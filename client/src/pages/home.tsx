@@ -289,16 +289,12 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid md:grid-cols-4 gap-8">
             <div className="md:col-span-2">
-              <div className="flex items-center space-x-3 mb-6">
+              <div className="flex items-center mb-6">
                 <img 
-                  src="/attached_assets/Logo_1754933299875.JPG" 
+                  src="/attached_assets/Logo_1754933299875.JPG"
                   alt="5Central Capital Logo" 
-                  className="w-12 h-12 object-contain"
+                  className="h-16 object-contain"
                 />
-                <div>
-                  <span className="text-2xl font-serif font-semibold">5Central</span>
-                  <span className="text-lg text-gray-300 ml-2">CAPITAL</span>
-                </div>
               </div>
               <p className="text-gray-300 leading-relaxed max-w-md">
                 Strategic real estate investment firm specializing in high-return multifamily acquisitions with proven value creation through disciplined execution and strategic financing.

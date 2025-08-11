@@ -49,16 +49,12 @@ export default function Navigation() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           {/* Logo */}
-          <Link href="/" className="flex items-center space-x-3" data-testid="logo-link">
+          <Link href="/" className="flex items-center" data-testid="logo-link">
             <img 
-              src="/attached_assets/Logo_1754933299875.JPG" 
+              src="/attached_assets/Logo_1754933299875.JPG"
               alt="5Central Capital Logo" 
-              className="w-12 h-12 object-contain"
+              className="h-12 object-contain"
             />
-            <div>
-              <span className="text-xl font-serif font-semibold text-primary">5Central</span>
-              <span className="text-sm text-gray-600 ml-1">CAPITAL</span>
-            </div>
           </Link>
 
           {/* Desktop Navigation */}
