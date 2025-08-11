@@ -100,13 +100,19 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
           </div>
         </div>
         
-        <div className="text-center mb-6">
-          <span className="text-gray-600">
-            NOI: 
-            <span className="text-primary font-medium ml-1" data-testid={`property-cashflow-${property.id}`}>
+        <div className="grid grid-cols-2 gap-4 mb-6 text-sm">
+          <div className="text-center">
+            <span className="text-gray-600">NOI: </span>
+            <span className="text-primary font-medium" data-testid={`property-cashflow-${property.id}`}>
               {formatCurrency(property.noi)}
             </span>
-          </span>
+          </div>
+          <div className="text-center">
+            <span className="text-gray-600">Rehab Budget: </span>
+            <span className="text-primary font-medium" data-testid={`property-rehab-${property.id}`}>
+              {formatCurrency(property.rehabCosts)}
+            </span>
+          </div>
         </div>
 
         <div className="pt-4 border-t border-gray-200">
@@ -129,11 +135,15 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
             <div>
               <div className="text-lg font-bold text-accent-gold" data-testid={`property-coc-${property.id}`}>
                 {(() => {
-                  const acquisitionPrice = parseFloat(property.acquisitionPrice);
-                  const annualCashflow = parseFloat(property.cashflow || property.noi || '0');
-                  if (acquisitionPrice && annualCashflow) {
-                    const coc = (annualCashflow / acquisitionPrice) * 100;
-                    return `${coc.toFixed(1)}%`;
+                  const initialInvestment = parseFloat(property.acquisitionPrice) + parseFloat(property.rehabCosts || '0');
+                  const totalCashCollected = parseFloat(property.totalCashflow || '0');
+                  const exitValue = parseFloat(property.salePrice || property.currentValue || '0');
+                  const yearsHeld = parseFloat(property.yearsHeld || '0');
+                  
+                  if (initialInvestment && exitValue && yearsHeld > 0) {
+                    const totalProfit = exitValue + totalCashCollected - initialInvestment;
+                    const annualizedCOC = (totalProfit / initialInvestment / yearsHeld) * 100;
+                    return `${annualizedCOC.toFixed(1)}%`;
                   }
                   return 'N/A';
                 })()}
