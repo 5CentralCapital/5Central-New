@@ -3,20 +3,19 @@ import { Link } from "wouter";
 
 export default function HeroSection() {
   return (
-    <section className="pt-24 pb-20 relative overflow-hidden">
+    <section className="pt-16 pb-16 min-h-screen flex items-center relative overflow-hidden">
       {/* Full-size Logo Background */}
       <div 
-        className="absolute inset-0 bg-contain bg-center bg-no-repeat"
+        className="absolute inset-0 bg-cover bg-center bg-no-repeat"
         style={{
-          backgroundImage: 'url(/logo.jpg)',
+          backgroundImage: 'url(/hero-logo.jpg)',
         }}
       ></div>
-      {/* Dark overlay for text readability */}
-      <div className="absolute inset-0 bg-black bg-opacity-60"></div>
-      <div className="geometric-pattern absolute inset-0 opacity-20"></div>
+      {/* Light overlay for text readability */}
+      <div className="absolute inset-0 bg-black bg-opacity-40"></div>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
         <div className="text-center">
-          <h1 className="text-5xl md:text-7xl font-serif font-bold text-white mb-6 leading-tight" data-testid="hero-title">
+          <h1 className="text-4xl md:text-6xl font-serif font-bold text-white mb-6 leading-tight" data-testid="hero-title">
             Strategic Real Estate
             <span className="block text-accent-gold">Investment</span>
           </h1>
