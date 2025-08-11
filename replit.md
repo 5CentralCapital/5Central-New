@@ -10,6 +10,13 @@ The platform displays current and sold properties with detailed financial perfor
 
 Preferred communication style: Simple, everyday language.
 
+## Recent Changes
+
+**Property Card Updates (August 11, 2025)**
+- Replaced "ROI" with "IRR" in property card badges for accuracy
+- Added equity multiple display to all property cards (both current and sold properties)
+- Improved card layout with consistent spacing and visual hierarchy
+
 ## System Architecture
 
 ### Frontend Architecture

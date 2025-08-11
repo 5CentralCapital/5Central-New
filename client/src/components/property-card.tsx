@@ -85,7 +85,7 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
           </div>
         </div>
         
-        <div className="flex justify-between text-sm">
+        <div className="flex justify-between text-sm mb-4">
           <span className="text-gray-600">
             Annual Cash Flow: 
             <span className="text-primary font-medium ml-1" data-testid={`property-cashflow-${property.id}`}>
@@ -96,20 +96,18 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
             className={`px-2 py-1 rounded font-medium ${getIRRColor(property.irr)}`}
             data-testid={`property-irr-${property.id}`}
           >
-            {formatIRR(property.irr)} ROI
+            {formatIRR(property.irr)} IRR
           </Badge>
         </div>
 
-        {property.status === 'sold' && (
-          <div className="mt-4 pt-4 border-t border-gray-200">
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-600">Equity Multiple:</span>
-              <span className="text-lg font-bold text-accent-gold" data-testid={`property-equity-multiple-${property.id}`}>
-                {property.equityMultiple}x
-              </span>
-            </div>
+        <div className="pt-4 border-t border-gray-200">
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-gray-600">Equity Multiple:</span>
+            <span className="text-lg font-bold text-accent-gold" data-testid={`property-equity-multiple-${property.id}`}>
+              {property.equityMultiple || 'N/A'}x
+            </span>
           </div>
-        )}
+        </div>
       </CardContent>
     </Card>
   );
