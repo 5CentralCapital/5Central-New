@@ -290,9 +290,11 @@ export default function Home() {
           <div className="grid md:grid-cols-4 gap-8">
             <div className="md:col-span-2">
               <div className="flex items-center space-x-3 mb-6">
-                <div className="w-12 h-12 bg-gradient-to-br from-accent-gold to-bronze rounded-lg flex items-center justify-center">
-                  <span className="text-white font-bold text-xl">5C</span>
-                </div>
+                <img 
+                  src="/attached_assets/Logo_1754933299875.JPG" 
+                  alt="5Central Capital Logo" 
+                  className="w-12 h-12 object-contain"
+                />
                 <div>
                   <span className="text-2xl font-serif font-semibold">5Central</span>
                   <span className="text-lg text-gray-300 ml-2">CAPITAL</span>

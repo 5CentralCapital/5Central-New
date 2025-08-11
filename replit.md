@@ -17,6 +17,11 @@ Preferred communication style: Simple, everyday language.
 - Added equity multiple display to all property cards (both current and sold properties)
 - Improved card layout with consistent spacing and visual hierarchy
 
+**Logo Integration (August 11, 2025)**
+- Added official 5Central Capital logo to navigation bar and footer
+- Replaced placeholder "5C" icon with professional 3D rendered logo
+- Logo features golden cityscape design that aligns with luxury real estate branding
+
 ## System Architecture
 
 ### Frontend Architecture
