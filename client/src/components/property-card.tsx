@@ -87,7 +87,7 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
         
         <div className="flex justify-between text-sm mb-4">
           <span className="text-gray-600">
-            Annual Cash Flow: 
+            NOI: 
             <span className="text-primary font-medium ml-1" data-testid={`property-cashflow-${property.id}`}>
               {formatCurrency(property.noi)}
             </span>

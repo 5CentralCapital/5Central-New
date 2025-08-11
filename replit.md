@@ -22,6 +22,12 @@ Preferred communication style: Simple, everyday language.
 - Replaced placeholder "5C" icon with professional 3D rendered logo
 - Logo features golden cityscape design that aligns with luxury real estate branding
 
+**Property Image & Display Updates (August 11, 2025)**
+- Mapped 8 actual property photos to their corresponding properties
+- Fixed asset loading by copying images to client/public folder
+- Changed "Annual Cash Flow" labels to "NOI" for accurate real estate terminology
+- Removed redundant company name text from navigation since logo includes it
+
 ## System Architecture
 
 ### Frontend Architecture
