@@ -14,11 +14,10 @@ export default function HeroSection() {
       {/* Dark overlay for text readability */}
       <div className="absolute inset-0 bg-black bg-opacity-50"></div>
       <div className="geometric-pattern absolute inset-0 opacity-20"></div>
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 h-full flex items-center">
-        <div className="text-center">
-          <h1 className="text-4xl md:text-6xl font-serif font-bold text-white mb-6 leading-tight" data-testid="hero-title">
-            Strategic Real Estate
-            <span className="block text-accent-gold">Investment</span>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 h-full flex items-center justify-center">
+        <div className="text-center w-full">
+          <h1 className="text-5xl md:text-7xl font-serif font-bold text-white mb-6 leading-tight" data-testid="hero-title">
+            5Central Capital
           </h1>
           <p className="text-xl md:text-2xl text-gray-200 mb-8 max-w-3xl mx-auto leading-relaxed" data-testid="hero-description">
             Tampa-based investment firm specializing in high-return multifamily acquisitions with proven value creation through disciplined execution and strategic financing.
