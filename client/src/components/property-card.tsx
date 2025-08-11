@@ -25,6 +25,21 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
     return `${num > 0 ? '+' : ''}${num.toFixed(1)}%`;
   };
 
+  const calculateIRRFromTotalProfit = (property: Property) => {
+    const initialInvestment = parseFloat(property.acquisitionPrice) + parseFloat(property.rehabCosts || '0');
+    const totalCashCollected = parseFloat(property.totalCashflow || '0');
+    const exitValue = parseFloat(property.salePrice || property.currentValue || '0');
+    const yearsHeld = parseFloat(property.yearsHeld || '0');
+    
+    if (initialInvestment && exitValue && yearsHeld > 0) {
+      const totalProfit = exitValue + totalCashCollected - initialInvestment;
+      const totalReturn = initialInvestment + totalProfit;
+      const irr = Math.pow(totalReturn / initialInvestment, 1 / yearsHeld) - 1;
+      return (irr * 100).toFixed(1);
+    }
+    return property.irr || '0';
+  };
+
   const getIRRColor = (irr: string | null) => {
     if (!irr) return "bg-gray-100 text-gray-800";
     const num = parseFloat(irr);
@@ -92,20 +107,45 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
               {formatCurrency(property.noi)}
             </span>
           </span>
-          <Badge 
-            className={`px-2 py-1 rounded font-medium ${getIRRColor(property.irr)}`}
-            data-testid={`property-irr-${property.id}`}
-          >
-            {formatIRR(property.irr)} IRR
-          </Badge>
+          <span className="text-gray-600">
+            Total Cash Collected: 
+            <span className="text-primary font-medium ml-1" data-testid={`property-total-cashflow-${property.id}`}>
+              {formatCurrency(property.totalCashflow)}
+            </span>
+          </span>
         </div>
 
         <div className="pt-4 border-t border-gray-200">
-          <div className="flex justify-between items-center">
-            <span className="text-sm text-gray-600">Equity Multiple:</span>
-            <span className="text-lg font-bold text-accent-gold" data-testid={`property-equity-multiple-${property.id}`}>
-              {property.equityMultiple || 'N/A'}x
-            </span>
+          <div className="grid grid-cols-3 gap-4 text-center">
+            <div>
+              <div className="text-lg font-bold text-accent-gold" data-testid={`property-irr-${property.id}`}>
+                {(() => {
+                  const calculatedIRR = calculateIRRFromTotalProfit(property);
+                  return formatIRR(calculatedIRR);
+                })()}
+              </div>
+              <div className="text-xs text-gray-600">IRR</div>
+            </div>
+            <div>
+              <div className="text-lg font-bold text-accent-gold" data-testid={`property-equity-multiple-${property.id}`}>
+                {property.equityMultiple || 'N/A'}x
+              </div>
+              <div className="text-xs text-gray-600">Equity Multiple</div>
+            </div>
+            <div>
+              <div className="text-lg font-bold text-accent-gold" data-testid={`property-coc-${property.id}`}>
+                {(() => {
+                  const acquisitionPrice = parseFloat(property.acquisitionPrice);
+                  const annualCashflow = parseFloat(property.cashflow || property.noi || '0');
+                  if (acquisitionPrice && annualCashflow) {
+                    const coc = (annualCashflow / acquisitionPrice) * 100;
+                    return `${coc.toFixed(1)}%`;
+                  }
+                  return 'N/A';
+                })()}
+              </div>
+              <div className="text-xs text-gray-600">COC</div>
+            </div>
           </div>
         </div>
       </CardContent>

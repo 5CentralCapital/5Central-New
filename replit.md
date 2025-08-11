@@ -28,6 +28,12 @@ Preferred communication style: Simple, everyday language.
 - Changed "Annual Cash Flow" labels to "NOI" for accurate real estate terminology
 - Removed redundant company name text from navigation since logo includes it
 
+**Return Metrics Restructure (August 11, 2025)**
+- Moved IRR from top badge to bottom 3-column grid with other return metrics
+- Added COC (Cash on Cash) return calculation as third metric
+- Updated IRR calculation to use total profit formula instead of stored values
+- New layout: NOI/Total Cash Collected on top, then IRR/Equity Multiple/COC grid below
+
 ## System Architecture
 
 ### Frontend Architecture
