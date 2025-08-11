@@ -56,7 +56,6 @@ export default function PerformanceMetrics({
                 {formatCurrency(totalPortfolioValue)}
               </div>
               <div className="text-gray-600 font-medium">Total Portfolio Value</div>
-              <div className="text-sm text-green-600 mt-2">+15% YoY</div>
             </CardContent>
           </Card>
 
@@ -69,7 +68,6 @@ export default function PerformanceMetrics({
                 {totalUnits}
               </div>
               <div className="text-gray-600 font-medium">Total Units</div>
-              <div className="text-sm text-gray-500 mt-2">Across 2 States</div>
             </CardContent>
           </Card>
 
@@ -82,7 +80,6 @@ export default function PerformanceMetrics({
                 {formatCurrency(totalEquityCreated)}
               </div>
               <div className="text-gray-600 font-medium">Total Equity Created</div>
-              <div className="text-sm text-green-600 mt-2">{equityPercentage}% of Portfolio</div>
             </CardContent>
           </Card>
 
@@ -95,7 +92,6 @@ export default function PerformanceMetrics({
                 {avgReturn.toFixed(1)}%
               </div>
               <div className="text-gray-600 font-medium">Avg Annualized Return</div>
-              <div className="text-sm text-gray-500 mt-2">Including Appreciation</div>
             </CardContent>
           </Card>
         </div>
