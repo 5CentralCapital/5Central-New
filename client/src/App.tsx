@@ -8,6 +8,7 @@ import Home from "@/pages/home";
 import Founder from "@/pages/founder";
 import Vision from "@/pages/vision";
 import Portfolio from "@/pages/portfolio";
+import Investor from "@/pages/investor";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -17,6 +18,7 @@ function Router() {
       <Route path="/founder" component={Founder} />
       <Route path="/vision" component={Vision} />
       <Route path="/portfolio" component={Portfolio} />
+      <Route path="/investor" component={Investor} />
       <Route component={NotFound} />
     </Switch>
   );

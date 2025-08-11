@@ -22,6 +22,7 @@ export default function Navigation() {
     { href: "/portfolio", label: "Portfolio" },
     { href: "/founder", label: "Founder" },
     { href: "/vision", label: "Vision" },
+    { href: "/investor", label: "Investor" },
   ];
 
   const NavLink = ({ href, label, mobile = false }: { href: string; label: string; mobile?: boolean }) => {
@@ -62,12 +63,14 @@ export default function Navigation() {
             {navItems.map((item) => (
               <NavLink key={item.href} {...item} />
             ))}
-            <Button 
-              className="bg-gradient-to-r from-accent-gold to-bronze text-white px-6 py-2 rounded-lg font-semibold hover:shadow-lg transition-all duration-300 transform hover:-translate-y-0.5"
-              data-testid="cta-investment-opportunities"
-            >
-              Investment Opportunities
-            </Button>
+            <Link href="/investor">
+              <Button 
+                className="bg-gradient-to-r from-accent-gold to-bronze text-white px-6 py-2 rounded-lg font-semibold hover:shadow-lg transition-all duration-300 transform hover:-translate-y-0.5"
+                data-testid="cta-investment-opportunities"
+              >
+                Investment Opportunities
+              </Button>
+            </Link>
           </div>
 
           {/* Mobile Navigation */}
@@ -82,12 +85,14 @@ export default function Navigation() {
                 {navItems.map((item) => (
                   <NavLink key={item.href} {...item} mobile />
                 ))}
-                <Button 
-                  className="bg-gradient-to-r from-accent-gold to-bronze text-white mt-4"
-                  data-testid="mobile-cta-investment-opportunities"
-                >
-                  Investment Opportunities
-                </Button>
+                <Link href="/investor">
+                  <Button 
+                    className="bg-gradient-to-r from-accent-gold to-bronze text-white mt-4"
+                    data-testid="mobile-cta-investment-opportunities"
+                  >
+                    Investment Opportunities
+                  </Button>
+                </Link>
               </div>
             </SheetContent>
           </Sheet>

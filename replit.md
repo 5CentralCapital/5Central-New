@@ -33,6 +33,17 @@ Preferred communication style: Simple, everyday language.
 - Added COC (Cash on Cash) return calculation as third metric
 - Updated IRR calculation to use total profit formula instead of stored values
 - New layout: NOI/Total Cash Collected on top, then IRR/Equity Multiple/COC grid below
+- Removed total cash collected, added rehab budget, standardized all middle text fonts
+- Fixed years held values for 1 Harmony St (0.86) and 3408 E Dr MLK BLVD (0.78)
+
+**Investor Page Addition (August 11, 2025)**
+- Created comprehensive investor page mirroring 5central.capital/investor
+- Interactive investment return calculator with sliders for investment amount and duration
+- Target 30% annual return calculations with compound growth formula
+- Join investor list form with email signup functionality
+- Investment opportunities section highlighting 458.8% average COC returns
+- What to expect section with investor portal features and investment structure
+- Added investor page to navigation menu and linked Investment Opportunities button
 
 ## System Architecture
 
