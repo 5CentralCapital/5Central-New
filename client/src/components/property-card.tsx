@@ -100,17 +100,11 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
           </div>
         </div>
         
-        <div className="flex justify-between text-sm mb-4">
+        <div className="text-center mb-6">
           <span className="text-gray-600">
             NOI: 
             <span className="text-primary font-medium ml-1" data-testid={`property-cashflow-${property.id}`}>
               {formatCurrency(property.noi)}
-            </span>
-          </span>
-          <span className="text-gray-600">
-            Total Cash Collected: 
-            <span className="text-primary font-medium ml-1" data-testid={`property-total-cashflow-${property.id}`}>
-              {formatCurrency(property.totalCashflow)}
             </span>
           </span>
         </div>
