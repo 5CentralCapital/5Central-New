@@ -170,25 +170,58 @@ export default function Portfolio() {
             </TabsList>
 
             <TabsContent value="all" data-testid="all-properties-content">
-              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-                {allProperties.map((property) => (
-                  <div key={property.id} className="relative">
-                    <PropertyCard
-                      property={property}
-                      imageUrl={getPropertyImage(property.name)}
-                    />
-                    <Badge 
-                      className={`absolute top-4 right-4 ${
-                        property.status === 'current' 
-                          ? 'bg-green-100 text-green-800' 
-                          : 'bg-blue-100 text-blue-800'
-                      }`}
-                      data-testid={`property-status-${property.id}`}
-                    >
-                      {property.status === 'current' ? 'Current' : 'Sold'}
-                    </Badge>
-                  </div>
-                ))}
+              {/* Currently Owned Properties Section */}
+              <div className="mb-16">
+                <div className="mb-8">
+                  <h3 className="text-3xl font-serif font-bold text-primary mb-2">Currently Owned Properties</h3>
+                  <div className="w-24 h-1 bg-accent-gold mb-6"></div>
+                  <p className="text-gray-600 text-lg">
+                    Our active portfolio of {currentProperties.length} multifamily properties generating consistent returns
+                  </p>
+                </div>
+                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+                  {currentProperties.map((property) => (
+                    <div key={property.id} className="relative">
+                      <PropertyCard
+                        property={property}
+                        imageUrl={getPropertyImage(property.name)}
+                      />
+                      <Badge 
+                        className="absolute top-4 right-4 bg-green-100 text-green-800"
+                        data-testid={`property-status-${property.id}`}
+                      >
+                        Current
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Sold Properties Section */}
+              <div className="pt-8 border-t border-gray-200">
+                <div className="mb-8">
+                  <h3 className="text-3xl font-serif font-bold text-primary mb-2">Successful Exits</h3>
+                  <div className="w-24 h-1 bg-accent-gold mb-6"></div>
+                  <p className="text-gray-600 text-lg">
+                    Our track record of {soldProperties.length} successful property sales demonstrating proven value creation
+                  </p>
+                </div>
+                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+                  {soldProperties.map((property) => (
+                    <div key={property.id} className="relative">
+                      <PropertyCard
+                        property={property}
+                        imageUrl={getPropertyImage(property.name)}
+                      />
+                      <Badge 
+                        className="absolute top-4 right-4 bg-blue-100 text-blue-800"
+                        data-testid={`property-status-${property.id}`}
+                      >
+                        Sold
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
               </div>
             </TabsContent>
 
