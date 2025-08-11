@@ -6,7 +6,7 @@ export default function HeroSection() {
     <section className="pt-24 pb-20 relative overflow-hidden">
       {/* Full-size Logo Background */}
       <div 
-        className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+        className="absolute inset-0 bg-contain bg-center bg-no-repeat"
         style={{
           backgroundImage: 'url(/logo.jpg)',
         }}
