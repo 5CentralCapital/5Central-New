@@ -17,7 +17,7 @@ export default function HeroSection() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 h-full flex items-center justify-center">
         <div className="text-center w-full">
           <h1 className="text-5xl md:text-7xl font-serif font-bold text-white mb-6 leading-tight" data-testid="hero-title">
-            5Central Capital
+            5Central <span className="text-accent-gold">Capital</span>
           </h1>
           <p className="text-xl md:text-2xl text-gray-200 mb-8 max-w-3xl mx-auto leading-relaxed" data-testid="hero-description">
             Tampa-based investment firm specializing in high-return multifamily acquisitions with proven value creation through disciplined execution and strategic financing.
