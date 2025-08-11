@@ -1,0 +1,58 @@
+import { Button } from "@/components/ui/button";
+import { Link } from "wouter";
+
+export default function HeroSection() {
+  return (
+    <section className="hero-gradient pt-24 pb-20 relative overflow-hidden">
+      <div className="geometric-pattern absolute inset-0 opacity-30"></div>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+        <div className="text-center">
+          <h1 className="text-5xl md:text-7xl font-serif font-bold text-white mb-6 leading-tight" data-testid="hero-title">
+            Strategic Real Estate
+            <span className="block text-accent-gold">Investment</span>
+          </h1>
+          <p className="text-xl md:text-2xl text-gray-200 mb-8 max-w-3xl mx-auto leading-relaxed" data-testid="hero-description">
+            Tampa-based investment firm specializing in high-return multifamily acquisitions with proven value creation through disciplined execution and strategic financing.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-4 justify-center mb-12">
+            <Link href="/portfolio">
+              <Button 
+                className="bg-accent-gold text-primary px-8 py-4 rounded-lg font-semibold text-lg hover:bg-yellow-400 transition-all duration-300 transform hover:-translate-y-1 shadow-lg"
+                data-testid="button-view-portfolio"
+              >
+                View Our Portfolio
+              </Button>
+            </Link>
+            <Button 
+              variant="outline"
+              className="border-2 border-accent-gold text-accent-gold px-8 py-4 rounded-lg font-semibold text-lg hover:bg-accent-gold hover:text-primary transition-all duration-300"
+              data-testid="button-investment-opportunities"
+            >
+              Investment Opportunities
+            </Button>
+          </div>
+          
+          {/* Key Metrics */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mt-16" data-testid="hero-metrics">
+            <div className="text-center">
+              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-portfolio-value">$10.2M</div>
+              <div className="text-gray-300 text-sm uppercase tracking-wide">Portfolio Value</div>
+            </div>
+            <div className="text-center">
+              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-total-units">47</div>
+              <div className="text-gray-300 text-sm uppercase tracking-wide">Total Units</div>
+            </div>
+            <div className="text-center">
+              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-avg-equity-multiple">3.02x</div>
+              <div className="text-gray-300 text-sm uppercase tracking-wide">Avg Equity Multiple</div>
+            </div>
+            <div className="text-center">
+              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-avg-return">85.3%</div>
+              <div className="text-gray-300 text-sm uppercase tracking-wide">Avg Return</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
