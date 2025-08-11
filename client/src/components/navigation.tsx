@@ -51,7 +51,7 @@ export default function Navigation() {
           {/* Logo */}
           <Link href="/" className="flex items-center" data-testid="logo-link">
             <img 
-              src="/attached_assets/Logo_1754933299875.JPG"
+              src="/logo.jpg"
               alt="5Central Capital Logo" 
               className="h-12 object-contain"
             />

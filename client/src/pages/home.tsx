@@ -291,7 +291,7 @@ export default function Home() {
             <div className="md:col-span-2">
               <div className="flex items-center mb-6">
                 <img 
-                  src="/attached_assets/Logo_1754933299875.JPG"
+                  src="/logo.jpg"
                   alt="5Central Capital Logo" 
                   className="h-16 object-contain"
                 />
