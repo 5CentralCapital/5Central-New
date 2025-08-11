@@ -12,10 +12,18 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+**Navigation & Hero Logo Updates (August 11, 2025)**
+- Replaced header logo image with "5Central Capital" text for better readability
+- Moved logo to hero section as subtle background element with proper text overlay
+- Logo now positioned on right side of hero with 20% opacity maintaining text readability
+- Header now uses clean typography instead of image for brand name
+
 **Property Card Updates (August 11, 2025)**
 - Replaced "ROI" with "IRR" in property card badges for accuracy
 - Added equity multiple display to all property cards (both current and sold properties)
 - Improved card layout with consistent spacing and visual hierarchy
+- Resized middle section text (Purchase Price, Current Value, NOI, CapEx Invested) to 18px
+- Renamed "Rehab Budget" to "CapEx Invested" for accurate real estate terminology
 
 **Logo Integration (August 11, 2025)**
 - Added official 5Central Capital logo to navigation bar and footer

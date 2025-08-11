@@ -51,11 +51,9 @@ export default function Navigation() {
         <div className="flex justify-between items-center h-16">
           {/* Logo */}
           <Link href="/" className="flex items-center" data-testid="logo-link">
-            <img 
-              src="/logo.jpg"
-              alt="5Central Capital Logo" 
-              className="h-12 object-contain"
-            />
+            <div className="text-2xl font-serif font-bold text-primary">
+              5Central <span className="text-accent-gold">Capital</span>
+            </div>
           </Link>
 
           {/* Desktop Navigation */}
