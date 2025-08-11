@@ -102,16 +102,16 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
         
         <div className="grid grid-cols-2 gap-4 mb-6">
           <div>
-            <div className="text-lg font-bold text-primary" data-testid={`property-cashflow-${property.id}`}>
-              {formatCurrency(property.noi)}
-            </div>
-            <div className="text-sm text-gray-500">NOI</div>
-          </div>
-          <div>
             <div className="text-lg font-bold text-primary" data-testid={`property-rehab-${property.id}`}>
               {formatCurrency(property.rehabCosts)}
             </div>
             <div className="text-sm text-gray-500">CapEx Invested</div>
+          </div>
+          <div>
+            <div className="text-lg font-bold text-primary" data-testid={`property-cashflow-${property.id}`}>
+              {formatCurrency(property.noi)}
+            </div>
+            <div className="text-sm text-gray-500">NOI</div>
           </div>
         </div>
 
