@@ -3,16 +3,17 @@ import { Link } from "wouter";
 
 export default function HeroSection() {
   return (
-    <section className="hero-gradient pt-24 pb-20 relative overflow-hidden">
-      <div className="geometric-pattern absolute inset-0 opacity-30"></div>
-      {/* Logo Background */}
-      <div className="absolute right-8 top-1/2 transform -translate-y-1/2 opacity-20">
-        <img 
-          src="/logo.jpg"
-          alt="5Central Capital Logo" 
-          className="h-64 md:h-80 lg:h-96 object-contain"
-        />
-      </div>
+    <section className="pt-24 pb-20 relative overflow-hidden">
+      {/* Full-size Logo Background */}
+      <div 
+        className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+        style={{
+          backgroundImage: 'url(/logo.jpg)',
+        }}
+      ></div>
+      {/* Dark overlay for text readability */}
+      <div className="absolute inset-0 bg-black bg-opacity-60"></div>
+      <div className="geometric-pattern absolute inset-0 opacity-20"></div>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
         <div className="text-center">
           <h1 className="text-5xl md:text-7xl font-serif font-bold text-white mb-6 leading-tight" data-testid="hero-title">
