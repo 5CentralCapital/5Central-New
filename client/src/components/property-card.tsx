@@ -85,13 +85,13 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
         
         <div className="grid grid-cols-2 gap-4 mb-4">
           <div>
-            <div className="text-2xl font-bold text-primary" data-testid={`property-purchase-price-${property.id}`}>
+            <div className="text-lg font-bold text-primary" data-testid={`property-purchase-price-${property.id}`}>
               {formatCurrency(property.acquisitionPrice)}
             </div>
             <div className="text-sm text-gray-500">Purchase Price</div>
           </div>
           <div>
-            <div className="text-2xl font-bold text-accent-gold" data-testid={`property-current-value-${property.id}`}>
+            <div className="text-lg font-bold text-accent-gold" data-testid={`property-current-value-${property.id}`}>
               {formatCurrency(property.currentValue || property.salePrice)}
             </div>
             <div className="text-sm text-gray-500">
@@ -102,16 +102,16 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
         
         <div className="grid grid-cols-2 gap-4 mb-6">
           <div>
-            <div className="text-2xl font-bold text-primary" data-testid={`property-cashflow-${property.id}`}>
+            <div className="text-lg font-bold text-primary" data-testid={`property-cashflow-${property.id}`}>
               {formatCurrency(property.noi)}
             </div>
             <div className="text-sm text-gray-500">NOI</div>
           </div>
           <div>
-            <div className="text-2xl font-bold text-primary" data-testid={`property-rehab-${property.id}`}>
+            <div className="text-lg font-bold text-primary" data-testid={`property-rehab-${property.id}`}>
               {formatCurrency(property.rehabCosts)}
             </div>
-            <div className="text-sm text-gray-500">Rehab Budget</div>
+            <div className="text-sm text-gray-500">CapEx Invested</div>
           </div>
         </div>
 
