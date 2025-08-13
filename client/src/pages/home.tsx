@@ -53,15 +53,15 @@ export default function Home() {
     return sum + Math.max(0, currentValue - acquisitionPrice);
   }, 0);
 
-  const avgReturn = allProperties.reduce((sum, p) => {
+  const avgReturn = allProperties.length > 0 ? allProperties.reduce((sum, p) => {
     const irr = parseFloat(p.irr || "0");
     return sum + irr;
-  }, 0) / allProperties.length;
+  }, 0) / allProperties.length : 0;
 
-  const avgEquityMultiple = allProperties.reduce((sum, p) => {
+  const avgEquityMultiple = allProperties.length > 0 ? allProperties.reduce((sum, p) => {
     const multiple = parseFloat(p.equityMultiple || "0");
     return sum + multiple;
-  }, 0) / allProperties.length;
+  }, 0) / allProperties.length : 0;
 
   const totalRealizedProfits = soldProperties.reduce((sum, p) => {
     const acquisitionPrice = parseFloat(p.acquisitionPrice);
@@ -71,7 +71,12 @@ export default function Home() {
 
   return (
     <div className="min-h-screen" data-testid="home-page">
-      <HeroSection />
+      <HeroSection 
+        totalPortfolioValue={totalPortfolioValue}
+        totalUnits={totalUnits}
+        avgEquityMultiple={avgEquityMultiple}
+        avgReturn={avgReturn}
+      />
 
       {/* Featured Properties */}
       <section id="portfolio" className="py-20 bg-white" data-testid="featured-properties-section">

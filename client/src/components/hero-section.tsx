@@ -1,7 +1,29 @@
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 
-export default function HeroSection() {
+interface HeroSectionProps {
+  totalPortfolioValue: number;
+  totalUnits: number;
+  avgEquityMultiple: number;
+  avgReturn: number;
+}
+
+export default function HeroSection({ 
+  totalPortfolioValue, 
+  totalUnits, 
+  avgEquityMultiple, 
+  avgReturn 
+}: HeroSectionProps) {
+  
+  const formatCurrency = (value: number) => {
+    if (!value || isNaN(value)) return "$0";
+    if (value >= 1000000) {
+      return `$${(value / 1000000).toFixed(1)}M`;
+    } else if (value >= 1000) {
+      return `$${(value / 1000).toFixed(0)}K`;
+    }
+    return `$${value.toLocaleString()}`;
+  };
   return (
     <section className="pt-24 pb-20 relative overflow-hidden" style={{ height: '70vh' }}>
       {/* Multifamily Apartment Building Background */}
@@ -43,19 +65,27 @@ export default function HeroSection() {
           {/* Key Metrics */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mt-16" data-testid="hero-metrics">
             <div className="text-center">
-              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-portfolio-value">$10.2M</div>
+              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-portfolio-value">
+                {formatCurrency(totalPortfolioValue)}
+              </div>
               <div className="text-gray-300 text-sm uppercase tracking-wide">Portfolio Value</div>
             </div>
             <div className="text-center">
-              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-total-units">47</div>
+              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-total-units">
+                {totalUnits || 0}
+              </div>
               <div className="text-gray-300 text-sm uppercase tracking-wide">Total Units</div>
             </div>
             <div className="text-center">
-              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-avg-equity-multiple">3.02x</div>
+              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-avg-equity-multiple">
+                {(avgEquityMultiple || 0).toFixed(2)}x
+              </div>
               <div className="text-gray-300 text-sm uppercase tracking-wide">Avg Equity Multiple</div>
             </div>
             <div className="text-center">
-              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-avg-return">85.3%</div>
+              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-avg-return">
+                {(avgReturn || 0).toFixed(1)}%
+              </div>
               <div className="text-gray-300 text-sm uppercase tracking-wide">Avg Return</div>
             </div>
           </div>

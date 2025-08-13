@@ -12,6 +12,13 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+**Data Consistency Fix (August 12, 2025)**
+- Fixed critical data inconsistency between hero section and performance metrics section
+- Hero section now uses dynamically calculated values from actual property data instead of hardcoded values
+- Both sections now display identical metrics: Portfolio Value, Total Units, Avg Equity Multiple, Avg Return
+- Added error handling for undefined values and division by zero scenarios
+- Improved data integrity across all portfolio displays
+
 **Navigation & Hero Logo Updates (August 11, 2025)**
 - Replaced header logo image with "5Central Capital" text for better readability
 - Moved logo to hero section as subtle background element with proper text overlay
