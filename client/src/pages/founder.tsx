@@ -26,8 +26,8 @@ export default function Founder() {
           <div className="grid lg:grid-cols-2 gap-16 items-center">
             <div>
               <img 
-                src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=800&h=900" 
-                alt="Michael McElwee - Founder" 
+                src="/hero-logo.jpg" 
+                alt="5Central Capital Logo" 
                 className="w-full h-96 object-cover rounded-2xl card-shadow"
                 data-testid="founder-image"
               />
