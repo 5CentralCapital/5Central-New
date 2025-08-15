@@ -54,7 +54,7 @@ export default function Founder() {
               <img 
                 src="/founder-logo.jpg" 
                 alt="5Central Capital Logo" 
-                className="w-full h-96 object-contain rounded-2xl card-shadow bg-gray-50"
+                className="w-full h-[500px] object-contain"
                 data-testid="founder-image"
               />
             </div>
