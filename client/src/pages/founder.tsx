@@ -52,9 +52,9 @@ export default function Founder() {
           <div className="grid lg:grid-cols-2 gap-16 items-center">
             <div>
               <img 
-                src="/hero-logo.jpg" 
+                src="/founder-logo.jpg" 
                 alt="5Central Capital Logo" 
-                className="w-full h-96 object-cover rounded-2xl card-shadow"
+                className="w-full h-96 object-contain rounded-2xl card-shadow bg-gray-50"
                 data-testid="founder-image"
               />
             </div>
