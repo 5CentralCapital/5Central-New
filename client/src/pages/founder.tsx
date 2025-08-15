@@ -1,8 +1,34 @@
+import { useQuery } from "@tanstack/react-query";
+import { type Property } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Mail, Linkedin, Building2 } from "lucide-react";
 
 export default function Founder() {
+  const { data: allProperties = [], isLoading } = useQuery<Property[]>({
+    queryKey: ["/api/properties"],
+  });
+
+  // Calculate dynamic statistics
+  const totalProperties = allProperties.length;
+  const totalPortfolioValue = allProperties.reduce((sum, p) => {
+    const value = parseFloat(p.currentValue || p.salePrice || "0");
+    return sum + value;
+  }, 0);
+  const yearsExperience = 4.5; // Started in 2020, now 2025
+
+  const formatCurrency = (value: number) => {
+    if (value >= 1000000) {
+      return `$${(value / 1000000).toFixed(1)}M`;
+    } else if (value >= 1000) {
+      return `$${(value / 1000).toFixed(0)}K`;
+    }
+    return `$${value.toLocaleString()}`;
+  };
+
+  if (isLoading) {
+    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  }
   return (
     <div className="min-h-screen pt-16" data-testid="founder-page">
       {/* Hero Section */}
@@ -42,38 +68,55 @@ export default function Founder() {
               
               <div className="space-y-6 text-gray-600 leading-relaxed" data-testid="founder-bio">
                 <p>
-                  With over a decade of experience in real estate investment and development, Michael founded 5Central Capital in 2020 to democratize access to high-quality multifamily investment opportunities. His vision was simple yet ambitious: create a platform that delivers institutional-quality returns while maintaining the personal touch and transparency that individual investors deserve.
+                  I started in 2020 with an FHA loan, a W-2, and a blunt strategy: buy under-managed assets and force performance. After the first deal, I used two friends' FHA loans to pick up ten Connecticut houses and convert them into ~120 rentable rooms. It was messy, labor-heavy, and the best training in operations, tenant management, and expense control I could have asked for.
                 </p>
                 
                 <p>
-                  Michael's disciplined approach to value creation has generated exceptional returns across multiple market cycles, with a track record spanning 47 units and over $10 million in portfolio value. His success stems from a unique combination of analytical rigor, operational expertise, and deep market knowledge gained through hands-on property management and renovation experience.
+                  In 2024 I refinanced, pulled $300k, and moved to Tampa to scale where the upside pays. My first Florida multifamily, a 10-unit at 3408 E Dr. MLK Blvd, outperformed my entire CT portfolio. That locked my focus: 10–20-unit value-add multifamily across the Tampa region.
                 </p>
                 
                 <p>
-                  Before founding 5Central Capital, Michael honed his skills in both traditional and alternative real estate investments, developing a keen eye for undervalued assets with significant upside potential. His investment philosophy centers on strategic market selection, rigorous due diligence, and operational excellence to create sustainable wealth for all stakeholders.
+                  Today I manage about $4.8M in assets, self-managing renovations with tight crews and no GC markups. The system is simple and repeatable: 85% LTC bridge, heavy rehab fast, refinance in 4–6 months at ≤70% LTV, then recycle capital. Underwriting is disciplined: neighborhood-specific rents, a 40% OpEx baseline, DSCR ≥ 1.20× at refi, and exit caps stressed 50–100 bps. To keep liquidity turning, I run select 1–4-unit flips at 100% LTC that net $60–80k in roughly four months.
                 </p>
 
-                <p>
-                  Michael believes that real estate investment success comes from three core principles: buying right, adding value through strategic improvements, and timing the market for optimal exits. This methodical approach has enabled 5Central Capital to consistently exceed industry benchmarks while building long-term relationships with investors, partners, and communities.
-                </p>
+                <div className="mt-8">
+                  <h3 className="text-xl font-semibold text-primary mb-4">What's Next</h3>
+                  <p>
+                    I'm scaling a Tampa-first, operations-led platform focused on C/C+ assets with clear management and OpEx wins. Near-term goal: $7.1M AUM by year-end 2025. Medium term: $50M by 2030 through steady, repeatable 10–20-unit acquisitions and fast turns. Long term: $1B by 2050, built on disciplined cash recycling and 1031s.
+                  </p>
+                </div>
+
+                <div className="mt-8">
+                  <h3 className="text-xl font-semibold text-primary mb-4">For Prospective LPs</h3>
+                  <div className="space-y-3">
+                    <p><strong>Strategy:</strong> Buy right, fix fast, refinance aggressively. Target assets where operations, not speculation, create value.</p>
+                    <p><strong>Edge:</strong> Hyper-local execution, speed, and cost control. We do the work ourselves with vetted crews and tight scopes.</p>
+                    <p><strong>Alignment:</strong> I co-invest meaningful capital in every deal and underwrite to the same downside you care about. Personal guarantees are on the table when needed.</p>
+                    <p><strong>Risk Controls:</strong> 85% LTC max at acquisition, 70% LTV refi, 40% OpEx baseline, DSCR ≥ 1.20× post-refi, interest-rate and exit-cap stress tests, 120–150-day turn targets.</p>
+                    <p><strong>Transparency:</strong> Standardized reporting and a real-time dashboard that tracks occupancy, rent collection, rehab budget, DSCR, and cash position.</p>
+                  </div>
+                  <p className="mt-4">
+                    I'm opening a limited allocation for LP co-investments in select Tampa deals where the plan is clear and timelines are tight. The objective is simple: recycle capital twice per year, protect the downside through disciplined underwriting and execution, and let the compounding do the heavy lifting.
+                  </p>
+                </div>
               </div>
 
               <div className="mt-8 grid grid-cols-3 gap-4">
                 <Card className="bg-secondary rounded-lg p-4 text-center">
                   <CardContent className="p-0">
-                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-properties">13</div>
+                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-properties">{totalProperties}</div>
                     <div className="text-sm text-gray-600">Properties Acquired</div>
                   </CardContent>
                 </Card>
                 <Card className="bg-secondary rounded-lg p-4 text-center">
                   <CardContent className="p-0">
-                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-experience">4.5</div>
+                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-experience">{yearsExperience}</div>
                     <div className="text-sm text-gray-600">Years Experience</div>
                   </CardContent>
                 </Card>
                 <Card className="bg-secondary rounded-lg p-4 text-center">
                   <CardContent className="p-0">
-                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-assets">$10.2M</div>
+                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-assets">{formatCurrency(totalPortfolioValue)}</div>
                     <div className="text-sm text-gray-600">Assets Under Mgmt</div>
                   </CardContent>
                 </Card>
@@ -142,12 +185,12 @@ export default function Founder() {
               <CardContent className="p-0">
                 <div className="w-16 h-16 bg-gradient-to-br from-accent-gold to-bronze rounded-full flex items-center justify-center mx-auto mb-6">
                   <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
+                    <path fillRule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z" clipRule="evenodd" />
                   </svg>
                 </div>
-                <h3 className="text-xl font-serif font-semibold text-primary mb-4">Market Timing</h3>
+                <h3 className="text-xl font-serif font-semibold text-primary mb-4">Speed of Execution</h3>
                 <p className="text-gray-600 leading-relaxed">
-                  Execute strategic exits at optimal market conditions to maximize returns, while maintaining a long-term perspective on market cycles and trends.
+                  Rapid deal closing, fast renovations with tight crews, and quick refinancing to maximize capital velocity and returns through disciplined execution timelines.
                 </p>
               </CardContent>
             </Card>
