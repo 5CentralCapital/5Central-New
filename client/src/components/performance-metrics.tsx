@@ -39,10 +39,10 @@ export default function PerformanceMetrics({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-16">
           <h2 className="text-4xl md:text-5xl font-serif font-bold text-primary mb-4" data-testid="performance-title">
-            Performance Metrics
+            Historical Performance
           </h2>
           <p className="text-xl text-gray-600 max-w-3xl mx-auto">
-            Verified track record of exceptional returns across our diversified real estate portfolio
+            Total performance metrics across our complete portfolio history including both current holdings and realized exits
           </p>
         </div>
 
@@ -55,7 +55,7 @@ export default function PerformanceMetrics({
               <div className="text-3xl font-bold text-primary mb-2" data-testid="metric-portfolio-value">
                 {formatCurrency(totalPortfolioValue)}
               </div>
-              <div className="text-gray-600 font-medium">Total Portfolio Value</div>
+              <div className="text-gray-600 font-medium">Total Portfolio Value<br/><span className="text-sm">(Current + Sold)</span></div>
             </CardContent>
           </Card>
 
@@ -67,7 +67,7 @@ export default function PerformanceMetrics({
               <div className="text-3xl font-bold text-primary mb-2" data-testid="metric-total-units">
                 {totalUnits}
               </div>
-              <div className="text-gray-600 font-medium">Total Units</div>
+              <div className="text-gray-600 font-medium">Total Units<br/><span className="text-sm">(All Time)</span></div>
             </CardContent>
           </Card>
 

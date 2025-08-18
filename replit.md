@@ -12,6 +12,14 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes
 
+**Performance Metrics Restructure (August 18, 2025)**
+- Separated current vs historical property statistics across homepage and portfolio page
+- Hero sections now show only currently owned properties stats (current holdings)
+- Performance metrics sections now clearly show total historical stats (current + sold properties)
+- Updated metric labels to clarify data scope: "Current Portfolio Value", "Total Portfolio Value (Current + Sold)", etc.
+- Changed Performance Metrics section title to "Historical Performance" for clarity
+- Fixed TypeScript Set iteration issues in portfolio geographic breakdown
+
 **Data Consistency Fix (August 12, 2025)**
 - Fixed critical data inconsistency between hero section and performance metrics section
 - Hero section now uses dynamically calculated values from actual property data instead of hardcoded values

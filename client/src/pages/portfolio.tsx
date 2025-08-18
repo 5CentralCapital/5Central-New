@@ -44,7 +44,15 @@ export default function Portfolio() {
     );
   }
 
-  // Calculate portfolio metrics
+  // Calculate metrics for CURRENT properties only (for header)
+  const currentPortfolioValue = currentProperties.reduce((sum, p) => {
+    const value = parseFloat(p.currentValue || "0");
+    return sum + value;
+  }, 0);
+
+  const currentUnits = currentProperties.reduce((sum, p) => sum + p.units, 0);
+
+  // Calculate metrics for ALL properties (current + sold) for performance metrics section
   const totalPortfolioValue = allProperties.reduce((sum, p) => {
     const value = parseFloat(p.currentValue || p.salePrice || "0");
     return sum + value;
@@ -58,15 +66,15 @@ export default function Portfolio() {
     return sum + Math.max(0, currentValue - acquisitionPrice);
   }, 0);
 
-  const avgReturn = allProperties.reduce((sum, p) => {
+  const avgReturn = allProperties.length > 0 ? allProperties.reduce((sum, p) => {
     const irr = parseFloat(p.irr || "0");
     return sum + irr;
-  }, 0) / allProperties.length;
+  }, 0) / allProperties.length : 0;
 
-  const avgEquityMultiple = allProperties.reduce((sum, p) => {
+  const avgEquityMultiple = allProperties.length > 0 ? allProperties.reduce((sum, p) => {
     const multiple = parseFloat(p.equityMultiple || "0");
     return sum + multiple;
-  }, 0) / allProperties.length;
+  }, 0) / allProperties.length : 0;
 
   const totalRealizedProfits = soldProperties.reduce((sum, p) => {
     const acquisitionPrice = parseFloat(p.acquisitionPrice);
@@ -104,25 +112,25 @@ export default function Portfolio() {
             </p>
           </div>
 
-          {/* Portfolio Overview Stats */}
+          {/* Portfolio Overview Stats - Current Properties Only */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8" data-testid="portfolio-overview-stats">
             <div className="text-center">
-              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="total-portfolio-value">
-                {formatCurrency(totalPortfolioValue)}
+              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="current-portfolio-value">
+                {formatCurrency(currentPortfolioValue)}
               </div>
-              <div className="text-gray-300 text-sm uppercase tracking-wide">Total Portfolio Value</div>
+              <div className="text-gray-300 text-sm uppercase tracking-wide">Current Portfolio Value</div>
             </div>
             <div className="text-center">
-              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="total-properties">
-                {allProperties.length}
+              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="current-properties">
+                {currentProperties.length}
               </div>
-              <div className="text-gray-300 text-sm uppercase tracking-wide">Total Properties</div>
+              <div className="text-gray-300 text-sm uppercase tracking-wide">Current Properties</div>
             </div>
             <div className="text-center">
-              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="total-units">
-                {totalUnits}
+              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="current-units">
+                {currentUnits}
               </div>
-              <div className="text-gray-300 text-sm uppercase tracking-wide">Total Units</div>
+              <div className="text-gray-300 text-sm uppercase tracking-wide">Current Units</div>
             </div>
             <div className="text-center">
               <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="avg-equity-multiple">
@@ -359,7 +367,7 @@ export default function Portfolio() {
 
                 <div className="space-y-3">
                   <h4 className="text-lg font-semibold text-primary mb-3">Properties by City:</h4>
-                  {[...new Set(ctProperties.map(p => p.city))].map(city => {
+                  {Array.from(new Set(ctProperties.map(p => p.city))).map(city => {
                     const cityProperties = ctProperties.filter(p => p.city === city);
                     const cityUnits = cityProperties.reduce((sum, p) => sum + p.units, 0);
                     return (
@@ -405,7 +413,7 @@ export default function Portfolio() {
 
                 <div className="space-y-3">
                   <h4 className="text-lg font-semibold text-primary mb-3">Properties by City:</h4>
-                  {[...new Set(flProperties.map(p => p.city))].map(city => {
+                  {Array.from(new Set(flProperties.map(p => p.city))).map(city => {
                     const cityProperties = flProperties.filter(p => p.city === city);
                     const cityUnits = cityProperties.reduce((sum, p) => sum + p.units, 0);
                     return (

@@ -38,7 +38,25 @@ export default function Home() {
     );
   }
 
-  // Calculate performance metrics
+  // Calculate metrics for CURRENT properties only (for hero section)
+  const currentPortfolioValue = currentProperties.reduce((sum, p) => {
+    const value = parseFloat(p.currentValue || "0");
+    return sum + value;
+  }, 0);
+
+  const currentUnits = currentProperties.reduce((sum, p) => sum + p.units, 0);
+  
+  const currentAvgReturn = currentProperties.length > 0 ? currentProperties.reduce((sum, p) => {
+    const irr = parseFloat(p.irr || "0");
+    return sum + irr;
+  }, 0) / currentProperties.length : 0;
+
+  const currentAvgEquityMultiple = currentProperties.length > 0 ? currentProperties.reduce((sum, p) => {
+    const multiple = parseFloat(p.equityMultiple || "0");
+    return sum + multiple;
+  }, 0) / currentProperties.length : 0;
+
+  // Calculate metrics for ALL properties (current + sold) for performance metrics section
   const soldProperties = allProperties.filter(p => p.status === 'sold');
   const totalPortfolioValue = allProperties.reduce((sum, p) => {
     const value = parseFloat(p.currentValue || p.salePrice || "0");
@@ -72,10 +90,10 @@ export default function Home() {
   return (
     <div className="min-h-screen" data-testid="home-page">
       <HeroSection 
-        totalPortfolioValue={totalPortfolioValue}
-        totalUnits={totalUnits}
-        avgEquityMultiple={avgEquityMultiple}
-        avgReturn={avgReturn}
+        totalPortfolioValue={currentPortfolioValue}
+        totalUnits={currentUnits}
+        avgEquityMultiple={currentAvgEquityMultiple}
+        avgReturn={currentAvgReturn}
       />
 
       {/* Featured Properties */}
