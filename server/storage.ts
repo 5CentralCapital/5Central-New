@@ -92,7 +92,7 @@ export class MemStorage implements IStorage {
         ownershipStructure: "100% 5Central Capital",
         ownershipName: "5Central Capital",
         yearsHeld: "0.78",
-        irr: "-1.1",
+        irr: "78.2",
         equityMultiple: "5.64",
         noi: "135000",
         debtService: "148200",
