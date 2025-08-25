@@ -336,8 +336,8 @@ export default function Home() {
             <div>
               <h3 className="text-lg font-serif font-semibold mb-4">Contact</h3>
               <ul className="space-y-2 text-gray-300">
-                <li>info@5central.capital</li>
-                <li>(813) 555-0100</li>
+                <li>michael@5central.capital</li>
+                <li>860-326-6094</li>
                 <li>Tampa, FL</li>
               </ul>
             </div>
