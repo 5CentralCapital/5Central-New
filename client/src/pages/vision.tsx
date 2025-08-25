@@ -5,7 +5,7 @@ import { Link } from "wouter";
 
 export default function Vision() {
   const milestones = [
-    { year: "2025", target: "$25M", description: "Expand to 100+ units across CT and FL markets" },
+    { year: "2027", target: "$25M", description: "Expand to 100+ units across CT and FL markets" },
     { year: "2030", target: "$100M", description: "Enter 3 new markets with 300+ units" },
     { year: "2040", target: "$500M", description: "Establish regional presence with 1,000+ units" },
     { year: "2050", target: "$1B", description: "Achieve national portfolio of 2,500+ units" },
