@@ -158,18 +158,6 @@ export default function Founder() {
                 </div>
               </div>
 
-              <div className="mt-8">
-                <Button 
-                  className="bg-gradient-to-r from-accent-gold to-bronze text-white w-full px-8 py-4 rounded-lg font-semibold hover:shadow-lg transition-all duration-300 transform hover:-translate-y-0.5"
-                  data-testid="button-connect-michael"
-                  asChild
-                >
-                  <a href="mailto:michael@5central.capital">
-                    <Mail className="w-5 h-5 mr-2" />
-                    Connect with Michael
-                  </a>
-                </Button>
-              </div>
             </div>
           </div>
         </div>
