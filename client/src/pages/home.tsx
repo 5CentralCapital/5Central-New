@@ -310,16 +310,10 @@ export default function Home() {
       {/* Footer */}
       <footer className="bg-primary text-white py-16" data-testid="footer">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid md:grid-cols-4 gap-8">
-            <div className="md:col-span-2">
-              <div className="flex items-center mb-6">
-                <img 
-                  src="/logo.jpg"
-                  alt="5Central Capital Logo" 
-                  className="h-16 object-contain"
-                />
-              </div>
-              <p className="text-gray-300 leading-relaxed max-w-md">
+          <div className="grid md:grid-cols-3 gap-8">
+            <div>
+              <h3 className="text-lg font-serif font-semibold mb-4">About 5Central Capital</h3>
+              <p className="text-gray-300 leading-relaxed">
                 Strategic real estate investment firm specializing in high-return multifamily acquisitions with proven value creation through disciplined execution and strategic financing.
               </p>
             </div>
