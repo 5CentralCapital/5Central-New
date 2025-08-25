@@ -25,7 +25,7 @@ export default function HeroSection({
     return `$${value.toLocaleString()}`;
   };
   return (
-    <section className="pt-20 pb-20 relative overflow-hidden">
+    <section className="pt-24 pb-20 relative overflow-hidden">
       {/* Multifamily Apartment Building Background */}
       <div 
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
