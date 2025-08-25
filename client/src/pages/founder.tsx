@@ -11,10 +11,27 @@ export default function Founder() {
 
   // Calculate dynamic statistics
   const totalProperties = allProperties.length;
+  const currentProperties = allProperties.filter(p => p.status === "current");
+  const soldProperties = allProperties.filter(p => p.status === "sold");
+  
   const totalPortfolioValue = allProperties.reduce((sum, p) => {
     const value = parseFloat(p.currentValue || p.salePrice || "0");
     return sum + value;
   }, 0);
+  
+  const totalUnits = allProperties.reduce((sum, p) => sum + p.units, 0);
+  
+  const totalCashflow = allProperties.reduce((sum, p) => {
+    const cashflow = parseFloat(p.totalCashflow || "0");
+    return sum + cashflow;
+  }, 0);
+  
+  const averageIRR = allProperties.length > 0 ? 
+    allProperties.reduce((sum, p) => sum + parseFloat(p.irr || "0"), 0) / allProperties.length : 0;
+    
+  const averageEquityMultiple = allProperties.length > 0 ?
+    allProperties.reduce((sum, p) => sum + parseFloat(p.equityMultiple || "0"), 0) / allProperties.length : 0;
+    
   const yearsExperience = 4.5; // Started in 2020, now 2025
 
   const formatCurrency = (value: number) => {
@@ -101,7 +118,7 @@ export default function Founder() {
                 </div>
               </div>
 
-              <div className="mt-8 grid grid-cols-3 gap-4">
+              <div className="mt-8 grid grid-cols-2 md:grid-cols-3 gap-4">
                 <Card className="bg-secondary rounded-lg p-4 text-center">
                   <CardContent className="p-0">
                     <div className="text-2xl font-bold text-primary" data-testid="founder-stat-properties">{totalProperties}</div>
@@ -110,14 +127,32 @@ export default function Founder() {
                 </Card>
                 <Card className="bg-secondary rounded-lg p-4 text-center">
                   <CardContent className="p-0">
-                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-experience">{yearsExperience}</div>
-                    <div className="text-sm text-gray-600">Years Experience</div>
+                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-units">{totalUnits}</div>
+                    <div className="text-sm text-gray-600">Total Units</div>
                   </CardContent>
                 </Card>
                 <Card className="bg-secondary rounded-lg p-4 text-center">
                   <CardContent className="p-0">
                     <div className="text-2xl font-bold text-primary" data-testid="founder-stat-assets">{formatCurrency(totalPortfolioValue)}</div>
-                    <div className="text-sm text-gray-600">Assets Under Mgmt</div>
+                    <div className="text-sm text-gray-600">Portfolio Value</div>
+                  </CardContent>
+                </Card>
+                <Card className="bg-secondary rounded-lg p-4 text-center">
+                  <CardContent className="p-0">
+                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-cashflow">{formatCurrency(totalCashflow)}</div>
+                    <div className="text-sm text-gray-600">Total Cash Flow</div>
+                  </CardContent>
+                </Card>
+                <Card className="bg-secondary rounded-lg p-4 text-center">
+                  <CardContent className="p-0">
+                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-irr">{averageIRR.toFixed(1)}%</div>
+                    <div className="text-sm text-gray-600">Average IRR</div>
+                  </CardContent>
+                </Card>
+                <Card className="bg-secondary rounded-lg p-4 text-center">
+                  <CardContent className="p-0">
+                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-multiple">{averageEquityMultiple.toFixed(1)}x</div>
+                    <div className="text-sm text-gray-600">Avg Equity Multiple</div>
                   </CardContent>
                 </Card>
               </div>
