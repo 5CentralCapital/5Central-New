@@ -56,11 +56,6 @@ export default function Home() {
     return sum + multiple;
   }, 0) / currentProperties.length : 0;
 
-  const currentAvgHoldTime = currentProperties.length > 0 ? currentProperties.reduce((sum, p) => {
-    const holdTime = parseFloat(p.yearsHeld || "0");
-    return sum + holdTime;
-  }, 0) / currentProperties.length : 0;
-
   // Calculate metrics for ALL properties (current + sold) for performance metrics section
   const soldProperties = allProperties.filter(p => p.status === 'sold');
   const totalPortfolioValue = allProperties.reduce((sum, p) => {
@@ -99,7 +94,6 @@ export default function Home() {
         totalUnits={currentUnits}
         avgEquityMultiple={currentAvgEquityMultiple}
         avgReturn={currentAvgReturn}
-        avgHoldTime={currentAvgHoldTime}
       />
 
       {/* Featured Properties */}

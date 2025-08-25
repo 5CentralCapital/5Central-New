@@ -6,15 +6,13 @@ interface HeroSectionProps {
   totalUnits: number;
   avgEquityMultiple: number;
   avgReturn: number;
-  avgHoldTime: number;
 }
 
 export default function HeroSection({ 
   totalPortfolioValue, 
   totalUnits, 
   avgEquityMultiple, 
-  avgReturn,
-  avgHoldTime 
+  avgReturn 
 }: HeroSectionProps) {
   
   const formatCurrency = (value: number) => {
@@ -27,7 +25,7 @@ export default function HeroSection({
     return `$${value.toLocaleString()}`;
   };
   return (
-    <section className="pt-16 pb-16 relative overflow-hidden">
+    <section className="pt-20 pb-20 relative overflow-hidden">
       {/* Multifamily Apartment Building Background */}
       <div 
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
@@ -65,7 +63,7 @@ export default function HeroSection({
           </div>
           
           {/* Key Metrics */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-5 gap-6 mt-12" data-testid="hero-metrics">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mt-16" data-testid="hero-metrics">
             <div className="text-center">
               <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-portfolio-value">
                 {formatCurrency(totalPortfolioValue)}
@@ -89,12 +87,6 @@ export default function HeroSection({
                 {(avgReturn || 0).toFixed(1)}%
               </div>
               <div className="text-gray-300 text-sm uppercase tracking-wide">Avg Return</div>
-            </div>
-            <div className="text-center">
-              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-avg-hold-time">
-                {(avgHoldTime || 0).toFixed(1)}
-              </div>
-              <div className="text-gray-300 text-sm uppercase tracking-wide">Avg Hold Time (Yrs)</div>
             </div>
           </div>
         </div>
