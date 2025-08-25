@@ -93,7 +93,7 @@ export default function Founder() {
                 </p>
                 
                 <p>
-                  Today I manage about $4.8M in assets, self-managing renovations with tight crews and no GC markups. The system is simple and repeatable: 85% LTC bridge, heavy rehab fast, refinance in 4–6 months at ≤70% LTV, then recycle capital. Underwriting is disciplined: neighborhood-specific rents, a 40% OpEx baseline, DSCR ≥ 1.20× at refi, and exit caps stressed 50–100 bps. To keep liquidity turning, I run select 1–4-unit flips at 100% LTC that net $60–80k in roughly four months.
+                  Today I manage {formatCurrency(totalPortfolioValue)} in assets, self-managing renovations with tight crews and no GC markups. The system is simple and repeatable: 85% LTC bridge, heavy rehab fast, refinance in 4–6 months at ≤70% LTV, then recycle capital. Underwriting is disciplined: neighborhood-specific rents, a 40% OpEx baseline, DSCR ≥ 1.20× at refi, and exit caps stressed 50–100 bps. To keep liquidity turning, I run select 1–4-unit flips at 100% LTC that net $60–80k in roughly four months.
                 </p>
 
                 <div className="mt-8">
