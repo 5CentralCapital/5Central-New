@@ -139,12 +139,6 @@ export default function Founder() {
                 </Card>
                 <Card className="bg-secondary rounded-lg p-4 text-center">
                   <CardContent className="p-0">
-                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-cashflow">{formatCurrency(totalCashflow)}</div>
-                    <div className="text-sm text-gray-600">Total Cash Flow</div>
-                  </CardContent>
-                </Card>
-                <Card className="bg-secondary rounded-lg p-4 text-center">
-                  <CardContent className="p-0">
                     <div className="text-2xl font-bold text-primary" data-testid="founder-stat-irr">{averageIRR.toFixed(1)}%</div>
                     <div className="text-sm text-gray-600">Average IRR</div>
                   </CardContent>
@@ -157,21 +151,16 @@ export default function Founder() {
                 </Card>
               </div>
 
-              <div className="mt-8 flex flex-wrap gap-4">
+              <div className="mt-8">
                 <Button 
                   className="bg-gradient-to-r from-accent-gold to-bronze text-white px-8 py-4 rounded-lg font-semibold hover:shadow-lg transition-all duration-300 transform hover:-translate-y-0.5"
                   data-testid="button-connect-michael"
+                  asChild
                 >
-                  <Mail className="w-5 h-5 mr-2" />
-                  Connect with Michael
-                </Button>
-                <Button 
-                  variant="outline"
-                  className="border-2 border-primary text-primary px-8 py-4 rounded-lg font-semibold hover:bg-primary hover:text-white transition-all duration-300"
-                  data-testid="button-linkedin-profile"
-                >
-                  <Linkedin className="w-5 h-5 mr-2" />
-                  LinkedIn Profile
+                  <a href="mailto:michael@5central.capital">
+                    <Mail className="w-5 h-5 mr-2" />
+                    Connect with Michael
+                  </a>
                 </Button>
               </div>
             </div>
@@ -295,8 +284,9 @@ export default function Founder() {
             <Button 
               className="bg-gradient-to-r from-accent-gold to-bronze text-white px-10 py-4 rounded-lg font-semibold text-lg hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1"
               data-testid="button-schedule-meeting"
+              asChild
             >
-              Schedule a Meeting
+              <a href="mailto:michael@5central.capital">Schedule a Meeting</a>
             </Button>
             <Button 
               variant="outline"

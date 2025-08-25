@@ -471,16 +471,12 @@ export default function Portfolio() {
           <div className="grid md:grid-cols-3 gap-8 text-center">
             <div className="flex flex-col items-center">
               <Mail className="w-8 h-8 text-accent-gold mb-2" />
-              <div className="text-2xl font-bold text-white mb-2" data-testid="portfolio-contact-email">
-                info@5central.capital
-              </div>
+              <div className="text-2xl font-bold text-white mb-2" data-testid="portfolio-contact-email">michael@5central.capital</div>
               <div className="text-gray-300">Investment Inquiries</div>
             </div>
             <div className="flex flex-col items-center">
               <Phone className="w-8 h-8 text-accent-gold mb-2" />
-              <div className="text-2xl font-bold text-white mb-2" data-testid="portfolio-contact-phone">
-                (813) 555-0100
-              </div>
+              <div className="text-2xl font-bold text-white mb-2" data-testid="portfolio-contact-phone">860-326-6094</div>
               <div className="text-gray-300">Direct Line</div>
             </div>
             <div className="flex flex-col items-center">

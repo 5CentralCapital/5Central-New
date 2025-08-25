@@ -290,12 +290,12 @@ export default function Home() {
           <div className="grid md:grid-cols-3 gap-8 text-center">
             <div className="flex flex-col items-center">
               <Mail className="w-8 h-8 text-accent-gold mb-2" />
-              <div className="text-2xl font-bold text-primary mb-2" data-testid="contact-email">info@5central.capital</div>
+              <div className="text-2xl font-bold text-primary mb-2" data-testid="contact-email">michael@5central.capital</div>
               <div className="text-gray-600">General Inquiries</div>
             </div>
             <div className="flex flex-col items-center">
               <Phone className="w-8 h-8 text-accent-gold mb-2" />
-              <div className="text-2xl font-bold text-primary mb-2" data-testid="contact-phone">(813) 555-0100</div>
+              <div className="text-2xl font-bold text-primary mb-2" data-testid="contact-phone">860-326-6094</div>
               <div className="text-gray-600">Investment Opportunities</div>
             </div>
             <div className="flex flex-col items-center">
