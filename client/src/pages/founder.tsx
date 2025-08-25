@@ -49,9 +49,9 @@ export default function Founder() {
   return (
     <div className="min-h-screen pt-16" data-testid="founder-page">
       {/* Hero Section */}
-      <section className="min-h-[60vh] bg-gradient-to-br from-primary to-gray-800 text-white relative overflow-hidden flex items-center">
+      <section className="py-16 bg-gradient-to-br from-primary to-gray-800 text-white relative overflow-hidden">
         <div className="geometric-pattern absolute inset-0 opacity-10"></div>
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 w-full">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
           <div className="text-center">
             <h1 className="text-5xl md:text-6xl font-serif font-bold mb-6" data-testid="founder-title">
               Meet <span className="text-accent-gold">Michael McElwee</span>
