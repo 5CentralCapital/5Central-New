@@ -118,42 +118,49 @@ export default function Founder() {
                 </div>
               </div>
 
-              <div className="mt-8 grid grid-cols-2 md:grid-cols-3 gap-4">
-                <Card className="bg-secondary rounded-lg p-4 text-center">
-                  <CardContent className="p-0">
-                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-properties">{totalProperties}</div>
-                    <div className="text-sm text-gray-600">Properties Acquired</div>
-                  </CardContent>
-                </Card>
-                <Card className="bg-secondary rounded-lg p-4 text-center">
-                  <CardContent className="p-0">
-                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-units">{totalUnits}</div>
-                    <div className="text-sm text-gray-600">Total Units</div>
-                  </CardContent>
-                </Card>
-                <Card className="bg-secondary rounded-lg p-4 text-center">
-                  <CardContent className="p-0">
-                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-assets">{formatCurrency(totalPortfolioValue)}</div>
-                    <div className="text-sm text-gray-600">Portfolio Value</div>
-                  </CardContent>
-                </Card>
-                <Card className="bg-secondary rounded-lg p-4 text-center">
-                  <CardContent className="p-0">
-                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-irr">{averageIRR.toFixed(1)}%</div>
-                    <div className="text-sm text-gray-600">Average IRR</div>
-                  </CardContent>
-                </Card>
-                <Card className="bg-secondary rounded-lg p-4 text-center">
-                  <CardContent className="p-0">
-                    <div className="text-2xl font-bold text-primary" data-testid="founder-stat-multiple">{averageEquityMultiple.toFixed(1)}x</div>
-                    <div className="text-sm text-gray-600">Avg Equity Multiple</div>
-                  </CardContent>
-                </Card>
+              <div className="mt-8 space-y-4">
+                {/* Top row - 3 boxes */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <Card className="bg-secondary rounded-lg p-4 text-center">
+                    <CardContent className="p-0">
+                      <div className="text-2xl font-bold text-primary" data-testid="founder-stat-properties">{totalProperties}</div>
+                      <div className="text-sm text-gray-600">Properties Acquired</div>
+                    </CardContent>
+                  </Card>
+                  <Card className="bg-secondary rounded-lg p-4 text-center">
+                    <CardContent className="p-0">
+                      <div className="text-2xl font-bold text-primary" data-testid="founder-stat-units">{totalUnits}</div>
+                      <div className="text-sm text-gray-600">Total Units</div>
+                    </CardContent>
+                  </Card>
+                  <Card className="bg-secondary rounded-lg p-4 text-center">
+                    <CardContent className="p-0">
+                      <div className="text-2xl font-bold text-primary" data-testid="founder-stat-assets">{formatCurrency(totalPortfolioValue)}</div>
+                      <div className="text-sm text-gray-600">Portfolio Value</div>
+                    </CardContent>
+                  </Card>
+                </div>
+                
+                {/* Bottom row - 2 centered boxes */}
+                <div className="grid grid-cols-2 gap-4 max-w-md mx-auto">
+                  <Card className="bg-secondary rounded-lg p-4 text-center">
+                    <CardContent className="p-0">
+                      <div className="text-2xl font-bold text-primary" data-testid="founder-stat-irr">{averageIRR.toFixed(1)}%</div>
+                      <div className="text-sm text-gray-600">Average IRR</div>
+                    </CardContent>
+                  </Card>
+                  <Card className="bg-secondary rounded-lg p-4 text-center">
+                    <CardContent className="p-0">
+                      <div className="text-2xl font-bold text-primary" data-testid="founder-stat-multiple">{averageEquityMultiple.toFixed(1)}x</div>
+                      <div className="text-sm text-gray-600">Avg Equity Multiple</div>
+                    </CardContent>
+                  </Card>
+                </div>
               </div>
 
               <div className="mt-8">
                 <Button 
-                  className="bg-gradient-to-r from-accent-gold to-bronze text-white px-8 py-4 rounded-lg font-semibold hover:shadow-lg transition-all duration-300 transform hover:-translate-y-0.5"
+                  className="bg-gradient-to-r from-accent-gold to-bronze text-white w-full px-8 py-4 rounded-lg font-semibold hover:shadow-lg transition-all duration-300 transform hover:-translate-y-0.5"
                   data-testid="button-connect-michael"
                   asChild
                 >
