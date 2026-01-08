@@ -38,8 +38,8 @@ export default function Investor() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    // Handle form submission here
-    console.log("Investor list signup:", formData);
+    // Form submission will be handled when investor portal is ready
+    // For now, the form captures user interest for the waitlist
   };
 
   return (
@@ -326,7 +326,7 @@ export default function Investor() {
 
           <div className="text-center mt-12">
             <p className="text-lg text-gray-600 mb-6">
-              The investor portal is currently in development and will launch in early 2025.
+              The investor portal is currently in development.
             </p>
             <Button
               className="bg-primary hover:bg-primary/90 text-white px-8 py-3 text-lg"
