@@ -10,9 +10,11 @@ interface PerformanceMetricsProps {
   soldProperties: number;
   avgEquityMultiple: number;
   totalRealizedProfits: number;
+  ctUnits?: number;
+  flUnits?: number;
 }
 
-export default function PerformanceMetrics({ 
+export default function PerformanceMetrics({
   totalPortfolioValue,
   totalUnits,
   totalEquityCreated,
@@ -20,7 +22,9 @@ export default function PerformanceMetrics({
   currentProperties,
   soldProperties,
   avgEquityMultiple,
-  totalRealizedProfits
+  totalRealizedProfits,
+  ctUnits = 0,
+  flUnits = 0
 }: PerformanceMetricsProps) {
   
   const formatCurrency = (value: number) => {
@@ -104,11 +108,11 @@ export default function PerformanceMetrics({
               <div className="space-y-4">
                 <div className="flex justify-between items-center">
                   <span className="text-gray-600">Connecticut Properties</span>
-                  <span className="font-semibold text-primary" data-testid="ct-units">37 Units</span>
+                  <span className="font-semibold text-primary" data-testid="ct-units">{ctUnits} Units</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-gray-600">Florida Properties</span>
-                  <span className="font-semibold text-primary" data-testid="fl-units">10 Units</span>
+                  <span className="font-semibold text-primary" data-testid="fl-units">{flUnits} Units</span>
                 </div>
                 <div className="flex justify-between items-center border-t pt-4">
                   <span className="text-gray-600 font-medium">Average Equity Multiple</span>

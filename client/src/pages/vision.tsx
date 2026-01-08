@@ -309,7 +309,7 @@ export default function Vision() {
               <div className="text-gray-300">Portfolio Goal by 2050</div>
             </div>
             <div>
-              <div className="text-3xl font-bold text-accent-gold mb-2" data-testid="vision-cta-experience">10+</div>
+              <div className="text-3xl font-bold text-accent-gold mb-2" data-testid="vision-cta-experience">6+</div>
               <div className="text-gray-300">Years Experience</div>
             </div>
             <div>

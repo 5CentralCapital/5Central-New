@@ -87,6 +87,10 @@ export default function Home() {
     return sum + Math.max(0, salePrice - acquisitionPrice);
   }, 0);
 
+  // Calculate CT and FL units for PerformanceMetrics
+  const ctUnits = allProperties.filter(p => p.state === 'CT').reduce((sum, p) => sum + p.units, 0);
+  const flUnits = allProperties.filter(p => p.state === 'FL').reduce((sum, p) => sum + p.units, 0);
+
   return (
     <div className="min-h-screen" data-testid="home-page">
       <HeroSection 
@@ -139,6 +143,8 @@ export default function Home() {
         soldProperties={soldProperties.length}
         avgEquityMultiple={avgEquityMultiple}
         totalRealizedProfits={totalRealizedProfits}
+        ctUnits={ctUnits}
+        flUnits={flUnits}
       />
 
       {/* Why Partner With Us */}
@@ -237,7 +243,7 @@ export default function Home() {
                 </AccordionTrigger>
                 <AccordionContent className="px-6 pb-6">
                   <p className="text-gray-600 leading-relaxed">
-                    Our target returns are 15-25% IRR with equity multiples of 2.0x-4.0x over a 3-7 year hold period. We've consistently exceeded these targets with an average IRR of 85.3% and equity multiples averaging 3.02x across our portfolio.
+                    Our target returns are 15-25% IRR with equity multiples of 2.0x-4.0x over a 3-7 year hold period. We've consistently exceeded these targets with an average IRR of {avgReturn.toFixed(1)}% and equity multiples averaging {avgEquityMultiple.toFixed(2)}x across our portfolio.
                   </p>
                 </AccordionContent>
               </Card>
@@ -338,7 +344,7 @@ export default function Home() {
           </div>
 
           <div className="border-t border-gray-700 mt-12 pt-8 text-center text-gray-400">
-            <p>&copy; 2024 5Central Capital. All rights reserved. | Investment opportunities subject to qualification and availability.</p>
+            <p>&copy; {new Date().getFullYear()} 5Central Capital. All rights reserved. | Investment opportunities subject to qualification and availability.</p>
           </div>
         </div>
       </footer>

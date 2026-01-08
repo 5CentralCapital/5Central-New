@@ -324,6 +324,8 @@ export default function Portfolio() {
         soldProperties={soldProperties.length}
         avgEquityMultiple={avgEquityMultiple}
         totalRealizedProfits={totalRealizedProfits}
+        ctUnits={ctUnits}
+        flUnits={flUnits}
       />
 
       {/* Geographic Breakdown */}
