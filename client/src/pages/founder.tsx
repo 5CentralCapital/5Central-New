@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { type Property } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Mail, Linkedin, Building2 } from "lucide-react";
+import { Building2 } from "lucide-react";
+import { Link } from "wouter";
 
 export default function Founder() {
   const { data: allProperties = [], isLoading } = useQuery<Property[]>({
@@ -31,8 +32,6 @@ export default function Founder() {
     
   const averageEquityMultiple = allProperties.length > 0 ?
     allProperties.reduce((sum, p) => sum + parseFloat(p.equityMultiple || "0"), 0) / allProperties.length : 0;
-    
-  const yearsExperience = 4.5; // Started in 2020, now 2025
 
   const formatCurrency = (value: number) => {
     if (value >= 1000000) {
@@ -283,13 +282,15 @@ export default function Founder() {
             >
               <a href="mailto:michael@5central.capital">Schedule a Meeting</a>
             </Button>
-            <Button 
-              variant="outline"
-              className="border-2 border-accent-gold text-accent-gold px-10 py-4 rounded-lg font-semibold text-lg hover:bg-accent-gold hover:text-primary transition-all duration-300"
-              data-testid="button-view-portfolio"
-            >
-              View Portfolio
-            </Button>
+            <Link href="/portfolio">
+              <Button
+                variant="outline"
+                className="border-2 border-accent-gold text-accent-gold px-10 py-4 rounded-lg font-semibold text-lg hover:bg-accent-gold hover:text-primary transition-all duration-300"
+                data-testid="button-view-portfolio"
+              >
+                View Portfolio
+              </Button>
+            </Link>
           </div>
         </div>
       </section>

@@ -4,11 +4,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
+import { useToast } from "@/hooks/use-toast";
 
 export default function Investor() {
   const [initialInvestment, setInitialInvestment] = useState(100000);
   const [investmentDuration, setInvestmentDuration] = useState(5);
   const [formData, setFormData] = useState({ fullName: "", email: "" });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const { toast } = useToast();
 
   const calculateReturns = () => {
     const targetReturn = 0.30;
@@ -36,14 +39,24 @@ export default function Investor() {
     }).format(amount);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Handle form submission here
-    console.log("Investor list signup:", formData);
+    setIsSubmitting(true);
+
+    // Simulate form submission (in production, this would be an API call)
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    toast({
+      title: "Successfully Joined!",
+      description: `Thank you ${formData.fullName}! You've been added to our investor list. We'll contact you at ${formData.email} when new opportunities become available.`,
+    });
+
+    setFormData({ fullName: "", email: "" });
+    setIsSubmitting(false);
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
+    <div className="min-h-screen pt-16 bg-gradient-to-b from-gray-50 to-white">
       {/* Hero Section */}
       <section className="relative py-20 px-4 text-center">
         <div className="max-w-4xl mx-auto">
@@ -219,14 +232,14 @@ export default function Investor() {
 
           <div className="grid md:grid-cols-3 gap-8 mb-12">
             <div className="text-center">
-              <div className="text-3xl font-bold text-accent-gold mb-2">458.8%</div>
-              <div className="text-lg font-semibold mb-2">Exceptional Returns</div>
-              <div className="opacity-90">Target returns based on our proven track record of average cash-on-cash returns</div>
+              <div className="text-3xl font-bold text-accent-gold mb-2">3.0x+</div>
+              <div className="text-lg font-semibold mb-2">Avg Equity Multiple</div>
+              <div className="opacity-90">Target equity multiples based on our proven track record of value-add investments</div>
             </div>
             <div className="text-center">
-              <div className="text-3xl font-bold text-accent-gold mb-2">15+</div>
-              <div className="text-lg font-semibold mb-2">Experienced Team</div>
-              <div className="opacity-90">Benefit from our deep market knowledge and proven track record across Florida and Connecticut</div>
+              <div className="text-3xl font-bold text-accent-gold mb-2">6+</div>
+              <div className="text-lg font-semibold mb-2">Years Experience</div>
+              <div className="opacity-90">Founder-led with deep market knowledge and proven track record across Florida and Connecticut</div>
             </div>
             <div className="text-center">
               <div className="text-3xl font-bold text-accent-gold mb-2">VIP</div>
@@ -278,8 +291,9 @@ export default function Investor() {
                 <Button
                   type="submit"
                   className="w-full bg-accent-gold hover:bg-accent-gold/90 text-primary font-bold py-3 text-lg"
+                  disabled={isSubmitting}
                 >
-                  Join Investor List
+                  {isSubmitting ? "Submitting..." : "Join Investor List"}
                 </Button>
               </form>
               
@@ -326,7 +340,7 @@ export default function Investor() {
 
           <div className="text-center mt-12">
             <p className="text-lg text-gray-600 mb-6">
-              The investor portal is currently in development and will launch in early 2025.
+              The investor portal is currently in development and will launch in 2026.
             </p>
             <Button
               className="bg-primary hover:bg-primary/90 text-white px-8 py-3 text-lg"

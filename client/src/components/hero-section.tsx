@@ -53,13 +53,15 @@ export default function HeroSection({
                 View Our Portfolio
               </Button>
             </Link>
-            <Button 
-              variant="outline"
-              className="border-2 border-accent-gold text-accent-gold px-8 py-4 rounded-lg font-semibold text-lg hover:bg-accent-gold hover:text-primary transition-all duration-300"
-              data-testid="button-investment-opportunities"
-            >
-              Investment Opportunities
-            </Button>
+            <Link href="/investor">
+              <Button
+                variant="outline"
+                className="border-2 border-accent-gold text-accent-gold px-8 py-4 rounded-lg font-semibold text-lg hover:bg-accent-gold hover:text-primary transition-all duration-300"
+                data-testid="button-investment-opportunities"
+              >
+                Investment Opportunities
+              </Button>
+            </Link>
           </div>
           
           {/* Key Metrics */}
