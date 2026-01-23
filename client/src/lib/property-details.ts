@@ -75,6 +75,20 @@ export interface PropertyDetails {
 
   // Investment Thesis
   investmentThesis?: string;
+
+  // Refinance Step
+  refiLTV?: number;
+  refiLoanAmount?: number;
+  refiCashOut?: number;
+  newMonthlyPI?: number;
+  equityAfterRefi?: number;
+  refiTargetMonth?: number;
+
+  // Exit Step
+  projectedSalePrice?: number;
+  projectedNetProceeds?: number;
+  projectedTotalProfit?: number;
+  holdPeriodMonths?: number;
 }
 
 export const propertyDetails: Record<string, PropertyDetails> = {
@@ -137,7 +151,11 @@ export const propertyDetails: Record<string, PropertyDetails> = {
     maturityDate: "Q4 2026",
     loanType: "Bridge",
 
-    beforePhotos: [], // Coming soon
+    beforePhotos: [
+      "/attached_assets/gallery/before/sun-cove-before-1.jpg",
+      "/attached_assets/gallery/before/sun-cove-before-2.jpg",
+      "/attached_assets/gallery/before/sun-cove-before-3.jpg",
+    ],
     afterPhotos: [
       "/attached_assets/gallery/sun-cove-21-unit-cover-photo-.jpg",
       "/attached_assets/gallery/sun-cove-13-unit-cover-photo.jpg",
@@ -147,7 +165,21 @@ export const propertyDetails: Record<string, PropertyDetails> = {
       "/attached_assets/gallery/sun-cove-8-unit-cover-photo-1.jpg",
     ],
 
-    investmentThesis: "21-unit portfolio in St. Petersburg with significant value-add opportunity through renovation and rent increases. In-place rents significantly below market with 81% occupancy providing NOI upside of $163K through stabilization."
+    investmentThesis: "21-unit portfolio in St. Petersburg with significant value-add opportunity through renovation and rent increases. In-place rents significantly below market with 81% occupancy providing NOI upside of $163K through stabilization.",
+
+    // Refinance Step
+    refiLTV: 0.70,
+    refiLoanAmount: 2940000,
+    refiCashOut: 561095,
+    newMonthlyPI: 15500,
+    equityAfterRefi: 1260000,
+    refiTargetMonth: 9,
+
+    // Exit Step
+    projectedSalePrice: 4200000,
+    projectedNetProceeds: 1092000,
+    projectedTotalProfit: 1331584,
+    holdPeriodMonths: 24
   },
 
   "Lucia Apartments": {
@@ -209,7 +241,12 @@ export const propertyDetails: Record<string, PropertyDetails> = {
     maturityDate: "Q1 2028",
     loanType: "Bridge",
 
-    beforePhotos: [], // Coming soon
+    beforePhotos: [
+      "/attached_assets/gallery/before/lucia-before-1.jpg",
+      "/attached_assets/gallery/before/lucia-before-2.jpg",
+      "/attached_assets/gallery/before/lucia-before-3.jpg",
+      "/attached_assets/gallery/before/lucia-before-4.jpg",
+    ],
     afterPhotos: [
       "/attached_assets/gallery/lucia-1.jpg",
       "/attached_assets/gallery/lucia-2.jpg",
@@ -218,7 +255,21 @@ export const propertyDetails: Record<string, PropertyDetails> = {
       "/attached_assets/gallery/lucia-5.jpg",
     ],
 
-    investmentThesis: "16-unit historic property in Winter Haven with proforma rents conservative vs renovated comps. Higher-end comps ($1,400-1,675 for 1BR) support significant rent upside after renovation."
+    investmentThesis: "16-unit historic property in Winter Haven with proforma rents conservative vs renovated comps. Higher-end comps ($1,400-1,675 for 1BR) support significant rent upside after renovation.",
+
+    // Refinance Step
+    refiLTV: 0.70,
+    refiLoanAmount: 1568000,
+    refiCashOut: 405040,
+    newMonthlyPI: 9800,
+    equityAfterRefi: 672000,
+    refiTargetMonth: 6,
+
+    // Exit Step
+    projectedSalePrice: 2240000,
+    projectedNetProceeds: 560000,
+    projectedTotalProfit: 841810,
+    holdPeriodMonths: 24
   },
 
   "Hickory Landing": {
@@ -280,7 +331,29 @@ export const propertyDetails: Record<string, PropertyDetails> = {
     maturityDate: "Q3 2027",
     loanType: "Bridge",
 
-    investmentThesis: "8-unit portfolio in Lakeland with massive NOI upside (249%) through renovation and lease-up. Currently 50% occupied with significant rent growth potential to $1,375-1,450/unit."
+    beforePhotos: [
+      "/attached_assets/gallery/before/hickory-before-1.jpg",
+      "/attached_assets/gallery/before/hickory-before-2.jpg",
+      "/attached_assets/gallery/before/hickory-before-3.jpg",
+      "/attached_assets/gallery/before/hickory-before-4.jpg",
+    ],
+    afterPhotos: [],
+
+    investmentThesis: "8-unit portfolio in Lakeland with massive NOI upside (249%) through renovation and lease-up. Currently 50% occupied with significant rent growth potential to $1,375-1,450/unit.",
+
+    // Refinance Step
+    refiLTV: 0.70,
+    refiLoanAmount: 906368,
+    refiCashOut: 350000,
+    newMonthlyPI: 5700,
+    equityAfterRefi: 388444,
+    refiTargetMonth: 9,
+
+    // Exit Step
+    projectedSalePrice: 1294812,
+    projectedNetProceeds: 336000,
+    projectedTotalProfit: 527028,
+    holdPeriodMonths: 24
   },
 
   "MLK Apartments": {
@@ -342,7 +415,34 @@ export const propertyDetails: Record<string, PropertyDetails> = {
     maturityDate: "Q1 2026",
     loanType: "Bridge",
 
-    investmentThesis: "10-unit stabilized property in Tampa at 100% occupancy. Strong DSCR of 1.81x and debt yield of 10.4%. Major rehab completed with $450K investment creating $700K in value."
+    beforePhotos: [
+      "/attached_assets/gallery/before/mlk-before-1.jpg",
+      "/attached_assets/gallery/before/mlk-before-2.jpg",
+      "/attached_assets/gallery/before/mlk-before-3.jpg",
+      "/attached_assets/gallery/before/mlk-before-4.jpg",
+    ],
+    afterPhotos: [
+      "/attached_assets/gallery/mlk-after-1.jpg",
+      "/attached_assets/gallery/mlk-after-2.jpg",
+      "/attached_assets/gallery/mlk-after-3.jpg",
+      "/attached_assets/gallery/mlk-after-4.jpg",
+    ],
+
+    investmentThesis: "10-unit stabilized property in Tampa at 100% occupancy. Strong DSCR of 1.81x and debt yield of 10.4%. Major rehab completed with $450K investment creating $700K in value.",
+
+    // Refinance Step
+    refiLTV: 0.70,
+    refiLoanAmount: 1330000,
+    refiCashOut: 160300,
+    newMonthlyPI: 8300,
+    equityAfterRefi: 570000,
+    refiTargetMonth: 9,
+
+    // Exit Step
+    projectedSalePrice: 1900000,
+    projectedNetProceeds: 589000,
+    projectedTotalProfit: 527175,
+    holdPeriodMonths: 24
   }
 };
 
