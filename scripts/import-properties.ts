@@ -101,13 +101,41 @@ function parseCurrentProperties(workbook: XLSX.WorkBook) {
   const sheet = workbook.Sheets['Portfolio Overview'];
   const data = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
 
+  // Acquisition dates from individual property sheets (row 9, column 1)
+  // Excel serial: Sun Cove=46038 (Jan 2026), Lucia=46058 (Feb 2026), Hickory=45918 (Sep 2025), MLK=45609 (Nov 2024)
+  const acquisitionDates: Record<string, Date> = {
+    'Sun Cove Apartments': new Date('2026-01-15'),
+    'Lucia Apartments': new Date('2026-02-04'),
+    'Hickory Landing': new Date('2025-09-17'),
+    'MLK Apartments': new Date('2024-11-13'),
+  };
+
+  // Try to read from Excel sheets to override with actual data
+  for (const sheetName of ['Sun Cove Apartments', 'Lucia Apartments', 'Hickory Landing', 'MLK Apartments']) {
+    const propSheet = workbook.Sheets[sheetName];
+    if (propSheet) {
+      const propData = XLSX.utils.sheet_to_json(propSheet, { header: 1 }) as any[][];
+      const row9 = propData[9];
+      if (row9 && row9[1] && typeof row9[1] === 'number') {
+        const serial = row9[1];
+        // Only use if it's a valid Excel serial date (2020-2030 range = ~43831 to ~47483)
+        if (serial >= 43831 && serial <= 50000) {
+          acquisitionDates[sheetName] = excelDateToJS(serial);
+        }
+      }
+    }
+  }
+
   // Property details from rows 41-44 (RETURN METRICS section)
   // Row 40 has headers, rows 41-44 have data
+  // Ownership structures from plan:
+  // Sun Cove: Arcadia Vision Group - 80% 5Central Capital, 20% Hector Mesa
+  // Lucia, Hickory Landing, MLK: 100% 5Central Capital
   const propertyRows = [
-    { row: 41, name: 'Sun Cove Apartments', address: '1701 Crissman Dr & 28th St', city: 'Tampa', state: 'FL', zip: '33605' },
-    { row: 42, name: 'Lucia Apartments', address: '669 Ave B NW', city: 'Winter Haven', state: 'FL', zip: '33881' },
-    { row: 43, name: 'Hickory Landing', address: '2006 W Hickory St', city: 'Denton', state: 'TX', zip: '76201' },
-    { row: 44, name: 'MLK Apartments', address: '3408 E Dr MLK Blvd', city: 'Tampa', state: 'FL', zip: '33610' },
+    { row: 41, name: 'Sun Cove Apartments', address: '5633 Crissman Dr N & 5680 28th St', city: 'St. Petersburg', state: 'FL', zip: '33712', ownershipStructure: 'Arcadia Vision Group', ownershipName: '80% 5Central Capital, 20% Hector Mesa', currentDebt: 2940000 },
+    { row: 42, name: 'Lucia Apartments', address: '669 Ave B NW', city: 'Winter Haven', state: 'FL', zip: '33881', ownershipStructure: '5Central Capital', ownershipName: '5Central Capital', currentDebt: 0 },
+    { row: 43, name: 'Hickory Landing', address: '2006 W Hickory St', city: 'Lakeland', state: 'FL', zip: '33805', ownershipStructure: '5Central Capital', ownershipName: '5Central Capital', currentDebt: 0 },
+    { row: 44, name: 'MLK Apartments', address: '3408 E Dr MLK Blvd', city: 'Tampa', state: 'FL', zip: '33610', ownershipStructure: '5Central Capital', ownershipName: '5Central Capital', currentDebt: 0 },
   ];
 
   // NOI and debt service from rows 15-18
@@ -149,6 +177,9 @@ function parseCurrentProperties(workbook: XLSX.WorkBook) {
     // 5: Cash-on-Cash (Sale), 6: Cash-Out at Refi, 7: Net Cash from Sale, 8: Total Profit,
     // 9: Hold Period, 10: Purchase Price, 11: Rehab, 12: ARV
 
+    // Get acquisition date from individual sheet or use fallback
+    const acqDate = acquisitionDates[prop.name] || new Date('2024-01-15');
+
     currentProperties.push({
       name: prop.name,
       address: prop.address,
@@ -156,9 +187,9 @@ function parseCurrentProperties(workbook: XLSX.WorkBook) {
       state: prop.state,
       zipCode: prop.zip,
       units: units.units,
-      ownershipStructure: '100% 5Central Capital',
-      ownershipName: '5Central Capital',
-      acquisitionDate: new Date('2024-01-15'), // Approximate - 24 months ago per "Hold Period"
+      ownershipStructure: prop.ownershipStructure,
+      ownershipName: prop.ownershipName,
+      acquisitionDate: acqDate,
       acquisitionPrice: row[10] || 0, // Purchase Price
       rehabCosts: row[11] || 0, // Rehab
       currentValue: row[12] || 0, // ARV
@@ -170,6 +201,7 @@ function parseCurrentProperties(workbook: XLSX.WorkBook) {
       debtService: noi.debtService,
       cashflow: noi.cashflow,
       status: 'current',
+      currentDebt: prop.currentDebt || 0, // Perm loan after refi
     });
   }
 

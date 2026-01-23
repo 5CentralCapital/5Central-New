@@ -1,12 +1,46 @@
 import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
+import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
 import path from "path";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { loadUser } from "./auth";
+import { pool } from "./db";
 
 const app = express();
+
+// Trust proxy for Replit (behind reverse proxy)
+app.set("trust proxy", 1);
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+
+// PostgreSQL session store
+const PgStore = connectPgSimple(session);
+
+// Session middleware with PostgreSQL storage
+app.use(
+  session({
+    store: new PgStore({
+      pool: pool,
+      tableName: "user_sessions",
+      createTableIfMissing: true,
+    }),
+    secret: process.env.SESSION_SECRET || "5central-capital-secret-key-change-in-production",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      secure: false, // Replit handles HTTPS at proxy level
+      httpOnly: true,
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      sameSite: "lax",
+    },
+  })
+);
+
+// Load user from session
+app.use(loadUser);
 
 // Serve attached_assets statically
 app.use('/attached_assets', express.static(path.resolve(import.meta.dirname, '..', 'attached_assets')));

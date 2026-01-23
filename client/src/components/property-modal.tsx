@@ -419,13 +419,11 @@ export default function PropertyModal({ property, isOpen, onClose }: PropertyMod
                 </span>
               </div>
             </div>
-            <span className={`px-3 py-1 text-xs uppercase tracking-wider rounded-full ${
-              property.status === "current"
-                ? "bg-warm-brass/10 text-warm-brass"
-                : "bg-muted text-muted-foreground"
-            }`}>
-              {property.status === "current" ? "Active" : "Sold"}
-            </span>
+            {property.status === "sold" && (
+              <span className="px-3 py-1 text-xs uppercase tracking-wider rounded-full bg-muted text-muted-foreground">
+                Sold
+              </span>
+            )}
           </div>
         </DialogHeader>
 

@@ -3,12 +3,15 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { AuthProvider } from "@/contexts/auth-context";
 import Navigation from "@/components/navigation";
+import ProtectedRoute from "@/components/protected-route";
 import Home from "@/pages/home";
 import Founder from "@/pages/founder";
 import Vision from "@/pages/vision";
 import Portfolio from "@/pages/portfolio";
 import Investor from "@/pages/investor";
+import InvestorDashboard from "@/pages/investor-dashboard";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -19,6 +22,11 @@ function Router() {
       <Route path="/vision" component={Vision} />
       <Route path="/portfolio" component={Portfolio} />
       <Route path="/investor" component={Investor} />
+      <Route path="/investor-dashboard">
+        <ProtectedRoute allowedRoles={["investor"]}>
+          <InvestorDashboard />
+        </ProtectedRoute>
+      </Route>
       <Route component={NotFound} />
     </Switch>
   );
@@ -27,11 +35,13 @@ function Router() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Navigation />
-        <Toaster />
-        <Router />
-      </TooltipProvider>
+      <AuthProvider>
+        <TooltipProvider>
+          <Navigation />
+          <Toaster />
+          <Router />
+        </TooltipProvider>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }

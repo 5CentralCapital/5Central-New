@@ -2,12 +2,21 @@ import { Link, useLocation } from "wouter";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import { Menu, X } from "lucide-react";
+import { Menu, LogOut } from "lucide-react";
+import { useAuth } from "@/contexts/auth-context";
+import LoginModal from "@/components/login-modal";
 
 export default function Navigation() {
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const [isScrolled, setIsScrolled] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const { user, logout } = useAuth();
+
+  const handleLogout = async () => {
+    await logout();
+    setLocation("/");
+  };
 
   useEffect(() => {
     const handleScroll = () => {
@@ -78,14 +87,30 @@ export default function Navigation() {
             {navItems.map((item) => (
               <NavLink key={item.href} {...item} />
             ))}
-            <Link href="/investor">
+            {user ? (
+              <div className="flex items-center gap-4 ml-4">
+                <span className="text-sm text-muted-foreground">
+                  {user.firstName}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleLogout}
+                  className="flex items-center gap-2"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Log Out
+                </Button>
+              </div>
+            ) : (
               <Button
                 className="btn-accent ml-4"
-                data-testid="cta-investment-opportunities"
+                data-testid="cta-login"
+                onClick={() => setIsLoginModalOpen(true)}
               >
-                Invest
+                Log In
               </Button>
-            </Link>
+            )}
           </div>
 
           {/* Mobile Navigation */}
@@ -122,14 +147,35 @@ export default function Navigation() {
                   </div>
 
                   <div className="mt-10 pt-8 border-t border-border">
-                    <Link href="/investor" onClick={() => setIsOpen(false)}>
+                    {user ? (
+                      <div className="space-y-4">
+                        <p className="text-sm text-muted-foreground">
+                          Signed in as {user.firstName} {user.lastName}
+                        </p>
+                        <Button
+                          variant="outline"
+                          className="w-full flex items-center justify-center gap-2"
+                          onClick={() => {
+                            handleLogout();
+                            setIsOpen(false);
+                          }}
+                        >
+                          <LogOut className="h-4 w-4" />
+                          Log Out
+                        </Button>
+                      </div>
+                    ) : (
                       <Button
                         className="btn-accent w-full"
-                        data-testid="mobile-cta-investment-opportunities"
+                        data-testid="mobile-cta-login"
+                        onClick={() => {
+                          setIsOpen(false);
+                          setIsLoginModalOpen(true);
+                        }}
                       >
-                        Investment Opportunities
+                        Log In
                       </Button>
-                    </Link>
+                    )}
                   </div>
                 </div>
 
@@ -147,6 +193,8 @@ export default function Navigation() {
           </Sheet>
         </div>
       </div>
+
+      <LoginModal open={isLoginModalOpen} onOpenChange={setIsLoginModalOpen} />
     </nav>
   );
 }
