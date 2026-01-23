@@ -1,5 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
+import { useAnimatedCounter } from "@/hooks/use-animated-counter";
+import { ArrowRight } from "lucide-react";
 
 interface HeroSectionProps {
   totalPortfolioValue: number;
@@ -8,90 +10,159 @@ interface HeroSectionProps {
   avgReturn: number;
 }
 
-export default function HeroSection({ 
-  totalPortfolioValue, 
-  totalUnits, 
-  avgEquityMultiple, 
-  avgReturn 
-}: HeroSectionProps) {
-  
-  const formatCurrency = (value: number) => {
-    if (!value || isNaN(value)) return "$0";
-    if (value >= 1000000) {
-      return `$${(value / 1000000).toFixed(1)}M`;
-    } else if (value >= 1000) {
-      return `$${(value / 1000).toFixed(0)}K`;
-    }
-    return `$${value.toLocaleString()}`;
-  };
+function AnimatedMetric({
+  value,
+  suffix = "",
+  prefix = "",
+  label,
+  decimals = 0,
+  delay = 0
+}: {
+  value: number;
+  suffix?: string;
+  prefix?: string;
+  label: string;
+  decimals?: number;
+  delay?: number;
+}) {
+  const counter = useAnimatedCounter(value, {
+    duration: 2000,
+    delay,
+    decimals
+  });
+
   return (
-    <section className="pt-24 pb-20 relative overflow-hidden">
-      {/* Multifamily Apartment Building Background */}
-      <div 
+    <div className="text-center">
+      <div className="metric-value text-white mb-2">
+        {prefix}
+        {decimals > 0 ? counter.value.toFixed(decimals) : Math.round(counter.value).toLocaleString()}
+        {suffix}
+      </div>
+      <div className="metric-label text-white/60">{label}</div>
+    </div>
+  );
+}
+
+export default function HeroSection({
+  totalPortfolioValue,
+  totalUnits,
+  avgEquityMultiple,
+  avgReturn
+}: HeroSectionProps) {
+
+  const formatValue = (value: number) => {
+    if (!value || isNaN(value)) return 0;
+    if (value >= 1000000) {
+      return value / 1000000;
+    }
+    return value;
+  };
+
+  const getValueSuffix = (value: number) => {
+    if (!value || isNaN(value)) return "";
+    if (value >= 1000000) return "M";
+    return "";
+  };
+
+  return (
+    <section className="relative min-h-screen flex items-center" data-testid="hero-section">
+      {/* Background Image with Overlay */}
+      <div
         className="absolute inset-0 bg-cover bg-center bg-no-repeat"
         style={{
-          backgroundImage: 'url(https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=2070&q=80)',
+          backgroundImage: 'url(https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?ixlib=rb-4.0.3&auto=format&fit=crop&w=2070&q=80)',
         }}
-      ></div>
-      {/* Dark overlay for text readability */}
-      <div className="absolute inset-0 bg-black bg-opacity-50"></div>
-      <div className="geometric-pattern absolute inset-0 opacity-20"></div>
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10 h-full flex items-center justify-center">
-        <div className="text-center w-full">
-          <h1 className="text-5xl md:text-7xl font-serif font-bold text-white mb-6 leading-tight" data-testid="hero-title">
-            5Central <span className="text-accent-gold">Capital</span>
-          </h1>
-          <p className="text-xl md:text-2xl text-gray-200 mb-8 max-w-3xl mx-auto leading-relaxed" data-testid="hero-description">
-            Tampa-based investment firm specializing in high-return multifamily acquisitions with proven value creation through disciplined execution and strategic financing.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center mb-12">
-            <Link href="/portfolio">
-              <Button 
-                className="bg-accent-gold text-primary px-8 py-4 rounded-lg font-semibold text-lg hover:bg-yellow-400 transition-all duration-300 transform hover:-translate-y-1 shadow-lg"
-                data-testid="button-view-portfolio"
-              >
-                View Our Portfolio
-              </Button>
-            </Link>
-            <Link href="/investor">
-              <Button
-                variant="outline"
-                className="border-2 border-accent-gold text-accent-gold px-8 py-4 rounded-lg font-semibold text-lg hover:bg-accent-gold hover:text-primary transition-all duration-300"
-                data-testid="button-investment-opportunities"
-              >
-                Investment Opportunities
-              </Button>
-            </Link>
+      />
+      {/* Refined dark overlay */}
+      <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-black/60 to-black/80" />
+
+      {/* Subtle grain texture overlay */}
+      <div
+        className="absolute inset-0 opacity-[0.03]"
+        style={{
+          backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")`,
+        }}
+      />
+
+      <div className="relative z-10 w-full">
+        <div className="max-w-7xl mx-auto px-6 lg:px-8 pt-32 pb-20">
+          {/* Content */}
+          <div className="max-w-4xl">
+            {/* Subtle tagline */}
+            <p className="text-warm-brass text-sm uppercase tracking-[0.3em] mb-6 fade-in-up" style={{ animationDelay: '0.1s' }}>
+              Tampa-Based Investment Firm
+            </p>
+
+            {/* Main headline */}
+            <h1 className="text-white mb-8 fade-in-up" style={{ animationDelay: '0.2s' }} data-testid="hero-title">
+              Building Wealth Through<br />
+              <span className="text-warm-brass italic">Strategic</span> Real Estate
+            </h1>
+
+            {/* Description */}
+            <p className="text-xl md:text-2xl text-white/70 leading-relaxed mb-12 max-w-2xl font-light fade-in-up" style={{ animationDelay: '0.3s' }} data-testid="hero-description">
+              High-return multifamily acquisitions with proven value creation through disciplined execution and strategic financing.
+            </p>
+
+            {/* CTA Buttons */}
+            <div className="flex flex-col sm:flex-row gap-4 mb-20 fade-in-up" style={{ animationDelay: '0.4s' }}>
+              <Link href="/portfolio">
+                <Button
+                  className="btn-accent group"
+                  data-testid="button-view-portfolio"
+                >
+                  View Portfolio
+                  <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+                </Button>
+              </Link>
+              <Link href="/investor">
+                <Button
+                  className="btn-outline border-white/30 text-white hover:bg-white hover:text-deep-charcoal"
+                  data-testid="button-investment-opportunities"
+                >
+                  Investment Opportunities
+                </Button>
+              </Link>
+            </div>
           </div>
-          
-          {/* Key Metrics */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mt-16" data-testid="hero-metrics">
-            <div className="text-center">
-              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-portfolio-value">
-                {formatCurrency(totalPortfolioValue)}
-              </div>
-              <div className="text-gray-300 text-sm uppercase tracking-wide">Portfolio Value</div>
-            </div>
-            <div className="text-center">
-              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-total-units">
-                {totalUnits || 0}
-              </div>
-              <div className="text-gray-300 text-sm uppercase tracking-wide">Total Units</div>
-            </div>
-            <div className="text-center">
-              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-avg-equity-multiple">
-                {(avgEquityMultiple || 0).toFixed(2)}x
-              </div>
-              <div className="text-gray-300 text-sm uppercase tracking-wide">Avg Equity Multiple</div>
-            </div>
-            <div className="text-center">
-              <div className="text-3xl md:text-4xl font-bold text-accent-gold mb-2" data-testid="metric-avg-return">
-                {(avgReturn || 0).toFixed(1)}%
-              </div>
-              <div className="text-gray-300 text-sm uppercase tracking-wide">Avg Return</div>
-            </div>
+
+          {/* Metrics Grid */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-8 md:gap-12 pt-12 border-t border-white/10 stagger-children" data-testid="hero-metrics">
+            <AnimatedMetric
+              value={formatValue(totalPortfolioValue)}
+              prefix="$"
+              suffix={getValueSuffix(totalPortfolioValue)}
+              label="Portfolio Value"
+              decimals={1}
+              delay={600}
+            />
+            <AnimatedMetric
+              value={totalUnits || 0}
+              label="Total Units"
+              delay={700}
+            />
+            <AnimatedMetric
+              value={avgEquityMultiple || 0}
+              suffix="x"
+              label="Avg Equity Multiple"
+              decimals={2}
+              delay={800}
+            />
+            <AnimatedMetric
+              value={avgReturn || 0}
+              suffix="%"
+              label="Avg IRR"
+              decimals={1}
+              delay={900}
+            />
           </div>
         </div>
+      </div>
+
+      {/* Scroll indicator */}
+      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 text-white/40">
+        <span className="text-xs uppercase tracking-[0.2em]">Scroll</span>
+        <div className="w-px h-8 bg-gradient-to-b from-white/40 to-transparent" />
       </div>
     </section>
   );

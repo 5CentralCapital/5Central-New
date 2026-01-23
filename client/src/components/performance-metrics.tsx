@@ -1,5 +1,5 @@
-import { Card, CardContent } from "@/components/ui/card";
-import { TrendingUp, Home, DollarSign, BarChart3 } from "lucide-react";
+import { useInViewCounter } from "@/hooks/use-animated-counter";
+import { TrendingUp, Building2, DollarSign, BarChart3, MapPin } from "lucide-react";
 
 interface PerformanceMetricsProps {
   totalPortfolioValue: number;
@@ -14,6 +14,50 @@ interface PerformanceMetricsProps {
   flUnits?: number;
 }
 
+function MetricCard({
+  value,
+  label,
+  sublabel,
+  prefix = "",
+  suffix = "",
+  decimals = 0,
+  icon: Icon
+}: {
+  value: number;
+  label: string;
+  sublabel?: string;
+  prefix?: string;
+  suffix?: string;
+  decimals?: number;
+  icon: React.ElementType;
+}) {
+  const counter = useInViewCounter(value, {
+    duration: 2000,
+    decimals
+  });
+
+  return (
+    <div ref={counter.ref} className="group">
+      <div className="card-refined p-8 h-full">
+        <div className="flex items-start justify-between mb-6">
+          <div className="w-10 h-10 flex items-center justify-center border border-border group-hover:border-warm-brass/50 transition-colors duration-300">
+            <Icon className="w-5 h-5 text-warm-brass" />
+          </div>
+        </div>
+        <div className="metric-value text-foreground mb-2">
+          {prefix}
+          {decimals > 0 ? counter.value.toFixed(decimals) : Math.round(counter.value).toLocaleString()}
+          {suffix}
+        </div>
+        <div className="text-sm text-muted-foreground font-medium">{label}</div>
+        {sublabel && (
+          <div className="text-xs text-muted-foreground/70 mt-1">{sublabel}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function PerformanceMetrics({
   totalPortfolioValue,
   totalUnits,
@@ -26,129 +70,132 @@ export default function PerformanceMetrics({
   ctUnits = 0,
   flUnits = 0
 }: PerformanceMetricsProps) {
-  
-  const formatCurrency = (value: number) => {
+
+  const formatValue = (value: number) => {
     if (value >= 1000000) {
-      return `$${(value / 1000000).toFixed(2)}M`;
+      return value / 1000000;
     } else if (value >= 1000) {
-      return `$${(value / 1000).toFixed(0)}K`;
+      return value / 1000;
     }
-    return `$${value.toLocaleString()}`;
+    return value;
   };
 
-  const equityPercentage = Math.round((totalEquityCreated / totalPortfolioValue) * 100);
+  const getSuffix = (value: number) => {
+    if (value >= 1000000) return "M";
+    if (value >= 1000) return "K";
+    return "";
+  };
+
+  const getDecimals = (value: number) => {
+    if (value >= 1000000) return 2;
+    return 0;
+  };
 
   return (
-    <section className="py-20 bg-gradient-to-br from-secondary to-gray-100" data-testid="performance-metrics-section">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <section className="section-padding bg-soft-cream" data-testid="performance-metrics-section">
+      <div className="container-wide">
+        {/* Section Header */}
         <div className="text-center mb-16">
-          <h2 className="text-4xl md:text-5xl font-serif font-bold text-primary mb-4" data-testid="performance-title">
+          <div className="divider mx-auto mb-6" />
+          <h2 className="text-foreground mb-4" data-testid="performance-title">
             Historical Performance
           </h2>
-          <p className="text-xl text-gray-600 max-w-3xl mx-auto">
-            Total performance metrics across our complete portfolio history including both current holdings and realized exits
+          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+            Complete portfolio metrics across all holdings and realized exits
           </p>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8 mb-12">
-          <Card className="bg-white rounded-2xl p-8 card-shadow text-center premium-border hover:shadow-xl transition-all duration-300">
-            <CardContent className="p-0">
-              <div className="w-16 h-16 bg-gradient-to-br from-accent-gold to-bronze rounded-full flex items-center justify-center mx-auto mb-4">
-                <DollarSign className="w-8 h-8 text-white" />
-              </div>
-              <div className="text-3xl font-bold text-primary mb-2" data-testid="metric-portfolio-value">
-                {formatCurrency(totalPortfolioValue)}
-              </div>
-              <div className="text-gray-600 font-medium">Total Portfolio Value<br/><span className="text-sm">(Current + Sold)</span></div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-white rounded-2xl p-8 card-shadow text-center premium-border hover:shadow-xl transition-all duration-300">
-            <CardContent className="p-0">
-              <div className="w-16 h-16 bg-gradient-to-br from-accent-gold to-bronze rounded-full flex items-center justify-center mx-auto mb-4">
-                <Home className="w-8 h-8 text-white" />
-              </div>
-              <div className="text-3xl font-bold text-primary mb-2" data-testid="metric-total-units">
-                {totalUnits}
-              </div>
-              <div className="text-gray-600 font-medium">Total Units<br/><span className="text-sm">(All Time)</span></div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-white rounded-2xl p-8 card-shadow text-center premium-border hover:shadow-xl transition-all duration-300">
-            <CardContent className="p-0">
-              <div className="w-16 h-16 bg-gradient-to-br from-accent-gold to-bronze rounded-full flex items-center justify-center mx-auto mb-4">
-                <TrendingUp className="w-8 h-8 text-white" />
-              </div>
-              <div className="text-3xl font-bold text-primary mb-2" data-testid="metric-equity-created">
-                {formatCurrency(totalEquityCreated)}
-              </div>
-              <div className="text-gray-600 font-medium">Total Equity Created</div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-white rounded-2xl p-8 card-shadow text-center premium-border hover:shadow-xl transition-all duration-300">
-            <CardContent className="p-0">
-              <div className="w-16 h-16 bg-gradient-to-br from-accent-gold to-bronze rounded-full flex items-center justify-center mx-auto mb-4">
-                <BarChart3 className="w-8 h-8 text-white" />
-              </div>
-              <div className="text-3xl font-bold text-primary mb-2" data-testid="metric-avg-return">
-                {avgReturn.toFixed(1)}%
-              </div>
-              <div className="text-gray-600 font-medium">Avg Annualized Return</div>
-            </CardContent>
-          </Card>
+        {/* Primary Metrics Grid */}
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
+          <MetricCard
+            value={formatValue(totalPortfolioValue)}
+            prefix="$"
+            suffix={getSuffix(totalPortfolioValue)}
+            decimals={getDecimals(totalPortfolioValue)}
+            label="Total Portfolio Value"
+            sublabel="Current + Sold"
+            icon={DollarSign}
+          />
+          <MetricCard
+            value={totalUnits}
+            label="Total Units"
+            sublabel="All Time"
+            icon={Building2}
+          />
+          <MetricCard
+            value={formatValue(totalEquityCreated)}
+            prefix="$"
+            suffix={getSuffix(totalEquityCreated)}
+            decimals={getDecimals(totalEquityCreated)}
+            label="Equity Created"
+            icon={TrendingUp}
+          />
+          <MetricCard
+            value={avgReturn}
+            suffix="%"
+            decimals={1}
+            label="Avg Annualized Return"
+            icon={BarChart3}
+          />
         </div>
 
-        {/* Additional Metrics Row */}
-        <div className="grid md:grid-cols-2 gap-8">
-          <Card className="bg-white rounded-2xl p-8 card-shadow premium-border">
-            <CardContent className="p-0">
-              <h3 className="text-2xl font-serif font-bold text-primary mb-6">Portfolio Breakdown</h3>
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-600">Connecticut Properties</span>
-                  <span className="font-semibold text-primary" data-testid="ct-units">{ctUnits} Units</span>
+        {/* Secondary Metrics */}
+        <div className="grid lg:grid-cols-2 gap-6">
+          {/* Portfolio Breakdown */}
+          <div className="card-refined p-8">
+            <h3 className="text-xl font-serif font-medium text-foreground mb-8">
+              Portfolio Breakdown
+            </h3>
+            <div className="space-y-6">
+              <div className="flex items-center justify-between pb-4 border-b border-border">
+                <div className="flex items-center gap-3">
+                  <MapPin className="w-4 h-4 text-warm-brass" />
+                  <span className="text-muted-foreground">Connecticut</span>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-600">Florida Properties</span>
-                  <span className="font-semibold text-primary" data-testid="fl-units">{flUnits} Units</span>
-                </div>
-                <div className="flex justify-between items-center border-t pt-4">
-                  <span className="text-gray-600 font-medium">Average Equity Multiple</span>
-                  <span className="font-bold text-accent-gold text-xl" data-testid="avg-equity-multiple">
-                    {avgEquityMultiple.toFixed(2)}x
-                  </span>
-                </div>
+                <span className="font-medium text-foreground" data-testid="ct-units">{ctUnits} Units</span>
               </div>
-            </CardContent>
-          </Card>
+              <div className="flex items-center justify-between pb-4 border-b border-border">
+                <div className="flex items-center gap-3">
+                  <MapPin className="w-4 h-4 text-warm-brass" />
+                  <span className="text-muted-foreground">Florida</span>
+                </div>
+                <span className="font-medium text-foreground" data-testid="fl-units">{flUnits} Units</span>
+              </div>
+              <div className="flex items-center justify-between pt-2">
+                <span className="text-muted-foreground font-medium">Average Equity Multiple</span>
+                <span className="font-serif text-2xl text-warm-brass font-medium" data-testid="avg-equity-multiple">
+                  {avgEquityMultiple.toFixed(2)}x
+                </span>
+              </div>
+            </div>
+          </div>
 
-          <Card className="bg-white rounded-2xl p-8 card-shadow premium-border">
-            <CardContent className="p-0">
-              <h3 className="text-2xl font-serif font-bold text-primary mb-6">Investment Performance</h3>
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-600">Properties Sold</span>
-                  <span className="font-semibold text-primary" data-testid="sold-properties-count">
-                    {soldProperties} Properties
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-600">Current Holdings</span>
-                  <span className="font-semibold text-primary" data-testid="current-properties-count">
-                    {currentProperties} Properties
-                  </span>
-                </div>
-                <div className="flex justify-between items-center border-t pt-4">
-                  <span className="text-gray-600 font-medium">Total Realized Profits</span>
-                  <span className="font-bold text-accent-gold text-xl" data-testid="realized-profits">
-                    {formatCurrency(totalRealizedProfits)}
-                  </span>
-                </div>
+          {/* Investment Performance */}
+          <div className="card-refined p-8">
+            <h3 className="text-xl font-serif font-medium text-foreground mb-8">
+              Investment Performance
+            </h3>
+            <div className="space-y-6">
+              <div className="flex items-center justify-between pb-4 border-b border-border">
+                <span className="text-muted-foreground">Properties Sold</span>
+                <span className="font-medium text-foreground" data-testid="sold-properties-count">
+                  {soldProperties} Properties
+                </span>
               </div>
-            </CardContent>
-          </Card>
+              <div className="flex items-center justify-between pb-4 border-b border-border">
+                <span className="text-muted-foreground">Current Holdings</span>
+                <span className="font-medium text-foreground" data-testid="current-properties-count">
+                  {currentProperties} Properties
+                </span>
+              </div>
+              <div className="flex items-center justify-between pt-2">
+                <span className="text-muted-foreground font-medium">Total Realized Profits</span>
+                <span className="font-serif text-2xl text-warm-brass font-medium" data-testid="realized-profits">
+                  ${(totalRealizedProfits / 1000).toFixed(0)}K
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>

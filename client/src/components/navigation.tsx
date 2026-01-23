@@ -2,7 +2,7 @@ import { Link, useLocation } from "wouter";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import { Menu } from "lucide-react";
+import { Menu, X } from "lucide-react";
 
 export default function Navigation() {
   const [location] = useLocation();
@@ -11,7 +11,7 @@ export default function Navigation() {
 
   useEffect(() => {
     const handleScroll = () => {
-      setIsScrolled(window.scrollY > 100);
+      setIsScrolled(window.scrollY > 50);
     };
 
     window.addEventListener('scroll', handleScroll);
@@ -27,16 +27,27 @@ export default function Navigation() {
 
   const NavLink = ({ href, label, mobile = false }: { href: string; label: string; mobile?: boolean }) => {
     const isActive = location === href;
-    const baseClasses = mobile 
-      ? "block py-2 text-lg" 
-      : "text-charcoal hover:text-accent-gold transition-colors duration-300 font-medium";
-    
+
+    if (mobile) {
+      return (
+        <Link
+          href={href}
+          className={`block py-3 text-lg font-medium tracking-wide transition-colors duration-300 ${
+            isActive ? 'text-warm-brass' : 'text-foreground hover:text-warm-brass'
+          }`}
+          data-testid={`nav-link-${label.toLowerCase()}`}
+          onClick={() => setIsOpen(false)}
+        >
+          {label}
+        </Link>
+      );
+    }
+
     return (
-      <Link 
+      <Link
         href={href}
-        className={`${baseClasses} ${isActive ? 'text-accent-gold' : ''}`}
+        className={`nav-link text-sm uppercase tracking-wider font-medium ${isActive ? 'active text-primary' : ''}`}
         data-testid={`nav-link-${label.toLowerCase()}`}
-        onClick={() => mobile && setIsOpen(false)}
       >
         {label}
       </Link>
@@ -44,29 +55,35 @@ export default function Navigation() {
   };
 
   return (
-    <nav className={`fixed w-full z-50 border-b border-gray-100 shadow-sm transition-all duration-300 ${
-      isScrolled ? 'bg-white/98 backdrop-blur-sm' : 'bg-white/95 backdrop-blur-sm'
-    }`} data-testid="main-navigation">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-16">
+    <nav
+      className={`fixed w-full z-50 transition-all duration-500 ${
+        isScrolled
+          ? 'bg-background/80 backdrop-blur-xl border-b border-border/50 shadow-sm'
+          : 'bg-transparent'
+      }`}
+      data-testid="main-navigation"
+    >
+      <div className="max-w-7xl mx-auto px-6 lg:px-8">
+        <div className="flex justify-between items-center h-20">
           {/* Logo */}
-          <Link href="/" className="flex items-center" data-testid="logo-link">
-            <div className="text-2xl font-serif font-bold text-primary">
-              5Central <span className="text-accent-gold">Capital</span>
+          <Link href="/" className="flex items-center group" data-testid="logo-link">
+            <div className="font-serif text-xl md:text-2xl tracking-tight">
+              <span className="font-medium text-foreground">5Central</span>
+              <span className="text-warm-brass ml-1 font-normal italic">Capital</span>
             </div>
           </Link>
 
           {/* Desktop Navigation */}
-          <div className="hidden md:flex items-center space-x-8">
+          <div className="hidden md:flex items-center gap-10">
             {navItems.map((item) => (
               <NavLink key={item.href} {...item} />
             ))}
             <Link href="/investor">
-              <Button 
-                className="bg-gradient-to-r from-accent-gold to-bronze text-white px-6 py-2 rounded-lg font-semibold hover:shadow-lg transition-all duration-300 transform hover:-translate-y-0.5"
+              <Button
+                className="btn-accent ml-4"
                 data-testid="cta-investment-opportunities"
               >
-                Investment Opportunities
+                Invest
               </Button>
             </Link>
           </div>
@@ -74,23 +91,57 @@ export default function Navigation() {
           {/* Mobile Navigation */}
           <Sheet open={isOpen} onOpenChange={setIsOpen}>
             <SheetTrigger asChild className="md:hidden">
-              <Button variant="ghost" size="icon" data-testid="mobile-menu-trigger">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="hover:bg-transparent"
+                data-testid="mobile-menu-trigger"
+              >
                 <Menu className="h-6 w-6" />
               </Button>
             </SheetTrigger>
-            <SheetContent side="right" className="w-64">
-              <div className="flex flex-col space-y-4 mt-8">
-                {navItems.map((item) => (
-                  <NavLink key={item.href} {...item} mobile />
-                ))}
-                <Link href="/investor">
-                  <Button 
-                    className="bg-gradient-to-r from-accent-gold to-bronze text-white mt-4"
-                    data-testid="mobile-cta-investment-opportunities"
-                  >
-                    Investment Opportunities
-                  </Button>
-                </Link>
+            <SheetContent
+              side="right"
+              className="w-full sm:w-80 bg-background border-l border-border p-0"
+            >
+              <div className="flex flex-col h-full">
+                {/* Mobile Header */}
+                <div className="flex items-center justify-between px-6 py-5 border-b border-border">
+                  <div className="font-serif text-xl tracking-tight">
+                    <span className="font-medium">5Central</span>
+                    <span className="text-warm-brass ml-1 italic">Capital</span>
+                  </div>
+                </div>
+
+                {/* Mobile Links */}
+                <div className="flex-1 px-6 py-8">
+                  <div className="space-y-1">
+                    {navItems.map((item) => (
+                      <NavLink key={item.href} {...item} mobile />
+                    ))}
+                  </div>
+
+                  <div className="mt-10 pt-8 border-t border-border">
+                    <Link href="/investor" onClick={() => setIsOpen(false)}>
+                      <Button
+                        className="btn-accent w-full"
+                        data-testid="mobile-cta-investment-opportunities"
+                      >
+                        Investment Opportunities
+                      </Button>
+                    </Link>
+                  </div>
+                </div>
+
+                {/* Mobile Footer */}
+                <div className="px-6 py-6 border-t border-border">
+                  <p className="text-sm text-muted-foreground">
+                    Tampa, FL
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    michael@5central.capital
+                  </p>
+                </div>
               </div>
             </SheetContent>
           </Sheet>

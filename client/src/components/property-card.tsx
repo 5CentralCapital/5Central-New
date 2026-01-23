@@ -1,6 +1,5 @@
 import { type Property } from "@shared/schema";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { MapPin, Calendar, TrendingUp } from "lucide-react";
 
 interface PropertyCardProps {
   property: Property;
@@ -9,10 +8,10 @@ interface PropertyCardProps {
 
 export default function PropertyCard({ property, imageUrl }: PropertyCardProps) {
   const formatCurrency = (value: string | null) => {
-    if (!value) return "N/A";
+    if (!value) return "—";
     const num = parseFloat(value);
     if (num >= 1000000) {
-      return `$${(num / 1000000).toFixed(1)}M`;
+      return `$${(num / 1000000).toFixed(2)}M`;
     } else if (num >= 1000) {
       return `$${(num / 1000).toFixed(0)}K`;
     }
@@ -20,7 +19,7 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
   };
 
   const formatIRR = (irr: string | null) => {
-    if (!irr) return "N/A";
+    if (!irr) return "—";
     const num = parseFloat(irr);
     return `${num > 0 ? '+' : ''}${num.toFixed(1)}%`;
   };
@@ -30,7 +29,7 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
     const totalCashCollected = parseFloat(property.totalCashflow || '0');
     const exitValue = parseFloat(property.salePrice || property.currentValue || '0');
     const yearsHeld = parseFloat(property.yearsHeld || '0');
-    
+
     if (initialInvestment && exitValue && yearsHeld > 0) {
       const totalProfit = exitValue + totalCashCollected - initialInvestment;
       const totalReturn = initialInvestment + totalProfit;
@@ -40,119 +39,150 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
     return property.irr || '0';
   };
 
-  const getIRRColor = (irr: string | null) => {
-    if (!irr) return "bg-gray-100 text-gray-800";
-    const num = parseFloat(irr);
-    if (num > 0) return "bg-green-100 text-green-800";
-    if (num < 0) return "bg-red-100 text-red-800";
-    return "bg-gray-100 text-gray-800";
-  };
-
   const acquisitionDate = new Date(property.acquisitionDate);
-  const formattedDate = acquisitionDate.toLocaleDateString('en-US', { 
-    month: 'short', 
-    year: 'numeric' 
+  const formattedDate = acquisitionDate.toLocaleDateString('en-US', {
+    month: 'short',
+    year: 'numeric'
   });
 
   return (
-    <Card 
-      className="bg-white rounded-2xl card-shadow premium-border overflow-hidden hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2"
+    <div
+      className="group card-refined overflow-hidden"
       data-testid={`property-card-${property.id}`}
     >
-      <img 
-        src={imageUrl} 
-        alt={`${property.name} Property`} 
-        className="w-full h-64 object-cover"
-        data-testid={`property-image-${property.id}`}
-      />
-      <CardContent className="p-6">
-        <div className="flex justify-between items-start mb-4">
-          <div>
-            <h3 className="text-xl font-serif font-semibold text-primary mb-1" data-testid={`property-name-${property.id}`}>
-              {property.name}
-            </h3>
-            <p className="text-gray-600" data-testid={`property-location-${property.id}`}>
-              {property.city}, {property.state} • {property.units} Units
-            </p>
-          </div>
-          <div className="text-right">
-            <div className="text-sm text-gray-500">Acquired {formattedDate}</div>
-            <div className="text-sm text-accent-gold font-medium" data-testid={`property-years-held-${property.id}`}>
-              {property.yearsHeld} years held
-            </div>
-          </div>
-        </div>
-        
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <div>
-            <div className="text-lg font-bold text-primary" data-testid={`property-purchase-price-${property.id}`}>
-              {formatCurrency(property.acquisitionPrice)}
-            </div>
-            <div className="text-sm text-gray-500">Purchase Price</div>
-          </div>
-          <div>
-            <div className="text-lg font-bold text-accent-gold" data-testid={`property-current-value-${property.id}`}>
-              {formatCurrency(property.currentValue || property.salePrice)}
-            </div>
-            <div className="text-sm text-gray-500">
-              {property.status === 'sold' ? 'Sale Price' : 'Current Value'}
-            </div>
-          </div>
-        </div>
-        
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <div>
-            <div className="text-lg font-bold text-primary" data-testid={`property-rehab-${property.id}`}>
-              {formatCurrency(property.rehabCosts)}
-            </div>
-            <div className="text-sm text-gray-500">CapEx Invested</div>
-          </div>
-          <div>
-            <div className="text-lg font-bold text-primary" data-testid={`property-cashflow-${property.id}`}>
-              {formatCurrency(property.noi)}
-            </div>
-            <div className="text-sm text-gray-500">NOI</div>
+      {/* Image Container */}
+      <div className="property-image-wrapper aspect-[4/3] bg-muted">
+        <img
+          src={imageUrl}
+          alt={`${property.name} Property`}
+          className="w-full h-full object-cover"
+          data-testid={`property-image-${property.id}`}
+        />
+      </div>
+
+      {/* Content */}
+      <div className="p-6">
+        {/* Header */}
+        <div className="mb-6">
+          <h3
+            className="text-xl font-serif font-medium text-foreground mb-2 group-hover:text-warm-brass transition-colors duration-300"
+            data-testid={`property-name-${property.id}`}
+          >
+            {property.name}
+          </h3>
+          <div className="flex items-center gap-4 text-sm text-muted-foreground">
+            <span className="flex items-center gap-1.5" data-testid={`property-location-${property.id}`}>
+              <MapPin className="w-3.5 h-3.5" />
+              {property.city}, {property.state}
+            </span>
+            <span className="text-border">•</span>
+            <span>{property.units} Units</span>
           </div>
         </div>
 
-        <div className="pt-4 border-t border-gray-200">
-          <div className="grid grid-cols-3 gap-4 text-center">
-            <div>
-              <div className="text-lg font-bold text-accent-gold" data-testid={`property-irr-${property.id}`}>
-                {(() => {
-                  const calculatedIRR = calculateIRRFromTotalProfit(property);
-                  return formatIRR(calculatedIRR);
-                })()}
-              </div>
-              <div className="text-xs text-gray-600">IRR</div>
+        {/* Acquisition Info */}
+        <div className="flex items-center justify-between text-sm mb-6 pb-6 border-b border-border">
+          <div className="flex items-center gap-1.5 text-muted-foreground">
+            <Calendar className="w-3.5 h-3.5" />
+            <span>Acquired {formattedDate}</span>
+          </div>
+          <span className="text-warm-brass font-medium" data-testid={`property-years-held-${property.id}`}>
+            {property.yearsHeld} years held
+          </span>
+        </div>
+
+        {/* Financial Grid */}
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <div>
+            <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Purchase</div>
+            <div className="text-lg font-medium text-foreground" data-testid={`property-purchase-price-${property.id}`}>
+              {formatCurrency(property.acquisitionPrice)}
             </div>
-            <div>
-              <div className="text-lg font-bold text-accent-gold" data-testid={`property-equity-multiple-${property.id}`}>
-                {property.equityMultiple || 'N/A'}x
-              </div>
-              <div className="text-xs text-gray-600">Equity Multiple</div>
+          </div>
+          <div>
+            <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">
+              {property.status === 'sold' ? 'Sale Price' : 'Current Value'}
             </div>
-            <div>
-              <div className="text-lg font-bold text-accent-gold" data-testid={`property-coc-${property.id}`}>
+            <div className="text-lg font-medium text-warm-brass" data-testid={`property-current-value-${property.id}`}>
+              {formatCurrency(property.currentValue || property.salePrice)}
+            </div>
+          </div>
+          {property.status === 'current' ? (
+            <>
+              <div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">CapEx</div>
+                <div className="text-lg font-medium text-foreground" data-testid={`property-rehab-${property.id}`}>
+                  {formatCurrency(property.rehabCosts)}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">NOI</div>
+                <div className="text-lg font-medium text-foreground" data-testid={`property-cashflow-${property.id}`}>
+                  {formatCurrency(property.noi)}
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Total Cashflow</div>
+                <div className="text-lg font-medium text-foreground" data-testid={`property-total-cashflow-${property.id}`}>
+                  {formatCurrency(property.totalCashflow)}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Total Profit</div>
+                <div className="text-lg font-medium text-foreground" data-testid={`property-profit-${property.id}`}>
+                  {(() => {
+                    const buyPrice = parseFloat(property.acquisitionPrice);
+                    const sellPrice = parseFloat(property.salePrice || '0');
+                    const cashflow = parseFloat(property.totalCashflow || '0');
+                    const rehab = parseFloat(property.rehabCosts || '0');
+                    const profit = sellPrice - buyPrice - rehab + cashflow;
+                    return formatCurrency(profit.toString());
+                  })()}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Performance Metrics */}
+        <div className="pt-6 border-t border-border">
+          <div className="grid grid-cols-3 gap-4">
+            <div className="text-center">
+              <div className="text-xl font-serif font-medium text-warm-brass" data-testid={`property-irr-${property.id}`}>
+                {formatIRR(calculateIRRFromTotalProfit(property))}
+              </div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground mt-1">IRR</div>
+            </div>
+            <div className="text-center border-x border-border">
+              <div className="text-xl font-serif font-medium text-warm-brass" data-testid={`property-equity-multiple-${property.id}`}>
+                {property.equityMultiple || '—'}x
+              </div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground mt-1">Multiple</div>
+            </div>
+            <div className="text-center">
+              <div className="text-xl font-serif font-medium text-warm-brass" data-testid={`property-coc-${property.id}`}>
                 {(() => {
                   const initialInvestment = parseFloat(property.acquisitionPrice) + parseFloat(property.rehabCosts || '0');
                   const totalCashCollected = parseFloat(property.totalCashflow || '0');
                   const exitValue = parseFloat(property.salePrice || property.currentValue || '0');
                   const yearsHeld = parseFloat(property.yearsHeld || '0');
-                  
+
                   if (initialInvestment && exitValue && yearsHeld > 0) {
                     const totalProfit = exitValue + totalCashCollected - initialInvestment;
                     const annualizedCOC = (totalProfit / initialInvestment / yearsHeld) * 100;
                     return `${annualizedCOC.toFixed(1)}%`;
                   }
-                  return 'N/A';
+                  return '—';
                 })()}
               </div>
-              <div className="text-xs text-gray-600">COC</div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground mt-1">COC</div>
             </div>
           </div>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
