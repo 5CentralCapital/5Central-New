@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { type Property } from "@shared/schema";
 import PropertyCard from "@/components/property-card";
+import PropertyModal from "@/components/property-modal";
 import PerformanceMetrics from "@/components/performance-metrics";
 import { getPropertyImage } from "@/lib/property-data";
 import { Button } from "@/components/ui/button";
@@ -58,6 +60,19 @@ export default function Portfolio() {
   const { data: allProperties = [], isLoading: allLoading } = useQuery<Property[]>({
     queryKey: ["/api/properties"],
   });
+
+  const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  const openPropertyModal = (property: Property) => {
+    setSelectedProperty(property);
+    setIsModalOpen(true);
+  };
+
+  const closePropertyModal = () => {
+    setIsModalOpen(false);
+    setSelectedProperty(null);
+  };
 
   const isLoading = currentLoading || soldLoading || allLoading;
 
@@ -218,7 +233,12 @@ export default function Portfolio() {
                 </div>
                 <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
                   {currentProperties.map((property) => (
-                    <PropertyCard key={property.id} property={property} imageUrl={getPropertyImage(property.name)} />
+                    <PropertyCard
+                      key={property.id}
+                      property={property}
+                      imageUrl={getPropertyImage(property.name)}
+                      onClick={() => openPropertyModal(property)}
+                    />
                   ))}
                 </div>
               </div>
@@ -235,7 +255,11 @@ export default function Portfolio() {
                 <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
                   {soldProperties.map((property) => (
                     <div key={property.id} className="relative">
-                      <PropertyCard property={property} imageUrl={getPropertyImage(property.name)} />
+                      <PropertyCard
+                        property={property}
+                        imageUrl={getPropertyImage(property.name)}
+                        onClick={() => openPropertyModal(property)}
+                      />
                       <Badge
                         className="absolute top-4 right-4 bg-muted text-muted-foreground border-0 text-xs uppercase tracking-wider"
                         data-testid={`property-status-${property.id}`}
@@ -276,7 +300,12 @@ export default function Portfolio() {
 
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
                 {currentProperties.map((property) => (
-                  <PropertyCard key={property.id} property={property} imageUrl={getPropertyImage(property.name)} />
+                  <PropertyCard
+                    key={property.id}
+                    property={property}
+                    imageUrl={getPropertyImage(property.name)}
+                    onClick={() => openPropertyModal(property)}
+                  />
                 ))}
               </div>
             </TabsContent>
@@ -309,7 +338,12 @@ export default function Portfolio() {
 
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
                 {soldProperties.map((property) => (
-                  <PropertyCard key={property.id} property={property} imageUrl={getPropertyImage(property.name)} />
+                  <PropertyCard
+                    key={property.id}
+                    property={property}
+                    imageUrl={getPropertyImage(property.name)}
+                    onClick={() => openPropertyModal(property)}
+                  />
                 ))}
               </div>
             </TabsContent>
@@ -486,6 +520,13 @@ export default function Portfolio() {
           </div>
         </div>
       </section>
+
+      {/* Property Detail Modal */}
+      <PropertyModal
+        property={selectedProperty}
+        isOpen={isModalOpen}
+        onClose={closePropertyModal}
+      />
     </div>
   );
 }

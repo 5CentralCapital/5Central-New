@@ -4,9 +4,10 @@ import { MapPin, Calendar, TrendingUp } from "lucide-react";
 interface PropertyCardProps {
   property: Property;
   imageUrl: string;
+  onClick?: () => void;
 }
 
-export default function PropertyCard({ property, imageUrl }: PropertyCardProps) {
+export default function PropertyCard({ property, imageUrl, onClick }: PropertyCardProps) {
   const formatCurrency = (value: string | null) => {
     if (!value) return "—";
     const num = parseFloat(value);
@@ -45,10 +46,15 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
     year: 'numeric'
   });
 
+  // Calculate actual years held
+  const endDate = property.saleDate ? new Date(property.saleDate) : new Date();
+  const yearsHeldActual = ((endDate.getTime() - acquisitionDate.getTime()) / (1000 * 60 * 60 * 24 * 365.25)).toFixed(1);
+
   return (
     <div
-      className="group card-refined overflow-hidden"
+      className="group card-refined overflow-hidden cursor-pointer hover:shadow-lg transition-shadow duration-300"
       data-testid={`property-card-${property.id}`}
+      onClick={onClick}
     >
       {/* Image Container */}
       <div className="property-image-wrapper aspect-[4/3] bg-muted">
@@ -87,7 +93,7 @@ export default function PropertyCard({ property, imageUrl }: PropertyCardProps) 
             <span>Acquired {formattedDate}</span>
           </div>
           <span className="text-warm-brass font-medium" data-testid={`property-years-held-${property.id}`}>
-            {property.yearsHeld} years held
+            {yearsHeldActual} years held
           </span>
         </div>
 
