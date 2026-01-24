@@ -76,6 +76,20 @@ export default function Portfolio() {
 
   const isLoading = currentLoading || soldLoading || allLoading;
 
+  // Helper function to get IRR from property (handles both numeric irr and text irrLevered)
+  const getPropertyIRR = (property: Property): number => {
+    if (property.irr) {
+      return parseFloat(property.irr);
+    }
+    if (property.irrLevered) {
+      const match = property.irrLevered.match(/(\d+)-(\d+)/);
+      if (match) {
+        return (parseFloat(match[1]) + parseFloat(match[2])) / 2;
+      }
+    }
+    return 0;
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center pt-16 bg-background" data-testid="portfolio-loading">
@@ -101,7 +115,7 @@ export default function Portfolio() {
   }, 0);
 
   const avgReturn = allProperties.length > 0
-    ? allProperties.reduce((sum, p) => sum + parseFloat(p.irr || "0"), 0) / allProperties.length
+    ? allProperties.reduce((sum, p) => sum + getPropertyIRR(p), 0) / allProperties.length
     : 0;
 
   const avgEquityMultiple = allProperties.length > 0
@@ -291,9 +305,9 @@ export default function Portfolio() {
                   </div>
                   <div className="text-center">
                     <div className="text-3xl font-serif font-medium text-warm-brass" data-testid="current-avg-irr">
-                      {(currentProperties.reduce((sum, p) => sum + parseFloat(p.irr || "0"), 0) / currentProperties.length).toFixed(1)}%
+                      {(currentProperties.reduce((sum, p) => sum + getPropertyIRR(p), 0) / currentProperties.length).toFixed(1)}%
                     </div>
-                    <div className="text-sm text-muted-foreground mt-1">Avg Current IRR</div>
+                    <div className="text-sm text-muted-foreground mt-1">Avg Projected IRR</div>
                   </div>
                 </div>
               </div>

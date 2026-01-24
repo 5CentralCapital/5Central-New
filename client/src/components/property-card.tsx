@@ -40,10 +40,12 @@ export default function PropertyCard({ property, imageUrl, onClick }: PropertyCa
     return property.irr || '0';
   };
 
+  // Parse date as UTC to avoid timezone shift issues
   const acquisitionDate = new Date(property.acquisitionDate);
   const formattedDate = acquisitionDate.toLocaleDateString('en-US', {
     month: 'short',
-    year: 'numeric'
+    year: 'numeric',
+    timeZone: 'UTC'
   });
 
   // Calculate actual years held

@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { type Property } from "@shared/schema";
 import HeroSection from "@/components/hero-section";
 import PropertyCard from "@/components/property-card";
+import PropertyModal from "@/components/property-modal";
 import PerformanceMetrics from "@/components/performance-metrics";
 import { getPropertyImage } from "@/lib/property-data";
 import { Button } from "@/components/ui/button";
@@ -28,7 +30,34 @@ export default function Home() {
     queryKey: ["/api/properties"],
   });
 
+  const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  const openPropertyModal = (property: Property) => {
+    setSelectedProperty(property);
+    setIsModalOpen(true);
+  };
+
+  const closePropertyModal = () => {
+    setIsModalOpen(false);
+    setSelectedProperty(null);
+  };
+
   const isLoading = currentLoading || allLoading;
+
+  // Helper function to get IRR from property (handles both numeric irr and text irrLevered)
+  const getPropertyIRR = (property: Property): number => {
+    if (property.irr) {
+      return parseFloat(property.irr);
+    }
+    if (property.irrLevered) {
+      const match = property.irrLevered.match(/(\d+)-(\d+)/);
+      if (match) {
+        return (parseFloat(match[1]) + parseFloat(match[2])) / 2;
+      }
+    }
+    return 0;
+  };
 
   if (isLoading) {
     return (
@@ -49,10 +78,9 @@ export default function Home() {
 
   const currentUnits = currentProperties.reduce((sum, p) => sum + p.units, 0);
 
-  const currentAvgReturn = currentProperties.length > 0 ? currentProperties.reduce((sum, p) => {
-    const irr = parseFloat(p.irr || "0");
-    return sum + irr;
-  }, 0) / currentProperties.length : 0;
+  const currentAvgReturn = currentProperties.length > 0
+    ? currentProperties.reduce((sum, p) => sum + getPropertyIRR(p), 0) / currentProperties.length
+    : 0;
 
   const currentAvgEquityMultiple = currentProperties.length > 0 ? currentProperties.reduce((sum, p) => {
     const multiple = parseFloat(p.equityMultiple || "0");
@@ -74,10 +102,9 @@ export default function Home() {
     return sum + Math.max(0, currentValue - acquisitionPrice);
   }, 0);
 
-  const avgReturn = allProperties.length > 0 ? allProperties.reduce((sum, p) => {
-    const irr = parseFloat(p.irr || "0");
-    return sum + irr;
-  }, 0) / allProperties.length : 0;
+  const avgReturn = allProperties.length > 0
+    ? allProperties.reduce((sum, p) => sum + getPropertyIRR(p), 0) / allProperties.length
+    : 0;
 
   const avgEquityMultiple = allProperties.length > 0 ? allProperties.reduce((sum, p) => {
     const multiple = parseFloat(p.equityMultiple || "0");
@@ -142,6 +169,7 @@ export default function Home() {
                 key={property.id}
                 property={property}
                 imageUrl={getPropertyImage(property.name)}
+                onClick={() => openPropertyModal(property)}
               />
             ))}
           </div>
@@ -372,6 +400,13 @@ export default function Home() {
           </div>
         </div>
       </footer>
+
+      {/* Property Modal */}
+      <PropertyModal
+        property={selectedProperty}
+        isOpen={isModalOpen}
+        onClose={closePropertyModal}
+      />
     </div>
   );
 }
