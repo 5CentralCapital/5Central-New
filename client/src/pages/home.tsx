@@ -4,6 +4,7 @@ import { type Property } from "@shared/schema";
 import HeroSection from "@/components/hero-section";
 import PropertyCard from "@/components/property-card";
 import PropertyModal from "@/components/property-modal";
+import GrowthModal from "@/components/growth-modal";
 import PerformanceMetrics from "@/components/performance-metrics";
 import { getPropertyImage } from "@/lib/property-data";
 import { Button } from "@/components/ui/button";
@@ -17,7 +18,9 @@ import {
   Phone,
   MapPin,
   ArrowRight,
-  ChevronDown
+  Target,
+  TrendingUp,
+  Maximize2
 } from "lucide-react";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 
@@ -32,6 +35,13 @@ export default function Home() {
 
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [growthModalOpen, setGrowthModalOpen] = useState(false);
+  const [growthModalType, setGrowthModalType] = useState<'current' | 'future'>('current');
+
+  const openGrowthModal = (type: 'current' | 'future') => {
+    setGrowthModalType(type);
+    setGrowthModalOpen(true);
+  };
 
   const openPropertyModal = (property: Property) => {
     setSelectedProperty(property);
@@ -47,14 +57,16 @@ export default function Home() {
 
   // Helper function to get IRR from property (handles both numeric irr and text irrLevered)
   const getPropertyIRR = (property: Property): number => {
-    if (property.irr) {
-      return parseFloat(property.irr);
-    }
+    // First check irrLevered (text format like "40-50%") which is more commonly populated
     if (property.irrLevered) {
       const match = property.irrLevered.match(/(\d+)-(\d+)/);
       if (match) {
         return (parseFloat(match[1]) + parseFloat(match[2])) / 2;
       }
+    }
+    // Fall back to numeric irr field if it has a meaningful value
+    if (property.irr && parseFloat(property.irr) > 0) {
+      return parseFloat(property.irr);
     }
     return 0;
   };
@@ -129,7 +141,7 @@ export default function Home() {
     {
       icon: Award,
       title: "Proven Track Record",
-      description: "Successfully acquired 47 units across 13 properties with documented performance metrics and transparent reporting."
+      description: "Successfully managing 55 units across 4 active properties with documented performance metrics and transparent reporting."
     },
     {
       icon: Users,
@@ -181,6 +193,149 @@ export default function Home() {
                 data-testid="button-view-complete-portfolio"
               >
                 View Complete Portfolio
+                <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
+              </Button>
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* ========================================
+          GROWTH SNAPSHOT - COMPACT AUM-FOCUSED DESIGN
+          ======================================== */}
+      <section className="py-12 md:py-16 bg-soft-cream border-y border-border/50 relative">
+        {/* Top accent line */}
+        <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-transparent via-warm-brass/40 to-transparent" />
+
+        <div className="container-wide">
+          {/* Compact Header */}
+          <div className="flex items-center justify-center gap-4 mb-10">
+            <div className="h-px w-12 bg-warm-brass/40" />
+            <span className="text-warm-brass text-[11px] uppercase tracking-[0.3em] font-medium">
+              Growth Trajectory
+            </span>
+            <div className="h-px w-12 bg-warm-brass/40" />
+          </div>
+
+          {/* Main Cards - Horizontal Rectangle Layout */}
+          <div className="grid lg:grid-cols-11 gap-4 lg:gap-6 items-stretch">
+
+            {/* LEFT: Current Portfolio - Compact Rectangle */}
+            <div className="lg:col-span-5 group">
+              <div
+                className="h-full bg-white border border-border/60 p-6 md:p-8 relative overflow-hidden transition-all duration-300 hover:border-warm-brass/40 hover:shadow-lg cursor-pointer"
+                onClick={() => openGrowthModal('current')}
+              >
+                {/* Expand icon */}
+                <div className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center bg-soft-cream/90 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
+                  <Maximize2 className="w-3.5 h-3.5 text-warm-brass" />
+                </div>
+
+                {/* Top Row: Label */}
+                <div className="flex items-center gap-2 mb-5">
+                  <div className="w-6 h-px bg-warm-brass" />
+                  <span className="text-[10px] uppercase tracking-[0.25em] text-warm-brass font-medium">Today</span>
+                </div>
+
+                {/* AUM as Hero - Most Important */}
+                <div className="mb-5">
+                  <div className="font-serif text-4xl md:text-5xl lg:text-6xl text-warm-brass font-light tracking-tight mb-1">
+                    $9.63M
+                  </div>
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Assets Under Management</div>
+                </div>
+
+                {/* Compact Metrics Row */}
+                <div className="flex items-center gap-6 pt-4 border-t border-border/50">
+                  <div>
+                    <div className="font-serif text-2xl md:text-3xl text-foreground">55</div>
+                    <div className="text-[9px] uppercase tracking-wider text-muted-foreground">Units</div>
+                  </div>
+                  <div className="h-8 w-px bg-border/50" />
+                  <div>
+                    <div className="font-serif text-lg text-foreground">4</div>
+                    <div className="text-[9px] uppercase tracking-wider text-muted-foreground">Properties</div>
+                  </div>
+                  <div className="h-8 w-px bg-border/50" />
+                  <div>
+                    <div className="font-serif text-lg text-foreground">$3.87M</div>
+                    <div className="text-[9px] uppercase tracking-wider text-muted-foreground">Equity</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* CENTER: Arrow Connector - Minimal */}
+            <div className="lg:col-span-1 flex items-center justify-center py-4 lg:py-0">
+              <div className="w-10 h-10 rounded-full border-2 border-warm-brass flex items-center justify-center bg-white shadow-md">
+                <ArrowRight className="w-4 h-4 text-warm-brass" />
+              </div>
+            </div>
+
+            {/* RIGHT: 2026 Target - Compact Dark Rectangle */}
+            <div className="lg:col-span-5 group">
+              <div
+                className="h-full bg-deep-charcoal text-white p-6 md:p-8 relative overflow-hidden transition-all duration-300 hover:shadow-xl cursor-pointer"
+                onClick={() => openGrowthModal('future')}
+              >
+                {/* Subtle texture */}
+                <div className="absolute inset-0 opacity-[0.02]" style={{
+                  backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")`,
+                }} />
+                {/* Top gold line */}
+                <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-warm-brass to-transparent" />
+
+                {/* Expand icon */}
+                <div className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center bg-white/10 rounded-full opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                  <Maximize2 className="w-3.5 h-3.5 text-warm-brass" />
+                </div>
+
+                {/* Top Row: Label + Growth Badge */}
+                <div className="relative flex items-center justify-between mb-5">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-px bg-warm-brass" />
+                    <span className="text-[10px] uppercase tracking-[0.25em] text-warm-brass font-medium">Year-End 2026</span>
+                  </div>
+                  <div className="px-2.5 py-1 bg-emerald-500/20 border border-emerald-500/30 rounded-sm">
+                    <span className="text-emerald-400 text-xs font-medium">+147% AUM</span>
+                  </div>
+                </div>
+
+                {/* AUM as Hero - Most Important */}
+                <div className="relative mb-5">
+                  <div className="font-serif text-4xl md:text-5xl lg:text-6xl text-warm-brass font-light tracking-tight mb-1">
+                    $23.76M
+                  </div>
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-white/40">Projected AUM</div>
+                </div>
+
+                {/* Compact Metrics Row */}
+                <div className="relative flex items-center gap-6 pt-4 border-t border-white/10">
+                  <div>
+                    <div className="font-serif text-2xl md:text-3xl text-white">124</div>
+                    <div className="text-[9px] uppercase tracking-wider text-white/40">Units</div>
+                  </div>
+                  <div className="h-8 w-px bg-white/10" />
+                  <div>
+                    <div className="text-emerald-400 font-medium">+125%</div>
+                    <div className="text-[9px] uppercase tracking-wider text-white/40">Growth</div>
+                  </div>
+                  <div className="h-8 w-px bg-white/10" />
+                  <div>
+                    <div className="text-emerald-400 font-medium">+200%</div>
+                    <div className="text-[9px] uppercase tracking-wider text-white/40">Equity</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          {/* View Full Strategy Link */}
+          <div className="text-center mt-8">
+            <Link href="/portfolio">
+              <Button className="btn-outline group">
+                View Full Growth Strategy
                 <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
               </Button>
             </Link>
@@ -406,6 +561,13 @@ export default function Home() {
         property={selectedProperty}
         isOpen={isModalOpen}
         onClose={closePropertyModal}
+      />
+
+      {/* Growth Modal */}
+      <GrowthModal
+        isOpen={growthModalOpen}
+        onClose={() => setGrowthModalOpen(false)}
+        type={growthModalType}
       />
     </div>
   );
