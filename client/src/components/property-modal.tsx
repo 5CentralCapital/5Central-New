@@ -2,7 +2,7 @@ import { useState } from "react";
 import { type Property } from "@shared/schema";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { getPropertyImage } from "@/lib/property-data";
-import { StoryTimeline } from "@/components/modals/StoryTimeline";
+import { StoryTimeline, VerticalStepIndicator } from "@/components/modals/StoryTimeline";
 import { StepPanel } from "@/components/modals/StepPanel";
 import { MetricRow, SimpleMetric } from "@/components/modals/MetricRow";
 import { HighlightMetric } from "@/components/modals/HighlightMetric";
@@ -141,15 +141,42 @@ const parsePhotos = (photosJson: string | null | undefined): string[] => {
   }
 };
 
-// 4-Step Investment Story Flow for Current Properties
-function InvestmentStoryFlow({ property }: { property: Property }) {
-  const steps = [
-    { number: 1, title: "Acquisition" },
-    { number: 2, title: "Value Add" },
-    { number: 3, title: "Refinance" },
-    { number: 4, title: "Exit" },
-  ];
+// Full-width Before/After Photo Gallery for top of modal
+function FullWidthPhotoGallery({ beforePhotos, afterPhotos, propertyName }: {
+  beforePhotos: string[];
+  afterPhotos: string[];
+  propertyName: string;
+}) {
+  if (beforePhotos.length === 0 && afterPhotos.length === 0) {
+    return null;
+  }
 
+  return (
+    <div className="mb-6">
+      <h4 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+        <Camera className="w-4 h-4 text-warm-brass" />
+        Before & After
+      </h4>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">Before</div>
+          <div className="aspect-[4/3] bg-muted rounded-lg overflow-hidden">
+            <SingleGallery photos={beforePhotos} title={`${propertyName} Before`} />
+          </div>
+        </div>
+        <div>
+          <div className="text-xs uppercase tracking-wider text-muted-foreground mb-2">After</div>
+          <div className="aspect-[4/3] bg-muted rounded-lg overflow-hidden">
+            <SingleGallery photos={afterPhotos} title={`${propertyName} After`} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 4-Step Investment Story Flow for Current Properties - VERTICAL LAYOUT
+function InvestmentStoryFlow({ property }: { property: Property }) {
   const totalBasis = num(property.acquisitionPrice) + num(property.rehabCosts);
   const beforePhotos = parsePhotos(property.beforePhotos);
   const afterPhotos = parsePhotos(property.afterPhotos);
@@ -167,108 +194,152 @@ function InvestmentStoryFlow({ property }: { property: Property }) {
         </div>
       )}
 
-      {/* Timeline */}
-      <StoryTimeline steps={steps} />
+      {/* Before/After Photos - NOW AT TOP */}
+      <FullWidthPhotoGallery
+        beforePhotos={beforePhotos}
+        afterPhotos={afterPhotos}
+        propertyName={property.name}
+      />
 
-      {/* 4 Step Panels */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* 4 Step Panels - VERTICAL LAYOUT */}
+      <div className="space-y-4">
         {/* Step 1: Acquisition */}
-        <StepPanel stepNumber={1} title="Acquisition" subtitle="Entry Point" icon={Home}>
-          <SimpleMetric label="Purchase Price" value={formatCurrency(num(property.acquisitionPrice))} />
-          <SimpleMetric label="Rehab Budget" value={formatCurrency(num(property.rehabCosts))} />
-          <SimpleMetric label="Total Basis" value={formatCurrency(totalBasis)} highlight />
-          <SimpleMetric label="Price/Unit" value={formatCurrency(num(property.entryPerUnit))} />
+        <div className="flex">
+          <VerticalStepIndicator stepNumber={1} />
+          <div className="flex-1">
+            <StepPanel stepNumber={1} title="Acquisition" subtitle="Entry Point" icon={Home}>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <SimpleMetric label="Purchase Price" value={formatCurrency(num(property.acquisitionPrice))} />
+                <SimpleMetric label="Rehab Budget" value={formatCurrency(num(property.rehabCosts))} />
+                <SimpleMetric label="Total Basis" value={formatCurrency(totalBasis)} highlight />
+                <SimpleMetric label="Price/Unit" value={formatCurrency(num(property.entryPerUnit))} />
+              </div>
 
-          <div className="pt-2 mt-2 border-t border-border/50">
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Bridge Financing</div>
-            <SimpleMetric label="Loan Amount" value={formatCurrency(num(property.bridgeLoan))} />
-            <SimpleMetric label="LTV" value={formatPercent(num(property.ltvPurchase))} />
-            <SimpleMetric label="Interest Rate" value={formatPercent(num(property.interestRate))} />
-            <SimpleMetric label="Monthly P&I" value={formatCurrency(num(property.monthlyPI))} />
+              <div className="pt-3 mt-3 border-t border-border/50">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Bridge Financing</div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <SimpleMetric label="Loan Amount" value={formatCurrency(num(property.bridgeLoan))} />
+                  <SimpleMetric label="LTV" value={formatPercent(num(property.ltvPurchase))} />
+                  <SimpleMetric label="Interest Rate" value={formatPercent(num(property.interestRate))} />
+                  <SimpleMetric label="Monthly P&I" value={formatCurrency(num(property.monthlyPI))} />
+                </div>
+              </div>
+            </StepPanel>
           </div>
-        </StepPanel>
+        </div>
 
         {/* Step 2: Value Add */}
-        <StepPanel stepNumber={2} title="Value Add" subtitle="Transformation" icon={ArrowUpRight}>
-          <MetricRow
-            label="Monthly Rent"
-            beforeValue={formatCurrency(num(property.inPlaceRent))}
-            afterValue={formatCurrency(num(property.proformaRent))}
-            change={formatPercentChange(num(property.inPlaceRent), num(property.proformaRent))}
-            changeType="positive"
-          />
-          <MetricRow
-            label="Annual NOI"
-            beforeValue={formatCurrency(num(property.inPlaceNOI))}
-            afterValue={formatCurrency(num(property.stabilizedNOI))}
-            change={`+${formatCurrency(num(property.noiUpside))}`}
-            changeType="positive"
-          />
-          <MetricRow
-            label="Property Value"
-            beforeValue={formatCurrency(totalBasis)}
-            afterValue={formatCurrency(num(property.arvTotal))}
-            change={`+${formatCurrency(num(property.valueCreation))}`}
-            changeType="positive"
-          />
+        <div className="flex">
+          <VerticalStepIndicator stepNumber={2} />
+          <div className="flex-1">
+            <StepPanel stepNumber={2} title="Value Add" subtitle="Transformation" icon={ArrowUpRight}>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <MetricRow
+                  label="Monthly Rent"
+                  beforeValue={formatCurrency(num(property.inPlaceRent))}
+                  afterValue={formatCurrency(num(property.proformaRent))}
+                  change={formatPercentChange(num(property.inPlaceRent), num(property.proformaRent))}
+                  changeType="positive"
+                />
+                <MetricRow
+                  label="Annual NOI"
+                  beforeValue={formatCurrency(num(property.inPlaceNOI))}
+                  afterValue={formatCurrency(num(property.stabilizedNOI))}
+                  change={`+${formatCurrency(num(property.noiUpside))}`}
+                  changeType="positive"
+                />
+                <MetricRow
+                  label="Property Value"
+                  beforeValue={formatCurrency(totalBasis)}
+                  afterValue={formatCurrency(num(property.arvTotal))}
+                  change={`+${formatCurrency(num(property.valueCreation))}`}
+                  changeType="positive"
+                />
+              </div>
 
-          {/* Compact Before/After Photos */}
-          {(beforePhotos.length > 0 || afterPhotos.length > 0) && (
-            <CompactPhotoGallery
-              beforePhotos={beforePhotos}
-              afterPhotos={afterPhotos}
-              propertyName={property.name}
-            />
-          )}
-        </StepPanel>
+              {/* Rent Roll Summary */}
+              <div className="pt-3 mt-3 border-t border-border/50">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Rent Roll</div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <SimpleMetric label="Occupied" value={`${property.occupiedUnits || 0}/${property.totalUnits || property.units}`} />
+                  <SimpleMetric label="Occupancy" value={formatPercent(num(property.occupancyRate))} />
+                  <SimpleMetric label="In-Place Rent" value={formatCurrency(num(property.inPlaceRent))} />
+                  <SimpleMetric label="Proforma Rent" value={formatCurrency(num(property.proformaRent))} highlight />
+                </div>
+              </div>
+
+              {/* Rehab Budget Breakdown */}
+              <div className="pt-3 mt-3 border-t border-border/50">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Rehab Budget: {formatCurrency(num(property.rehabCosts))}</div>
+                <div className="text-xs text-muted-foreground">
+                  Major items: Roof, Flooring, Cabinets, Paint, Plumbing, Electrical
+                </div>
+              </div>
+            </StepPanel>
+          </div>
+        </div>
 
         {/* Step 3: Refinance */}
-        <StepPanel stepNumber={3} title="Refinance" subtitle="Harvest Equity" icon={Landmark}>
-          <SimpleMetric label="New Loan Amount" value={formatCurrency(num(property.refiLoanAmount))} />
-          <SimpleMetric label="LTV (on ARV)" value={formatPercent(num(property.refiLTV) || 0.70)} />
-          <SimpleMetric label="Cash-Out" value={formatCurrency(num(property.refiCashOut) || num(property.cashOutAtRefi))} highlight />
+        <div className="flex">
+          <VerticalStepIndicator stepNumber={3} />
+          <div className="flex-1">
+            <StepPanel stepNumber={3} title="Refinance" subtitle="Harvest Equity" icon={Landmark}>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                <SimpleMetric label="New Loan Amount" value={formatCurrency(num(property.refiLoanAmount))} />
+                <SimpleMetric label="LTV (on ARV)" value={formatPercent(num(property.refiLTV) || 0.70)} />
+                <SimpleMetric label="Cash-Out" value={formatCurrency(num(property.refiCashOut) || num(property.cashOutAtRefi))} highlight />
+              </div>
 
-          <div className="pt-2 mt-2 border-t border-border/50">
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Post-Refi Position</div>
-            <SimpleMetric label="Equity After Refi" value={formatCurrency(num(property.equityAfterRefi))} />
-            <SimpleMetric label="New Monthly P&I" value={formatCurrency(num(property.newMonthlyPI))} />
-            <SimpleMetric label="DSCR" value={`${num(property.dscrStabilized).toFixed(2)}x`} highlight={num(property.dscrStabilized) >= 1.25} />
-            <SimpleMetric label="Debt Yield" value={formatPercent(num(property.debtYield))} />
-          </div>
+              <div className="pt-3 mt-3 border-t border-border/50">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2">Post-Refi Position</div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <SimpleMetric label="Equity After Refi" value={formatCurrency(num(property.equityAfterRefi))} />
+                  <SimpleMetric label="New Monthly P&I" value={formatCurrency(num(property.newMonthlyPI))} />
+                  <SimpleMetric label="DSCR" value={`${num(property.dscrStabilized).toFixed(2)}x`} highlight={num(property.dscrStabilized) >= 1.25} />
+                  <SimpleMetric label="Debt Yield" value={formatPercent(num(property.debtYield))} />
+                </div>
+              </div>
 
-          <div className="mt-2 p-2 bg-muted/30 rounded text-center">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Target: </span>
-            <span className="text-xs font-medium text-foreground">Month {property.refiTargetMonth || property.refiMonth}</span>
+              <div className="mt-3 p-2 bg-muted/30 rounded text-center">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Target: </span>
+                <span className="text-xs font-medium text-foreground">Month {property.refiTargetMonth || property.refiMonth}</span>
+              </div>
+            </StepPanel>
           </div>
-        </StepPanel>
+        </div>
 
         {/* Step 4: Exit */}
-        <StepPanel stepNumber={4} title="Exit" subtitle="Realize Returns" icon={Target} highlight>
-          <SimpleMetric label="Exit Cap Rate" value={formatPercent(num(property.exitCapRate))} />
-          <SimpleMetric label="Projected Sale" value={formatCurrency(num(property.projectedSalePrice) || num(property.arvTotal))} />
-          <SimpleMetric label="Net Proceeds" value={formatCurrency(num(property.projectedNetProceeds) || num(property.netCashFromSale))} />
+        <div className="flex">
+          <VerticalStepIndicator stepNumber={4} isLast />
+          <div className="flex-1">
+            <StepPanel stepNumber={4} title="Exit" subtitle="Realize Returns" icon={Target} highlight>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                <SimpleMetric label="Exit Cap Rate" value={formatPercent(num(property.exitCapRate))} />
+                <SimpleMetric label="Projected Sale" value={formatCurrency(num(property.projectedSalePrice) || num(property.arvTotal))} />
+                <SimpleMetric label="Net Proceeds" value={formatCurrency(num(property.projectedNetProceeds) || num(property.netCashFromSale))} />
+              </div>
 
-          <div className="pt-3 mt-3 border-t border-warm-brass/30">
-            <div className="text-[10px] uppercase tracking-wider text-warm-brass mb-2 font-medium">Final Returns</div>
-            <div className="grid grid-cols-2 gap-2">
-              <HighlightMetric label="IRR" value={property.irrLevered || "N/A"} size="sm" variant="featured" />
-              <HighlightMetric label="MOIC" value={`${num(property.moic).toFixed(2)}x`} size="sm" variant="featured" />
-            </div>
-            <div className="mt-2">
-              <HighlightMetric
-                label="Total Profit"
-                value={formatCurrency(num(property.projectedTotalProfit) || num(property.totalProfit))}
-                size="md"
-                variant="featured"
-              />
-            </div>
-          </div>
+              <div className="pt-4 mt-4 border-t border-warm-brass/30">
+                <div className="text-[10px] uppercase tracking-wider text-warm-brass mb-3 font-medium">Final Returns</div>
+                <div className="grid grid-cols-3 gap-4">
+                  <HighlightMetric label="IRR" value={property.irrLevered || "N/A"} size="sm" variant="featured" />
+                  <HighlightMetric label="MOIC" value={`${num(property.moic).toFixed(2)}x`} size="sm" variant="featured" />
+                  <HighlightMetric
+                    label="Total Profit"
+                    value={formatCurrency(num(property.projectedTotalProfit) || num(property.totalProfit))}
+                    size="sm"
+                    variant="featured"
+                  />
+                </div>
+              </div>
 
-          <div className="mt-2 p-2 bg-warm-brass/10 rounded text-center">
-            <span className="text-[10px] uppercase tracking-wider text-warm-brass">Hold Period: </span>
-            <span className="text-xs font-medium text-warm-brass">{property.holdPeriodMonths || 24} Months</span>
+              <div className="mt-3 p-2 bg-warm-brass/10 rounded text-center">
+                <span className="text-[10px] uppercase tracking-wider text-warm-brass">Hold Period: </span>
+                <span className="text-xs font-medium text-warm-brass">{property.holdPeriodMonths || 24} Months</span>
+              </div>
+            </StepPanel>
           </div>
-        </StepPanel>
+        </div>
       </div>
 
       {/* Deal Overview Footer */}

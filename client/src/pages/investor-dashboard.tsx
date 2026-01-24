@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getQueryFn } from "@/lib/queryClient";
 import { getPropertyImage } from "@/lib/property-data";
+import PropertyModal from "@/components/property-modal";
 import { type Property } from "@shared/schema";
 import {
   DollarSign,
@@ -72,6 +73,18 @@ interface PortfolioMetrics {
 export default function InvestorDashboard() {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState("overview");
+  const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  const openPropertyModal = (property: Property) => {
+    setSelectedProperty(property);
+    setIsModalOpen(true);
+  };
+
+  const closePropertyModal = () => {
+    setIsModalOpen(false);
+    setSelectedProperty(null);
+  };
 
   const { data: profile } = useQuery<InvestorProfile | null>({
     queryKey: ["/api/investor/profile"],
@@ -191,7 +204,22 @@ export default function InvestorDashboard() {
 
   // Company Partner Dashboard
   if (isCompanyPartner && portfolioMetrics) {
-    return <CompanyPartnerDashboard user={user} profile={profile} metrics={portfolioMetrics} properties={properties} />;
+    return (
+      <>
+        <CompanyPartnerDashboard
+          user={user}
+          profile={profile}
+          metrics={portfolioMetrics}
+          properties={properties}
+          onPropertyClick={openPropertyModal}
+        />
+        <PropertyModal
+          property={selectedProperty}
+          isOpen={isModalOpen}
+          onClose={closePropertyModal}
+        />
+      </>
+    );
   }
 
   return (
@@ -277,6 +305,7 @@ export default function InvestorDashboard() {
                 investments={investments}
                 formatCurrency={formatCurrency}
                 formatPercent={formatPercent}
+                onPropertyClick={openPropertyModal}
               />
             </TabsContent>
 
@@ -320,6 +349,13 @@ export default function InvestorDashboard() {
           </div>
         </div>
       </section>
+
+      {/* Property Modal */}
+      <PropertyModal
+        property={selectedProperty}
+        isOpen={isModalOpen}
+        onClose={closePropertyModal}
+      />
     </div>
   );
 }
@@ -678,11 +714,13 @@ function PropertiesTab({
   investments,
   formatCurrency,
   formatPercent,
+  onPropertyClick,
 }: {
   properties: Property[];
   investments: Investment[];
   formatCurrency: (value: string | number | null | undefined) => string;
   formatPercent: (value: string | number | null | undefined) => string;
+  onPropertyClick: (property: Property) => void;
 }) {
   // Create a map of property name to investor's stake
   const investmentsByProperty = investments.reduce((acc, inv) => {
@@ -709,7 +747,11 @@ function PropertiesTab({
           const equityInvestment = propInvestments.find(inv => inv.investmentType === "equity");
 
           return (
-            <Card key={property.id} className="card-refined overflow-hidden">
+            <Card
+              key={property.id}
+              className="card-refined overflow-hidden cursor-pointer hover:shadow-lg transition-shadow duration-300"
+              onClick={() => onPropertyClick(property)}
+            >
               {/* Property Image */}
               <div className="aspect-[16/10] overflow-hidden bg-muted">
                 <img
@@ -720,7 +762,7 @@ function PropertiesTab({
               </div>
 
               <CardContent className="p-6">
-                <h3 className="text-lg font-serif font-medium text-foreground mb-2">
+                <h3 className="text-lg font-serif font-medium text-foreground mb-2 group-hover:text-warm-brass transition-colors">
                   {property.name}
                 </h3>
                 <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
@@ -891,11 +933,13 @@ function CompanyPartnerDashboard({
   profile,
   metrics,
   properties,
+  onPropertyClick,
 }: {
   user: any;
   profile: InvestorProfile | null;
   metrics: PortfolioMetrics;
   properties: Property[];
+  onPropertyClick: (property: Property) => void;
 }) {
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat("en-US", {
@@ -1024,7 +1068,11 @@ function CompanyPartnerDashboard({
 
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
             {properties.map((property) => (
-              <Card key={property.id} className="card-refined overflow-hidden">
+              <Card
+                key={property.id}
+                className="card-refined overflow-hidden cursor-pointer hover:shadow-lg transition-shadow duration-300"
+                onClick={() => onPropertyClick(property)}
+              >
                 <div className="aspect-[16/10] overflow-hidden bg-muted">
                   <img
                     src={getPropertyImage(property.name)}
@@ -1033,7 +1081,7 @@ function CompanyPartnerDashboard({
                   />
                 </div>
                 <CardContent className="p-6">
-                  <h3 className="text-lg font-serif font-medium text-foreground mb-2">
+                  <h3 className="text-lg font-serif font-medium text-foreground mb-2 hover:text-warm-brass transition-colors">
                     {property.name}
                   </h3>
                   <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
