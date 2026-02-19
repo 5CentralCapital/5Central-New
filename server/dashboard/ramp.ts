@@ -112,8 +112,8 @@ export async function fetchTransactions(opts?: {
   maxPages?: number;
 }): Promise<RampTransaction[]> {
   const allTxs: RampTransaction[] = [];
-  const pageSize = opts?.pageSize || 1000;
-  const maxPages = opts?.maxPages || 5;
+  const pageSize = opts?.pageSize || 100;
+  const maxPages = opts?.maxPages || 50;
   let cursor: string | undefined;
 
   for (let page = 0; page < maxPages; page++) {
