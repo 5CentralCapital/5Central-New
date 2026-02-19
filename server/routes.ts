@@ -2,10 +2,14 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { registerAuthRoutes, requireAdmin, requireAuth } from "./auth";
+import { registerDashboardRoutes } from "./dashboard/routes";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Auth routes
   registerAuthRoutes(app);
+
+  // Admin dashboard API routes
+  registerDashboardRoutes(app);
 
   // Investor routes
   app.get("/api/investor/profile", requireAuth, async (req, res) => {
