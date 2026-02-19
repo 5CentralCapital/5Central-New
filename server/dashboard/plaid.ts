@@ -30,7 +30,6 @@ export const plaidClient = new PlaidApi(configuration);
 /** Products we request from Plaid Link */
 export const PLAID_PRODUCTS: Products[] = [
   Products.Transactions,
-  Products.Auth,
 ];
 
 export const PLAID_COUNTRY_CODES: CountryCode[] = [CountryCode.Us];
