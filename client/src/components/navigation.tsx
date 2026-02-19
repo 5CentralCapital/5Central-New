@@ -89,9 +89,15 @@ export default function Navigation() {
             ))}
             {user ? (
               <div className="flex items-center gap-4 ml-4">
-                <span className="text-sm text-muted-foreground">
-                  {user.firstName}
-                </span>
+                {user.role === "admin" ? (
+                  <Link href="/admin" className="text-sm text-warm-brass hover:underline font-medium cursor-pointer">
+                    {user.firstName}
+                  </Link>
+                ) : (
+                  <Link href="/investor-dashboard" className="text-sm text-muted-foreground hover:underline cursor-pointer">
+                    {user.firstName}
+                  </Link>
+                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -149,9 +155,13 @@ export default function Navigation() {
                   <div className="mt-10 pt-8 border-t border-border">
                     {user ? (
                       <div className="space-y-4">
-                        <p className="text-sm text-muted-foreground">
-                          Signed in as {user.firstName} {user.lastName}
-                        </p>
+                        <Link
+                          href={user.role === "admin" ? "/admin" : "/investor-dashboard"}
+                          className={`block text-sm font-medium ${user.role === "admin" ? "text-warm-brass" : "text-muted-foreground"}`}
+                          onClick={() => setIsOpen(false)}
+                        >
+                          {user.firstName} {user.lastName} → Dashboard
+                        </Link>
                         <Button
                           variant="outline"
                           className="w-full flex items-center justify-center gap-2"

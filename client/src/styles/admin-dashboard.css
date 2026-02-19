@@ -1,111 +1,170 @@
+/* ═══════════════════════════════════════════════════════
+   Admin Dashboard — Light theme matching main 5Central site
+   ═══════════════════════════════════════════════════════ */
+
 .admin-dashboard {
-  --color-bg: #141414;
-  --color-surface: #1a1a1a;
-  --color-surface-alt: #222222;
-  --color-text: #f5f4f1;
-  --color-text-muted: #9a9590;
-  --color-accent: #c4a574;
-  --color-accent-strong: #d4b884;
-  --color-border: #2e2b28;
+  --color-bg: var(--background, #FAFAF8);
+  --color-surface: var(--card, #FFFFFF);
+  --color-surface-alt: var(--secondary, #F5F4F1);
+  --color-text: var(--foreground, #1A1A1A);
+  --color-text-muted: var(--muted-foreground, #6B6B6B);
+  --color-accent: var(--warm-brass, #C4A574);
+  --color-accent-strong: #B8944A;
+  --color-border: var(--border, #E5E3DF);
   --color-success: #10b981;
   --color-warning: #f59e0b;
   --color-danger: #ef4444;
-  --radius-card: 10px;
-  --font-display: 'Cormorant Garamond', Georgia, serif;
+  --radius-card: 0.25rem;
+  --font-display: var(--font-serif, 'Cormorant Garamond', Georgia, serif);
   --font-sans: 'DM Sans', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --font-mono: 'SF Mono', Menlo, monospace;
 
   min-height: 100vh;
-  background:
-    radial-gradient(ellipse 80% 50% at 5% -15%, rgba(196, 165, 116, 0.06), transparent 50%),
-    radial-gradient(ellipse 60% 40% at 95% -10%, rgba(196, 165, 116, 0.04), transparent 40%),
-    var(--color-bg);
+  background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
+  padding-top: 80px; /* space for fixed nav */
 }
 
 .admin-dashboard * { box-sizing: border-box; }
 
 .admin-dashboard h1, .admin-dashboard h2, .admin-dashboard h3, .admin-dashboard .font-display {
   font-family: var(--font-display), var(--font-sans), sans-serif;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.03em;
 }
 
 .admin-dashboard .shell { max-width: 1440px; margin: 0 auto; padding: 1.5rem; }
 
+/* Cards use the main site's refined card style */
 .admin-dashboard .panel, .admin-dashboard .card {
   border: 1px solid var(--color-border);
-  background: linear-gradient(168deg, rgba(26, 26, 26, 0.95), rgba(20, 20, 20, 0.98));
+  background: var(--color-surface);
   border-radius: var(--radius-card);
-  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.25), 0 1px 3px rgba(0, 0, 0, 0.1);
-  backdrop-filter: blur(8px);
+  box-shadow:
+    0 4px 6px rgba(26, 26, 26, 0.02),
+    0 12px 24px rgba(26, 26, 26, 0.04),
+    0 24px 48px rgba(26, 26, 26, 0.03);
   animation: dashFadeIn 0.3s ease-out;
+  transition: all 0.5s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
 .admin-dashboard .panel.kpi { padding: 1rem; }
-.admin-dashboard .panel.kpi .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); }
-.admin-dashboard .panel.kpi .value { font-size: 1.75rem; font-weight: 600; margin-top: 0.25rem; font-variant-numeric: tabular-nums; }
+.admin-dashboard .panel.kpi .label {
+  font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.15em; color: var(--color-text-muted);
+}
+.admin-dashboard .panel.kpi .value {
+  font-size: 1.75rem; font-weight: 600; margin-top: 0.25rem;
+  font-variant-numeric: tabular-nums;
+}
 
+/* Tab nav buttons — light style matching main site */
 .admin-dashboard .nav-btn {
   padding: 0.5rem 0.875rem;
-  border-radius: 12px;
+  border-radius: var(--radius-card);
   border: 1px solid var(--color-border);
-  background: rgba(12, 21, 37, 0.4);
+  background: var(--color-surface);
   color: var(--color-text-muted);
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: all 0.4s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
 }
-.admin-dashboard .nav-btn:hover { border-color: color-mix(in oklab, var(--color-accent) 30%, var(--color-border)); color: var(--color-text); transform: translateY(-1px); }
-.admin-dashboard .nav-btn.active { border-color: rgba(196, 165, 116, 0.4); background: rgba(196, 165, 116, 0.1); color: var(--color-accent-strong); box-shadow: 0 0 20px rgba(196, 165, 116, 0.06); }
+.admin-dashboard .nav-btn:hover {
+  border-color: rgba(196, 165, 116, 0.4);
+  color: var(--color-text);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(26, 26, 26, 0.06);
+}
+.admin-dashboard .nav-btn.active {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--deep-charcoal, #1A1A1A);
+  box-shadow: 0 2px 8px rgba(196, 165, 116, 0.25);
+}
 
-.admin-dashboard .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--color-accent); }
+/* Label style matching main site metric-label */
+.admin-dashboard .label {
+  font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.22em; color: var(--color-accent);
+  font-weight: 450;
+}
 
+/* Interactive cards — hover lift like card-refined */
 .admin-dashboard .interactive {
-  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), border-color 200ms ease, box-shadow 200ms ease;
+  transition: all 0.5s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
 }
 .admin-dashboard .interactive:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in oklab, var(--color-accent) 25%, var(--color-border));
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(196, 165, 116, 0.06);
+  transform: translateY(-4px);
+  border-color: rgba(196, 165, 116, 0.3);
+  box-shadow:
+    0 8px 12px rgba(26, 26, 26, 0.03),
+    0 24px 48px rgba(26, 26, 26, 0.06),
+    0 48px 80px rgba(26, 26, 26, 0.04);
 }
 
 .admin-dashboard input, .admin-dashboard select, .admin-dashboard button, .admin-dashboard textarea { font: inherit; }
-.admin-dashboard input:focus, .admin-dashboard select:focus, .admin-dashboard button:focus-visible, .admin-dashboard textarea:focus { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.admin-dashboard input:focus, .admin-dashboard select:focus, .admin-dashboard button:focus-visible, .admin-dashboard textarea:focus {
+  outline: 2px solid var(--color-accent); outline-offset: 2px;
+}
 
+/* Tables — light borders on cream */
 .admin-dashboard table { border-collapse: collapse; width: 100%; }
-.admin-dashboard th { text-align: left; padding: 0.5rem 0.75rem; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); }
-.admin-dashboard td { padding: 0.5rem 0.75rem; border-bottom: 1px solid rgba(30, 45, 72, 0.5); }
-.admin-dashboard td input { width: 100%; background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 4px 8px; color: var(--color-text); }
-.admin-dashboard td input:hover { border-color: var(--color-border); background: var(--color-surface-alt); }
-.admin-dashboard td input:focus { border-color: var(--color-accent); background: var(--color-surface); outline: none; }
-.admin-dashboard tr:hover { background: rgba(15, 23, 42, 0.4); }
+.admin-dashboard th {
+  text-align: left; padding: 0.5rem 0.75rem;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--color-text-muted); border-bottom: 1px solid var(--color-border);
+}
+.admin-dashboard td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.admin-dashboard td input {
+  width: 100%; background: transparent;
+  border: 1px solid transparent; border-radius: var(--radius-card);
+  padding: 4px 8px; color: var(--color-text);
+}
+.admin-dashboard td input:hover {
+  border-color: var(--color-border); background: var(--color-surface-alt);
+}
+.admin-dashboard td input:focus {
+  border-color: var(--color-accent); background: var(--color-surface); outline: none;
+}
+.admin-dashboard tr:hover { background: rgba(196, 165, 116, 0.04); }
 .admin-dashboard tfoot td { border-bottom: none; }
 
 .admin-dashboard .tabular-nums { font-variant-numeric: tabular-nums; }
 
+/* Select fields */
 .admin-dashboard .select-field {
-  appearance: none; padding: 6px 12px; border-radius: 10px;
+  appearance: none; padding: 6px 12px; border-radius: var(--radius-card);
   border: 1px solid var(--color-border); background: var(--color-surface);
   color: var(--color-text); font-size: 12px; cursor: pointer;
 }
-.admin-dashboard .select-field:hover { border-color: color-mix(in oklab, var(--color-accent) 30%, var(--color-border)); }
+.admin-dashboard .select-field:hover { border-color: rgba(196, 165, 116, 0.4); }
 
 .admin-dashboard .select-inline {
-  appearance: none; padding: 1px 6px; border-radius: 6px;
+  appearance: none; padding: 1px 6px; border-radius: var(--radius-card);
   border: 1px solid transparent; background: transparent;
   color: var(--color-text-muted); font-size: 11px; cursor: pointer;
 }
-.admin-dashboard .select-inline:hover { border-color: var(--color-border); background: var(--color-surface-alt); }
+.admin-dashboard .select-inline:hover {
+  border-color: var(--color-border); background: var(--color-surface-alt);
+}
 
+/* Inline edit inputs */
 .admin-dashboard .inline-edit {
-  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  background: transparent; border: 1px solid transparent; border-radius: var(--radius-card);
   padding: 2px 6px; margin: -2px -6px; color: inherit; width: calc(100% + 12px);
 }
-.admin-dashboard .inline-edit:hover { border-color: var(--color-border); background: var(--color-surface-alt); }
-.admin-dashboard .inline-edit:focus { border-color: var(--color-accent); background: var(--color-surface); outline: none; box-shadow: 0 0 0 2px rgba(196, 165, 116, 0.15); }
+.admin-dashboard .inline-edit:hover {
+  border-color: var(--color-border); background: var(--color-surface-alt);
+}
+.admin-dashboard .inline-edit:focus {
+  border-color: var(--color-accent); background: var(--color-surface); outline: none;
+  box-shadow: 0 0 0 2px rgba(196, 165, 116, 0.15);
+}
 
 .admin-dashboard code { font-family: var(--font-mono), monospace; }
 
@@ -124,6 +183,7 @@
   50% { opacity: 0.4; }
 }
 
+/* Scrollbar — subtle light style */
 .admin-dashboard ::-webkit-scrollbar { width: 6px; height: 6px; }
 .admin-dashboard ::-webkit-scrollbar-track { background: transparent; }
 .admin-dashboard ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }

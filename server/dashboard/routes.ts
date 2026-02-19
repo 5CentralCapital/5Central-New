@@ -5,9 +5,9 @@ import { getBankingData } from "./bankingDb";
 
 export function registerDashboardRoutes(app: Express) {
   // GET dashboard data
-  app.get("/api/dashboard", requireAdmin, (_req, res) => {
+  app.get("/api/dashboard", requireAdmin, async (_req, res) => {
     try {
-      const dashData = getDashboardData();
+      const dashData = await getDashboardData();
       try {
         dashData.banking = getBankingData();
       } catch {}
@@ -18,15 +18,15 @@ export function registerDashboardRoutes(app: Express) {
   });
 
   // PATCH update a specific table
-  app.patch("/api/dashboard", requireAdmin, (req, res) => {
+  app.patch("/api/dashboard", requireAdmin, async (req, res) => {
     try {
       const { table, data, reason } = req.body;
       if (!table || !data) {
         return res.status(400).json({ error: "table and data required" });
       }
-      updateTable(table, data);
+      await updateTable(table, data);
       if (reason) {
-        appendActivity({
+        await appendActivity({
           actor: "admin",
           action: reason,
           entityType: table,
@@ -38,6 +38,11 @@ export function registerDashboardRoutes(app: Express) {
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
+  });
+
+  // Refresh (no-op — data is already live from PostgreSQL; frontend calls load() after)
+  app.post("/api/dashboard/refresh", requireAdmin, (_req, res) => {
+    res.json({ ok: true });
   });
 
   // Plaid routes (only if configured)
@@ -146,6 +151,24 @@ export function registerDashboardRoutes(app: Express) {
       }
       res.json({ ok: true });
     } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ─── Ramp API routes ───
+  app.get("/api/ramp/transactions", requireAdmin, async (req, res) => {
+    try {
+      const { isRampConfigured, fetchTransactions, buildSpendingSummary } = await import("./ramp");
+      if (!isRampConfigured()) {
+        return res.status(400).json({ error: "Ramp not configured. Set RAMP_CLIENT_ID and RAMP_CLIENT_SECRET." });
+      }
+      const fromDate = req.query.from_date as string | undefined;
+      const toDate = req.query.to_date as string | undefined;
+      const txs = await fetchTransactions({ fromDate, toDate });
+      const summary = buildSpendingSummary(txs);
+      res.json(summary);
+    } catch (error: any) {
+      console.error("Ramp sync error:", error);
       res.status(500).json({ error: error.message });
     }
   });

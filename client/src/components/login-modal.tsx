@@ -42,7 +42,7 @@ export default function LoginModal({ open, onOpenChange }: LoginModalProps) {
       if (response.ok) {
         const data = await response.json();
         if (data.user.role === "admin") {
-          setLocation("/portfolio");
+          setLocation("/admin");
         } else {
           setLocation("/investor-dashboard");
         }

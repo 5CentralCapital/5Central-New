@@ -12,6 +12,14 @@ interface BankAccount { id: string; plaidAccountId: string; name: string; offici
 interface BankTransaction { id: string; accountId: string; date: string; name: string; amount: number; category?: string[]; merchantName?: string; pending: boolean; }
 interface DashboardData { tasks: TaskItem[]; metrics: any[]; properties: PropertyCard[]; rehab: RehabTracker[]; occupancy: OccupancyRecord[]; kpis: any[]; debt: DebtMaturity[]; growth: GrowthMilestone[]; activity: any[]; freshness?: any[]; diagnostics?: any[]; banking?: { accounts: BankAccount[]; recentTransactions: BankTransaction[]; connections: any[]; totalCash: number; }; }
 
+interface RampSpending {
+  totalSpent: number;
+  transactionCount: number;
+  byMerchant: { merchant: string; total: number; count: number }[];
+  byCategory: { category: string; total: number; count: number }[];
+  recentTransactions: { id: string; date: string; merchant: string; amount: number; category: string; memo: string | null; state: string; cardHolder: string }[];
+}
+
 /* ──────────────────────── Tab definitions ──────────────────────── */
 type Tab =
   | "overview"
@@ -133,10 +141,30 @@ export default function AdminDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [refreshing, setRefreshing] = useState(false);
+  const [rampData, setRampData] = useState<RampSpending | null>(null);
+  const [rampLoading, setRampLoading] = useState(false);
+  const [rampError, setRampError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/dashboard");
     setData(await res.json());
+  }, []);
+
+  const loadRamp = useCallback(async () => {
+    setRampLoading(true);
+    setRampError(null);
+    try {
+      const res = await fetch("/api/ramp/transactions");
+      if (!res.ok) {
+        const err = await res.json();
+        setRampError(err.error || "Failed to load Ramp data");
+      } else {
+        setRampData(await res.json());
+      }
+    } catch (e: any) {
+      setRampError(e.message || "Network error");
+    }
+    setRampLoading(false);
   }, []);
 
   useEffect(() => {
@@ -354,7 +382,7 @@ export default function AdminDashboard() {
             <div className="card" style={{ padding: 14 }}>
               <div className="label" style={{ marginBottom: 10 }}>Debt Maturity Timeline</div>
               {data.debt.sort((a, b) => a.daysUntilMaturity - b.daysUntilMaturity).map((d) => (
-                <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid rgba(46,43,40,0.5)" }}>
+                <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid var(--color-border)" }}>
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: urgencyColor(d.urgency), flexShrink: 0 }} />
                   <span style={{ flex: 1, fontSize: 12 }}>{d.property}</span>
                   <span style={{ fontSize: 18, fontWeight: 600, color: urgencyColor(d.urgency), width: 50, textAlign: "right" }} className="tabular-nums">{d.daysUntilMaturity}d</span>
@@ -366,7 +394,7 @@ export default function AdminDashboard() {
             <div className="card" style={{ padding: 14 }}>
               <div className="label" style={{ marginBottom: 10 }}>Recent Activity</div>
               {data.activity.slice(0, 10).map((a) => (
-                <div key={a.id} style={{ fontSize: 11, color: "var(--color-text-muted)", padding: "3px 0", borderBottom: "1px solid rgba(46,43,40,0.3)" }}>
+                <div key={a.id} style={{ fontSize: 11, color: "var(--color-text-muted)", padding: "3px 0", borderBottom: "1px solid var(--color-border)" }}>
                   <span style={{ color: "var(--color-accent)", marginRight: 6, fontSize: 10 }}>{new Date(a.ts).toLocaleTimeString()}</span>
                   {a.action} — {a.detail}
                 </div>
@@ -376,6 +404,9 @@ export default function AdminDashboard() {
 
           {/* Banking / Cash Position */}
           <BankingSection banking={data.banking} onRefresh={load} />
+
+          {/* Ramp Card Spending */}
+          <RampSection rampData={rampData} loading={rampLoading} error={rampError} onLoad={loadRamp} />
         </section>
       )}
 
@@ -466,6 +497,9 @@ export default function AdminDashboard() {
           {data.rehab.map((r) => (
             <RehabCard key={r.id} item={r} onSave={(updated) => save("rehab", data.rehab.map((x) => (x.id === updated.id ? updated : x)), "rehab_edit")} />
           ))}
+
+          {/* Ramp Card Spending for Rehab */}
+          <RampSection rampData={rampData} loading={rampLoading} error={rampError} onLoad={loadRamp} showDetails />
         </section>
       )}
 
@@ -564,7 +598,7 @@ export default function AdminDashboard() {
                     <td className="tabular-nums">{fmtCompact(m.targetEquity)}</td>
                     <td style={{ fontSize: 11 }}>{m.phase}</td>
                     <td>
-                      <span style={{ fontSize: 10, textTransform: "uppercase", padding: "2px 8px", borderRadius: 4, background: m.status === "completed" ? "rgba(16,185,129,0.12)" : m.status === "current" ? "rgba(196,165,116,0.12)" : "rgba(46,43,40,0.4)", color: m.status === "completed" ? "var(--color-success)" : m.status === "current" ? "var(--color-accent)" : "var(--color-text-muted)" }}>
+                      <span style={{ fontSize: 10, textTransform: "uppercase", padding: "2px 8px", borderRadius: 4, background: m.status === "completed" ? "rgba(16,185,129,0.12)" : m.status === "current" ? "rgba(196,165,116,0.12)" : "var(--color-border)", color: m.status === "completed" ? "var(--color-success)" : m.status === "current" ? "var(--color-accent)" : "var(--color-text-muted)" }}>
                         {m.status}
                       </span>
                     </td>
@@ -591,7 +625,7 @@ export default function AdminDashboard() {
           <div className="card" style={{ padding: 16 }}>
             <div className="label" style={{ marginBottom: 12 }}>Data Source Status</div>
             {(data.diagnostics || []).map((d) => (
-              <div key={d.source} style={{ padding: "10px 0", borderBottom: "1px solid rgba(46,43,40,0.4)", display: "flex", alignItems: "center", gap: 12 }}>
+              <div key={d.source} style={{ padding: "10px 0", borderBottom: "1px solid var(--color-border)", display: "flex", alignItems: "center", gap: 12 }}>
                 <span style={{ width: 8, height: 8, borderRadius: "50%", background: d.lastError ? "var(--color-danger)" : d.lastSuccessAt ? "var(--color-success)" : "var(--color-text-muted)" }} />
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 500 }}>{d.source.toUpperCase()}</div>
@@ -637,7 +671,7 @@ export default function AdminDashboard() {
           <div className="card" style={{ padding: 16 }}>
             <div className="label" style={{ marginBottom: 10 }}>Full Activity Log</div>
             {data.activity.slice(0, 50).map((a) => (
-              <div key={a.id} style={{ fontSize: 11, color: "var(--color-text-muted)", padding: "3px 0", borderBottom: "1px solid rgba(46,43,40,0.3)" }}>
+              <div key={a.id} style={{ fontSize: 11, color: "var(--color-text-muted)", padding: "3px 0", borderBottom: "1px solid var(--color-border)" }}>
                 <span style={{ color: "var(--color-accent)", marginRight: 6, fontSize: 10 }}>{new Date(a.ts).toLocaleString()}</span>
                 <span style={{ color: "var(--color-text)", marginRight: 6 }}>{a.actor}</span>
                 {a.action} — {a.detail}
@@ -680,7 +714,7 @@ function PropertySummaryCard({ property: p, occupancy: o, debt: d, rehab: r }: {
         <div style={{ marginBottom: 6 }}>
           <div style={{ display: "flex", gap: 2, flexWrap: "wrap", marginBottom: 3 }}>
             {Array.from({ length: p.units }).map((_, i) => (
-              <div key={i} style={{ width: 8, height: 8, borderRadius: 2, background: i < (o.occupied || 0) ? "var(--color-accent)" : "rgba(46,43,40,0.6)", border: "1px solid rgba(46,43,40,0.8)" }} />
+              <div key={i} style={{ width: 8, height: 8, borderRadius: 2, background: i < (o.occupied || 0) ? "var(--color-accent)" : "var(--color-border)", border: "1px solid var(--color-border)" }} />
             ))}
           </div>
           <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>{o.occupied}/{o.units} occupied · {fmtCompact(o.monthlyRent)}/mo</div>
@@ -699,14 +733,14 @@ function PropertySummaryCard({ property: p, occupancy: o, debt: d, rehab: r }: {
             <span style={{ color: "var(--color-text-muted)" }}>Rehab</span>
             <span className="tabular-nums">{r.completionPct}%</span>
           </div>
-          <div style={{ height: 3, borderRadius: 2, background: "rgba(46,43,40,0.6)" }}>
+          <div style={{ height: 3, borderRadius: 2, background: "var(--color-border)" }}>
             <div style={{ height: "100%", borderRadius: 2, width: `${r.completionPct}%`, background: r.completionPct > 80 ? "var(--color-success)" : "var(--color-accent)", transition: "width 0.5s ease" }} />
           </div>
         </div>
       )}
 
       {d && (
-        <div style={{ fontSize: 10, color: "var(--color-text-muted)", paddingTop: 4, borderTop: "1px solid rgba(46,43,40,0.4)" }}>
+        <div style={{ fontSize: 10, color: "var(--color-text-muted)", paddingTop: 4, borderTop: "1px solid var(--color-border)" }}>
           {d.lender} · {d.interestRate}% · <span style={{ color: urgencyColor(d.urgency) }}>{d.daysUntilMaturity}d to maturity</span>
         </div>
       )}
@@ -717,7 +751,7 @@ function PropertySummaryCard({ property: p, occupancy: o, debt: d, rehab: r }: {
 /* Compact task row for overview - only status toggle, no inline editing */
 function TaskRowCompact({ task: t, onToggle }: { task: TaskItem; onToggle: () => void }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 0", borderBottom: "1px solid rgba(46,43,40,0.3)" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 0", borderBottom: "1px solid var(--color-border)" }}>
       <button onClick={onToggle} style={{
         width: 16, height: 16, borderRadius: 3, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "white", flexShrink: 0,
         border: `1px solid ${t.status === "done" ? "var(--color-success)" : "var(--color-border)"}`,
@@ -752,7 +786,7 @@ function RehabCard({ item: r, onSave }: { item: RehabTracker; onSave: (updated: 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{
             fontSize: 10, textTransform: "uppercase", padding: "2px 8px", borderRadius: 6,
-            background: r.status === "in_progress" ? "rgba(196,165,116,0.12)" : r.status === "complete" ? "rgba(16,185,129,0.12)" : r.status === "blocked" ? "rgba(239,68,68,0.12)" : "rgba(46,43,40,0.4)",
+            background: r.status === "in_progress" ? "rgba(196,165,116,0.12)" : r.status === "complete" ? "rgba(16,185,129,0.12)" : r.status === "blocked" ? "rgba(239,68,68,0.12)" : "var(--color-border)",
             color: r.status === "in_progress" ? "var(--color-accent)" : r.status === "complete" ? "var(--color-success)" : r.status === "blocked" ? "var(--color-danger)" : "var(--color-text-muted)"
           }}>
             {r.status.replace("_", " ")}
@@ -768,7 +802,7 @@ function RehabCard({ item: r, onSave }: { item: RehabTracker; onSave: (updated: 
           <span className="tabular-nums">{fmtCompact(r.spent)} / {fmtCompact(r.budget)}</span>
           <span style={{ fontWeight: 600, color: "var(--color-accent)" }} className="tabular-nums">{r.completionPct}%</span>
         </div>
-        <div style={{ height: 8, borderRadius: 4, background: "rgba(46,43,40,0.6)" }}>
+        <div style={{ height: 8, borderRadius: 4, background: "var(--color-border)" }}>
           <div style={{ height: "100%", borderRadius: 4, width: `${r.completionPct}%`, background: "linear-gradient(90deg, var(--color-accent), var(--color-accent-strong))", transition: "width 0.5s ease" }} />
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--color-text-muted)", marginTop: 3 }}>
@@ -815,7 +849,7 @@ function OccupancyCard({ item: o }: { item: OccupancyRecord }) {
             width: 16, height: 16, borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 7,
             background: i < o.occupied ? "var(--color-accent)" : "rgba(239,68,68,0.2)",
             border: i < o.occupied ? "1px solid var(--color-accent)" : "1px solid rgba(239,68,68,0.3)",
-            color: i < o.occupied ? "var(--color-bg)" : "var(--color-danger)"
+            color: i < o.occupied ? "white" : "var(--color-danger)"
           }}>
             {i < o.occupied ? "●" : "○"}
           </div>
@@ -842,7 +876,7 @@ function GrowthTimeline({ milestones }: { milestones: GrowthMilestone[] }) {
           <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{ width: 50, fontSize: 12, fontWeight: 600, textAlign: "right", flexShrink: 0 }} className="tabular-nums">{m.year}</div>
             <div style={{ flex: 1, position: "relative", height: 28 }}>
-              <div style={{ position: "absolute", inset: 0, borderRadius: 6, background: "rgba(46,43,40,0.4)" }} />
+              <div style={{ position: "absolute", inset: 0, borderRadius: 6, background: "var(--color-border)" }} />
               <div style={{
                 position: "absolute", top: 0, left: 0, bottom: 0, borderRadius: 6,
                 width: `${Math.max(pct, 3)}%`,
@@ -855,7 +889,7 @@ function GrowthTimeline({ milestones }: { milestones: GrowthMilestone[] }) {
             </div>
             <div style={{ width: 80, fontSize: 10, color: "var(--color-text-muted)", textAlign: "right", flexShrink: 0 }} className="tabular-nums">{fmtCompact(m.targetAUM)}</div>
             <div style={{ width: 70, fontSize: 10, flexShrink: 0 }}>
-              <span style={{ padding: "1px 6px", borderRadius: 4, background: m.status === "completed" ? "rgba(16,185,129,0.12)" : m.status === "current" ? "rgba(196,165,116,0.12)" : "rgba(46,43,40,0.4)", color: m.status === "completed" ? "var(--color-success)" : m.status === "current" ? "var(--color-accent)" : "var(--color-text-muted)" }}>
+              <span style={{ padding: "1px 6px", borderRadius: 4, background: m.status === "completed" ? "rgba(16,185,129,0.12)" : m.status === "current" ? "rgba(196,165,116,0.12)" : "var(--color-border)", color: m.status === "completed" ? "var(--color-success)" : m.status === "current" ? "var(--color-accent)" : "var(--color-text-muted)" }}>
                 {m.phase}
               </span>
             </div>
@@ -918,7 +952,7 @@ function TaskRow({ task: t, onChange }: { task: TaskItem; onChange: (changes: Pa
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div style={{ borderBottom: "1px solid rgba(46,43,40,0.3)", padding: "8px 0" }}>
+    <div style={{ borderBottom: "1px solid var(--color-border)", padding: "8px 0" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <button onClick={() => onChange({ status: t.status === "done" ? "open" : "done" })} style={{
           width: 18, height: 18, borderRadius: 4, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "white", flexShrink: 0,
@@ -1093,7 +1127,7 @@ function BankingSection({ banking, onRefresh }: { banking?: DashboardData["banki
                     <div style={{ fontSize: 12, fontWeight: 500 }}>{a.name}</div>
                     <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>{a.institution} {a.mask ? `···${a.mask}` : ""}</div>
                   </div>
-                  <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-muted)", padding: "1px 4px", borderRadius: 3, background: "rgba(46,43,40,0.5)" }}>{a.subtype}</span>
+                  <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-muted)", padding: "1px 4px", borderRadius: 3, background: "var(--color-border)" }}>{a.subtype}</span>
                 </div>
                 <div style={{ fontSize: 18, fontWeight: 600 }} className="tabular-nums">{fmtCompact(a.currentBalance)}</div>
                 {a.availableBalance != null && a.availableBalance !== a.currentBalance && (
@@ -1108,7 +1142,7 @@ function BankingSection({ banking, onRefresh }: { banking?: DashboardData["banki
             <>
               <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--color-text-muted)", marginBottom: 6 }}>Recent Transactions</div>
               {banking!.recentTransactions.slice(0, 15).map((tx) => (
-                <div key={tx.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid rgba(46,43,40,0.3)", fontSize: 12 }}>
+                <div key={tx.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid var(--color-border)", fontSize: 12 }}>
                   <span style={{ width: 60, fontSize: 10, color: "var(--color-text-muted)", flexShrink: 0 }} className="tabular-nums">{tx.date}</span>
                   <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx.merchantName || tx.name}</span>
                   {tx.pending && <span style={{ fontSize: 8, color: "var(--color-warning)", textTransform: "uppercase" }}>pending</span>}
@@ -1122,7 +1156,7 @@ function BankingSection({ banking, onRefresh }: { banking?: DashboardData["banki
 
           {/* Connection status */}
           {banking!.connections.length > 0 && (
-            <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid rgba(46,43,40,0.3)" }}>
+            <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid var(--color-border)" }}>
               {banking!.connections.map((c) => (
                 <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: "var(--color-text-muted)" }}>
                   <span style={{ width: 6, height: 6, borderRadius: "50%", background: c.status === "active" ? "var(--color-success)" : "var(--color-danger)" }} />
@@ -1131,6 +1165,104 @@ function BankingSection({ banking, onRefresh }: { banking?: DashboardData["banki
                   {c.error && <span style={{ color: "var(--color-danger)" }}>· {c.error}</span>}
                 </div>
               ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ──────────────────────── Ramp Spending Section ──────────────────────── */
+
+function RampSection({ rampData, loading, error, onLoad, showDetails = false }: {
+  rampData: RampSpending | null;
+  loading: boolean;
+  error: string | null;
+  onLoad: () => void;
+  showDetails?: boolean;
+}) {
+  return (
+    <div className="card" style={{ padding: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <div className="label">Ramp Card Spending</div>
+        <button className="nav-btn" style={{ fontSize: 10, padding: "3px 10px" }} onClick={onLoad} disabled={loading}>
+          <span style={{ display: "inline-block", animation: loading ? "spin 1s linear infinite" : "none", marginRight: 4 }}>↻</span>
+          {loading ? "Loading…" : rampData ? "Refresh" : "Load Ramp Data"}
+        </button>
+      </div>
+
+      {error && (
+        <div style={{ fontSize: 11, color: "var(--color-danger)", marginBottom: 8, padding: "6px 10px", borderRadius: 6, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+          {error}
+        </div>
+      )}
+
+      {!rampData && !loading && !error && (
+        <div style={{ textAlign: "center", padding: "20px 0" }}>
+          <div style={{ fontSize: 28, marginBottom: 8, opacity: 0.3 }}>$</div>
+          <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginBottom: 4 }}>Click "Load Ramp Data" to pull corporate card transactions</div>
+          <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+            Tracks rehab spending by merchant and category from your Ramp corporate cards.
+          </div>
+        </div>
+      )}
+
+      {rampData && (
+        <>
+          {/* Summary KPIs */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>
+            <div style={{ padding: 12, borderRadius: 6, border: "1px solid var(--color-border)", background: "var(--color-surface-alt)" }}>
+              <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--color-text-muted)", marginBottom: 4 }}>Total Spent</div>
+              <div style={{ fontSize: 24, fontWeight: 600, fontFamily: "var(--font-display)", color: "var(--color-accent)" }} className="tabular-nums">
+                {fmtCompact(rampData.totalSpent)}
+              </div>
+            </div>
+            <div style={{ padding: 12, borderRadius: 6, border: "1px solid var(--color-border)", background: "var(--color-surface-alt)" }}>
+              <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--color-text-muted)", marginBottom: 4 }}>Transactions</div>
+              <div style={{ fontSize: 24, fontWeight: 600, fontFamily: "var(--font-display)" }} className="tabular-nums">
+                {rampData.transactionCount}
+              </div>
+            </div>
+          </div>
+
+          {/* Spending by Category */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--color-text-muted)", marginBottom: 8 }}>By Category</div>
+            <HBarChart items={rampData.byCategory.slice(0, 8).map((c) => ({ label: c.category.length > 14 ? c.category.slice(0, 14) + "…" : c.category, value: c.total }))} />
+          </div>
+
+          {/* Top Merchants */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--color-text-muted)", marginBottom: 8 }}>Top Merchants</div>
+            <HBarChart items={rampData.byMerchant.slice(0, 8).map((m) => ({ label: m.merchant.length > 14 ? m.merchant.slice(0, 14) + "…" : m.merchant, value: m.total, color: "var(--color-accent-strong)" }))} />
+          </div>
+
+          {/* Recent Transactions - only on detailed view (Rehab tab) */}
+          {showDetails && rampData.recentTransactions.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--color-text-muted)", marginBottom: 6 }}>Recent Transactions</div>
+              <div style={{ overflowX: "auto" }}>
+                <table>
+                  <thead>
+                    <tr><th>Date</th><th>Merchant</th><th>Category</th><th>Amount</th><th>Cardholder</th><th>Memo</th></tr>
+                  </thead>
+                  <tbody>
+                    {rampData.recentTransactions.slice(0, 25).map((tx) => (
+                      <tr key={tx.id}>
+                        <td className="tabular-nums" style={{ fontSize: 11 }}>{tx.date}</td>
+                        <td style={{ fontWeight: 500, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx.merchant}</td>
+                        <td style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{tx.category}</td>
+                        <td className="tabular-nums" style={{ fontWeight: 500, color: tx.amount > 0 ? "var(--color-danger)" : "var(--color-success)" }}>
+                          {tx.amount > 0 ? "-" : "+"}{fmtCompact(Math.abs(tx.amount))}
+                        </td>
+                        <td style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{tx.cardHolder}</td>
+                        <td style={{ fontSize: 11, color: "var(--color-text-muted)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tx.memo || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </>

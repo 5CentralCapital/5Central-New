@@ -176,6 +176,81 @@ export const properties = pgTable("properties", {
   roc: decimal("roc", { precision: 8, scale: 2 }),
   avgAnnualReturn: decimal("avg_annual_return", { precision: 8, scale: 2 }),
   profitPerUnit: decimal("profit_per_unit", { precision: 12, scale: 2 }),
+
+  // Dashboard operational fields (shared with admin dashboard)
+  phase: text("phase"), // rehab, lease_up, stabilizing, stabilized, sold
+  lender: text("lender"),
+  refiTarget: text("refi_target"), // e.g. "Q3 2026"
+  monthlyRent: decimal("monthly_rent", { precision: 12, scale: 2 }),
+  occupancyStatus: text("occupancy_status"), // stable, watch, critical
+});
+
+// === DASHBOARD-SPECIFIC TABLES (admin dashboard data in PostgreSQL) ===
+
+export const dashboardTasks = pgTable("dashboard_tasks", {
+  id: varchar("id").primaryKey(),
+  title: text("title").notNull(),
+  dueDate: text("due_date"),
+  cadence: text("cadence"), // daily, weekly, monthly, quarterly, ad_hoc
+  status: text("status").notNull().default("open"), // open, in_progress, done, blocked
+  property: text("property"),
+  module: text("module").notNull().default("reminders"), // reminders, long_term, future_plans, ideas_backlog, rehab
+  priority: text("priority").default("medium"), // low, medium, high, critical
+  notes: text("notes"),
+});
+
+export const dashboardRehab = pgTable("dashboard_rehab", {
+  id: varchar("id").primaryKey(),
+  property: text("property").notNull(),
+  project: text("project").notNull(),
+  budget: decimal("budget", { precision: 12, scale: 2 }).notNull(),
+  spent: decimal("spent", { precision: 12, scale: 2 }).notNull().default("0"),
+  completionPct: integer("completion_pct").notNull().default(0),
+  status: text("status").notNull().default("not_started"), // not_started, in_progress, complete, blocked
+  targetDate: text("target_date"),
+  notes: text("notes"),
+});
+
+export const dashboardGrowth = pgTable("dashboard_growth", {
+  id: varchar("id").primaryKey(),
+  year: integer("year").notNull(),
+  targetUnits: integer("target_units").notNull(),
+  targetAUM: decimal("target_aum", { precision: 14, scale: 2 }).notNull(),
+  targetEquity: decimal("target_equity", { precision: 14, scale: 2 }).notNull(),
+  phase: text("phase").notNull(),
+  status: text("status").notNull().default("planned"), // completed, current, planned
+});
+
+export const dashboardKpis = pgTable("dashboard_kpis", {
+  id: varchar("id").primaryKey(),
+  name: text("name").notNull(),
+  current: decimal("current_value", { precision: 14, scale: 4 }).notNull(),
+  previous: decimal("previous_value", { precision: 14, scale: 4 }).notNull(),
+  target: decimal("target_value", { precision: 14, scale: 4 }).notNull(),
+  unit: text("unit"),
+  format: text("format"), // currency, percent, number, multiplier
+  property: text("property"),
+  date: text("date"),
+});
+
+export const dashboardMetrics = pgTable("dashboard_metrics", {
+  id: varchar("id").primaryKey(),
+  label: text("label").notNull(),
+  value: decimal("value", { precision: 14, scale: 4 }).notNull(),
+  unit: text("unit"),
+  trend: decimal("trend", { precision: 8, scale: 4 }),
+  target: decimal("target", { precision: 14, scale: 4 }),
+  format: text("format"), // currency, percent, number, multiplier
+});
+
+export const dashboardActivity = pgTable("dashboard_activity", {
+  id: varchar("id").primaryKey(),
+  ts: timestamp("ts").defaultNow().notNull(),
+  actor: text("actor").notNull(),
+  action: text("action").notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: text("entity_id").notNull(),
+  detail: text("detail").notNull(),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({
@@ -196,6 +271,13 @@ export const insertInvestmentSchema = createInsertSchema(investments).omit({
   createdAt: true,
 });
 
+export const insertTaskSchema = createInsertSchema(dashboardTasks);
+export const insertRehabSchema = createInsertSchema(dashboardRehab);
+export const insertGrowthSchema = createInsertSchema(dashboardGrowth);
+export const insertKpiSchema = createInsertSchema(dashboardKpis);
+export const insertMetricSchema = createInsertSchema(dashboardMetrics);
+export const insertActivitySchema = createInsertSchema(dashboardActivity);
+
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 export type Property = typeof properties.$inferSelect;
@@ -204,3 +286,9 @@ export type Investor = typeof investors.$inferSelect;
 export type InsertInvestor = z.infer<typeof insertInvestorSchema>;
 export type Investment = typeof investments.$inferSelect;
 export type InsertInvestment = z.infer<typeof insertInvestmentSchema>;
+export type DashboardTask = typeof dashboardTasks.$inferSelect;
+export type DashboardRehab = typeof dashboardRehab.$inferSelect;
+export type DashboardGrowth = typeof dashboardGrowth.$inferSelect;
+export type DashboardKpi = typeof dashboardKpis.$inferSelect;
+export type DashboardMetric = typeof dashboardMetrics.$inferSelect;
+export type DashboardActivityLog = typeof dashboardActivity.$inferSelect;

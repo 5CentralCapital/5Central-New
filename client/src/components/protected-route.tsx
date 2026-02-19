@@ -23,7 +23,7 @@ export default function ProtectedRoute({ children, allowedRoles }: ProtectedRout
     if (allowedRoles && !allowedRoles.includes(user.role)) {
       // User doesn't have the required role, redirect to appropriate dashboard
       if (user.role === "admin") {
-        setLocation("/portfolio");
+        setLocation("/admin");
       } else {
         setLocation("/investor-dashboard");
       }
