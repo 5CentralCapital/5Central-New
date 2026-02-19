@@ -128,7 +128,7 @@ export function registerDashboardRoutes(app: Express) {
               upsertTransactions(
                 [...added, ...modified].map((t: any) => ({
                   id: t.transaction_id,
-                  accountId: t.account_id,
+                  accountId: `ba_${t.account_id}`,
                   date: t.date,
                   name: t.name,
                   amount: t.amount,
