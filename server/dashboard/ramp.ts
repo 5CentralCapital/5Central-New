@@ -32,7 +32,7 @@ async function getAccessToken(): Promise<string> {
       Authorization: `Basic ${credentials}`,
       "Content-Type": "application/x-www-form-urlencoded",
     },
-    body: "grant_type=client_credentials&scope=transactions:read accounting:read",
+    body: "grant_type=client_credentials&scope=transactions:read",
   });
 
   if (!res.ok) {
