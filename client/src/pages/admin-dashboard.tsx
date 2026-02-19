@@ -1107,7 +1107,7 @@ function BankingSection({ banking, onRefresh }: { banking?: DashboardData["banki
             Connect via Plaid for real-time cash balances and transaction tracking.
           </div>
           <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 8, opacity: 0.6 }}>
-            Requires PLAID_CLIENT_ID and PLAID_SECRET in .env.local
+            Click "Connect Bank" above to link your accounts via Plaid.
           </div>
         </div>
       ) : (
