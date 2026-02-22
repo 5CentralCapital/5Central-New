@@ -494,7 +494,7 @@ export const propertyDetails: Record<string, PropertyDetails> = {
 
     yieldOnCost: 0.1072,
     arvPerUnit: 190000,
-    arvTotal: 1900000,
+    arvTotal: 1975000,
     sponsorEquity: 222125,
     holdPeriod: "24 months",
     refiMonth: 9,

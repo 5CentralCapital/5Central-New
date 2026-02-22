@@ -36,6 +36,7 @@ export interface PropertyCard {
   acquisitionPrice: number;
   rehabBudget: number;
   totalBasis: number;
+  currentValue: number;
   currentDebt: number;
   currentEquity: number;
   lender: string;

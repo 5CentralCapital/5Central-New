@@ -49,6 +49,7 @@ function toPropertyCard(p: any): PropertyCard {
   const acquisitionPrice = num(p.acquisitionPrice);
   const rehabBudget = num(p.rehabCosts);
   const totalBasis = num(p.totalBasis) || (acquisitionPrice + rehabBudget);
+  const currentValue = num(p.currentValue) || num(p.arvTotal) || totalBasis;
   const currentEquity = totalBasis - currentDebt;
   const yieldOnCost = totalBasis > 0 ? (annualNOI / totalBasis) * 100 : 0;
   const capRate = totalBasis > 0 ? (annualNOI / totalBasis) * 100 : 0;
@@ -64,6 +65,7 @@ function toPropertyCard(p: any): PropertyCard {
     acquisitionPrice,
     rehabBudget,
     totalBasis,
+    currentValue,
     currentDebt,
     currentEquity,
     lender: p.lender || "Unknown",

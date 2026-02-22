@@ -3,7 +3,7 @@ import "../styles/admin-dashboard.css";
 
 // Dashboard types (inline to avoid external dependency)
 interface TaskItem { id: string; title: string; dueDate?: string; cadence?: string; status: string; property?: string; module?: string; priority?: string; notes?: string; }
-interface PropertyCard { id: string; name: string; address: string; city: string; state: string; units: number; acquisitionPrice: number; rehabBudget: number; totalBasis: number; currentDebt: number; currentEquity: number; lender: string; interestRate: number; maturityDate: string; annualNOI: number; yieldOnCost: number; capRate: number; dscr: number; occupancyRate: number; occupiedUnits: number; phase: string; refiTarget?: string; refiProceeds?: number; }
+interface PropertyCard { id: string; name: string; address: string; city: string; state: string; units: number; acquisitionPrice: number; rehabBudget: number; totalBasis: number; currentValue: number; currentDebt: number; currentEquity: number; lender: string; interestRate: number; maturityDate: string; annualNOI: number; yieldOnCost: number; capRate: number; dscr: number; occupancyRate: number; occupiedUnits: number; phase: string; refiTarget?: string; refiProceeds?: number; }
 interface RehabTracker { id: string; property: string; project: string; budget: number; spent: number; completionPct: number; status: string; targetDate?: string; notes?: string; }
 interface OccupancyRecord { id: string; property: string; units: number; occupied: number; vacant: number; occupancyRate: number; monthlyRent: number; status: string; }
 interface DebtMaturity { id: string; property: string; lender: string; balance: number; interestRate: number; maturityDate: string; daysUntilMaturity: number; urgency: string; refiTarget?: string; expectedProceeds?: number; }
@@ -212,7 +212,7 @@ export default function AdminDashboard() {
   const totalNOI = data.properties.reduce((s, p) => s + p.annualNOI, 0);
   const totalDebt = data.debt.reduce((s, d) => s + d.balance, 0);
   const totalEquity = data.properties.reduce((s, p) => s + p.currentEquity, 0);
-  const totalAUM = data.properties.reduce((s, p) => s + p.totalBasis, 0);
+  const totalAUM = data.properties.reduce((s, p) => s + (p.currentValue || p.totalBasis), 0);
   const avgOcc = data.occupancy.length
     ? data.occupancy.reduce((s, o) => s + o.occupancyRate * o.units, 0) / data.occupancy.reduce((s, o) => s + o.units, 0)
     : 0;
@@ -438,7 +438,7 @@ export default function AdminDashboard() {
             <table>
               <thead>
                 <tr>
-                  <th>Property</th><th>Units</th><th>Phase</th><th>Basis</th><th>NOI</th><th>DSCR</th>
+                  <th>Property</th><th>Units</th><th>Phase</th><th>ARV</th><th>NOI</th><th>DSCR</th>
                   <th>Yield</th><th>Occ%</th><th>Debt</th><th>Equity</th><th>Lender</th><th>Rate</th><th>Maturity</th>
                 </tr>
               </thead>
@@ -448,7 +448,7 @@ export default function AdminDashboard() {
                     <td style={{ fontWeight: 500 }}>{p.name}</td>
                     <td className="tabular-nums">{p.units}</td>
                     <td><span style={{ color: phaseColor(p.phase), fontSize: 11, textTransform: "uppercase" }}>{p.phase.replace("_", " ")}</span></td>
-                    <td className="tabular-nums">{fmtCompact(p.totalBasis)}</td>
+                    <td className="tabular-nums">{fmtCompact(p.currentValue || p.totalBasis)}</td>
                     <td className="tabular-nums">{fmtCompact(p.annualNOI)}</td>
                     <td className="tabular-nums" style={{ color: p.dscr < 1.15 ? "var(--color-warning)" : "inherit" }}>{p.dscr.toFixed(2)}x</td>
                     <td className="tabular-nums">{p.yieldOnCost.toFixed(1)}%</td>

@@ -314,7 +314,7 @@ async function importCurrentProperties() {
       acquisitionDate: new Date("2024-11-01"),
       acquisitionPrice: "750000",
       rehabCosts: "450000",
-      currentValue: "1900000",
+      currentValue: "1975000",
       status: "current",
       ownershipStructure: "LLC",
       ownershipName: "5Central Capital LLC",
@@ -337,7 +337,7 @@ async function importCurrentProperties() {
       entryPerUnit: "75000",
       exitPerUnit: "190000",
       arvPerUnit: "190000",
-      arvTotal: "1900000",
+      arvTotal: "1975000",
 
       bridgeLoan: "600000",
       ltvPurchase: "0.80",
