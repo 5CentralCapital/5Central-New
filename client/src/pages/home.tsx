@@ -240,20 +240,20 @@ export default function Home() {
                 {/* AUM as Hero - Most Important */}
                 <div className="mb-5">
                   <div className="font-serif text-4xl md:text-5xl lg:text-6xl text-warm-brass font-light tracking-tight mb-1">
-                    $9.63M
+                    ${(currentPortfolioValue / 1000000).toFixed(2)}M
                   </div>
-                  <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Assets Under Management</div>
+                  <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Current AUM</div>
                 </div>
 
                 {/* Compact Metrics Row */}
                 <div className="flex items-center gap-6 pt-4 border-t border-border/50">
                   <div>
-                    <div className="font-serif text-2xl md:text-3xl text-foreground">55</div>
+                    <div className="font-serif text-2xl md:text-3xl text-foreground">{currentUnits}</div>
                     <div className="text-[9px] uppercase tracking-wider text-muted-foreground">Units</div>
                   </div>
                   <div className="h-8 w-px bg-border/50" />
                   <div>
-                    <div className="font-serif text-lg text-foreground">4</div>
+                    <div className="font-serif text-lg text-foreground">{currentProperties.length}</div>
                     <div className="text-[9px] uppercase tracking-wider text-muted-foreground">Properties</div>
                   </div>
                   <div className="h-8 w-px bg-border/50" />

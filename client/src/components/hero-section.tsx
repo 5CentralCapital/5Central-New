@@ -132,7 +132,7 @@ export default function HeroSection({
               value={formatValue(totalPortfolioValue)}
               prefix="$"
               suffix={getValueSuffix(totalPortfolioValue)}
-              label="Portfolio Value"
+              label="AUM"
               decimals={1}
               delay={600}
             />
