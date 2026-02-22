@@ -641,9 +641,9 @@ export default function AdminDashboard() {
           <div className="card" style={{ padding: 16 }}>
             <div className="label" style={{ marginBottom: 12 }}>OpenClaw Integration</div>
             <div style={{ fontSize: 12, color: "var(--color-text-muted)", lineHeight: 1.8 }}>
-              Dashboard auto-refreshes via OpenClaw cron job every 2 hours.<br />
-              Webhook: <code style={{ background: "var(--color-surface-alt)", padding: "2px 6px", borderRadius: 4, fontSize: 11 }}>POST /api/dashboard/refresh</code><br />
-              Manual refresh via header button. Client polls every 2 minutes.
+              OpenClaw syncs at 9 AM &amp; 3 PM EST via API key auth (<code style={{ background: "var(--color-surface-alt)", padding: "2px 6px", borderRadius: 4, fontSize: 11 }}>X-API-Key</code> header).<br />
+              Endpoints: <code style={{ background: "var(--color-surface-alt)", padding: "2px 6px", borderRadius: 4, fontSize: 11 }}>GET/POST/PATCH/DELETE /api/tasks</code>, <code style={{ background: "var(--color-surface-alt)", padding: "2px 6px", borderRadius: 4, fontSize: 11 }}>GET/PUT /api/metrics</code>, <code style={{ background: "var(--color-surface-alt)", padding: "2px 6px", borderRadius: 4, fontSize: 11 }}>POST /api/activity</code>, <code style={{ background: "var(--color-surface-alt)", padding: "2px 6px", borderRadius: 4, fontSize: 11 }}>GET /api/dashboard/summary</code><br />
+              Refresh returns live data: <code style={{ background: "var(--color-surface-alt)", padding: "2px 6px", borderRadius: 4, fontSize: 11 }}>POST /api/dashboard/refresh</code>. Client polls every 2 min.
             </div>
           </div>
 

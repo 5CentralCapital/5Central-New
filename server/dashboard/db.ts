@@ -311,3 +311,103 @@ export async function appendActivity(entry: { actor: string; action: string; ent
     detail: entry.detail,
   });
 }
+
+/* ── Single-record CRUD (tasks) ── */
+
+export async function getTasks() {
+  return db.select().from(dashboardTasks);
+}
+
+export async function addTask(task: {
+  id?: string;
+  title: string;
+  dueDate?: string;
+  cadence?: string;
+  status?: string;
+  property?: string;
+  module?: string;
+  priority?: string;
+  notes?: string;
+}) {
+  const id = task.id || `t_${crypto.randomUUID()}`;
+  await db.insert(dashboardTasks).values({
+    id,
+    title: task.title,
+    dueDate: task.dueDate || null,
+    cadence: task.cadence || null,
+    status: task.status || "open",
+    property: task.property || null,
+    module: task.module || "reminders",
+    priority: task.priority || "medium",
+    notes: task.notes || null,
+  });
+  return id;
+}
+
+export async function updateTask(id: string, updates: Partial<{
+  title: string;
+  dueDate: string | null;
+  cadence: string | null;
+  status: string;
+  property: string | null;
+  module: string;
+  priority: string;
+  notes: string | null;
+}>) {
+  await db.update(dashboardTasks).set(updates).where(eq(dashboardTasks.id, id));
+}
+
+export async function deleteTask(id: string) {
+  await db.delete(dashboardTasks).where(eq(dashboardTasks.id, id));
+}
+
+/* ── Single-record CRUD (metrics) ── */
+
+export async function getMetrics() {
+  return db.select().from(dashboardMetrics);
+}
+
+export async function replaceMetrics(data: any[]) {
+  await db.transaction(async (tx) => {
+    await tx.delete(dashboardMetrics);
+    for (const m of data) {
+      await tx.insert(dashboardMetrics).values({
+        id: m.id,
+        label: m.label,
+        value: String(m.value),
+        unit: m.unit || null,
+        trend: m.trend != null ? String(m.trend) : null,
+        target: m.target != null ? String(m.target) : null,
+        format: m.format || null,
+      });
+    }
+  });
+}
+
+/* ── Dashboard summary (quick totals) ── */
+
+export async function getDashboardSummary() {
+  const props = await db.select().from(properties).where(eq(properties.status, "current"));
+  const tasks = await db.select().from(dashboardTasks);
+
+  const totalUnits = props.reduce((s, p) => s + num(p.units), 0);
+  const totalOccupied = props.reduce((s, p) => s + num(p.occupiedUnits), 0);
+  const occupancyPct = totalUnits > 0 ? (totalOccupied / totalUnits) * 100 : 0;
+  const totalDebt = props.reduce((s, p) => s + num(p.currentDebt), 0);
+  const totalValue = props.reduce((s, p) => s + (num(p.currentValue) || num(p.arvTotal) || (num(p.acquisitionPrice) + num(p.rehabCosts))), 0);
+  const totalEquity = totalValue - totalDebt;
+  const openTasks = tasks.filter((t) => t.status === "open" || t.status === "in_progress").length;
+
+  return {
+    properties: props.length,
+    totalUnits,
+    totalOccupied,
+    occupancyPct: Math.round(occupancyPct * 10) / 10,
+    totalDebt,
+    totalValue,
+    totalEquity,
+    totalTasks: tasks.length,
+    openTasks,
+    ts: new Date().toISOString(),
+  };
+}

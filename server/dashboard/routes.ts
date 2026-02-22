@@ -1,11 +1,22 @@
 import type { Express } from "express";
-import { requireAdmin } from "../auth";
-import { getDashboardData, updateTable, appendActivity } from "./db";
+import { requireAdmin, requireAdminOrApiKey } from "../auth";
+import {
+  getDashboardData,
+  updateTable,
+  appendActivity,
+  getTasks,
+  addTask,
+  updateTask,
+  deleteTask,
+  getMetrics,
+  replaceMetrics,
+  getDashboardSummary,
+} from "./db";
 import { getBankingData } from "./bankingDb";
 
 export function registerDashboardRoutes(app: Express) {
-  // GET dashboard data
-  app.get("/api/dashboard", requireAdmin, async (_req, res) => {
+  // GET dashboard data (session OR API key)
+  app.get("/api/dashboard", requireAdminOrApiKey, async (_req, res) => {
     try {
       const dashData = await getDashboardData();
       try {
@@ -17,17 +28,18 @@ export function registerDashboardRoutes(app: Express) {
     }
   });
 
-  // PATCH update a specific table
-  app.patch("/api/dashboard", requireAdmin, async (req, res) => {
+  // PATCH update a specific table (session OR API key)
+  app.patch("/api/dashboard", requireAdminOrApiKey, async (req, res) => {
     try {
       const { table, data, reason } = req.body;
       if (!table || !data) {
         return res.status(400).json({ error: "table and data required" });
       }
       await updateTable(table, data);
+      const actor = (req as any).apiKeyAuth ? "openclaw" : "admin";
       if (reason) {
         await appendActivity({
-          actor: "admin",
+          actor,
           action: reason,
           entityType: table,
           entityId: "bulk",
@@ -40,9 +52,135 @@ export function registerDashboardRoutes(app: Express) {
     }
   });
 
-  // Refresh (no-op — data is already live from PostgreSQL; frontend calls load() after)
-  app.post("/api/dashboard/refresh", requireAdmin, (_req, res) => {
-    res.json({ ok: true });
+  // Refresh — returns fresh dashboard data (useful for validation after PATCH)
+  app.post("/api/dashboard/refresh", requireAdminOrApiKey, async (_req, res) => {
+    try {
+      const dashData = await getDashboardData();
+      try {
+        dashData.banking = getBankingData();
+      } catch {}
+      res.json(dashData);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ─── Quick summary endpoint (totals only, lightweight) ───
+  app.get("/api/dashboard/summary", requireAdminOrApiKey, async (_req, res) => {
+    try {
+      const summary = await getDashboardSummary();
+      res.json(summary);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ─── Standalone task endpoints (session OR API key) ───
+
+  app.get("/api/tasks", requireAdminOrApiKey, async (_req, res) => {
+    try {
+      const tasks = await getTasks();
+      res.json(tasks);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/tasks", requireAdminOrApiKey, async (req, res) => {
+    try {
+      const id = await addTask(req.body);
+      const actor = (req as any).apiKeyAuth ? "openclaw" : "admin";
+      await appendActivity({
+        actor,
+        action: "add_task",
+        entityType: "tasks",
+        entityId: id,
+        detail: `Added task: ${req.body.title}`,
+      });
+      res.json({ ok: true, id });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.patch("/api/tasks/:id", requireAdminOrApiKey, async (req, res) => {
+    try {
+      await updateTask(req.params.id, req.body);
+      const actor = (req as any).apiKeyAuth ? "openclaw" : "admin";
+      await appendActivity({
+        actor,
+        action: "update_task",
+        entityType: "tasks",
+        entityId: req.params.id,
+        detail: `Updated task ${req.params.id}`,
+      });
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/tasks/:id", requireAdminOrApiKey, async (req, res) => {
+    try {
+      await deleteTask(req.params.id);
+      const actor = (req as any).apiKeyAuth ? "openclaw" : "admin";
+      await appendActivity({
+        actor,
+        action: "delete_task",
+        entityType: "tasks",
+        entityId: req.params.id,
+        detail: `Deleted task ${req.params.id}`,
+      });
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ─── Standalone metrics endpoints (session OR API key) ───
+
+  app.get("/api/metrics", requireAdminOrApiKey, async (_req, res) => {
+    try {
+      const metrics = await getMetrics();
+      res.json(metrics);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put("/api/metrics", requireAdminOrApiKey, async (req, res) => {
+    try {
+      await replaceMetrics(req.body);
+      const actor = (req as any).apiKeyAuth ? "openclaw" : "admin";
+      await appendActivity({
+        actor,
+        action: "replace_metrics",
+        entityType: "metrics",
+        entityId: "bulk",
+        detail: `Replaced all metrics (${req.body.length} records)`,
+      });
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ─── Standalone activity endpoint (session OR API key) ───
+
+  app.post("/api/activity", requireAdminOrApiKey, async (req, res) => {
+    try {
+      const actor = (req as any).apiKeyAuth ? "openclaw" : (req.body.actor || "admin");
+      await appendActivity({
+        actor,
+        action: req.body.action || "log",
+        entityType: req.body.entityType || "system",
+        entityId: req.body.entityId || "manual",
+        detail: req.body.detail || "",
+      });
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
   });
 
   // Plaid routes (only if configured)

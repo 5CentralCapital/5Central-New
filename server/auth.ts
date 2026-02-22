@@ -68,6 +68,26 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+// Middleware: accept admin session OR X-API-Key header (for OpenClaw / external agents)
+export function requireAdminOrApiKey(req: Request, res: Response, next: NextFunction) {
+  // Path 1: already authenticated via session
+  if (req.user && req.user.role === "admin") {
+    return next();
+  }
+
+  // Path 2: API key in header
+  const apiKey = req.headers["x-api-key"] as string | undefined;
+  const expectedKey = process.env.DASHBOARD_API_KEY;
+
+  if (apiKey && expectedKey && apiKey === expectedKey) {
+    // Mark request as API-key-authenticated (no user object, but authorized)
+    (req as any).apiKeyAuth = true;
+    return next();
+  }
+
+  return res.status(401).json({ message: "Authentication required (session or X-API-Key)" });
+}
+
 // Middleware to require investor role
 export function requireInvestor(req: Request, res: Response, next: NextFunction) {
   if (!req.user) {
