@@ -273,17 +273,17 @@ export const propertyDetails: Record<string, PropertyDetails> = {
     closingDate: "Feb 2026",
 
     inPlaceNOI: 80520,
-    stabilizedNOI: 157464,
-    noiUpside: 76944,
+    stabilizedNOI: 168198,
+    noiUpside: 87678,
     capRateInPlace: 0.061,
-    capRateStabilized: 0.081,
+    capRateStabilized: 0.087,
 
     entryCapRate: 0.061,
-    exitCapRate: 0.0526,
-    capRateSpread: -0.0084,
-    valueCreation: 827988,
+    exitCapRate: 0.065,
+    capRateSpread: 0.004,
+    valueCreation: 643662,
     entryPerUnit: 82500,
-    exitPerUnit: 173249,
+    exitPerUnit: 161729,
 
     bridgeLoan: 993960,
     ltvPurchase: 0.753,
@@ -292,9 +292,9 @@ export const propertyDetails: Record<string, PropertyDetails> = {
     rehabHoldback: 350628,
     totalCommitment: 1344588,
 
-    yieldOnCost: 0.081,
-    arvPerUnit: 173249,
-    arvTotal: 2771988,
+    yieldOnCost: 0.087,
+    arvPerUnit: 161729,
+    arvTotal: 2587662,
     sponsorEquity: 599412,
     holdPeriod: "24 months",
     refiMonth: 6,
@@ -316,8 +316,8 @@ export const propertyDetails: Record<string, PropertyDetails> = {
     occupiedUnits: 10,
     occupancyRate: 0.625,
     inPlaceRent: 11437,
-    proformaRent: 19620,
-    rentUpside: 8183,
+    proformaRent: 21825,
+    rentUpside: 10388,
 
     currentDebt: 1344588,
     monthlyPI: 11641,
@@ -342,7 +342,7 @@ export const propertyDetails: Record<string, PropertyDetails> = {
     equityAfterRefi: 946413,
     refiTargetMonth: 6,
 
-    projectedSalePrice: 2771988,
+    projectedSalePrice: 2587662,
     projectedNetProceeds: 807814,
     projectedTotalProfit: 689389,
     holdPeriodMonths: 24
