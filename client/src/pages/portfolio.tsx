@@ -93,9 +93,9 @@ export default function Portfolio() {
   const totalUnits = allProperties.reduce((sum, p) => sum + p.units, 0);
 
   const totalEquityCreated = allProperties.reduce((sum, p) => {
-    const acquisitionPrice = parseFloat(p.acquisitionPrice);
+    const totalBasis = parseFloat(p.totalBasis || "0") || (parseFloat(p.acquisitionPrice) + parseFloat(p.rehabCosts || "0"));
     const currentValue = parseFloat(p.currentValue || p.salePrice || "0");
-    return sum + Math.max(0, currentValue - acquisitionPrice);
+    return sum + Math.max(0, currentValue - totalBasis);
   }, 0);
 
   const avgReturn = allProperties.length > 0
