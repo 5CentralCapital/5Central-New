@@ -59,7 +59,16 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Tab nav buttons — light style matching main site */
+/* ─── Tab navigation: dropdown groups ─── */
+.admin-dashboard .tab-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+/* Base button style (standalone tabs like Command Center) */
 .admin-dashboard .nav-btn {
   padding: 0.5rem 0.875rem;
   border-radius: var(--radius-card);
@@ -69,19 +78,117 @@
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.4s var(--ease-out-expo, cubic-bezier(0.16, 1, 0.3, 1));
+  transition: all 0.3s ease;
 }
 .admin-dashboard .nav-btn:hover {
   border-color: rgba(196, 165, 116, 0.4);
   color: var(--color-text);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(26, 26, 26, 0.06);
+  box-shadow: 0 2px 8px rgba(26, 26, 26, 0.05);
 }
 .admin-dashboard .nav-btn.active {
   border-color: var(--color-accent);
   background: var(--color-accent);
   color: var(--deep-charcoal, #1A1A1A);
   box-shadow: 0 2px 8px rgba(196, 165, 116, 0.25);
+}
+
+/* ─── Dropdown trigger ─── */
+.admin-dashboard .tab-dropdown {
+  position: relative;
+}
+.admin-dashboard .tab-dropdown-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-card);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  white-space: nowrap;
+}
+.admin-dashboard .tab-dropdown-trigger:hover {
+  border-color: rgba(196, 165, 116, 0.4);
+  color: var(--color-text);
+  box-shadow: 0 2px 8px rgba(26, 26, 26, 0.05);
+}
+.admin-dashboard .tab-dropdown-trigger.group-active {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+.admin-dashboard .tab-dropdown-label {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.admin-dashboard .tab-dropdown-active-hint {
+  font-weight: 400;
+  opacity: 0.5;
+  font-size: 11px;
+  padding-left: 2px;
+}
+.admin-dashboard .tab-dropdown-trigger.group-active .tab-dropdown-active-hint {
+  opacity: 0.7;
+  color: var(--color-accent-strong, #B8944A);
+}
+.admin-dashboard .tab-dropdown-chevron {
+  font-size: 9px;
+  opacity: 0.4;
+  margin-left: 2px;
+  line-height: 1;
+}
+.admin-dashboard .tab-dropdown.open .tab-dropdown-trigger {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+  box-shadow: 0 2px 8px rgba(196, 165, 116, 0.15);
+}
+
+/* ─── Dropdown menu ─── */
+.admin-dashboard .tab-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  min-width: 180px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  box-shadow:
+    0 4px 12px rgba(26, 26, 26, 0.08),
+    0 12px 28px rgba(26, 26, 26, 0.06);
+  padding: 4px;
+  animation: dropdownFadeIn 0.15s ease-out;
+}
+@keyframes dropdownFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.admin-dashboard .tab-dropdown-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+.admin-dashboard .tab-dropdown-item:hover {
+  background: var(--color-surface-alt, #F5F4F1);
+  color: var(--color-text);
+}
+.admin-dashboard .tab-dropdown-item.active {
+  background: rgba(196, 165, 116, 0.12);
+  color: var(--color-accent-strong, #B8944A);
+  font-weight: 600;
 }
 
 /* Label style matching main site metric-label */
@@ -188,3 +295,25 @@
 .admin-dashboard ::-webkit-scrollbar-track { background: transparent; }
 .admin-dashboard ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
 .admin-dashboard ::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+
+/* ═══════════════════════════════════════════════════════
+   Tenant Management
+   ═══════════════════════════════════════════════════════ */
+.admin-dashboard .tenant-mgmt table tr { cursor: pointer; }
+.admin-dashboard .tenant-mgmt table tr:hover {
+  background: rgba(196, 165, 116, 0.07);
+}
+.admin-dashboard .tenant-stat-bar .card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.admin-dashboard .tenant-stat-bar .card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(26, 26, 26, 0.06);
+}
+
+/* Responsive: stack stat bar on narrow screens */
+@media (max-width: 640px) {
+  .admin-dashboard .tenant-stat-bar {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+}

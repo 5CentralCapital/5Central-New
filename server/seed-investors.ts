@@ -102,7 +102,7 @@ const investorData: InvestorData[] = [
         effectiveDate: excelDateToJS(46036),
         term: '12 mo',
         investmentType: 'deal-specific',
-        notes: 'Balloon at refi',
+        notes: 'Per Sun Cove investor section',
       },
       {
         propertyName: 'Lucia Apartments',
@@ -132,7 +132,7 @@ const investorData: InvestorData[] = [
         effectiveDate: excelDateToJS(46036),
         term: '12 mo',
         investmentType: 'deal-specific',
-        notes: 'Balloon at refi',
+        notes: 'Per Sun Cove investor section',
       },
     ],
   },
@@ -205,21 +205,21 @@ const investorData: InvestorData[] = [
         propertyName: '5Central Capital - General',
         principal: 100000,
         monthlyPayment: 2169.85,
-        interestRate: 0.218328,
-        effectiveDate: excelDateToJS(46023),
+        interestRate: 0.2183,
+        effectiveDate: new Date('2026-01-01'),
         term: 'Amortizing',
         investmentType: 'general',
-        notes: 'Payments start April 2026. Interest accrues Jan-Mar 2026 (deferral).',
+        notes: 'Pilar & Jozeph Bailon. Payments start April 2026. Interest accrues Jan-Mar 2026 (deferral).',
       },
       {
         propertyName: '5Central Capital - Legacy',
         principal: 85000,
         monthlyPayment: 2330.15,
-        interestRate: 0.31416,
-        effectiveDate: excelDateToJS(44927),
+        interestRate: 0.3142,
+        effectiveDate: new Date('2023-01-01'),
         term: 'Amortizing',
         investmentType: 'general',
-        notes: 'Legacy loan from 2023.',
+        notes: 'Pilar Bailon (Legacy). Legacy loan from 2023.',
       },
     ],
   },
@@ -233,7 +233,7 @@ const investorData: InvestorData[] = [
         principal: 50000,
         monthlyPayment: 1667,
         interestRate: 0.3916,
-        effectiveDate: excelDateToJS(44927),
+        effectiveDate: new Date('2023-01-01'),
         term: 'Amortizing',
         investmentType: 'general',
         notes: 'Legacy loan from 2023.',
@@ -311,8 +311,16 @@ async function seed() {
       console.log(`  Created investor profile (${data.investorType || 'deal-investor'})`);
     }
 
-    // Create investments
+    // Create investments (skip if already exists for this investor + property combo)
+    const existingInvestments = await db.select().from(investments).where(eq(investments.investorId, investorId));
     for (const inv of data.investments) {
+      const alreadyExists = existingInvestments.some(
+        e => e.propertyName === inv.propertyName && e.principal === inv.principal.toString()
+      );
+      if (alreadyExists) {
+        console.log(`  Skipped (already exists): ${inv.propertyName} - $${inv.principal.toLocaleString()}`);
+        continue;
+      }
       await db.insert(investments).values({
         investorId,
         propertyName: inv.propertyName,

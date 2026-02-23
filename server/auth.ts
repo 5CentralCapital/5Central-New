@@ -34,13 +34,36 @@ async function comparePasswords(supplied: string, stored: string): Promise<boole
   return timingSafeEqual(Buffer.from(hashedPassword, "hex"), buf);
 }
 
-// Middleware to load user from session
+// Check if request has a valid API key (for external agents like OpenClaw)
+function hasValidApiKey(req: Request): boolean {
+  const apiKey = req.headers["x-api-key"] as string | undefined;
+  const expectedKey = process.env.ADMIN_API_KEY;
+  if (!apiKey || !expectedKey) return false;
+  // Use timing-safe comparison to prevent timing attacks
+  try {
+    return apiKey.length === expectedKey.length &&
+      timingSafeEqual(Buffer.from(apiKey), Buffer.from(expectedKey));
+  } catch {
+    return false;
+  }
+}
+
+// Middleware to load user from session (or API key)
 export async function loadUser(req: Request, _res: Response, next: NextFunction) {
   try {
+    // First check session-based auth
     if (req.session?.userId) {
       const user = await storage.getUser(req.session.userId);
       if (user) {
         req.user = user;
+      }
+    }
+    // If no session user, check for API key → treat as admin
+    if (!req.user && hasValidApiKey(req)) {
+      // Find the admin user to attach to the request
+      const adminUser = await storage.getUserByEmail("michael@5central.capital");
+      if (adminUser) {
+        req.user = adminUser;
       }
     }
   } catch (error) {
@@ -93,7 +116,7 @@ export function requireInvestor(req: Request, res: Response, next: NextFunction)
   if (!req.user) {
     return res.status(401).json({ message: "Authentication required" });
   }
-  if (req.user.role !== "investor") {
+  if (req.user.role !== "investor" && req.user.role !== "admin") {
     return res.status(403).json({ message: "Investor access required" });
   }
   next();

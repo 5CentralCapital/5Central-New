@@ -18,6 +18,7 @@ export interface IStorage {
   getInvestmentsByInvestorId(investorId: string): Promise<Investment[]>;
   getPropertiesByNames(names: string[]): Promise<Property[]>;
   getAllInvestors(): Promise<Investor[]>;
+  getAllInvestments(): Promise<Investment[]>;
   getPortfolioMetrics(): Promise<{ totalValue: number; totalEquity: number; propertyCount: number }>;
 }
 
@@ -96,6 +97,10 @@ export class DatabaseStorage implements IStorage {
 
   async getAllInvestors(): Promise<Investor[]> {
     return await db.select().from(investors);
+  }
+
+  async getAllInvestments(): Promise<Investment[]> {
+    return await db.select().from(investments);
   }
 
   async getPortfolioMetrics(): Promise<{ totalValue: number; totalEquity: number; propertyCount: number }> {

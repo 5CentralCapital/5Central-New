@@ -1,5 +1,19 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef, lazy, Suspense } from "react";
 import "../styles/admin-dashboard.css";
+
+// Lazy-load new module dashboards
+const PayrollOps = lazy(() => import("../components/dashboard/payroll-ops"));
+const RehabDetail = lazy(() => import("../components/dashboard/rehab-detail"));
+const LeaseUpControl = lazy(() => import("../components/dashboard/lease-up"));
+const PmOps = lazy(() => import("../components/dashboard/pm-ops"));
+const InvestorCRM = lazy(() => import("../components/dashboard/investor-crm"));
+const DealPipeline = lazy(() => import("../components/dashboard/deal-pipeline"));
+const PropertyPL = lazy(() => import("../components/dashboard/property-pl"));
+const TenantManagement = lazy(() => import("../components/dashboard/tenant-management"));
+const PropertyDetailView = lazy(() => import("../components/dashboard/property-detail"));
+const InvestorOverview = lazy(() => import("../components/dashboard/investor-overview"));
+
+import { equityInvestors, mortgageObligations, getInvestorSummary } from "@/lib/investor-data";
 
 // Dashboard types (inline to avoid external dependency)
 interface TaskItem { id: string; title: string; dueDate?: string; cadence?: string; status: string; property?: string; module?: string; priority?: string; notes?: string; }
@@ -29,17 +43,72 @@ type Tab =
   | "debt"
   | "growth"
   | "ideas"
-  | "diagnostics";
+  | "diagnostics"
+  | "payroll"
+  | "rehab_detail"
+  | "lease_up"
+  | "pm_ops"
+  | "investor_crm"
+  | "deal_pipeline"
+  | "property_pl"
+  | "tenant_mgmt"
+  | "investor_overview";
 
-const tabs: { key: Tab; label: string; icon: string }[] = [
-  { key: "overview", label: "Command Center", icon: "⌘" },
-  { key: "portfolio", label: "Portfolio", icon: "◆" },
-  { key: "rehab", label: "Rehab Ops", icon: "⚒" },
-  { key: "occupancy", label: "Occupancy", icon: "◧" },
-  { key: "debt", label: "Capital & Debt", icon: "$" },
-  { key: "growth", label: "Growth Plan", icon: "↗" },
-  { key: "ideas", label: "Ideas", icon: "💡" },
-  { key: "diagnostics", label: "Diagnostics", icon: "⚙" },
+interface TabDef { key: Tab; label: string; icon: string }
+interface TabGroup { label?: string; tabs: TabDef[] }
+
+const tabGroups: TabGroup[] = [
+  {
+    tabs: [
+      { key: "overview", label: "Command Center", icon: "⌘" },
+    ],
+  },
+  {
+    label: "Portfolio",
+    tabs: [
+      { key: "portfolio", label: "Portfolio", icon: "◆" },
+      { key: "property_pl", label: "P&L", icon: "≡" },
+      { key: "occupancy", label: "Occupancy", icon: "▦" },
+    ],
+  },
+  {
+    label: "Rehab",
+    tabs: [
+      { key: "rehab", label: "Rehab Tracker", icon: "⚒" },
+      { key: "rehab_detail", label: "Rehab Detail", icon: "⊞" },
+    ],
+  },
+  {
+    label: "Tenants",
+    tabs: [
+      { key: "tenant_mgmt", label: "Tenant Mgmt", icon: "◉" },
+      { key: "lease_up", label: "Lease-Up", icon: "◧" },
+    ],
+  },
+  {
+    label: "Operations",
+    tabs: [
+      { key: "payroll", label: "Payroll", icon: "⊕" },
+      { key: "pm_ops", label: "PM Ops", icon: "⊘" },
+    ],
+  },
+  {
+    label: "Capital",
+    tabs: [
+      { key: "investor_overview", label: "Investor Overview", icon: "◈" },
+      { key: "debt", label: "Capital & Debt", icon: "$" },
+      { key: "investor_crm", label: "Investor CRM", icon: "◎" },
+      { key: "deal_pipeline", label: "Deal Pipeline", icon: "↗" },
+      { key: "growth", label: "Growth Plan", icon: "△" },
+    ],
+  },
+  {
+    label: "System",
+    tabs: [
+      { key: "ideas", label: "Ideas", icon: "✦" },
+      { key: "diagnostics", label: "Diagnostics", icon: "⚙" },
+    ],
+  },
 ];
 
 /* ──────────────────────── Helpers ──────────────────────── */
@@ -140,14 +209,31 @@ function ProgressBar({ current, target, color = "var(--color-accent)" }: { curre
 export default function AdminDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
+  const [openGroup, setOpenGroup] = useState<string | null>(null);
+  const navRef = useRef<HTMLElement>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [rampData, setRampData] = useState<RampSpending | null>(null);
   const [rampLoading, setRampLoading] = useState(false);
   const [rampError, setRampError] = useState<string | null>(null);
+  const [selectedProperty, setSelectedProperty] = useState<string | null>(null);
+  const [selectedRehabProperty, setSelectedRehabProperty] = useState<string | null>(null);
+  const [dbLoans, setDbLoans] = useState<{ id: string; propertyName: string; lender: string; balance: string; interestRate: string | null; monthlyPayment: string | null; maturityDate: string | null; status: string; loanType: string | null; notes: string | null }[] | null>(null);
 
   const load = useCallback(async () => {
-    const res = await fetch("/api/dashboard");
-    setData(await res.json());
+    try {
+      const res = await fetch("/api/dashboard");
+      const contentType = res.headers.get("content-type") || "";
+      if (res.ok && contentType.includes("application/json")) {
+        setData(await res.json());
+      } else {
+        // Backend not running — use empty shell so dashboard renders
+        console.info("[DEV PREVIEW] Backend unreachable — using empty dashboard data");
+        setData((prev) => prev || { tasks: [], metrics: [], properties: [], rehab: [], occupancy: [], kpis: [], debt: [], growth: [], activity: [] });
+      }
+    } catch {
+      console.info("[DEV PREVIEW] Backend unreachable — using empty dashboard data");
+      setData((prev) => prev || { tasks: [], metrics: [], properties: [], rehab: [], occupancy: [], kpis: [], debt: [], growth: [], activity: [] });
+    }
   }, []);
 
   const loadRamp = useCallback(async () => {
@@ -167,11 +253,31 @@ export default function AdminDashboard() {
     setRampLoading(false);
   }, []);
 
+  // Fetch loans from database for Command Center
+  const loadLoans = useCallback(() => {
+    fetch("/api/admin/loans", { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (Array.isArray(d)) setDbLoans(d); })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     load();
-    const interval = setInterval(load, 120_000);
+    loadLoans();
+    const interval = setInterval(() => { load(); loadLoans(); }, 120_000);
     return () => clearInterval(interval);
-  }, [load]);
+  }, [load, loadLoans]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (navRef.current && !navRef.current.contains(e.target as Node)) {
+        setOpenGroup(null);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
 
   const save = useCallback(
     async (table: keyof DashboardData, payload: unknown, reason = "inline_edit") => {
@@ -213,8 +319,9 @@ export default function AdminDashboard() {
   const totalDebt = data.debt.reduce((s, d) => s + d.balance, 0);
   const totalEquity = data.properties.reduce((s, p) => s + p.currentEquity, 0);
   const totalAUM = data.properties.reduce((s, p) => s + (p.currentValue || p.totalBasis), 0);
-  const avgOcc = data.occupancy.length
-    ? data.occupancy.reduce((s, o) => s + o.occupancyRate * o.units, 0) / data.occupancy.reduce((s, o) => s + o.units, 0)
+  const totalWeightedUnits = data.occupancy.reduce((s, o) => s + o.units, 0);
+  const avgOcc = totalWeightedUnits > 0
+    ? data.occupancy.reduce((s, o) => s + o.occupancyRate * o.units, 0) / totalWeightedUnits
     : 0;
   const avgDSCR = data.properties.length ? data.properties.reduce((s, p) => s + p.dscr, 0) / data.properties.length : 0;
   const urgentDebt = data.debt.filter((d) => d.urgency === "urgent");
@@ -253,45 +360,74 @@ export default function AdminDashboard() {
       </header>
 
       {/* ═══════ NAV ═══════ */}
-      <nav style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
-        {tabs.map((t) => (
-          <button key={t.key} className={`nav-btn ${tab === t.key ? "active" : ""}`} onClick={() => setTab(t.key)}>
-            <span style={{ marginRight: 4, opacity: 0.7 }}>{t.icon}</span>{t.label}
-          </button>
-        ))}
+      <nav className="tab-nav" ref={navRef}>
+        {tabGroups.map((group, gi) => {
+          // Standalone tab (no label = no dropdown)
+          if (!group.label) {
+            const t = group.tabs[0];
+            return (
+              <button key={t.key} className={`nav-btn ${tab === t.key ? "active" : ""}`} onClick={() => { setTab(t.key); setOpenGroup(null); setSelectedProperty(null); setSelectedRehabProperty(null); }}>
+                <span style={{ marginRight: 4, opacity: 0.7 }}>{t.icon}</span>{t.label}
+              </button>
+            );
+          }
+
+          // Dropdown group
+          const isOpen = openGroup === group.label;
+          const activeChild = group.tabs.find((t) => t.key === tab);
+          const hasActive = !!activeChild;
+
+          return (
+            <div key={gi} className={`tab-dropdown ${isOpen ? "open" : ""}`}>
+              <button
+                className={`nav-btn tab-dropdown-trigger ${hasActive ? "group-active" : ""}`}
+                onClick={() => setOpenGroup(isOpen ? null : (group.label ?? null))}
+              >
+                <span className="tab-dropdown-label">{group.label}</span>
+                {activeChild && <span className="tab-dropdown-active-hint">{activeChild.label}</span>}
+                <span className="tab-dropdown-chevron">{isOpen ? "▴" : "▾"}</span>
+              </button>
+              {isOpen && (
+                <div className="tab-dropdown-menu">
+                  {group.tabs.map((t) => (
+                    <button
+                      key={t.key}
+                      className={`tab-dropdown-item ${tab === t.key ? "active" : ""}`}
+                      onClick={() => { setTab(t.key); setOpenGroup(null); setSelectedProperty(null); setSelectedRehabProperty(null); }}
+                    >
+                      <span style={{ marginRight: 6, opacity: 0.6 }}>{t.icon}</span>{t.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </nav>
 
-      {/* ═══════ OVERVIEW — KPIs + Tasks + Priorities + Charts ═══════ */}
-      {tab === "overview" && (
-        <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {/* Alerts */}
-          {(urgentDebt.length > 0 || criticalOcc.length > 0 || criticalTasks.length > 0) && (
-            <div className="card" style={{ padding: 14, borderColor: "rgba(239, 68, 68, 0.25)" }}>
-              <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--color-danger)", marginBottom: 6, fontWeight: 600 }}>
-                Action Required
-              </div>
-              {urgentDebt.map((d) => (
-                <div key={d.id} style={{ fontSize: 12, color: "var(--color-text)", marginBottom: 3 }}>
-                  <span style={{ color: "var(--color-danger)", fontWeight: 600, marginRight: 6 }}>DEBT</span>
-                  {d.property} — {d.lender} matures in {d.daysUntilMaturity}d
-                </div>
-              ))}
-              {criticalOcc.map((o) => (
-                <div key={o.id} style={{ fontSize: 12, color: "var(--color-text)", marginBottom: 3 }}>
-                  <span style={{ color: "var(--color-warning)", fontWeight: 600, marginRight: 6 }}>OCC</span>
-                  {o.property} at {o.occupancyRate.toFixed(1)}% — {o.vacant} vacant
-                </div>
-              ))}
-              {criticalTasks.map((t) => (
-                <div key={t.id} style={{ fontSize: 12, color: "var(--color-text)", marginBottom: 3 }}>
-                  <span style={{ color: "var(--color-danger)", fontWeight: 600, marginRight: 6 }}>TASK</span>
-                  {t.title}
-                </div>
-              ))}
-            </div>
-          )}
+      {/* ═══════ PROPERTY DETAIL VIEW ═══════ */}
+      {selectedProperty && (() => {
+        const sp = data.properties.find(p => p.name === selectedProperty);
+        if (!sp) return null;
+        return (
+          <Suspense fallback={<div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>Loading Property Detail…</div>}>
+            <PropertyDetailView
+              propertyName={selectedProperty}
+              property={sp}
+              occupancy={data.occupancy.find(o => o.property === selectedProperty)}
+              debt={data.debt.find(d => d.property === selectedProperty)}
+              rehab={data.rehab.find(r => r.property === selectedProperty)}
+              onBack={() => setSelectedProperty(null)}
+            />
+          </Suspense>
+        );
+      })()}
 
-          {/* Hero KPIs */}
+      {/* ═══════ OVERVIEW — KPIs + Tasks + Priorities + Charts ═══════ */}
+      {tab === "overview" && !selectedProperty && (
+        <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+
+          {/* Hero KPIs — at the top */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8 }}>
             <KPICard label="Units" value={String(totalUnits)} sub="across 4 properties" />
             <KPICard label="AUM" value={fmtCompact(totalAUM)} />
@@ -301,6 +437,79 @@ export default function AdminDashboard() {
             <KPICard label="Avg DSCR" value={avgDSCR.toFixed(3) + "x"} color={avgDSCR < 1.15 ? "var(--color-warning)" : "var(--color-accent)"} />
             <KPICard label="Total Debt" value={fmtCompact(totalDebt)} />
             <KPICard label="Refi Pipeline" value={fmtCompact(refiPipeline)} sub="expected cash-out" color="var(--color-accent)" />
+          </div>
+
+          {/* To-Do on left, Active Rehabs on right */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {/* TODAY'S TO-DO LIST */}
+            <div className="card" style={{ padding: 14 }}>
+              <div className="label" style={{ marginBottom: 8 }}>To-Do List</div>
+              {openTasks
+                .filter((t) => t.module === "reminders")
+                .sort((a, b) => {
+                  const po: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+                  return (po[a.priority || "low"] ?? 3) - (po[b.priority || "low"] ?? 3);
+                })
+                .slice(0, 12)
+                .map((t) => (
+                  <TaskRowCompact key={t.id} task={t} onToggle={() => {
+                    save("tasks", data.tasks.map((x) => x.id === t.id ? { ...x, status: x.status === "done" ? "open" : "done" } : x), "task_toggle");
+                  }} />
+                ))}
+              {openTasks.filter((t) => t.module === "reminders").length === 0 && (
+                <div style={{ fontSize: 12, color: "var(--color-text-muted)", padding: 8 }}>All caught up.</div>
+              )}
+            </div>
+
+            {/* ACTIVE REHABS OVERVIEW */}
+            <div className="card" style={{ padding: 14 }}>
+              <div className="label" style={{ marginBottom: 10 }}>Active Rehabs</div>
+              {data.rehab.filter(r => r.status !== "complete" && r.status !== "not_started").length === 0 && (
+                <div style={{ fontSize: 12, color: "var(--color-text-muted)", padding: 8 }}>No active rehabs.</div>
+              )}
+              {data.rehab
+                .filter(r => r.status !== "complete" && r.status !== "not_started")
+                .sort((a, b) => a.completionPct - b.completionPct)
+                .map(r => {
+                  const pctSpent = r.budget > 0 ? (r.spent / r.budget) * 100 : 0;
+                  const overBudget = r.spent > r.budget;
+                  return (
+                    <div key={r.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--color-border)", cursor: "pointer" }} onClick={() => setSelectedProperty(r.property)}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                        <div>
+                          <span style={{ fontSize: 12, fontWeight: 600 }}>{r.property}</span>
+                          <span style={{ fontSize: 11, color: "var(--color-text-muted)", marginLeft: 6 }}>{r.project}</span>
+                        </div>
+                        <span style={{ fontSize: 10, textTransform: "uppercase", padding: "2px 6px", borderRadius: 4, background: r.completionPct >= 80 ? "rgba(16,185,129,0.1)" : "rgba(196,165,116,0.1)", color: r.completionPct >= 80 ? "var(--color-success)" : "var(--color-accent)", fontWeight: 600 }}>
+                          {r.completionPct}%
+                        </span>
+                      </div>
+                      {/* Progress bar */}
+                      <div style={{ height: 4, borderRadius: 2, background: "var(--color-border)", marginBottom: 4 }}>
+                        <div style={{ height: "100%", borderRadius: 2, width: `${Math.min(r.completionPct, 100)}%`, background: r.completionPct >= 80 ? "var(--color-success)" : "var(--color-accent)", transition: "width 0.5s ease" }} />
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--color-text-muted)" }}>
+                        <span>Budget: {fmtCompact(r.budget)}</span>
+                        <span style={{ color: overBudget ? "var(--color-danger)" : "inherit" }}>Spent: {fmtCompact(r.spent)} ({pctSpent.toFixed(0)}%)</span>
+                        {r.targetDate && <span>Target: {r.targetDate}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              {/* Rehab totals */}
+              {(() => {
+                const active = data.rehab.filter(r => r.status !== "complete" && r.status !== "not_started");
+                if (active.length === 0) return null;
+                const totalBudget = active.reduce((s, r) => s + r.budget, 0);
+                const totalSpent = active.reduce((s, r) => s + r.spent, 0);
+                return (
+                  <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 8, fontSize: 11, fontWeight: 600 }}>
+                    <span>Total: {fmtCompact(totalBudget)} budget</span>
+                    <span style={{ color: totalSpent > totalBudget ? "var(--color-danger)" : "var(--color-accent)" }}>{fmtCompact(totalSpent)} spent</span>
+                  </div>
+                );
+              })()}
+            </div>
           </div>
 
           {/* Visual charts row */}
@@ -323,80 +532,139 @@ export default function AdminDashboard() {
             </div>
           </div>
 
-          {/* Two-column: Tasks + Property Cards */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            {/* TODAY'S PRIORITIES + TASKS */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              <div className="card" style={{ padding: 14 }}>
-                <div className="label" style={{ marginBottom: 8 }}>Today&apos;s Priorities</div>
-                {openTasks
-                  .filter((t) => t.module === "reminders")
-                  .sort((a, b) => {
-                    const po: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
-                    return (po[a.priority || "low"] ?? 3) - (po[b.priority || "low"] ?? 3);
-                  })
-                  .slice(0, 10)
-                  .map((t) => (
-                    <TaskRowCompact key={t.id} task={t} onToggle={() => {
-                      save("tasks", data.tasks.map((x) => x.id === t.id ? { ...x, status: x.status === "done" ? "open" : "done" } : x), "task_toggle");
-                    }} />
-                  ))}
-                {openTasks.filter((t) => t.module === "reminders").length === 0 && (
-                  <div style={{ fontSize: 12, color: "var(--color-text-muted)", padding: 8 }}>All caught up.</div>
-                )}
-              </div>
-
-              <div className="card" style={{ padding: 14 }}>
-                <div className="label" style={{ marginBottom: 8 }}>Open Tasks ({openTasks.length})</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                  {(["critical", "high", "medium", "low"] as const).map((p) => {
-                    const count = openTasks.filter((t) => (t.priority || "low") === p).length;
-                    return (
-                      <div key={p} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-                        <span style={{ width: 8, height: 8, borderRadius: "50%", background: priorityColor(p) }} />
-                        <span style={{ textTransform: "capitalize" }}>{p}</span>
-                        <span style={{ marginLeft: "auto", fontWeight: 600 }} className="tabular-nums">{count}</span>
-                      </div>
-                    );
-                  })}
+          {/* ═══ MONTHLY OBLIGATIONS & MORTGAGE SUMMARY ═══ */}
+          {(() => {
+            const inv = getInvestorSummary();
+            // Use DB loans if available, fall back to static data
+            const loanRows = dbLoans
+              ? dbLoans.filter((l: any) => l.status === "active").map((l: any) => ({
+                  property: l.propertyName,
+                  lender: l.lender,
+                  balance: parseFloat(l.balance) || 0,
+                  interestRate: parseFloat(l.interestRate) || 0,
+                  monthlyPI: parseFloat(l.monthlyPayment) || 0,
+                  maturityDate: l.maturityDate || "TBD",
+                }))
+              : mortgageObligations;
+            const totalMortBal = loanRows.reduce((s: number, m: any) => s + m.balance, 0);
+            const totalMortMo = loanRows.reduce((s: number, m: any) => s + m.monthlyPI, 0);
+            const totalMonthly = inv.totalEquityMonthly + totalMortMo;
+            return (<>
+              {/* Monthly Obligations Hero */}
+              <div className="card" style={{ padding: 16, background: "linear-gradient(135deg, rgba(196,165,116,0.04) 0%, rgba(196,165,116,0.01) 100%)", borderColor: "rgba(196,165,116,0.2)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+                  <div className="label">Monthly Payment Obligations</div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--color-text-muted)" }}>Total Due Monthly</div>
+                    <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "var(--font-display)", color: "var(--color-accent)" }} className="tabular-nums">{fmtCompact(totalMonthly)}</div>
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                  {/* Mortgage payments */}
+                  <div style={{ padding: 12, borderRadius: 8, background: "var(--color-surface-alt)", border: "1px solid var(--color-border)" }}>
+                    <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--color-text-muted)", marginBottom: 4 }}>Mortgage P&I</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "var(--font-display)" }} className="tabular-nums">{fmtCompact(totalMortMo)}</div>
+                    <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 2 }}>{loanRows.length} loans · {fmtCompact(totalMortBal)} balance</div>
+                  </div>
+                  {/* Equity investor payments */}
+                  <div style={{ padding: 12, borderRadius: 8, background: "var(--color-surface-alt)", border: "1px solid var(--color-border)" }}>
+                    <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--color-text-muted)", marginBottom: 4 }}>Investor Pmts</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "var(--font-display)" }} className="tabular-nums">{fmtCompact(inv.totalEquityMonthly)}</div>
+                    <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 2 }}>{inv.activeEquityCount} active · {fmtCompact(inv.totalAnnualInterest)}/yr interest</div>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* PROPERTY SUMMARY CARDS */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {data.properties.map((p) => (
-                <PropertySummaryCard
-                  key={p.id}
-                  property={p}
-                  occupancy={data.occupancy.find((o) => o.property === p.name)}
-                  debt={data.debt.find((d) => d.property === p.name)}
-                  rehab={data.rehab.find((r) => r.property === p.name)}
-                />
-              ))}
-            </div>
+              {/* Mortgage Detail + Investor Detail side by side */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                {/* Mortgage by Property */}
+                <div className="card" style={{ padding: 14 }}>
+                  <div className="label" style={{ marginBottom: 10 }}>Mortgage Obligations by Property</div>
+                  <table>
+                    <thead>
+                      <tr><th>Property</th><th>Lender</th><th>Balance</th><th>Rate</th><th>Monthly P&I</th><th>Maturity</th></tr>
+                    </thead>
+                    <tbody>
+                      {loanRows.map((m: any, idx: number) => (
+                        <tr key={m.property + idx}>
+                          <td style={{ fontWeight: 500, fontSize: 11 }}>{m.property.replace(" Apartments", "")}</td>
+                          <td style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{m.lender}</td>
+                          <td className="tabular-nums" style={{ fontSize: 11 }}>{fmtCompact(m.balance)}</td>
+                          <td className="tabular-nums" style={{ fontSize: 11 }}>{(m.interestRate * 100).toFixed(2)}%</td>
+                          <td className="tabular-nums" style={{ fontSize: 11, fontWeight: 600 }}>${m.monthlyPI.toLocaleString()}</td>
+                          <td className="tabular-nums" style={{ fontSize: 11 }}>{m.maturityDate}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ fontWeight: 600, borderTop: "2px solid var(--color-border)" }}>
+                        <td colSpan={2}>Total</td>
+                        <td className="tabular-nums">{fmtCompact(totalMortBal)}</td>
+                        <td />
+                        <td className="tabular-nums">${totalMortMo.toLocaleString()}</td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+
+                {/* Investors with Monthly Payments */}
+                <div className="card" style={{ padding: 14 }}>
+                  <div className="label" style={{ marginBottom: 10 }}>Investors with Monthly Payments</div>
+                  <table>
+                    <thead>
+                      <tr><th>Investor</th><th>Invested</th><th>Rate</th><th>Monthly Pmt</th><th>Payoff</th></tr>
+                    </thead>
+                    <tbody>
+                      {equityInvestors.filter(i => i.monthlyPayment > 0).map(i => (
+                        <tr key={i.name}>
+                          <td style={{ fontWeight: 500, fontSize: 11 }}>{i.name}</td>
+                          <td className="tabular-nums" style={{ fontSize: 11 }}>{fmtCompact(i.investedAmount)}</td>
+                          <td className="tabular-nums" style={{ fontSize: 11 }}>{i.interestRate > 0 ? (i.interestRate * 100).toFixed(1) + "%" : "—"}</td>
+                          <td className="tabular-nums" style={{ fontSize: 11, fontWeight: 600 }}>${i.monthlyPayment.toLocaleString("en-US", { minimumFractionDigits: 2 })}</td>
+                          <td className="tabular-nums" style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{i.payoffDate}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ fontWeight: 600, borderTop: "2px solid var(--color-border)" }}>
+                        <td>Total</td>
+                        <td className="tabular-nums">{fmtCompact(equityInvestors.filter(i => i.monthlyPayment > 0).reduce((s, i) => s + i.investedAmount, 0))}</td>
+                        <td />
+                        <td className="tabular-nums">${inv.totalEquityMonthly.toLocaleString("en-US", { minimumFractionDigits: 2 })}</td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            </>);
+          })()}
+
+          {/* Property Summary Cards — 2 per row — clickable */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            {data.properties.map((p) => (
+              <PropertySummaryCard
+                key={p.id}
+                property={p}
+                occupancy={data.occupancy.find((o) => o.property === p.name)}
+                debt={data.debt.find((d) => d.property === p.name)}
+                rehab={data.rehab.find((r) => r.property === p.name)}
+                onClick={() => setSelectedProperty(p.name)}
+              />
+            ))}
           </div>
 
-          {/* Debt Maturity Visual + Activity */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-            <div className="card" style={{ padding: 14 }}>
-              <div className="label" style={{ marginBottom: 10 }}>Debt Maturity Timeline</div>
+          {/* Debt Maturity Timeline */}
+          <div className="card" style={{ padding: 14 }}>
+            <div className="label" style={{ marginBottom: 10 }}>Debt Maturity Timeline</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 24px" }}>
               {data.debt.sort((a, b) => a.daysUntilMaturity - b.daysUntilMaturity).map((d) => (
                 <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid var(--color-border)" }}>
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: urgencyColor(d.urgency), flexShrink: 0 }} />
                   <span style={{ flex: 1, fontSize: 12 }}>{d.property}</span>
                   <span style={{ fontSize: 18, fontWeight: 600, color: urgencyColor(d.urgency), width: 50, textAlign: "right" }} className="tabular-nums">{d.daysUntilMaturity}d</span>
                   <span style={{ fontSize: 10, color: "var(--color-text-muted)", width: 60, textAlign: "right" }}>{d.maturityDate}</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="card" style={{ padding: 14 }}>
-              <div className="label" style={{ marginBottom: 10 }}>Recent Activity</div>
-              {data.activity.slice(0, 10).map((a) => (
-                <div key={a.id} style={{ fontSize: 11, color: "var(--color-text-muted)", padding: "3px 0", borderBottom: "1px solid var(--color-border)" }}>
-                  <span style={{ color: "var(--color-accent)", marginRight: 6, fontSize: 10 }}>{new Date(a.ts).toLocaleTimeString()}</span>
-                  {a.action} — {a.detail}
                 </div>
               ))}
             </div>
@@ -411,7 +679,7 @@ export default function AdminDashboard() {
       )}
 
       {/* ═══════ PORTFOLIO ═══════ */}
-      {tab === "portfolio" && (
+      {tab === "portfolio" && !selectedProperty && (
         <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {/* Visual summary */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
@@ -444,8 +712,8 @@ export default function AdminDashboard() {
               </thead>
               <tbody>
                 {data.properties.map((p) => (
-                  <tr key={p.id}>
-                    <td style={{ fontWeight: 500 }}>{p.name}</td>
+                  <tr key={p.id} style={{ cursor: "pointer" }} onClick={() => setSelectedProperty(p.name)}>
+                    <td style={{ fontWeight: 500, color: "var(--color-accent)" }}>{p.name}</td>
                     <td className="tabular-nums">{p.units}</td>
                     <td><span style={{ color: phaseColor(p.phase), fontSize: 11, textTransform: "uppercase" }}>{p.phase.replace("_", " ")}</span></td>
                     <td className="tabular-nums">{fmtCompact(p.currentValue || p.totalBasis)}</td>
@@ -482,20 +750,27 @@ export default function AdminDashboard() {
       )}
 
       {/* ═══════ REHAB ═══════ */}
-      {tab === "rehab" && (
+      {tab === "rehab" && !selectedProperty && selectedRehabProperty && (
+        <Suspense fallback={<div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>Loading Rehab Detail…</div>}>
+          <RehabDetail initialPropertyName={selectedRehabProperty} onBack={() => setSelectedRehabProperty(null)} />
+        </Suspense>
+      )}
+      {tab === "rehab" && !selectedProperty && !selectedRehabProperty && (
         <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {/* Budget overview chart */}
           <div className="card" style={{ padding: 16 }}>
             <div className="label" style={{ marginBottom: 12 }}>Rehab Budget Utilization</div>
             <div style={{ display: "flex", justifyContent: "space-around", flexWrap: "wrap", gap: 16 }}>
               {data.rehab.map((r) => (
-                <DonutChart key={r.id} value={r.spent} max={r.budget} label={r.property} size={80} color={r.spent / r.budget > 0.9 ? "var(--color-danger)" : r.spent / r.budget > 0.7 ? "var(--color-warning)" : "var(--color-accent)"} />
+                <div key={r.id} style={{ cursor: "pointer" }} onClick={() => setSelectedRehabProperty(r.property)}>
+                  <DonutChart value={r.spent} max={r.budget} label={r.property} size={80} color={r.spent / r.budget > 0.9 ? "var(--color-danger)" : r.spent / r.budget > 0.7 ? "var(--color-warning)" : "var(--color-accent)"} />
+                </div>
               ))}
             </div>
           </div>
 
           {data.rehab.map((r) => (
-            <RehabCard key={r.id} item={r} onSave={(updated) => save("rehab", data.rehab.map((x) => (x.id === updated.id ? updated : x)), "rehab_edit")} />
+            <RehabCard key={r.id} item={r} onSave={(updated) => save("rehab", data.rehab.map((x) => (x.id === updated.id ? updated : x)), "rehab_edit")} onClick={() => setSelectedRehabProperty(r.property)} />
           ))}
 
           {/* Ramp Card Spending for Rehab */}
@@ -619,6 +894,61 @@ export default function AdminDashboard() {
         />
       )}
 
+      {/* ═══════ NEW MODULE TABS ═══════ */}
+      {tab === "payroll" && (
+        <Suspense fallback={<div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>Loading Payroll Ops…</div>}>
+          <PayrollOps />
+        </Suspense>
+      )}
+
+      {tab === "rehab_detail" && (
+        <Suspense fallback={<div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>Loading Rehab Detail…</div>}>
+          <RehabDetail />
+        </Suspense>
+      )}
+
+      {tab === "tenant_mgmt" && (
+        <Suspense fallback={<div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>Loading Tenant Management…</div>}>
+          <TenantManagement />
+        </Suspense>
+      )}
+
+      {tab === "lease_up" && (
+        <Suspense fallback={<div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>Loading Lease-Up…</div>}>
+          <LeaseUpControl />
+        </Suspense>
+      )}
+
+      {tab === "pm_ops" && (
+        <Suspense fallback={<div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>Loading PM Ops…</div>}>
+          <PmOps />
+        </Suspense>
+      )}
+
+      {tab === "investor_overview" && (
+        <Suspense fallback={<div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>Loading Investor Overview…</div>}>
+          <InvestorOverview />
+        </Suspense>
+      )}
+
+      {tab === "investor_crm" && (
+        <Suspense fallback={<div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>Loading Investor CRM…</div>}>
+          <InvestorCRM />
+        </Suspense>
+      )}
+
+      {tab === "deal_pipeline" && (
+        <Suspense fallback={<div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>Loading Deal Pipeline…</div>}>
+          <DealPipeline />
+        </Suspense>
+      )}
+
+      {tab === "property_pl" && (
+        <Suspense fallback={<div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>Loading Property P&L…</div>}>
+          <PropertyPL />
+        </Suspense>
+      )}
+
       {/* ═══════ DIAGNOSTICS ═══════ */}
       {tab === "diagnostics" && (
         <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -697,9 +1027,9 @@ function KPICard({ label, value, sub, color }: { label: string; value: string; s
   );
 }
 
-function PropertySummaryCard({ property: p, occupancy: o, debt: d, rehab: r }: { property: PropertyCard; occupancy?: OccupancyRecord; debt?: DebtMaturity; rehab?: RehabTracker }) {
+function PropertySummaryCard({ property: p, occupancy: o, debt: d, rehab: r, onClick }: { property: PropertyCard; occupancy?: OccupancyRecord; debt?: DebtMaturity; rehab?: RehabTracker; onClick?: () => void }) {
   return (
-    <article className="card interactive" style={{ padding: 14 }}>
+    <article className="card interactive" style={{ padding: 14, cursor: onClick ? "pointer" : undefined }} onClick={onClick}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
         <div>
           <div style={{ fontSize: 13, fontWeight: 600 }}>{p.name}</div>
@@ -772,12 +1102,12 @@ function TaskRowCompact({ task: t, onToggle }: { task: TaskItem; onToggle: () =>
   );
 }
 
-function RehabCard({ item: r, onSave }: { item: RehabTracker; onSave: (updated: RehabTracker) => void }) {
+function RehabCard({ item: r, onSave, onClick }: { item: RehabTracker; onSave: (updated: RehabTracker) => void; onClick?: () => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(r);
 
   return (
-    <div className="card" style={{ padding: 16 }}>
+    <div className="card" style={{ padding: 16, cursor: onClick ? "pointer" : undefined }} onClick={(e) => { if (onClick && !editing && (e.target as HTMLElement).tagName !== "INPUT" && (e.target as HTMLElement).tagName !== "SELECT" && (e.target as HTMLElement).tagName !== "BUTTON") onClick(); }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>{r.property}</div>
@@ -791,9 +1121,11 @@ function RehabCard({ item: r, onSave }: { item: RehabTracker; onSave: (updated: 
           }}>
             {r.status.replace("_", " ")}
           </span>
-          <button className="nav-btn" style={{ fontSize: 10, padding: "3px 8px" }} onClick={() => {
+          <button className="nav-btn" style={{ fontSize: 10, padding: "3px 8px" }} onClick={(e) => {
+            e.stopPropagation();
             if (editing) { onSave(draft); setEditing(false); } else { setDraft(r); setEditing(true); }
           }}>{editing ? "Save" : "Edit"}</button>
+          {onClick && !editing && <button className="nav-btn" style={{ fontSize: 10, padding: "3px 8px" }} onClick={(e) => { e.stopPropagation(); onClick(); }}>View Detail →</button>}
         </div>
       </div>
 
