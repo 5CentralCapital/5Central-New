@@ -7,6 +7,7 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { loadUser } from "./auth";
 import { pool } from "./db";
+import { ensureSchema } from "./ensureSchema";
 
 const app = express();
 
@@ -76,6 +77,9 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  // Ensure all database tables exist before starting
+  await ensureSchema();
+
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
