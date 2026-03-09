@@ -851,9 +851,9 @@ export async function buildPortfolioSummary(): Promise<PortfolioSummary> {
         }
         delinquentBalance += propDelinq;
 
-        // Per-property open work orders
+        // Per-property open work orders (same filter as portfolio-wide count)
         const propOpenWOs = Array.isArray(allWorkOrders)
-          ? allWorkOrders.filter((wo: any) => String(wo.PropertyID) === pid && !wo.IsClosed).length
+          ? allWorkOrders.filter((wo: any) => String(wo.PropertyID) === pid && !wo.IsClosed && wo.StatusID !== 5 && wo.StatusID !== 7 && wo.StatusID !== 8).length
           : 0;
 
         // Emergency work order alert

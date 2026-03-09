@@ -260,40 +260,36 @@ export default function TenantManagement() {
   // Fetch leases for expiration warnings
   useEffect(() => {
     if (rmProperties.length === 0) return;
-    const propParam = selectedPropId !== "all" ? `?propertyId=${selectedPropId}` : "";
-    const fetchUrl = selectedPropId !== "all"
-      ? `/api/rm/leases?propertyId=${selectedPropId}`
-      : Promise.all(rmProperties.map(p =>
-          fetch(`/api/rm/leases?propertyId=${p.PropertyID}`, { credentials: "include" })
-            .then(r => r.ok ? r.json() : []).catch(() => [])
-        )).then(results => results.flat());
+    let cancelled = false;
 
-    if (typeof fetchUrl === "string") {
-      fetch(fetchUrl, { credentials: "include" })
+    const buildLeaseMap = (leases: any[]) => {
+      // Track most recent lease per tenant (highest LeaseID = newest)
+      const bestLease: Record<number, number> = {};
+      const map: Record<number, { MoveOutDate: string | null }> = {};
+      leases.forEach((l: any) => {
+        if (!bestLease[l.TenantID] || l.LeaseID > bestLease[l.TenantID]) {
+          bestLease[l.TenantID] = l.LeaseID;
+          map[l.TenantID] = { MoveOutDate: l.MoveOutDate || null };
+        }
+      });
+      return map;
+    };
+
+    if (selectedPropId !== "all") {
+      fetch(`/api/rm/leases?propertyId=${selectedPropId}`, { credentials: "include" })
         .then(r => r.ok ? r.json() : [])
-        .then((leases: any[]) => {
-          const map: Record<number, { MoveOutDate: string | null }> = {};
-          leases.forEach((l: any) => {
-            if (!map[l.TenantID] || l.LeaseID > (map[l.TenantID] as any)._id) {
-              map[l.TenantID] = { MoveOutDate: l.MoveOutDate || null };
-              (map[l.TenantID] as any)._id = l.LeaseID;
-            }
-          });
-          setLeaseData(map);
-        })
+        .then((leases: any[]) => { if (!cancelled) setLeaseData(buildLeaseMap(leases)); })
         .catch(() => {});
     } else {
-      fetchUrl.then((leases: any[]) => {
-        const map: Record<number, { MoveOutDate: string | null }> = {};
-        leases.forEach((l: any) => {
-          if (!map[l.TenantID] || l.LeaseID > (map[l.TenantID] as any)._id) {
-            map[l.TenantID] = { MoveOutDate: l.MoveOutDate || null };
-            (map[l.TenantID] as any)._id = l.LeaseID;
-          }
-        });
-        setLeaseData(map);
-      }).catch(() => {});
+      Promise.all(rmProperties.map(p =>
+        fetch(`/api/rm/leases?propertyId=${p.PropertyID}`, { credentials: "include" })
+          .then(r => r.ok ? r.json() : []).catch(() => [])
+      ))
+        .then(results => { if (!cancelled) setLeaseData(buildLeaseMap(results.flat())); })
+        .catch(() => {});
     }
+
+    return () => { cancelled = true; };
   }, [rmProperties, selectedPropId]);
 
   // Compute delinquent tenants for the delinquency tab
@@ -310,7 +306,7 @@ export default function TenantManagement() {
     const moveOut = new Date(lease.MoveOutDate);
     const now = new Date();
     const daysLeft = Math.ceil((moveOut.getTime() - now.getTime()) / 86400000);
-    if (daysLeft < 0 || daysLeft > 60) return null;
+    if (daysLeft < -90 || daysLeft > 60) return null;
     const isUrgent = daysLeft <= 30;
     return (
       <span style={{
@@ -1052,7 +1048,7 @@ function TenantDetail({
               </thead>
               <tbody>
                 {transactions.map((c, i) => (
-                  <tr key={`${c._type}-${c.ChargeID || i}`}>
+                  <tr key={`${c._type}-${c.ChargeID || (c as any).PaymentID || i}`}>
                     <td className="tabular-nums" style={{ fontSize: 11 }}>{fmtDate(c.TransactionDate)}</td>
                     <td>
                       <span style={{
