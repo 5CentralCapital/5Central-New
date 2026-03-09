@@ -18,6 +18,9 @@
  *   Filter by AccountID (NOT TenantID)
  */
 
+import { PROPERTY_NAMES, ALL_RM_IDS, rmToLocal } from "./property-map";
+import { cachedFetch, cacheInvalidate } from "./rmCache";
+
 const RM_BASE = process.env.RM_API_BASE || "https://mcelweepm.api.rentmanager.com";
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
@@ -114,6 +117,26 @@ export async function rmPost(path: string, body: any): Promise<any> {
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`RM API error (${res.status} POST ${path}): ${text}`);
+  }
+
+  return res.json();
+}
+
+/** Make an authenticated PUT request to the Rent Manager API (for updates). */
+export async function rmPut(path: string, body: any): Promise<any> {
+  const token = await getApiToken();
+  const res = await fetch(`${RM_BASE}${path}`, {
+    method: "PUT",
+    headers: {
+      "X-RM12Api-ApiToken": token,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`RM API error (${res.status} PUT ${path}): ${text}`);
   }
 
   return res.json();
@@ -471,8 +494,6 @@ export interface VacancyReport {
   marketRentByBedroom: Record<number, number>;
 }
 
-import { PROPERTY_NAMES, rmToLocal } from "./property-map";
-
 /**
  * Build a vacancy report across one or more properties.
  * For each vacant unit: calculates days vacant from last lease MoveOutDate,
@@ -695,6 +716,198 @@ export async function buildMonthlyRentSummary(
     }));
 
   return result;
+}
+
+// ═══════════════════════════════════════════════════════════
+// CHARGE TYPES — human-readable names for charge type IDs
+// ═══════════════════════════════════════════════════════════
+
+export interface ChargeType {
+  ChargeTypeID: number;
+  Name: string;
+  Description?: string;
+  IsActive?: boolean;
+}
+
+/** Fetch all charge types from RM. Cached indefinitely (rarely changes). */
+export async function fetchChargeTypes(): Promise<ChargeType[]> {
+  return cachedFetch<ChargeType[]>(
+    "charge-types",
+    () => rmGet("/ChargeTypes", { pagesize: "200" }),
+    -1, // never expires
+  );
+}
+
+/** Lookup a charge type name by ID. Returns "Unknown" if not found. */
+export async function chargeTypeName(chargeTypeId: number): Promise<string> {
+  const types = await fetchChargeTypes();
+  return types.find((t) => t.ChargeTypeID === chargeTypeId)?.Name || "Unknown";
+}
+
+// ═══════════════════════════════════════════════════════════
+// PORTFOLIO SUMMARY — aggregated KPIs across all properties
+// ═══════════════════════════════════════════════════════════
+
+export interface PortfolioSummary {
+  totalUnits: number;
+  occupiedUnits: number;
+  vacantUnits: number;
+  occupancyRate: number;
+  totalMonthlyRent: number;
+  delinquentBalance: number;
+  delinquentCount: number;
+  openWorkOrders: number;
+  leasesExpiring30d: number;
+  leasesExpiring60d: number;
+  properties: Array<{
+    propertyId: string;
+    name: string;
+    totalUnits: number;
+    occupiedUnits: number;
+    vacantUnits: number;
+    occupancyRate: number;
+    monthlyRent: number;
+    delinquentBalance: number;
+    openWorkOrders: number;
+  }>;
+  alerts: Array<{
+    type: "danger" | "warning";
+    message: string;
+    propertyId?: string;
+  }>;
+}
+
+/**
+ * Build a portfolio-wide summary with KPIs, alerts, and per-property breakdown.
+ * Uses cache for rent rolls; fetches work orders + leases fresh.
+ */
+export async function buildPortfolioSummary(): Promise<PortfolioSummary> {
+  return cachedFetch<PortfolioSummary>(
+    "portfolio-summary",
+    async () => {
+      // Fetch rent rolls for all properties in parallel (via cache)
+      const rentRolls = await Promise.all(
+        ALL_RM_IDS.map((pid) =>
+          cachedFetch(`rent-roll-${pid}`, () => buildRentRoll(pid))
+        )
+      );
+
+      // Fetch work orders (all properties) + leases in parallel
+      const [allWorkOrders, allLeases] = await Promise.all([
+        fetchRMServiceIssues({}).catch(() => []),
+        Promise.all(ALL_RM_IDS.map((pid) => fetchRMLeases({ propertyId: pid }))).then((a) => a.flat()),
+      ]);
+
+      // Count open work orders
+      const openWOs = Array.isArray(allWorkOrders)
+        ? allWorkOrders.filter((wo: any) => !wo.IsClosed && wo.StatusID !== 5 && wo.StatusID !== 7 && wo.StatusID !== 8).length
+        : 0;
+
+      // Count leases expiring within 30d / 60d
+      const now = new Date();
+      const in30d = new Date(now.getTime() + 30 * 86400000);
+      const in60d = new Date(now.getTime() + 60 * 86400000);
+      let expiring30 = 0;
+      let expiring60 = 0;
+      for (const l of allLeases) {
+        if (!l.MoveOutDate) continue;
+        const moveOut = new Date(l.MoveOutDate);
+        if (moveOut >= now && moveOut <= in30d) expiring30++;
+        else if (moveOut > in30d && moveOut <= in60d) expiring60++;
+      }
+
+      // Aggregate
+      let totalUnits = 0, occupiedUnits = 0, totalMonthlyRent = 0, delinquentBalance = 0, delinquentCount = 0;
+      const alerts: PortfolioSummary["alerts"] = [];
+      const properties: PortfolioSummary["properties"] = [];
+
+      for (let i = 0; i < rentRolls.length; i++) {
+        const rr = rentRolls[i];
+        const pid = ALL_RM_IDS[i];
+        const pName = PROPERTY_NAMES[parseInt(pid)] || pid;
+        const s = rr.summary;
+
+        totalUnits += s.totalUnits;
+        occupiedUnits += s.occupiedUnits;
+        totalMonthlyRent += s.totalMonthlyRent;
+
+        // Per-property delinquency
+        let propDelinq = 0;
+        let propDelinqCount = 0;
+        for (const t of rr.tenants) {
+          if (t.Balance > 0) {
+            propDelinq += t.Balance;
+            propDelinqCount++;
+            delinquentCount++;
+            // Alert if balance > 1 month rent
+            if (t.Balance > t.MonthlyRent && t.MonthlyRent > 0) {
+              alerts.push({
+                type: "danger",
+                message: `${t.Name} (${pName} ${t.UnitName}) owes ${fmtMoney(t.Balance)} — more than 1 month's rent`,
+                propertyId: pid,
+              });
+            }
+          }
+        }
+        delinquentBalance += propDelinq;
+
+        // Per-property open work orders
+        const propOpenWOs = Array.isArray(allWorkOrders)
+          ? allWorkOrders.filter((wo: any) => String(wo.PropertyID) === pid && !wo.IsClosed).length
+          : 0;
+
+        // Emergency work order alert
+        if (Array.isArray(allWorkOrders)) {
+          for (const wo of allWorkOrders) {
+            if (String(wo.PropertyID) === pid && !wo.IsClosed && (wo.PriorityID === 6 || wo.PriorityID === 9)) {
+              alerts.push({
+                type: "danger",
+                message: `Emergency work order open: ${wo.Title || wo.Description || "WO #" + wo.ServiceManagerIssueID} (${pName})`,
+                propertyId: pid,
+              });
+            }
+          }
+        }
+
+        properties.push({
+          propertyId: pid,
+          name: pName,
+          totalUnits: s.totalUnits,
+          occupiedUnits: s.occupiedUnits,
+          vacantUnits: s.vacantUnits,
+          occupancyRate: s.occupancyRate,
+          monthlyRent: s.totalMonthlyRent,
+          delinquentBalance: Math.round(propDelinq * 100) / 100,
+          openWorkOrders: propOpenWOs,
+        });
+      }
+
+      // Lease expiration alerts
+      if (expiring30 > 0) {
+        alerts.push({ type: "warning", message: `${expiring30} lease${expiring30 > 1 ? "s" : ""} expiring within 30 days` });
+      }
+
+      return {
+        totalUnits,
+        occupiedUnits,
+        vacantUnits: totalUnits - occupiedUnits,
+        occupancyRate: totalUnits > 0 ? occupiedUnits / totalUnits : 0,
+        totalMonthlyRent: Math.round(totalMonthlyRent),
+        delinquentBalance: Math.round(delinquentBalance * 100) / 100,
+        delinquentCount,
+        openWorkOrders: openWOs,
+        leasesExpiring30d: expiring30,
+        leasesExpiring60d: expiring60,
+        properties,
+        alerts,
+      };
+    },
+    5 * 60 * 1000, // 5 minute TTL
+  );
+}
+
+function fmtMoney(v: number): string {
+  return "$" + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
 
 // ─── ServiceManagerIssues → MaintenanceRequest transform ──────────

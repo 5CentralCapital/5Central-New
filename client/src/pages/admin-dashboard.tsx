@@ -218,6 +218,13 @@ export default function AdminDashboard() {
   const [selectedProperty, setSelectedProperty] = useState<string | null>(null);
   const [selectedRehabProperty, setSelectedRehabProperty] = useState<string | null>(null);
   const [dbLoans, setDbLoans] = useState<{ id: string; propertyName: string; lender: string; balance: string; interestRate: string | null; monthlyPayment: string | null; maturityDate: string | null; status: string; loanType: string | null; notes: string | null }[] | null>(null);
+  const [portfolioSummary, setPortfolioSummary] = useState<{
+    totalUnits: number; occupiedUnits: number; vacantUnits: number; occupancyRate: number;
+    totalMonthlyRent: number; delinquentBalance: number; delinquentCount: number;
+    openWorkOrders: number; leasesExpiring30d: number; leasesExpiring60d: number;
+    properties: any[]; alerts: { type: "danger" | "warning"; message: string; propertyId?: string }[];
+  } | null>(null);
+  const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     try {
@@ -259,6 +266,17 @@ export default function AdminDashboard() {
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (Array.isArray(d)) setDbLoans(d); })
       .catch(() => {});
+  }, []);
+
+  // Fetch live portfolio summary from RM (KPIs, alerts, delinquency)
+  const loadPortfolioSummary = useCallback(async () => {
+    try {
+      const res = await fetch("/api/rm/portfolio-summary", { credentials: "include" });
+      if (res.ok) {
+        const ps = await res.json();
+        setPortfolioSummary(ps);
+      }
+    } catch { /* silently fail */ }
   }, []);
 
   // Fetch live occupancy from Rent Manager and overlay on BOTH occupancy records AND properties array
@@ -326,9 +344,10 @@ export default function AdminDashboard() {
     load();
     loadLoans();
     loadRMOccupancy();
-    const interval = setInterval(() => { load(); loadLoans(); loadRMOccupancy(); }, 120_000);
+    loadPortfolioSummary();
+    const interval = setInterval(() => { load(); loadLoans(); loadRMOccupancy(); loadPortfolioSummary(); }, 120_000);
     return () => clearInterval(interval);
-  }, [load, loadLoans, loadRMOccupancy]);
+  }, [load, loadLoans, loadRMOccupancy, loadPortfolioSummary]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -489,13 +508,46 @@ export default function AdminDashboard() {
       {tab === "overview" && !selectedProperty && (
         <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
 
-          {/* Hero KPIs — at the top */}
+          {/* Alert Banner — RM-powered alerts */}
+          {portfolioSummary && portfolioSummary.alerts.length > 0 && (() => {
+            const visibleAlerts = portfolioSummary.alerts.filter(a => !dismissedAlerts.has(a.message));
+            if (visibleAlerts.length === 0) return null;
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {visibleAlerts.slice(0, 5).map((alert, i) => (
+                  <div key={i} style={{
+                    display: "flex", alignItems: "center", gap: 10, padding: "8px 14px",
+                    borderRadius: 8, fontSize: 12,
+                    background: alert.type === "danger" ? "rgba(239,68,68,0.08)" : "rgba(245,158,11,0.08)",
+                    border: `1px solid ${alert.type === "danger" ? "rgba(239,68,68,0.25)" : "rgba(245,158,11,0.25)"}`,
+                    color: alert.type === "danger" ? "#ef4444" : "#f59e0b",
+                  }}>
+                    <span style={{ fontWeight: 600, fontSize: 14 }}>{alert.type === "danger" ? "⚠" : "⚡"}</span>
+                    <span style={{ flex: 1 }}>{alert.message}</span>
+                    <button onClick={() => setDismissedAlerts(prev => { const next = new Set(Array.from(prev)); next.add(alert.message); return next; })} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", fontSize: 14, padding: "0 4px", opacity: 0.6 }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+
+          {/* Hero KPIs — live RM data row + static financial row */}
+          {portfolioSummary && (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
+              <KPICard label="Units" value={String(portfolioSummary.totalUnits)} sub="across 4 properties" />
+              <KPICard label="Occupancy" value={(portfolioSummary.occupancyRate * 100).toFixed(1) + "%"} color={portfolioSummary.occupancyRate < 0.8 ? "var(--color-warning)" : "var(--color-success)"} sub={`${portfolioSummary.occupiedUnits} occupied`} />
+              <KPICard label="Delinquent" value={"$" + portfolioSummary.delinquentBalance.toLocaleString("en-US", { maximumFractionDigits: 0 })} color={portfolioSummary.delinquentBalance > 0 ? "var(--color-danger)" : "var(--color-success)"} sub={`${portfolioSummary.delinquentCount} tenant${portfolioSummary.delinquentCount !== 1 ? "s" : ""}`} />
+              <KPICard label="Monthly Rent" value={"$" + portfolioSummary.totalMonthlyRent.toLocaleString("en-US", { maximumFractionDigits: 0 })} sub="in-place rent" />
+              <KPICard label="Expiring Leases" value={String(portfolioSummary.leasesExpiring30d)} color={portfolioSummary.leasesExpiring30d > 0 ? "var(--color-warning)" : "var(--color-success)"} sub="within 30 days" />
+              <KPICard label="Open Work Orders" value={String(portfolioSummary.openWorkOrders)} color={portfolioSummary.openWorkOrders > 5 ? "var(--color-warning)" : "var(--color-accent)"} sub="portfolio-wide" />
+            </div>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8 }}>
-            <KPICard label="Units" value={String(totalUnits)} sub="across 4 properties" />
+            {!portfolioSummary && <KPICard label="Units" value={String(totalUnits)} sub="across 4 properties" />}
             <KPICard label="AUM" value={fmtCompact(totalAUM)} />
             <KPICard label="Total Equity" value={fmtCompact(totalEquity)} />
             <KPICard label="Annual NOI" value={fmtCompact(totalNOI)} />
-            <KPICard label="Occupancy" value={avgOcc.toFixed(1) + "%"} color={avgOcc < 80 ? "var(--color-warning)" : "var(--color-success)"} />
+            {!portfolioSummary && <KPICard label="Occupancy" value={avgOcc.toFixed(1) + "%"} color={avgOcc < 80 ? "var(--color-warning)" : "var(--color-success)"} />}
             <KPICard label="Avg DSCR" value={avgDSCR.toFixed(3) + "x"} color={avgDSCR < 1.15 ? "var(--color-warning)" : "var(--color-accent)"} />
             <KPICard label="Total Debt" value={fmtCompact(totalDebt)} />
             <KPICard label="Refi Pipeline" value={fmtCompact(refiPipeline)} sub="expected cash-out" color="var(--color-accent)" />

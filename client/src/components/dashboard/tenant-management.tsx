@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useMemo } from "react";
 import { PropertySubTabs } from "./shared/property-subtabs";
 
 /* ── Types matching the EnrichedTenant shape from server/dashboard/rentmanager.ts ── */
@@ -167,9 +167,11 @@ export default function TenantManagement() {
   const [selectedTenant, setSelectedTenant] = useState<EnrichedTenant | null>(null);
   const [sortField, setSortField] = useState<string>("Unit");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [activeTab, setActiveTab] = useState<"tenants" | "work-orders">("tenants");
+  const [activeTab, setActiveTab] = useState<"tenants" | "work-orders" | "delinquency">("tenants");
   const [workOrders, setWorkOrders] = useState<RMWorkOrder[]>([]);
   const [loadingWO, setLoadingWO] = useState(false);
+  const [chargeTypeMap, setChargeTypeMap] = useState<Record<number, string>>({});
+  const [leaseData, setLeaseData] = useState<Record<number, { MoveOutDate: string | null }>>({});
 
   const tabProperties = rmProperties.map(p => ({
     id: String(p.PropertyID),
@@ -241,6 +243,87 @@ export default function TenantManagement() {
     if (activeTab === "work-orders") loadWorkOrders();
   }, [activeTab, loadWorkOrders]);
 
+  // Fetch charge types (cached on server, fetch once)
+  useEffect(() => {
+    fetch("/api/rm/charge-types", { credentials: "include" })
+      .then(r => r.ok ? r.json() : [])
+      .then(types => {
+        if (Array.isArray(types)) {
+          const map: Record<number, string> = {};
+          types.forEach((t: any) => { map[t.ChargeTypeID] = t.Name; });
+          setChargeTypeMap(map);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Fetch leases for expiration warnings
+  useEffect(() => {
+    if (rmProperties.length === 0) return;
+    const propParam = selectedPropId !== "all" ? `?propertyId=${selectedPropId}` : "";
+    const fetchUrl = selectedPropId !== "all"
+      ? `/api/rm/leases?propertyId=${selectedPropId}`
+      : Promise.all(rmProperties.map(p =>
+          fetch(`/api/rm/leases?propertyId=${p.PropertyID}`, { credentials: "include" })
+            .then(r => r.ok ? r.json() : []).catch(() => [])
+        )).then(results => results.flat());
+
+    if (typeof fetchUrl === "string") {
+      fetch(fetchUrl, { credentials: "include" })
+        .then(r => r.ok ? r.json() : [])
+        .then((leases: any[]) => {
+          const map: Record<number, { MoveOutDate: string | null }> = {};
+          leases.forEach((l: any) => {
+            if (!map[l.TenantID] || l.LeaseID > (map[l.TenantID] as any)._id) {
+              map[l.TenantID] = { MoveOutDate: l.MoveOutDate || null };
+              (map[l.TenantID] as any)._id = l.LeaseID;
+            }
+          });
+          setLeaseData(map);
+        })
+        .catch(() => {});
+    } else {
+      fetchUrl.then((leases: any[]) => {
+        const map: Record<number, { MoveOutDate: string | null }> = {};
+        leases.forEach((l: any) => {
+          if (!map[l.TenantID] || l.LeaseID > (map[l.TenantID] as any)._id) {
+            map[l.TenantID] = { MoveOutDate: l.MoveOutDate || null };
+            (map[l.TenantID] as any)._id = l.LeaseID;
+          }
+        });
+        setLeaseData(map);
+      }).catch(() => {});
+    }
+  }, [rmProperties, selectedPropId]);
+
+  // Compute delinquent tenants for the delinquency tab
+  const delinquentTenants = useMemo(() => {
+    return allTenants
+      .filter(t => t.Balance > 0)
+      .sort((a, b) => b.Balance - a.Balance);
+  }, [allTenants]);
+
+  // Helper: lease expiration badge
+  const leaseExpirationBadge = (tenantId: number) => {
+    const lease = leaseData[tenantId];
+    if (!lease?.MoveOutDate) return null;
+    const moveOut = new Date(lease.MoveOutDate);
+    const now = new Date();
+    const daysLeft = Math.ceil((moveOut.getTime() - now.getTime()) / 86400000);
+    if (daysLeft < 0 || daysLeft > 60) return null;
+    const isUrgent = daysLeft <= 30;
+    return (
+      <span style={{
+        fontSize: 9, padding: "1px 6px", borderRadius: 4, marginLeft: 6,
+        background: isUrgent ? "rgba(239,68,68,0.12)" : "rgba(245,158,11,0.12)",
+        color: isUrgent ? "#ef4444" : "#f59e0b",
+        fontWeight: 600,
+      }}>
+        {daysLeft <= 0 ? "EXPIRED" : `${daysLeft}d`}
+      </span>
+    );
+  };
+
   /* ── Sorting ── */
   const handleSort = (field: string) => {
     if (sortField === field) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -305,6 +388,7 @@ export default function TenantManagement() {
         tenant={selectedTenant}
         propertyName={propName(selectedTenant.PropertyID)}
         onBack={() => { setSelectedTenant(null); loadRentRoll(); }}
+        chargeTypeMap={chargeTypeMap}
       />
     );
   }
@@ -321,7 +405,7 @@ export default function TenantManagement() {
           allLabel="All Properties"
         />
         <div style={{ display: "flex", gap: 6 }}>
-          {(["tenants", "work-orders"] as const).map(tab => (
+          {(["tenants", "delinquency", "work-orders"] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -330,12 +414,12 @@ export default function TenantManagement() {
                 borderColor: activeTab === tab ? "var(--color-accent)" : "var(--color-border)",
                 borderRadius: 14, cursor: "pointer",
                 background: activeTab === tab ? "var(--color-accent)18" : "transparent",
-                color: activeTab === tab ? "var(--color-accent)" : "var(--color-text-muted)",
+                color: activeTab === tab ? (tab === "delinquency" && delinquentTenants.length > 0 ? "var(--color-danger)" : "var(--color-accent)") : "var(--color-text-muted)",
                 fontWeight: activeTab === tab ? 600 : 400,
                 transition: "all 0.15s ease",
               }}
             >
-              {tab === "tenants" ? "Tenants & Rent Roll" : "Work Orders"}
+              {tab === "tenants" ? "Tenants & Rent Roll" : tab === "delinquency" ? `Delinquent (${delinquentTenants.length})` : "Work Orders"}
             </button>
           ))}
         </div>
@@ -399,7 +483,10 @@ export default function TenantManagement() {
                   <td style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
                     {t.Bedrooms != null ? `${t.Bedrooms}/${t.Bathrooms ?? "—"}` : "—"}
                   </td>
-                  <td className="tabular-nums" style={{ fontSize: 11 }}>{fmtDate(t.MoveInDate)}</td>
+                  <td className="tabular-nums" style={{ fontSize: 11 }}>
+                    {fmtDate(t.MoveInDate)}
+                    {leaseExpirationBadge(t.TenantID)}
+                  </td>
                   <td className="tabular-nums" style={{ fontWeight: 500, color: "var(--color-accent)" }}>
                     {fmtMoney(t.MonthlyRent)}
                   </td>
@@ -421,6 +508,67 @@ export default function TenantManagement() {
                   </td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* ── DELINQUENCY TAB ── */}
+      {activeTab === "delinquency" && !loading && (
+        <div className="card" style={{ padding: 12, overflowX: "auto" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, padding: "0 4px" }}>
+            <div className="label" style={{ fontSize: 13, color: "var(--color-danger)" }}>Delinquent Tenants</div>
+            <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+              {delinquentTenants.length} tenant{delinquentTenants.length !== 1 ? "s" : ""} with outstanding balance
+              {delinquentTenants.length > 0 && (
+                <span style={{ marginLeft: 8, fontWeight: 600, color: "var(--color-danger)" }}>
+                  Total: ${delinquentTenants.reduce((s, t) => s + t.Balance, 0).toLocaleString("en-US", { maximumFractionDigits: 0 })}
+                </span>
+              )}
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Unit</th>
+                {selectedPropId === "all" && <th>Property</th>}
+                <th>Tenant</th>
+                <th>Monthly Rent</th>
+                <th>Balance Owed</th>
+                <th>Months Behind</th>
+                <th>Lease Expires</th>
+              </tr>
+            </thead>
+            <tbody>
+              {delinquentTenants.length === 0 && (
+                <tr><td colSpan={selectedPropId === "all" ? 7 : 6} style={{ textAlign: "center", color: "var(--color-success)", padding: 24 }}>No delinquent tenants — all accounts current</td></tr>
+              )}
+              {delinquentTenants.map(t => {
+                const monthsBehind = t.MonthlyRent > 0 ? t.Balance / t.MonthlyRent : 0;
+                const lease = leaseData[t.TenantID];
+                return (
+                  <tr key={t.TenantID} style={{ cursor: "pointer" }} onClick={() => setSelectedTenant(t)}>
+                    <td style={{ fontWeight: 500 }}>{t.UnitName}</td>
+                    {selectedPropId === "all" && <td style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{propName(t.PropertyID)}</td>}
+                    <td>{t.Name}</td>
+                    <td className="tabular-nums">{fmtMoney(t.MonthlyRent)}</td>
+                    <td className="tabular-nums" style={{ fontWeight: 600, color: "var(--color-danger)" }}>{fmtMoney(t.Balance)}</td>
+                    <td>
+                      <span style={{
+                        fontSize: 10, padding: "2px 8px", borderRadius: 4, fontWeight: 600,
+                        background: monthsBehind >= 2 ? "rgba(239,68,68,0.12)" : monthsBehind >= 1 ? "rgba(245,158,11,0.12)" : "rgba(96,165,250,0.12)",
+                        color: monthsBehind >= 2 ? "#ef4444" : monthsBehind >= 1 ? "#f59e0b" : "#60a5fa",
+                      }}>
+                        {monthsBehind.toFixed(1)}x
+                      </span>
+                    </td>
+                    <td className="tabular-nums" style={{ fontSize: 11 }}>
+                      {lease?.MoveOutDate ? fmtDate(lease.MoveOutDate) : "—"}
+                      {leaseExpirationBadge(t.TenantID)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -502,15 +650,29 @@ function TenantDetail({
   tenant,
   propertyName,
   onBack,
+  chargeTypeMap,
 }: {
   tenant: EnrichedTenant;
   propertyName: string;
   onBack: () => void;
+  chargeTypeMap?: Record<number, string>;
 }) {
   const [transactions, setTransactions] = useState<(RMCharge & { _type: string })[]>([]);
   const [recurringCharges, setRecurringCharges] = useState<RMRecurringCharge[]>([]);
   const [loadingTxns, setLoadingTxns] = useState(true);
   const [loadingRecurring, setLoadingRecurring] = useState(true);
+  const [notes, setNotes] = useState<any[]>([]);
+  const [loadingNotes, setLoadingNotes] = useState(true);
+  const [showPostCharge, setShowPostCharge] = useState(false);
+  const [showLogPayment, setShowLogPayment] = useState(false);
+  const [showAddNote, setShowAddNote] = useState(false);
+  const [formAmount, setFormAmount] = useState("");
+  const [formDate, setFormDate] = useState(new Date().toISOString().split("T")[0]);
+  const [formComment, setFormComment] = useState("");
+  const [formChargeType, setFormChargeType] = useState(2); // default to Rent
+  const [formSubmitting, setFormSubmitting] = useState(false);
+  const [formMessage, setFormMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const ctMap = chargeTypeMap || {};
 
   useEffect(() => {
     const tid = tenant.TenantID;
@@ -538,6 +700,106 @@ function TenantDetail({
       .catch(() => setRecurringCharges([]))
       .finally(() => setLoadingRecurring(false));
   }, [tenant.TenantID]);
+
+  // Fetch history notes
+  useEffect(() => {
+    setLoadingNotes(true);
+    fetch(`/api/rm/history-notes?tenantId=${tenant.TenantID}`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setNotes(Array.isArray(data) ? data : []))
+      .catch(() => setNotes([]))
+      .finally(() => setLoadingNotes(false));
+  }, [tenant.TenantID]);
+
+  // Reload transactions after posting a charge or payment
+  const reloadTransactions = useCallback(() => {
+    setLoadingTxns(true);
+    const tid = tenant.TenantID;
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
+    const fromDate = twelveMonthsAgo.toISOString().split("T")[0];
+    Promise.all([
+      fetch(`/api/rm/charges?tenantId=${tid}&fromDate=${fromDate}`, { credentials: "include" })
+        .then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch(`/api/rm/payments?tenantId=${tid}&fromDate=${fromDate}`, { credentials: "include" })
+        .then(r => r.ok ? r.json() : []).catch(() => []),
+    ]).then(([charges, payments]) => {
+      const all = [
+        ...(Array.isArray(charges) ? charges : []).map((c: any) => ({ ...c, _type: "Charge" })),
+        ...(Array.isArray(payments) ? payments : []).map((p: any) => ({ ...p, _type: "Payment" })),
+      ].sort((a, b) => (b.TransactionDate || "").localeCompare(a.TransactionDate || ""));
+      setTransactions(all);
+    }).finally(() => setLoadingTxns(false));
+  }, [tenant.TenantID]);
+
+  // Submit handlers
+  const submitCharge = async () => {
+    const amount = parseFloat(formAmount);
+    if (!amount || amount <= 0) { setFormMessage({ type: "error", text: "Enter a valid amount" }); return; }
+    setFormSubmitting(true); setFormMessage(null);
+    try {
+      const r = await fetch("/api/rm/charges", {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          AccountID: tenant.TenantID, AccountType: "Customer",
+          ChargeTypeID: formChargeType, Amount: amount,
+          TransactionDate: formDate, Comment: formComment || undefined,
+        }),
+      });
+      if (!r.ok) throw new Error("Failed to post charge");
+      setFormMessage({ type: "success", text: "Charge posted" });
+      setFormAmount(""); setFormComment(""); setShowPostCharge(false);
+      reloadTransactions();
+    } catch (err: any) { setFormMessage({ type: "error", text: err.message }); }
+    finally { setFormSubmitting(false); }
+  };
+
+  const submitPayment = async () => {
+    const amount = parseFloat(formAmount);
+    if (!amount || amount <= 0) { setFormMessage({ type: "error", text: "Enter a valid amount" }); return; }
+    setFormSubmitting(true); setFormMessage(null);
+    try {
+      const r = await fetch("/api/rm/payments", {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          AccountID: tenant.TenantID, AccountType: "Customer",
+          Amount: amount, TransactionDate: formDate,
+          Comment: formComment || undefined,
+        }),
+      });
+      if (!r.ok) throw new Error("Failed to log payment");
+      setFormMessage({ type: "success", text: "Payment logged" });
+      setFormAmount(""); setFormComment(""); setShowLogPayment(false);
+      reloadTransactions();
+    } catch (err: any) { setFormMessage({ type: "error", text: err.message }); }
+    finally { setFormSubmitting(false); }
+  };
+
+  const submitNote = async () => {
+    if (!formComment.trim()) { setFormMessage({ type: "error", text: "Enter a note" }); return; }
+    setFormSubmitting(true); setFormMessage(null);
+    try {
+      const r = await fetch("/api/rm/history-notes", {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          EntityType: "Tenant", EntityKeyID: tenant.TenantID,
+          Date: new Date().toISOString(), Note: formComment,
+        }),
+      });
+      if (!r.ok) throw new Error("Failed to add note");
+      setFormMessage({ type: "success", text: "Note added" });
+      setFormComment(""); setShowAddNote(false);
+      // Reload notes
+      fetch(`/api/rm/history-notes?tenantId=${tenant.TenantID}`, { credentials: "include" })
+        .then(r2 => r2.ok ? r2.json() : [])
+        .then(data => setNotes(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    } catch (err: any) { setFormMessage({ type: "error", text: err.message }); }
+    finally { setFormSubmitting(false); }
+  };
 
   const infoRow = (label: string, value: string | number | undefined | null) => (
     <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--color-border)" }}>
@@ -572,7 +834,7 @@ function TenantDetail({
               {tenant.Bedrooms != null && ` - ${tenant.Bedrooms}bd/${tenant.Bathrooms ?? "?"}ba`}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <span style={{
               fontSize: 11, textTransform: "uppercase", padding: "4px 12px", borderRadius: 6,
               background: `${STATUS_COLORS[tenant.Status] || "var(--color-text-muted)"}15`,
@@ -590,9 +852,120 @@ function TenantDetail({
                 Owes {fmtMoney(tenant.Balance)}
               </span>
             )}
+            <div style={{ display: "flex", gap: 4, marginLeft: 4 }}>
+              {([
+                { label: "Post Charge", onClick: () => { setShowPostCharge(true); setShowLogPayment(false); setShowAddNote(false); setFormAmount(""); setFormComment(""); setFormMessage(null); }, color: "var(--color-danger)" },
+                { label: "Log Payment", onClick: () => { setShowLogPayment(true); setShowPostCharge(false); setShowAddNote(false); setFormAmount(""); setFormComment(""); setFormMessage(null); }, color: "var(--color-success)" },
+                { label: "Add Note", onClick: () => { setShowAddNote(true); setShowPostCharge(false); setShowLogPayment(false); setFormComment(""); setFormMessage(null); }, color: "var(--color-accent)" },
+              ] as const).map(btn => (
+                <button key={btn.label} onClick={btn.onClick} style={{
+                  fontSize: 10, padding: "4px 10px", borderRadius: 6, cursor: "pointer",
+                  background: `${btn.color}15`, color: btn.color, border: `1px solid ${btn.color}30`,
+                  fontWeight: 600, transition: "all 0.15s ease",
+                }}>{btn.label}</button>
+              ))}
+            </div>
           </div>
         </div>
       </div>
+
+      {/* Status message */}
+      {formMessage && (
+        <div className="card" style={{
+          padding: "10px 16px", fontSize: 12, fontWeight: 500,
+          color: formMessage.type === "success" ? "var(--color-success)" : "var(--color-danger)",
+          background: formMessage.type === "success" ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
+          border: `1px solid ${formMessage.type === "success" ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`,
+        }}>
+          {formMessage.text}
+          <button onClick={() => setFormMessage(null)} style={{ marginLeft: 12, cursor: "pointer", fontSize: 11, color: "var(--color-text-muted)", background: "none", border: "none" }}>✕</button>
+        </div>
+      )}
+
+      {/* Write forms */}
+      {(showPostCharge || showLogPayment) && (
+        <div className="card" style={{ padding: 16 }}>
+          <div className="label" style={{ marginBottom: 10, color: showPostCharge ? "var(--color-danger)" : "var(--color-success)" }}>
+            {showPostCharge ? "Post Charge" : "Log Payment"}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 10, alignItems: "end" }}>
+            <div>
+              <label style={{ fontSize: 10, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>Amount ($)</label>
+              <input type="number" value={formAmount} onChange={e => setFormAmount(e.target.value)} placeholder="0.00"
+                style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: "1px solid var(--color-border)", fontSize: 13, background: "var(--color-surface)", color: "var(--color-text)" }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 10, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>Date</label>
+              <input type="date" value={formDate} onChange={e => setFormDate(e.target.value)}
+                style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: "1px solid var(--color-border)", fontSize: 13, background: "var(--color-surface)", color: "var(--color-text)" }} />
+            </div>
+            {showPostCharge && (
+              <div>
+                <label style={{ fontSize: 10, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>Charge Type</label>
+                <select value={formChargeType} onChange={e => setFormChargeType(Number(e.target.value))}
+                  style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: "1px solid var(--color-border)", fontSize: 13, background: "var(--color-surface)", color: "var(--color-text)" }}>
+                  {Object.entries(ctMap).length > 0
+                    ? Object.entries(ctMap).map(([id, name]) => <option key={id} value={id}>{name}</option>)
+                    : <option value={2}>Rent</option>
+                  }
+                </select>
+              </div>
+            )}
+            {!showPostCharge && (
+              <div>
+                <label style={{ fontSize: 10, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>Comment</label>
+                <input type="text" value={formComment} onChange={e => setFormComment(e.target.value)} placeholder="Optional"
+                  style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: "1px solid var(--color-border)", fontSize: 13, background: "var(--color-surface)", color: "var(--color-text)" }} />
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={showPostCharge ? submitCharge : submitPayment} disabled={formSubmitting}
+                style={{
+                  padding: "6px 16px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: formSubmitting ? "not-allowed" : "pointer",
+                  background: showPostCharge ? "var(--color-danger)" : "var(--color-success)", color: "#fff", border: "none", opacity: formSubmitting ? 0.6 : 1,
+                }}>
+                {formSubmitting ? "..." : "Submit"}
+              </button>
+              <button onClick={() => { setShowPostCharge(false); setShowLogPayment(false); }}
+                style={{ padding: "6px 12px", borderRadius: 6, fontSize: 12, cursor: "pointer", background: "transparent", border: "1px solid var(--color-border)", color: "var(--color-text-muted)" }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+          {showPostCharge && (
+            <div style={{ marginTop: 8 }}>
+              <label style={{ fontSize: 10, color: "var(--color-text-muted)", display: "block", marginBottom: 4 }}>Comment</label>
+              <input type="text" value={formComment} onChange={e => setFormComment(e.target.value)} placeholder="Optional comment"
+                style={{ width: "100%", padding: "6px 10px", borderRadius: 6, border: "1px solid var(--color-border)", fontSize: 13, background: "var(--color-surface)", color: "var(--color-text)" }} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {showAddNote && (
+        <div className="card" style={{ padding: 16 }}>
+          <div className="label" style={{ marginBottom: 10, color: "var(--color-accent)" }}>Add Note</div>
+          <div style={{ display: "flex", gap: 10, alignItems: "end" }}>
+            <div style={{ flex: 1 }}>
+              <textarea value={formComment} onChange={e => setFormComment(e.target.value)} placeholder="Enter note..."
+                rows={3} style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid var(--color-border)", fontSize: 13, background: "var(--color-surface)", color: "var(--color-text)", resize: "vertical" }} />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <button onClick={submitNote} disabled={formSubmitting}
+                style={{
+                  padding: "6px 16px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: formSubmitting ? "not-allowed" : "pointer",
+                  background: "var(--color-accent)", color: "#fff", border: "none", opacity: formSubmitting ? 0.6 : 1,
+                }}>
+                {formSubmitting ? "..." : "Save"}
+              </button>
+              <button onClick={() => setShowAddNote(false)}
+                style={{ padding: "6px 12px", borderRadius: 6, fontSize: 12, cursor: "pointer", background: "transparent", border: "1px solid var(--color-border)", color: "var(--color-text-muted)" }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Info cards */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -691,7 +1064,11 @@ function TenantDetail({
                         {c._type}
                       </span>
                     </td>
-                    <td style={{ fontSize: 12 }}>{c.Comment || "—"}</td>
+                    <td style={{ fontSize: 12 }}>
+                      {c.ChargeTypeID && ctMap[c.ChargeTypeID] ? (
+                        <><span style={{ fontWeight: 500 }}>{ctMap[c.ChargeTypeID]}</span>{c.Comment ? ` — ${c.Comment}` : ""}</>
+                      ) : (c.Comment || "—")}
+                    </td>
                     <td className="tabular-nums" style={{
                       fontWeight: 500,
                       color: c._type === "Payment" ? "var(--color-success)" : "var(--color-text)",
@@ -703,6 +1080,34 @@ function TenantDetail({
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+      </div>
+
+      {/* Notes / History */}
+      <div className="card" style={{ padding: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div className="label">History Notes</div>
+          <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>{notes.length} note{notes.length !== 1 ? "s" : ""}</div>
+        </div>
+        {loadingNotes ? (
+          <div style={{ fontSize: 12, color: "var(--color-text-muted)", padding: 16, textAlign: "center" }}>Loading...</div>
+        ) : notes.length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--color-text-muted)", padding: 16, textAlign: "center" }}>No history notes</div>
+        ) : (
+          <div style={{ maxHeight: 300, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
+            {notes.map((note: any, i: number) => (
+              <div key={note.HistoryNoteID || i} style={{
+                padding: "8px 12px", borderRadius: 6, fontSize: 12,
+                background: "var(--color-surface)", border: "1px solid var(--color-border)",
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                  <span style={{ fontWeight: 500, color: "var(--color-text)" }}>{note.CreatedBy || "System"}</span>
+                  <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>{fmtDate(note.Date || note.CreateDate)}</span>
+                </div>
+                <div style={{ color: "var(--color-text-muted)", lineHeight: 1.5 }}>{note.Note || note.NoteText || "—"}</div>
+              </div>
+            ))}
           </div>
         )}
       </div>

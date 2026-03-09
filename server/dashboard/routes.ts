@@ -479,6 +479,141 @@ export function registerDashboardRoutes(app: Express) {
     }
   });
 
+  // ─── Portfolio summary (aggregated KPIs across all properties) ───
+  app.get("/api/rm/portfolio-summary", requireAdmin, async (_req, res) => {
+    try {
+      const { isRMConfigured, buildPortfolioSummary } = await import("./rentmanager");
+      if (!isRMConfigured()) return res.status(400).json({ error: "Rent Manager not configured." });
+      const summary = await buildPortfolioSummary();
+      res.json(summary);
+    } catch (err: any) {
+      console.error("RM portfolio summary error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── Charge types (human-readable names) ───
+  app.get("/api/rm/charge-types", requireAdmin, async (_req, res) => {
+    try {
+      const { isRMConfigured, fetchChargeTypes } = await import("./rentmanager");
+      if (!isRMConfigured()) return res.status(400).json({ error: "Rent Manager not configured." });
+      const types = await fetchChargeTypes();
+      res.json(types);
+    } catch (err: any) {
+      console.error("RM charge types error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ─── Cache invalidation ───
+  app.post("/api/rm/cache/invalidate", requireAdmin, async (_req, res) => {
+    try {
+      const { cacheInvalidate } = await import("./rmCache");
+      cacheInvalidate();
+      res.json({ ok: true, message: "All RM caches invalidated" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // WRITE OPERATIONS — post charges, payments, work orders, notes
+  // ═══════════════════════════════════════════════════════════
+
+  // Post a charge to a tenant
+  app.post("/api/rm/charges", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, rmPost } = await import("./rentmanager");
+      const { cacheInvalidate } = await import("./rmCache");
+      if (!isRMConfigured()) return res.status(400).json({ error: "Rent Manager not configured." });
+      const result = await rmPost("/Charges", req.body);
+      cacheInvalidate("rent-roll");
+      cacheInvalidate("portfolio-summary");
+      res.json(result);
+    } catch (err: any) {
+      console.error("RM post charge error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Log a payment
+  app.post("/api/rm/payments", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, rmPost } = await import("./rentmanager");
+      const { cacheInvalidate } = await import("./rmCache");
+      if (!isRMConfigured()) return res.status(400).json({ error: "Rent Manager not configured." });
+      const result = await rmPost("/Payments", req.body);
+      cacheInvalidate("rent-roll");
+      cacheInvalidate("portfolio-summary");
+      res.json(result);
+    } catch (err: any) {
+      console.error("RM post payment error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Create a work order
+  app.post("/api/rm/work-orders", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, rmPost } = await import("./rentmanager");
+      const { cacheInvalidate } = await import("./rmCache");
+      if (!isRMConfigured()) return res.status(400).json({ error: "Rent Manager not configured." });
+      const result = await rmPost("/ServiceManagerIssues", req.body);
+      cacheInvalidate("portfolio-summary");
+      res.json(result);
+    } catch (err: any) {
+      console.error("RM create work order error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Update a work order (close, change status, etc.)
+  app.put("/api/rm/work-orders/:id", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, rmPut } = await import("./rentmanager");
+      const { cacheInvalidate } = await import("./rmCache");
+      if (!isRMConfigured()) return res.status(400).json({ error: "Rent Manager not configured." });
+      const result = await rmPut(`/ServiceManagerIssues/${req.params.id}`, req.body);
+      cacheInvalidate("portfolio-summary");
+      res.json(result);
+    } catch (err: any) {
+      console.error("RM update work order error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Add a history note to a tenant
+  app.post("/api/rm/history-notes", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, rmPost } = await import("./rentmanager");
+      if (!isRMConfigured()) return res.status(400).json({ error: "Rent Manager not configured." });
+      const result = await rmPost("/HistoryNotes", req.body);
+      res.json(result);
+    } catch (err: any) {
+      console.error("RM history note error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get history notes for a tenant
+  app.get("/api/rm/history-notes", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, rmGet } = await import("./rentmanager");
+      if (!isRMConfigured()) return res.status(400).json({ error: "Rent Manager not configured." });
+      const tenantId = req.query.tenantId as string;
+      if (!tenantId) return res.status(400).json({ error: "tenantId required" });
+      const notes = await rmGet("/HistoryNotes", {
+        filters: `EntityType,eq,Tenant;EntityKeyID,eq,${tenantId}`,
+        orderby: "Date desc",
+        pagesize: "100",
+      });
+      res.json(notes);
+    } catch (err: any) {
+      console.error("RM history notes error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Maintenance / work orders from RM ServiceManagerIssues
   app.get("/api/rm/maintenance", requireAdmin, async (req, res) => {
     try {
