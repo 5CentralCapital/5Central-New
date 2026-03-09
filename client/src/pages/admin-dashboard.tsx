@@ -261,23 +261,16 @@ export default function AdminDashboard() {
       .catch(() => {});
   }, []);
 
-  // Fetch live occupancy from Rent Manager vacancy report and overlay on dashboard data
+  // Fetch live occupancy from Rent Manager and overlay on BOTH occupancy records AND properties array
   const loadRMOccupancy = useCallback(async () => {
     try {
       const res = await fetch("/api/rm/vacancies", { credentials: "include" });
       if (!res.ok) return;
       const report = await res.json();
-      // Transform into OccupancyRecord format per property
+      // Property mapping: RM ID -> display name
       const propNames: Record<string, string> = { "30": "MLK Apartments", "31": "Hickory Landing", "32": "Sun Cove Apartments", "33": "Lucia Apartments" };
       const propIds = ["30", "31", "32", "33"];
-      // Group vacant units by property
-      const vacByProp = new Map<number, any[]>();
-      for (const v of report.vacantUnits) {
-        if (!vacByProp.has(v.PropertyID)) vacByProp.set(v.PropertyID, []);
-        vacByProp.get(v.PropertyID)!.push(v);
-      }
-      // Build per-property occupancy from the all-properties report
-      // We need per-property unit counts. Fetch each property's rent-roll summary.
+      // Fetch each property's rent-roll summary for accurate per-property counts
       const perPropReqs = await Promise.all(
         propIds.map(async (pid) => {
           try {
@@ -287,20 +280,42 @@ export default function AdminDashboard() {
           } catch { return null; }
         })
       );
+      // Build per-property RM data keyed by display name
+      const rmByName = new Map<string, { units: number; occupied: number; vacant: number; occRate: number; monthlyRent: number }>();
       const rmOccupancy: OccupancyRecord[] = perPropReqs
         .filter((rr): rr is any => rr !== null)
-        .map((rr, i) => ({
-          id: `rm-occ-${propIds[i]}`,
-          property: propNames[propIds[i]] || `Property ${propIds[i]}`,
-          units: rr.summary.totalUnits,
-          occupied: rr.summary.occupiedUnits,
-          vacant: rr.summary.vacantUnits,
-          occupancyRate: Math.round(rr.summary.occupancyRate * 1000) / 10,
-          monthlyRent: rr.summary.totalMonthlyRent,
-          status: rr.summary.occupancyRate < 0.75 ? "critical" : rr.summary.occupancyRate < 0.9 ? "watch" : "stable",
-        }));
+        .map((rr, i) => {
+          const name = propNames[propIds[i]] || `Property ${propIds[i]}`;
+          const occPct = Math.round(rr.summary.occupancyRate * 1000) / 10;
+          rmByName.set(name, {
+            units: rr.summary.totalUnits,
+            occupied: rr.summary.occupiedUnits,
+            vacant: rr.summary.vacantUnits,
+            occRate: occPct,
+            monthlyRent: rr.summary.totalMonthlyRent,
+          });
+          return {
+            id: `rm-occ-${propIds[i]}`,
+            property: name,
+            units: rr.summary.totalUnits,
+            occupied: rr.summary.occupiedUnits,
+            vacant: rr.summary.vacantUnits,
+            occupancyRate: occPct,
+            monthlyRent: rr.summary.totalMonthlyRent,
+            status: rr.summary.occupancyRate < 0.75 ? "critical" : rr.summary.occupancyRate < 0.9 ? "watch" : "stable",
+          };
+        });
       if (rmOccupancy.length > 0) {
-        setData((prev) => prev ? { ...prev, occupancy: rmOccupancy } : prev);
+        setData((prev) => {
+          if (!prev) return prev;
+          // Overlay properties with live RM occupancy + unit counts
+          const updatedProperties = prev.properties.map((p) => {
+            const rm = rmByName.get(p.name);
+            if (!rm) return p;
+            return { ...p, units: rm.units, occupancyRate: rm.occRate, occupiedUnits: rm.occupied };
+          });
+          return { ...prev, occupancy: rmOccupancy, properties: updatedProperties };
+        });
       }
     } catch {
       // Silently fail — dashboard still uses local data

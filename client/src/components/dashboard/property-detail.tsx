@@ -53,9 +53,56 @@ export default function PropertyDetail({ propertyName, property: p, occupancy: o
   const [afterIdx, setAfterIdx] = useState(0);
   const [propertyId, setPropertyId] = useState<string | null>(null);
 
+  // Map property display names to RM IDs
+  const rmPropMap: Record<string, string> = {
+    "MLK Apartments": "30",
+    "Hickory Landing": "31",
+    "Sun Cove Apartments": "32",
+    "Lucia Apartments": "33",
+  };
+
   const loadRentRoll = useCallback(async () => {
     setLoadingUnits(true);
     try {
+      // Try RM first — live data
+      const rmId = rmPropMap[propertyName];
+      if (rmId) {
+        const res = await fetch(`/api/rm/rent-roll?propertyId=${rmId}`, { credentials: "include" });
+        if (res.ok) {
+          const rr = await res.json();
+          // Build a set of occupied unit IDs from tenants
+          const occupiedUnitIds = new Set<number>();
+          for (const t of rr.tenants || []) {
+            if (t.UnitID) occupiedUnitIds.add(t.UnitID);
+          }
+          // Create tenant lookup by UnitID
+          const tenantByUnit = new Map<number, any>();
+          for (const t of rr.tenants || []) {
+            if (t.UnitID) tenantByUnit.set(t.UnitID, t);
+          }
+          // Build RentRollUnit[] from all RM units
+          const rmUnits: RentRollUnit[] = (rr.units || []).map((u: any) => {
+            const tenant = tenantByUnit.get(u.UnitID);
+            return {
+              id: u.UnitID,
+              propertyId: rmId,
+              unitNumber: u.Name || `${u.UnitID}`,
+              tenantName: tenant ? tenant.Name : null,
+              monthlyRent: tenant ? tenant.MonthlyRent : null,
+              bedrooms: u.Bedrooms || null,
+              bathrooms: u.Bathrooms ? String(u.Bathrooms) : null,
+              sqft: null, // RM doesn't have sqft
+              status: tenant ? "occupied" : "vacant",
+              notes: null,
+            };
+          });
+          setUnits(rmUnits);
+          setPropertyId(rmId);
+          setLoadingUnits(false);
+          return;
+        }
+      }
+      // Fallback: local DB
       const propsRes = await fetch("/api/properties/current");
       if (!propsRes.ok) { setLoadingUnits(false); return; }
       const props = await propsRes.json();
@@ -70,7 +117,11 @@ export default function PropertyDetail({ propertyName, property: p, occupancy: o
 
   useEffect(() => { loadRentRoll(); }, [loadRentRoll]);
 
+  // RM data is read-only — inline editing is disabled when using live RM data
+  const isRMData = !!rmPropMap[propertyName];
+
   const saveUnit = useCallback(async (unitId: number, changes: Partial<RentRollUnit>) => {
+    if (isRMData) return; // RM data is read-only
     try {
       await fetch(`/api/lease-up/units/${unitId}`, {
         method: "PATCH",
@@ -80,7 +131,7 @@ export default function PropertyDetail({ propertyName, property: p, occupancy: o
       await loadRentRoll();
       setEditingUnit(null);
     } catch { /* silent */ }
-  }, [loadRentRoll]);
+  }, [loadRentRoll, isRMData]);
 
   const beforePhotos = details?.beforePhotos || [];
   const afterPhotos = details?.afterPhotos || [];
@@ -349,7 +400,7 @@ export default function PropertyDetail({ propertyName, property: p, occupancy: o
                       </td>
                     </tr>
                   ) : (
-                    <tr key={u.id} style={{ cursor: "pointer" }} onClick={() => { setEditingUnit(u.id); setUnitDraft({ tenantName: u.tenantName, monthlyRent: u.monthlyRent, status: u.status, notes: u.notes }); }}>
+                    <tr key={u.id} style={{ cursor: isRMData ? "default" : "pointer" }} onClick={() => { if (!isRMData) { setEditingUnit(u.id); setUnitDraft({ tenantName: u.tenantName, monthlyRent: u.monthlyRent, status: u.status, notes: u.notes }); } }}>
                       <td style={{ fontWeight: 500 }}>{u.unitNumber}</td>
                       <td>{u.tenantName || <span style={{ color: "var(--color-text-muted)" }}>—</span>}</td>
                       <td className="tabular-nums">{u.monthlyRent ? fmtDollars(Number(u.monthlyRent)) : "—"}</td>
@@ -363,7 +414,7 @@ export default function PropertyDetail({ propertyName, property: p, occupancy: o
                       <td style={{ fontSize: 11, color: u.notes?.includes("DELINQUENT") ? "var(--color-danger)" : "var(--color-text-muted)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {u.notes || "—"}
                       </td>
-                      <td style={{ fontSize: 9, color: "var(--color-text-muted)" }}>edit</td>
+                      <td style={{ fontSize: 9, color: "var(--color-text-muted)" }}>{isRMData ? "live" : "edit"}</td>
                     </tr>
                   ))}
               </tbody>

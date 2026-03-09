@@ -68,6 +68,14 @@ const inputStyle: React.CSSProperties = {
   background: "var(--color-surface, #fff)", fontSize: 13, color: "var(--color-text, #1A1A1A)",
 };
 
+// Local DB UUID -> RM property ID mapping for live rent overlay
+const localToRmId: Record<string, string> = {
+  "ea28fe29-c3e4-4ccd-a68d-a38dbd6b52fb": "30", // MLK
+  "48385b5c-791a-455d-a358-5f1947b448e3": "31", // Hickory
+  "ba502e16-e1ee-4925-baff-1b156ad37133": "32", // Sun Cove
+  "4d7c6538-2f0d-42e2-8c40-6ec57b438a4a": "33", // Lucia
+};
+
 // ═════════════════════════════════════════════════════════
 export default function PropertyPL() {
   const { properties, loading: propsLoading } = useProperties();
@@ -100,6 +108,50 @@ export default function PropertyPL() {
     })();
   }, []);
 
+  // Overlay RM live rent data on local monthly records
+  const overlayRMRent = useCallback(async (localData: PropertyMonthlyData[], propId: string): Promise<PropertyMonthlyData[]> => {
+    const rmId = localToRmId[propId];
+    if (!rmId || localData.length === 0) return localData;
+    try {
+      // Determine date range from the local data months
+      const months = localData.map(d => d.month).sort();
+      const fromDate = months[0] + "-01";
+      const lastMonth = months[months.length - 1];
+      // End of last month
+      const [y, m] = lastMonth.split("-").map(Number);
+      const endDate = new Date(y, m, 0); // last day of month
+      const toDate = endDate.toISOString().substring(0, 10);
+
+      const res = await fetch(`/api/rm/monthly-rent?propertyId=${rmId}&fromDate=${fromDate}&toDate=${toDate}`, { credentials: "include" });
+      if (!res.ok) return localData;
+      const rmMonths: { month: string; totalCharges: number; totalPayments: number }[] = await res.json();
+      if (rmMonths.length === 0) return localData;
+
+      // Build lookup by month
+      const rmByMonth = new Map<string, { charges: number; payments: number }>();
+      for (const rm of rmMonths) {
+        rmByMonth.set(rm.month, { charges: rm.totalCharges, payments: rm.totalPayments });
+      }
+
+      // Overlay: replace actualRentCollected with RM payment data where available
+      return localData.map(d => {
+        const rm = rmByMonth.get(d.month);
+        if (!rm || rm.payments === 0) return d;
+        const actualRent = rm.payments;
+        const opex = Number(d.operatingExpenses || 0);
+        const actualNOI = actualRent - opex;
+        return {
+          ...d,
+          actualRentCollected: String(actualRent),
+          actualNOI: String(actualNOI),
+          netCashflow: String(actualNOI - Number(d.debtServicePaid || 0)),
+        };
+      });
+    } catch {
+      return localData;
+    }
+  }, []);
+
   const load = useCallback(async () => {
     if (!selectedProp || selectedProp === "all") return;
     try {
@@ -107,7 +159,10 @@ export default function PropertyPL() {
       setError(null);
       const r = await fetch(`/api/monthly-data?propertyId=${selectedProp}`);
       if (!r.ok) throw new Error(`Monthly data fetch failed (${r.status})`);
-      setMonthlyData(await r.json());
+      const localData: PropertyMonthlyData[] = await r.json();
+      // Overlay RM live rent collected on local P&L data
+      const overlaid = await overlayRMRent(localData, selectedProp);
+      setMonthlyData(overlaid);
       // Also refresh portfolio-level allData so portfolio view stays current
       const rAll = await fetch("/api/monthly-data");
       if (!rAll.ok) throw new Error(`All data fetch failed (${rAll.status})`);
@@ -118,7 +173,7 @@ export default function PropertyPL() {
     } finally {
       setLoading(false);
     }
-  }, [selectedProp]);
+  }, [selectedProp, overlayRMRent]);
 
   useEffect(() => { load(); }, [load]);
 

@@ -479,6 +479,27 @@ export function registerDashboardRoutes(app: Express) {
     }
   });
 
+  // Monthly rent summary (charges + payments grouped by month) for P&L overlay
+  app.get("/api/rm/monthly-rent", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, buildMonthlyRentSummary } = await import("./rentmanager");
+      if (!isRMConfigured()) {
+        return res.status(400).json({ error: "Rent Manager not configured." });
+      }
+      const propertyId = req.query.propertyId as string;
+      const fromDate = req.query.fromDate as string;
+      const toDate = req.query.toDate as string;
+      if (!propertyId || !fromDate || !toDate) {
+        return res.status(400).json({ error: "propertyId, fromDate, toDate are required" });
+      }
+      const summary = await buildMonthlyRentSummary(propertyId, fromDate, toDate);
+      res.json(summary);
+    } catch (error: any) {
+      console.error("RM monthly rent error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Generic RM API passthrough for flexibility
   app.get("/api/rm/raw/:resource", requireAdmin, async (req, res) => {
     try {

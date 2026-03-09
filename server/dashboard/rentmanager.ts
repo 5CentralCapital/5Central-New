@@ -471,12 +471,7 @@ export interface VacancyReport {
   marketRentByBedroom: Record<number, number>;
 }
 
-const PROPERTY_NAMES: Record<number, string> = {
-  30: "MLK",
-  31: "Hickory",
-  32: "Sun Cove",
-  33: "Lucia",
-};
+import { PROPERTY_NAMES } from "./property-map";
 
 /**
  * Build a vacancy report across one or more properties.
@@ -629,4 +624,75 @@ export async function buildVacancyReport(
     },
     marketRentByBedroom,
   };
+}
+
+// ═══════════════════════════════════════════════════════════
+// MONTHLY RENT SUMMARY — charges grouped by month for P&L overlay
+// ═══════════════════════════════════════════════════════════
+
+export interface MonthlyRentSummary {
+  month: string;         // YYYY-MM format
+  totalCharges: number;  // Total charges posted (rent billed)
+  totalPayments: number; // Total payments received (rent collected)
+  chargeCount: number;
+  paymentCount: number;
+}
+
+/**
+ * Build a monthly rent summary for a property over a date range.
+ * Uses Charges (which have PropertyID) for billed rent and
+ * fetches payments via tenants for actual rent collected.
+ */
+export async function buildMonthlyRentSummary(
+  propertyId: string,
+  fromDate: string,
+  toDate: string
+): Promise<MonthlyRentSummary[]> {
+  // Fetch charges for this property in date range (billed rent)
+  const charges = await fetchRMCharges({ propertyId, fromDate, toDate });
+
+  // For payments: need to go through tenants since Payments don't have PropertyID
+  const tenants = await fetchRMTenants(propertyId, "Current");
+  const tenantIds = tenants.map((t: any) => t.TenantID);
+  const payments = tenantIds.length > 0
+    ? await fetchRMPayments({ tenantIds, fromDate, toDate })
+    : [];
+
+  // Group charges by month
+  const chargesByMonth = new Map<string, { total: number; count: number }>();
+  for (const c of charges) {
+    if (!c.TransactionDate) continue;
+    const month = c.TransactionDate.substring(0, 7); // YYYY-MM
+    const entry = chargesByMonth.get(month) || { total: 0, count: 0 };
+    entry.total += c.Amount || 0;
+    entry.count += 1;
+    chargesByMonth.set(month, entry);
+  }
+
+  // Group payments by month
+  const paymentsByMonth = new Map<string, { total: number; count: number }>();
+  for (const p of payments) {
+    if (!p.TransactionDate) continue;
+    const month = p.TransactionDate.substring(0, 7);
+    const entry = paymentsByMonth.get(month) || { total: 0, count: 0 };
+    entry.total += p.Amount || 0;
+    entry.count += 1;
+    paymentsByMonth.set(month, entry);
+  }
+
+  // Merge into sorted array
+  const allMonthsArr: string[] = [];
+  chargesByMonth.forEach((_, k) => allMonthsArr.push(k));
+  paymentsByMonth.forEach((_, k) => { if (!chargesByMonth.has(k)) allMonthsArr.push(k); });
+  const result: MonthlyRentSummary[] = allMonthsArr
+    .sort()
+    .map((month) => ({
+      month,
+      totalCharges: Math.round((chargesByMonth.get(month)?.total || 0) * 100) / 100,
+      totalPayments: Math.round((paymentsByMonth.get(month)?.total || 0) * 100) / 100,
+      chargeCount: chargesByMonth.get(month)?.count || 0,
+      paymentCount: paymentsByMonth.get(month)?.count || 0,
+    }));
+
+  return result;
 }
