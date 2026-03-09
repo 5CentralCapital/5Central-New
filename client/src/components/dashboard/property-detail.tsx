@@ -52,6 +52,7 @@ export default function PropertyDetail({ propertyName, property: p, occupancy: o
   const [beforeIdx, setBeforeIdx] = useState(0);
   const [afterIdx, setAfterIdx] = useState(0);
   const [propertyId, setPropertyId] = useState<string | null>(null);
+  const [unitView, setUnitView] = useState<"grid" | "table">("grid");
 
   // Map property display names to RM IDs
   const rmPropMap: Record<string, string> = {
@@ -337,11 +338,27 @@ export default function PropertyDetail({ propertyName, property: p, occupancy: o
       <div className="card" style={{ padding: 14 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
           <div className="label">Rent Roll — {units.length} Units</div>
-          {o && (
-            <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
-              {o.occupied} occupied · {o.vacant} vacant · {fmtCompact(o.monthlyRent)}/mo
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {o && (
+              <span style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+                {o.occupied} occupied · {o.vacant} vacant · {fmtCompact(o.monthlyRent)}/mo
+              </span>
+            )}
+            <div style={{ display: "flex", gap: 2, border: "1px solid var(--color-border)", borderRadius: 4, overflow: "hidden" }}>
+              <button onClick={() => setUnitView("grid")} style={{
+                fontSize: 9, padding: "3px 8px", border: "none", cursor: "pointer",
+                background: unitView === "grid" ? "var(--color-accent, #C4A574)" : "transparent",
+                color: unitView === "grid" ? "#fff" : "var(--color-text-muted)",
+                fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase",
+              }}>Grid</button>
+              <button onClick={() => setUnitView("table")} style={{
+                fontSize: 9, padding: "3px 8px", border: "none", cursor: "pointer",
+                background: unitView === "table" ? "var(--color-accent, #C4A574)" : "transparent",
+                color: unitView === "table" ? "#fff" : "var(--color-text-muted)",
+                fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase",
+              }}>Table</button>
             </div>
-          )}
+          </div>
         </div>
 
         {/* Rent Projection Cards (if details) */}
@@ -362,11 +379,73 @@ export default function PropertyDetail({ propertyName, property: p, occupancy: o
           </div>
         )}
 
+        {/* ═══ UNIT GRID VIEW ═══ */}
+        {unitView === "grid" && !loadingUnits && units.length > 0 && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))", gap: 8, marginBottom: 12 }}>
+            {units
+              .sort((a, b) => a.unitNumber.localeCompare(b.unitNumber, undefined, { numeric: true }))
+              .map(u => {
+                const isOccupied = u.status === "occupied";
+                const isReno = u.status === "renovation";
+                const bgColor = isOccupied ? "rgba(22,163,74,0.06)" : isReno ? "rgba(217,119,6,0.06)" : "rgba(239,68,68,0.06)";
+                const borderColor = isOccupied ? "rgba(22,163,74,0.2)" : isReno ? "rgba(217,119,6,0.2)" : "rgba(239,68,68,0.2)";
+                const dotColor = isOccupied ? "#16A34A" : isReno ? "#D97706" : "#DC2626";
+                return (
+                  <div key={u.id} style={{
+                    padding: "10px 10px 8px", borderRadius: 8, background: bgColor,
+                    border: `1px solid ${borderColor}`, position: "relative",
+                    transition: "transform 0.15s ease", cursor: "default",
+                  }}>
+                    {/* Status dot */}
+                    <div style={{ position: "absolute", top: 8, right: 8, width: 8, height: 8, borderRadius: "50%", background: dotColor }} />
+                    {/* Unit number */}
+                    <div style={{ fontSize: 14, fontWeight: 700, fontFamily: "'Cormorant Garamond', Georgia, serif", marginBottom: 2 }}>
+                      {u.unitNumber}
+                    </div>
+                    {/* Tenant name or status */}
+                    <div style={{ fontSize: 10, color: isOccupied ? "var(--color-text)" : "var(--color-text-muted)", marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {u.tenantName || (isReno ? "Renovation" : "Vacant")}
+                    </div>
+                    {/* Rent / bed-bath */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                      <span style={{ fontSize: 11, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>
+                        {u.monthlyRent ? fmtDollars(Number(u.monthlyRent)) : "—"}
+                      </span>
+                      {u.bedrooms && (
+                        <span style={{ fontSize: 9, color: "var(--color-text-muted)" }}>
+                          {u.bedrooms}bd/{u.bathrooms || "—"}ba
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        )}
+        {unitView === "grid" && !loadingUnits && units.length > 0 && (
+          <div style={{ display: "flex", gap: 16, justifyContent: "center", marginBottom: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#16A34A" }} />
+              <span style={{ fontSize: 9, color: "var(--color-text-muted)" }}>Occupied ({units.filter(u => u.status === "occupied").length})</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#DC2626" }} />
+              <span style={{ fontSize: 9, color: "var(--color-text-muted)" }}>Vacant ({units.filter(u => u.status === "vacant").length})</span>
+            </div>
+            {units.some(u => u.status === "renovation") && (
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#D97706" }} />
+                <span style={{ fontSize: 9, color: "var(--color-text-muted)" }}>Renovation ({units.filter(u => u.status === "renovation").length})</span>
+              </div>
+            )}
+          </div>
+        )}
+
         {loadingUnits ? (
           <div style={{ textAlign: "center", padding: 20, color: "var(--color-text-muted)", fontSize: 12 }}>Loading rent roll…</div>
         ) : units.length === 0 ? (
           <div style={{ textAlign: "center", padding: 20, color: "var(--color-text-muted)", fontSize: 12 }}>No unit data available</div>
-        ) : (
+        ) : unitView === "table" ? (
           <div style={{ overflowX: "auto" }}>
             <table>
               <thead>
@@ -430,7 +509,7 @@ export default function PropertyDetail({ propertyName, property: p, occupancy: o
               </tfoot>
             </table>
           </div>
-        )}
+        ) : null}
       </div>
 
       {/* ═══ RISK METRICS ═══ */}

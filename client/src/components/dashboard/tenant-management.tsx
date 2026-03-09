@@ -172,6 +172,10 @@ export default function TenantManagement() {
   const [loadingWO, setLoadingWO] = useState(false);
   const [chargeTypeMap, setChargeTypeMap] = useState<Record<number, string>>({});
   const [leaseData, setLeaseData] = useState<Record<number, { MoveOutDate: string | null }>>({});
+  const [showCreateWO, setShowCreateWO] = useState(false);
+  const [editingWO, setEditingWO] = useState<RMWorkOrder | null>(null);
+  const [woSubmitting, setWoSubmitting] = useState(false);
+  const [woMsg, setWoMsg] = useState<string | null>(null);
 
   const tabProperties = rmProperties.map(p => ({
     id: String(p.PropertyID),
@@ -242,6 +246,57 @@ export default function TenantManagement() {
   useEffect(() => {
     if (activeTab === "work-orders") loadWorkOrders();
   }, [activeTab, loadWorkOrders]);
+
+  /* ── Create Work Order ── */
+  const submitWorkOrder = useCallback(async (data: Record<string, string>) => {
+    setWoSubmitting(true);
+    setWoMsg(null);
+    try {
+      const body: any = {
+        PropertyID: Number(data.PropertyID),
+        Description: data.Description,
+        Category: data.Category || undefined,
+        Priority: data.Priority || "Normal",
+        Status: "Open",
+      };
+      if (data.UnitID) body.UnitID = Number(data.UnitID);
+      if (data.ReportedByName) body.ReportedByName = data.ReportedByName;
+      const r = await fetch("/api/rm/work-orders", {
+        method: "POST", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) throw new Error(`Failed (${r.status})`);
+      setWoMsg("Work order created");
+      setShowCreateWO(false);
+      await loadWorkOrders();
+    } catch (e: any) {
+      setWoMsg(e.message || "Failed to create work order");
+    } finally {
+      setWoSubmitting(false);
+    }
+  }, [loadWorkOrders]);
+
+  /* ── Update Work Order Status ── */
+  const updateWorkOrderStatus = useCallback(async (woId: number, newStatus: string) => {
+    setWoSubmitting(true);
+    setWoMsg(null);
+    try {
+      const r = await fetch(`/api/rm/work-orders/${woId}`, {
+        method: "PUT", credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ Status: newStatus }),
+      });
+      if (!r.ok) throw new Error(`Failed (${r.status})`);
+      setWoMsg(`Work order #${woId} updated to ${newStatus}`);
+      setEditingWO(null);
+      await loadWorkOrders();
+    } catch (e: any) {
+      setWoMsg(e.message || "Failed to update work order");
+    } finally {
+      setWoSubmitting(false);
+    }
+  }, [loadWorkOrders]);
 
   // Fetch charge types (cached on server, fetch once)
   useEffect(() => {
@@ -575,10 +630,65 @@ export default function TenantManagement() {
         <div className="card" style={{ padding: 12, overflowX: "auto" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, padding: "0 4px" }}>
             <div className="label" style={{ fontSize: 13 }}>Maintenance / Work Orders</div>
-            <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
-              {workOrders.length} work order{workOrders.length !== 1 ? "s" : ""}
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+                {workOrders.length} work order{workOrders.length !== 1 ? "s" : ""}
+              </span>
+              <button className="nav-btn active" style={{ fontSize: 10, padding: "4px 10px" }}
+                onClick={() => { setShowCreateWO(!showCreateWO); setEditingWO(null); setWoMsg(null); }}>
+                {showCreateWO ? "Cancel" : "+ New Work Order"}
+              </button>
             </div>
           </div>
+          {woMsg && (
+            <div style={{ fontSize: 11, padding: "6px 10px", marginBottom: 8, borderRadius: 4,
+              background: woMsg.includes("Failed") ? "rgba(220,38,38,0.08)" : "rgba(22,163,74,0.08)",
+              color: woMsg.includes("Failed") ? "#DC2626" : "#16A34A" }}>{woMsg}</div>
+          )}
+          {/* Create Work Order Form */}
+          {showCreateWO && (
+            <form style={{ padding: "12px 8px", marginBottom: 10, borderRadius: 6, background: "var(--color-surface-alt, #F5F4F1)", border: "1px solid var(--color-border)" }}
+              onSubmit={e => { e.preventDefault(); const fd = new FormData(e.currentTarget); submitWorkOrder(Object.fromEntries(fd) as Record<string, string>); }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-muted)", letterSpacing: "0.06em" }}>Property *</span>
+                  <select name="PropertyID" required style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid var(--color-border)", fontSize: 12, background: "var(--color-surface)" }}
+                    defaultValue={selectedPropId !== "all" ? selectedPropId : ""}>
+                    <option value="" disabled>Select property</option>
+                    {rmProperties.map(p => <option key={p.PropertyID} value={p.PropertyID}>{p.Name}</option>)}
+                  </select>
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-muted)", letterSpacing: "0.06em" }}>Priority</span>
+                  <select name="Priority" style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid var(--color-border)", fontSize: 12, background: "var(--color-surface)" }}>
+                    <option value="Normal">Normal</option>
+                    <option value="Low">Low</option>
+                    <option value="High">High</option>
+                    <option value="Emergency">Emergency</option>
+                  </select>
+                </label>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-muted)", letterSpacing: "0.06em" }}>Category</span>
+                  <input name="Category" style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid var(--color-border)", fontSize: 12, background: "var(--color-surface)" }} placeholder="e.g. Plumbing, Electrical, HVAC" />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-muted)", letterSpacing: "0.06em" }}>Reported By</span>
+                  <input name="ReportedByName" style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid var(--color-border)", fontSize: 12, background: "var(--color-surface)" }} placeholder="Tenant or staff name" />
+                </label>
+              </div>
+              <label style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 8 }}>
+                <span style={{ fontSize: 9, textTransform: "uppercase", color: "var(--color-text-muted)", letterSpacing: "0.06em" }}>Description *</span>
+                <textarea name="Description" required rows={2} style={{ padding: "6px 8px", borderRadius: 4, border: "1px solid var(--color-border)", fontSize: 12, background: "var(--color-surface)", resize: "vertical" }} placeholder="Describe the maintenance issue..." />
+              </label>
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button type="submit" className="nav-btn active" style={{ fontSize: 10, padding: "5px 14px" }} disabled={woSubmitting}>
+                  {woSubmitting ? "Creating..." : "Create Work Order"}
+                </button>
+              </div>
+            </form>
+          )}
           {loadingWO ? (
             <div style={{ textAlign: "center", padding: 30, color: "var(--color-text-muted)", fontSize: 13 }}>Loading work orders...</div>
           ) : (
@@ -592,14 +702,16 @@ export default function TenantManagement() {
                   <th>Status</th>
                   <th>Reported</th>
                   <th>Created</th>
+                  <th style={{ width: 60 }}>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {workOrders.length === 0 && (
-                  <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--color-text-muted)", padding: 24 }}>No work orders found</td></tr>
+                  <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--color-text-muted)", padding: 24 }}>No work orders found</td></tr>
                 )}
                 {workOrders.map(wo => (
-                  <tr key={wo.ServiceManagerIssueID}>
+                  <tr key={wo.ServiceManagerIssueID} style={{ cursor: "pointer" }}
+                    onClick={() => { setEditingWO(editingWO?.ServiceManagerIssueID === wo.ServiceManagerIssueID ? null : wo); setWoMsg(null); }}>
                     <td style={{ fontWeight: 500, fontSize: 11 }}>#{wo.ServiceManagerIssueID}</td>
                     <td>{wo.Category || "—"}</td>
                     <td style={{ maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -616,17 +728,32 @@ export default function TenantManagement() {
                       </span>
                     </td>
                     <td>
-                      <span style={{
-                        fontSize: 10, padding: "2px 8px", borderRadius: 4, textTransform: "uppercase",
-                        background: wo.Status === "Open" ? "var(--color-warning)15" : "var(--color-success)15",
-                        color: wo.Status === "Open" ? "var(--color-warning)" : "var(--color-success)",
-                        fontWeight: 600,
-                      }}>
-                        {wo.Status || "—"}
-                      </span>
+                      {editingWO?.ServiceManagerIssueID === wo.ServiceManagerIssueID ? (
+                        <select style={{ fontSize: 10, padding: "2px 4px", borderRadius: 4, border: "1px solid var(--color-border)" }}
+                          defaultValue={wo.Status || "Open"}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => { e.stopPropagation(); updateWorkOrderStatus(wo.ServiceManagerIssueID, e.target.value); }}>
+                          <option value="Open">Open</option>
+                          <option value="In Progress">In Progress</option>
+                          <option value="On Hold">On Hold</option>
+                          <option value="Closed">Closed</option>
+                        </select>
+                      ) : (
+                        <span style={{
+                          fontSize: 10, padding: "2px 8px", borderRadius: 4, textTransform: "uppercase",
+                          background: wo.Status === "Open" ? "rgba(217,119,6,0.1)" : wo.Status === "Closed" ? "rgba(22,163,74,0.1)" : "rgba(59,130,246,0.1)",
+                          color: wo.Status === "Open" ? "#D97706" : wo.Status === "Closed" ? "#16A34A" : "#3B82F6",
+                          fontWeight: 600,
+                        }}>
+                          {wo.Status || "—"}
+                        </span>
+                      )}
                     </td>
                     <td style={{ fontSize: 11 }}>{wo.ReportedByName || "—"}</td>
                     <td className="tabular-nums" style={{ fontSize: 11 }}>{fmtDate(wo.CreatedDate)}</td>
+                    <td style={{ fontSize: 9, color: "var(--color-text-muted)" }}>
+                      {editingWO?.ServiceManagerIssueID === wo.ServiceManagerIssueID ? "editing" : "click to edit"}
+                    </td>
                   </tr>
                 ))}
               </tbody>

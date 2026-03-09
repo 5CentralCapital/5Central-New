@@ -189,6 +189,7 @@ export default function PropertyPL() {
   const totalDebtService = sorted.reduce((s, d) => s + Number(d.debtServicePaid || 0), 0);
   const totalCashflow = sorted.reduce((s, d) => s + Number(d.netCashflow || 0), 0);
   const totalRehabSpend = sorted.reduce((s, d) => s + Number(d.rehabSpend || 0), 0);
+  const collectionRate = totalProformaRent > 0 ? (totalActualRent / totalProformaRent) * 100 : 0;
   const avgOccupancy = sorted.length > 0
     ? sorted.reduce((s, d) => {
         const total = (d.occupiedCount || 0) + (d.vacancyCount || 0);
@@ -259,6 +260,7 @@ export default function PropertyPL() {
         <KPI label="Operating Expenses" value={fmtCompact(totalOpex)} />
         <KPI label="Debt Service" value={fmtCompact(totalDebtService)} />
         <KPI label="Net Cashflow" value={fmtCompact(totalCashflow)} color={totalCashflow >= 0 ? "#16A34A" : "#DC2626"} />
+        <KPI label="Collections Rate" value={`${collectionRate.toFixed(1)}%`} sub={`${fmtCompact(totalActualRent)} of ${fmtCompact(totalProformaRent)}`} color={collectionRate >= 95 ? "#16A34A" : collectionRate >= 85 ? "#D97706" : "#DC2626"} />
         <KPI label="Avg Occupancy" value={`${avgOccupancy.toFixed(1)}%`} color={avgOccupancy >= 90 ? "#16A34A" : avgOccupancy >= 75 ? "#D97706" : "#DC2626"} />
         <KPI label="Rehab Spend" value={fmtCompact(totalRehabSpend)} color="var(--color-accent, #C4A574)" />
       </div>}
@@ -401,6 +403,7 @@ export default function PropertyPL() {
                 <th style={{ paddingLeft: 16, position: "sticky", left: 0, background: "var(--color-surface, #fff)", zIndex: 1 }}>Month</th>
                 <th style={{ textAlign: "right" }}>Rent</th>
                 <th style={{ textAlign: "right" }}>Pro Forma</th>
+                <th style={{ textAlign: "center" }}>Coll%</th>
                 <th style={{ textAlign: "right" }}>OpEx</th>
                 <th style={{ textAlign: "right" }}>NOI</th>
                 <th style={{ textAlign: "right" }}>Debt Svc</th>
@@ -412,10 +415,11 @@ export default function PropertyPL() {
             </thead>
             <tbody>
               {sorted.length === 0 ? (
-                <tr><td colSpan={10} style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>No monthly data for {propName}</td></tr>
+                <tr><td colSpan={11} style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)" }}>No monthly data for {propName}</td></tr>
               ) : sorted.map(d => {
                 const occ = (d.occupiedCount || 0) + (d.vacancyCount || 0);
                 const occPct = occ > 0 ? ((d.occupiedCount || 0) / occ * 100) : 0;
+                const monthCollRate = Number(d.proformaRent || 0) > 0 ? (Number(d.actualRentCollected || 0) / Number(d.proformaRent || 0)) * 100 : 0;
                 return (
                   <tr key={d.id}>
                     <td style={{
@@ -424,6 +428,7 @@ export default function PropertyPL() {
                     }}>{monthLabel(d.month)}</td>
                     <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmtMoney(Number(d.actualRentCollected || 0))}</td>
                     <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--color-text-muted)" }}>{fmtMoney(Number(d.proformaRent || 0))}</td>
+                    <td style={{ textAlign: "center", fontVariantNumeric: "tabular-nums", fontWeight: 600, fontSize: 11, color: monthCollRate >= 95 ? "#16A34A" : monthCollRate >= 85 ? "#D97706" : "#DC2626" }}>{monthCollRate > 0 ? `${monthCollRate.toFixed(0)}%` : "—"}</td>
                     <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "#DC2626" }}>{fmtMoney(Number(d.operatingExpenses || 0))}</td>
                     <td style={{
                       textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 600,
@@ -460,6 +465,7 @@ export default function PropertyPL() {
                   <td style={{ paddingLeft: 16, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--color-text-muted)", position: "sticky", left: 0, background: "var(--color-surface, #fff)" }}>Totals</td>
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmtMoney(totalActualRent)}</td>
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--color-text-muted)" }}>{fmtMoney(totalProformaRent)}</td>
+                  <td style={{ textAlign: "center", fontVariantNumeric: "tabular-nums", fontWeight: 700, fontSize: 11, color: collectionRate >= 95 ? "#16A34A" : collectionRate >= 85 ? "#D97706" : "#DC2626" }}>{collectionRate > 0 ? `${collectionRate.toFixed(0)}%` : "—"}</td>
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "#DC2626" }}>{fmtMoney(totalOpex)}</td>
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700, fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 14 }}>{fmtMoney(totalActualNOI)}</td>
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmtMoney(totalDebtService)}</td>
@@ -576,6 +582,7 @@ export default function PropertyPL() {
                 <th style={{ paddingLeft: 16 }}>Property</th>
                 <th style={{ textAlign: "right" }}>Actual Rent</th>
                 <th style={{ textAlign: "right" }}>Pro Forma</th>
+                <th style={{ textAlign: "center" }}>Coll%</th>
                 <th style={{ textAlign: "right" }}>OpEx</th>
                 <th style={{ textAlign: "right" }}>NOI</th>
                 <th style={{ textAlign: "right" }}>Debt Service</th>
@@ -592,6 +599,7 @@ export default function PropertyPL() {
                   </td>
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmtMoney(p.actualRent)}</td>
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--color-text-muted)" }}>{fmtMoney(p.proformaRent)}</td>
+                  <td style={{ textAlign: "center", fontVariantNumeric: "tabular-nums", fontWeight: 600, fontSize: 11, color: p.proformaRent > 0 ? ((p.actualRent / p.proformaRent) * 100 >= 95 ? "#16A34A" : (p.actualRent / p.proformaRent) * 100 >= 85 ? "#D97706" : "#DC2626") : "var(--color-text-muted)" }}>{p.proformaRent > 0 ? `${((p.actualRent / p.proformaRent) * 100).toFixed(0)}%` : "—"}</td>
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmtMoney(p.opex)}</td>
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 600, fontFamily: "'Cormorant Garamond', Georgia, serif" }}>{fmtMoney(p.actualNOI)}</td>
                   <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{fmtMoney(p.debtService)}</td>
@@ -614,6 +622,7 @@ export default function PropertyPL() {
                 </td>
                 <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{fmtMoney(portfolioTotals.actualRent)}</td>
                 <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", color: "var(--color-text-muted)", fontWeight: 700 }}>{fmtMoney(portfolioTotals.proformaRent)}</td>
+                <td style={{ textAlign: "center", fontVariantNumeric: "tabular-nums", fontWeight: 700, fontSize: 11, color: portfolioTotals.proformaRent > 0 ? ((portfolioTotals.actualRent / portfolioTotals.proformaRent) * 100 >= 95 ? "#16A34A" : (portfolioTotals.actualRent / portfolioTotals.proformaRent) * 100 >= 85 ? "#D97706" : "#DC2626") : "var(--color-text-muted)" }}>{portfolioTotals.proformaRent > 0 ? `${((portfolioTotals.actualRent / portfolioTotals.proformaRent) * 100).toFixed(0)}%` : "—"}</td>
                 <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{fmtMoney(portfolioTotals.opex)}</td>
                 <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700, fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: 15 }}>{fmtMoney(portfolioTotals.actualNOI)}</td>
                 <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>{fmtMoney(portfolioTotals.debtService)}</td>
