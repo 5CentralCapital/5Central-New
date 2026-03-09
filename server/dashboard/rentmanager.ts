@@ -672,9 +672,13 @@ export async function buildMonthlyRentSummary(
   // Fetch charges for this property in date range (billed rent)
   const charges = await fetchRMCharges({ propertyId, fromDate, toDate });
 
-  // For payments: need to go through tenants since Payments don't have PropertyID
-  const tenants = await fetchRMTenants(propertyId, "Current");
-  const tenantIds = tenants.map((t: any) => t.TenantID);
+  // For payments: need to go through tenants since Payments don't have PropertyID.
+  // Fetch both Current AND Past tenants so payments from moved-out tenants are included.
+  const [currentTenants, pastTenants] = await Promise.all([
+    fetchRMTenants(propertyId, "Current"),
+    fetchRMTenants(propertyId, "Past"),
+  ]);
+  const tenantIds = [...currentTenants, ...pastTenants].map((t: any) => t.TenantID);
   const payments = tenantIds.length > 0
     ? await fetchRMPayments({ tenantIds, fromDate, toDate })
     : [];
@@ -804,17 +808,26 @@ export async function buildPortfolioSummary(): Promise<PortfolioSummary> {
         : 0;
 
       // Count leases expiring within 30d / 60d
+      // Deduplicate: only count the most recent lease per tenant (highest LeaseID)
+      // to avoid false alarms when a tenant has renewed but old lease MoveOutDate is near
       const now = new Date();
       const in30d = new Date(now.getTime() + 30 * 86400000);
       const in60d = new Date(now.getTime() + 60 * 86400000);
+      const latestLeaseByTenant = new Map<number, any>();
+      for (const l of allLeases) {
+        const existing = latestLeaseByTenant.get(l.TenantID);
+        if (!existing || l.LeaseID > existing.LeaseID) {
+          latestLeaseByTenant.set(l.TenantID, l);
+        }
+      }
       let expiring30 = 0;
       let expiring60 = 0;
-      for (const l of allLeases) {
-        if (!l.MoveOutDate) continue;
+      latestLeaseByTenant.forEach((l) => {
+        if (!l.MoveOutDate) return;
         const moveOut = new Date(l.MoveOutDate);
         if (moveOut >= now && moveOut <= in30d) expiring30++;
         else if (moveOut > in30d && moveOut <= in60d) expiring60++;
-      }
+      });
 
       // Aggregate
       let totalUnits = 0, occupiedUnits = 0, totalMonthlyRent = 0, delinquentBalance = 0, delinquentCount = 0;
