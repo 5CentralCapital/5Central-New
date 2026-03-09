@@ -261,12 +261,59 @@ export default function AdminDashboard() {
       .catch(() => {});
   }, []);
 
+  // Fetch live occupancy from Rent Manager vacancy report and overlay on dashboard data
+  const loadRMOccupancy = useCallback(async () => {
+    try {
+      const res = await fetch("/api/rm/vacancies", { credentials: "include" });
+      if (!res.ok) return;
+      const report = await res.json();
+      // Transform into OccupancyRecord format per property
+      const propNames: Record<string, string> = { "30": "MLK Apartments", "31": "Hickory Landing", "32": "Sun Cove Apartments", "33": "Lucia Apartments" };
+      const propIds = ["30", "31", "32", "33"];
+      // Group vacant units by property
+      const vacByProp = new Map<number, any[]>();
+      for (const v of report.vacantUnits) {
+        if (!vacByProp.has(v.PropertyID)) vacByProp.set(v.PropertyID, []);
+        vacByProp.get(v.PropertyID)!.push(v);
+      }
+      // Build per-property occupancy from the all-properties report
+      // We need per-property unit counts. Fetch each property's rent-roll summary.
+      const perPropReqs = await Promise.all(
+        propIds.map(async (pid) => {
+          try {
+            const rr = await fetch(`/api/rm/rent-roll?propertyId=${pid}`, { credentials: "include" });
+            if (!rr.ok) return null;
+            return await rr.json();
+          } catch { return null; }
+        })
+      );
+      const rmOccupancy: OccupancyRecord[] = perPropReqs
+        .filter((rr): rr is any => rr !== null)
+        .map((rr, i) => ({
+          id: `rm-occ-${propIds[i]}`,
+          property: propNames[propIds[i]] || `Property ${propIds[i]}`,
+          units: rr.summary.totalUnits,
+          occupied: rr.summary.occupiedUnits,
+          vacant: rr.summary.vacantUnits,
+          occupancyRate: Math.round(rr.summary.occupancyRate * 1000) / 10,
+          monthlyRent: rr.summary.totalMonthlyRent,
+          status: rr.summary.occupancyRate < 0.75 ? "critical" : rr.summary.occupancyRate < 0.9 ? "watch" : "stable",
+        }));
+      if (rmOccupancy.length > 0) {
+        setData((prev) => prev ? { ...prev, occupancy: rmOccupancy } : prev);
+      }
+    } catch {
+      // Silently fail — dashboard still uses local data
+    }
+  }, []);
+
   useEffect(() => {
     load();
     loadLoans();
-    const interval = setInterval(() => { load(); loadLoans(); }, 120_000);
+    loadRMOccupancy();
+    const interval = setInterval(() => { load(); loadLoans(); loadRMOccupancy(); }, 120_000);
     return () => clearInterval(interval);
-  }, [load, loadLoans]);
+  }, [load, loadLoans, loadRMOccupancy]);
 
   // Close dropdown when clicking outside
   useEffect(() => {

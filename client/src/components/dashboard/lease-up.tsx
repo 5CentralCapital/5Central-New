@@ -1,316 +1,446 @@
 import { useCallback, useEffect, useState } from "react";
-import { PropertySubTabs, useProperties } from "./shared/property-subtabs";
 
-interface UnitRentRoll {
-  id: string; propertyId: string; unitNumber: string; bedrooms?: number;
-  bathrooms?: string; sqft?: number; tenantName?: string; leaseStart?: string;
-  leaseEnd?: string; monthlyRent?: string; marketRent?: string; securityDeposit?: string;
-  status: string; moveInDate?: string; moveOutDate?: string; notes?: string;
-}
-interface VacancyPipeline {
-  id: string; unitId: string; propertyId: string; unitNumber: string;
-  vacancyStartDate: string; daysVacant?: number; turnStatus: string;
-  targetReadyDate?: string; targetLeaseDate?: string; askingRent?: string;
-  marketComps?: string; showingsCount?: number; applicationsCount?: number;
-  urgency?: string; notes?: string;
-}
-interface TurnChecklistItem {
-  id: string; vacancyId: string; step: string; sortOrder: number;
-  isComplete?: boolean; completedAt?: string; completedBy?: string; dueDate?: string; notes?: string;
+// ── Types matching backend VacancyReport ──
+interface VacantUnit {
+  UnitID: number;
+  UnitName: string;
+  PropertyID: number;
+  PropertyName: string;
+  Bedrooms: number | null;
+  Bathrooms: number | null;
+  LastMoveOutDate: string | null;
+  DaysVacant: number;
+  EstimatedMonthlyRent: number;
+  LostRentTotal: number;
 }
 
-function fmtMoney(v: number) { return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 }); }
+interface VacancyReport {
+  vacantUnits: VacantUnit[];
+  summary: {
+    totalUnits: number;
+    occupiedUnits: number;
+    vacantUnits: number;
+    occupancyRate: number;
+    totalLostRent: number;
+    avgDaysVacant: number;
+  };
+  marketRentByBedroom: Record<number, number>;
+}
 
-const TURN_STAGES = [
-  "not_started", "rehab_in_progress", "punch_clean", "photos_pending",
-  "listing_live", "showing_scheduled", "application_received", "approved",
-  "lease_sent", "lease_signed", "move_in_scheduled", "complete"
-];
-const TURN_LABELS: Record<string, string> = {
-  not_started: "Not Started", rehab_in_progress: "Rehab", punch_clean: "Punch & Clean",
-  photos_pending: "Photos", listing_live: "Listed", showing_scheduled: "Showings",
-  application_received: "Application", approved: "Approved", lease_sent: "Lease Sent",
-  lease_signed: "Signed", move_in_scheduled: "Move-In", complete: "Complete"
-};
-const DEFAULT_CHECKLIST = [
-  "move_out_inspection", "scope_approved", "rehab_complete", "punch_clean",
-  "photos_complete", "listing_live", "showings_scheduled", "application_screening",
-  "lease_sent", "lease_signed", "move_in_scheduled"
+interface RentRollTenant {
+  TenantID: number;
+  Name: string;
+  PropertyID: number;
+  UnitID: number | null;
+  UnitName: string;
+  MoveInDate: string | null;
+  MoveOutDate: string | null;
+  MonthlyRent: number;
+  Balance: number;
+  Bedrooms: number | null;
+  Bathrooms: number | null;
+  Status: string;
+}
+
+interface RentRollResult {
+  property: { PropertyID: string };
+  units: any[];
+  tenants: RentRollTenant[];
+  summary: {
+    totalUnits: number;
+    occupiedUnits: number;
+    vacantUnits: number;
+    occupancyRate: number;
+    totalMonthlyRent: number;
+    totalBalance: number;
+  };
+}
+
+function fmtMoney(v: number) {
+  return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
+const ACTIVE_PROPERTIES = [
+  { id: "30", name: "MLK" },
+  { id: "31", name: "Hickory" },
+  { id: "32", name: "Sun Cove" },
+  { id: "33", name: "Lucia" },
 ];
 
 export default function LeaseUpControl() {
-  const { properties } = useProperties();
-  const [selectedProp, setSelectedProp] = useState<string>("");
-  const [units, setUnits] = useState<UnitRentRoll[]>([]);
-  const [vacancies, setVacancies] = useState<VacancyPipeline[]>([]);
-  const [checklist, setChecklist] = useState<Record<string, TurnChecklistItem[]>>({});
-  const [view, setView] = useState<"kanban" | "rentroll" | "vacancies">("kanban");
-  const [expandedVacancy, setExpandedVacancy] = useState<string | null>(null);
-  const [showAddUnit, setShowAddUnit] = useState(false);
+  const [selectedProp, setSelectedProp] = useState<string>("all");
+  const [view, setView] = useState<"vacancies" | "rentroll">("vacancies");
+  const [vacancyReport, setVacancyReport] = useState<VacancyReport | null>(null);
+  const [rentRoll, setRentRoll] = useState<RentRollResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (properties.length > 0 && !selectedProp) setSelectedProp(properties[0].id);
-  }, [properties, selectedProp]);
-
-  const load = useCallback(async () => {
-    if (!selectedProp) return;
+  // ── Load vacancy report (All or per-property) ──
+  const loadVacancies = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [rUnits, rVacancies] = await Promise.all([
-        fetch(`/api/lease-up/${selectedProp}/units`, { credentials: "include" }),
-        fetch(`/api/lease-up/vacancies?propertyId=${selectedProp}`, { credentials: "include" }),
-      ]);
-      if (!rUnits.ok) throw new Error(`Failed to load units (${rUnits.status})`);
-      if (!rVacancies.ok) throw new Error(`Failed to load vacancies (${rVacancies.status})`);
-      const u = await rUnits.json();
-      const v = await rVacancies.json();
-      setUnits(u);
-      setVacancies(v);
+      const url = selectedProp === "all"
+        ? "/api/rm/vacancies"
+        : `/api/rm/vacancies?propertyId=${selectedProp}`;
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error(`Failed to load vacancies (${res.status})`);
+      const data: VacancyReport = await res.json();
+      setVacancyReport(data);
     } catch (err: any) {
-      setError(err.message || "Failed to load lease-up data");
+      setError(err.message || "Failed to load vacancy data");
     } finally {
       setLoading(false);
     }
   }, [selectedProp]);
 
-  useEffect(() => { load(); }, [load]);
-
-  const loadChecklist = async (vacancyId: string) => {
-    try {
-      const r = await fetch(`/api/lease-up/vacancies/${vacancyId}/checklist`, { credentials: "include" });
-      if (!r.ok) throw new Error(`Failed to load checklist (${r.status})`);
-      const cl = await r.json();
-      setChecklist(prev => ({ ...prev, [vacancyId]: cl }));
-    } catch (err: any) {
-      setError(err.message || "Failed to load checklist");
+  // ── Load rent roll for a specific property ──
+  const loadRentRoll = useCallback(async () => {
+    if (selectedProp === "all") {
+      setRentRoll(null);
+      return;
     }
-  };
-
-  // Computed
-  const occupied = units.filter(u => u.status === "occupied").length;
-  const vacant = units.filter(u => u.status !== "occupied").length;
-  const occRate = units.length > 0 ? (occupied / units.length) * 100 : 0;
-  const totalRent = units.filter(u => u.status === "occupied").reduce((s, u) => s + Number(u.monthlyRent || 0), 0);
-  const totalMarket = units.reduce((s, u) => s + Number(u.marketRent || 0), 0);
-  const rentUpside = totalMarket - totalRent;
-  const urgentVacancies = vacancies.filter(v => v.urgency === "red").length;
-  const yellowVacancies = vacancies.filter(v => v.urgency === "yellow").length;
-
-  const updateVacancy = async (id: string, changes: Partial<VacancyPipeline>) => {
+    setLoading(true);
+    setError(null);
     try {
-      const r = await fetch(`/api/lease-up/vacancies/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(changes) });
-      if (!r.ok) throw new Error(`Failed to update vacancy (${r.status})`);
-      load();
+      const res = await fetch(`/api/rm/rent-roll?propertyId=${selectedProp}`, { credentials: "include" });
+      if (!res.ok) throw new Error(`Failed to load rent roll (${res.status})`);
+      const data: RentRollResult = await res.json();
+      setRentRoll(data);
     } catch (err: any) {
-      setError(err.message || "Failed to update vacancy");
+      setError(err.message || "Failed to load rent roll");
+    } finally {
+      setLoading(false);
     }
-  };
+  }, [selectedProp]);
 
-  const urgencyColor = (u?: string) => u === "red" ? "var(--color-danger)" : u === "yellow" ? "var(--color-warning)" : "var(--color-success)";
-  const statusColor = (s: string) => {
-    const m: Record<string, string> = { occupied: "var(--color-success)", vacant: "var(--color-danger)", notice: "var(--color-warning)", eviction: "var(--color-danger)", renovation: "var(--color-accent)" };
-    return m[s] || "var(--color-text-muted)";
-  };
+  useEffect(() => {
+    if (view === "vacancies") loadVacancies();
+    else loadRentRoll();
+  }, [view, loadVacancies, loadRentRoll]);
+
+  // ── Computed values ──
+  const summary = vacancyReport?.summary;
+  const vacantUnits = vacancyReport?.vacantUnits || [];
+  const marketRents = vacancyReport?.marketRentByBedroom || {};
+
+  // For rent roll view, compute from rent roll data
+  const rrTenants = rentRoll?.tenants || [];
+  const rrSummary = rentRoll?.summary;
+
+  const urgencyColor = (days: number) =>
+    days >= 30 ? "var(--color-danger)" : days >= 14 ? "var(--color-warning)" : "var(--color-success)";
+  const urgencyLabel = (days: number) =>
+    days >= 30 ? "CRITICAL" : days >= 14 ? "WATCH" : "OK";
 
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* Property selector */}
-      <PropertySubTabs properties={properties} selected={selectedProp} onSelect={setSelectedProp} />
+      {/* Property filter pills */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <button
+          className={`nav-btn ${selectedProp === "all" ? "active" : ""}`}
+          onClick={() => setSelectedProp("all")}
+          style={{ fontSize: 11 }}
+        >
+          All Properties
+        </button>
+        {ACTIVE_PROPERTIES.map((p) => (
+          <button
+            key={p.id}
+            className={`nav-btn ${selectedProp === p.id ? "active" : ""}`}
+            onClick={() => setSelectedProp(p.id)}
+            style={{ fontSize: 11 }}
+          >
+            {p.name}
+          </button>
+        ))}
+      </div>
 
       {/* Error banner */}
       {error && (
         <div className="card" style={{ padding: 10, borderColor: "rgba(239,68,68,0.4)", background: "rgba(239,68,68,0.06)" }}>
           <div style={{ fontSize: 12, color: "var(--color-danger)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>{error}</span>
-            <button onClick={() => setError(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-danger)", fontSize: 14, padding: "0 4px" }}>x</button>
+            <button onClick={() => setError(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-danger)", fontSize: 14, padding: "0 4px" }}>×</button>
           </div>
         </div>
       )}
 
-      {/* Loading indicator */}
+      {/* Loading */}
       {loading && (
-        <div style={{ textAlign: "center", padding: 24, color: "var(--color-text-muted)", fontSize: 13 }}>Loading lease-up data...</div>
-      )}
-
-      {/* KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8 }}>
-        <KPI label="Occupancy" value={`${occRate.toFixed(0)}%`} sub={`${occupied}/${units.length} units`} color={occRate < 75 ? "var(--color-danger)" : occRate < 90 ? "var(--color-warning)" : "var(--color-success)"} />
-        <KPI label="Vacant" value={String(vacant)} color={vacant > 0 ? "var(--color-warning)" : "var(--color-success)"} />
-        <KPI label="Monthly Rent" value={fmtMoney(totalRent)} />
-        <KPI label="Market Rent" value={fmtMoney(totalMarket)} />
-        <KPI label="Rent Upside" value={fmtMoney(rentUpside)} color="var(--color-accent)" />
-        <KPI label="Active Turns" value={String(vacancies.filter(v => v.turnStatus !== "complete").length)} />
-        {urgentVacancies > 0 && <KPI label="Urgent (>14d)" value={String(urgentVacancies)} color="var(--color-danger)" />}
-        {yellowVacancies > 0 && <KPI label="Watch (>7d)" value={String(yellowVacancies)} color="var(--color-warning)" />}
-      </div>
-
-      {/* Alerts */}
-      {vacancies.some(v => v.urgency === "red") && (
-        <div className="card" style={{ padding: 10, borderColor: "rgba(239,68,68,0.25)" }}>
-          <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--color-danger)", marginBottom: 4, fontWeight: 600 }}>Vacancy Alerts</div>
-          {vacancies.filter(v => v.urgency === "red").map(v => (
-            <div key={v.id} style={{ fontSize: 12, color: "var(--color-text)", marginBottom: 2 }}>
-              <span style={{ color: "var(--color-danger)", fontWeight: 600, marginRight: 6 }}>RED</span>
-              Unit {v.unitNumber} — {v.daysVacant} days vacant — {TURN_LABELS[v.turnStatus]}
-            </div>
-          ))}
+        <div style={{ textAlign: "center", padding: 24, color: "var(--color-text-muted)", fontSize: 13 }}>
+          Loading live data from Rent Manager...
         </div>
       )}
 
-      {/* Sub-nav */}
+      {/* View tabs */}
       <div style={{ display: "flex", gap: 6 }}>
-        {(["kanban", "rentroll", "vacancies"] as const).map(v => (
-          <button key={v} className={`nav-btn ${view === v ? "active" : ""}`} onClick={() => setView(v)} style={{ fontSize: 11 }}>
-            {v === "kanban" ? "Turn Kanban" : v === "rentroll" ? "Rent Roll" : "Vacancy Pipeline"}
+        <button
+          className={`nav-btn ${view === "vacancies" ? "active" : ""}`}
+          onClick={() => setView("vacancies")}
+          style={{ fontSize: 11 }}
+        >
+          Vacancy Report
+        </button>
+        {selectedProp !== "all" && (
+          <button
+            className={`nav-btn ${view === "rentroll" ? "active" : ""}`}
+            onClick={() => setView("rentroll")}
+            style={{ fontSize: 11 }}
+          >
+            Rent Roll
           </button>
-        ))}
+        )}
       </div>
 
-      {/* KANBAN VIEW */}
-      {view === "kanban" && (
-        <div style={{ overflowX: "auto" }}>
-          <div style={{ display: "flex", gap: 8, minWidth: "max-content" }}>
-            {TURN_STAGES.filter(s => s !== "complete").map(stage => {
-              const stageVacancies = vacancies.filter(v => v.turnStatus === stage);
-              return (
-                <div key={stage} style={{ minWidth: 180, flex: "0 0 180px" }}>
-                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--color-text-muted)", marginBottom: 6, padding: "0 4px", display: "flex", justifyContent: "space-between" }}>
-                    <span>{TURN_LABELS[stage]}</span>
-                    <span style={{ fontWeight: 600 }}>{stageVacancies.length}</span>
+      {/* ═══════ VACANCY VIEW ═══════ */}
+      {view === "vacancies" && !loading && vacancyReport && (
+        <>
+          {/* KPI cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8 }}>
+            <KPI
+              label="Portfolio Occupancy"
+              value={`${((summary?.occupancyRate || 0) * 100).toFixed(0)}%`}
+              sub={`${summary?.occupiedUnits || 0}/${summary?.totalUnits || 0} units`}
+              color={(summary?.occupancyRate || 0) < 0.75 ? "var(--color-danger)" : (summary?.occupancyRate || 0) < 0.9 ? "var(--color-warning)" : "var(--color-success)"}
+            />
+            <KPI
+              label="Vacant Units"
+              value={String(summary?.vacantUnits || 0)}
+              color={(summary?.vacantUnits || 0) > 0 ? "var(--color-warning)" : "var(--color-success)"}
+            />
+            <KPI
+              label="Avg Days Vacant"
+              value={`${summary?.avgDaysVacant || 0}d`}
+              color={(summary?.avgDaysVacant || 0) >= 30 ? "var(--color-danger)" : (summary?.avgDaysVacant || 0) >= 14 ? "var(--color-warning)" : "var(--color-success)"}
+            />
+            <KPI
+              label="Total Lost Rent"
+              value={fmtMoney(summary?.totalLostRent || 0)}
+              color="var(--color-danger)"
+            />
+          </div>
+
+          {/* Market rent reference */}
+          {Object.keys(marketRents).length > 0 && (
+            <div className="card" style={{ padding: 10 }}>
+              <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--color-text-muted)", marginBottom: 6 }}>
+                Estimated Market Rent (avg of occupied units)
+              </div>
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                {Object.entries(marketRents).sort(([a], [b]) => Number(a) - Number(b)).map(([beds, rent]) => (
+                  <div key={beds} style={{ fontSize: 12 }}>
+                    <span style={{ color: "var(--color-text-muted)" }}>{beds}BR:</span>{" "}
+                    <span style={{ fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(rent)}/mo</span>
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {stageVacancies.map(v => (
-                      <div key={v.id} className="card interactive" style={{ padding: 10, borderColor: `${urgencyColor(v.urgency)}33`, cursor: "pointer" }} onClick={() => { setExpandedVacancy(expandedVacancy === v.id ? null : v.id); if (!checklist[v.id]) loadChecklist(v.id); }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                          <span style={{ fontSize: 13, fontWeight: 600 }}>{v.unitNumber}</span>
-                          <span style={{ fontSize: 10, color: urgencyColor(v.urgency), fontWeight: 600 }}>{v.daysVacant}d</span>
-                        </div>
-                        {v.askingRent && <div style={{ fontSize: 11, color: "var(--color-text-muted)" }}>Asking: {fmtMoney(Number(v.askingRent))}</div>}
-                        <div style={{ fontSize: 10, color: "var(--color-text-muted)", display: "flex", gap: 8 }}>
-                          {(v.showingsCount ?? 0) > 0 && <span>{v.showingsCount} showings</span>}
-                          {(v.applicationsCount ?? 0) > 0 && <span>{v.applicationsCount} apps</span>}
-                        </div>
-                        {/* Advance button */}
-                        {TURN_STAGES.indexOf(stage) < TURN_STAGES.length - 1 && (
-                          <button className="nav-btn" style={{ fontSize: 9, marginTop: 6, width: "100%", padding: "2px 0" }} onClick={(e) => { e.stopPropagation(); updateVacancy(v.id, { turnStatus: TURN_STAGES[TURN_STAGES.indexOf(stage) + 1] }); }}>
-                            Advance →
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                    {stageVacancies.length === 0 && (
-                      <div style={{ padding: 12, textAlign: "center", fontSize: 10, color: "var(--color-text-muted)", border: "1px dashed var(--color-border)", borderRadius: 6 }}>Empty</div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Expanded vacancy checklist */}
-      {expandedVacancy && checklist[expandedVacancy] && (
-        <div className="card" style={{ padding: 14 }}>
-          <div className="label" style={{ marginBottom: 8 }}>Turn Checklist — Unit {vacancies.find(v => v.id === expandedVacancy)?.unitNumber}</div>
-          {[...checklist[expandedVacancy]].sort((a, b) => a.sortOrder - b.sortOrder).map(item => (
-            <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: "1px solid var(--color-border)" }}>
-              <button onClick={async () => { try { const r = await fetch(`/api/lease-up/checklist/${item.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify({ isComplete: !item.isComplete }) }); if (!r.ok) throw new Error(`Failed to update checklist (${r.status})`); loadChecklist(expandedVacancy!); } catch (err: any) { setError(err.message || "Failed to update checklist item"); } }} style={{
-                width: 18, height: 18, borderRadius: 4, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "white", flexShrink: 0,
-                border: `1px solid ${item.isComplete ? "var(--color-success)" : "var(--color-border)"}`,
-                background: item.isComplete ? "var(--color-success)" : "transparent",
-              }}>
-                {item.isComplete ? "✓" : ""}
-              </button>
-              <span style={{ flex: 1, fontSize: 12, textTransform: "capitalize", textDecoration: item.isComplete ? "line-through" : "none", opacity: item.isComplete ? 0.5 : 1 }}>
-                {item.step.replace(/_/g, " ")}
-              </span>
-              {item.completedAt && <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>{new Date(item.completedAt).toLocaleDateString()}</span>}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* RENT ROLL VIEW */}
-      {view === "rentroll" && (
-        <div className="card" style={{ padding: 14 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
-            <div className="label">Rent Roll — {properties.find(p => p.id === selectedProp)?.name}</div>
-            <button className="nav-btn" style={{ fontSize: 10 }} onClick={() => setShowAddUnit(!showAddUnit)}>+ Add Unit</button>
-          </div>
-          {showAddUnit && <AddUnitForm propertyId={selectedProp} onSave={async (u) => { try { const r = await fetch("/api/lease-up/units", { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "include", body: JSON.stringify(u) }); if (!r.ok) throw new Error(`Failed to add unit (${r.status})`); setShowAddUnit(false); load(); } catch (err: any) { setError(err.message || "Failed to add unit"); } }} onCancel={() => setShowAddUnit(false)} />}
-          <div style={{ overflowX: "auto" }}>
-            <table>
-              <thead>
-                <tr><th>Unit</th><th>Bed/Bath</th><th>SqFt</th><th>Tenant</th><th>Status</th><th>Rent</th><th>Market</th><th>Lease Start</th><th>Lease End</th><th>Upside</th></tr>
-              </thead>
-              <tbody>
-                {[...units].sort((a, b) => a.unitNumber.localeCompare(b.unitNumber)).map(u => {
-                  const upside = Number(u.marketRent || 0) - Number(u.monthlyRent || 0);
-                  const leaseEnd = u.leaseEnd ? new Date(u.leaseEnd) : null;
-                  const expiringsSoon = leaseEnd && ((leaseEnd.getTime() - Date.now()) / 86400000) < 60;
-                  return (
-                    <tr key={u.id}>
-                      <td style={{ fontWeight: 600 }}>{u.unitNumber}</td>
-                      <td className="tabular-nums" style={{ fontSize: 11 }}>{u.bedrooms || "—"}/{u.bathrooms || "—"}</td>
-                      <td className="tabular-nums" style={{ fontSize: 11 }}>{u.sqft || "—"}</td>
-                      <td>{u.tenantName || <span style={{ color: "var(--color-text-muted)" }}>Vacant</span>}</td>
-                      <td><span style={{ fontSize: 10, textTransform: "uppercase", padding: "2px 6px", borderRadius: 4, background: `${statusColor(u.status)}15`, color: statusColor(u.status), border: `1px solid ${statusColor(u.status)}33` }}>{u.status}</span></td>
-                      <td className="tabular-nums">{u.monthlyRent ? fmtMoney(Number(u.monthlyRent)) : "—"}</td>
-                      <td className="tabular-nums" style={{ color: "var(--color-text-muted)" }}>{u.marketRent ? fmtMoney(Number(u.marketRent)) : "—"}</td>
-                      <td style={{ fontSize: 11 }}>{u.leaseStart || "—"}</td>
-                      <td style={{ fontSize: 11, color: expiringsSoon ? "var(--color-danger)" : "inherit", fontWeight: expiringsSoon ? 600 : 400 }}>{u.leaseEnd || "—"}{expiringsSoon && " !"}</td>
-                      <td className="tabular-nums" style={{ color: upside > 0 ? "var(--color-success)" : "var(--color-text-muted)" }}>{upside > 0 ? `+${fmtMoney(upside)}` : "—"}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr style={{ fontWeight: 600, borderTop: "2px solid var(--color-border)" }}>
-                  <td colSpan={5}>TOTAL ({units.length} units)</td>
-                  <td className="tabular-nums">{fmtMoney(totalRent)}</td>
-                  <td className="tabular-nums">{fmtMoney(totalMarket)}</td>
-                  <td colSpan={2} />
-                  <td className="tabular-nums" style={{ color: "var(--color-success)" }}>+{fmtMoney(rentUpside)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* VACANCIES VIEW */}
-      {view === "vacancies" && (
-        <div className="card" style={{ padding: 14 }}>
-          <div className="label" style={{ marginBottom: 10 }}>Vacancy Pipeline</div>
-          <div style={{ overflowX: "auto" }}>
-            <table>
-              <thead>
-                <tr><th>Unit</th><th>Days Vacant</th><th>Urgency</th><th>Turn Status</th><th>Target Ready</th><th>Target Lease</th><th>Asking</th><th>Showings</th><th>Apps</th></tr>
-              </thead>
-              <tbody>
-                {[...vacancies].sort((a, b) => (b.daysVacant || 0) - (a.daysVacant || 0)).map(v => (
-                  <tr key={v.id}>
-                    <td style={{ fontWeight: 600 }}>{v.unitNumber}</td>
-                    <td className="tabular-nums" style={{ fontWeight: 600, fontSize: 16, color: urgencyColor(v.urgency) }}>{v.daysVacant}d</td>
-                    <td><span style={{ fontSize: 10, textTransform: "uppercase", padding: "2px 6px", borderRadius: 4, color: urgencyColor(v.urgency), background: `${urgencyColor(v.urgency)}12`, border: `1px solid ${urgencyColor(v.urgency)}33` }}>{v.urgency}</span></td>
-                    <td>
-                      <select className="select-inline" value={v.turnStatus} onChange={e => updateVacancy(v.id, { turnStatus: e.target.value })}>
-                        {TURN_STAGES.map(s => <option key={s} value={s}>{TURN_LABELS[s]}</option>)}
-                      </select>
-                    </td>
-                    <td className="tabular-nums" style={{ fontSize: 11 }}>{v.targetReadyDate || "—"}</td>
-                    <td className="tabular-nums" style={{ fontSize: 11 }}>{v.targetLeaseDate || "—"}</td>
-                    <td className="tabular-nums">{v.askingRent ? fmtMoney(Number(v.askingRent)) : "—"}</td>
-                    <td className="tabular-nums">{v.showingsCount || 0}</td>
-                    <td className="tabular-nums">{v.applicationsCount || 0}</td>
-                  </tr>
                 ))}
-              </tbody>
-            </table>
+              </div>
+            </div>
+          )}
+
+          {/* Vacancy alerts */}
+          {vacantUnits.some((v) => v.DaysVacant >= 30) && (
+            <div className="card" style={{ padding: 10, borderColor: "rgba(239,68,68,0.25)" }}>
+              <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--color-danger)", marginBottom: 4, fontWeight: 600 }}>
+                Critical Vacancies (30+ days)
+              </div>
+              {vacantUnits.filter((v) => v.DaysVacant >= 30).map((v) => (
+                <div key={v.UnitID} style={{ fontSize: 12, color: "var(--color-text)", marginBottom: 2 }}>
+                  <span style={{ color: "var(--color-danger)", fontWeight: 600, marginRight: 6 }}>
+                    {v.DaysVacant}d
+                  </span>
+                  {v.PropertyName} — {v.UnitName} ({v.Bedrooms || "?"}BR/{v.Bathrooms || "?"}BA)
+                  <span style={{ color: "var(--color-text-muted)", marginLeft: 8 }}>
+                    ~{fmtMoney(v.LostRentTotal)} lost
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Vacant units table */}
+          {vacantUnits.length > 0 ? (
+            <div className="card" style={{ padding: 14 }}>
+              <div className="label" style={{ marginBottom: 10 }}>
+                Vacant Units{selectedProp === "all" ? " — All Properties" : ` — ${ACTIVE_PROPERTIES.find((p) => p.id === selectedProp)?.name}`}
+              </div>
+              <div style={{ overflowX: "auto" }}>
+                <table>
+                  <thead>
+                    <tr>
+                      {selectedProp === "all" && <th>Property</th>}
+                      <th>Unit</th>
+                      <th>Type</th>
+                      <th>Days Vacant</th>
+                      <th>Urgency</th>
+                      <th>Last Move-Out</th>
+                      <th>Est. Rent</th>
+                      <th>Lost Rent</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {vacantUnits.map((v) => (
+                      <tr key={v.UnitID}>
+                        {selectedProp === "all" && (
+                          <td style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{v.PropertyName}</td>
+                        )}
+                        <td style={{ fontWeight: 600 }}>{v.UnitName}</td>
+                        <td style={{ fontSize: 11 }}>
+                          {v.Bedrooms ?? "?"}BR / {v.Bathrooms ?? "?"}BA
+                        </td>
+                        <td className="tabular-nums" style={{ fontWeight: 600, fontSize: 14, color: urgencyColor(v.DaysVacant) }}>
+                          {v.DaysVacant}d
+                        </td>
+                        <td>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              textTransform: "uppercase",
+                              padding: "2px 6px",
+                              borderRadius: 4,
+                              color: urgencyColor(v.DaysVacant),
+                              background: `${urgencyColor(v.DaysVacant)}12`,
+                              border: `1px solid ${urgencyColor(v.DaysVacant)}33`,
+                              fontWeight: 600,
+                            }}
+                          >
+                            {urgencyLabel(v.DaysVacant)}
+                          </span>
+                        </td>
+                        <td style={{ fontSize: 11 }}>
+                          {v.LastMoveOutDate
+                            ? new Date(v.LastMoveOutDate).toLocaleDateString()
+                            : "—"}
+                        </td>
+                        <td className="tabular-nums">{fmtMoney(v.EstimatedMonthlyRent)}/mo</td>
+                        <td className="tabular-nums" style={{ color: "var(--color-danger)", fontWeight: 600 }}>
+                          {fmtMoney(v.LostRentTotal)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ fontWeight: 600, borderTop: "2px solid var(--color-border)" }}>
+                      <td colSpan={selectedProp === "all" ? 6 : 5}>
+                        TOTAL ({vacantUnits.length} vacant units)
+                      </td>
+                      <td className="tabular-nums">
+                        {fmtMoney(vacantUnits.reduce((s, v) => s + v.EstimatedMonthlyRent, 0))}/mo
+                      </td>
+                      <td className="tabular-nums" style={{ color: "var(--color-danger)" }}>
+                        {fmtMoney(summary?.totalLostRent || 0)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          ) : (
+            !loading && (
+              <div className="card" style={{ padding: 24, textAlign: "center" }}>
+                <div style={{ fontSize: 24, marginBottom: 8 }}>🎉</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "var(--color-success)" }}>
+                  No Vacancies!
+                </div>
+                <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 4 }}>
+                  All units are currently occupied.
+                </div>
+              </div>
+            )
+          )}
+        </>
+      )}
+
+      {/* ═══════ RENT ROLL VIEW (per-property only) ═══════ */}
+      {view === "rentroll" && selectedProp !== "all" && !loading && rentRoll && (
+        <>
+          {/* KPI cards */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8 }}>
+            <KPI
+              label="Occupancy"
+              value={`${((rrSummary?.occupancyRate || 0) * 100).toFixed(0)}%`}
+              sub={`${rrSummary?.occupiedUnits || 0}/${rrSummary?.totalUnits || 0} units`}
+              color={(rrSummary?.occupancyRate || 0) < 0.75 ? "var(--color-danger)" : (rrSummary?.occupancyRate || 0) < 0.9 ? "var(--color-warning)" : "var(--color-success)"}
+            />
+            <KPI label="Monthly Rent" value={fmtMoney(rrSummary?.totalMonthlyRent || 0)} />
+            <KPI label="Vacant" value={String(rrSummary?.vacantUnits || 0)} color={(rrSummary?.vacantUnits || 0) > 0 ? "var(--color-warning)" : "var(--color-success)"} />
+            <KPI label="Total Balance" value={fmtMoney(rrSummary?.totalBalance || 0)} color={(rrSummary?.totalBalance || 0) > 0 ? "var(--color-danger)" : "var(--color-success)"} />
+          </div>
+
+          {/* Rent roll table */}
+          <div className="card" style={{ padding: 14 }}>
+            <div className="label" style={{ marginBottom: 10 }}>
+              Rent Roll — {ACTIVE_PROPERTIES.find((p) => p.id === selectedProp)?.name}
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Unit</th>
+                    <th>Type</th>
+                    <th>Tenant</th>
+                    <th>Move-In</th>
+                    <th>Lease End</th>
+                    <th>Rent</th>
+                    <th>Balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rrTenants.map((t) => {
+                    const leaseEnd = t.MoveOutDate ? new Date(t.MoveOutDate) : null;
+                    const expiringSoon = leaseEnd && (leaseEnd.getTime() - Date.now()) / 86400000 < 60;
+                    return (
+                      <tr key={t.TenantID}>
+                        <td style={{ fontWeight: 600 }}>{t.UnitName}</td>
+                        <td style={{ fontSize: 11 }}>{t.Bedrooms ?? "?"}BR/{t.Bathrooms ?? "?"}BA</td>
+                        <td>{t.Name}</td>
+                        <td style={{ fontSize: 11 }}>
+                          {t.MoveInDate ? new Date(t.MoveInDate).toLocaleDateString() : "—"}
+                        </td>
+                        <td
+                          style={{
+                            fontSize: 11,
+                            color: expiringSoon ? "var(--color-danger)" : "inherit",
+                            fontWeight: expiringSoon ? 600 : 400,
+                          }}
+                        >
+                          {t.MoveOutDate ? new Date(t.MoveOutDate).toLocaleDateString() : "MTM"}
+                          {expiringSoon && " ⚠"}
+                        </td>
+                        <td className="tabular-nums">{fmtMoney(t.MonthlyRent)}</td>
+                        <td
+                          className="tabular-nums"
+                          style={{
+                            color: t.Balance > 0 ? "var(--color-danger)" : "var(--color-success)",
+                            fontWeight: t.Balance !== 0 ? 600 : 400,
+                          }}
+                        >
+                          {t.Balance !== 0 ? fmtMoney(t.Balance) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr style={{ fontWeight: 600, borderTop: "2px solid var(--color-border)" }}>
+                    <td colSpan={5}>TOTAL ({rrTenants.length} tenants)</td>
+                    <td className="tabular-nums">{fmtMoney(rrSummary?.totalMonthlyRent || 0)}</td>
+                    <td className="tabular-nums" style={{ color: (rrSummary?.totalBalance || 0) > 0 ? "var(--color-danger)" : "var(--color-success)" }}>
+                      {(rrSummary?.totalBalance || 0) !== 0 ? fmtMoney(rrSummary?.totalBalance || 0) : "—"}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* When "All Properties" is selected and they switch to rent roll */}
+      {view === "rentroll" && selectedProp === "all" && !loading && (
+        <div className="card" style={{ padding: 24, textAlign: "center" }}>
+          <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+            Select a specific property to view its rent roll.
           </div>
         </div>
       )}
@@ -321,42 +451,21 @@ export default function LeaseUpControl() {
 function KPI({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
   return (
     <article className="card interactive" style={{ padding: "10px 12px" }}>
-      <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--color-text-muted)", marginBottom: 2 }}>{label}</div>
-      <div style={{ fontSize: "1.2rem", fontWeight: 600, fontVariantNumeric: "tabular-nums", color: color || "var(--color-text)", fontFamily: "var(--font-display)" }}>{value}</div>
+      <div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--color-text-muted)", marginBottom: 2 }}>
+        {label}
+      </div>
+      <div
+        style={{
+          fontSize: "1.2rem",
+          fontWeight: 600,
+          fontVariantNumeric: "tabular-nums",
+          color: color || "var(--color-text)",
+          fontFamily: "var(--font-display)",
+        }}
+      >
+        {value}
+      </div>
       {sub && <div style={{ fontSize: 9, color: "var(--color-text-muted)", marginTop: 1 }}>{sub}</div>}
     </article>
-  );
-}
-
-function AddUnitForm({ propertyId, onSave, onCancel }: { propertyId: string; onSave: (u: any) => void; onCancel: () => void }) {
-  const [form, setForm] = useState({ propertyId, unitNumber: "", bedrooms: "2", bathrooms: "1", sqft: "", monthlyRent: "", marketRent: "", status: "vacant" });
-  return (
-    <div style={{ padding: 12, marginBottom: 10, borderRadius: 8, border: "1px solid var(--color-border)", background: "var(--color-surface-alt)" }}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, fontSize: 12 }}>
-        <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>Unit Number</span>
-          <input className="inline-edit" value={form.unitNumber} onChange={e => setForm({ ...form, unitNumber: e.target.value })} placeholder="e.g. 101, A1" />
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>Bed/Bath</span>
-          <div style={{ display: "flex", gap: 4 }}>
-            <input className="inline-edit" type="number" value={form.bedrooms} onChange={e => setForm({ ...form, bedrooms: e.target.value })} style={{ width: 50 }} />
-            <input className="inline-edit" type="number" step="0.5" value={form.bathrooms} onChange={e => setForm({ ...form, bathrooms: e.target.value })} style={{ width: 50 }} />
-          </div>
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>Monthly Rent</span>
-          <input className="inline-edit" type="number" value={form.monthlyRent} onChange={e => setForm({ ...form, monthlyRent: e.target.value })} />
-        </label>
-        <label style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <span style={{ fontSize: 10, color: "var(--color-text-muted)" }}>Market Rent</span>
-          <input className="inline-edit" type="number" value={form.marketRent} onChange={e => setForm({ ...form, marketRent: e.target.value })} />
-        </label>
-      </div>
-      <div style={{ display: "flex", gap: 6, marginTop: 8, justifyContent: "flex-end" }}>
-        <button className="nav-btn" style={{ fontSize: 10 }} onClick={onCancel}>Cancel</button>
-        <button className="nav-btn active" style={{ fontSize: 10 }} onClick={() => onSave(form)}>Add Unit</button>
-      </div>
-    </div>
   );
 }

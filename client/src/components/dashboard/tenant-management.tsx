@@ -1,177 +1,354 @@
 import { useCallback, useEffect, useState } from "react";
-import { PropertySubTabs, useProperties, type Property } from "./shared/property-subtabs";
+import { PropertySubTabs } from "./shared/property-subtabs";
 
-/* ── Types ── */
-interface Tenant {
-  id: string;
-  propertyId: string;
-  unitNumber: string;
-  bedrooms?: number;
-  bathrooms?: string;
-  sqft?: number;
-  tenantName?: string;
-  leaseStart?: string;
-  leaseEnd?: string;
-  monthlyRent?: string;
-  marketRent?: string;
-  securityDeposit?: string;
-  status: string;
-  moveInDate?: string;
-  moveOutDate?: string;
-  notes?: string;
+/* ── Types matching the EnrichedTenant shape from server/dashboard/rentmanager.ts ── */
+interface RMProperty {
+  PropertyID: number;
+  Name: string;
+  ShortName?: string;
+  AddressLine1?: string;
+  City?: string;
+  State?: string;
+  PostalCode?: string;
+  IsActive?: boolean;
+}
+
+interface EnrichedTenant {
+  TenantID: number;
+  FirstName: string;
+  LastName: string;
+  Name: string;
+  PropertyID: number;
+  Status: string;
+  UnitID: number | null;
+  UnitName: string;
+  MoveInDate: string | null;
+  MoveOutDate: string | null;
+  MonthlyRent: number;
+  Balance: number;
+  Bedrooms: number | null;
+  Bathrooms: number | null;
+}
+
+interface RMCharge {
+  ChargeID: number;
+  AccountID: number;
+  AccountType: string;
+  Amount: number;
+  TransactionDate?: string;
+  TransactionType?: string;
+  Comment?: string;
+  ChargeTypeID?: number;
+  PropertyID?: number;
+  UnitID?: number;
+  Reference?: string;
+}
+
+interface RMRecurringCharge {
+  RecurringChargeID: number;
+  EntityKeyID: number;
+  TenantID: number;
+  UnitID?: number;
+  Amount: number;
+  ChargeTypeID?: number;
+  Comment?: string;
+  Frequency?: number;
+  FromDate?: string;
+}
+
+interface RMWorkOrder {
+  ServiceManagerIssueID: number;
+  PropertyID: number;
+  UnitID?: number;
+  TenantID?: number;
+  Category?: string;
+  Priority?: string;
+  Status?: string;
+  Description?: string;
+  ReportedByName?: string;
+  CreatedDate?: string;
+  ClosedDate?: string;
+}
+
+interface RentRollData {
+  property: any;
+  units: any[];
+  tenants: EnrichedTenant[];
+  summary: {
+    totalUnits: number;
+    occupiedUnits: number;
+    vacantUnits: number;
+    occupancyRate: number;
+    totalMonthlyRent: number;
+    totalBalance: number;
+  };
 }
 
 function fmtMoney(v: number) {
-  return "$" + v.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  return "$" + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+}
+
+function fmtDate(d?: string | null) {
+  if (!d) return "—";
+  try {
+    return new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  } catch {
+    return d;
+  }
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  occupied: "var(--color-success)",
-  vacant: "var(--color-danger)",
-  notice: "var(--color-warning)",
-  eviction: "#e74c3c",
-  renovation: "var(--color-accent)",
+  Current: "var(--color-success)",
+  Past: "var(--color-text-muted)",
+  Future: "var(--color-accent)",
+  Applicant: "var(--color-warning)",
+  Eviction: "#e74c3c",
 };
 
-const STATUS_OPTIONS = ["occupied", "vacant", "notice", "eviction", "renovation"];
+const PRIORITY_COLORS: Record<string, string> = {
+  Emergency: "#e74c3c",
+  High: "#e67e22",
+  Normal: "var(--color-accent)",
+  Low: "var(--color-text-muted)",
+};
+
+/* ── Hook to fetch RM properties ── */
+let cachedRMProperties: RMProperty[] | null = null;
+
+function useRMProperties() {
+  const [properties, setProperties] = useState<RMProperty[]>(cachedRMProperties || []);
+  const [loading, setLoading] = useState(!cachedRMProperties);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (cachedRMProperties) {
+      setProperties(cachedRMProperties);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/rm/properties", { credentials: "include" });
+        if (!r.ok) {
+          const data = await r.json().catch(() => ({}));
+          throw new Error(data.error || `Failed to load properties (${r.status})`);
+        }
+        const data = await r.json();
+        if (Array.isArray(data) && !cancelled) {
+          // Only show the 4 active 5Central Capital properties
+          const ACTIVE_PROPERTY_IDS = new Set([30, 31, 32, 33]);
+          const active = data.filter((p: RMProperty) => ACTIVE_PROPERTY_IDS.has(p.PropertyID));
+          cachedRMProperties = active;
+          setProperties(active);
+        }
+      } catch (err: any) {
+        if (!cancelled) setError(err.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  return { properties, loading, error };
+}
 
 /* ═══════════════════════════════════════════════════════════════ */
-/*  TENANT MANAGEMENT                                             */
+/*  TENANT MANAGEMENT — POWERED BY RENT MANAGER                   */
 /* ═══════════════════════════════════════════════════════════════ */
 export default function TenantManagement() {
-  const { properties, loading: propsLoading } = useProperties();
-  const [selectedProp, setSelectedProp] = useState<string>("all");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [tenants, setTenants] = useState<Tenant[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { properties: rmProperties, loading: propsLoading, error: propsError } = useRMProperties();
+  const [selectedPropId, setSelectedPropId] = useState<string>("all");
+  const [rentRollData, setRentRollData] = useState<RentRollData | null>(null);
+  const [allTenants, setAllTenants] = useState<EnrichedTenant[]>([]);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [sortField, setSortField] = useState<string>("unitNumber");
+  const [selectedTenant, setSelectedTenant] = useState<EnrichedTenant | null>(null);
+  const [sortField, setSortField] = useState<string>("Unit");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [activeTab, setActiveTab] = useState<"tenants" | "work-orders">("tenants");
+  const [workOrders, setWorkOrders] = useState<RMWorkOrder[]>([]);
+  const [loadingWO, setLoadingWO] = useState(false);
 
-  /* ── Fetch tenants across all properties ── */
-  const loadTenants = useCallback(async () => {
-    if (properties.length === 0) return;
+  const tabProperties = rmProperties.map(p => ({
+    id: String(p.PropertyID),
+    name: p.Name || p.ShortName || `Property ${p.PropertyID}`,
+  }));
+
+  /* ── Fetch rent roll for selected property ── */
+  const loadRentRoll = useCallback(async () => {
+    if (rmProperties.length === 0) return;
     setLoading(true);
     setError(null);
     try {
-      const propsToFetch = selectedProp === "all" ? properties : properties.filter(p => p.id === selectedProp);
-      const results = await Promise.all(
-        propsToFetch.map(p => fetch(`/api/lease-up/${p.id}/units`, { credentials: "include" }).then(r => r.ok ? r.json() : []))
-      );
-      setTenants(results.flat());
+      if (selectedPropId === "all") {
+        const results = await Promise.all(
+          rmProperties.map(p =>
+            fetch(`/api/rm/rent-roll?propertyId=${p.PropertyID}`, { credentials: "include" })
+              .then(r => r.ok ? r.json() : { tenants: [], units: [], summary: {} })
+          )
+        );
+        const combinedTenants = results.flatMap((r: RentRollData) => r.tenants || []);
+        setAllTenants(combinedTenants);
+        const combined: RentRollData = {
+          property: null,
+          units: results.flatMap((r: RentRollData) => r.units || []),
+          tenants: combinedTenants,
+          summary: {
+            totalUnits: results.reduce((s, r) => s + (r.summary?.totalUnits || 0), 0),
+            occupiedUnits: results.reduce((s, r) => s + (r.summary?.occupiedUnits || 0), 0),
+            vacantUnits: results.reduce((s, r) => s + (r.summary?.vacantUnits || 0), 0),
+            occupancyRate: 0,
+            totalMonthlyRent: results.reduce((s, r) => s + (r.summary?.totalMonthlyRent || 0), 0),
+            totalBalance: results.reduce((s, r) => s + (r.summary?.totalBalance || 0), 0),
+          },
+        };
+        if (combined.summary.totalUnits > 0) {
+          combined.summary.occupancyRate = combined.summary.occupiedUnits / combined.summary.totalUnits;
+        }
+        setRentRollData(combined);
+      } else {
+        const r = await fetch(`/api/rm/rent-roll?propertyId=${selectedPropId}`, { credentials: "include" });
+        if (!r.ok) throw new Error("Failed to load rent roll");
+        const data: RentRollData = await r.json();
+        setRentRollData(data);
+        setAllTenants(data.tenants || []);
+      }
     } catch (err: any) {
-      setError(err.message || "Failed to load tenants");
+      setError(err.message || "Failed to load rent roll");
     } finally {
       setLoading(false);
     }
-  }, [properties, selectedProp]);
+  }, [rmProperties, selectedPropId]);
 
-  useEffect(() => { loadTenants(); }, [loadTenants]);
+  useEffect(() => { loadRentRoll(); }, [loadRentRoll]);
+
+  /* ── Fetch work orders ── */
+  const loadWorkOrders = useCallback(async () => {
+    if (rmProperties.length === 0) return;
+    setLoadingWO(true);
+    try {
+      const propParam = selectedPropId !== "all" ? `?propertyId=${selectedPropId}` : "";
+      const r = await fetch(`/api/rm/work-orders${propParam}`, { credentials: "include" });
+      if (r.ok) setWorkOrders(await r.json());
+    } catch { /* ignore */ } finally {
+      setLoadingWO(false);
+    }
+  }, [rmProperties, selectedPropId]);
+
+  useEffect(() => {
+    if (activeTab === "work-orders") loadWorkOrders();
+  }, [activeTab, loadWorkOrders]);
 
   /* ── Sorting ── */
   const handleSort = (field: string) => {
-    if (sortField === field) {
-      setSortDir(d => d === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortDir("asc");
-    }
+    if (sortField === field) setSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setSortField(field); setSortDir("asc"); }
+  };
+  const sortIcon = (field: string) => sortField !== field ? "" : sortDir === "asc" ? " ↑" : " ↓";
+
+  const extractUnitNum = (name: string) => {
+    const m = (name || "").match(/\d+/);
+    return m ? parseInt(m[0], 10) : 99999;
   };
 
-  /* ── Filter + sort tenants ── */
-  const filtered = tenants
-    .filter(t => statusFilter === "all" || t.status === statusFilter)
-    .sort((a, b) => {
-      let av: any = (a as any)[sortField] ?? "";
-      let bv: any = (b as any)[sortField] ?? "";
-      if (sortField === "monthlyRent" || sortField === "marketRent") {
-        av = parseFloat(av) || 0;
-        bv = parseFloat(bv) || 0;
-      }
-      if (typeof av === "string") av = av.toLowerCase();
-      if (typeof bv === "string") bv = bv.toLowerCase();
-      if (av < bv) return sortDir === "asc" ? -1 : 1;
-      if (av > bv) return sortDir === "asc" ? 1 : -1;
-      return 0;
-    });
+  const sortedTenants = [...allTenants].sort((a, b) => {
+    // When viewing all properties, always group by property first
+    if (selectedPropId === "all" && sortField === "Unit") {
+      if (a.PropertyID !== b.PropertyID) return a.PropertyID - b.PropertyID;
+    }
 
-  /* ── Summary stats ── */
-  const totalUnits = tenants.length;
-  const occupied = tenants.filter(t => t.status === "occupied").length;
-  const vacant = tenants.filter(t => t.status === "vacant").length;
-  const avgRent = occupied > 0
-    ? tenants.filter(t => t.status === "occupied" && t.monthlyRent)
-        .reduce((s, t) => s + (parseFloat(t.monthlyRent!) || 0), 0) / occupied
-    : 0;
+    let av: any, bv: any;
+    switch (sortField) {
+      case "Unit": av = extractUnitNum(a.UnitName); bv = extractUnitNum(b.UnitName); break;
+      case "Name": av = a.Name; bv = b.Name; break;
+      case "Rent": av = a.MonthlyRent; bv = b.MonthlyRent; break;
+      case "Balance": av = a.Balance || 0; bv = b.Balance || 0; break;
+      case "Status": av = a.Status; bv = b.Status; break;
+      default: av = ""; bv = "";
+    }
+    if (typeof av === "string") { av = av.toLowerCase(); bv = (bv as string).toLowerCase(); }
+    if (av < bv) return sortDir === "asc" ? -1 : 1;
+    if (av > bv) return sortDir === "asc" ? 1 : -1;
+    return 0;
+  });
 
-  /* ── Property name lookup ── */
-  const propName = (id: string) => properties.find(p => p.id === id)?.name || "—";
+  const summary = rentRollData?.summary || { totalUnits: 0, occupiedUnits: 0, vacantUnits: 0, occupancyRate: 0, totalMonthlyRent: 0, totalBalance: 0 };
+  const propName = (id: number) => rmProperties.find(p => p.PropertyID === id)?.Name || `Property ${id}`;
 
-  /* ── If a tenant is selected, show detail view ── */
+  /* ── Not configured ── */
+  if (propsError) {
+    return (
+      <section className="tenant-mgmt" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div className="card" style={{ padding: 24, textAlign: "center" }}>
+          <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8, color: "var(--color-danger)" }}>Rent Manager Not Connected</div>
+          <div style={{ fontSize: 13, color: "var(--color-text-muted)", lineHeight: 1.6 }}>
+            {propsError}
+            <br /><br />
+            Add your Rent Manager credentials to the <code>.env</code> file:
+            <br />
+            <code style={{ fontSize: 11, background: "var(--color-surface)", padding: "4px 8px", borderRadius: 4, display: "inline-block", marginTop: 6 }}>
+              RM_USERNAME=your_username<br />
+              RM_PASSWORD=your_password
+            </code>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  /* ── Tenant detail view ── */
   if (selectedTenant) {
     return (
       <TenantDetail
         tenant={selectedTenant}
-        propertyName={propName(selectedTenant.propertyId)}
-        onBack={() => { setSelectedTenant(null); loadTenants(); }}
-        onUpdate={(updated) => setSelectedTenant(updated)}
+        propertyName={propName(selectedTenant.PropertyID)}
+        onBack={() => { setSelectedTenant(null); loadRentRoll(); }}
       />
     );
   }
-
-  /* ── Sort indicator ── */
-  const sortIcon = (field: string) => {
-    if (sortField !== field) return "";
-    return sortDir === "asc" ? " ↑" : " ↓";
-  };
 
   return (
     <section className="tenant-mgmt" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {/* Property pills */}
       <div className="card" style={{ padding: "12px 16px" }}>
         <PropertySubTabs
-          selected={selectedProp}
-          onSelect={setSelectedProp}
-          properties={properties}
+          selected={selectedPropId}
+          onSelect={setSelectedPropId}
+          properties={tabProperties}
           showAll
           allLabel="All Properties"
         />
-
-        {/* Status filter pills */}
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {["all", ...STATUS_OPTIONS].map(s => (
+        <div style={{ display: "flex", gap: 6 }}>
+          {(["tenants", "work-orders"] as const).map(tab => (
             <button
-              key={s}
-              onClick={() => setStatusFilter(s)}
+              key={tab}
+              onClick={() => setActiveTab(tab)}
               style={{
-                padding: "4px 14px",
-                fontSize: 11,
-                border: "1px solid",
-                borderColor: statusFilter === s ? (STATUS_COLORS[s] || "var(--color-accent)") : "var(--color-border)",
-                borderRadius: 14,
-                cursor: "pointer",
-                background: statusFilter === s ? `${STATUS_COLORS[s] || "var(--color-accent)"}18` : "transparent",
-                color: statusFilter === s ? (STATUS_COLORS[s] || "var(--color-accent)") : "var(--color-text-muted)",
-                fontWeight: statusFilter === s ? 600 : 400,
-                textTransform: "capitalize",
+                padding: "4px 14px", fontSize: 11, border: "1px solid",
+                borderColor: activeTab === tab ? "var(--color-accent)" : "var(--color-border)",
+                borderRadius: 14, cursor: "pointer",
+                background: activeTab === tab ? "var(--color-accent)18" : "transparent",
+                color: activeTab === tab ? "var(--color-accent)" : "var(--color-text-muted)",
+                fontWeight: activeTab === tab ? 600 : 400,
                 transition: "all 0.15s ease",
               }}
             >
-              {s === "all" ? "All Statuses" : s}
+              {tab === "tenants" ? "Tenants & Rent Roll" : "Work Orders"}
             </button>
           ))}
         </div>
       </div>
 
       {/* Stat bar */}
-      <div className="tenant-stat-bar" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+      <div className="tenant-stat-bar" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
         {[
-          { label: "Total Units", value: totalUnits, color: "var(--color-accent)" },
-          { label: "Occupied", value: occupied, color: "var(--color-success)" },
-          { label: "Vacant", value: vacant, color: "var(--color-danger)" },
-          { label: "Avg Rent", value: fmtMoney(avgRent), color: "var(--color-accent)" },
+          { label: "Total Units", value: summary.totalUnits, color: "var(--color-accent)" },
+          { label: "Occupied", value: summary.occupiedUnits, color: "var(--color-success)" },
+          { label: "Vacant", value: summary.vacantUnits, color: "var(--color-danger)" },
+          { label: "Occupancy", value: `${(summary.occupancyRate * 100).toFixed(0)}%`, color: summary.occupancyRate >= 0.9 ? "var(--color-success)" : "var(--color-warning)" },
+          { label: "Monthly Rent", value: fmtMoney(summary.totalMonthlyRent), color: "var(--color-accent)" },
         ].map(s => (
           <div key={s.label} className="card" style={{ padding: "12px 16px", textAlign: "center" }}>
             <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--color-text-muted)", marginBottom: 4 }}>{s.label}</div>
@@ -180,91 +357,137 @@ export default function TenantManagement() {
         ))}
       </div>
 
-      {/* Actions */}
-      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-        <button className="nav-btn" onClick={() => setShowAddForm(!showAddForm)} style={{ fontSize: 11 }}>
-          {showAddForm ? "✕ Cancel" : "+ Add Tenant"}
-        </button>
-        <button
-          className="nav-btn"
-          onClick={() => alert("Bulk import coming soon — upload a CSV of tenants.")}
-          style={{ fontSize: 11, opacity: 0.7 }}
-        >
-          ⇧ Bulk Import
-        </button>
-      </div>
-
-      {/* Add tenant form */}
-      {showAddForm && (
-        <AddTenantForm
-          properties={properties}
-          defaultPropertyId={selectedProp !== "all" ? selectedProp : properties[0]?.id}
-          onSaved={() => { setShowAddForm(false); loadTenants(); }}
-          onCancel={() => setShowAddForm(false)}
-        />
-      )}
-
       {/* Error / Loading */}
-      {error && <div className="card" style={{ padding: 16, color: "var(--color-danger)", fontSize: 13 }}>⚠ {error}</div>}
-      {loading && <div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)", fontSize: 13 }}>Loading tenants…</div>}
+      {error && <div className="card" style={{ padding: 16, color: "var(--color-danger)", fontSize: 13 }}>Error: {error}</div>}
+      {(loading || propsLoading) && <div style={{ textAlign: "center", padding: 40, color: "var(--color-text-muted)", fontSize: 13 }}>Loading from Rent Manager...</div>}
 
-      {/* Tenant table */}
-      {!loading && (
+      {/* ── TENANTS TAB ── */}
+      {activeTab === "tenants" && !loading && (
         <div className="card" style={{ padding: 12, overflowX: "auto" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, padding: "0 4px" }}>
+            <div className="label" style={{ fontSize: 13 }}>Live Rent Roll</div>
+            <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+              Data from Rent Manager - {allTenants.length} tenant{allTenants.length !== 1 ? "s" : ""}
+            </div>
+          </div>
           <table>
             <thead>
               <tr>
-                <th style={{ cursor: "pointer" }} onClick={() => handleSort("unitNumber")}>Unit{sortIcon("unitNumber")}</th>
-                {selectedProp === "all" && <th style={{ cursor: "pointer" }} onClick={() => handleSort("propertyId")}>Property{sortIcon("propertyId")}</th>}
-                <th style={{ cursor: "pointer" }} onClick={() => handleSort("tenantName")}>Tenant{sortIcon("tenantName")}</th>
-                <th style={{ cursor: "pointer" }} onClick={() => handleSort("monthlyRent")}>Rent{sortIcon("monthlyRent")}</th>
-                <th style={{ cursor: "pointer" }} onClick={() => handleSort("leaseEnd")}>Lease End{sortIcon("leaseEnd")}</th>
-                <th style={{ cursor: "pointer" }} onClick={() => handleSort("status")}>Status{sortIcon("status")}</th>
-                <th>Actions</th>
+                <th style={{ cursor: "pointer" }} onClick={() => handleSort("Unit")}>Unit{sortIcon("Unit")}</th>
+                {selectedPropId === "all" && <th>Property</th>}
+                <th style={{ cursor: "pointer" }} onClick={() => handleSort("Name")}>Tenant{sortIcon("Name")}</th>
+                <th>Bed/Bath</th>
+                <th>Move-In</th>
+                <th style={{ cursor: "pointer" }} onClick={() => handleSort("Rent")}>Rent{sortIcon("Rent")}</th>
+                <th style={{ cursor: "pointer" }} onClick={() => handleSort("Balance")}>Balance{sortIcon("Balance")}</th>
+                <th style={{ cursor: "pointer" }} onClick={() => handleSort("Status")}>Status{sortIcon("Status")}</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 && (
-                <tr><td colSpan={selectedProp === "all" ? 7 : 6} style={{ textAlign: "center", color: "var(--color-text-muted)", padding: 24 }}>No tenants found</td></tr>
+              {sortedTenants.length === 0 && (
+                <tr><td colSpan={selectedPropId === "all" ? 8 : 7} style={{ textAlign: "center", color: "var(--color-text-muted)", padding: 24 }}>No tenants found</td></tr>
               )}
-              {filtered.map(t => (
+              {sortedTenants.map(t => (
                 <tr
-                  key={t.id}
+                  key={t.TenantID}
                   style={{ cursor: "pointer" }}
                   onClick={() => setSelectedTenant(t)}
                 >
-                  <td style={{ fontWeight: 500 }}>{t.unitNumber}</td>
-                  {selectedProp === "all" && <td style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{propName(t.propertyId)}</td>}
-                  <td>{t.tenantName || <span style={{ color: "var(--color-text-muted)", fontStyle: "italic" }}>Vacant</span>}</td>
-                  <td className="tabular-nums">{t.monthlyRent ? fmtMoney(parseFloat(t.monthlyRent)) : "—"}</td>
-                  <td className="tabular-nums" style={{ fontSize: 11 }}>{t.leaseEnd || "—"}</td>
-                  <td>
-                    <span style={{
-                      fontSize: 10,
-                      textTransform: "uppercase",
-                      padding: "2px 8px",
-                      borderRadius: 4,
-                      background: `${STATUS_COLORS[t.status] || "var(--color-text-muted)"}15`,
-                      color: STATUS_COLORS[t.status] || "var(--color-text-muted)",
-                      fontWeight: 600,
-                      letterSpacing: "0.04em",
-                    }}>
-                      {t.status}
-                    </span>
+                  <td style={{ fontWeight: 500 }}>{t.UnitName}</td>
+                  {selectedPropId === "all" && <td style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{propName(t.PropertyID)}</td>}
+                  <td>{t.Name}</td>
+                  <td style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+                    {t.Bedrooms != null ? `${t.Bedrooms}/${t.Bathrooms ?? "—"}` : "—"}
+                  </td>
+                  <td className="tabular-nums" style={{ fontSize: 11 }}>{fmtDate(t.MoveInDate)}</td>
+                  <td className="tabular-nums" style={{ fontWeight: 500, color: "var(--color-accent)" }}>
+                    {fmtMoney(t.MonthlyRent)}
+                  </td>
+                  <td className="tabular-nums" style={{
+                    fontWeight: t.Balance > 0 ? 600 : 400,
+                    color: t.Balance > 0 ? "var(--color-danger)" : "var(--color-success)",
+                  }}>
+                    {t.Balance > 0 ? fmtMoney(t.Balance) : t.Balance < 0 ? `(${fmtMoney(t.Balance)})` : "$0"}
                   </td>
                   <td>
-                    <button
-                      className="nav-btn"
-                      onClick={(e) => { e.stopPropagation(); setSelectedTenant(t); }}
-                      style={{ fontSize: 10, padding: "2px 10px" }}
-                    >
-                      View
-                    </button>
+                    <span style={{
+                      fontSize: 10, textTransform: "uppercase", padding: "2px 8px", borderRadius: 4,
+                      background: `${STATUS_COLORS[t.Status] || "var(--color-text-muted)"}15`,
+                      color: STATUS_COLORS[t.Status] || "var(--color-text-muted)",
+                      fontWeight: 600, letterSpacing: "0.04em",
+                    }}>
+                      {t.Status}
+                    </span>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ── WORK ORDERS TAB ── */}
+      {activeTab === "work-orders" && (
+        <div className="card" style={{ padding: 12, overflowX: "auto" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, padding: "0 4px" }}>
+            <div className="label" style={{ fontSize: 13 }}>Maintenance / Work Orders</div>
+            <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+              {workOrders.length} work order{workOrders.length !== 1 ? "s" : ""}
+            </div>
+          </div>
+          {loadingWO ? (
+            <div style={{ textAlign: "center", padding: 30, color: "var(--color-text-muted)", fontSize: 13 }}>Loading work orders...</div>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Category</th>
+                  <th>Description</th>
+                  <th>Priority</th>
+                  <th>Status</th>
+                  <th>Reported</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {workOrders.length === 0 && (
+                  <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--color-text-muted)", padding: 24 }}>No work orders found</td></tr>
+                )}
+                {workOrders.map(wo => (
+                  <tr key={wo.ServiceManagerIssueID}>
+                    <td style={{ fontWeight: 500, fontSize: 11 }}>#{wo.ServiceManagerIssueID}</td>
+                    <td>{wo.Category || "—"}</td>
+                    <td style={{ maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {wo.Description || "—"}
+                    </td>
+                    <td>
+                      <span style={{
+                        fontSize: 10, padding: "2px 8px", borderRadius: 4,
+                        background: `${PRIORITY_COLORS[wo.Priority || ""] || "var(--color-text-muted)"}15`,
+                        color: PRIORITY_COLORS[wo.Priority || ""] || "var(--color-text-muted)",
+                        fontWeight: 600,
+                      }}>
+                        {wo.Priority || "—"}
+                      </span>
+                    </td>
+                    <td>
+                      <span style={{
+                        fontSize: 10, padding: "2px 8px", borderRadius: 4, textTransform: "uppercase",
+                        background: wo.Status === "Open" ? "var(--color-warning)15" : "var(--color-success)15",
+                        color: wo.Status === "Open" ? "var(--color-warning)" : "var(--color-success)",
+                        fontWeight: 600,
+                      }}>
+                        {wo.Status || "—"}
+                      </span>
+                    </td>
+                    <td style={{ fontSize: 11 }}>{wo.ReportedByName || "—"}</td>
+                    <td className="tabular-nums" style={{ fontSize: 11 }}>{fmtDate(wo.CreatedDate)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
     </section>
@@ -273,272 +496,68 @@ export default function TenantManagement() {
 
 
 /* ═══════════════════════════════════════════════════════════════ */
-/*  ADD TENANT FORM                                               */
-/* ═══════════════════════════════════════════════════════════════ */
-function AddTenantForm({
-  properties,
-  defaultPropertyId,
-  onSaved,
-  onCancel,
-}: {
-  properties: Property[];
-  defaultPropertyId: string;
-  onSaved: () => void;
-  onCancel: () => void;
-}) {
-  const [form, setForm] = useState({
-    propertyId: defaultPropertyId,
-    unitNumber: "",
-    tenantName: "",
-    status: "occupied",
-    monthlyRent: "",
-    marketRent: "",
-    securityDeposit: "",
-    leaseStart: "",
-    leaseEnd: "",
-    bedrooms: "",
-    bathrooms: "",
-    sqft: "",
-    moveInDate: "",
-    notes: "",
-  });
-  const [saving, setSaving] = useState(false);
-
-  const handleSave = async () => {
-    if (!form.unitNumber.trim()) return alert("Unit number is required");
-    setSaving(true);
-    try {
-      const body: any = {
-        propertyId: form.propertyId,
-        unitNumber: form.unitNumber.trim(),
-        tenantName: form.tenantName.trim() || null,
-        status: form.status,
-        monthlyRent: form.monthlyRent || null,
-        marketRent: form.marketRent || null,
-        securityDeposit: form.securityDeposit || null,
-        leaseStart: form.leaseStart || null,
-        leaseEnd: form.leaseEnd || null,
-        bedrooms: form.bedrooms ? parseInt(form.bedrooms) : null,
-        bathrooms: form.bathrooms || null,
-        sqft: form.sqft ? parseInt(form.sqft) : null,
-        moveInDate: form.moveInDate || null,
-        notes: form.notes.trim() || null,
-      };
-      const r = await fetch(`/api/lease-up/units`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) throw new Error("Failed to create tenant");
-      onSaved();
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const field = (label: string, key: string, type = "text", placeholder = "") => (
-    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--color-text-muted)" }}>{label}</label>
-      <input
-        type={type}
-        value={(form as any)[key]}
-        onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
-        placeholder={placeholder}
-        style={{
-          padding: "6px 10px",
-          fontSize: 12,
-          border: "1px solid var(--color-border)",
-          borderRadius: 6,
-          background: "var(--color-surface)",
-          color: "var(--color-text)",
-          outline: "none",
-        }}
-      />
-    </div>
-  );
-
-  return (
-    <div className="card" style={{ padding: 20 }}>
-      <div className="label" style={{ marginBottom: 14 }}>Add New Tenant</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12 }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-          <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--color-text-muted)" }}>Property</label>
-          <select
-            value={form.propertyId}
-            onChange={e => setForm(f => ({ ...f, propertyId: e.target.value }))}
-            style={{
-              padding: "6px 10px",
-              fontSize: 12,
-              border: "1px solid var(--color-border)",
-              borderRadius: 6,
-              background: "var(--color-surface)",
-              color: "var(--color-text)",
-            }}
-          >
-            {properties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-        </div>
-        {field("Unit #", "unitNumber", "text", "e.g. 101")}
-        {field("Tenant Name", "tenantName", "text", "John Doe")}
-        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-          <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--color-text-muted)" }}>Status</label>
-          <select
-            value={form.status}
-            onChange={e => setForm(f => ({ ...f, status: e.target.value }))}
-            style={{
-              padding: "6px 10px",
-              fontSize: 12,
-              border: "1px solid var(--color-border)",
-              borderRadius: 6,
-              background: "var(--color-surface)",
-              color: "var(--color-text)",
-              textTransform: "capitalize",
-            }}
-          >
-            {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
-        {field("Monthly Rent", "monthlyRent", "number", "1200")}
-        {field("Market Rent", "marketRent", "number", "1300")}
-        {field("Security Deposit", "securityDeposit", "number", "1200")}
-        {field("Lease Start", "leaseStart", "date")}
-        {field("Lease End", "leaseEnd", "date")}
-        {field("Move-In Date", "moveInDate", "date")}
-        {field("Bedrooms", "bedrooms", "number", "2")}
-        {field("Bathrooms", "bathrooms", "text", "1.5")}
-        {field("Sq Ft", "sqft", "number", "850")}
-      </div>
-      <div style={{ marginTop: 12 }}>
-        {field("Notes", "notes", "text", "Optional notes…")}
-      </div>
-      <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
-        <button className="nav-btn" onClick={onCancel} style={{ fontSize: 11, opacity: 0.7 }}>Cancel</button>
-        <button
-          className="nav-btn active"
-          onClick={handleSave}
-          disabled={saving}
-          style={{ fontSize: 11 }}
-        >
-          {saving ? "Saving…" : "Save Tenant"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-
-/* ═══════════════════════════════════════════════════════════════ */
-/*  TENANT DETAIL                                                 */
+/*  TENANT DETAIL — with live charges & recurring charges          */
 /* ═══════════════════════════════════════════════════════════════ */
 function TenantDetail({
   tenant,
   propertyName,
   onBack,
-  onUpdate,
 }: {
-  tenant: Tenant;
+  tenant: EnrichedTenant;
   propertyName: string;
   onBack: () => void;
-  onUpdate: (t: Tenant) => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [form, setForm] = useState({ ...tenant });
-  const [saving, setSaving] = useState(false);
-  const [noteDraft, setNoteDraft] = useState(tenant.notes || "");
-  const [savingNote, setSavingNote] = useState(false);
+  const [transactions, setTransactions] = useState<(RMCharge & { _type: string })[]>([]);
+  const [recurringCharges, setRecurringCharges] = useState<RMRecurringCharge[]>([]);
+  const [loadingTxns, setLoadingTxns] = useState(true);
+  const [loadingRecurring, setLoadingRecurring] = useState(true);
 
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      const body: any = {
-        tenantName: form.tenantName?.trim() || null,
-        status: form.status,
-        monthlyRent: form.monthlyRent || null,
-        marketRent: form.marketRent || null,
-        securityDeposit: form.securityDeposit || null,
-        leaseStart: form.leaseStart || null,
-        leaseEnd: form.leaseEnd || null,
-        moveInDate: form.moveInDate || null,
-        moveOutDate: form.moveOutDate || null,
-        bedrooms: form.bedrooms ?? null,
-        bathrooms: form.bathrooms || null,
-        sqft: form.sqft ?? null,
-      };
-      const r = await fetch(`/api/lease-up/units/${tenant.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) throw new Error("Failed to update");
-      const updated = await r.json();
-      onUpdate(updated);
-      setEditing(false);
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
+  useEffect(() => {
+    const tid = tenant.TenantID;
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
+    const fromDate = twelveMonthsAgo.toISOString().split("T")[0];
 
-  const saveNote = async () => {
-    setSavingNote(true);
-    try {
-      const r = await fetch(`/api/lease-up/units/${tenant.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ notes: noteDraft.trim() || null }),
-      });
-      if (!r.ok) throw new Error("Failed to save note");
-      const updated = await r.json();
-      onUpdate(updated);
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setSavingNote(false);
-    }
-  };
+    // Fetch both charges and payments, then merge
+    Promise.all([
+      fetch(`/api/rm/charges?tenantId=${tid}&fromDate=${fromDate}`, { credentials: "include" })
+        .then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch(`/api/rm/payments?tenantId=${tid}&fromDate=${fromDate}`, { credentials: "include" })
+        .then(r => r.ok ? r.json() : []).catch(() => []),
+    ]).then(([charges, payments]) => {
+      const all = [
+        ...(Array.isArray(charges) ? charges : []).map((c: any) => ({ ...c, _type: "Charge" })),
+        ...(Array.isArray(payments) ? payments : []).map((p: any) => ({ ...p, _type: "Payment" })),
+      ].sort((a, b) => (b.TransactionDate || "").localeCompare(a.TransactionDate || ""));
+      setTransactions(all);
+    }).finally(() => setLoadingTxns(false));
 
-  const infoRow = (label: string, value: string | number | undefined | null, suffix = "") => (
+    fetch(`/api/rm/recurring-charges?tenantId=${tid}`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : [])
+      .then(data => setRecurringCharges(Array.isArray(data) ? data : []))
+      .catch(() => setRecurringCharges([]))
+      .finally(() => setLoadingRecurring(false));
+  }, [tenant.TenantID]);
+
+  const infoRow = (label: string, value: string | number | undefined | null) => (
     <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--color-border)" }}>
       <span style={{ fontSize: 11, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</span>
-      <span style={{ fontSize: 13, fontWeight: 500 }}>{value ?? "—"}{suffix}</span>
+      <span style={{ fontSize: 13, fontWeight: 500 }}>{value ?? "—"}</span>
     </div>
   );
 
-  const editField = (label: string, key: keyof Tenant, type = "text") => (
-    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--color-text-muted)" }}>{label}</label>
-      <input
-        type={type}
-        value={(form as any)[key] ?? ""}
-        onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
-        style={{
-          padding: "6px 10px",
-          fontSize: 12,
-          border: "1px solid var(--color-border)",
-          borderRadius: 6,
-          background: "var(--color-surface)",
-          color: "var(--color-text)",
-          outline: "none",
-        }}
-      />
-    </div>
-  );
+  const totalChargesAmt = transactions.filter(t => t._type === "Charge").reduce((s, c) => s + (c.Amount || 0), 0);
+  const totalPaymentsAmt = transactions.filter(t => t._type === "Payment").reduce((s, c) => s + (c.Amount || 0), 0);
+  const monthlyTotal = recurringCharges.reduce((s, rc) => s + (rc.Amount || 0), 0);
 
   return (
     <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* Back button */}
       <button
         className="nav-btn"
         onClick={onBack}
         style={{ alignSelf: "flex-start", fontSize: 11, display: "flex", alignItems: "center", gap: 4 }}
       >
-        ← Back to Tenant List
+        &larr; Back to Tenant List
       </button>
 
       {/* Header card */}
@@ -546,140 +565,146 @@ function TenantDetail({
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
           <div>
             <div style={{ fontFamily: "var(--font-display)", fontSize: "1.4rem", fontWeight: 600, color: "var(--color-text)" }}>
-              {tenant.tenantName || "Vacant Unit"}
+              {tenant.Name}
             </div>
             <div style={{ fontSize: 12, color: "var(--color-text-muted)", marginTop: 4 }}>
-              Unit {tenant.unitNumber} · {propertyName}
+              {tenant.UnitName} - {propertyName}
+              {tenant.Bedrooms != null && ` - ${tenant.Bedrooms}bd/${tenant.Bathrooms ?? "?"}ba`}
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <span style={{
-              fontSize: 11,
-              textTransform: "uppercase",
-              padding: "4px 12px",
-              borderRadius: 6,
-              background: `${STATUS_COLORS[tenant.status] || "var(--color-text-muted)"}15`,
-              color: STATUS_COLORS[tenant.status] || "var(--color-text-muted)",
-              fontWeight: 600,
-              letterSpacing: "0.04em",
+              fontSize: 11, textTransform: "uppercase", padding: "4px 12px", borderRadius: 6,
+              background: `${STATUS_COLORS[tenant.Status] || "var(--color-text-muted)"}15`,
+              color: STATUS_COLORS[tenant.Status] || "var(--color-text-muted)",
+              fontWeight: 600, letterSpacing: "0.04em",
             }}>
-              {tenant.status}
+              {tenant.Status}
             </span>
-            <button className="nav-btn" onClick={() => setEditing(!editing)} style={{ fontSize: 11 }}>
-              {editing ? "✕ Cancel" : "✎ Edit"}
-            </button>
+            {tenant.Balance > 0 && (
+              <span style={{
+                fontSize: 11, padding: "4px 12px", borderRadius: 6,
+                background: "var(--color-danger)15", color: "var(--color-danger)",
+                fontWeight: 600,
+              }}>
+                Owes {fmtMoney(tenant.Balance)}
+              </span>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Edit mode */}
-      {editing && (
-        <div className="card" style={{ padding: 20 }}>
-          <div className="label" style={{ marginBottom: 14 }}>Edit Tenant Details</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12 }}>
-            {editField("Tenant Name", "tenantName")}
-            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-              <label style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--color-text-muted)" }}>Status</label>
-              <select
-                value={form.status}
-                onChange={e => setForm(f => ({ ...f, status: e.target.value }))}
-                style={{
-                  padding: "6px 10px", fontSize: 12, border: "1px solid var(--color-border)",
-                  borderRadius: 6, background: "var(--color-surface)", color: "var(--color-text)", textTransform: "capitalize",
-                }}
-              >
-                {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            {editField("Monthly Rent", "monthlyRent", "number")}
-            {editField("Market Rent", "marketRent", "number")}
-            {editField("Security Deposit", "securityDeposit", "number")}
-            {editField("Lease Start", "leaseStart", "date")}
-            {editField("Lease End", "leaseEnd", "date")}
-            {editField("Move-In", "moveInDate", "date")}
-            {editField("Move-Out", "moveOutDate", "date")}
-            {editField("Bedrooms", "bedrooms", "number")}
-            {editField("Bathrooms", "bathrooms", "text")}
-            {editField("Sq Ft", "sqft", "number")}
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
-            <button className="nav-btn" onClick={() => setEditing(false)} style={{ fontSize: 11, opacity: 0.7 }}>Cancel</button>
-            <button className="nav-btn active" onClick={handleSave} disabled={saving} style={{ fontSize: 11 }}>
-              {saving ? "Saving…" : "Save Changes"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Info cards — 2-column layout */}
+      {/* Info cards */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        {/* Lease summary */}
         <div className="card" style={{ padding: 16 }}>
-          <div className="label" style={{ marginBottom: 10 }}>Lease Summary</div>
-          {infoRow("Lease Start", tenant.leaseStart)}
-          {infoRow("Lease End", tenant.leaseEnd)}
-          {infoRow("Monthly Rent", tenant.monthlyRent ? fmtMoney(parseFloat(tenant.monthlyRent)) : undefined)}
-          {infoRow("Market Rent", tenant.marketRent ? fmtMoney(parseFloat(tenant.marketRent)) : undefined)}
-          {infoRow("Security Deposit", tenant.securityDeposit ? fmtMoney(parseFloat(tenant.securityDeposit)) : undefined)}
-          {infoRow("Move-In", tenant.moveInDate)}
-          {infoRow("Move-Out", tenant.moveOutDate)}
+          <div className="label" style={{ marginBottom: 10 }}>Tenant Info</div>
+          {infoRow("Name", tenant.Name)}
+          {infoRow("Unit", tenant.UnitName)}
+          {infoRow("Bed/Bath", tenant.Bedrooms != null ? `${tenant.Bedrooms}/${tenant.Bathrooms}` : undefined)}
+          {infoRow("Move-In", fmtDate(tenant.MoveInDate))}
+          {infoRow("Move-Out", fmtDate(tenant.MoveOutDate))}
+          {infoRow("Status", tenant.Status)}
         </div>
 
-        {/* Unit details */}
         <div className="card" style={{ padding: 16 }}>
-          <div className="label" style={{ marginBottom: 10 }}>Unit Details</div>
-          {infoRow("Unit Number", tenant.unitNumber)}
-          {infoRow("Bedrooms", tenant.bedrooms)}
-          {infoRow("Bathrooms", tenant.bathrooms)}
-          {infoRow("Sq Ft", tenant.sqft, tenant.sqft ? " sqft" : "")}
-          {infoRow("Property", propertyName)}
+          <div className="label" style={{ marginBottom: 10 }}>Financial Summary</div>
+          {infoRow("Current Balance", tenant.Balance > 0 ? fmtMoney(tenant.Balance) : tenant.Balance < 0 ? `(${fmtMoney(tenant.Balance)})` : "$0")}
+          {infoRow("Monthly Rent", fmtMoney(tenant.MonthlyRent))}
+          {infoRow("Total Charges (12mo)", fmtMoney(totalChargesAmt))}
+          {infoRow("Total Payments (12mo)", fmtMoney(totalPaymentsAmt))}
+          {infoRow("Tenant ID", tenant.TenantID)}
+          {infoRow("Unit ID", tenant.UnitID)}
         </div>
       </div>
 
-      {/* Notes */}
+      {/* Recurring Charges */}
       <div className="card" style={{ padding: 16 }}>
-        <div className="label" style={{ marginBottom: 10 }}>Notes</div>
-        <textarea
-          value={noteDraft}
-          onChange={e => setNoteDraft(e.target.value)}
-          placeholder="Add notes about this tenant…"
-          rows={3}
-          style={{
-            width: "100%",
-            padding: "8px 12px",
-            fontSize: 12,
-            border: "1px solid var(--color-border)",
-            borderRadius: 6,
-            background: "var(--color-surface)",
-            color: "var(--color-text)",
-            resize: "vertical",
-            outline: "none",
-            fontFamily: "var(--font-sans)",
-          }}
-        />
-        {noteDraft !== (tenant.notes || "") && (
-          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-            <button className="nav-btn active" onClick={saveNote} disabled={savingNote} style={{ fontSize: 11 }}>
-              {savingNote ? "Saving…" : "Save Note"}
-            </button>
-          </div>
+        <div className="label" style={{ marginBottom: 10 }}>Recurring Charges</div>
+        {loadingRecurring ? (
+          <div style={{ fontSize: 12, color: "var(--color-text-muted)", padding: 16, textAlign: "center" }}>Loading...</div>
+        ) : recurringCharges.length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--color-text-muted)", padding: 16, textAlign: "center" }}>No recurring charges</div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th>Amount</th>
+                <th>Frequency</th>
+                <th>From Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recurringCharges.map(rc => (
+                <tr key={rc.RecurringChargeID}>
+                  <td>{rc.Comment || "Charge"}</td>
+                  <td className="tabular-nums" style={{ fontWeight: 500 }}>{fmtMoney(rc.Amount)}</td>
+                  <td style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+                    {rc.Frequency === 1 ? "Monthly" : rc.Frequency === 12 ? "Annually" : `Every ${rc.Frequency} mo`}
+                  </td>
+                  <td className="tabular-nums" style={{ fontSize: 11 }}>{fmtDate(rc.FromDate)}</td>
+                </tr>
+              ))}
+              <tr style={{ borderTop: "2px solid var(--color-border)" }}>
+                <td style={{ fontWeight: 600 }}>Monthly Total</td>
+                <td className="tabular-nums" style={{ fontWeight: 600 }}>{fmtMoney(monthlyTotal)}</td>
+                <td colSpan={2}></td>
+              </tr>
+            </tbody>
+          </table>
         )}
       </div>
 
-      {/* Placeholder: Transactions */}
-      <div className="card" style={{ padding: 16, opacity: 0.6 }}>
-        <div className="label" style={{ marginBottom: 6 }}>Transactions</div>
-        <div style={{ fontSize: 12, color: "var(--color-text-muted)", fontStyle: "italic", padding: "20px 0", textAlign: "center" }}>
-          Transaction tracking coming soon — payments, charges, and ledger history.
+      {/* Transactions */}
+      <div className="card" style={{ padding: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div className="label">Transactions (Last 12 Months)</div>
+          <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>{transactions.length} transaction{transactions.length !== 1 ? "s" : ""}</div>
         </div>
-      </div>
-
-      {/* Placeholder: Recurring Charges */}
-      <div className="card" style={{ padding: 16, opacity: 0.6 }}>
-        <div className="label" style={{ marginBottom: 6 }}>Recurring Charges</div>
-        <div style={{ fontSize: 12, color: "var(--color-text-muted)", fontStyle: "italic", padding: "20px 0", textAlign: "center" }}>
-          Recurring charge management coming soon — rent, utilities, fees.
-        </div>
+        {loadingTxns ? (
+          <div style={{ fontSize: 12, color: "var(--color-text-muted)", padding: 16, textAlign: "center" }}>Loading...</div>
+        ) : transactions.length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--color-text-muted)", padding: 16, textAlign: "center" }}>No transactions found</div>
+        ) : (
+          <div style={{ maxHeight: 400, overflowY: "auto" }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Description</th>
+                  <th>Amount</th>
+                  <th>Reference</th>
+                </tr>
+              </thead>
+              <tbody>
+                {transactions.map((c, i) => (
+                  <tr key={`${c._type}-${c.ChargeID || i}`}>
+                    <td className="tabular-nums" style={{ fontSize: 11 }}>{fmtDate(c.TransactionDate)}</td>
+                    <td>
+                      <span style={{
+                        fontSize: 10, padding: "2px 6px", borderRadius: 4,
+                        background: c._type === "Charge" ? "var(--color-danger)15" : "var(--color-success)15",
+                        color: c._type === "Charge" ? "var(--color-danger)" : "var(--color-success)",
+                        fontWeight: 600,
+                      }}>
+                        {c._type}
+                      </span>
+                    </td>
+                    <td style={{ fontSize: 12 }}>{c.Comment || "—"}</td>
+                    <td className="tabular-nums" style={{
+                      fontWeight: 500,
+                      color: c._type === "Payment" ? "var(--color-success)" : "var(--color-text)",
+                    }}>
+                      {c._type === "Payment" ? `(${fmtMoney(c.Amount)})` : fmtMoney(c.Amount)}
+                    </td>
+                    <td style={{ fontSize: 11, color: "var(--color-text-muted)" }}>{c.Reference || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </section>
   );

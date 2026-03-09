@@ -311,6 +311,194 @@ export function registerDashboardRoutes(app: Express) {
     }
   });
 
+  // ─── Rent Manager API routes ───
+
+  app.get("/api/rm/properties", requireAdmin, async (_req, res) => {
+    try {
+      const { isRMConfigured, fetchRMProperties } = await import("./rentmanager");
+      if (!isRMConfigured()) {
+        return res.status(400).json({ error: "Rent Manager not configured. Set RM_USERNAME and RM_PASSWORD in .env." });
+      }
+      const properties = await fetchRMProperties();
+      res.json(properties);
+    } catch (error: any) {
+      console.error("RM properties error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/rm/tenants", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, fetchRMTenants } = await import("./rentmanager");
+      if (!isRMConfigured()) {
+        return res.status(400).json({ error: "Rent Manager not configured." });
+      }
+      const propertyId = req.query.propertyId as string | undefined;
+      const status = req.query.status as string | undefined;
+      const tenants = await fetchRMTenants(propertyId, status || undefined);
+      res.json(tenants);
+    } catch (error: any) {
+      console.error("RM tenants error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/rm/units", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, fetchRMUnits } = await import("./rentmanager");
+      if (!isRMConfigured()) {
+        return res.status(400).json({ error: "Rent Manager not configured." });
+      }
+      const propertyId = req.query.propertyId as string;
+      if (!propertyId) return res.status(400).json({ error: "propertyId is required" });
+      const units = await fetchRMUnits(propertyId);
+      res.json(units);
+    } catch (error: any) {
+      console.error("RM units error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/rm/rent-roll", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, buildRentRoll } = await import("./rentmanager");
+      if (!isRMConfigured()) {
+        return res.status(400).json({ error: "Rent Manager not configured." });
+      }
+      const propertyId = req.query.propertyId as string;
+      if (!propertyId) return res.status(400).json({ error: "propertyId is required" });
+      const rentRoll = await buildRentRoll(propertyId);
+      res.json(rentRoll);
+    } catch (error: any) {
+      console.error("RM rent roll error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/rm/charges", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, fetchRMCharges } = await import("./rentmanager");
+      if (!isRMConfigured()) {
+        return res.status(400).json({ error: "Rent Manager not configured." });
+      }
+      const charges = await fetchRMCharges({
+        tenantId: req.query.tenantId as string | undefined,
+        propertyId: req.query.propertyId as string | undefined,
+        fromDate: req.query.fromDate as string | undefined,
+        toDate: req.query.toDate as string | undefined,
+      });
+      res.json(charges);
+    } catch (error: any) {
+      console.error("RM charges error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/rm/payments", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, fetchRMPayments } = await import("./rentmanager");
+      if (!isRMConfigured()) {
+        return res.status(400).json({ error: "Rent Manager not configured." });
+      }
+      const payments = await fetchRMPayments({
+        tenantId: req.query.tenantId as string | undefined,
+        fromDate: req.query.fromDate as string | undefined,
+        toDate: req.query.toDate as string | undefined,
+      });
+      res.json(payments);
+    } catch (error: any) {
+      console.error("RM payments error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/rm/recurring-charges", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, fetchRMRecurringCharges } = await import("./rentmanager");
+      if (!isRMConfigured()) {
+        return res.status(400).json({ error: "Rent Manager not configured." });
+      }
+      const charges = await fetchRMRecurringCharges({
+        tenantId: req.query.tenantId as string | undefined,
+      });
+      res.json(charges);
+    } catch (error: any) {
+      console.error("RM recurring charges error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/rm/leases", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, fetchRMLeases } = await import("./rentmanager");
+      if (!isRMConfigured()) {
+        return res.status(400).json({ error: "Rent Manager not configured." });
+      }
+      const leases = await fetchRMLeases({
+        tenantId: req.query.tenantId as string | undefined,
+        propertyId: req.query.propertyId as string | undefined,
+      });
+      res.json(leases);
+    } catch (error: any) {
+      console.error("RM leases error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/rm/work-orders", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, fetchRMServiceIssues } = await import("./rentmanager");
+      if (!isRMConfigured()) {
+        return res.status(400).json({ error: "Rent Manager not configured." });
+      }
+      const issues = await fetchRMServiceIssues({
+        propertyId: req.query.propertyId as string | undefined,
+        status: req.query.status as string | undefined,
+      });
+      res.json(issues);
+    } catch (error: any) {
+      console.error("RM work orders error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Vacancy report — all vacant units across properties with lost rent
+  app.get("/api/rm/vacancies", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, buildVacancyReport } = await import("./rentmanager");
+      if (!isRMConfigured()) {
+        return res.status(400).json({ error: "Rent Manager not configured." });
+      }
+      const propertyId = req.query.propertyId as string | undefined;
+      const propertyIds = propertyId ? [propertyId] : undefined;
+      const report = await buildVacancyReport(propertyIds);
+      res.json(report);
+    } catch (error: any) {
+      console.error("RM vacancies error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Generic RM API passthrough for flexibility
+  app.get("/api/rm/raw/:resource", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, rmGet } = await import("./rentmanager");
+      if (!isRMConfigured()) {
+        return res.status(400).json({ error: "Rent Manager not configured." });
+      }
+      const { resource } = req.params;
+      const params: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.query)) {
+        if (typeof v === "string") params[k] = v;
+      }
+      const data = await rmGet(`/${resource}`, params);
+      res.json(data);
+    } catch (error: any) {
+      console.error("RM raw API error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.get("/api/plaid/accounts", requireAdmin, (_req, res) => {
     try {
       const data = getBankingData();
