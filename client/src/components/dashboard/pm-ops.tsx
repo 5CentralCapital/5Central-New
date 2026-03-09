@@ -63,22 +63,47 @@ export default function PmOps() {
   const [error, setError] = useState<string | null>(null);
   const { properties } = useProperties();
 
+  // Map local UUIDs to RM property IDs for filtering
+  const localToRmId: Record<string, string> = {
+    "ea28fe29-c3e4-4ccd-a68d-a38dbd6b52fb": "30", // MLK
+    "48385b5c-791a-455d-a358-5f1947b448e3": "31", // Hickory
+    "ba502e16-e1ee-4925-baff-1b156ad37133": "32", // Sun Cove
+    "4d7c6538-2f0d-42e2-8c40-6ec57b438a4a": "33", // Lucia
+  };
+
   const load = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       const q = propertyFilter !== "all" ? `?propertyId=${propertyFilter}` : "";
-      const [nRes, eRes, sRes, mRes] = await Promise.all([
+      const [nRes, eRes, sRes] = await Promise.all([
         fetch(`/api/pm/notes${q}`),
         fetch(`/api/pm/escalations${q}`),
         fetch(`/api/pm/sla-timers${q}`),
-        fetch(`/api/maintenance${q}`),
       ]);
-      if (!nRes.ok || !eRes.ok || !sRes.ok || !mRes.ok) {
+      if (!nRes.ok || !eRes.ok || !sRes.ok) {
         throw new Error("One or more API requests failed");
       }
-      const [n, e, s, m] = await Promise.all([nRes.json(), eRes.json(), sRes.json(), mRes.json()]);
-      setNotes(n); setEscalations(e); setSlaTimers(s); setMaintenance(m);
+      const [n, e, s] = await Promise.all([nRes.json(), eRes.json(), sRes.json()]);
+      setNotes(n); setEscalations(e); setSlaTimers(s);
+
+      // Maintenance: try RM first, fall back to local DB
+      let maintenanceData: MaintenanceRequest[] = [];
+      try {
+        const rmPropId = propertyFilter !== "all" ? localToRmId[propertyFilter] : undefined;
+        const rmQ = rmPropId ? `?propertyId=${rmPropId}` : "";
+        const rmRes = await fetch(`/api/rm/maintenance${rmQ}`, { credentials: "include" });
+        if (rmRes.ok) {
+          maintenanceData = await rmRes.json();
+        } else {
+          throw new Error("RM unavailable");
+        }
+      } catch {
+        // Fall back to local DB
+        const mRes = await fetch(`/api/maintenance${q}`);
+        if (mRes.ok) maintenanceData = await mRes.json();
+      }
+      setMaintenance(maintenanceData);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load data");
     } finally {

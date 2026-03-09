@@ -471,7 +471,7 @@ export interface VacancyReport {
   marketRentByBedroom: Record<number, number>;
 }
 
-import { PROPERTY_NAMES } from "./property-map";
+import { PROPERTY_NAMES, rmToLocal } from "./property-map";
 
 /**
  * Build a vacancy report across one or more properties.
@@ -695,4 +695,79 @@ export async function buildMonthlyRentSummary(
     }));
 
   return result;
+}
+
+// ─── ServiceManagerIssues → MaintenanceRequest transform ──────────
+// Maps from RM API names
+const RM_STATUS_MAP: Record<number, string> = {
+  1: "open", 2: "open", 3: "in_progress", 4: "cancelled",
+  5: "complete", 6: "open", 7: "cancelled", 8: "complete",
+};
+const RM_PRIORITY_MAP: Record<number, string> = {
+  1: "medium", 3: "medium", 4: "high", 5: "low",
+  6: "emergency", 7: "medium", 8: "high", 9: "emergency",
+};
+const RM_CATEGORY_MAP: Record<number, string> = {
+  1: "other", 3: "other", 4: "other", 5: "emergency", 6: "other",
+  8: "structural", 9: "plumbing", 10: "electrical",
+  11: "structural", 12: "other", 13: "other", 14: "other", 15: "other",
+};
+
+export interface RMMaintenanceRequest {
+  id: string; propertyId: string; unitNumber?: string; tenantName?: string;
+  title: string; description: string; category: string; priority: string;
+  status: string; assignedTo?: string; estimatedCost?: string; actualCost?: string;
+  reportedAt: string; acknowledgedAt?: string; scheduledDate?: string; completedAt?: string;
+  photoUrls?: string; notes?: string; createdAt: string;
+}
+
+export async function fetchRMMaintenanceRequests(propertyId?: string): Promise<RMMaintenanceRequest[]> {
+  const params: Record<string, string> = {
+    pagesize: "200",
+    orderby: "CreateDate desc",
+    embeds: "Units,Properties,Tenants",
+  };
+  const issues = await rmGet("/ServiceManagerIssues", params);
+  if (!Array.isArray(issues)) return [];
+
+  return issues
+    .filter((iss: any) => {
+      if (!propertyId) return true;
+      // Filter by property if embedded
+      const props = iss.Properties || [];
+      return props.some((p: any) => String(p.PropertyID) === propertyId);
+    })
+    .map((iss: any) => {
+      const props = iss.Properties || [];
+      const units = iss.Units || [];
+      const tenants = iss.Tenants || [];
+      const prop = props[0];
+      const unit = units[0];
+      const tenant = tenants[0];
+
+      // Map propertyId back to local UUID
+      const rmPropId = prop?.PropertyID ? String(prop.PropertyID) : "";
+      const localId = rmPropId ? (rmToLocal(rmPropId) || rmPropId) : "";
+
+      return {
+        id: `rm-${iss.ServiceManagerIssueID}`,
+        propertyId: localId,
+        unitNumber: unit?.Name || undefined,
+        tenantName: tenant ? `${tenant.FirstName || ""} ${tenant.LastName || ""}`.trim() : undefined,
+        title: iss.Title || "Untitled",
+        description: iss.Description || "",
+        category: RM_CATEGORY_MAP[iss.CategoryID] || "other",
+        priority: RM_PRIORITY_MAP[iss.PriorityID] || "medium",
+        status: iss.IsClosed ? "complete" : (RM_STATUS_MAP[iss.StatusID] || "open"),
+        assignedTo: undefined,
+        estimatedCost: undefined,
+        actualCost: undefined,
+        reportedAt: iss.CreateDate || new Date().toISOString(),
+        acknowledgedAt: iss.AssignedOpenDate || undefined,
+        scheduledDate: iss.AssignedCloseDate || undefined,
+        completedAt: iss.IsClosed ? (iss.CloseDate || iss.UpdateDate) : undefined,
+        notes: iss.Resolution || iss.NoteText || undefined,
+        createdAt: iss.CreateDate || new Date().toISOString(),
+      } as RMMaintenanceRequest;
+    });
 }

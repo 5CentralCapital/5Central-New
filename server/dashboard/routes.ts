@@ -479,6 +479,20 @@ export function registerDashboardRoutes(app: Express) {
     }
   });
 
+  // Maintenance / work orders from RM ServiceManagerIssues
+  app.get("/api/rm/maintenance", requireAdmin, async (req, res) => {
+    try {
+      const { isRMConfigured, fetchRMMaintenanceRequests } = await import("./rentmanager");
+      if (!isRMConfigured()) return res.status(400).json({ error: "Rent Manager not configured." });
+      const propertyId = req.query.propertyId as string | undefined;
+      const issues = await fetchRMMaintenanceRequests(propertyId);
+      res.json(issues);
+    } catch (err: any) {
+      console.error("RM maintenance error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Monthly rent summary (charges + payments grouped by month) for P&L overlay
   app.get("/api/rm/monthly-rent", requireAdmin, async (req, res) => {
     try {
