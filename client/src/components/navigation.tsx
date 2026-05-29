@@ -89,6 +89,9 @@ export default function Navigation() {
             ))}
             {user ? (
               <div className="flex items-center gap-4 ml-4">
+                <Link href="/data-room" className="text-sm text-muted-foreground hover:text-warm-brass font-medium">
+                  Data Room
+                </Link>
                 {user.role === "admin" ? (
                   <Link href="/admin" className="text-sm text-warm-brass hover:underline font-medium cursor-pointer">
                     {user.firstName}
@@ -161,6 +164,13 @@ export default function Navigation() {
                           onClick={() => setIsOpen(false)}
                         >
                           {user.firstName} {user.lastName} → Dashboard
+                        </Link>
+                        <Link
+                          href="/data-room"
+                          className="block text-sm font-medium text-muted-foreground"
+                          onClick={() => setIsOpen(false)}
+                        >
+                          Private Data Room
                         </Link>
                         <Button
                           variant="outline"

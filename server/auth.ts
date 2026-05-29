@@ -34,18 +34,51 @@ async function comparePasswords(supplied: string, stored: string): Promise<boole
   return timingSafeEqual(Buffer.from(hashedPassword, "hex"), buf);
 }
 
-// Check if request has a valid API key (for external agents like OpenClaw)
-function hasValidApiKey(req: Request): boolean {
-  const apiKey = req.headers["x-api-key"] as string | undefined;
-  const expectedKey = process.env.ADMIN_API_KEY;
-  if (!apiKey || !expectedKey) return false;
-  // Use timing-safe comparison to prevent timing attacks
+function extractApiKey(req: Request): string | undefined {
+  const directHeader = req.headers["x-api-key"];
+  if (typeof directHeader === "string" && directHeader.trim()) {
+    return directHeader.trim();
+  }
+
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === "string") {
+    const bearerMatch = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (bearerMatch?.[1]) {
+      return bearerMatch[1].trim();
+    }
+  }
+
+  return undefined;
+}
+
+function getExternalApiKeys(): string[] {
+  return Array.from(
+    new Set(
+      [
+        process.env.DASHBOARD_API_KEY,
+        process.env.FIVECENTRAL_API_KEY,
+        process.env.ADMIN_API_KEY,
+      ]
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+}
+
+function matchesApiKey(supplied: string, expected: string): boolean {
   try {
-    return apiKey.length === expectedKey.length &&
-      timingSafeEqual(Buffer.from(apiKey), Buffer.from(expectedKey));
+    return supplied.length === expected.length &&
+      timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
   } catch {
     return false;
   }
+}
+
+// Check if request has a valid API key (for external agents like OpenClaw)
+function hasValidApiKey(req: Request): boolean {
+  const apiKey = extractApiKey(req);
+  if (!apiKey) return false;
+  return getExternalApiKeys().some((expectedKey) => matchesApiKey(apiKey, expectedKey));
 }
 
 // Middleware to load user from session (or API key)
@@ -99,10 +132,7 @@ export function requireAdminOrApiKey(req: Request, res: Response, next: NextFunc
   }
 
   // Path 2: API key in header
-  const apiKey = req.headers["x-api-key"] as string | undefined;
-  const expectedKey = process.env.DASHBOARD_API_KEY;
-
-  if (apiKey && expectedKey && apiKey === expectedKey) {
+  if (hasValidApiKey(req)) {
     // Mark request as API-key-authenticated (no user object, but authorized)
     (req as any).apiKeyAuth = true;
     return next();

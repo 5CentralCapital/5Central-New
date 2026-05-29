@@ -394,7 +394,7 @@ export function registerModuleRoutes(app: Express) {
 
   app.post("/api/investor-signup", async (req: Request, res: Response) => {
     try {
-      const { firstName, lastName, email, phone, company, investableCapital, source } = req.body;
+      const { firstName, lastName, email, phone, company, investableCapital, accreditedStatus, source } = req.body;
       if (!firstName || !lastName || !email) {
         return res.status(400).json({ error: "Name and email are required" });
       }
@@ -404,10 +404,12 @@ export function registerModuleRoutes(app: Express) {
         email,
         phone: phone || null,
         company: company || null,
+        accreditedStatus: accreditedStatus || "unknown",
         investableCapital: investableCapital || null,
         source: source || "website",
         stage: "new",
         interestLevel: "warm",
+        notes: "Website investor intake form",
       });
       ok(res, { message: "Thank you for your interest. We'll be in touch shortly.", leadId: lead.id });
     } catch (e) { err(res, e); }

@@ -1,12 +1,18 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { type Property } from "@shared/schema";
 import HeroSection from "@/components/hero-section";
 import PropertyCard from "@/components/property-card";
 import PropertyModal from "@/components/property-modal";
 import GrowthModal from "@/components/growth-modal";
 import PerformanceMetrics from "@/components/performance-metrics";
-import { getPropertyImage } from "@/lib/property-data";
+import {
+  getPublicPropertyImage,
+  publicAllProperties,
+  publicCurrentProperties,
+  publicPortfolioFacts,
+  publicPortfolioPulse,
+  publicSoldProperties,
+} from "@/lib/public-portfolio-data";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
 import {
@@ -18,21 +24,16 @@ import {
   Phone,
   MapPin,
   ArrowRight,
-  Target,
-  TrendingUp,
   Maximize2
 } from "lucide-react";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 
 export default function Home() {
-  const { data: currentProperties = [], isLoading: currentLoading } = useQuery<Property[]>({
-    queryKey: ["/api/properties/current"],
-  });
-
-  const { data: allProperties = [], isLoading: allLoading } = useQuery<Property[]>({
-    queryKey: ["/api/properties"],
-  });
-
+  const currentProperties = publicCurrentProperties;
+  const soldProperties = publicSoldProperties;
+  const allProperties = publicAllProperties;
+  const featuredPropertyIds = new Set(["sun-cove-apartments", "lucia-apartments", "mlk-apartments"]);
+  const featuredProperties = publicCurrentProperties.filter((property) => featuredPropertyIds.has(property.id));
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [growthModalOpen, setGrowthModalOpen] = useState(false);
@@ -53,8 +54,6 @@ export default function Home() {
     setSelectedProperty(null);
   };
 
-  const isLoading = currentLoading || allLoading;
-
   // Helper function to get IRR from property (handles both numeric irr and text irrLevered)
   const getPropertyIRR = (property: Property): number => {
     // First check irrLevered (text format like "40-50%") which is more commonly populated
@@ -71,24 +70,9 @@ export default function Home() {
     return 0;
   };
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background" data-testid="loading-state">
-        <div className="text-center">
-          <div className="w-8 h-8 border-2 border-warm-brass border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-muted-foreground text-sm uppercase tracking-wider">Loading</p>
-        </div>
-      </div>
-    );
-  }
-
   // Calculate metrics for CURRENT properties only (for hero section)
-  const currentPortfolioValue = currentProperties.reduce((sum, p) => {
-    const value = parseFloat(p.currentValue || "0");
-    return sum + value;
-  }, 0);
-
-  const currentUnits = currentProperties.reduce((sum, p) => sum + p.units, 0);
+  const currentPortfolioValue = publicPortfolioFacts.publicAum;
+  const currentUnits = publicPortfolioFacts.activeMultifamilyUnits;
 
   const currentAvgReturn = currentProperties.length > 0
     ? currentProperties.reduce((sum, p) => sum + getPropertyIRR(p), 0) / currentProperties.length
@@ -100,7 +84,6 @@ export default function Home() {
   }, 0) / currentProperties.length : 0;
 
   // Calculate metrics for ALL properties (current + sold) for performance metrics section
-  const soldProperties = allProperties.filter(p => p.status === 'sold');
   const totalPortfolioValue = allProperties.reduce((sum, p) => {
     const value = parseFloat(p.currentValue || p.salePrice || "0");
     return sum + value;
@@ -135,23 +118,23 @@ export default function Home() {
   const features = [
     {
       icon: CheckCircle,
-      title: "Exceptional Returns",
-      description: "Consistently deliver 3.0x+ equity multiples through strategic value-add renovations and operational improvements."
+      title: "Real Operating Data",
+      description: "Public AUM, occupancy, rent upside, and project profit are tied back to the operating workbooks."
     },
     {
       icon: Award,
-      title: "Proven Track Record",
-      description: "Successfully managing 55 units across 4 active properties with documented performance metrics and transparent reporting."
+      title: "Execution Proof",
+      description: "Four active Florida multifamily assets, one active flip, and a documented exit track record."
     },
     {
       icon: Users,
-      title: "Principal Investment",
-      description: "Founder-led with significant personal capital invested alongside partners in every deal."
+      title: "Founder-Led",
+      description: "No layers. Capital, rehab, leasing, refinancing, and reporting are run directly by the sponsor."
     },
     {
       icon: FileText,
-      title: "Full Transparency",
-      description: "Complete financial disclosure and direct access to the investment team throughout the lifecycle."
+      title: "Clean Reporting",
+      description: "Investor materials are built from the same rent roll, rehab, debt, and cashflow files used to run the business."
     }
   ];
 
@@ -171,16 +154,16 @@ export default function Home() {
             <div className="divider mx-auto mb-6" />
             <h2 className="text-foreground mb-4">Featured Properties</h2>
             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-              Current multifamily investments showcasing our value-add strategy with verified performance metrics
+              Three core Florida multifamily assets, using verified workbook data and the larger photo library.
             </p>
           </div>
 
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8 mb-12" data-testid="property-grid">
-            {currentProperties.slice(0, 3).map((property) => (
+            {featuredProperties.map((property) => (
               <PropertyCard
                 key={property.id}
                 property={property}
-                imageUrl={getPropertyImage(property.name)}
+                imageUrl={getPublicPropertyImage(property)}
                 onClick={() => openPropertyModal(property)}
               />
             ))}
@@ -196,6 +179,37 @@ export default function Home() {
                 <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
               </Button>
             </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* Portfolio Pulse */}
+      <section className="py-10 md:py-14 bg-soft-cream border-y border-border/50" data-testid="portfolio-pulse-section">
+        <div className="container-wide">
+          <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
+            <div>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-px bg-warm-brass" />
+                <span className="text-xs uppercase tracking-[0.2em] text-warm-brass font-medium">Portfolio Pulse</span>
+              </div>
+              <h2 className="text-foreground mb-2">Current Operating Snapshot</h2>
+              <p className="text-muted-foreground max-w-xl">
+                As of {publicPortfolioPulse.asOf}. This is the operating picture behind the public portfolio, not a stale marketing count.
+              </p>
+            </div>
+            <div className="text-sm text-muted-foreground">
+              Source: {publicPortfolioFacts.sourceWorkbook}
+            </div>
+          </div>
+
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {publicPortfolioPulse.cards.map((card) => (
+              <div key={card.label} className="bg-white border border-border/60 p-5">
+                <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-3">{card.label}</div>
+                <div className="font-serif text-2xl md:text-3xl text-warm-brass mb-1">{card.value}</div>
+                <p className="text-xs text-muted-foreground">{card.sublabel}</p>
+              </div>
+            ))}
           </div>
         </div>
       </section>
@@ -240,7 +254,7 @@ export default function Home() {
                 {/* AUM as Hero - Most Important */}
                 <div className="mb-5">
                   <div className="font-serif text-4xl md:text-5xl lg:text-6xl text-warm-brass font-light tracking-tight mb-1">
-                    ${(currentPortfolioValue / 1000000).toFixed(2)}M
+                    {publicPortfolioFacts.publicAumLabel}
                   </div>
                   <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Current AUM</div>
                 </div>
@@ -297,7 +311,7 @@ export default function Home() {
                     <span className="text-[10px] uppercase tracking-[0.25em] text-warm-brass font-medium">Year-End 2026</span>
                   </div>
                   <div className="px-2.5 py-1 bg-emerald-500/20 border border-emerald-500/30 rounded-sm">
-                    <span className="text-emerald-400 text-xs font-medium">+147% AUM</span>
+                    <span className="text-emerald-400 text-xs font-medium">+136% AUM</span>
                   </div>
                 </div>
 

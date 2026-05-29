@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import { type Property } from "@shared/schema";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { getPropertyImage } from "@/lib/property-data";
+import { getPublicPropertyImage, getPublicPropertyMeta } from "@/lib/public-portfolio-data";
 import { StoryTimeline, VerticalStepIndicator } from "@/components/modals/StoryTimeline";
 import { StepPanel } from "@/components/modals/StepPanel";
 import { MetricRow, SimpleMetric } from "@/components/modals/MetricRow";
@@ -123,6 +125,12 @@ const formatCurrency = (value: number) => {
   return `$${value.toLocaleString()}`;
 };
 
+const formatPreciseCurrency = (value: number) => {
+  if (value >= 1000000) return `$${(value / 1000000).toFixed(2)}M`;
+  if (value >= 1000) return `$${(value / 1000).toFixed(1)}K`;
+  return `$${value.toLocaleString()}`;
+};
+
 const formatPercent = (value: number) => `${(value * 100).toFixed(1)}%`;
 
 const formatPercentChange = (before: number, after: number) => {
@@ -180,6 +188,14 @@ function InvestmentStoryFlow({ property }: { property: Property }) {
   const totalBasis = num(property.acquisitionPrice) + num(property.rehabCosts);
   const beforePhotos = parsePhotos(property.beforePhotos);
   const afterPhotos = parsePhotos(property.afterPhotos);
+  const refiLoanAmount = num(property.refiLoanAmount);
+  const stabilizedNOI = num(property.stabilizedNOI);
+  const projectedSale = num(property.projectedSalePrice) || num(property.arvTotal);
+  const debtYield = num(property.debtYield) || (refiLoanAmount > 0 ? stabilizedNOI / refiLoanAmount : 0);
+  const exitCapRate = num(property.exitCapRate) || (projectedSale > 0 ? stabilizedNOI / projectedSale : 0);
+  const refiTargetLabel = property.refiTargetMonth || property.refiMonth
+    ? `Month ${property.refiTargetMonth || property.refiMonth}`
+    : property.refiTarget || "TBD";
 
   return (
     <div className="space-y-6">
@@ -296,13 +312,13 @@ function InvestmentStoryFlow({ property }: { property: Property }) {
                   <SimpleMetric label="Equity After Refi" value={formatCurrency(num(property.equityAfterRefi))} />
                   <SimpleMetric label="New Monthly P&I" value={formatCurrency(num(property.newMonthlyPI))} />
                   <SimpleMetric label="DSCR" value={`${num(property.dscrStabilized).toFixed(2)}x`} highlight={num(property.dscrStabilized) >= 1.25} />
-                  <SimpleMetric label="Debt Yield" value={formatPercent(num(property.debtYield))} />
+                  <SimpleMetric label="Debt Yield" value={formatPercent(debtYield)} />
                 </div>
               </div>
 
               <div className="mt-3 p-2 bg-muted/30 rounded text-center">
                 <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Target: </span>
-                <span className="text-xs font-medium text-foreground">Month {property.refiTargetMonth || property.refiMonth}</span>
+                <span className="text-xs font-medium text-foreground">{refiTargetLabel}</span>
               </div>
             </StepPanel>
           </div>
@@ -314,7 +330,7 @@ function InvestmentStoryFlow({ property }: { property: Property }) {
           <div className="flex-1">
             <StepPanel stepNumber={4} title="Exit" subtitle="Realize Returns" icon={Target} highlight>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                <SimpleMetric label="Exit Cap Rate" value={formatPercent(num(property.exitCapRate))} />
+                <SimpleMetric label="Exit Cap Rate" value={formatPercent(exitCapRate)} />
                 <SimpleMetric label="Projected Sale" value={formatCurrency(num(property.projectedSalePrice) || num(property.arvTotal))} />
                 <SimpleMetric label="Net Proceeds" value={formatCurrency(num(property.projectedNetProceeds) || num(property.netCashFromSale))} />
               </div>
@@ -440,9 +456,93 @@ function SoldPropertyTimelineView({ property }: { property: Property }) {
   );
 }
 
+function FlipProjectView({ property }: { property: Property }) {
+  const sensitivity = [
+    { label: "Low", sale: 550_000, closingCash: 100_462.01, profit: 27_587.01 },
+    { label: "Base", sale: 575_000, closingCash: 123_712.01, profit: 50_837.01 },
+    { label: "Target", sale: 600_000, closingCash: 146_962.01, profit: 74_087.01 },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="mb-6 aspect-[21/9] bg-muted rounded-lg overflow-hidden">
+        <img
+          src={getPublicPropertyImage(property)}
+          alt={property.name}
+          className="w-full h-full object-cover"
+        />
+      </div>
+
+      {property.investmentThesis && (
+        <div className="p-4 bg-warm-brass/5 border border-warm-brass/20 rounded-lg">
+          <h4 className="text-sm font-semibold text-warm-brass mb-2 flex items-center gap-2">
+            <TrendingUp className="w-4 h-4" />
+            Project Thesis
+          </h4>
+          <p className="text-sm text-muted-foreground leading-relaxed">{property.investmentThesis}</p>
+        </div>
+      )}
+
+      <HeroMetricsBar
+        metrics={[
+          { label: "Target Sale", value: formatPreciseCurrency(num(property.projectedSalePrice) || num(property.currentValue)), highlight: true },
+          { label: "Cash To 5Central", value: formatPreciseCurrency(num(property.projectedNetProceeds)), highlight: true },
+          { label: "Full Project Profit", value: formatPreciseCurrency(num(property.projectedTotalProfit) || num(property.totalProfit)), highlight: true },
+          { label: "ROI", value: `${num(property.cashOnCash).toFixed(1)}%`, highlight: true },
+        ]}
+      />
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="panel-summary p-5">
+          <h4 className="text-sm uppercase tracking-[0.2em] text-muted-foreground mb-4">Project Capital</h4>
+          <div className="grid grid-cols-2 gap-4">
+            <SimpleMetric label="Payoff" value={formatPreciseCurrency(num(property.acquisitionPrice))} />
+            <SimpleMetric label="Rehab Budget" value={formatPreciseCurrency(num(property.rehabCosts))} />
+            <SimpleMetric label="Cash Due At Purchase" value={formatPreciseCurrency(9_700)} />
+            <SimpleMetric label="Rehab Gap" value={formatPreciseCurrency(35_000)} />
+            <SimpleMetric label="Holding Interest" value={formatPreciseCurrency(28_175)} />
+            <SimpleMetric label="Total Contribution" value={formatPreciseCurrency(num(property.initialCapitalRequired))} highlight />
+          </div>
+        </div>
+
+        <div className="panel-summary p-5">
+          <h4 className="text-sm uppercase tracking-[0.2em] text-muted-foreground mb-4">Exit Case</h4>
+          <div className="grid grid-cols-2 gap-4">
+            <SimpleMetric label="Base Hold" value={`${property.holdPeriodMonths || 7} months`} />
+            <SimpleMetric label="Draw Reimbursement" value={formatPreciseCurrency(60_000)} />
+            <SimpleMetric label="Closing Cash" value={formatPreciseCurrency(num(property.projectedNetProceeds))} highlight />
+            <SimpleMetric label="Project Profit" value={formatPreciseCurrency(num(property.totalProfit))} highlight />
+          </div>
+          <p className="text-xs text-muted-foreground mt-4 border-t border-border pt-4">
+            Public view shows full project economics only. Partner splits are intentionally not shown.
+          </p>
+        </div>
+      </div>
+
+      <div className="panel-summary p-5">
+        <h4 className="text-sm uppercase tracking-[0.2em] text-muted-foreground mb-4">Sale Price Sensitivity</h4>
+        <div className="grid md:grid-cols-3 gap-4">
+          {sensitivity.map((item) => (
+            <div key={item.label} className="border border-border bg-background p-4">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground mb-3">{item.label} Case</div>
+              <div className="space-y-3">
+                <SimpleMetric label="Sale Price" value={formatPreciseCurrency(item.sale)} />
+                <SimpleMetric label="Closing Cash" value={formatPreciseCurrency(item.closingCash)} />
+                <SimpleMetric label="Profit" value={formatPreciseCurrency(item.profit)} highlight />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Main Property Modal
 export default function PropertyModal({ property, isOpen, onClose }: PropertyModalProps) {
   if (!property) return null;
+  const meta = getPublicPropertyMeta(property);
+  const isFlip = meta?.assetClass === "single_family_flip";
 
   const acquisitionDate = new Date(property.acquisitionDate);
   const formattedDate = acquisitionDate.toLocaleDateString('en-US', {
@@ -466,15 +566,24 @@ export default function PropertyModal({ property, isOpen, onClose }: PropertyMod
                 </span>
                 <span className="flex items-center gap-1.5">
                   <Building2 className="w-4 h-4" />
-                  {property.units} Units
+                  {isFlip ? "Single-family flip" : `${property.units} Units`}
                 </span>
                 <span className="flex items-center gap-1.5">
                   <Calendar className="w-4 h-4" />
-                  Acquired {formattedDate}
+                  {isFlip ? "Started" : "Acquired"} {formattedDate}
                 </span>
               </div>
+              {meta?.slug && (
+                <Link href={`/portfolio/${meta.slug}`} className="inline-flex mt-3 text-xs uppercase tracking-[0.18em] text-warm-brass hover:underline">
+                  Open asset page
+                </Link>
+              )}
             </div>
-            {property.status === "sold" && (
+            {isFlip ? (
+              <span className="px-3 py-1 text-xs uppercase tracking-wider rounded-full bg-warm-brass/10 text-warm-brass border border-warm-brass/20">
+                Active Flip
+              </span>
+            ) : property.status === "sold" && (
               <span className="px-3 py-1 text-xs uppercase tracking-wider rounded-full bg-warm-brass/10 text-warm-brass border border-warm-brass/20">
                 Sold
               </span>
@@ -495,7 +604,9 @@ export default function PropertyModal({ property, isOpen, onClose }: PropertyMod
           )}
 
           {/* Details Section */}
-          {property.status === "current" ? (
+          {isFlip ? (
+            <FlipProjectView property={property} />
+          ) : property.status === "current" ? (
             <InvestmentStoryFlow property={property} />
           ) : (
             <SoldPropertyTimelineView property={property} />

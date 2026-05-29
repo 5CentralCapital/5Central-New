@@ -9,7 +9,14 @@ import { useToast } from "@/hooks/use-toast";
 export default function Investor() {
   const [initialInvestment, setInitialInvestment] = useState(100000);
   const [investmentDuration, setInvestmentDuration] = useState(5);
-  const [formData, setFormData] = useState({ fullName: "", email: "" });
+  const [formData, setFormData] = useState({
+    fullName: "",
+    email: "",
+    phone: "",
+    company: "",
+    investableCapital: "100000",
+    accreditedStatus: "unknown",
+  });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { toast } = useToast();
 
@@ -43,16 +50,52 @@ export default function Investor() {
     e.preventDefault();
     setIsSubmitting(true);
 
-    // Simulate form submission (in production, this would be an API call)
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    const [firstName, ...lastParts] = formData.fullName.trim().split(/\s+/);
+    const lastName = lastParts.join(" ") || "-";
 
-    toast({
-      title: "Successfully Joined!",
-      description: `Thank you ${formData.fullName}! You've been added to our investor list. We'll contact you at ${formData.email} when new opportunities become available.`,
-    });
+    try {
+      const response = await fetch("/api/investor-signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          firstName,
+          lastName,
+          email: formData.email,
+          phone: formData.phone || null,
+          company: formData.company || null,
+          investableCapital: formData.investableCapital,
+          accreditedStatus: formData.accreditedStatus,
+          source: "website",
+        }),
+      });
 
-    setFormData({ fullName: "", email: "" });
-    setIsSubmitting(false);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || "Signup failed");
+      }
+
+      toast({
+        title: "You're on the list",
+        description: `Got it. We'll use ${formData.email} for investor updates and deal follow-up.`,
+      });
+
+      setFormData({
+        fullName: "",
+        email: "",
+        phone: "",
+        company: "",
+        investableCapital: "100000",
+        accreditedStatus: "unknown",
+      });
+    } catch (error) {
+      toast({
+        title: "Signup did not go through",
+        description: error instanceof Error ? error.message : "Try again or email michael@5central.capital.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -64,10 +107,8 @@ export default function Investor() {
             Investor Opportunities
           </h1>
           <div className="w-24 h-1 bg-accent-gold mx-auto mb-8"></div>
-          <p className="text-2xl text-gray-600 mb-8">Coming Soon</p>
           <p className="text-lg text-gray-700 max-w-3xl mx-auto leading-relaxed">
-            5Central Capital will soon be offering accredited investors the opportunity to co-invest in select real estate deals. 
-            Join our investor list to be the first to know about upcoming opportunities.
+            Join the investor list for direct updates on new multifamily deals, refinance progress, and source-file-backed portfolio reporting.
           </p>
         </div>
       </section>
@@ -78,7 +119,7 @@ export default function Investor() {
           <div className="text-center mb-12">
             <h2 className="text-3xl font-serif font-bold text-primary mb-4">Investment Return Calculator</h2>
             <p className="text-gray-600 max-w-2xl mx-auto">
-              Calculate potential returns based on our target 30% annual return strategy. This calculator demonstrates the power of compound growth in real estate investments.
+              A simple target-case calculator for the private-capital model. It is planning math, not a promised return.
             </p>
           </div>
 
@@ -194,10 +235,10 @@ export default function Investor() {
                 Calculation Methodology
               </summary>
               <div className="mt-2 text-xs text-gray-600 space-y-1">
-                <div>• Based on 30% target annual return strategy</div>
+                <div>• Based on a 30% annual target case</div>
                 <div>• Uses compound growth formula: A = P(1 + r)^t</div>
                 <div>• Assumes consistent annual performance compounding</div>
-                <div>• Conservative estimate based on market opportunities</div>
+                <div>• Built for planning and sensitivity review, not a guarantee</div>
               </div>
             </details>
             
@@ -210,7 +251,6 @@ export default function Investor() {
                 <div>• Based on target return strategy, not guaranteed results</div>
                 <div>• Actual returns may vary significantly from projections</div>
                 <div>• Real estate investments carry inherent risks</div>
-                <div>• Consult with financial advisors before investing</div>
                 <div>• Market conditions and property performance may affect returns</div>
                 <div>• Past performance does not guarantee future results</div>
               </div>
@@ -225,8 +265,7 @@ export default function Investor() {
           <div className="text-center mb-12">
             <h2 className="text-4xl font-serif font-bold mb-6">Exclusive Investment Opportunities</h2>
             <p className="text-xl max-w-3xl mx-auto leading-relaxed opacity-90">
-              We're currently developing our investor portal and preparing to offer accredited investors the opportunity to participate in our high-return multifamily deals. 
-              Our investment offerings will feature carefully selected properties with strong fundamentals and significant upside potential.
+              The next capital stack is being built around Florida value-add multifamily: clear basis, clear rehab plan, clear refinance path, and direct sponsor reporting.
             </p>
           </div>
 
@@ -257,6 +296,9 @@ export default function Investor() {
             <CardContent className="p-8">
               <div className="text-center mb-8">
                 <h2 className="text-3xl font-serif font-bold text-primary mb-4">Join Our Investor List</h2>
+                <p className="text-gray-600">
+                  Real form. It writes straight to the investor CRM.
+                </p>
               </div>
               
               <form onSubmit={handleSubmit} className="space-y-6">
@@ -287,6 +329,65 @@ export default function Investor() {
                     required
                   />
                 </div>
+
+                <div>
+                  <Label htmlFor="phone" className="text-lg font-semibold text-primary">
+                    Phone
+                  </Label>
+                  <Input
+                    id="phone"
+                    type="tel"
+                    value={formData.phone}
+                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                    className="mt-2"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="company" className="text-lg font-semibold text-primary">
+                    Company
+                  </Label>
+                  <Input
+                    id="company"
+                    type="text"
+                    value={formData.company}
+                    onChange={(e) => setFormData({ ...formData, company: e.target.value })}
+                    className="mt-2"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="investableCapital" className="text-lg font-semibold text-primary">
+                    Investable Capital
+                  </Label>
+                  <select
+                    id="investableCapital"
+                    value={formData.investableCapital}
+                    onChange={(e) => setFormData({ ...formData, investableCapital: e.target.value })}
+                    className="mt-2 w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  >
+                    <option value="50000">$50K</option>
+                    <option value="100000">$100K</option>
+                    <option value="250000">$250K</option>
+                    <option value="500000">$500K+</option>
+                  </select>
+                </div>
+
+                <div>
+                  <Label htmlFor="accreditedStatus" className="text-lg font-semibold text-primary">
+                    Accredited Status
+                  </Label>
+                  <select
+                    id="accreditedStatus"
+                    value={formData.accreditedStatus}
+                    onChange={(e) => setFormData({ ...formData, accreditedStatus: e.target.value })}
+                    className="mt-2 w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  >
+                    <option value="unknown">Not sure yet</option>
+                    <option value="self_reported">Accredited</option>
+                    <option value="not_accredited">Not accredited</option>
+                  </select>
+                </div>
                 
                 <Button
                   type="submit"
@@ -298,7 +399,7 @@ export default function Investor() {
               </form>
               
               <p className="text-sm text-gray-600 text-center mt-6">
-                * Investment opportunities are limited to accredited investors only. Past performance does not guarantee future results.
+                Investment opportunities may be limited by accreditation status and deal structure.
               </p>
             </CardContent>
           </Card>

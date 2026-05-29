@@ -19,16 +19,6 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// ── DEV PREVIEW: auto-login when backend is unreachable ──
-const MOCK_ADMIN: User = {
-  id: "preview-admin",
-  email: "admin@5central.com",
-  role: "admin",
-  firstName: "Michael",
-  lastName: "McElwee",
-  createdAt: new Date().toISOString(),
-};
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -44,17 +34,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const data = await response.json();
           setUser(data.user);
         } else {
-          // Backend not running (Vite returned HTML) → auto-login for preview
-          console.info("[DEV PREVIEW] Backend unreachable — using mock admin user");
-          setUser(MOCK_ADMIN);
+          setUser(null);
         }
       } else {
         setUser(null);
       }
     } catch (error) {
-      // Network error (backend not running at all) → auto-login for preview
-      console.info("[DEV PREVIEW] Backend unreachable — using mock admin user");
-      setUser(MOCK_ADMIN);
+      setUser(null);
     } finally {
       setIsLoading(false);
     }
@@ -79,9 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         data = await response.json();
       } catch {
-        // Backend not running — use mock login for preview
-        setUser(MOCK_ADMIN);
-        return { success: true };
+        return { success: false, error: "Login service unavailable" };
       }
 
       if (response.ok) {
@@ -91,9 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { success: false, error: data.message || "Login failed" };
       }
     } catch (error) {
-      // Network error — use mock login for preview
-      setUser(MOCK_ADMIN);
-      return { success: true };
+      return { success: false, error: "Login service unavailable" };
     }
   };
 
