@@ -305,7 +305,7 @@ export default function Portfolio() {
 
       <section className="py-10 md:py-14 bg-background border-b border-border/40" data-testid="asset-dashboard-section">
         <div className="container-wide">
-          <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
+          <div className="mb-8">
             <div>
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-10 h-px bg-warm-brass" />
@@ -315,9 +315,6 @@ export default function Portfolio() {
               <p className="text-muted-foreground max-w-xl">
                 The operating signal is lease-up, rent upside, active rehab, and the 115th liquidity project.
               </p>
-            </div>
-            <div className="text-sm text-muted-foreground">
-              Snapshot: {publicPortfolioPulse.asOf}
             </div>
           </div>
 
