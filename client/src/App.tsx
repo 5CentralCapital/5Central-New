@@ -10,7 +10,9 @@ import Home from "@/pages/home";
 import Founder from "@/pages/founder";
 import Vision from "@/pages/vision";
 import Portfolio from "@/pages/portfolio";
+import PropertyStory from "@/pages/property-story";
 import Investor from "@/pages/investor";
+import DataRoom from "@/pages/data-room";
 import InvestorDashboard from "@/pages/investor-dashboard";
 import AdminDashboard from "@/pages/admin-dashboard";
 import NotFound from "@/pages/not-found";
@@ -21,8 +23,14 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/founder" component={Founder} />
       <Route path="/vision" component={Vision} />
+      <Route path="/portfolio/:slug" component={PropertyStory} />
       <Route path="/portfolio" component={Portfolio} />
       <Route path="/investor" component={Investor} />
+      <Route path="/data-room">
+        <ProtectedRoute allowedRoles={["admin", "investor"]}>
+          <DataRoom />
+        </ProtectedRoute>
+      </Route>
       <Route path="/investor-dashboard">
         <ProtectedRoute allowedRoles={["investor"]}>
           <InvestorDashboard />

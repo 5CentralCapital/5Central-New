@@ -138,7 +138,7 @@ export default function HeroSection({
             />
             <AnimatedMetric
               value={totalUnits || 0}
-              label="Total Units"
+              label="Multifamily Units"
               delay={700}
             />
             <AnimatedMetric

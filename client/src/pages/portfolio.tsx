@@ -1,11 +1,19 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { type Property } from "@shared/schema";
 import PropertyCard from "@/components/property-card";
 import PropertyModal from "@/components/property-modal";
 import GrowthModal from "@/components/growth-modal";
 import PerformanceMetrics from "@/components/performance-metrics";
-import { getPropertyImage } from "@/lib/property-data";
+import {
+  getPublicPropertyImage,
+  growthPlan,
+  publicAllProperties,
+  publicCurrentProperties,
+  publicFlipProject,
+  publicPortfolioFacts,
+  publicPortfolioPulse,
+  publicSoldProperties,
+} from "@/lib/public-portfolio-data";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
@@ -23,18 +31,12 @@ import {
 } from "lucide-react";
 
 export default function Portfolio() {
-  const { data: currentProperties = [], isLoading: currentLoading } = useQuery<Property[]>({
-    queryKey: ["/api/properties/current"],
-  });
-
-  const { data: soldProperties = [], isLoading: soldLoading } = useQuery<Property[]>({
-    queryKey: ["/api/properties/sold"],
-  });
-
-  const { data: allProperties = [], isLoading: allLoading } = useQuery<Property[]>({
-    queryKey: ["/api/properties"],
-  });
-
+  const currentProperties = publicCurrentProperties;
+  const soldProperties = publicSoldProperties;
+  const allProperties = publicAllProperties;
+  const activeProjects = [publicFlipProject];
+  const currentGrowthStep = growthPlan[0];
+  const targetGrowthStep = growthPlan[growthPlan.length - 1];
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'all' | 'current' | 'sold'>('all');
@@ -56,8 +58,6 @@ export default function Portfolio() {
     setSelectedProperty(null);
   };
 
-  const isLoading = currentLoading || soldLoading || allLoading;
-
   // Helper function to get IRR from property (handles both numeric irr and text irrLevered)
   const getPropertyIRR = (property: Property): number => {
     // First check irrLevered (text format like "40-50%") which is more commonly populated
@@ -74,20 +74,8 @@ export default function Portfolio() {
     return 0;
   };
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center pt-16 bg-background" data-testid="portfolio-loading">
-        <div className="text-center">
-          <div className="w-8 h-8 border-2 border-warm-brass border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-muted-foreground text-sm uppercase tracking-wider">Loading Portfolio</p>
-        </div>
-      </div>
-    );
-  }
-
   // Calculate metrics
-  const currentPortfolioValue = currentProperties.reduce((sum, p) => sum + parseFloat(p.currentValue || "0"), 0);
-  const currentUnits = currentProperties.reduce((sum, p) => sum + p.units, 0);
+  const currentUnits = publicPortfolioFacts.activeMultifamilyUnits;
 
   const totalPortfolioValue = allProperties.reduce((sum, p) => sum + parseFloat(p.currentValue || p.salePrice || "0"), 0);
   const totalUnits = allProperties.reduce((sum, p) => sum + p.units, 0);
@@ -137,7 +125,7 @@ export default function Portfolio() {
               </h1>
 
               <p className="text-lg text-muted-foreground max-w-lg leading-relaxed">
-                Track record of multifamily acquisitions across Connecticut and Florida with documented performance metrics.
+                Current Florida portfolio, 115th flip, and realized exits with the same operating data used to run the business.
               </p>
             </div>
 
@@ -145,7 +133,7 @@ export default function Portfolio() {
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="portfolio-overview-stats">
               <div className="stat-block">
                 <div className="stat-block-value" data-testid="stat-current-value">
-                  ${(currentPortfolioValue / 1000000).toFixed(1)}M
+                  {publicPortfolioFacts.publicAumLabel}
                 </div>
                 <div className="stat-block-label">AUM</div>
               </div>
@@ -159,7 +147,7 @@ export default function Portfolio() {
                 <div className="stat-block-value" data-testid="stat-units">
                   {currentUnits}
                 </div>
-                <div className="stat-block-label">Total Units</div>
+                <div className="stat-block-label">Multifamily Units</div>
               </div>
               <div className="stat-block">
                 <div className="stat-block-value" data-testid="stat-multiple">
@@ -214,7 +202,7 @@ export default function Portfolio() {
                 {/* AUM as Hero - Most Important */}
                 <div className="mb-5">
                   <div className="font-serif text-4xl md:text-5xl lg:text-6xl text-warm-brass font-light tracking-tight mb-1">
-                    ${(currentPortfolioValue / 1000000).toFixed(2)}M
+                    {publicPortfolioFacts.publicAumLabel}
                   </div>
                   <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground">Current AUM</div>
                 </div>
@@ -227,7 +215,7 @@ export default function Portfolio() {
                   </div>
                   <div className="h-8 w-px bg-border/50" />
                   <div>
-                    <div className="font-serif text-lg text-foreground">$630K</div>
+                    <div className="font-serif text-lg text-foreground">$618K</div>
                     <div className="text-[9px] uppercase tracking-wider text-muted-foreground">NOI</div>
                   </div>
                   <div className="h-8 w-px bg-border/50" />
@@ -276,7 +264,7 @@ export default function Portfolio() {
                     <span className="text-[10px] uppercase tracking-[0.25em] text-warm-brass font-medium">Year-End 2026</span>
                   </div>
                   <div className="px-2.5 py-1 bg-emerald-500/20 border border-emerald-500/30 rounded-sm">
-                    <span className="text-emerald-400 text-xs font-medium">+147% AUM</span>
+                    <span className="text-emerald-400 text-xs font-medium">+136% AUM</span>
                   </div>
                 </div>
 
@@ -311,6 +299,36 @@ export default function Portfolio() {
               </div>
             </div>
 
+          </div>
+        </div>
+	      </section>
+
+      <section className="py-10 md:py-14 bg-background border-b border-border/40" data-testid="asset-dashboard-section">
+        <div className="container-wide">
+          <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
+            <div>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-px bg-warm-brass" />
+                <span className="text-xs uppercase tracking-[0.2em] text-warm-brass font-medium">Asset Dashboard</span>
+              </div>
+              <h2 className="text-foreground mb-2">What Matters Right Now</h2>
+              <p className="text-muted-foreground max-w-xl">
+                The operating signal is lease-up, rent upside, active rehab, and the 115th liquidity project.
+              </p>
+            </div>
+            <div className="text-sm text-muted-foreground">
+              Snapshot: {publicPortfolioPulse.asOf}
+            </div>
+          </div>
+
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {publicPortfolioPulse.cards.map((card) => (
+              <div key={card.label} className="panel-summary p-5">
+                <div className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-3">{card.label}</div>
+                <div className="font-serif text-2xl md:text-3xl text-warm-brass mb-1">{card.value}</div>
+                <p className="text-xs text-muted-foreground">{card.sublabel}</p>
+              </div>
+            ))}
           </div>
         </div>
       </section>
@@ -349,7 +367,7 @@ export default function Portfolio() {
                 data-state={activeTab === 'current' ? 'active' : 'inactive'}
                 data-testid="tab-current-properties"
               >
-                Current<sup>{currentProperties.length}</sup>
+                Current<sup>{currentProperties.length + activeProjects.length}</sup>
               </button>
               <button
                 className={`tab-elegant ${activeTab === 'sold' ? 'bg-warm-brass text-deep-charcoal' : ''}`}
@@ -378,7 +396,7 @@ export default function Portfolio() {
                     <div>
                       <h3 className="text-2xl font-serif font-medium text-foreground">Current Holdings</h3>
                       <p className="text-sm text-muted-foreground mt-1">
-                        {currentProperties.length} active properties generating consistent returns
+                        {currentProperties.length} active multifamily properties plus one active flip
                       </p>
                     </div>
                   </div>
@@ -398,7 +416,7 @@ export default function Portfolio() {
                         >
                           <div className="collage-image">
                             <img
-                              src={getPropertyImage(property.name)}
+                              src={getPublicPropertyImage(property)}
                               alt={property.name}
                               className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
                             />
@@ -422,7 +440,31 @@ export default function Portfolio() {
                         </div>
                       );
                     })}
+	                  </div>
+	                </div>
+	              </div>
+
+              <div className="mb-12">
+                <div className="flex items-center gap-4 mb-6">
+                  <div className="w-10 h-10 flex items-center justify-center border border-warm-brass/30">
+                    <Target className="w-5 h-5 text-warm-brass" />
                   </div>
+                  <div>
+                    <h3 className="text-2xl font-serif font-medium text-foreground">Active Adjacent Project</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Single-family flip tracked beside the portfolio for liquidity planning. Full project profit is shown; partner splits are not shown.
+                    </p>
+                  </div>
+                </div>
+                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+                  {activeProjects.map((property) => (
+                    <PropertyCard
+                      key={property.id}
+                      property={property}
+                      imageUrl={getPublicPropertyImage(property)}
+                      onClick={() => openPropertyModal(property)}
+                    />
+                  ))}
                 </div>
               </div>
 
@@ -462,7 +504,7 @@ export default function Portfolio() {
                       >
                         <div className="sold-collage-image">
                           <img
-                            src={getPropertyImage(property.name)}
+                            src={getPublicPropertyImage(property)}
                             alt={property.name}
                             className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
                           />
@@ -511,20 +553,20 @@ export default function Portfolio() {
                   <h3 className="text-xl font-serif font-medium text-foreground">Current Holdings Overview</h3>
                 </div>
                 <div className="grid md:grid-cols-3 gap-6">
-                  <div className="text-center md:text-left">
-                    <div className="text-2xl md:text-3xl font-serif font-medium text-warm-brass mb-1" data-testid="current-total-value">
-                      ${(currentProperties.reduce((sum, p) => sum + parseFloat(p.currentValue || "0"), 0) / 1000000).toFixed(2)}M
-                    </div>
-                    <div className="text-sm text-muted-foreground">Current Portfolio Value</div>
+	                  <div className="text-center md:text-left">
+	                    <div className="text-2xl md:text-3xl font-serif font-medium text-warm-brass mb-1" data-testid="current-total-value">
+	                      {publicPortfolioFacts.publicAumLabel}
+	                    </div>
+	                    <div className="text-sm text-muted-foreground">Public AUM</div>
                     <div className="stat-bar mt-3">
                       <div className="stat-bar-fill" style={{ width: '85%' }} />
                     </div>
                   </div>
-                  <div className="text-center md:border-x md:border-border md:px-8">
-                    <div className="text-2xl md:text-3xl font-serif font-medium text-warm-brass mb-1" data-testid="current-total-units">
-                      {currentProperties.reduce((sum, p) => sum + p.units, 0)}
-                    </div>
-                    <div className="text-sm text-muted-foreground">Active Units</div>
+	                  <div className="text-center md:border-x md:border-border md:px-8">
+	                    <div className="text-2xl md:text-3xl font-serif font-medium text-warm-brass mb-1" data-testid="current-total-units">
+	                      {currentUnits}
+	                    </div>
+	                    <div className="text-sm text-muted-foreground">Multifamily Units</div>
                     <div className="stat-bar mt-3">
                       <div className="stat-bar-fill" style={{ width: '70%' }} />
                     </div>
@@ -555,7 +597,7 @@ export default function Portfolio() {
                     >
                       <div className="collage-image">
                         <img
-                          src={getPropertyImage(property.name)}
+                          src={getPublicPropertyImage(property)}
                           alt={property.name}
                           className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
                         />
@@ -578,7 +620,31 @@ export default function Portfolio() {
                       </div>
                     </div>
                   );
-                })}
+	                })}
+	              </div>
+
+              <div className="mt-10">
+                <div className="flex items-center gap-4 mb-6">
+                  <div className="w-10 h-10 flex items-center justify-center border border-warm-brass/30">
+                    <Target className="w-5 h-5 text-warm-brass" />
+                  </div>
+                  <div>
+                    <h3 className="text-2xl font-serif font-medium text-foreground">115th Flip</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Base case: $575K target sale, $123.7K cash to 5Central at closing, $50.8K full project profit.
+                    </p>
+                  </div>
+                </div>
+                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+                  {activeProjects.map((property) => (
+                    <PropertyCard
+                      key={property.id}
+                      property={property}
+                      imageUrl={getPublicPropertyImage(property)}
+                      onClick={() => openPropertyModal(property)}
+                    />
+                  ))}
+                </div>
               </div>
             </div>
           )}
@@ -640,7 +706,7 @@ export default function Portfolio() {
                     >
                       <div className="sold-collage-image">
                         <img
-                          src={getPropertyImage(property.name)}
+                          src={getPublicPropertyImage(property)}
                           alt={property.name}
                           className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
                         />
@@ -708,8 +774,8 @@ export default function Portfolio() {
                   <div className="w-5 h-px bg-warm-brass" />
                   <span className="text-[9px] uppercase tracking-[0.2em] text-warm-brass font-medium">Today</span>
                 </div>
-                <div className="font-serif text-3xl md:text-4xl text-warm-brass">$9.63M</div>
-                <div className="text-muted-foreground text-sm">55 units</div>
+	                <div className="font-serif text-3xl md:text-4xl text-warm-brass">${(currentGrowthStep.aum / 1000000).toFixed(1)}M</div>
+	                <div className="text-muted-foreground text-sm">{currentGrowthStep.units} units</div>
               </div>
 
               {/* Arrow */}
@@ -727,10 +793,10 @@ export default function Portfolio() {
                   <div className="w-5 h-px bg-warm-brass" />
                   <span className="text-[9px] uppercase tracking-[0.2em] text-warm-brass font-medium">2026</span>
                 </div>
-                <div className="font-serif text-3xl md:text-4xl text-foreground">$23.76M</div>
-                <div className="text-muted-foreground text-sm">124 units</div>
+	                <div className="font-serif text-3xl md:text-4xl text-foreground">${(targetGrowthStep.aum / 1000000).toFixed(2)}M</div>
+	                <div className="text-muted-foreground text-sm">{targetGrowthStep.units} units</div>
                 <div className="px-2 py-1 bg-emerald-50 border border-emerald-200 rounded-sm">
-                  <span className="text-emerald-600 text-xs font-medium">+147%</span>
+                  <span className="text-emerald-600 text-xs font-medium">+136%</span>
                 </div>
               </div>
             </div>
@@ -738,23 +804,21 @@ export default function Portfolio() {
 
           {/* Compact Milestone Cards */}
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {[
-              { title: 'Rehab Completion', date: 'Jun', desc: 'Sun Cove & Lucia to 95% occ.', Icon: Building2 },
-              { title: 'Strategic Refi', date: 'Aug', desc: '$843K equity release', Icon: TrendingUp },
-              { title: 'Acquisition #1', date: 'Aug', desc: '40-unit property', Icon: Target },
-              { title: 'Acquisition #2', date: 'Nov', desc: '40-unit to reach goal', Icon: Award },
-            ].map((m, i) => (
-              <div key={i} className="bg-white border border-border/60 p-5 hover:border-warm-brass/40 hover:shadow-md transition-all group">
-                <div className="flex items-start justify-between mb-3">
-                  <div className="w-9 h-9 flex items-center justify-center border border-warm-brass/20 bg-warm-brass/5 group-hover:bg-warm-brass/10 transition-colors">
-                    <m.Icon className="w-4 h-4 text-warm-brass" />
-                  </div>
-                  <span className="text-[10px] uppercase tracking-wider text-warm-brass font-medium">{m.date} '26</span>
-                </div>
-                <h4 className="font-serif text-base font-medium text-foreground mb-1">{m.title}</h4>
-                <p className="text-xs text-muted-foreground">{m.desc}</p>
-              </div>
-            ))}
+	            {growthPlan.map((m, i) => {
+	              const icons = [Building2, TrendingUp, Target, Award];
+	              const Icon = icons[i] || Target;
+	              return (
+	              <div key={i} className="bg-white border border-border/60 p-5 hover:border-warm-brass/40 hover:shadow-md transition-all group">
+	                <div className="flex items-start justify-between mb-3">
+	                  <div className="w-9 h-9 flex items-center justify-center border border-warm-brass/20 bg-warm-brass/5 group-hover:bg-warm-brass/10 transition-colors">
+	                    <Icon className="w-4 h-4 text-warm-brass" />
+	                  </div>
+	                  <span className="text-[10px] uppercase tracking-wider text-warm-brass font-medium">{m.date}</span>
+	                </div>
+	                <h4 className="font-serif text-base font-medium text-foreground mb-1">{m.label}</h4>
+	                <p className="text-xs text-muted-foreground">{m.note}</p>
+	              </div>
+	            )})}
           </div>
         </div>
       </section>
