@@ -1,19 +1,17 @@
 import { useState } from "react";
 import { type Property } from "@shared/schema";
-import PropertyCard from "@/components/property-card";
 import PropertyModal from "@/components/property-modal";
 import GrowthModal from "@/components/growth-modal";
 import PerformanceMetrics from "@/components/performance-metrics";
 import {
   getPublicPropertyImage,
   growthPlan,
-  publicAllProperties,
   publicCurrentProperties,
-  publicFlipProject,
   publicPortfolioFacts,
   publicPortfolioPulse,
   publicSoldProperties,
 } from "@/lib/public-portfolio-data";
+import { currentFlips, flipPortfolioSummary } from "@/lib/flips-data";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Link } from "wouter";
@@ -30,11 +28,40 @@ import {
   Maximize2
 } from "lucide-react";
 
+function FlipsCallout() {
+  return (
+    <Link
+      href="/flips"
+      className="group grid gap-6 border border-border bg-deep-charcoal p-6 text-white transition-all duration-300 hover:border-warm-brass/60 hover:shadow-xl md:grid-cols-[minmax(0,1fr)_auto] md:items-center md:p-8"
+      data-testid="portfolio-flips-callout"
+    >
+      <div>
+        <div className="mb-3 flex items-center gap-3">
+          <Target className="h-4 w-4 text-warm-brass" />
+          <span className="text-[10px] font-medium uppercase tracking-[0.22em] text-warm-brass">Dedicated flips ledger</span>
+        </div>
+        <h3 className="text-3xl text-white">All {currentFlips.length} current small projects, one source.</h3>
+        <p className="mt-3 max-w-2xl text-sm leading-relaxed text-white/60">
+          Two active rehabs and one acquisition under contract, with progress photos, modeled schedules, capital controls, and return metrics from the unified workbook.
+        </p>
+      </div>
+      <div className="flex items-center gap-8 border-t border-white/10 pt-5 md:border-l md:border-t-0 md:pl-8 md:pt-0">
+        <div>
+          <p className="font-serif text-3xl text-white">${(flipPortfolioSummary.projectedSaleValue / 1_000_000).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}M</p>
+          <p className="mt-1 text-[9px] uppercase tracking-[0.16em] text-white/40">Projected exits</p>
+        </div>
+        <span className="flex h-11 w-11 items-center justify-center border border-warm-brass/40 text-warm-brass transition-colors group-hover:bg-warm-brass group-hover:text-deep-charcoal">
+          <ArrowRight className="h-4 w-4" />
+        </span>
+      </div>
+    </Link>
+  );
+}
+
 export default function Portfolio() {
   const currentProperties = publicCurrentProperties;
   const soldProperties = publicSoldProperties;
-  const allProperties = publicAllProperties;
-  const activeProjects = [publicFlipProject];
+  const allProperties = [...currentProperties, ...soldProperties];
   const currentGrowthStep = growthPlan[0];
   const targetGrowthStep = growthPlan[growthPlan.length - 1];
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
@@ -125,7 +152,7 @@ export default function Portfolio() {
               </h1>
 
               <p className="text-lg text-muted-foreground max-w-lg leading-relaxed">
-                Current Florida portfolio, 115th flip, and realized exits with the same operating data used to run the business.
+                Current Florida portfolio, dedicated small-project pipeline, and realized exits with the same operating data used to run the business.
               </p>
             </div>
 
@@ -313,7 +340,7 @@ export default function Portfolio() {
               </div>
               <h2 className="text-foreground mb-2">What Matters Right Now</h2>
               <p className="text-muted-foreground max-w-xl">
-                The operating signal is lease-up, rent upside, active rehab, and the 115th liquidity project.
+                The operating signal is lease-up, rent upside, active rehabs, and the small-project pipeline.
               </p>
             </div>
           </div>
@@ -364,7 +391,7 @@ export default function Portfolio() {
                 data-state={activeTab === 'current' ? 'active' : 'inactive'}
                 data-testid="tab-current-properties"
               >
-                Current<sup>{currentProperties.length + activeProjects.length}</sup>
+                Current<sup>{currentProperties.length}</sup>
               </button>
               <button
                 className={`tab-elegant ${activeTab === 'sold' ? 'bg-warm-brass text-deep-charcoal' : ''}`}
@@ -393,7 +420,7 @@ export default function Portfolio() {
                     <div>
                       <h3 className="text-2xl font-serif font-medium text-foreground">Current Holdings</h3>
                       <p className="text-sm text-muted-foreground mt-1">
-                        {currentProperties.length} active multifamily properties plus one active flip
+                        {currentProperties.length} active multifamily properties; smaller flips are tracked in a dedicated project ledger
                       </p>
                     </div>
                   </div>
@@ -442,27 +469,7 @@ export default function Portfolio() {
 	              </div>
 
               <div className="mb-12">
-                <div className="flex items-center gap-4 mb-6">
-                  <div className="w-10 h-10 flex items-center justify-center border border-warm-brass/30">
-                    <Target className="w-5 h-5 text-warm-brass" />
-                  </div>
-                  <div>
-                    <h3 className="text-2xl font-serif font-medium text-foreground">Active Adjacent Project</h3>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Single-family flip tracked beside the portfolio for liquidity planning. Full project profit is shown; partner splits are not shown.
-                    </p>
-                  </div>
-                </div>
-                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-                  {activeProjects.map((property) => (
-                    <PropertyCard
-                      key={property.id}
-                      property={property}
-                      imageUrl={getPublicPropertyImage(property)}
-                      onClick={() => openPropertyModal(property)}
-                    />
-                  ))}
-                </div>
+                <FlipsCallout />
               </div>
 
               {/* Divider */}
@@ -621,27 +628,7 @@ export default function Portfolio() {
 	              </div>
 
               <div className="mt-10">
-                <div className="flex items-center gap-4 mb-6">
-                  <div className="w-10 h-10 flex items-center justify-center border border-warm-brass/30">
-                    <Target className="w-5 h-5 text-warm-brass" />
-                  </div>
-                  <div>
-                    <h3 className="text-2xl font-serif font-medium text-foreground">115th Flip</h3>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Base case: $575K target sale, $123.7K cash to 5Central at closing, $50.8K full project profit.
-                    </p>
-                  </div>
-                </div>
-                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-                  {activeProjects.map((property) => (
-                    <PropertyCard
-                      key={property.id}
-                      property={property}
-                      imageUrl={getPublicPropertyImage(property)}
-                      onClick={() => openPropertyModal(property)}
-                    />
-                  ))}
-                </div>
+                <FlipsCallout />
               </div>
             </div>
           )}

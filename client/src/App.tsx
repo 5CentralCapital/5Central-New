@@ -10,6 +10,7 @@ import Home from "@/pages/home";
 import Founder from "@/pages/founder";
 import Vision from "@/pages/vision";
 import Portfolio from "@/pages/portfolio";
+import Flips from "@/pages/flips";
 import PropertyStory from "@/pages/property-story";
 import Investor from "@/pages/investor";
 import DataRoom from "@/pages/data-room";
@@ -23,6 +24,7 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/founder" component={Founder} />
       <Route path="/vision" component={Vision} />
+      <Route path="/flips" component={Flips} />
       <Route path="/portfolio/:slug" component={PropertyStory} />
       <Route path="/portfolio" component={Portfolio} />
       <Route path="/investor" component={Investor} />

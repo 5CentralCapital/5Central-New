@@ -555,7 +555,10 @@ export const publicSoldProperties: Property[] = [
   property({ id: "35-linden-st", name: "35 Linden St", address: "35 Linden St", city: "New London", state: "CT", zipCode: "06320", units: 3, acquisitionDate: d("2022-11-01T00:00:00.000Z"), acquisitionPrice: money(385_000), rehabCosts: money(0), salePrice: money(440_000), saleDate: d("2025-01-10T00:00:00.000Z"), status: "sold", ownershipStructure: "Realized exit", ownershipName: "5Central Capital", yearsHeld: "2.00", irr: "35.00", equityMultiple: "1.84", totalBasis: money(385_000), totalCashflow: money(84_000), totalCashflowCollected: money(84_000), saleProceeds: money(122_500), totalProfit: money(94_000), profitPerUnit: money(31_333), initialCapitalRequired: money(112_500), cashOnCash: "37.33", totalReturnPercent: "83.56", appreciationPercent: "14.29", pricePerUnit: money(146_667), avgAnnualReturn: "41.78" }),
 ];
 
-export const publicAllProperties = [...publicCurrentProperties, publicFlipProject, ...publicSoldProperties];
+// Current flips now live in the unified-workbook-backed /flips ledger rather than
+// the multifamily collection, which prevents the legacy single-project snapshot
+// above from leaking stale modeled figures into portfolio totals or stories.
+export const publicAllProperties = [...publicCurrentProperties, ...publicSoldProperties];
 
 export const publicPropertyMeta: Record<string, PublicPropertyMeta> = {
   "sun-cove-apartments": {

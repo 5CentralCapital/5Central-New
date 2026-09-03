@@ -1,7 +1,7 @@
 import { Link, useLocation } from "wouter";
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Menu, LogOut } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
 import LoginModal from "@/components/login-modal";
@@ -29,6 +29,7 @@ export default function Navigation() {
 
   const navItems = [
     { href: "/portfolio", label: "Portfolio" },
+    { href: "/flips", label: "Flips" },
     { href: "/founder", label: "Founder" },
     { href: "/vision", label: "Vision" },
     { href: "/investor", label: "Investor" },
@@ -83,7 +84,7 @@ export default function Navigation() {
           </Link>
 
           {/* Desktop Navigation */}
-          <div className="hidden md:flex items-center gap-10">
+          <div className="hidden lg:flex items-center gap-10">
             {navItems.map((item) => (
               <NavLink key={item.href} {...item} />
             ))}
@@ -124,7 +125,7 @@ export default function Navigation() {
 
           {/* Mobile Navigation */}
           <Sheet open={isOpen} onOpenChange={setIsOpen}>
-            <SheetTrigger asChild className="md:hidden">
+            <SheetTrigger asChild className="lg:hidden">
               <Button
                 variant="ghost"
                 size="icon"
@@ -132,12 +133,15 @@ export default function Navigation() {
                 data-testid="mobile-menu-trigger"
               >
                 <Menu className="h-6 w-6" />
+                <span className="sr-only">Open navigation</span>
               </Button>
             </SheetTrigger>
             <SheetContent
               side="right"
               className="w-full sm:w-80 bg-background border-l border-border p-0"
             >
+              <SheetTitle className="sr-only">Site navigation</SheetTitle>
+              <SheetDescription className="sr-only">Navigate the 5Central Capital website.</SheetDescription>
               <div className="flex flex-col h-full">
                 {/* Mobile Header */}
                 <div className="flex items-center justify-between px-6 py-5 border-b border-border">
