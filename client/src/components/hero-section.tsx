@@ -6,8 +6,8 @@ import { ArrowRight } from "lucide-react";
 interface HeroSectionProps {
   totalPortfolioValue: number;
   totalUnits: number;
-  annualNOI: number;
-  occupancyRate: number;
+  yieldOnCost: number;
+  weightedCapRate: number;
 }
 
 function AnimatedMetric({
@@ -46,8 +46,8 @@ function AnimatedMetric({
 export default function HeroSection({
   totalPortfolioValue,
   totalUnits,
-  annualNOI,
-  occupancyRate,
+  yieldOnCost,
+  weightedCapRate,
 }: HeroSectionProps) {
 
   const formatValue = (value: number) => {
@@ -142,17 +142,16 @@ export default function HeroSection({
               delay={700}
             />
             <AnimatedMetric
-              value={(annualNOI || 0) / 1000}
-              suffix="K"
-              prefix="$"
-              label="Underwritten NOI"
-              decimals={0}
+              value={(yieldOnCost || 0) * 100}
+              suffix="%"
+              label="Yield on Cost"
+              decimals={1}
               delay={800}
             />
             <AnimatedMetric
-              value={(occupancyRate || 0) * 100}
+              value={(weightedCapRate || 0) * 100}
               suffix="%"
-              label="Portfolio Occupancy"
+              label="Weighted Cap Rate"
               decimals={1}
               delay={900}
             />

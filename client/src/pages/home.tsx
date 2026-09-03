@@ -138,8 +138,8 @@ export default function Home() {
       <HeroSection
         totalPortfolioValue={currentPortfolioValue}
         totalUnits={currentUnits}
-        annualNOI={publicPortfolioFacts.underwrittenNOI}
-        occupancyRate={publicPortfolioFacts.currentOccupancy}
+        yieldOnCost={publicPortfolioFacts.yieldOnCost}
+        weightedCapRate={publicPortfolioFacts.weightedCapRate}
       />
 
       {/* Featured Properties */}
