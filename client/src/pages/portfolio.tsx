@@ -28,6 +28,14 @@ import {
   Maximize2
 } from "lucide-react";
 
+const formatPropertyValue = (value: string | null) => {
+  const amount = parseFloat(value || "0");
+  if (amount >= 1_000_000) {
+    return `$${(amount / 1_000_000).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")}M`;
+  }
+  return `$${Math.round(amount / 1_000)}K`;
+};
+
 function FlipsCallout() {
   return (
     <Link
@@ -113,13 +121,17 @@ export default function Portfolio() {
     return sum + Math.max(0, currentValue - totalBasis);
   }, 0);
 
-  const avgReturn = allProperties.length > 0
-    ? allProperties.reduce((sum, p) => sum + getPropertyIRR(p), 0) / allProperties.length
+  const avgReturn = soldProperties.length > 0
+    ? soldProperties.reduce((sum, p) => sum + getPropertyIRR(p), 0) / soldProperties.length
     : 0;
 
-  const avgEquityMultiple = allProperties.length > 0
-    ? allProperties.reduce((sum, p) => sum + parseFloat(p.equityMultiple || "0"), 0) / allProperties.length
+  const avgEquityMultiple = soldProperties.length > 0
+    ? soldProperties.reduce((sum, p) => sum + parseFloat(p.equityMultiple || "0"), 0) / soldProperties.length
     : 0;
+
+  const projectedAumGrowth = Math.round(
+    (publicPortfolioFacts.projected2026Aum / publicPortfolioFacts.publicAum - 1) * 100,
+  );
 
   const totalRealizedProfits = soldProperties.reduce((sum, p) => {
     const acquisitionPrice = parseFloat(p.acquisitionPrice);
@@ -178,9 +190,9 @@ export default function Portfolio() {
               </div>
               <div className="stat-block">
                 <div className="stat-block-value" data-testid="stat-multiple">
-                  {avgEquityMultiple.toFixed(2)}x
+                  {(publicPortfolioFacts.currentOccupancy * 100).toFixed(1)}%
                 </div>
-                <div className="stat-block-label">Avg Multiple</div>
+                <div className="stat-block-label">Occupancy</div>
               </div>
             </div>
           </div>
@@ -242,17 +254,17 @@ export default function Portfolio() {
                   </div>
                   <div className="h-8 w-px bg-border/50" />
                   <div>
-                    <div className="font-serif text-lg text-foreground">$618K</div>
+                    <div className="font-serif text-lg text-foreground">${(publicPortfolioFacts.underwrittenNOI / 1000).toFixed(0)}K</div>
                     <div className="text-[9px] uppercase tracking-wider text-muted-foreground">NOI</div>
                   </div>
                   <div className="h-8 w-px bg-border/50" />
                   <div>
-                    <div className="font-serif text-lg text-foreground">$3.87M</div>
+                    <div className="font-serif text-lg text-foreground">${(publicPortfolioFacts.portfolioEquity / 1_000_000).toFixed(2)}M</div>
                     <div className="text-[9px] uppercase tracking-wider text-muted-foreground">Equity</div>
                   </div>
                   <div className="h-8 w-px bg-border/50" />
                   <div>
-                    <div className="font-serif text-lg text-foreground">10.3%</div>
+                    <div className="font-serif text-lg text-foreground">{(publicPortfolioFacts.yieldOnCost * 100).toFixed(1)}%</div>
                     <div className="text-[9px] uppercase tracking-wider text-muted-foreground">Yield</div>
                   </div>
                 </div>
@@ -291,7 +303,7 @@ export default function Portfolio() {
                     <span className="text-[10px] uppercase tracking-[0.25em] text-warm-brass font-medium">Year-End 2026</span>
                   </div>
                   <div className="px-2.5 py-1 bg-emerald-500/20 border border-emerald-500/30 rounded-sm">
-                    <span className="text-emerald-400 text-xs font-medium">+136% AUM</span>
+                    <span className="text-emerald-400 text-xs font-medium">+{projectedAumGrowth}% AUM</span>
                   </div>
                 </div>
 
@@ -455,9 +467,9 @@ export default function Portfolio() {
                                 {property.city}, {property.state}
                               </p>
                               <div className="collage-stats">
-                                <span>${(parseFloat(property.currentValue || '0') / 1000000).toFixed(1)}M</span>
+                                <span>{formatPropertyValue(property.currentValue)}</span>
                                 <span className="collage-divider">|</span>
-                                <span>{property.irrLevered || `${getPropertyIRR(property).toFixed(0)}%`} IRR</span>
+                                <span>{(parseFloat(property.occupancyRate || "0") * 100).toFixed(0)}% occupied</span>
                               </div>
                             </div>
                           </div>
@@ -576,10 +588,10 @@ export default function Portfolio() {
                     </div>
                   </div>
                   <div className="text-center md:text-right">
-                    <div className="text-2xl md:text-3xl font-serif font-medium text-warm-brass mb-1" data-testid="current-avg-irr">
-                      {(currentProperties.reduce((sum, p) => sum + getPropertyIRR(p), 0) / currentProperties.length).toFixed(1)}%
+                    <div className="text-2xl md:text-3xl font-serif font-medium text-warm-brass mb-1" data-testid="current-underwritten-noi">
+                      ${(publicPortfolioFacts.underwrittenNOI / 1000).toFixed(0)}K
                     </div>
-                    <div className="text-sm text-muted-foreground">Avg Projected IRR</div>
+                    <div className="text-sm text-muted-foreground">Underwritten NOI</div>
                     <div className="stat-bar mt-3">
                       <div className="stat-bar-fill" style={{ width: '92%' }} />
                     </div>
@@ -616,9 +628,9 @@ export default function Portfolio() {
                             {property.city}, {property.state}
                           </p>
                           <div className="collage-stats">
-                            <span>${(parseFloat(property.currentValue || '0') / 1000000).toFixed(1)}M</span>
+                            <span>{formatPropertyValue(property.currentValue)}</span>
                             <span className="collage-divider">|</span>
-                            <span>{property.irrLevered || `${getPropertyIRR(property).toFixed(0)}%`} IRR</span>
+                            <span>{(parseFloat(property.occupancyRate || "0") * 100).toFixed(0)}% occupied</span>
                           </div>
                         </div>
                       </div>
@@ -780,7 +792,7 @@ export default function Portfolio() {
 	                <div className="font-serif text-3xl md:text-4xl text-foreground">${(targetGrowthStep.aum / 1000000).toFixed(2)}M</div>
 	                <div className="text-muted-foreground text-sm">{targetGrowthStep.units} units</div>
                 <div className="px-2 py-1 bg-emerald-50 border border-emerald-200 rounded-sm">
-                  <span className="text-emerald-600 text-xs font-medium">+136%</span>
+                  <span className="text-emerald-600 text-xs font-medium">+{projectedAumGrowth}%</span>
                 </div>
               </div>
             </div>

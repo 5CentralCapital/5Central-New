@@ -1,4 +1,4 @@
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Building2,
   TrendingUp,
@@ -9,6 +9,7 @@ import {
   ArrowRight,
   Award
 } from "lucide-react";
+import { publicCurrentProperties, publicPortfolioFacts } from "@/lib/public-portfolio-data";
 
 interface GrowthModalProps {
   isOpen: boolean;
@@ -16,25 +17,36 @@ interface GrowthModalProps {
   type: 'current' | 'future';
 }
 
-// Current Portfolio Data
+const compactMoney = (value: number) =>
+  value >= 1_000_000 ? `$${(value / 1_000_000).toFixed(2)}M` : `$${(value / 1_000).toFixed(1)}K`;
+
+const exactMoney = (value: number) => {
+  const hasCents = Math.abs(value - Math.round(value)) > 0.001;
+  return `$${value.toLocaleString("en-US", {
+    minimumFractionDigits: hasCents ? 2 : 0,
+    maximumFractionDigits: 2,
+  })}`;
+};
+
+// Current property totals use the same public underwriting object as the portfolio page.
 const currentData = {
-  totalUnits: 55,
-  aum: 9.63,
-  annualNOI: 630,
-  yieldOnCost: 10.3,
-  portfolioLTV: 59,
-  totalEquity: 3.87,
-  properties: [
-    { name: 'Sun Cove', units: 21, multiple: '5.30x', status: 'In Rehab' },
-    { name: 'Lucia', units: 16, multiple: '6.70x', status: 'In Rehab' },
-    { name: 'MLK', units: 10, multiple: '1.58x', status: 'Stabilized' },
-    { name: 'Hickory Landing', units: 8, multiple: '1.59x', status: 'Stabilized' },
-  ],
+  totalUnits: publicPortfolioFacts.activeMultifamilyUnits,
+  aum: publicPortfolioFacts.publicAum / 1_000_000,
+  annualNOI: publicPortfolioFacts.underwrittenNOI / 1_000,
+  yieldOnCost: publicPortfolioFacts.yieldOnCost * 100,
+  portfolioLTV: publicPortfolioFacts.currentMortgageDebt / publicPortfolioFacts.publicAum * 100,
+  totalEquity: publicPortfolioFacts.portfolioEquity / 1_000_000,
+  properties: publicCurrentProperties.map((property) => ({
+    name: property.name.replace(" Apartments", ""),
+    units: property.units,
+    noi: exactMoney(parseFloat(property.noi || "0")),
+    status: property.phase === "lease_up" ? "Lease-up" : "Stabilizing",
+  })),
   keyMetrics: [
-    { label: 'Total Properties', value: '4', icon: Building2 },
-    { label: 'Avg Equity Multiple', value: '3.82x', icon: TrendingUp },
-    { label: 'Weighted Avg IRR', value: '28.5%', icon: Percent },
-    { label: 'Avg Hold Period', value: '2.3 yrs', icon: Calendar },
+    { label: 'Portfolio Occupancy', value: `${(publicPortfolioFacts.currentOccupancy * 100).toFixed(1)}%`, icon: Building2 },
+    { label: 'Contracted Base Rent', value: `${compactMoney(publicPortfolioFacts.inPlaceMonthlyRent)}/mo`, icon: DollarSign },
+    { label: 'Underwritten Rent', value: `${compactMoney(publicPortfolioFacts.proformaMonthlyRent)}/mo`, icon: TrendingUp },
+    { label: 'Weighted Cap Rate', value: `${(publicPortfolioFacts.weightedCapRate * 100).toFixed(1)}%`, icon: Percent },
   ]
 };
 
@@ -112,8 +124,11 @@ function CurrentPortfolioView() {
               Current State
             </span>
             <DialogTitle className="text-2xl font-serif font-medium text-foreground">
-              Today's Portfolio
+              Current Portfolio
             </DialogTitle>
+            <DialogDescription className="sr-only">
+              Current property-level portfolio totals and underwriting metrics.
+            </DialogDescription>
           </div>
         </div>
       </DialogHeader>
@@ -129,13 +144,13 @@ function CurrentPortfolioView() {
           </div>
           <div className="text-center p-6 bg-white border border-border rounded-lg">
             <div className="font-serif text-5xl font-light text-warm-brass mb-2">
-              ${currentData.aum}M
+              ${currentData.aum.toFixed(2)}M
             </div>
             <div className="text-sm uppercase tracking-wider text-muted-foreground">Assets Under Management</div>
           </div>
           <div className="text-center p-6 bg-white border border-border rounded-lg">
             <div className="font-serif text-5xl font-light text-foreground mb-2">
-              ${currentData.annualNOI}K
+              ${currentData.annualNOI.toFixed(1)}K
             </div>
             <div className="text-sm uppercase tracking-wider text-muted-foreground">Annual NOI</div>
           </div>
@@ -164,7 +179,7 @@ function CurrentPortfolioView() {
                 <tr>
                   <th className="text-left px-4 py-3 text-xs uppercase tracking-wider text-muted-foreground font-medium">Property</th>
                   <th className="text-center px-4 py-3 text-xs uppercase tracking-wider text-muted-foreground font-medium">Units</th>
-                  <th className="text-center px-4 py-3 text-xs uppercase tracking-wider text-muted-foreground font-medium">Equity Multiple</th>
+                  <th className="text-center px-4 py-3 text-xs uppercase tracking-wider text-muted-foreground font-medium">Underwritten NOI</th>
                   <th className="text-right px-4 py-3 text-xs uppercase tracking-wider text-muted-foreground font-medium">Status</th>
                 </tr>
               </thead>
@@ -173,7 +188,7 @@ function CurrentPortfolioView() {
                   <tr key={i} className="hover:bg-soft-cream/50 transition-colors">
                     <td className="px-4 py-4 font-medium text-foreground">{prop.name}</td>
                     <td className="px-4 py-4 text-center text-muted-foreground">{prop.units}</td>
-                    <td className="px-4 py-4 text-center font-medium text-warm-brass">{prop.multiple}</td>
+                    <td className="px-4 py-4 text-center font-medium text-warm-brass">{prop.noi}</td>
                     <td className="px-4 py-4 text-right">
                       <span className={`inline-flex px-2 py-1 text-xs rounded-full ${
                         prop.status === 'Stabilized'
@@ -193,15 +208,15 @@ function CurrentPortfolioView() {
         {/* Portfolio Metrics Grid */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4 border-t border-border">
           <div className="p-4 border-l-2 border-warm-brass/30">
-            <div className="font-serif text-xl text-foreground mb-1">{currentData.yieldOnCost}%</div>
+            <div className="font-serif text-xl text-foreground mb-1">{currentData.yieldOnCost.toFixed(1)}%</div>
             <div className="text-xs uppercase tracking-wider text-muted-foreground">Yield on Cost</div>
           </div>
           <div className="p-4 border-l-2 border-warm-brass/30">
-            <div className="font-serif text-xl text-foreground mb-1">{currentData.portfolioLTV}%</div>
+            <div className="font-serif text-xl text-foreground mb-1">{currentData.portfolioLTV.toFixed(1)}%</div>
             <div className="text-xs uppercase tracking-wider text-muted-foreground">Portfolio LTV</div>
           </div>
           <div className="p-4 border-l-2 border-warm-brass/30">
-            <div className="font-serif text-xl text-foreground mb-1">${currentData.totalEquity}M</div>
+            <div className="font-serif text-xl text-foreground mb-1">${currentData.totalEquity.toFixed(2)}M</div>
             <div className="text-xs uppercase tracking-wider text-muted-foreground">Total Equity</div>
           </div>
           <div className="p-4 border-l-2 border-warm-brass/30">
@@ -236,6 +251,9 @@ function FutureVisionView() {
             <DialogTitle className="text-2xl font-serif font-medium text-white">
               Growth Roadmap
             </DialogTitle>
+            <DialogDescription className="sr-only">
+              Future portfolio targets and planned growth milestones.
+            </DialogDescription>
           </div>
         </div>
       </DialogHeader>
@@ -266,7 +284,7 @@ function FutureVisionView() {
             </div>
             <div className="text-sm uppercase tracking-wider text-white/50">Target AUM</div>
             <div className="flex items-center gap-2 mt-3 text-sm text-white/50">
-              <span>$9.63M</span>
+              <span>{publicPortfolioFacts.publicAumLabel}</span>
               <ArrowRight className="w-4 h-4 text-warm-brass" />
               <span className="text-warm-brass font-medium">${futureData.targetAUM}M</span>
             </div>

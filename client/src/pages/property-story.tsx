@@ -17,6 +17,14 @@ const formatCurrency = (value: number) => {
   return `$${value.toLocaleString()}`;
 };
 
+const formatExactCurrency = (value: number) => {
+  const hasCents = Math.abs(value - Math.round(value)) > 0.001;
+  return `$${value.toLocaleString("en-US", {
+    minimumFractionDigits: hasCents ? 2 : 0,
+    maximumFractionDigits: 2,
+  })}`;
+};
+
 const parsePhotos = (photosJson: string | null | undefined): string[] => {
   if (!photosJson) return [];
   try {
@@ -47,10 +55,13 @@ function metricsFor(property: Property) {
   }
 
   return [
-    { label: "Public Value", value: formatCurrency(num(property.currentValue)) },
-    { label: "Units", value: property.units.toString() },
-    { label: "Occupied", value: `${property.occupiedUnits || 0}/${property.totalUnits || property.units}` },
-    { label: "Rent Upside", value: formatCurrency(num(property.rentUpside)) + "/mo" },
+    {
+      label: property.id === "mlk-apartments" ? "Appraised Value" : "Underwritten Value",
+      value: formatExactCurrency(num(property.currentValue)),
+    },
+    { label: "Underwritten NOI", value: formatExactCurrency(num(property.stabilizedNOI) || num(property.noi)) },
+    { label: "Cap Rate", value: `${(num(property.exitCapRate) * 100).toFixed(1)}%` },
+    { label: "Occupancy", value: `${(num(property.occupancyRate) * 100).toFixed(1)}%` },
   ];
 }
 

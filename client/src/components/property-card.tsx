@@ -29,6 +29,21 @@ export default function PropertyCard({ property, imageUrl, onClick }: PropertyCa
     return `${num > 0 ? '+' : ''}${num.toFixed(1)}%`;
   };
 
+  const formatPercentValue = (value: string | null) => {
+    if (!value) return "—";
+    return `${(parseFloat(value) * 100).toFixed(1)}%`;
+  };
+
+  const formatExactCurrency = (value: string | null) => {
+    if (!value) return "—";
+    const amount = parseFloat(value);
+    const hasCents = Math.abs(amount - Math.round(amount)) > 0.001;
+    return `$${amount.toLocaleString("en-US", {
+      minimumFractionDigits: hasCents ? 2 : 0,
+      maximumFractionDigits: 2,
+    })}`;
+  };
+
   const calculateIRRFromTotalProfit = (property: Property) => {
     const initialInvestment = parseFloat(property.acquisitionPrice) + parseFloat(property.rehabCosts || '0');
     const totalCashCollected = parseFloat(property.totalCashflow || '0');
@@ -144,10 +159,16 @@ export default function PropertyCard({ property, imageUrl, onClick }: PropertyCa
             </div>
             <div>
               <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">
-                {property.status === 'sold' ? 'Sale Price' : 'Current Value'}
+                {property.status === 'sold'
+                  ? 'Sale Price'
+                  : property.id === 'mlk-apartments'
+                    ? 'Appraised Value'
+                    : 'Underwritten Value'}
               </div>
               <div className="text-lg font-medium text-warm-brass" data-testid={`property-current-value-${property.id}`}>
-                {formatCurrency(property.currentValue || property.salePrice)}
+                {property.status === 'current'
+                  ? formatExactCurrency(property.currentValue || property.salePrice)
+                  : formatCurrency(property.currentValue || property.salePrice)}
               </div>
             </div>
             {property.status === 'current' ? (
@@ -161,7 +182,7 @@ export default function PropertyCard({ property, imageUrl, onClick }: PropertyCa
               <div>
                 <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">NOI</div>
                 <div className="text-lg font-medium text-foreground" data-testid={`property-cashflow-${property.id}`}>
-                  {formatCurrency(property.noi)}
+                  {formatExactCurrency(property.noi)}
                 </div>
               </div>
             </>
@@ -193,40 +214,63 @@ export default function PropertyCard({ property, imageUrl, onClick }: PropertyCa
 
         {/* Performance Metrics */}
         <div className="pt-6 border-t border-border">
-          <div className="grid grid-cols-3 gap-4">
-            <div className="text-center">
-              <div className="text-xl font-serif font-medium text-warm-brass" data-testid={`property-irr-${property.id}`}>
-                {isFlip ? `${parseFloat(property.cashOnCash || "0").toFixed(1)}%` : formatIRR(calculateIRRFromTotalProfit(property))}
+          {property.status === 'current' && !isFlip ? (
+            <div className="grid grid-cols-3 gap-4">
+              <div className="text-center">
+                <div className="text-xl font-serif font-medium text-warm-brass" data-testid={`property-cap-rate-${property.id}`}>
+                  {formatPercentValue(property.exitCapRate)}
+                </div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground mt-1">Cap Rate</div>
               </div>
-              <div className="text-xs uppercase tracking-wider text-muted-foreground mt-1">{isFlip ? "ROI" : "IRR"}</div>
-            </div>
-            <div className="text-center border-x border-border">
-              <div className="text-xl font-serif font-medium text-warm-brass" data-testid={`property-equity-multiple-${property.id}`}>
-                {property.equityMultiple || '—'}x
+              <div className="text-center border-x border-border">
+                <div className="text-xl font-serif font-medium text-warm-brass" data-testid={`property-yoc-${property.id}`}>
+                  {formatPercentValue(property.yieldOnCost)}
+                </div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground mt-1">Yield on Cost</div>
               </div>
-              <div className="text-xs uppercase tracking-wider text-muted-foreground mt-1">Multiple</div>
+              <div className="text-center">
+                <div className="text-xl font-serif font-medium text-warm-brass" data-testid={`property-occupancy-${property.id}`}>
+                  {formatPercentValue(property.occupancyRate)}
+                </div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground mt-1">Occupancy</div>
+              </div>
             </div>
-            <div className="text-center">
-              <div className="text-xl font-serif font-medium text-warm-brass" data-testid={`property-coc-${property.id}`}>
-                {isFlip ? (
-                  `${property.holdPeriodMonths || 7} mo`
-                ) : (() => {
-                  const initialInvestment = parseFloat(property.acquisitionPrice) + parseFloat(property.rehabCosts || '0');
-                  const totalCashCollected = parseFloat(property.totalCashflow || '0');
-                  const exitValue = parseFloat(property.salePrice || property.currentValue || '0');
-                  const yearsHeld = parseFloat(property.yearsHeld || '0');
+          ) : (
+            <div className="grid grid-cols-3 gap-4">
+              <div className="text-center">
+                <div className="text-xl font-serif font-medium text-warm-brass" data-testid={`property-irr-${property.id}`}>
+                  {isFlip ? `${parseFloat(property.cashOnCash || "0").toFixed(1)}%` : formatIRR(calculateIRRFromTotalProfit(property))}
+                </div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground mt-1">{isFlip ? "ROI" : "IRR"}</div>
+              </div>
+              <div className="text-center border-x border-border">
+                <div className="text-xl font-serif font-medium text-warm-brass" data-testid={`property-equity-multiple-${property.id}`}>
+                  {property.equityMultiple || '—'}x
+                </div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground mt-1">Multiple</div>
+              </div>
+              <div className="text-center">
+                <div className="text-xl font-serif font-medium text-warm-brass" data-testid={`property-coc-${property.id}`}>
+                  {isFlip ? (
+                    `${property.holdPeriodMonths || 7} mo`
+                  ) : (() => {
+                    const initialInvestment = parseFloat(property.acquisitionPrice) + parseFloat(property.rehabCosts || '0');
+                    const totalCashCollected = parseFloat(property.totalCashflow || '0');
+                    const exitValue = parseFloat(property.salePrice || property.currentValue || '0');
+                    const yearsHeld = parseFloat(property.yearsHeld || '0');
 
-                  if (initialInvestment && exitValue && yearsHeld > 0) {
-                    const totalProfit = exitValue + totalCashCollected - initialInvestment;
-                    const annualizedCOC = (totalProfit / initialInvestment / yearsHeld) * 100;
-                    return `${annualizedCOC.toFixed(1)}%`;
-                  }
-                  return '—';
-                })()}
+                    if (initialInvestment && exitValue && yearsHeld > 0) {
+                      const totalProfit = exitValue + totalCashCollected - initialInvestment;
+                      const annualizedCOC = (totalProfit / initialInvestment / yearsHeld) * 100;
+                      return `${annualizedCOC.toFixed(1)}%`;
+                    }
+                    return '—';
+                  })()}
+                </div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground mt-1">{isFlip ? "Hold" : "COC"}</div>
               </div>
-              <div className="text-xs uppercase tracking-wider text-muted-foreground mt-1">{isFlip ? "Hold" : "COC"}</div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

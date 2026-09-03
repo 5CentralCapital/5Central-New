@@ -74,15 +74,6 @@ export default function Home() {
   const currentPortfolioValue = publicPortfolioFacts.publicAum;
   const currentUnits = publicPortfolioFacts.activeMultifamilyUnits;
 
-  const currentAvgReturn = currentProperties.length > 0
-    ? currentProperties.reduce((sum, p) => sum + getPropertyIRR(p), 0) / currentProperties.length
-    : 0;
-
-  const currentAvgEquityMultiple = currentProperties.length > 0 ? currentProperties.reduce((sum, p) => {
-    const multiple = parseFloat(p.equityMultiple || "0");
-    return sum + multiple;
-  }, 0) / currentProperties.length : 0;
-
   // Calculate metrics for ALL properties (current + sold) for performance metrics section
   const totalPortfolioValue = allProperties.reduce((sum, p) => {
     const value = parseFloat(p.currentValue || p.salePrice || "0");
@@ -97,14 +88,18 @@ export default function Home() {
     return sum + Math.max(0, currentValue - totalBasis);
   }, 0);
 
-  const avgReturn = allProperties.length > 0
-    ? allProperties.reduce((sum, p) => sum + getPropertyIRR(p), 0) / allProperties.length
+  const avgReturn = soldProperties.length > 0
+    ? soldProperties.reduce((sum, p) => sum + getPropertyIRR(p), 0) / soldProperties.length
     : 0;
 
-  const avgEquityMultiple = allProperties.length > 0 ? allProperties.reduce((sum, p) => {
+  const avgEquityMultiple = soldProperties.length > 0 ? soldProperties.reduce((sum, p) => {
     const multiple = parseFloat(p.equityMultiple || "0");
     return sum + multiple;
-  }, 0) / allProperties.length : 0;
+  }, 0) / soldProperties.length : 0;
+
+  const projectedAumGrowth = Math.round(
+    (publicPortfolioFacts.projected2026Aum / publicPortfolioFacts.publicAum - 1) * 100,
+  );
 
   const totalRealizedProfits = soldProperties.reduce((sum, p) => {
     const acquisitionPrice = parseFloat(p.acquisitionPrice);
@@ -124,7 +119,7 @@ export default function Home() {
     {
       icon: Award,
       title: "Execution Proof",
-      description: "Four active Florida multifamily assets, one active flip, and a documented exit track record."
+      description: "Four active Florida multifamily assets, three small-project flips, and a documented exit track record."
     },
     {
       icon: Users,
@@ -143,8 +138,8 @@ export default function Home() {
       <HeroSection
         totalPortfolioValue={currentPortfolioValue}
         totalUnits={currentUnits}
-        avgEquityMultiple={currentAvgEquityMultiple}
-        avgReturn={currentAvgReturn}
+        annualNOI={publicPortfolioFacts.underwrittenNOI}
+        occupancyRate={publicPortfolioFacts.currentOccupancy}
       />
 
       {/* Featured Properties */}
@@ -186,7 +181,7 @@ export default function Home() {
       {/* Portfolio Pulse */}
       <section className="py-10 md:py-14 bg-soft-cream border-y border-border/50" data-testid="portfolio-pulse-section">
         <div className="container-wide">
-          <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
+          <div className="mb-8">
             <div>
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-10 h-px bg-warm-brass" />
@@ -194,11 +189,8 @@ export default function Home() {
               </div>
               <h2 className="text-foreground mb-2">Current Operating Snapshot</h2>
               <p className="text-muted-foreground max-w-xl">
-                As of {publicPortfolioPulse.asOf}. This is the operating picture behind the public portfolio, not a stale marketing count.
+                Contracted rent and occupancy are shown alongside the approved property underwriting.
               </p>
-            </div>
-            <div className="text-sm text-muted-foreground">
-              Source: {publicPortfolioFacts.sourceWorkbook}
             </div>
           </div>
 
@@ -272,7 +264,7 @@ export default function Home() {
                   </div>
                   <div className="h-8 w-px bg-border/50" />
                   <div>
-                    <div className="font-serif text-lg text-foreground">$3.87M</div>
+                    <div className="font-serif text-lg text-foreground">${(publicPortfolioFacts.portfolioEquity / 1_000_000).toFixed(2)}M</div>
                     <div className="text-[9px] uppercase tracking-wider text-muted-foreground">Equity</div>
                   </div>
                 </div>
@@ -311,7 +303,7 @@ export default function Home() {
                     <span className="text-[10px] uppercase tracking-[0.25em] text-warm-brass font-medium">Year-End 2026</span>
                   </div>
                   <div className="px-2.5 py-1 bg-emerald-500/20 border border-emerald-500/30 rounded-sm">
-                    <span className="text-emerald-400 text-xs font-medium">+136% AUM</span>
+                    <span className="text-emerald-400 text-xs font-medium">+{projectedAumGrowth}% AUM</span>
                   </div>
                 </div>
 
