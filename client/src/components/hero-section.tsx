@@ -6,8 +6,8 @@ import { ArrowRight } from "lucide-react";
 interface HeroSectionProps {
   totalPortfolioValue: number;
   totalUnits: number;
-  yieldOnCost: number;
-  weightedCapRate: number;
+  avgRealizedIRR: number;
+  avgRealizedCashOnCash: number;
 }
 
 function AnimatedMetric({
@@ -46,8 +46,8 @@ function AnimatedMetric({
 export default function HeroSection({
   totalPortfolioValue,
   totalUnits,
-  yieldOnCost,
-  weightedCapRate,
+  avgRealizedIRR,
+  avgRealizedCashOnCash,
 }: HeroSectionProps) {
 
   const formatValue = (value: number) => {
@@ -142,16 +142,16 @@ export default function HeroSection({
               delay={700}
             />
             <AnimatedMetric
-              value={(yieldOnCost || 0) * 100}
+              value={avgRealizedIRR || 0}
               suffix="%"
-              label="Yield on Cost"
+              label="Avg Realized IRR"
               decimals={1}
               delay={800}
             />
             <AnimatedMetric
-              value={(weightedCapRate || 0) * 100}
+              value={avgRealizedCashOnCash || 0}
               suffix="%"
-              label="Weighted Cap Rate"
+              label="Avg Realized Cash-on-Cash"
               decimals={1}
               delay={900}
             />

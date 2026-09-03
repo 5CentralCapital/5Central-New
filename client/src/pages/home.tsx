@@ -97,6 +97,10 @@ export default function Home() {
     return sum + multiple;
   }, 0) / soldProperties.length : 0;
 
+  const avgCashOnCash = soldProperties.length > 0
+    ? soldProperties.reduce((sum, p) => sum + parseFloat(p.cashOnCash || "0"), 0) / soldProperties.length
+    : 0;
+
   const projectedAumGrowth = Math.round(
     (publicPortfolioFacts.projected2026Aum / publicPortfolioFacts.publicAum - 1) * 100,
   );
@@ -138,8 +142,8 @@ export default function Home() {
       <HeroSection
         totalPortfolioValue={currentPortfolioValue}
         totalUnits={currentUnits}
-        yieldOnCost={publicPortfolioFacts.yieldOnCost}
-        weightedCapRate={publicPortfolioFacts.weightedCapRate}
+        avgRealizedIRR={avgReturn}
+        avgRealizedCashOnCash={avgCashOnCash}
       />
 
       {/* Featured Properties */}
