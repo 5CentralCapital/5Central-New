@@ -1,3 +1,4 @@
+import { configuredSupplementVerifier, type SupplementVerifierConfig } from "./supplement-receipt-verifier";
 import { pathToFileURL } from "node:url";
 import type { RentOpsQueryExecutor } from "../repositories/postgres";
 import {
@@ -27,7 +28,7 @@ const SAFE_IDENTIFIER = /^[A-Za-z0-9:_-]{1,128}$/;
 const SAFE_REASON = /^[A-Za-z0-9_.:-]{1,160}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
 
-export interface RestrictedMigrationCliArgs {
+export interface RestrictedMigrationCliArgs extends SupplementVerifierConfig {
   archiveRoot: string;
   mode: "dry_run" | "apply";
   importerOptions: PersistenceImporterOptions;
@@ -199,6 +200,8 @@ function argumentValue(argv: readonly string[], index: number, flag: string): { 
 
 /** Parses only explicit non-secret operator controls. Dry-run is the default. */
 export function parseRestrictedMigrationCliArgs(argv: readonly string[]): RestrictedMigrationCliArgs {
+  let trustedPublicKeyPath: string | undefined;
+  let signedReceiptPath: string | undefined;
   let archiveRoot: string | undefined;
   let mode: "dry_run" | "apply" = "dry_run";
   let targetClassification: PersistenceImporterOptions["targetClassification"];
@@ -218,6 +221,8 @@ export function parseRestrictedMigrationCliArgs(argv: readonly string[]): Restri
     const argument = argv[index];
     if (argument === "--apply") { mode = "apply"; continue; }
     if (argument === "--dry-run" || argument === "--dry_run") { mode = "dry_run"; continue; }
+    if (argument === "--trusted-supplement-public-key" || argument.startsWith("--trusted-supplement-public-key=")) { const p = argumentValue(argv, index, "--trusted-supplement-public-key"); trustedPublicKeyPath = p.value; index = p.nextIndex; continue; }
+    if (argument === "--signed-supplement-receipt" || argument.startsWith("--signed-supplement-receipt=")) { const p = argumentValue(argv, index, "--signed-supplement-receipt"); signedReceiptPath = p.value; index = p.nextIndex; continue; }
     if (argument === "--help" || argument === "-h") throw new Error("restricted_migration_cli_usage");
     if (argument === "--archive-root" || argument.startsWith("--archive-root=")) { const parsed = argumentValue(argv, index, "--archive-root"); archiveRoot = parsed.value; index = parsed.nextIndex; continue; }
     if (argument === "--target-classification" || argument.startsWith("--target-classification=")) { const parsed = argumentValue(argv, index, "--target-classification"); if (parsed.value !== "staging" && parsed.value !== "production" && parsed.value !== "unclassified") throw new Error("target_classification_invalid"); targetClassification = parsed.value; index = parsed.nextIndex; continue; }
@@ -244,6 +249,8 @@ export function parseRestrictedMigrationCliArgs(argv: readonly string[]): Restri
     : undefined;
   return {
     archiveRoot,
+    ...(trustedPublicKeyPath ? { trustedPublicKeyPath } : {}),
+    ...(signedReceiptPath ? { signedReceiptPath } : {}),
     mode,
     importerOptions: {
       mode,
@@ -267,9 +274,10 @@ export async function runRestrictedMigrationCli(args: RestrictedMigrationCliArgs
   // a parity-only or self-attested callback.
   if (process.env.NODE_ENV === "production" && runtime.runArchive) throw new RestrictedMigrationArchiveError(["restricted_archive_runner_override_forbidden"]);
   if (process.env.NODE_ENV === "production" && runtime.audit) throw new RestrictedMigrationArchiveError(["restricted_independent_audit_override_forbidden"]);
+  const supplementReceiptVerifier = await configuredSupplementVerifier(args, [args.archiveRoot]);
   const runArchive = runtime.runArchive ?? runRestrictedMigrationArchive;
   if (args.mode === "dry_run") {
-    const result = await runArchive({ archiveRoot: args.archiveRoot, mode: "dry_run", importerOptions: args.importerOptions });
+    const result = await runArchive({ archiveRoot: args.archiveRoot, supplementReceiptVerifier, mode: "dry_run", importerOptions: args.importerOptions });
     return formatRestrictedMigrationOutput(result);
   }
   const connection = runtime.createExecutor ? await runtime.createExecutor() : await createProductionExecutor();
@@ -279,6 +287,7 @@ export async function runRestrictedMigrationCli(args: RestrictedMigrationCliArgs
         const { affirmativeGate: _ignoredGate, ...ungatedOptions } = args.importerOptions;
         return runArchive({
           archiveRoot: args.archiveRoot,
+          supplementReceiptVerifier,
           mode,
           ...(mode === "apply" ? { executor: connection.executor } : {}),
           importerOptions: {
@@ -306,6 +315,7 @@ export async function runRestrictedMigrationCli(args: RestrictedMigrationCliArgs
       : undefined;
     const orchestration = await runRestrictedMigrationArchiveOrchestration({
       archiveRoot: args.archiveRoot,
+      supplementReceiptVerifier,
       executor: connection.executor,
       importerOptions: args.importerOptions,
       firstApplyGate: args.importerOptions.affirmativeGate,

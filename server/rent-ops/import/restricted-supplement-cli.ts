@@ -1,3 +1,5 @@
+import { dirname } from "node:path";
+import { configuredSupplementVerifier, type SupplementVerifierConfig } from "./supplement-receipt-verifier";
 import { pathToFileURL } from "node:url";
 import {
   applyRestrictedSupplementPackage,
@@ -9,7 +11,7 @@ import {
 const SAFE_REASON = /^[A-Za-z0-9_.:-]{1,160}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
 
-export interface RestrictedSupplementCliArgs {
+export interface RestrictedSupplementCliArgs extends SupplementVerifierConfig {
   archiveRoot: string;
   derivativeRoot: string;
   supplementPackagePath: string;
@@ -62,11 +64,15 @@ function argumentValue(argv: readonly string[], index: number, flag: string): { 
 }
 
 export function parseRestrictedSupplementCliArgs(argv: readonly string[]): RestrictedSupplementCliArgs {
+  let trustedPublicKeyPath: string | undefined;
+  let signedReceiptPath: string | undefined;
   let archiveRoot: string | undefined;
   let derivativeRoot: string | undefined;
   let supplementPackagePath: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
+    if (argument === "--trusted-supplement-public-key" || argument.startsWith("--trusted-supplement-public-key=")) { const p = argumentValue(argv, index, "--trusted-supplement-public-key"); trustedPublicKeyPath = p.value; index = p.nextIndex; continue; }
+    if (argument === "--signed-supplement-receipt" || argument.startsWith("--signed-supplement-receipt=")) { const p = argumentValue(argv, index, "--signed-supplement-receipt"); signedReceiptPath = p.value; index = p.nextIndex; continue; }
     if (argument === "--help" || argument === "-h") throw new Error("restricted_supplement_cli_usage");
     if (argument === "--archive-root" || argument.startsWith("--archive-root=")) {
       const parsed = argumentValue(argv, index, "--archive-root"); archiveRoot = parsed.value; index = parsed.nextIndex; continue;
@@ -84,7 +90,7 @@ export function parseRestrictedSupplementCliArgs(argv: readonly string[]): Restr
   if (!archiveRoot) throw new Error("archive_root_required");
   if (!derivativeRoot) throw new Error("derivative_root_required");
   if (!supplementPackagePath) throw new Error("supplement_package_required");
-  return { archiveRoot, derivativeRoot, supplementPackagePath };
+  return { archiveRoot, derivativeRoot, supplementPackagePath, ...(trustedPublicKeyPath ? { trustedPublicKeyPath } : {}), ...(signedReceiptPath ? { signedReceiptPath } : {}) };
 }
 
 export function formatRestrictedSupplementOutput(result: RestrictedSupplementDerivativeResult): RestrictedSupplementCliOutput {
@@ -111,7 +117,10 @@ export function formatRestrictedSupplementError(error: unknown): string {
 }
 
 export async function runRestrictedSupplementCli(args: RestrictedSupplementCliArgs, runtime?: RestrictedSupplementCliRuntime): Promise<RestrictedSupplementCliOutput> {
-  const result = await applyRestrictedSupplementPackage({ ...args, ...(runtime?.externalVerifier ? { externalVerifier: runtime.externalVerifier } : {}) });
+  const configured = await configuredSupplementVerifier(args, [args.archiveRoot, args.derivativeRoot, dirname(args.supplementPackagePath)]);
+  if (configured && runtime?.externalVerifier) throw new Error("supplement_verifier_conflict");
+  const externalVerifier = configured ?? runtime?.externalVerifier;
+  const result = await applyRestrictedSupplementPackage({ ...args, ...(externalVerifier ? { externalVerifier } : {}) });
   return formatRestrictedSupplementOutput(result);
 }
 
