@@ -1,0 +1,83 @@
+.tp-root, .tp-admin-accounts { --tp-charcoal: #3a3a3c; --tp-gold: #d4a843; --tp-cream: #f5f0e8; color: #222225; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.tp-root { min-height: 100vh; background: var(--tp-cream); }
+.tp-root * { box-sizing: border-box; }
+.tp-header { min-height: 90px; padding: 22px max(5vw, 20px); display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #ddd8cf; gap: 16px; }
+.tp-brand { display: flex; align-items: center; gap: 13px; color: var(--tp-charcoal); text-decoration: none; }
+.tp-brand span { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid var(--tp-gold); border-radius: 8px; font-weight: 700; font-size: 18px; }
+.tp-brand strong { font-size: 17px; letter-spacing: -.4px; }
+.tp-brand em { font-size: 12px; font-style: normal; padding-left: 14px; border-left: 1px solid #cfc8bc; }
+.tp-main { max-width: 1160px; margin: 0 auto; padding: 38px 24px 72px; }
+.tp-root h1, .tp-root h2, .tp-root h3, .tp-root p, .tp-admin-accounts h3, .tp-admin-accounts p { margin: 0; }
+.tp-root h1 { font-size: clamp(32px, 4vw, 48px); font-weight: 600; line-height: 1.16; letter-spacing: -1.7px; }
+.tp-root h2 { font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
+.tp-root h3 { font-size: 14px; font-weight: 600; margin-bottom: 14px; }
+.tp-root p { font-size: 14px; line-height: 1.65; color: #5f5c57; }
+.tp-root button, .tp-admin-accounts button { min-height: 42px; padding: 10px 16px; display: inline-flex; gap: 8px; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 7px; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; transition: background .15s ease; }
+.tp-root button:disabled, .tp-admin-accounts button:disabled { opacity: .55; cursor: not-allowed; }
+.tp-root button svg, .tp-admin-accounts button svg { width: 16px; height: 16px; }
+.tp-primary { background: #3a3a3c !important; color: #fff !important; }
+.tp-primary:hover { background: #202022 !important; }
+.tp-secondary { background: transparent !important; color: #3a3a3c !important; border-color: #cfc8bc !important; }
+.tp-secondary:hover { background: #ede7dd !important; }
+.tp-text-button { background: transparent !important; color: #3a3a3c !important; text-decoration: underline; text-underline-offset: 3px; padding-left: 0 !important; }
+.tp-root :focus-visible, .tp-admin-accounts :focus-visible { outline: 3px solid #b58723; outline-offset: 3px; }
+.tp-welcome { min-height: 65vh; display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 80px; }
+.tp-welcome-copy > svg { width: 44px; height: 44px; stroke: #9c782d; margin-bottom: 28px; stroke-width: 1.2; }
+.tp-welcome-copy h1 { margin-bottom: 20px; font-size: clamp(38px, 5vw, 62px); }
+.tp-welcome-copy p { font-size: 16px; }
+.tp-card { padding: 28px; border: 1px solid #e2ded6; border-radius: 12px; background: #fffdfa; min-width: 0; }
+.tp-card > h2, .tp-section-heading { margin-bottom: 20px; }
+.tp-login { max-width: 440px; box-shadow: 0 14px 45px #3a3a3c07; padding: 34px; }
+.tp-login > h2 { margin: 16px 0 10px; font-size: 27px; }
+.tp-login > p { margin-bottom: 24px; }
+.tp-lock { color: #8f702d; width: 24px; }
+.tp-root form, .tp-admin-accounts form { display: flex; flex-direction: column; gap: 18px; }
+.tp-root label, .tp-admin-accounts label { display: flex; flex-direction: column; font-size: 13px; font-weight: 600; gap: 7px; text-align: left; }
+.tp-root input, .tp-admin-accounts input, .tp-admin-accounts select { width: 100%; padding: 12px; background: #fff; border: 1px solid #cecac3; border-radius: 6px; font: inherit; font-weight: 400; color: #222225; min-height: 44px; }
+.tp-root small, .tp-admin-accounts small { display: block; font-size: 11px; font-weight: 400; line-height: 1.5; color: #716b63; }
+.tp-root .tp-error, .tp-admin-accounts .tp-error { background: #fbeeea; color: #8c3320; border: 1px solid #e9beb2; border-radius: 6px; padding: 12px 15px; margin-bottom: 18px; font-size: 13px; }
+.tp-root .tp-notice, .tp-admin-accounts .tp-notice { background: #f5f0e6; border: 1px solid #dfd1b3; color: #5f4d29; border-radius: 6px; padding: 12px 15px; margin-bottom: 18px; font-size: 13px; }
+.tp-login .tp-text-button { margin-top: 13px; }
+.tp-login .tp-account-help { font-size: 12px; margin: 16px 0 0; }
+.tp-loading { min-height: 300px; display: flex; align-items: center; justify-content: center; gap: 12px; color: #655f54; }
+.tp-greeting { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin: 10px 0 32px; }
+.tp-greeting h1 { margin: 9px 0 10px; }
+.tp-overview { display: grid; grid-template-columns: .95fr 1.05fr; gap: 24px; align-items: start; margin-bottom: 24px; }
+.tp-balance { background: #3a3a3c; color: #fffdfa; border-radius: 12px; padding: 34px; min-height: 228px; display: flex; flex-direction: column; justify-content: center; gap: 18px; }
+.tp-balance > span { color: #e8dfcc; font-size: 13px; }
+.tp-balance strong { font-weight: 500; font-size: clamp(32px, 4vw, 46px); letter-spacing: -1.5px; font-variant-numeric: tabular-nums; }
+.tp-balance p { color: #ddd8ce; font-size: 12px; }
+.tp-section-heading { display: flex; align-items: center; gap: 10px; }
+.tp-section-heading > svg { width: 20px; color: #96722b; }
+.tp-payment-history { margin-top: 24px; }
+.tp-payment-history > div, .tp-deposit { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; border-top: 1px solid #e8e2d9; font-size: 13px; }
+.tp-payment-history strong, .tp-deposit strong { font-variant-numeric: tabular-nums; }
+.tp-ledger { margin-bottom: 24px; }
+.tp-table-wrap { overflow-x: auto; }
+.tp-root table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+.tp-root th { color: #766d5e; padding: 13px 10px; border-bottom: 1px solid #ddd6ca; font-size: 11px; font-weight: 500; }
+.tp-root td { padding: 15px 10px; border-bottom: 1px solid #ece6dc; vertical-align: top; }
+.tp-root tr:last-child td { border-bottom: 0; }
+.tp-root td:first-child { white-space: nowrap; }
+.tp-money { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tp-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+.tp-root dl { margin: 15px 0 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.tp-root dt { font-size: 11px; color: #756f64; }
+.tp-root dd { margin: 5px 0 0; font-size: 14px; }
+.tp-lease > strong { font-weight: 500; font-size: 13px; }
+.tp-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.tp-admin-accounts { border: 1px solid #ded5c4; background: #fffdfa; border-radius: 10px; margin: 20px; padding: 22px; }
+.tp-admin-accounts h3 { font-size: 17px; margin: 0; }
+.tp-admin-accounts > p { margin: 12px 0 18px; font-size: 13px; line-height: 1.5; }
+.tp-admin-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
+.tp-admin-account { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #e6dfd2; padding: 16px 0; font-size: 13px; }
+.tp-admin-status { display: inline-block; margin-left: 8px; border: 1px solid #d3c6ac; border-radius: 12px; padding: 2px 8px; font-size: 10px; }
+.tp-admin-link { background: #f5f0e8; padding: 18px; border-radius: 7px; margin: 18px 0; }
+.tp-admin-link p { margin: 0 0 12px; font-size: 13px; }
+.tp-admin-link input { margin-bottom: 10px; font-size: 12px; }
+.tp-admin-accounts .tp-danger { color: #8c3320 !important; border-color: #dba999 !important; }
+.tp-admin-accounts .tp-confirm { display: flex; flex-direction: column; gap: 12px; margin: 12px 0; padding: 16px; border: 1px solid #dba999; border-radius: 6px; font-size: 13px; }
+.tp-spin { animation: tp-spin 1s linear infinite; }
+@keyframes tp-spin { to { transform: rotate(360deg); } }
+@media (max-width: 760px) { .tp-main { padding: 24px 16px 50px; } .tp-welcome { grid-template-columns: 1fr; gap: 28px; } .tp-welcome-copy { padding: 12px 8px; } .tp-welcome-copy > svg { display: none; } .tp-welcome-copy h1 { font-size: 36px; } .tp-login { max-width: none; padding: 26px; } .tp-overview, .tp-detail-grid { grid-template-columns: 1fr; } .tp-brand em { display: none; } .tp-brand strong { font-size: 15px; } .tp-card { padding: 22px; } .tp-greeting { align-items: flex-start; } .tp-greeting h1 { font-size: 32px; } .tp-greeting > button { padding: 9px; font-size: 0; } .tp-admin-accounts { margin: 14px; padding: 16px; } }
+@media (prefers-reduced-motion: reduce) { .tp-spin { animation: none; } .tp-root button { transition: none; } }

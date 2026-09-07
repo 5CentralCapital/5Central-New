@@ -1,4 +1,4 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -17,6 +17,9 @@ import DataRoom from "@/pages/data-room";
 import InvestorDashboard from "@/pages/investor-dashboard";
 import AdminDashboard from "@/pages/admin-dashboard";
 import NotFound from "@/pages/not-found";
+import RentOpsPage from "@/pages/rent-ops";
+import RentOpsApplyPage from "@/pages/rent-ops-apply";
+import TenantPortalPage from "@/pages/tenant-portal";
 
 function Router() {
   return (
@@ -43,15 +46,23 @@ function Router() {
           <AdminDashboard />
         </ProtectedRoute>
       </Route>
+      <Route path="/ops" component={RentOpsPage} />
+      <Route path="/tenant" component={TenantPortalPage} />
+      <Route path="/apply" component={RentOpsApplyPage} />
+      <Route path="/apply/:propertySlug" component={RentOpsApplyPage} />
       <Route component={NotFound} />
     </Switch>
   );
 }
 
 function AppContent() {
+  const [location] = useLocation();
+  const isApplicantRoute = location === "/apply" || location.startsWith("/apply/");
+  const isRentOpsRoute = location === "/ops" || location.startsWith("/ops/");
+  const isTenantRoute = location === "/tenant";
   return (
     <>
-      <Navigation />
+      {!isApplicantRoute && !isRentOpsRoute && !isTenantRoute && <Navigation />}
       <Toaster />
       <Router />
     </>
@@ -59,13 +70,12 @@ function AppContent() {
 }
 
 function App() {
+  const [location] = useLocation();
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <TooltipProvider>
-          <AppContent />
-        </TooltipProvider>
-      </AuthProvider>
+      <TooltipProvider>
+        {location === "/tenant" ? <AppContent /> : <AuthProvider><AppContent /></AuthProvider>}
+      </TooltipProvider>
     </QueryClientProvider>
   );
 }

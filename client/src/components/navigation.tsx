@@ -94,9 +94,10 @@ export default function Navigation() {
                   Data Room
                 </Link>
                 {user.role === "admin" ? (
-                  <Link href="/admin" className="text-sm text-warm-brass hover:underline font-medium cursor-pointer">
-                    {user.firstName}
-                  </Link>
+                  <div className="flex items-center gap-3">
+                    <Link href="/ops" className="text-sm text-muted-foreground hover:text-warm-brass font-medium">Rent Ops</Link>
+                    <Link href="/admin" className="text-sm text-warm-brass hover:underline font-medium cursor-pointer">{user.firstName}</Link>
+                  </div>
                 ) : (
                   <Link href="/investor-dashboard" className="text-sm text-muted-foreground hover:underline cursor-pointer">
                     {user.firstName}

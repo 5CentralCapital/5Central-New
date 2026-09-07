@@ -1,12 +1,23 @@
+import { createTenantPaymentService, type TenantPaymentService } from "./rent-ops/payments/service";
+import { registerTenantPaymentRoutes } from "./rent-ops/payments/routes";
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { registerAuthRoutes, requireAdmin, requireAuth } from "./auth";
+import { registerAuthRoutes, requireAdmin, requireRentOpsAdmin, requireAuth } from "./auth";
 import { registerDashboardRoutes } from "./dashboard/routes";
 import { registerModuleRoutes } from "./modules/routes";
 import { db } from "./db";
 import { investments, loans, properties, investors, insertLoanSchema, insertInvestmentSchema, insertPropertySchema, insertInvestorSchema } from "@shared/schema";
 import { eq } from "drizzle-orm";
+import { registerTenantPortalRoutes } from "./rent-ops/tenant-portal/routes";
+import { registerRentOpsBillingRoutes } from "./rent-ops/billing/routes";
+import { registerRentOpsRoutes } from "./rent-ops/routes";
+import { PostgresRentOpsRepository } from "./rent-ops/repositories/postgres";
+import { createRentOpsPoolExecutor, createRentOpsRuntimeDatabase } from "./rent-ops/runtime-database";
+import { createMagicLinkWebhookNotifierFromEnv } from "./rent-ops/services/notifier";
+import { pool } from "./db";
+import { createRentOpsPublicRateLimiter } from "./rent-ops/security/deployment-runtime";
+import { createProductionRentOpsObjectStoresFromEnv } from "./rent-ops/storage/object-store";
 
 // Helper: coerce ISO date strings to Date objects for Drizzle timestamp fields
 function coerceDates(body: Record<string, any>): Record<string, any> {
@@ -21,9 +32,40 @@ function coerceDates(body: Record<string, any>): Record<string, any> {
   return result;
 }
 
-export async function registerRoutes(app: Express): Promise<Server> {
+export async function registerRoutes(app: Express, options: { onTenantPaymentService?: (service: TenantPaymentService) => void } = {}): Promise<Server> {
   // Auth routes
   registerAuthRoutes(app);
+
+  // Rent Operations uses its own bounded repository and fails clearly when
+  // the explicitly-reviewed v1 tables are absent. It never runs a migration
+  // or falls back to demo data in this production application.
+  // Development/test may explicitly share the host pool. Production always
+  // resolves RENT_OPS_RUNTIME_DATABASE_URL through the dedicated factory.
+  const rentOpsRuntimeDatabase = await createRentOpsRuntimeDatabase({
+    environment: process.env.NODE_ENV,
+    sharedExecutor: process.env.NODE_ENV === "production" ? undefined : createRentOpsPoolExecutor(pool),
+  });
+  const rentOpsRepository = new PostgresRentOpsRepository(rentOpsRuntimeDatabase);
+  if (process.env.NODE_ENV === "production") await rentOpsRepository.assertReady();
+  const rentOpsObjectStores = process.env.NODE_ENV === "production"
+    ? await createProductionRentOpsObjectStoresFromEnv()
+    : undefined;
+  registerRentOpsRoutes(app, {
+    repository: rentOpsRepository,
+    requireAdmin: requireRentOpsAdmin,
+    publicRateLimiter: createRentOpsPublicRateLimiter({ executor: rentOpsRuntimeDatabase }),
+    resumeTokenNotifier: createMagicLinkWebhookNotifierFromEnv(),
+    ...(rentOpsObjectStores ? {
+      documentStorage: rentOpsObjectStores.documentStorage,
+      documentUploadStorage: rentOpsObjectStores.documentUploadStorage,
+    } : {}),
+  });
+
+  const tenantPortal = registerTenantPortalRoutes(app, { repository: rentOpsRepository, database: rentOpsRuntimeDatabase, requireAdmin: requireRentOpsAdmin });
+  const tenantPaymentService = createTenantPaymentService({ executor: rentOpsRuntimeDatabase, rentOpsRepository, env: process.env });
+  options.onTenantPaymentService?.(tenantPaymentService);
+  registerTenantPaymentRoutes(app, { service: tenantPaymentService, requireTenant: tenantPortal.requireTenant, getTenantIdentity: tenantPortal.getTenantIdentity });
+  registerRentOpsBillingRoutes(app, { executor: rentOpsRuntimeDatabase, requireAdmin: requireRentOpsAdmin });
 
   // Admin dashboard API routes
   registerDashboardRoutes(app);

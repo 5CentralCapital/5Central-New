@@ -1,0 +1,78 @@
+services:
+  - type: web
+    name: 5central-new-rent-ops
+    runtime: node
+    plan: free
+    numInstances: 1
+    buildCommand: npm ci && npm run check && npm run test:rent-ops && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: DATABASE_URL
+        sync: false
+      - key: RENT_OPS_RUNTIME_DATABASE_URL
+        sync: false
+      - key: RENT_OPS_DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: RENT_OPS_SESSION_SECRET
+        generateValue: true
+      - key: RENT_OPS_ADMIN_EMAIL
+        sync: false
+      - key: RENT_OPS_MAGIC_LINK_WEBHOOK_URL
+        sync: false
+      - key: RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET
+        sync: false
+      - key: RENT_OPS_PUBLIC_APP_URL
+        sync: false
+      - key: RENT_OPS_OBJECT_STORE_BACKEND
+        value: private-versioned
+      - key: RENT_OPS_OBJECT_STORE_ENDPOINT
+        sync: false
+      - key: RENT_OPS_OBJECT_STORE_REGION
+        sync: false
+      - key: RENT_OPS_OBJECT_STORE_BUCKET
+        sync: false
+      - key: RENT_OPS_OBJECT_STORE_PREFIX
+        value: rent-ops/private
+      - key: RENT_OPS_OBJECT_STORE_ENCRYPTION
+        value: required
+      - key: RENT_OPS_OBJECT_STORE_VERSIONING
+        value: required
+      - key: RENT_OPS_OBJECT_STORE_RUNTIME_IDENTITY
+        sync: false
+      - key: RENT_OPS_OBJECT_STORE_RUNTIME_TOKEN
+        sync: false
+      - key: RENT_OPS_OBJECT_STORE_UPLOAD_IDENTITY
+        sync: false
+      - key: RENT_OPS_OBJECT_STORE_UPLOAD_TOKEN
+        sync: false
+      - key: RENT_OPS_OBJECT_STORE_IMPORTER_IDENTITY
+        sync: false
+      - key: RENT_OPS_OBJECT_STORE_IMPORTER_TOKEN
+        sync: false
+      - key: RENT_OPS_PUBLIC_LIMITER_MODE
+        value: database
+      - key: RENT_OPS_INSTANCE_MODE
+        value: single
+      - key: PLAID_ENV
+        sync: false
+      - key: PLAID_CLIENT_ID
+        sync: false
+      - key: PLAID_SECRET
+        sync: false
+      - key: PLAID_REDIRECT_URI
+        sync: false
+      - key: RAMP_CLIENT_ID
+        sync: false
+      - key: RAMP_CLIENT_SECRET
+        sync: false
+
+# Optional Stripe connection: add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET
+# in Render after test-mode verification. Missing keys keep payments disabled.
+# Checkout returns to RENT_OPS_PUBLIC_APP_URL; no Stripe credentials are stored here.

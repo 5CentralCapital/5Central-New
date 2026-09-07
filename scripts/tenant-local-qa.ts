@@ -1,0 +1,45 @@
+/** Isolated local QA only: no environment credentials, remote DB, or provider. */
+import express from "express";
+import session from "express-session";
+import { createServer } from "node:http";
+import { PGlite } from "@electric-sql/pglite";
+import { ensureRentOpsSchema } from "../server/rent-ops/persistence";
+import { createSyntheticRentOpsRepository } from "../server/rent-ops/fixtures/synthetic";
+import { registerTenantPortalRoutes } from "../server/rent-ops/tenant-portal/routes";
+import { hashTenantPassword } from "../server/rent-ops/tenant-portal/passwords";
+import { eligibleTenantTenancies } from "../server/rent-ops/tenant-portal/presentation";
+import { createTenantPaymentService } from "../server/rent-ops/payments/service";
+import { registerTenantPaymentRoutes } from "../server/rent-ops/payments/routes";
+import type { RentOpsQueryExecutor } from "../server/rent-ops/repositories/postgres";
+import { applicantPageSecurityHeaders } from "../server/applicant-page-security";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { privatePortalHtml } from "../server/applicant-page-security";
+
+if (process.env.NODE_ENV === "production") throw new Error("Local QA cannot run in production");
+const db = new PGlite();
+await ensureRentOpsSchema({ apply: true, executor: async sql => { await db.exec(sql); } });
+const executor: RentOpsQueryExecutor = { query: async (text, values) => db.query(text, values) };
+const repository = createSyntheticRentOpsRepository();
+const snapshot = await repository.getSnapshot();
+const selected = eligibleTenantTenancies(snapshot)[0];
+if (!selected) throw new Error("Synthetic tenant is missing");
+const tenancy = snapshot.tenancies.find(t => t.id === selected.tenancyId)!;
+// Minimal FK parents are synthetic; tenant home reads the synthetic repository.
+await db.query("INSERT INTO rent_ops_properties (id,name,slug,address_line1,city,state,postal_code,property_type) VALUES ($1,'QA Property','qa','1 Example Street','Example','FL','00000','multifamily')", [tenancy.propertyId]);
+await db.query("INSERT INTO rent_ops_units (id,property_id,unit_number) VALUES ($1,$2,'QA')", [tenancy.unitId, tenancy.propertyId]);
+await db.query("INSERT INTO rent_ops_people (id,first_name,last_name) VALUES ($1,'QA','Resident')", [selected.personId]);
+await db.query("INSERT INTO rent_ops_tenancies (id,property_id,unit_id,primary_person_id,status,created_at) VALUES ($1,$2,$3,$4,'current',now())", [tenancy.id, tenancy.propertyId, tenancy.unitId, selected.personId]);
+await db.query("INSERT INTO rent_ops_tenant_accounts (id,email,person_id,tenancy_id,status,password_hash,activated_at) VALUES ('qa-resident','resident@example.test',$1,$2,'active',$3,now())", [selected.personId, tenancy.id, await hashTenantPassword("LocalQA-Only-2026")]);
+const app = express();
+app.use(express.json());
+app.use(session({ secret: "synthetic-local-qa-session-only", resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: "lax" } }));
+app.use(/^\/tenant(?:\/|$)/, applicantPageSecurityHeaders);
+const tenant = registerTenantPortalRoutes(app, { repository, database: executor, requireAdmin: (_req,res) => { res.sendStatus(401); } });
+const service = createTenantPaymentService({ executor, rentOpsRepository: repository, env: {} });
+registerTenantPaymentRoutes(app, { service, requireTenant: tenant.requireTenant, getTenantIdentity: tenant.getTenantIdentity });
+app.get('/api/rent-ops/*', (_req,res) => res.sendStatus(401));
+const server = createServer(app);
+app.use(express.static(resolve("dist/public")));
+app.get(/^\/tenant(?:\/.*)?$/, (req,res) => res.type("html").send(privatePortalHtml(readFileSync(resolve("dist/public/index.html"), "utf8"), req.originalUrl)));
+server.listen(4176, "127.0.0.1", () => console.log("Isolated tenant QA: http://127.0.0.1:4176/tenant"));

@@ -800,3 +800,7 @@ export type MaintenanceRequest = typeof maintenanceRequests.$inferSelect;
 export type InsertMaintenanceRequest = z.infer<typeof insertMaintenanceRequestSchema>;
 export type Loan = typeof loans.$inferSelect;
 export type InsertLoan = z.infer<typeof insertLoanSchema>;
+
+// Bounded Rent Operations tables remain defined in their own module while
+// this re-export keeps the existing Drizzle schema entrypoint complete.
+export * from "./rent-ops-schema";
