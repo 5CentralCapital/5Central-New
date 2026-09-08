@@ -17,6 +17,8 @@ test("billing requires admin and rejects malformed or client-supplied actor requ
     assert.equal((await fetch(base + "/preview?month=2025-05")).status, 401);
     assert.equal(reads, 0);
     assert.equal((await fetch(base + "/preview?month=bad", {headers:{"x-admin":"yes"}})).status, 400);
+    assert.equal((await fetch(base + "/preview?month=2025-05&propertyId=", {headers:{"x-admin":"yes"}})).status, 400);
+    assert.equal((await fetch(base + "/preview?month=2025-05&tenancyId=missing", {headers:{"x-admin":"yes"}})).status, 400);
     const preview = await fetch(base + "/preview?month=2025-05", {headers:{"x-admin":"yes"}});
     assert.equal(preview.status,200); assert.equal(preview.headers.get("cache-control"),"no-store");
     assert.equal((await fetch(base + "/post", {method:"POST", headers:{"x-admin":"yes","content-type":"application/json"}, body:JSON.stringify({month:"2025-05",previewToken:"a".repeat(64),actorSubject:"spoof"})})).status,400);

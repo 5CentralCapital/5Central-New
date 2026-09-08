@@ -12,6 +12,8 @@ import { investments, loans, properties, investors, insertLoanSchema, insertInve
 import { eq } from "drizzle-orm";
 import { registerTenantPortalRoutes } from "./rent-ops/tenant-portal/routes";
 import { registerRentOpsBillingRoutes } from "./rent-ops/billing/routes";
+import { RecurringBillingService } from "./rent-ops/billing/service";
+import { PostgresBillingStore } from "./rent-ops/billing/postgres";
 import { registerRentOpsRoutes } from "./rent-ops/routes";
 import { PostgresRentOpsRepository } from "./rent-ops/repositories/postgres";
 import { createRentOpsPoolExecutor, createRentOpsRuntimeDatabase } from "./rent-ops/runtime-database";
@@ -51,7 +53,6 @@ export async function registerRoutes(app: Express, options: { onTenantPaymentSer
   const rentOpsObjectStores = process.env.NODE_ENV === "production"
     ? await createConfiguredRentOpsWebObjectStores()
     : undefined;
-  await registerRentOpsMcpRoutes(app, rentOpsRepository);
   registerRentOpsRoutes(app, {
     repository: rentOpsRepository,
     requireAdmin: requireRentOpsAdmin,
@@ -64,10 +65,12 @@ export async function registerRoutes(app: Express, options: { onTenantPaymentSer
   });
 
   const tenantPortal = registerTenantPortalRoutes(app, { repository: rentOpsRepository, database: rentOpsRuntimeDatabase, requireAdmin: requireRentOpsAdmin, ...(rentOpsObjectStores ? { documentStorage: rentOpsObjectStores.documentStorage } : {}) });
+  const recurringBillingService = new RecurringBillingService(new PostgresBillingStore(rentOpsRuntimeDatabase));
+  await registerRentOpsMcpRoutes(app, rentOpsRepository, process.env, { accountAdmin: tenantPortal.accountAdmin, billing: recurringBillingService });
   const tenantPaymentService = createTenantPaymentService({ executor: rentOpsRuntimeDatabase, rentOpsRepository, env: process.env });
   options.onTenantPaymentService?.(tenantPaymentService);
   registerTenantPaymentRoutes(app, { service: tenantPaymentService, requireTenant: tenantPortal.requireTenant, getTenantIdentity: tenantPortal.getTenantIdentity });
-  registerRentOpsBillingRoutes(app, { executor: rentOpsRuntimeDatabase, requireAdmin: requireRentOpsAdmin });
+  registerRentOpsBillingRoutes(app, { service: recurringBillingService, requireAdmin: requireRentOpsAdmin });
 
   // Admin dashboard API routes
   registerDashboardRoutes(app);

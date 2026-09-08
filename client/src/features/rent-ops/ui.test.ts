@@ -53,3 +53,11 @@ test("only local read-only transport is blocked; real transport can save synthet
  const {assertWritableRentOpsTransport}=await import("./api");assert.throws(()=>assertWritableRentOpsTransport(true),/Read-only preview. No records were saved/);assert.doesNotThrow(()=>assertWritableRentOpsTransport(false));
  let message="";let conflict=false;try{assertWritableRentOpsTransport(true);}catch(error){handleRentOpsMutationError(error,()=>{conflict=true;},value=>{message=value;});}assert.match(message,/No records were saved/);assert.equal(conflict,false);
 });
+
+import { scheduledRentNeedsReview } from "./ui";
+test("scheduled dashboard value is withheld for uncertain or unclassified rent", () => {
+  assert.equal(scheduledRentNeedsReview([{category: "base_rent", known: true, amountCents: 10000}]), false);
+  assert.equal(scheduledRentNeedsReview([{category: "base_rent", known: true, amountCents: 10000, temporalUncertainty: true}]), true);
+  assert.equal(scheduledRentNeedsReview([{category: null, unclassified: true, amountCents: 10000}]), true);
+  assert.equal(scheduledRentNeedsReview([{category: "base_rent", known: true, amountCents: null}]), true);
+});

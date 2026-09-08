@@ -12,7 +12,8 @@ export interface RentOpsBillingRouteOptions {
   service?: RecurringBillingService;
 }
 
-const postSchema = z.object({ month: z.string(), previewToken: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+const scopeSchema = z.object({ propertyId: z.string().trim().min(1).optional(), tenancyId: z.string().trim().min(1).optional() }).strict().refine(value => !!value.propertyId || !!value.tenancyId);
+const postSchema = z.object({ month: z.string(), scope: scopeSchema.optional(), previewToken: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 
 export function registerRentOpsBillingRoutes(app: Express, options: RentOpsBillingRouteOptions, mountPath = "/api/rent-ops/billing"): Router {
   if (!options.service && !options.executor) throw new Error("Rent Operations billing requires its dedicated database executor");
@@ -22,10 +23,11 @@ export function registerRentOpsBillingRoutes(app: Express, options: RentOpsBilli
   router.use((_req, res, next) => { res.setHeader("Cache-Control", "no-store"); next(); });
   router.get("/preview", async (req, res) => {
     try {
-      if (typeof req.query.month !== "string" || Object.keys(req.query).some((key) => key !== "month")) throw new BillingError("invalid_input", 400);
-      res.json(await service.preview(req.query.month));
+      if (typeof req.query.month !== "string" || Object.keys(req.query).some((key) => !["month", "propertyId", "tenancyId"].includes(key))) throw new BillingError("invalid_input", 400);
+      const scope = req.query.propertyId !== undefined || req.query.tenancyId !== undefined ? scopeSchema.parse({ ...(req.query.propertyId !== undefined ? {propertyId: req.query.propertyId} : {}), ...(req.query.tenancyId !== undefined ? {tenancyId: req.query.tenancyId} : {}) }) : undefined;
+      res.json(await service.preview(req.query.month, scope));
     } catch (error) {
-      res.status(error instanceof BillingError ? error.status : 503).json({ code: error instanceof BillingError ? error.code : "billing_unavailable" });
+      res.status(error instanceof BillingError ? error.status : error instanceof z.ZodError ? 400 : 503).json({ code: error instanceof BillingError ? error.code : error instanceof z.ZodError ? "invalid_input" : "billing_unavailable" });
     }
   });
   router.post("/post", async (req, res) => {
@@ -36,7 +38,7 @@ export function registerRentOpsBillingRoutes(app: Express, options: RentOpsBilli
       if (!actorSubject) { res.status(401).json({ code: "not_authorized" }); return; }
       res.json(await service.post({ ...parsed.data, actorSubject }));
     } catch (error) {
-      res.status(error instanceof BillingError ? error.status : 503).json({ code: error instanceof BillingError ? error.code : "billing_unavailable" });
+      res.status(error instanceof BillingError ? error.status : error instanceof z.ZodError ? 400 : 503).json({ code: error instanceof BillingError ? error.code : error instanceof z.ZodError ? "invalid_input" : "billing_unavailable" });
     }
   });
   app.use(mountPath, router);

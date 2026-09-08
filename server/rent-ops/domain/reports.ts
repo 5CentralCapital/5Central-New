@@ -49,6 +49,20 @@ function reportMonth(filters: RentOpsFilters = {}): IsoMonth {
   return filters.month ?? monthFromDate(asOfDate(filters));
 }
 
+/** Ranges select flows, never the history needed to establish a balance. */
+export function validateReportFilters(report: string, filters: RentOpsFilters): void {
+  if (!filters.fromDate && !filters.toDate) return;
+  if (!["collected-income", "tenant-ledger"].includes(report)) throw new RentOpsInvariantError(`${report} uses asOfDate or month, not an activity range`);
+  if (filters.month) throw new RentOpsInvariantError("Choose a month or an activity range, not both");
+  if (filters.fromDate && filters.toDate && filters.fromDate > filters.toDate) throw new RentOpsInvariantError("fromDate must be on or before toDate");
+  if (filters.asOfDate && [filters.fromDate, filters.toDate].some(date => date && date > filters.asOfDate!)) throw new RentOpsInvariantError("Activity range cannot extend beyond asOfDate");
+}
+
+function receiptInPeriod(date: IsoDate, filters: RentOpsFilters): boolean {
+  if (filters.fromDate || filters.toDate) return (!filters.fromDate || date >= filters.fromDate) && (!filters.toDate || date <= filters.toDate);
+  return monthFromDate(date) === reportMonth(filters);
+}
+
 function scopedProperties(snapshot: RentOpsSnapshot, filters: RentOpsFilters): RentOpsProperty[] {
   const selected = snapshot.properties.filter((property) => !filters.propertyId || property.id === filters.propertyId);
   // An explicit property selection is already a deliberate scope choice. The
@@ -663,6 +677,10 @@ function deriveTruthCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
     const charge = allocation.chargeTransactionId ? transactions.get(allocation.chargeTransactionId) : undefined;
     const propertyId = charge?.propertyId ?? payment?.propertyId;
     const paymentOn = payment?.postedOn ?? null;
+    if (paymentOn && !receiptInPeriod(paymentOn, filters)) continue;
+    if (propertyId && !matchesPropertyScope(propertyId, filters, propertyIds)) continue;
+    if (filters.tenancyId && (charge?.tenancyId ?? payment?.tenancyId) !== filters.tenancyId) continue;
+    if (filters.personId && (charge?.personId ?? payment?.personId) !== filters.personId) continue;
     const sourceHasKnownProperty = typeof propertyId === "string" && propertyIds.has(propertyId);
     if (!sourceHasKnownProperty) {
       if (propertyId === null || propertyId === undefined) { uncertainCount += 1; uncertaintyCodes.add("collected_property_unknown"); }
@@ -676,7 +694,7 @@ function deriveTruthCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
     const chargeKnown = charge?.kind === "charge" && charge.status === "posted" && typeof charge.postedOn === "string" && charge.postedOn <= cutoff;
     const linksKnown = Boolean(payment && charge && allocation.paymentLinkKnowledge !== "unknown" && allocation.paymentLinkKnowledge !== "ambiguous" && allocation.chargeLinkKnowledge !== "unknown" && allocation.chargeLinkKnowledge !== "ambiguous");
     const exactCategory = category !== null && incomeCategories.has(category);
-    const monthMatches = postedKnown && monthFromDate(paymentOn!) === month;
+    const monthMatches = postedKnown && receiptInPeriod(paymentOn!, filters);
     const reversed = Boolean((payment && postedReversals.has(payment.id)) || (charge && postedReversals.has(charge.id)));
     // A known non-income allocation is not a collected-income row, but it is
     // still a source control when its category is missing/unknown.
@@ -761,7 +779,7 @@ export function deriveScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOp
       if (!knownAmount(schedule.amountCents)) continue;
       const description = schedule.description ?? "";
       const uncertaintyCodes = [
-        schedule.active === undefined ? "active_state_unknown" : undefined,
+        schedule.active !== true ? "active_state_unknown" : undefined,
         !schedule.description ? "description_unknown" : undefined,
         !schedule.effectiveFrom && !currentConfiguration ? "unknown_open_start_historical" : undefined,
         schedule.effectiveFromKnowledge === "unknown_open_start" && currentConfiguration ? "unknown_open_start_current_configuration" : undefined,
@@ -815,7 +833,7 @@ export function deriveScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOp
       if (!knownAmount(schedule.amountCents)) continue;
       const description = schedule.description ?? "";
       const uncertaintyCodes = [
-        schedule.active === undefined ? "active_state_unknown" : undefined,
+        schedule.active !== true ? "active_state_unknown" : undefined,
         !schedule.description ? "description_unknown" : undefined,
         !schedule.effectiveFrom && !currentConfiguration ? "unknown_open_start_historical" : undefined,
         schedule.effectiveFromKnowledge === "unknown_open_start" && currentConfiguration ? "unknown_open_start_current_configuration" : undefined,
@@ -842,6 +860,7 @@ export function deriveScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOp
 }
 
 export function deriveCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): CollectedIncomeRow[] {
+  validateReportFilters("collected-income", filters);
   if (snapshot.modelVersion === 3) {
     const collected = deriveTruthCollectedIncome(snapshot, filters);
     const rows = collected.rows;
@@ -880,7 +899,10 @@ export function deriveCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOp
   const propertyIds = new Set(scopedProperties(snapshot, filters).map((property) => property.id));
   const rows: CollectedIncomeRow[] = [];
   for (const { allocation, payment, charge } of effectiveAllocations(snapshot, reportCutoff)) {
-    if (!charge.propertyId || monthFromDate(payment.postedOn) !== month || !charge.category || !incomeCategories.has(charge.category) || !propertyIds.has(charge.propertyId)) continue;
+    if (!charge.propertyId || !receiptInPeriod(payment.postedOn, filters) || !charge.category || !incomeCategories.has(charge.category) || !propertyIds.has(charge.propertyId)) continue;
+    if (filters.unitId && (charge.unitId ?? payment.unitId) !== filters.unitId) continue;
+    if (filters.tenancyId && (charge.tenancyId ?? payment.tenancyId) !== filters.tenancyId) continue;
+    if (filters.personId && (charge.personId ?? payment.personId) !== filters.personId) continue;
     const unit = units.get(charge.unitId ?? payment.unitId ?? "");
     const person = people.get(charge.personId ?? payment.personId ?? "");
     rows.push({
@@ -1054,6 +1076,7 @@ export function deriveDelinquency(snapshot: RentOpsSnapshot, filters: RentOpsFil
 }
 
 export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string, filters: RentOpsFilters = {}, accountTransactionIds?: ReadonlySet<string>): LedgerRow[] {
+  validateReportFilters("tenant-ledger", filters);
   const allocationCutoff = filters.asOfDate ?? ("9999-12-31" as IsoDate);
   const transactions = snapshot.ledgerTransactions
     .filter((transaction) => (accountTransactionIds ? accountTransactionIds.has(transaction.id) : transaction.tenancyId === tenancyId) && !!transaction.postedOn && knownAmount(transaction.amountCents) && (!filters.asOfDate || transaction.postedOn <= filters.asOfDate))
@@ -1087,7 +1110,7 @@ export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string,
   }
   transactions.sort((left, right) => compareOptionalTimestamp(left.postedOn, right.postedOn) || left.id.localeCompare(right.id));
   let running = 0;
-  return transactions.map((transaction) => {
+  const ledgerRows: LedgerRow[] = transactions.map((transaction) => {
     const amountCents = transaction.amountCents;
     if (!knownAmount(amountCents)) return { transaction, allocatedCents: 0, openCents: 0, runningBalanceCents: running };
     const allocatedCents = transaction.kind === "charge" ? allocationByCharge.get(transaction.id) ?? 0 : transaction.kind === "payment" ? allocationByPayment.get(transaction.id) ?? 0 : transaction.kind === "credit" ? allocationByCredit.get(transaction.id) ?? 0 : 0;
@@ -1101,6 +1124,20 @@ export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string,
     if (transaction.status === "posted") running += ledgerBalanceSign(transaction, transactionMap) * amountCents;
     return { transaction, allocatedCents, openCents, runningBalanceCents: running };
   });
+  if (!filters.fromDate && !filters.toDate) return ledgerRows;
+  const openingBalanceCents = filters.fromDate
+    ? ledgerRows.filter(row => row.transaction.postedOn! < filters.fromDate!).at(-1)?.runningBalanceCents ?? 0
+    : 0;
+  const activity = ledgerRows.filter(row => (!filters.fromDate || row.transaction.postedOn! >= filters.fromDate) && (!filters.toDate || row.transaction.postedOn! <= filters.toDate));
+  if (!filters.fromDate) return activity;
+  // Explicit presentation record, with no ledger kind/status/amount. It is
+  // never persisted and survives periods with no transaction activity.
+  return [{ rowType: "opening_balance", openingBalanceCents,
+    transaction: { id: `report-opening:${tenancyId || transactions[0]?.personId || "account"}`, propertyId: filters.propertyId ?? null,
+      personId: transactions[0]?.personId, tenancyId: tenancyId || undefined,
+      kind: null, status: null, category: null, amountCents: null,
+      postedOn: filters.fromDate, description: "Opening balance" },
+    allocatedCents: 0, openCents: 0, runningBalanceCents: openingBalanceCents }, ...activity];
 }
 
 /** Account entries remain account-scoped; never assign them to one of the
@@ -1116,7 +1153,8 @@ export function deriveManagerAccountLedger(snapshot: RentOpsSnapshot, personId: 
     const propertyId = row.propertyId ?? tenancy?.propertyId;
     return matchesPropertyScope(propertyId, filters, propertyIds) && (!filters.unitId || (row.unitId ?? tenancy?.unitId) === filters.unitId);
   }).map(row => row.id));
-  return deriveTenantLedger(snapshot, "", filters, scopedIds);
+  if (scopedIds.size === 0 && tenancyIds.length === 0) return [];
+  return deriveTenantLedger(snapshot, "", filters, scopedIds).map(row => row.rowType === "opening_balance" ? { ...row, transaction: { ...row.transaction, id: `report-opening:${personId}`, personId } } : row);
 }
 
 export function deriveLeaseExpirations(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): LeaseExpirationRow[] {
@@ -1410,7 +1448,11 @@ export function deriveDashboardSummary(snapshot: RentOpsSnapshot, filters: RentO
   const occupiedUnits = activeUnits.filter((row) => row.occupancy === "current").length;
   const futurePreleasedUnits = activeUnits.filter((row) => row.occupancy === "future_preleased").length;
   const genuineVacantUnits = activeUnits.filter((row) => row.occupancy === "vacant").length;
-  const scheduledRentCents = scheduled.filter((row) => row.category === "base_rent" || row.category === "recurring_fee").reduce((sum, row) => sum + (knownAmount(row.amountCents) ? row.amountCents : 0), 0);
+  const scheduledCandidates = scheduled.filter(row => row.category === "base_rent" || row.category === "recurring_fee" || row.category == null);
+  const confirmedSchedule = (row: ScheduledIncomeRow) => knownAmount(row.amountCents) && (snapshot.modelVersion === 3 ? row.known === true : !row.temporalUncertainty) && row.category != null;
+  const scheduledRentConfirmedCents = scheduledCandidates.filter(confirmedSchedule).reduce((sum, row) => sum + row.amountCents!, 0);
+  const scheduledRentUnresolvedCount = scheduledCandidates.filter(row => !confirmedSchedule(row)).length;
+  const scheduledRentCents = scheduledRentConfirmedCents;
   const collectedRentCents = collected.filter((row) => row.category === "base_rent" || row.category === "recurring_fee").reduce((sum, row) => sum + (knownAmount(row.amountCents) ? row.amountCents : 0), 0);
   const expiringIn30Days = expirations.filter((row) => row.actionStatus === "expiring" && row.contractEndOn && row.contractEndOn <= addDays(asOf, 30)).length;
   const expiringIn60Days = expirations.filter((row) => row.actionStatus === "expiring" && row.contractEndOn && row.contractEndOn <= addDays(asOf, 60)).length;
@@ -1427,6 +1469,10 @@ export function deriveDashboardSummary(snapshot: RentOpsSnapshot, filters: RentO
     offMarketUnits: activeUnits.filter((row) => row.readiness === "off_market" || row.listing === "off_market").length,
     physicalOccupancyPercent: activeUnits.length ? occupiedUnits / activeUnits.length : 0,
     scheduledRentCents,
+    scheduledRentConfirmedCents,
+    scheduledRentUnresolvedCount,
+    scheduledRentComplete: scheduledRentUnresolvedCount === 0,
+    scheduledRentCadenceComplete: scheduledCandidates.every(row => snapshot.recurringSchedules.find(schedule => schedule.id === row.scheduleId)?.billingFrequency === "monthly"),
     collectedRentCents,
     rentOnlyDelinquencyCents: delinquency.reduce((sum, row) => sum + Math.max(0, row.rentOnlyBalanceCents), 0),
     totalDelinquencyCents: delinquency.reduce((sum, row) => sum + Math.max(0, row.totalBalanceCents), 0),
@@ -1512,6 +1558,7 @@ export function toApplicantPublicView(snapshot: RentOpsSnapshot, application: Re
 }
 
 export function deriveFixedReport(snapshot: RentOpsSnapshot, report: FixedReportName, filters: RentOpsFilters = {}): unknown[] {
+  validateReportFilters(report, filters);
   switch (report) {
     case "rent-roll": return deriveRentRoll(snapshot, filters);
     case "occupancy": return deriveOccupancy(snapshot, filters);

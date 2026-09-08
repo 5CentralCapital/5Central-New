@@ -1,6 +1,7 @@
 export type RentOpsSource = "live" | "synthetic";
 
 export type SectionKey =
+  | "dashboard"
   | "reports"
   | "rent-roll"
   | "tenants"
@@ -33,6 +34,8 @@ export interface ApiFilters {
   personId?: string;
   asOfDate?: string;
   month?: string;
+  fromDate?: string;
+  toDate?: string;
   occupancy?: string[];
   readiness?: string[];
   listing?: string[];
@@ -52,6 +55,10 @@ export interface DashboardSummary {
   notReadyUnits: number;
   offMarketUnits: number;
   physicalOccupancyPercent: number;
+  scheduledRentConfirmedCents?: number;
+  scheduledRentUnresolvedCount?: number;
+  scheduledRentComplete?: boolean;
+  scheduledRentCadenceComplete?: boolean;
   scheduledRentCents: number;
   collectedRentCents: number;
   rentOnlyDelinquencyCents: number;
@@ -230,6 +237,8 @@ export interface AdminLeaseTermView {
   createdAtKnowledge?: string;
 }
 export interface AdminRecurringScheduleView {
+  chargeDefinitionId?: string;
+  billingFrequency?: "monthly" | null;
   recordRevision?: number;
   id?: string;
   scopeType?: string | null;
@@ -566,6 +575,8 @@ export interface AdminActivityView {
 }
 
 export interface AdminLedgerRowView {
+  rowType?: "transaction" | "opening_balance";
+  openingBalanceCents?: number;
   transaction: AdminLedgerTransactionView;
   allocatedCents?: number;
   openCents?: number;

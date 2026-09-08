@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { serializeAdminDashboard } from "../../../../server/rent-ops/presentation/dashboard";
-import { buildRentOpsQuery, currentLocalIsoDate, escapeCsvCell, loadRentOpsAdminSnapshot, loadRentOpsChargeDefinitions, loadRentOpsPreviewContext, loadRentOpsReport, postRentOpsMutation, reportCell, RentOpsApiError } from "./api";
+import { createDemoAdminSnapshot } from "./demo";
+import { filterReportRows, buildRentOpsQuery, currentLocalIsoDate, escapeCsvCell, loadRentOpsAdminSnapshot, loadRentOpsChargeDefinitions, loadRentOpsPreviewContext, loadRentOpsReport, postRentOpsMutation, reportCell, RentOpsApiError } from "./api";
 import type { ReportKey } from "./types";
 import { parseCentsInput, requireCentsInput } from "./money";
 import { mutationPayload } from "./form-payload";
@@ -375,10 +376,10 @@ test("incomplete imported edit forms emit only the changed field and preserve un
 
 test("manual recurring and conversion payloads require positive explicit facts", () => {
   const root = mutationPayload("save-recurring-schedule", {
-    scopeType: "property", scopeId: "property:one", propertyId: "property:one", chargeDefinitionId: "charge:rent", category: "base_rent", description: "Rent", amountDollars: "1200.00", effectiveFrom: "2026-09-01", active: "true", source: "must-not-leak", effectiveFromKnowledge: "unknown_open_start",
+    scopeType: "property", scopeId: "property:one", propertyId: "property:one", chargeDefinitionId: "charge:rent", category: "base_rent", description: "Rent", amountDollars: "1200.00", billingFrequency: "monthly", effectiveFrom: "2026-09-01", active: "true", source: "must-not-leak", effectiveFromKnowledge: "unknown_open_start",
   });
   assert.match(String(root.id), /^manual:save-recurring-schedule:/);
-  assert.deepEqual({ ...root, id: undefined }, { id: undefined, scopeType: "property", scopeId: "property:one", propertyId: "property:one", chargeDefinitionId: "charge:rent", category: "base_rent", description: "Rent", amountCents: 120000, effectiveFrom: "2026-09-01", active: true });
+  assert.deepEqual({ ...root, id: undefined }, { id: undefined, scopeType: "property", scopeId: "property:one", propertyId: "property:one", chargeDefinitionId: "charge:rent", category: "base_rent", description: "Rent", amountCents: 120000, billingFrequency: "monthly", effectiveFrom: "2026-09-01", active: true });
   const end = mutationPayload("end-recurring-schedule", { predecessorId: "schedule:one", expectedRevision: 2, effectiveFrom: "2026-09-01", amountDollars: "10.00" });
   assert.equal("amountCents" in end, false);
 });
@@ -405,4 +406,42 @@ test("deposit browser decoders preserve null held, known zero, and signed source
     assert.equal(reportCell(row, "sourceBalanceCents"), -155000);
     assert.equal(reportCell(row, "refundablePetHeldCents"), 0);
   } finally { restoreReport(); }
+});
+
+test("property filter uses ledger property identity even when its name is not a displayed column", () => {
+  const snapshot = createDemoAdminSnapshot();
+  const property = snapshot.snapshot.properties[0];
+  const report = { ...snapshot.reports["tenant-ledger"], rows: [{ transaction: { id: "ledger:test", propertyId: property.id, description: "Payment" } }] };
+  assert.equal(filterReportRows(report, { propertyId: property.id!, status: "all", search: "" }, snapshot).rows.length, 1);
+});
+
+test("unit configuration payload converts dimensions, deposit and amenities without filling unknowns", () => {
+  const payload = mutationPayload("save-unit", { id: "unit:qa", propertyId: "property:qa", unitNumber: "1", bedrooms: "", bathrooms: "", squareFeet: "850", defaultDepositDollars: "1200.50", amenitiesText: "Parking\nPatio", unitType: "Apartment", accessNotes: "Front entrance" });
+  assert.equal(payload.squareFeet, 850);
+  assert.equal(payload.defaultDepositCents, 120050);
+  assert.deepEqual(payload.amenities, ["Parking", "Patio"]);
+  assert.equal("bedrooms" in payload, false);
+  const unchanged = mutationPayload("save-unit", { id: "unit:qa", revision: 2, bedrooms: "", bathrooms: "", squareFeet: "", defaultDepositDollars: "", amenitiesText: "" }, { id: "unit:qa", revision: 2, bedrooms: "", bathrooms: "", squareFeet: "", defaultDepositDollars: "", amenitiesText: "" });
+  assert.equal("squareFeet" in unchanged, false);
+  assert.equal("defaultDepositCents" in unchanged, false);
+  assert.equal("amenities" in unchanged, false);
+});
+
+test("recurring replacement confirms monthly cadence only when explicitly selected", () => {
+  const values = { predecessorId: "schedule:one", expectedRevision: 2, effectiveFrom: "2026-10-01", amountDollars: "1200" };
+  assert.equal("billingFrequency" in mutationPayload("replace-recurring-schedule", values), false);
+  assert.equal(mutationPayload("replace-recurring-schedule", { ...values, billingFrequency: "monthly" }).billingFrequency, "monthly");
+});
+
+test("recurring DTO accepts opaque charge catalog target but rejects raw source keys", async () => {
+  const bundle = serializedServerDocumentBundle();
+  const snapshot = bundle.snapshot as Record<string, unknown>;
+  snapshot.recurringSchedules = [{ id: "schedule:qa", chargeDefinitionId: "definition:qa", billingFrequency: "monthly" }];
+  let restore = stubJsonResponse(bundle);
+  try { assert.equal((await loadRentOpsAdminSnapshot()).snapshot.snapshot.recurringSchedules[0].chargeDefinitionId, "definition:qa"); }
+  finally { restore(); }
+  snapshot.recurringSchedules = [{ id: "schedule:qa", chargeDefinitionId: "definition:qa", sourceDefinitionId: "raw-rm-key" }];
+  restore = stubJsonResponse(bundle);
+  try { await assert.rejects(loadRentOpsAdminSnapshot(), /invalid response/); }
+  finally { restore(); }
 });

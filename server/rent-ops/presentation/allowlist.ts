@@ -67,7 +67,6 @@ export const FORBIDDEN_PRESENTATION_KEYS = [
   "provenanceSha256",
   "sourceDefinitionId",
   "sourceDefinitionKey",
-  "chargeDefinitionId",
   "chargeDefinitionKey",
 ] as const;
 

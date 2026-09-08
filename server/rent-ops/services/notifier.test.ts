@@ -4,7 +4,7 @@ import { createMagicLinkWebhookNotifier, createMagicLinkWebhookNotifierFromEnv, 
 
 test("magic-link webhook sends only the delivery contract and keeps the secret out of the body", async () => {
   let call: { url: string; init?: RequestInit } | undefined;
-  const notifier = createMagicLinkWebhookNotifier({ webhookUrl: "https://notify.example.test/hook", webhookSecret: "synthetic-secret-1234", publicAppUrl: "https://apply.example.test", fetchImpl: async (url, init) => { call = { url: String(url), init }; return new Response("ok", { status: 202 }); } });
+  const notifier = createMagicLinkWebhookNotifier({ allowedRecipients: "applicant@example.test", webhookUrl: "https://notify.example.test/hook", webhookSecret: "synthetic-secret-1234", publicAppUrl: "https://apply.example.test", fetchImpl: async (url, init) => { call = { url: String(url), init }; return new Response("ok", { status: 202 }); } });
   await notifier({ applicationId: "application:1", email: "applicant@example.test", token: "opaque-token", expiresAt: "2026-08-17T00:00:00.000Z" });
   assert.equal(call?.url, "https://notify.example.test/hook");
   const payload = JSON.parse(String(call?.init?.body)) as Record<string, unknown>;
@@ -18,7 +18,7 @@ test("magic-link webhook sends only the delivery contract and keeps the secret o
 
 test("magic-link delivery has a bounded timeout and typed provider failures", async () => {
   const notifier = createMagicLinkWebhookNotifier({
-    webhookUrl: "https://notify.example.test/hook",
+    allowedRecipients: "applicant@example.test", webhookUrl: "https://notify.example.test/hook",
     webhookSecret: "synthetic-secret-1234",
     publicAppUrl: "https://apply.example.test",
     timeoutMs: 100,
@@ -37,7 +37,7 @@ test("notifier env factory fails closed on partial or non-HTTPS configuration", 
 });
 
 test("managed Gmail application email uses resume link and typed uncertain failure",async()=>{
- const env={RENT_OPS_TENANT_EMAIL_PROVIDER:"replit-gmail",RENT_OPS_TENANT_EMAIL_ENABLED:"true",RENT_OPS_GMAIL_FROM:"sender@example.test",RENT_OPS_PUBLIC_APP_URL:"https://portal.example.test"};
+ const env={RENT_OPS_EMAIL_ALLOWED_RECIPIENTS:"applicant@example.test",RENT_OPS_TENANT_EMAIL_PROVIDER:"replit-gmail",RENT_OPS_TENANT_EMAIL_ENABLED:"true",RENT_OPS_GMAIL_FROM:"sender@example.test",RENT_OPS_PUBLIC_APP_URL:"https://portal.example.test"};
  let mime="";
  const input={applicationId:"application:synthetic",email:"applicant@example.test",token:"a".repeat(43),expiresAt:"2026-09-08T00:00:00Z"};
  const send=createMagicLinkWebhookNotifierFromEnv(env,async(_url,init)=>{mime=Buffer.from(JSON.parse(String(init?.body)).raw,"base64url").toString();return Response.json({id:"accepted"});})!;

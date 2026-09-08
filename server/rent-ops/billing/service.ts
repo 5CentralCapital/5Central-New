@@ -35,7 +35,10 @@ export interface BillingPreviewRow {
   status: "ready" | "blocked" | "posted" | "excluded";
   reasons: string[];
 }
+export interface BillingScope { propertyId?: string; tenancyId?: string }
+
 export interface BillingPreview {
+  scope?: BillingScope;
   month: IsoMonth;
   billingOn: string;
   previewToken: string;
@@ -80,10 +83,20 @@ interface PlannedCharge { row: BillingPreviewRow; transaction?: RentOpsLedgerTra
 
 /** Billing is deliberately narrower than the monthly forecast. Only exact,
  * full-month tenant obligations become immutable ledger charges. */
-function planBilling(data: BillingData, month: IsoMonth): { preview: BillingPreview; charges: PlannedCharge[] } {
+function planBilling(data: BillingData, month: IsoMonth, scope?: BillingScope): { preview: BillingPreview; charges: PlannedCharge[] } {
   const { snapshot } = data;
+  if (scope !== undefined) {
+    if (!scope || typeof scope !== "object" || Object.keys(scope).some(key => !["propertyId", "tenancyId"].includes(key)) || !Object.keys(scope).length
+      || Object.values(scope).some(value => typeof value !== "string" || !value.trim())) throw new BillingError("invalid_input", 400);
+    const selectedScope = scope;
+    const tenancy = scope.tenancyId ? snapshot.tenancies.find(row => row.id === selectedScope.tenancyId) : undefined;
+    if (scope.propertyId && !snapshot.properties.some(row => row.id === selectedScope.propertyId)
+      || scope.tenancyId && !tenancy || tenancy && scope.propertyId && tenancy.propertyId !== scope.propertyId) throw new BillingError("invalid_input", 400);
+    scope = { ...(scope.propertyId ? { propertyId: scope.propertyId } : {}), ...(scope.tenancyId ? { tenancyId: scope.tenancyId } : {}) };
+  }
+  const inScope = (propertyId: string | null | undefined, tenancyId: string | null | undefined) => (!scope?.propertyId || propertyId === scope.propertyId) && (!scope?.tenancyId || tenancyId === scope.tenancyId);
   const interval = financialMonthInterval(month);
-  const receipts = data.receipts.filter((receipt) => receipt.billingOn === interval.start);
+  const receipts = data.receipts.filter((receipt) => receipt.billingOn === interval.start && inScope(snapshot.tenancies.find(row => row.id === receipt.tenancyId)?.propertyId, receipt.tenancyId));
   const projection = projectFinancialSchedules(snapshot, month);
   const schedules = new Map(snapshot.recurringSchedules.map((schedule) => [schedule.id, schedule]));
   const prior = new Map(receipts.map((receipt) => [receipt.lineageRootId, receipt]));
@@ -107,7 +120,7 @@ function planBilling(data: BillingData, month: IsoMonth): { preview: BillingPrev
 
   for (const projected of projection.rows) {
     const schedule = projected.scheduleId ? schedules.get(projected.scheduleId) : undefined;
-    if (!schedule) continue;
+    if (!schedule || !inScope(projected.propertyId, projected.tenancyId)) continue;
     const lineageRootId = schedule.lineageRootId ?? schedule.id;
     const existingReceipt = prior.get(lineageRootId);
     if (existingReceipt) {
@@ -128,6 +141,7 @@ function planBilling(data: BillingData, month: IsoMonth): { preview: BillingPrev
       continue;
     }
     const reasons = row.reasons;
+    if (schedule.billingFrequency !== "monthly" || schedule.versionOrigin !== "manual") reasons.push("Billing frequency is unverified; explicitly configure a monthly successor before posting.");
     if (projected.known !== true) reasons.push("Schedule facts or tenant assignment need review.");
     if (typeof projected.amountCents !== "number" || !Number.isSafeInteger(projected.amountCents) || projected.amountCents <= 0 || projected.amountKnowledge !== "known") reasons.push("A confirmed positive amount is required.");
     if (!schedule.category || !billableCategories.has(schedule.category)) reasons.push("Charge category needs review.");
@@ -174,6 +188,7 @@ function planBilling(data: BillingData, month: IsoMonth): { preview: BillingPrev
   // still needs a human proration decision; surface that omission explicitly.
   const versions = resolveEffectiveScheduleVersions(snapshot.recurringSchedules, month, { strictLineage: snapshot.modelVersion === 3 });
   for (const schedule of versions.endedSchedules) {
+    if (!inScope(schedule.propertyId, schedule.tenancyId)) continue;
     const root = schedule.lineageRootId ?? schedule.id;
     if (!schedule.effectiveFrom || schedule.effectiveFrom <= interval.start || schedule.effectiveFrom > interval.end || prior.has(root) || (schedule.category && !billableCategories.has(schedule.category))) continue;
     charges.push({ lineageRootId: root, row: {
@@ -195,31 +210,38 @@ function planBilling(data: BillingData, month: IsoMonth): { preview: BillingPrev
   const rows = charges.map((charge) => charge.row);
   const ready = rows.filter((row) => row.status === "ready");
   const posted = rows.filter((row) => row.status === "posted");
-  const previewToken = createHash("sha256").update(JSON.stringify({ month, charges })).digest("hex");
+  const previewToken = createHash("sha256").update(JSON.stringify({ month, ...(scope ? { scope } : {}), charges })).digest("hex");
   return { charges, preview: {
-    month, billingOn: interval.start, previewToken, rows, readyCount: ready.length, readyCents: sum(ready),
+    month, ...(scope ? { scope } : {}), billingOn: interval.start, previewToken, rows, readyCount: ready.length, readyCents: sum(ready),
     blockedCount: rows.filter((row) => row.status === "blocked").length, postedCount: posted.length, postedCents: sum(posted),
   } };
 }
 
-export function previewRecurringBilling(data: BillingData, month: string): BillingPreview {
-  return planBilling(data, parseBillingMonth(month)).preview;
+export function previewRecurringBilling(data: BillingData, month: string, scope?: BillingScope): BillingPreview {
+  return planBilling(data, parseBillingMonth(month), scope).preview;
 }
 
 export class RecurringBillingService {
   constructor(private readonly store: BillingStore, private readonly now: () => Date = () => new Date()) {}
-  async preview(month: string): Promise<BillingPreview> {
+  async preview(month: string, scope?: BillingScope): Promise<BillingPreview> {
     const parsed = parseBillingMonth(month);
-    return previewRecurringBilling(await this.store.read(parsed), parsed);
+    return previewRecurringBilling(await this.store.read(parsed), parsed, scope);
   }
-  async post(input: { month: string; previewToken: string; actorSubject: string }): Promise<BillingPostResult> {
+  async post(input: { month: string; previewToken: string; actorSubject: string; scope?: BillingScope }): Promise<BillingPostResult> {
     const month = parseBillingMonth(input.month);
     if (!/^[a-f0-9]{64}$/.test(input.previewToken) || !input.actorSubject.trim()) throw new BillingError("invalid_input", 400);
     return this.store.transaction(month, async (context) => {
       const data = await context.read(month);
-      const plan = planBilling(data, month);
-      const replay = data.receipts.filter((receipt) => receipt.previewToken === input.previewToken);
-      if (replay.length) return { postedCount: 0, postedCents: 0, alreadyPostedCount: replay.length, preview: plan.preview };
+      const plan = planBilling(data, month, input.scope);
+      const replay = data.receipts.filter((receipt) => receipt.previewToken === input.previewToken && (!input.scope?.tenancyId || receipt.tenancyId === input.scope.tenancyId) && (!input.scope?.propertyId || data.snapshot.tenancies.find(row => row.id === receipt.tenancyId)?.propertyId === input.scope.propertyId));
+      if (replay.length) {
+        // Recover the reviewed pre-post state: a token from another selection
+        // must not authorize a scoped replay merely because receipts overlap.
+        const ledgerIds = new Set(replay.map(receipt => receipt.ledgerTransactionId));
+        const original = { snapshot: { ...data.snapshot, ledgerTransactions: data.snapshot.ledgerTransactions.filter(row => !ledgerIds.has(row.id)) }, receipts: data.receipts.filter(receipt => !ledgerIds.has(receipt.ledgerTransactionId)) };
+        if (planBilling(original, month, input.scope).preview.previewToken !== input.previewToken) throw new BillingError("preview_changed", 409);
+        return { postedCount: 0, postedCents: 0, alreadyPostedCount: replay.length, preview: plan.preview };
+      }
       if (plan.preview.previewToken !== input.previewToken) throw new BillingError("preview_changed", 409);
       const ready = plan.charges.filter((charge) => charge.row.status === "ready" && charge.transaction);
       if (!ready.length) throw new BillingError("no_ready_charges", 409);
@@ -234,7 +256,7 @@ export class RecurringBillingService {
         data.snapshot.ledgerTransactions.push(transaction);
         data.receipts.push(receipt);
       }
-      return { postedCount: ready.length, postedCents: plan.preview.readyCents, alreadyPostedCount: 0, preview: planBilling(data, month).preview };
+      return { postedCount: ready.length, postedCents: plan.preview.readyCents, alreadyPostedCount: 0, preview: planBilling(data, month, input.scope).preview };
     });
   }
 }

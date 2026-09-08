@@ -31,6 +31,7 @@ function approvedFacts(propertyId = "demo-property-a", unitId = "demo-unit-a-3")
     contractEndOn: "2027-09-14",
     monthToMonth: false,
     baseRentCents: 110000,
+    billingFrequency: "monthly",
     chargeDefinitionId: "definition:base-rent",
     category: "base_rent",
     scheduleDescription: "Monthly base rent",
@@ -254,7 +255,7 @@ test("application status changes follow the explicit lifecycle and conversion re
 test("runtime money minima match the SQL migration and document parents remain private and linked", async () => {
   const repository = createSyntheticRentOpsRepository();
   const service = new RentOpsService(repository, () => new Date("2026-08-16T12:00:00.000Z"), undefined, undefined, true);
-  await assert.rejects(() => service.saveRecurringSchedule({ id: "zero-schedule", tenancyId: "demo-tenancy-1", propertyId: "demo-property-a", unitId: "demo-unit-a-1", category: "recurring_fee", description: "Zero", amountCents: 0, effectiveFrom: "2026-08-01", active: true }, adminContext), /greater than zero/i);
+  await assert.rejects(() => service.saveRecurringSchedule({ billingFrequency: "monthly", id: "zero-schedule", tenancyId: "demo-tenancy-1", propertyId: "demo-property-a", unitId: "demo-unit-a-1", category: "recurring_fee", description: "Zero", amountCents: 0, effectiveFrom: "2026-08-01", active: true }, adminContext), /greater than zero/i);
   await assert.rejects(() => service.saveSecurityDeposit({ id: "zero-deposit", propertyId: "demo-property-a", unitId: "demo-unit-a-1", tenancyId: "demo-tenancy-1", personId: "demo-person-1", type: "security", amountHeldCents: 0, receivedOn: "2026-08-01", dispositionStatus: "held" }), /greater than zero/i);
   await assert.rejects(() => service.saveSubsidyContract({ id: "zero-subsidy", propertyId: "demo-property-a", unitId: "demo-unit-a-1", tenancyId: "demo-tenancy-1", agencyName: "Agency", effectiveFrom: "2026-08-01", agencyObligationCents: 0, tenantObligationCents: 0, status: "active" }), /total more than zero/i);
   await assert.rejects(() => service.saveDocument({ id: "public-doc", propertyId: "demo-property-a", type: "other", state: "requested", fileName: "x.pdf", mimeType: "application/pdf", storageKey: "https://public.example/x.pdf", uploadedAt: "2026-08-16T12:00:00.000Z" }), /private relative key/i);
@@ -394,7 +395,7 @@ test("a failed change-ledger insert rolls back the row revision and values", asy
 
   await base.saveChargeDefinition!({ id: "definition:rollback-fee", displayName: "Rollback fee", displayNameKnowledge: "manual", category: "recurring_fee", categoryKnowledge: "manual", active: true, activeKnowledge: "manual" });
   await assert.rejects(
-    () => service.saveRecurringSchedule({ id: "rollback-schedule", scopeType: "unit", scopeId: "demo-unit-a-1", chargeDefinitionId: "definition:rollback-fee", propertyId: "demo-property-a", unitId: "demo-unit-a-1", category: "recurring_fee", description: "Rollback fee", amountCents: 1000, effectiveFrom: "2026-08-16", active: true, lineageRootId: "rollback-schedule", lineageRootOrigin: "manual", versionOrigin: "manual", versionAction: "root" }, adminContext),
+    () => service.saveRecurringSchedule({ billingFrequency: "monthly", id: "rollback-schedule", scopeType: "unit", scopeId: "demo-unit-a-1", chargeDefinitionId: "definition:rollback-fee", propertyId: "demo-property-a", unitId: "demo-unit-a-1", category: "recurring_fee", description: "Rollback fee", amountCents: 1000, effectiveFrom: "2026-08-16", active: true, lineageRootId: "rollback-schedule", lineageRootOrigin: "manual", versionOrigin: "manual", versionAction: "root" }, adminContext),
     /change ledger unavailable/i,
   );
   assert.equal((await base.getSnapshot()).recurringSchedules.some((schedule) => schedule.id === "rollback-schedule"), false);
@@ -411,7 +412,7 @@ test("native operator dates and links cannot claim source knowledge", async () =
   assert.equal(unknownDeposit.receivedOnKnowledge, "unknown");
   assert.equal(unknownDeposit.unitLinkKnowledge, "unknown");
   await repository.saveChargeDefinition!({ id: "definition:operator-fee", displayName: "Operator fee", displayNameKnowledge: "manual", category: "recurring_fee", categoryKnowledge: "manual", active: true, activeKnowledge: "manual" });
-  const schedule = await service.saveRecurringSchedule({ id: "native-schedule-knowledge", scopeType: "tenant", scopeId: "demo-person-1", scopeTypeKnowledge: "source", scopeLinkKnowledge: "exact", chargeDefinitionId: "definition:operator-fee", chargeDefinitionLinkKnowledge: "exact", tenancyId: "demo-tenancy-1", personId: "demo-person-1", propertyId: "demo-property-a", unitId: "demo-unit-a-1", category: "recurring_fee", categoryKnowledge: "source", description: "Operator fee", descriptionKnowledge: "source", amountCents: 5000, amountKnowledge: "known", effectiveFrom: "2026-08-16", effectiveFromKnowledge: "source", active: true, activeKnowledge: "source", lineageRootId: "native-schedule-knowledge", lineageRootOrigin: "manual", versionOrigin: "manual", versionAction: "root" }, adminContext);
+  const schedule = await service.saveRecurringSchedule({ billingFrequency: "monthly", id: "native-schedule-knowledge", scopeType: "tenant", scopeId: "demo-person-1", scopeTypeKnowledge: "source", scopeLinkKnowledge: "exact", chargeDefinitionId: "definition:operator-fee", chargeDefinitionLinkKnowledge: "exact", tenancyId: "demo-tenancy-1", personId: "demo-person-1", propertyId: "demo-property-a", unitId: "demo-unit-a-1", category: "recurring_fee", categoryKnowledge: "source", description: "Operator fee", descriptionKnowledge: "source", amountCents: 5000, amountKnowledge: "known", effectiveFrom: "2026-08-16", effectiveFromKnowledge: "source", active: true, activeKnowledge: "source", lineageRootId: "native-schedule-knowledge", lineageRootOrigin: "manual", versionOrigin: "manual", versionAction: "root" }, adminContext);
   assert.equal(schedule.effectiveFromKnowledge, "manual");
   assert.equal(schedule.scopeTypeKnowledge, "manual");
   assert.equal(schedule.scopeLinkKnowledge, "manual");

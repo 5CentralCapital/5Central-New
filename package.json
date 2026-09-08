@@ -12,7 +12,7 @@
     "db:seed": "tsx server/seed.ts",
     "db:seed-investors": "tsx server/seed-investors.ts",
     "db:migrate": "tsx server/migrate.ts",
-    "test:rent-ops": "tsx --no-cache --test $(find server/rent-ops client/src/features -name '*.test.ts' -print) server/*.test.ts",
+    "test:rent-ops": "tsx --no-cache --test $(find server/rent-ops client/src/features -name '*.test.ts' -print) server/*.test.ts client/src/components/account-entry.test.ts",
     "rent-ops:demo": "NODE_ENV=development tsx server/rent-ops/demo-entry.ts",
     "rent-ops:demo:build": "VITE_RENT_OPS_DEMO=true VITE_RENT_OPS_APPLY_DEMO=true VITE_RENT_OPS_LOCAL_SYNTHETIC_BUILD=true npm run build",
     "rent-ops:migration:dry-run": "tsx -e \"import { ensureRentOpsSchema } from './server/rent-ops/persistence.ts'; ensureRentOpsSchema().then((result) => console.log(JSON.stringify(result, null, 2)))\"",

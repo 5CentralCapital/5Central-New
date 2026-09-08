@@ -526,6 +526,8 @@ export interface RentOpsLeaseTerm {
 }
 
 export interface RentOpsRecurringChargeSchedule {
+  /** Null means cadence has not been explicitly configured. */
+  billingFrequency?: "monthly" | null;
   id: string;
   recordRevision?: number;
   source?: SourceRef;
@@ -1339,6 +1341,9 @@ export interface RentOpsFilters {
   tenancyId?: string;
   personId?: string;
   asOfDate?: IsoDate;
+  /** Inclusive receipt/activity range; supported only by flow reports. */
+  fromDate?: IsoDate;
+  toDate?: IsoDate;
   month?: IsoMonth;
   occupancy?: OccupancyState[];
   readiness?: ReadinessState[];
@@ -1355,6 +1360,8 @@ export const rentOpsFiltersSchema = z.object({
   tenancyId: idSchema.optional(),
   personId: idSchema.optional(),
   asOfDate: isoDateSchema.optional(),
+  fromDate: isoDateSchema.optional(),
+  toDate: isoDateSchema.optional(),
   month: isoMonthSchema.optional(),
   occupancy: z.array(z.enum(OCCUPANCY_STATES)).optional(),
   readiness: z.array(z.enum(READINESS_STATES)).optional(),
@@ -1494,6 +1501,9 @@ export interface DelinquencyRow {
 }
 
 export interface LedgerRow {
+  /** Opening rows are report-only, never ledger transactions. */
+  rowType?: "transaction" | "opening_balance";
+  openingBalanceCents?: Cents;
   transaction: RentOpsLedgerTransaction;
   allocatedCents: Cents;
   openCents: Cents;
@@ -1583,6 +1593,11 @@ export interface DashboardSummary {
   offMarketUnits: number;
   physicalOccupancyPercent: number;
   scheduledRentCents: Cents;
+  scheduledRentConfirmedCents: Cents;
+  scheduledRentUnresolvedCount: number;
+  scheduledRentComplete: boolean;
+  /** Recurring configuration is not a monthly projection without cadence evidence. */
+  scheduledRentCadenceComplete: boolean;
   collectedRentCents: Cents;
   rentOnlyDelinquencyCents: Cents;
   totalDelinquencyCents: Cents;
@@ -1736,6 +1751,7 @@ export const applicationStatusSchema = z.object({
 
 /** Admin-owned record kinds that support sparse, revision-checked edits. */
 export const RENT_OPS_PATCH_ENTITY_TYPES = [
+  "charge_definition",
   "property",
   "unit",
   "person",
@@ -1824,6 +1840,8 @@ export interface RentOpsRepository {
 export interface RentOpsTransactionOptions {
   lockApplicationId?: string;
   lockTransactionIds?: string[];
+  /** Shared with Stripe: serialize financial writes for the whole person account. */
+  lockAccountPersonId?: string;
   /** One target row is locked with SELECT ... FOR UPDATE before a patch merge. */
   lockRecord?: { entityType: RentOpsPatchEntityType; targetId: string };
   /** Serialize tenancy occupancy invariants for every tenancy on the target unit. */

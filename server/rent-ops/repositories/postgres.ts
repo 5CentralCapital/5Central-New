@@ -76,6 +76,7 @@ export class RentOpsRuntimePrivilegeError extends Error {
 
 const tableNames = new Set<string>(RENT_OPS_RUNTIME_REQUIRED_TABLES);
 const patchTables: Record<RentOpsPatchEntityType, string> = {
+  charge_definition: "rent_ops_charge_definitions",
   property: "rent_ops_properties",
   unit: "rent_ops_units",
   person: "rent_ops_people",
@@ -103,9 +104,10 @@ const runtimeCreateOnlyTables = new Set([
   "rent_ops_documents",
 ]);
 const patchColumns: Record<RentOpsPatchEntityType, ReadonlySet<string>> = {
+  charge_definition: new Set(["display_name", "display_name_knowledge", "active", "active_knowledge"]),
   property: new Set(["name", "slug", "address_line1", "address_line2", "city", "state", "postal_code", "property_type", "state_status", "operating_contact", "name_knowledge", "address_knowledge", "property_type_knowledge", "state_knowledge", "operating_contact_knowledge"]),
   unit: new Set(["property_id", "unit_number", "unit_type", "bedrooms", "bathrooms", "square_feet", "market_rent_cents", "default_deposit_cents", "readiness", "listing", "amenities", "access_notes", "property_link_knowledge", "unit_number_knowledge", "unit_type_knowledge", "readiness_knowledge", "listing_knowledge"]),
-  person: new Set(["first_name", "last_name", "email", "phone", "renter_insurance_expires_on", "archived", "first_name_knowledge", "last_name_knowledge", "email_knowledge", "phone_knowledge", "archived_knowledge"]),
+  person: new Set(["first_name", "last_name", "email", "phone", "phone_methods", "renter_insurance_expires_on", "archived", "first_name_knowledge", "last_name_knowledge", "email_knowledge", "phone_knowledge", "archived_knowledge"]),
   household_membership: new Set(["tenancy_id", "application_id", "account_person_id", "person_id", "role", "relationship", "is_financially_responsible", "role_knowledge", "relationship_knowledge", "responsibility_knowledge"]),
   tenancy: new Set(["property_id", "unit_id", "primary_person_id", "status", "planned_move_in_on", "actual_move_in_on", "notice_on", "expected_move_out_on", "actual_move_out_on", "application_id", "ended_at", "property_link_knowledge", "unit_link_knowledge", "primary_person_link_knowledge", "status_knowledge", "planned_move_in_knowledge", "actual_move_in_knowledge", "notice_knowledge", "expected_move_out_knowledge", "actual_move_out_knowledge", "ended_at_knowledge"]),
   lease_term: new Set(["tenancy_id", "status", "contract_start_on", "contract_end_on", "month_to_month", "signed_on", "executed_document_id", "renewal_of_id", "tenancy_link_knowledge", "status_knowledge", "contract_start_knowledge", "contract_end_knowledge", "signed_on_knowledge", "month_to_month_knowledge"]),
@@ -129,6 +131,7 @@ const recurringScheduleColumns = [
   "amount_cents", "amount_knowledge", "effective_from", "effective_from_knowledge", "effective_to", "active", "active_knowledge",
   "source_confidence", "charge_definition_knowledge", "charge_definition_link_knowledge", "source_artifact_sha256", "artifact_observation_on",
   "lineage_root_id", "lineage_root_origin", "version_origin", "supersedes_id", "version_action", "record_revision", "source_system", "source_id",
+  "billing_frequency",
 ] as const;
 
 /** v9 history is an immutable importer-owned projection.  These column
@@ -176,7 +179,7 @@ const recurringChangeFields = new Set([
   "tenancyId", "personId", "propertyId", "unitId", "category", "categoryKnowledge", "description", "descriptionKnowledge",
   "amountCents", "amountKnowledge", "effectiveFrom", "effectiveFromKnowledge", "effectiveTo", "active", "activeKnowledge",
   "sourceConfidence", "chargeDefinitionKnowledge", "chargeDefinitionLinkKnowledge", "artifactObservationOn", "lineageRootId",
-  "lineageRootOrigin", "versionOrigin", "supersedesId", "versionAction", "recordRevision",
+  "lineageRootOrigin", "versionOrigin", "supersedesId", "versionAction", "recordRevision", "billingFrequency",
 ]);
 
 function chargeDefinitionValues(value: RentOpsChargeDefinition): unknown[] {
@@ -197,6 +200,7 @@ function recurringScheduleValues(value: RentOpsRecurringChargeSchedule): unknown
     value.sourceConfidence ?? null, value.chargeDefinitionKnowledge ?? null, value.chargeDefinitionLinkKnowledge ?? null,
     value.sourceArtifactSha256 ?? null, value.artifactObservationOn ?? null, value.lineageRootId, value.lineageRootOrigin, value.versionOrigin,
     value.supersedesId ?? null, value.versionAction, value.recordRevision ?? 1, value.source?.system ?? null, value.source?.sourceId ?? null,
+    value.billingFrequency ?? null,
   ];
 }
 
@@ -573,6 +577,7 @@ function rowToAllocation(row: Record<string, unknown>): RentOpsPaymentAllocation
 
 function rowToSchedule(row: Record<string, unknown>): RentOpsRecurringChargeSchedule {
   return {
+    billingFrequency: nullableTextValue(row, "billingFrequency", "billing_frequency") as "monthly" | null,
     id: String(row.id),
     recordRevision: revisionValue(row),
     source: source(row, "recurring_schedule"),
@@ -936,6 +941,9 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
 
   /** Serialize operations whose invariants span multiple append-only rows. */
   private async lockRowsForOperation(options: RentOpsTransactionOptions): Promise<void> {
+    // A tuple write (with unchanged business values) fences RR snapshots even
+    // when the competing operation only appends financial child rows.
+    if (options.lockAccountPersonId) await this.client.query("UPDATE rent_ops_people SET id = id WHERE id = $1 RETURNING id", [options.lockAccountPersonId]);
     if (options.lockRecord) {
       const table = patchTables[options.lockRecord.entityType];
       if (!table) throw new RentOpsInvariantError("Unknown Rent Operations patch target");
@@ -1191,7 +1199,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     await this.assertReady();
     const assignments = entries.map(([column], index) => `${column} = $${index + 1}`);
     assignments.push(`record_revision = $${entries.length + 1}`);
-    const values = entries.map(([, value]) => value);
+    const values = entries.map(([column, value]) => column === "phone_methods" ? JSON.stringify(value) : value);
     values.push(update.nextRevision, update.targetId, update.expectedRevision);
     const result = await this.client.query<Record<string, unknown>>(
       `UPDATE ${table} SET ${assignments.join(", ")} WHERE id = $${entries.length + 2} AND record_revision = $${entries.length + 3} RETURNING id`,

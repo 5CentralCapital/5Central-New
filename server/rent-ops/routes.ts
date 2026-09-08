@@ -1,3 +1,6 @@
+import { phoneMethodsSchema } from "./domain/phone-methods";
+import { RentOpsRetryableConflict } from "./runtime-database";
+import { manualPaymentSchema, createChargeDefinitionSchema, patchChargeDefinitionSchema } from "./services/operational-inputs";
 import type { Express, Request, RequestHandler, Response } from "express";
 import { Router } from "express";
 import { Readable, Transform } from "node:stream";
@@ -20,7 +23,7 @@ import {
 } from "../../shared/rent-ops-contracts";
 import { RentOpsInvariantError } from "./domain/invariants";
 import { nowIsoDate } from "./domain/dates";
-import { deriveApplicantPipeline, deriveDashboardSummary, deriveFixedReport, deriveRentRoll, deriveTenantProfile } from "./domain/reports";
+import { validateReportFilters, deriveApplicantPipeline, deriveDashboardSummary, deriveFixedReport, deriveRentRoll, deriveTenantProfile } from "./domain/reports";
 import { toCsv } from "./services/csv";
 import { RentOpsService } from "./services/service";
 import { MagicLinkDeliveryError } from "./services/notifier";
@@ -106,6 +109,7 @@ const personSchema = z.object({
   lastName: z.string().trim().min(1).max(80),
   email: z.string().email().max(240).optional(),
   phone: z.string().max(40).optional(),
+  phoneMethods: phoneMethodsSchema.optional(),
   renterInsuranceExpiresOn: isoDateSchema.optional(),
   archived: z.boolean().optional(),
 }).strict();
@@ -148,6 +152,7 @@ const targetIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9:_-]{0,159}$/);
  * browser to forge a provenance marker or server revision.
  */
 const recurringScheduleSchema = z.object({
+  billingFrequency: z.literal("monthly"),
   id: targetIdSchema,
   scopeType: z.enum(["tenant", "unit", "property"]),
   scopeId: targetIdSchema,
@@ -176,6 +181,7 @@ const recurringScheduleSchema = z.object({
 });
 
 const recurringSuccessorSchema = z.object({
+  billingFrequency: z.literal("monthly").optional(),
   id: targetIdSchema.optional(),
   expectedRevision: z.number().int().min(1),
   action: z.enum(["replace", "end"]),
@@ -274,7 +280,7 @@ const patchText = (max: number) => z.string().max(max).nullable().optional();
 const patchDate = isoDateSchema.nullable().optional();
 const patchPropertySchema = z.object({ revision: patchRevision, name: z.string().trim().min(1).max(200).optional(), slug: z.string().trim().min(1).max(120).optional(), address: addressSchema.partial().nullable().optional(), propertyType: z.enum(["multifamily", "single_family", "other"]).optional(), state: z.enum(["active", "archived"]).optional(), operatingContact: patchText(160) }).strict();
 const patchUnitSchema = z.object({ revision: patchRevision, propertyId: patchId, unitNumber: z.string().trim().min(1).max(80).optional(), unitType: patchText(100), bedrooms: z.number().int().min(0).max(50).nullable().optional(), bathrooms: z.number().finite().min(0).max(50).nullable().optional(), squareFeet: z.number().int().min(0).max(100000).nullable().optional(), marketRentCents: centsSchema.nonnegative().nullable().optional(), defaultDepositCents: centsSchema.nonnegative().nullable().optional(), readiness: z.enum(["ready", "not_ready", "off_market"]).optional(), listing: z.enum(["listed", "unlisted", "off_market"]).optional(), amenities: z.array(z.string().max(100)).max(100).nullable().optional(), accessNotes: patchText(1000) }).strict();
-const patchPersonSchema = z.object({ revision: patchRevision, firstName: z.string().trim().min(1).max(80).optional(), lastName: z.string().trim().min(1).max(80).optional(), email: z.string().email().max(240).nullable().optional(), phone: patchText(40), renterInsuranceExpiresOn: patchDate, archived: z.boolean().nullable().optional() }).strict();
+const patchPersonSchema = z.object({ revision: patchRevision, firstName: z.string().trim().min(1).max(80).optional(), lastName: z.string().trim().min(1).max(80).optional(), email: z.string().email().max(240).nullable().optional(), phone: patchText(40), phoneMethods: phoneMethodsSchema.optional(), renterInsuranceExpiresOn: patchDate, archived: z.boolean().nullable().optional() }).strict();
 const patchHouseholdMembershipSchema = z.object({ revision: patchRevision, tenancyId: patchId, applicationId: patchId, accountPersonId: patchId, personId: z.string().min(1).max(160).optional(), role: z.enum(["primary", "co_applicant", "occupant", "minor", "emergency_contact", "other_contact"]).nullable().optional(), relationship: patchText(120), isFinanciallyResponsible: z.boolean().nullable().optional() }).strict();
 const patchTenancySchema = z.object({ revision: patchRevision, propertyId: z.string().min(1).max(160).optional(), unitId: z.string().min(1).max(160).optional(), primaryPersonId: z.string().min(1).max(160).optional(), status: z.enum(["future", "current", "notice", "past", "cancelled"]).optional(), plannedMoveInOn: patchDate, actualMoveInOn: patchDate, noticeOn: patchDate, expectedMoveOutOn: patchDate, actualMoveOutOn: patchDate, applicationId: patchId, endedAt: z.string().datetime().nullable().optional() }).strict();
 const patchLeaseTermSchema = z.object({ revision: patchRevision, tenancyId: z.string().min(1).max(160).optional(), status: z.enum(["draft", "executed", "expired", "month_to_month", "cancelled"]).optional(), contractStartOn: isoDateSchema.optional(), contractEndOn: patchDate, monthToMonth: z.boolean().optional(), signedOn: patchDate, executedDocumentId: patchId, renewalOfId: patchId }).strict();
@@ -307,6 +313,7 @@ const applicationConversionFactsSchema = z.object({
   contractEndOn: isoDateSchema.optional(),
   monthToMonth: z.boolean(),
   baseRentCents: centsSchema.positive(),
+  billingFrequency: z.literal("monthly"),
   chargeDefinitionId: targetIdSchema,
   category: z.enum(["base_rent", "recurring_fee", "one_time_fee", "subsidy", "security_deposit", "refundable_pet_deposit", "move_in_funds", "unapplied_cash", "other"]),
   scheduleDescription: z.string().trim().min(1).max(240),
@@ -395,6 +402,8 @@ function parseFilters(query: Request["query"], defaultAsOfDate?: string): RentOp
     personId: asString(query.personId),
     asOfDate: asString(query.asOfDate) ?? defaultAsOfDate,
     month: asString(query.month),
+    fromDate: asString(query.fromDate),
+    toDate: asString(query.toDate),
     occupancy: asList(query.occupancy),
     readiness: asList(query.readiness),
     listing: asList(query.listing),
@@ -519,6 +528,7 @@ function safeDownloadName(fileName: string): string {
 }
 
 function adminError(res: Response, error: unknown): void {
+  if (error instanceof RentOpsRetryableConflict) { res.status(409).json({code: error.code, retryable: true}); return; }
   if (error instanceof z.ZodError) {
     res.status(400).json(serializePresentationError(new Error("invalid input")));
     return;
@@ -821,11 +831,28 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   };
   adminRouter.get("/preview-context", (_req, res) => { res.json({ asOfDate: nowIsoDate(configuredNow()), dataMode: options.previewSource ?? "live" }); });
   adminRouter.get("/dashboard", async (req, res) => { try { res.json(serializeAdminDashboardSummary(await service.dashboard(parseAdminFilters(req.query)))); } catch (error) { adminError(res, error); } });
-  adminRouter.get("/snapshot", async (req, res) => { try { res.json(buildClientSnapshot(await service.snapshot(), parseAdminFilters(req.query))); } catch (error) { adminError(res, error); } });
+  adminRouter.get("/snapshot", async (req, res) => { try { const filters = parseAdminFilters(req.query); validateReportFilters("overview", filters); res.json(buildClientSnapshot(await service.snapshot(), filters)); } catch (error) { adminError(res, error); } });
   /** Positive catalog used by manual recurring roots and application conversion. */
   adminRouter.get("/charge-definitions", async (_req, res) => {
     try {
       res.json((await service.snapshot()).chargeDefinitions.map(serializeAdminChargeDefinition));
+    } catch (error) { adminError(res, error); }
+  });
+  adminRouter.post("/charge-definitions", async (req, res) => {
+    const parsed = createChargeDefinitionSchema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; }
+    try {
+      const actorSubject = req.rentOpsAdminUser?.id;
+      if (!actorSubject) { res.status(401).json(errorBody("not_authorized")); return; }
+      res.status(201).json(serializeAdminChargeDefinition(await service.createChargeDefinition(parsed.data, {actorSubject, occurredAt: patchOccurredAt()})));
+    } catch (error) { adminError(res, error); }
+  });
+  adminRouter.patch("/charge-definitions/:id", async (req, res) => {
+    const parsed = z.object({expectedRevision: z.number().int().positive(), patch: patchChargeDefinitionSchema}).strict().safeParse(req.body);
+    if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; }
+    try {
+      const actorSubject = patchActorSubject(req);
+      res.json(serializeAdminChargeDefinition(await service.patchChargeDefinition(req.params.id, parsed.data.expectedRevision, parsed.data.patch, {actorSubject, occurredAt: patchOccurredAt()})));
     } catch (error) { adminError(res, error); }
   });
   adminRouter.get("/reports/:report/csv", async (req, res) => {
@@ -853,7 +880,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   adminRouter.patch("/units/:id", (req, res) => patchAdminRecord(req, res, "unit", patchUnitSchema, (value) => serializeAdminUnit(value as Parameters<typeof serializeAdminUnit>[0])));
   adminRouter.get("/tenants", async (req, res) => { try { const snapshot = await service.snapshot(); const personSearch = asString(req.query.search)?.toLowerCase(); res.json(snapshot.people.filter((person) => !personSearch || [person.firstName, person.lastName, person.email].filter((value): value is string => typeof value === "string").join(" ").toLowerCase().includes(personSearch)).map(serializeAdminPerson)); } catch (error) { adminError(res, error); } });
   adminRouter.get("/tenants/:personId", async (req, res) => { try { const profile = await service.tenantProfile(req.params.personId, parseAdminFilters(req.query)); if (!profile) { res.status(404).json(errorBody("not_found")); return; } res.json(serializeAdminTenantProfile(profile)); } catch (error) { adminError(res, error); } });
-  adminRouter.post("/people", async (req, res) => { const parsed = personSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminPerson(await service.savePerson(parsed.data))); } catch (error) { adminError(res, error); } });
+  adminRouter.post("/people", async (req, res) => { const parsed = personSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminPerson(await service.savePerson(parsed.data, {actorSubject: patchActorSubject(req), occurredAt: patchOccurredAt()}))); } catch (error) { adminError(res, error); } });
   adminRouter.patch("/people/:id", (req, res) => patchAdminRecord(req, res, "person", patchPersonSchema, (value) => serializeAdminPerson(value as Parameters<typeof serializeAdminPerson>[0])));
   adminRouter.post("/household-memberships", async (req, res) => { const parsed = householdMembershipSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminHouseholdMembership(await service.saveHouseholdMembership(parsed.data))); } catch (error) { adminError(res, error); } });
   adminRouter.patch("/household-memberships/:id", (req, res) => patchAdminRecord(req, res, "household_membership", patchHouseholdMembershipSchema, (value) => serializeAdminHouseholdMembership(value as Parameters<typeof serializeAdminHouseholdMembership>[0])));
@@ -922,6 +949,16 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
     } catch (error) { adminError(res, error); }
   });
   adminRouter.patch("/recurring-schedules/:id", (_req, res) => { res.status(409).json(errorBody("versioned_schedule_required")); });
+  adminRouter.post("/manual-payments", async (req, res) => {
+    const parsed = manualPaymentSchema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; }
+    try {
+      const actorSubject = req.rentOpsAdminUser?.id;
+      if (!actorSubject) { res.status(401).json(errorBody("not_authorized")); return; }
+      const result = await service.recordManualPayment(parsed.data, {actorSubject, occurredAt: patchOccurredAt()});
+      res.status(result.replayed ? 200 : 201).json({payment: serializeAdminLedgerTransaction(result.payment), allocations: result.allocations.map(serializeAdminPaymentAllocation), replayed: result.replayed});
+    } catch (error) { adminError(res, error); }
+  });
   adminRouter.post("/ledger/transactions", async (req, res) => { const parsed = ledgerSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminLedgerTransaction(await service.saveLedgerTransaction(parsed.data))); } catch (error) { adminError(res, error); } });
   adminRouter.post("/ledger/allocations", async (req, res) => { const parsed = allocationSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminPaymentAllocation(await service.savePaymentAllocation(parsed.data))); } catch (error) { adminError(res, error); } });
   adminRouter.post("/ledger/:id/reverse", async (req, res) => { const parsed = z.object({ id: z.string().max(160).optional(), postedOn: isoDateSchema, description: z.string().trim().min(1).max(240), payer: z.enum(["tenant", "agency", "owner", "unknown"]).optional(), status: z.enum(["posted", "voided", "pending"]).default("posted") }).strict().safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminLedgerTransaction(await service.reverseLedgerTransaction(req.params.id, parsed.data))); } catch (error) { adminError(res, error); } });

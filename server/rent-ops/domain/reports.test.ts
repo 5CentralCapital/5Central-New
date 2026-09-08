@@ -403,3 +403,35 @@ test("voided and pending ledger facts remain visible but have zero running-balan
   const ledger = deriveTenantLedger(current, "demo-tenancy-1", { asOfDate });
   assert.equal(ledger.find((row) => row.transaction.id === "pending-charge")?.runningBalanceCents, baseline);
 });
+
+test("dashboard confirmed recurring total excludes unknown active state and raw uncertain amounts", () => {
+  const value = truthSnapshot();
+  value.recurringSchedules.push(truthSchedule({ id: "confirmed", category: "recurring_fee", amountCents: 12345 }), truthSchedule({ id: "unknown-active", category: "recurring_fee", amountCents: 98765, active: null, activeKnowledge: "unknown" }));
+  const summary = deriveDashboardSummary(value, { asOfDate, month: "2026-08" });
+  assert.equal(summary.scheduledRentConfirmedCents, 12345);
+  assert.equal(summary.scheduledRentCents, 12345);
+  assert.equal(summary.scheduledRentCadenceComplete, false);
+  assert.equal(summary.scheduledRentUnresolvedCount, 1);
+  assert.equal(summary.scheduledRentComplete, false);
+});
+
+
+test("dashboard cadence accepts confirmed manual monthly schedules and blocks mixed unknown imported cadence", () => {
+  const value = truthSnapshot();
+  const manual = truthSchedule({ id: "manual-monthly", category: "recurring_fee", amountCents: 12345,
+    billingFrequency: "monthly", source: undefined, sourceArtifactSha256: undefined,
+    artifactObservationOn: undefined, lineageRootOrigin: "manual", versionOrigin: "manual", effectiveFromKnowledge: "manual" });
+  value.recurringSchedules.push(manual);
+  const confirmed = deriveDashboardSummary(value, { asOfDate, month: "2026-08" });
+  assert.equal(confirmed.scheduledRentConfirmedCents, 12345);
+  assert.equal(confirmed.scheduledRentComplete, true);
+  assert.equal(confirmed.scheduledRentCadenceComplete, true);
+  value.recurringSchedules.push(truthSchedule({ id: "imported-unknown-cadence", category: "recurring_fee", amountCents: 5001, billingFrequency: null }));
+  const mixed = deriveDashboardSummary(value, { asOfDate, month: "2026-08" });
+  assert.equal(mixed.scheduledRentConfirmedCents, 17346);
+  assert.equal(mixed.scheduledRentComplete, true);
+  assert.equal(mixed.scheduledRentCadenceComplete, false);
+  // An inactive imported row is outside the applicable schedule set.
+  value.recurringSchedules[1].active = false;
+  assert.equal(deriveDashboardSummary(value, { asOfDate, month: "2026-08" }).scheduledRentCadenceComplete, true);
+});

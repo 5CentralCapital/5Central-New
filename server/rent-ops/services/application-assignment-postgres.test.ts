@@ -35,7 +35,7 @@ test("imported unitless complete application can be assigned, reviewed and conve
   assert.equal((await send("",{revision:1,propertyId:"p",unitId:"u"})).status,409);
   response=await send("/status",{revision:2,status:"under_review"});assert.equal(response.status,200,await response.text());
   response=await send("/status",{revision:3,status:"approved",note:"Synthetic manager reviewed explicit facts"});assert.equal(response.status,200,await response.text());
-  const facts={propertyId:"p",unitId:"u",plannedMoveInOn:"2027-10-01",leaseStatus:"draft",contractStartOn:"2027-10-01",contractEndOn:"2028-09-30",monthToMonth:false,baseRentCents:125000,chargeDefinitionId:"rent",category:"base_rent",scheduleDescription:"Monthly rent",primaryFinanciallyResponsible:true,members:[{applicationMemberId:"primary",role:"primary",isFinanciallyResponsible:true}]};
+  const facts={propertyId:"p",unitId:"u",plannedMoveInOn:"2027-10-01",leaseStatus:"draft",contractStartOn:"2027-10-01",contractEndOn:"2028-09-30",monthToMonth:false,billingFrequency:"monthly",baseRentCents:125000,chargeDefinitionId:"rent",category:"base_rent",scheduleDescription:"Monthly rent",primaryFinanciallyResponsible:true,members:[{applicationMemberId:"primary",role:"primary",isFinanciallyResponsible:true}]};
   response=await send("/convert",facts,"POST");assert.equal(response.status,201,await response.text());
   const snapshot=await repo.getSnapshot();assert.equal(snapshot.tenancies.length,1);assert.equal(snapshot.leaseTerms[0].status,"draft");assert.equal(eligibleTenantTenancies(snapshot)[0]?.tenancyId,snapshot.tenancies[0].id);
   row=snapshot.applications[0];assert.equal(row.status,"converted");assert.equal((await send("",{revision:row.recordRevision,propertyId:"other",unitId:"u"})).status,400);

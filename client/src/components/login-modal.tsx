@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import {
   Dialog,
@@ -12,12 +12,16 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/auth-context";
 
+import { AccountEntryChoices, legacyAccountDestination } from "./account-entry";
+
 interface LoginModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
 export default function LoginModal({ open, onOpenChange }: LoginModalProps) {
+  const [showLegacyLogin, setShowLegacyLogin] = useState(false);
+  useEffect(() => { if (!open) { setShowLegacyLogin(false); setPassword(""); setError(""); } }, [open]);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -41,11 +45,7 @@ export default function LoginModal({ open, onOpenChange }: LoginModalProps) {
       const response = await fetch("/api/auth/me", { credentials: "include" });
       if (response.ok) {
         const data = await response.json();
-        if (data.user.role === "admin") {
-          setLocation("/admin");
-        } else {
-          setLocation("/investor-dashboard");
-        }
+        setLocation(legacyAccountDestination(data.user.role));
       }
     } else {
       setError(result.error || "Login failed");
@@ -59,14 +59,15 @@ export default function LoginModal({ open, onOpenChange }: LoginModalProps) {
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="font-serif text-2xl">
-            Welcome Back
+            {showLegacyLogin ? "Investor / Website Admin" : "Log In"}
           </DialogTitle>
           <DialogDescription>
-            Sign in to access your account
+            {showLegacyLogin ? "Sign in with your existing website account." : "Choose your account."}
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4 mt-4">
+        {!showLegacyLogin ? <AccountEntryChoices onInvestor={() => setShowLegacyLogin(true)} onNavigate={() => onOpenChange(false)} /> : <form onSubmit={handleSubmit} className="space-y-4 mt-4">
+          <button type="button" className="text-sm underline" onClick={() => { setShowLegacyLogin(false); setPassword(""); setError(""); }}>← Choose another account</button>
           {error && (
             <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md">
               {error}
@@ -116,7 +117,7 @@ export default function LoginModal({ open, onOpenChange }: LoginModalProps) {
               Contact us
             </a>
           </p>
-        </form>
+        </form>}
       </DialogContent>
     </Dialog>
   );

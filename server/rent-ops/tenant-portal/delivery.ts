@@ -1,3 +1,4 @@
+import { createEmailRecipientPolicy } from "../email/recipient-policy";
 import { ReplitConnectors } from "@replit/connectors-sdk";
 import { createGmailTenantNotifier } from "./gmail-delivery";
 export interface TenantAccessDelivery {
@@ -11,6 +12,7 @@ export interface TenantAccessDelivery {
 export type TenantAccessNotifier = (input: TenantAccessDelivery) => Promise<void>;
 /** Acceptance means the receiver accepted responsibility, not mailbox delivery. */
 export function createTenantAccessNotifier(env: Record<string,string|undefined> = process.env, fetchImpl: typeof fetch = fetch): TenantAccessNotifier | undefined {
+  const recipient = createEmailRecipientPolicy(env.RENT_OPS_EMAIL_ALLOWED_RECIPIENTS);
   if (env.RENT_OPS_TENANT_EMAIL_ENABLED !== "true") return undefined;
   if (env.RENT_OPS_TENANT_EMAIL_PROVIDER === "replit-gmail") {
     const connector = new ReplitConnectors();
@@ -24,6 +26,7 @@ export function createTenantAccessNotifier(env: Record<string,string|undefined> 
   const secret = env.RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET ?? "";
   if (endpoint.protocol !== "https:" || app.protocol !== "https:" || endpoint.username || endpoint.password || app.username || app.password || secret.length < 16 || secret.length > 500) throw new Error("Tenant email configuration is invalid");
   return async input => {
+    input = { ...input, email: recipient(input?.email) };
     const response = await fetchImpl(endpoint, { method:"POST", signal:AbortSignal.timeout(10_000),
       headers:{"Content-Type":"application/json",Authorization:`Bearer ${secret}`,"Idempotency-Key":`rent-ops-tenant-access:${input.issuanceId}`},
       body:JSON.stringify({event:"tenant.access.v1",issuanceId:input.issuanceId,accountId:input.accountId,email:input.email,purpose:input.purpose,

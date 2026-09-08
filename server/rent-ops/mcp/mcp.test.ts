@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createRentOpsMcpServer } from './tools';
+import { createRentOpsMcpServer, type McpOperationalOptions } from './tools';
 import { verifyOAuthToken, READ_SCOPE, WRITE_SCOPE, type OAuthConfig } from './oauth';
 import { RentOpsService } from '../services/service';
 import { createSyntheticRentOpsRepository } from '../fixtures/synthetic';
@@ -12,16 +12,16 @@ test('OAuth rejects wrong audience, issuer, subject, expiry, scope and revoked t
   for (const patch of [{active:false},{aud:'other'},{iss:'other'},{sub:'tenant'},{exp:1},{scope:WRITE_SCOPE}]) await assert.rejects(verifyOAuthToken('token',config,async () => new Response(JSON.stringify({...valid,...patch}))));
   assert.equal((await verifyOAuthToken('token',config,async () => new Response(JSON.stringify(valid)))).subject,'admin');
 });
-async function connect(scopes: string[]) {
+async function connect(scopes: string[], options: McpOperationalOptions = {}) {
   const repository = createSyntheticRentOpsRepository(); const service = new RentOpsService(repository);
-  const server = createRentOpsMcpServer(service,{subject:'admin',scopes},config.resource);
+  const server = createRentOpsMcpServer(service,{subject:'admin',scopes},config.resource,options);
   const client = new Client({name:'test',version:'1'}); const [a,b] = InMemoryTransport.createLinkedPair();
   await server.connect(a); await client.connect(b);
   return {repository,service,client,close:async () => {await client.close();await server.close();}};
 }
 test('MCP advertises annotated tools and prevents read-scope writes',async () => {
   const ctx=await connect([READ_SCOPE]); try {
-    const tools=await ctx.client.listTools(); assert.equal(tools.tools.length,14);
+    const tools=await ctx.client.listTools(); assert.equal(tools.tools.length,26);
     for(const tool of tools.tools) assert.equal(tool.annotations?.openWorldHint,false);
     const person=(await ctx.service.snapshot()).people[0];
     const result=await ctx.client.callTool({name:'update_tenant_contact',arguments:{id:person.id,revision:person.recordRevision ?? 1,patch:{phone:'555-0100'}}});
@@ -102,6 +102,80 @@ test('imported prospect names are discoverable and exact reads contain only cura
   }
   assert.equal((await client.callTool({name:'get_prospect',arguments:{id:'missing'}})).isError,true);
   assert.equal((await client.callTool({name:'fetch',arguments:{id:'tenant/prospect:rm:396'}})).isError,true);
-  const tools=await client.listTools();const tool=tools.tools.find(t=>t.name==='get_prospect')!;assert.equal(tool.annotations?.readOnlyHint,true);assert.equal(tools.tools.length,14);
+  const tools=await client.listTools();const tool=tools.tools.find(t=>t.name==='get_prospect')!;assert.equal(tool.annotations?.readOnlyHint,true);assert.equal(tools.tools.length,26);
  }finally{await client.close();await server.close();}
+});
+
+test('configuration tools enforce revisions, strict patches and write scopes',async()=>{
+ const ctx=await connect([READ_SCOPE,WRITE_SCOPE]);try{
+  const snapshot=await ctx.service.snapshot();
+  for(const [name,row,patch] of [['property',snapshot.properties[0],{name:'Synthetic MCP property'}],['unit',snapshot.units[0],{marketRentCents:123456}],['tenancy',snapshot.tenancies[0],{noticeOn:'2026-09-08'}]] as const){
+   const args={id:row.id,revision:row.recordRevision??1,patch};
+   const result=await ctx.client.callTool({name:`update_${name}`,arguments:args});assert.notEqual(result.isError,true,JSON.stringify(result));
+   const read=await ctx.client.callTool({name:`get_${name}`,arguments:{id:row.id}});const value=(read.structuredContent as any).data;
+   for(const [key,expected] of Object.entries(patch))assert.deepEqual(value[key],expected);
+   assert.equal((await ctx.client.callTool({name:`update_${name}`,arguments:args})).isError,true);
+   assert.equal((await ctx.client.callTool({name:`update_${name}`,arguments:{...args,revision:value.recordRevision,patch:{source:{system:'forged'}}}})).isError,true);
+  }
+ }finally{await ctx.close();}
+ const readonly=await connect([READ_SCOPE]);try{
+  const tools=await readonly.client.listTools();for(const tool of tools.tools.filter(t=>t.annotations?.readOnlyHint===false))assert.equal(tool.annotations?.idempotentHint,false);
+  const row=(await readonly.service.snapshot()).units[0];assert.equal((await readonly.client.callTool({name:'update_unit',arguments:{id:row.id,revision:1,patch:{readiness:'off_market'}}})).isError,true);
+ }finally{await readonly.close();}
+});
+
+test('recurring tools expose curated records and reject missing IDs or invalid successor amounts',async()=>{
+ const ctx=await connect([READ_SCOPE,WRITE_SCOPE]);try{
+  const snapshot=await ctx.service.snapshot();const propertyId=snapshot.properties[0].id;
+  for(const [name,args] of [['list_charge_definitions',{}],['list_recurring_schedules',{propertyId}]] as const){const result=await ctx.client.callTool({name,arguments:args});assert.notEqual(result.isError,true);const data=(result.structuredContent as any).data;assert.ok(Array.isArray(data));for(const row of data)assert.equal('source' in row,false);}
+  assert.equal((await ctx.client.callTool({name:'get_recurring_schedule',arguments:{id:'missing'}})).isError,true);
+  assert.equal((await ctx.client.callTool({name:'replace_recurring_schedule',arguments:{predecessorId:'missing',successorId:'qa:new',revision:1,effectiveFrom:'2026-10-01',amountCents:-1}})).isError,true);
+  assert.equal((await ctx.client.callTool({name:'end_recurring_schedule',arguments:{predecessorId:'missing',successorId:'qa:new',revision:1,effectiveFrom:'2026-10-01'}})).isError,true);
+ }finally{await ctx.close();}
+});
+
+test('recurring creation and replacement preserve history and prevent duplicate or stale overwrites',async()=>{
+ const ctx=await connect([READ_SCOPE,WRITE_SCOPE]);try{
+  const snapshot=await ctx.service.snapshot();const t=snapshot.tenancies[0];
+  const args={id:'qa:mcp-schedule',billingFrequency:'monthly',scopeType:'tenant',scopeId:t.primaryPersonId,personId:t.primaryPersonId,tenancyId:t.id,propertyId:t.propertyId,unitId:t.unitId,chargeDefinitionId:'demo-charge-definition-utility-fee',category:'recurring_fee',description:'Synthetic schedule',amountCents:9900,effectiveFrom:'2027-01-01',active:true};
+  const created=await ctx.client.callTool({name:'create_recurring_schedule',arguments:args});assert.notEqual(created.isError,true,JSON.stringify(created));
+  assert.equal((await ctx.client.callTool({name:'create_recurring_schedule',arguments:args})).isError,true);
+  const replace={predecessorId:args.id,successorId:'qa:mcp-successor',revision:1,effectiveFrom:'2027-02-01',amountCents:10900};
+  const replaced=await ctx.client.callTool({name:'replace_recurring_schedule',arguments:replace});assert.notEqual(replaced.isError,true,JSON.stringify(replaced));
+  assert.equal((await ctx.client.callTool({name:'replace_recurring_schedule',arguments:{...replace,successorId:'qa:mcp-conflict',amountCents:11900}})).isError,true);
+  const after=await ctx.service.snapshot();assert.equal(after.recurringSchedules.find(x=>x.id===args.id)?.amountCents,9900);assert.equal(after.recurringSchedules.find(x=>x.id===replace.successorId)?.amountCents,10900);
+  const successor=after.recurringSchedules.find(x=>x.id===replace.successorId)!;
+  assert.notEqual((await ctx.client.callTool({name:'end_recurring_schedule',arguments:{predecessorId:successor.id,successorId:'qa:mcp-end',revision:successor.recordRevision??1,effectiveFrom:'2027-03-01'}})).isError,true);
+ }finally{await ctx.close();}
+});
+
+test('manual payments replay without duplicate cash and charge definitions enforce revisions',async()=>{
+ const ctx=await connect([READ_SCOPE,WRITE_SCOPE]);try{
+  const definition={id:'qa:mcp-definition',displayName:'QA fee',category:'recurring_fee',active:true};
+  const created=await ctx.client.callTool({name:'create_charge_definition',arguments:definition});assert.notEqual(created.isError,true,JSON.stringify(created));
+  assert.notEqual((await ctx.client.callTool({name:'update_charge_definition',arguments:{id:definition.id,revision:1,patch:{displayName:'QA renamed'}}})).isError,true);
+  assert.equal((await ctx.client.callTool({name:'update_charge_definition',arguments:{id:definition.id,revision:1,patch:{active:false}}})).isError,true);
+  const tenancy=(await ctx.service.snapshot()).tenancies[0];
+  const payment={id:'qa:mcp-payment',tenancyId:tenancy.id,amountCents:500,postedOn:'2026-09-08',paymentMethod:'cash',description:'Synthetic receipt',category:'unapplied_cash',allocations:[]};
+  const first=await ctx.client.callTool({name:'record_manual_payment',arguments:payment});assert.notEqual(first.isError,true,JSON.stringify(first));
+  const second=await ctx.client.callTool({name:'record_manual_payment',arguments:payment});assert.equal((second.structuredContent as any).data.replayed,true);
+  assert.equal((await ctx.client.callTool({name:'record_manual_payment',arguments:{...payment,amountCents:600}})).isError,true);
+  assert.equal((await ctx.service.snapshot()).ledgerTransactions.filter(x=>x.id===payment.id).length,1);
+  assert.equal('source' in (first.structuredContent as any).data.payment,false);
+ }finally{await ctx.close();}
+});
+
+test('optional account and billing adapters require write scopes and server-owned actor context',async()=>{
+ const calls:Array<any>=[];
+ const options={accountAdmin:{listForMcp:async()=>[{id:'qa:account',credentialRevision:4,passwordHash:'never-expose',tokenHash:'never-expose',activationPath:'/secret'}],grantForMcp:async(...args:any[])=>{calls.push(args);return {account:{id:'qa:account',credentialRevision:4}};},reissueForMcp:async(...args:any[])=>{calls.push(args);if(args[1]!==4)throw new Error('revision conflict');return {account:{id:'qa:account',credentialRevision:5}};},revokeForMcp:async(...args:any[])=>{calls.push(args);return {account:{id:'qa:account',credentialRevision:5}};},sendLinkForMcp:async(...args:any[])=>{calls.push(args);return {delivery:'accepted',replayed:false};}},billing:{preview:async()=>({previewToken:'a'.repeat(64),readyCents:500}),post:async(...args:any[])=>{calls.push(args);return {postedCount:1};}}} as unknown as McpOperationalOptions;
+ const writes=[['grant_tenant_access',{requestId:'qa_request',email:'qa@example.test',personId:'qa:person',tenancyId:'qa:tenancy'}],['reissue_tenant_access',{id:'qa:account',credentialRevision:4}],['revoke_tenant_access',{id:'qa:account',credentialRevision:4}],['send_tenant_access_link',{id:'qa:account',requestId:'qa_request'}],['post_recurring_billing',{month:'2026-09',scope:{propertyId:'qa:property'},previewToken:'a'.repeat(64)}]] as const;
+ const readonly=await connect([READ_SCOPE],options);try{for(const [name,args]of writes)assert.equal((await readonly.client.callTool({name,arguments:args})).isError,true);assert.equal(calls.length,0);}finally{await readonly.close();}
+ const ctx=await connect([READ_SCOPE,WRITE_SCOPE],options);try{
+  const accounts=await ctx.client.callTool({name:'list_tenant_accounts',arguments:{}});assert.equal(JSON.stringify(accounts).includes('never-expose'),false);assert.equal(JSON.stringify(accounts).includes('/secret'),false);
+  const listed=await ctx.client.listTools();assert.equal(listed.tools.length,33);assert.equal(listed.tools.find(x=>x.name==='send_tenant_access_link')?.annotations?.openWorldHint,true);
+  for(const [name,args]of writes)assert.notEqual((await ctx.client.callTool({name,arguments:args})).isError,true);
+  for(const args of calls)assert.equal(args.at(-1).actorSubject??args[0].actorSubject,'oauth:admin');
+  assert.equal((await ctx.client.callTool({name:'reissue_tenant_access',arguments:{id:'qa:account',credentialRevision:3}})).isError,true);
+  assert.equal((await ctx.client.callTool({name:'post_recurring_billing',arguments:{month:'2026-09',scope:{},previewToken:'bad'}})).isError,true);
+ }finally{await ctx.close();}
 });

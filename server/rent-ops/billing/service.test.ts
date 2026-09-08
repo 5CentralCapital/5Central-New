@@ -56,8 +56,9 @@ function schedule(input: Record<string, unknown>): RentOpsSnapshot["recurringSch
   const active = has("active") ? input.active : true;
   const chargeDefinitionId = has("chargeDefinitionId") ? input.chargeDefinitionId : null;
   return {
+    billingFrequency: (has("billingFrequency") ? input.billingFrequency : "monthly") as "monthly" | null,
     id: String(input.id),
-    source: { system: "rm", sourceId: `source:${String(input.id)}` },
+    source: undefined,
     propertyId,
     scopeType,
     scopeId: (has("scopeId") ? input.scopeId : defaultScopeId) as string | null | undefined,
@@ -71,7 +72,7 @@ function schedule(input: Record<string, unknown>): RentOpsSnapshot["recurringSch
     amountCents: amountCents as never,
     amountKnowledge: (has("amountKnowledge") ? input.amountKnowledge : amountCents === null ? "unknown" : "known") as any,
     effectiveFrom: effectiveFrom as any,
-    effectiveFromKnowledge: (has("effectiveFromKnowledge") ? input.effectiveFromKnowledge : "source") as any,
+    effectiveFromKnowledge: (has("effectiveFromKnowledge") ? input.effectiveFromKnowledge : "manual") as any,
     active: active as boolean | null,
     activeKnowledge: (has("activeKnowledge") ? input.activeKnowledge : "source") as any,
     chargeDefinitionId: chargeDefinitionId as string | null,
@@ -79,11 +80,11 @@ function schedule(input: Record<string, unknown>): RentOpsSnapshot["recurringSch
     chargeDefinitionKey: (has("chargeDefinitionKey") ? input.chargeDefinitionKey : null) as string | null,
     description: has("description") ? input.description as string | null : "synthetic",
     descriptionKnowledge: (has("descriptionKnowledge") ? input.descriptionKnowledge : "source") as any,
-    sourceArtifactSha256: has("sourceArtifactSha256") ? input.sourceArtifactSha256 as string | null : "a".repeat(64),
-    artifactObservationOn: has("artifactObservationOn") ? input.artifactObservationOn as any : "2025-01-01",
+    sourceArtifactSha256: has("sourceArtifactSha256") ? input.sourceArtifactSha256 as string | null : null,
+    artifactObservationOn: has("artifactObservationOn") ? input.artifactObservationOn as any : null,
     lineageRootId: String(input.lineageRootId ?? input.id),
-    lineageRootOrigin: "artifact",
-    versionOrigin: "artifact",
+    lineageRootOrigin: "manual",
+    versionOrigin: "manual",
     versionAction: "root",
   } as any;
 }
@@ -189,4 +190,31 @@ test("native billing ledger survives actual SQL and model3 mapping with complete
     const home = presentTenantHome(snapshot,{id:"a", email:"resident@example.test", personId:"person-u1",tenancyId:"tenancy-u1",status:"active"},"2025-05-31");
     assert.equal(home?.balance.complete,true); assert.equal(home?.balance.amountCents,125000);
   } finally { await db.close(); }
+});
+
+test("billing selection validates identity and binds preview and replay to exact scope", async () => {
+  const data = fixture();
+  const service = new RecurringBillingService(memoryStore(data));
+  for (const scope of [{}, { propertyId: "missing" }, { tenancyId: "missing" }, { propertyId: "other", tenancyId: "tenancy-u1" }]) {
+    await assert.rejects(service.preview("2025-05", scope), /invalid_input/);
+  }
+  const global = await service.preview("2025-05");
+  const scope = { tenancyId: "tenancy-u1" };
+  const selected = await service.preview("2025-05", scope);
+  assert.equal(selected.readyCount, 1);
+  assert.notEqual(global.previewToken, selected.previewToken);
+  await assert.rejects(service.post({ month: "2025-05", previewToken: selected.previewToken, actorSubject: "admin" }), /preview_changed/);
+  const result = await service.post({ month: "2025-05", previewToken: selected.previewToken, actorSubject: "admin", scope });
+  assert.equal(result.postedCount, 1);
+  assert.equal((await service.post({ month: "2025-05", previewToken: selected.previewToken, actorSubject: "admin", scope })).alreadyPostedCount, 1);
+  await assert.rejects(service.post({ month: "2025-05", previewToken: selected.previewToken, actorSubject: "admin" }), /preview_changed/);
+});
+
+test("unknown cadence blocks billing until an explicit monthly successor is configured", () => {
+ const data=fixture();const original=data.snapshot.recurringSchedules[0];original.billingFrequency=null;original.effectiveFromKnowledge="source";original.lineageRootOrigin="artifact";original.versionOrigin="artifact";original.source={system:"rm",sourceId:"source-rent"};original.sourceArtifactSha256="a".repeat(64);original.artifactObservationOn="2025-01-01";
+ assert.equal(previewRecurringBilling(data,"2025-05").readyCount,0);
+ assert.ok(previewRecurringBilling(data,"2025-05").rows.some(row=>row.reasons.some(reason=>reason.includes("frequency"))));
+ data.snapshot.recurringSchedules.push({...original,id:"confirmed-monthly",billingFrequency:"monthly",versionOrigin:"manual",versionAction:"replace",supersedesId:original.id,lineageRootId:original.lineageRootId??original.id,effectiveFrom:"2025-05-01",effectiveFromKnowledge:"manual",recordRevision:2,source:undefined});
+ assert.equal(previewRecurringBilling(data,"2025-05").readyCount,1);
+ assert.equal(original.billingFrequency,null);
 });

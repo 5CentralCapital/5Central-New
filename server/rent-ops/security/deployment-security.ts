@@ -1,3 +1,5 @@
+import { createEmailRecipientPolicy } from "../email/recipient-policy";
+import { resolveHostDatabaseUrl } from "../../host-database-config";
 /**
  * Render and validate the least-privilege role boundary for Rent Ops.
  *
@@ -16,7 +18,8 @@ export const RENT_OPS_SECURITY_VERSION = "rent-ops-security/v1" as const;
 
 /**
  * Production deployment configuration is intentionally explicit.  Render
- * supplies these names exactly; startup rejects aliases and unsafe fallbacks
+ * supplies these names exactly; the explicit Replit host override takes priority.
+ * Startup rejects invalid credentials and unsafe fallbacks
  * before opening a database, session store, or object-store client.
  */
 export const RENT_OPS_DEPLOYMENT_ENVIRONMENT = "production" as const;
@@ -78,11 +81,14 @@ export function validateRentOpsProductionConfiguration(
   env: RentOpsDeploymentEnvironment = process.env,
 ): RentOpsProductionConfigurationValidation {
   const blockingReasons: string[] = [];
+  if (env.RENT_OPS_TENANT_EMAIL_ENABLED === "true" && !env.RENT_OPS_EMAIL_ALLOWED_RECIPIENTS?.trim()) blockingReasons.push("production_email_recipient_allowlist_required");
+  try { createEmailRecipientPolicy(env.RENT_OPS_EMAIL_ALLOWED_RECIPIENTS); } catch { blockingReasons.push("production_email_recipient_allowlist_invalid"); }
   if (configured(env, "NODE_ENV") !== RENT_OPS_DEPLOYMENT_ENVIRONMENT) blockingReasons.push("production_node_env_required");
-  for (const key of ["DATABASE_URL", "RENT_OPS_RUNTIME_DATABASE_URL"] as const) {
+  for (const key of ["RENT_OPS_RUNTIME_DATABASE_URL"] as const) {
     if (!postgresUrl(configured(env, key))) blockingReasons.push(`production_${key.toLowerCase()}_invalid`);
   }
-  const hostDatabase = configured(env, "DATABASE_URL");
+  const hostDatabase = resolveHostDatabaseUrl(env);
+  if (!postgresUrl(hostDatabase) || hostDatabase?.trim() !== hostDatabase) blockingReasons.push("production_database_url_invalid");
   const runtimeDatabase = configured(env, "RENT_OPS_RUNTIME_DATABASE_URL");
   for (const key of ["RENT_OPS_DATABASE_URL", "RENT_OPS_OBJECT_STORE_IMPORTER_TOKEN"]) {
     if (env[key]) blockingReasons.push(`production_importer_credential_forbidden_${key.toLowerCase()}`);
@@ -244,6 +250,7 @@ export const RENT_OPS_ALL_TABLES = [
 
 /** Tables written by the staff application and authenticated tenant services. */
 export const RENT_OPS_RUNTIME_WRITABLE_TABLES = [
+  "rent_ops_charge_definitions",
   "rent_ops_properties",
   "rent_ops_units",
   "rent_ops_people",
@@ -271,7 +278,6 @@ export const RENT_OPS_RUNTIME_WRITABLE_TABLES = [
  * intentionally read-only for the web role; the importer owns their writes.
  */
 export const RENT_OPS_RUNTIME_READ_ONLY_TABLES = [
-  "rent_ops_charge_definitions",
   "rent_ops_prospects",
   "rent_ops_application_history",
   "rent_ops_application_interests",

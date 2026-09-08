@@ -50,8 +50,8 @@ export function RentOpsAdminLogin({ message }: { message?: string }) {
     <section className="ro-auth-card" aria-labelledby="rent-ops-login-title">
       <div className="ro-auth-icon"><LockKeyhole aria-hidden="true" /></div>
       <span className="eyebrow">Private workspace</span>
-      <h1 id="rent-ops-login-title">Rent Operations</h1>
-      <p className="ro-auth-intro">Sign in with the dedicated administrator account to view and update operational records.</p>
+      <h1 id="rent-ops-login-title">Manager Sign In</h1>
+      <p className="ro-auth-intro">Sign in to open your manager dashboard.</p>
       {error && <div className="ro-error" role="alert"><AlertCircle aria-hidden="true" /><span>{error}</span></div>}
       {googleEnabled && <a className="primary ro-auth-submit" href="/api/rent-ops/auth/oauth/start">Continue with Google</a>}
       <form onSubmit={submit}>
@@ -61,7 +61,7 @@ export function RentOpsAdminLogin({ message }: { message?: string }) {
         <input id="rent-ops-password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required disabled={submitting} />
         <button className="primary ro-auth-submit" type="submit" disabled={submitting}>{submitting ? "Signing in…" : "Sign in"}</button>
       </form>
-      <p className="ro-auth-note">This sign-in is separate from the public site and investor access.</p>
+      <a className="ro-auth-note" href="/">← Back to 5Central</a>
     </section>
   </main>;
 }

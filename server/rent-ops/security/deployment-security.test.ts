@@ -118,7 +118,6 @@ test("security inventory matches all migration tables and repository runtime rea
   ];
   assert.deepEqual([...RENT_OPS_RUNTIME_TABLES].sort(), [...repositorySnapshotTables, ...RENT_OPS_APPLICATION_TABLES].sort());
   assert.deepEqual([...RENT_OPS_RUNTIME_READ_ONLY_TABLES], [
-    "rent_ops_charge_definitions",
     "rent_ops_prospects",
     "rent_ops_application_history",
     "rent_ops_application_interests",
@@ -156,6 +155,7 @@ test("security inventory matches all migration tables and repository runtime rea
   // saveLedgerTransaction/savePaymentAllocation/saveActivity use insertOnly;
   // every other runtime save method uses the repository upsert path.
   const repositoryUpsertTables = [
+    "rent_ops_charge_definitions",
     "rent_ops_properties",
     "rent_ops_units",
     "rent_ops_people",
@@ -205,7 +205,7 @@ test("verified staging plan grants normal tables and importer-only access to res
   assert.match(plan.sql, /GRANT SELECT ON TABLE "public"\."rent_ops_schema_meta", "public"\."rent_ops_schema_migrations", "public"\."rent_ops_record_changes" TO "rent_ops_staging_importer"/);
   assert.match(plan.sql, /GRANT SELECT, INSERT ON TABLE .*rent_ops_ledger_transactions.*rent_ops_payment_allocations.*rent_ops_activity_events.* TO "rent_ops_staging_web"/);
   assert.match(plan.sql, /GRANT SELECT, INSERT ON TABLE .*rent_ops_ledger_transactions.*rent_ops_payment_allocations.*rent_ops_activity_events.* TO "rent_ops_staging_importer"/);
-  assert.match(plan.sql, /GRANT SELECT ON TABLE [^;]*"public"\."rent_ops_charge_definitions"[^;]*"public"\."rent_ops_application_history_aggregates"[^;]* TO "rent_ops_staging_web"/);
+  assert.match(plan.sql, /GRANT SELECT, INSERT, UPDATE ON TABLE [^;]*"public"\."rent_ops_charge_definitions"[^;]* TO "rent_ops_staging_web"/);
   assert.match(plan.sql, /GRANT SELECT, INSERT ON TABLE [^;]*"public"\."rent_ops_charge_definitions"[^;]*"public"\."rent_ops_application_history_aggregates"[^;]* TO "rent_ops_staging_importer"/);
   assert.doesNotMatch(plan.sql, /GRANT SELECT, INSERT, UPDATE ON TABLE [^;]*rent_ops_charge_definitions[^;]* TO "rent_ops_staging_importer"/);
   assert.doesNotMatch(plan.sql, /GRANT SELECT, INSERT, UPDATE ON TABLE [^;]*rent_ops_ledger_transactions[^;]* TO "rent_ops_staging_web"/);
@@ -334,4 +334,11 @@ test("managed Gmail startup does not require an unused webhook receiver or manua
  assert.equal(configured.blockingReasons.some(reason=>/webhook|gmail_client|gmail_refresh|email_delivery_disabled|gmail_sender/.test(reason)),false);
  const disabled=validateRentOpsProductionConfiguration({NODE_ENV:"production",RENT_OPS_TENANT_EMAIL_PROVIDER:"replit-gmail"});
  assert.ok(disabled.blockingReasons.includes("production_email_delivery_disabled"));
+});
+
+test("pre-launch production email requires an exact recipient allowlist when enabled", () => {
+  const validate = (allowed?: string) => validateRentOpsProductionConfiguration({ NODE_ENV: "production", RENT_OPS_TENANT_EMAIL_ENABLED: "true", RENT_OPS_EMAIL_ALLOWED_RECIPIENTS: allowed }).blockingReasons;
+  assert.ok(validate().includes("production_email_recipient_allowlist_required"));
+  assert.ok(validate("*").includes("production_email_recipient_allowlist_invalid"));
+  assert.equal(validate("qa@example.test").some(reason => reason.startsWith("production_email_recipient_allowlist_")), false);
 });

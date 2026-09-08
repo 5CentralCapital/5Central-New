@@ -6,12 +6,18 @@ import { Menu, LogOut } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
 import LoginModal from "@/components/login-modal";
 
+import { useRentOpsAuth } from "@/features/rent-ops/auth-ui";
+import { rentOpsAuthClient } from "@/features/rent-ops/auth";
+import { ManagerDashboardLink } from "./account-entry";
+
 export default function Navigation() {
   const [location, setLocation] = useLocation();
   const [isScrolled, setIsScrolled] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const { user, logout } = useAuth();
+  const managerAuth = useRentOpsAuth();
+  useEffect(() => { if (managerAuth.status === "unknown") void rentOpsAuthClient.restore().catch(() => undefined); }, [managerAuth.status]);
 
   const handleLogout = async () => {
     await logout();
@@ -86,19 +92,20 @@ export default function Navigation() {
           </Link>
 
           {/* Desktop Navigation */}
-          <div className="hidden lg:flex items-center gap-10">
+          <div className="hidden xl:flex items-center gap-4">
             {navItems.map((item) => (
               <NavLink key={item.href} {...item} />
             ))}
+            <ManagerDashboardLink authenticated={managerAuth.status === "authenticated"} />
             {user ? (
               <div className="flex items-center gap-4 ml-4">
+                <button className="text-sm font-medium hover:underline" onClick={() => setIsLoginModalOpen(true)}>Account Access</button>
                 <Link href="/data-room" className="text-sm text-muted-foreground hover:text-warm-brass font-medium">
                   Data Room
                 </Link>
                 {user.role === "admin" ? (
                   <div className="flex items-center gap-3">
-                    <Link href="/ops" className="text-sm text-muted-foreground hover:text-warm-brass font-medium">Rent Ops</Link>
-                    <Link href="/admin" className="text-sm text-warm-brass hover:underline font-medium cursor-pointer">{user.firstName}</Link>
+                    <Link href="/admin" className="text-sm text-warm-brass hover:underline font-medium cursor-pointer">Website Admin</Link>
                   </div>
                 ) : (
                   <Link href="/investor-dashboard" className="text-sm text-muted-foreground hover:underline cursor-pointer">
@@ -128,7 +135,7 @@ export default function Navigation() {
 
           {/* Mobile Navigation */}
           <Sheet open={isOpen} onOpenChange={setIsOpen}>
-            <SheetTrigger asChild className="lg:hidden">
+            <SheetTrigger asChild className="xl:hidden">
               <Button
                 variant="ghost"
                 size="icon"
@@ -163,14 +170,16 @@ export default function Navigation() {
                   </div>
 
                   <div className="mt-10 pt-8 border-t border-border">
+                    <div className="mb-4"><ManagerDashboardLink authenticated={managerAuth.status === "authenticated"} onNavigate={() => setIsOpen(false)} /></div>
                     {user ? (
                       <div className="space-y-4">
+                        <button className="text-sm font-medium hover:underline" onClick={() => { setIsOpen(false); setIsLoginModalOpen(true); }}>Account Access</button>
                         <Link
                           href={user.role === "admin" ? "/admin" : "/investor-dashboard"}
                           className={`block text-sm font-medium ${user.role === "admin" ? "text-warm-brass" : "text-muted-foreground"}`}
                           onClick={() => setIsOpen(false)}
                         >
-                          {user.firstName} {user.lastName} → Dashboard
+                          {user.role === "admin" ? "Website Admin" : "Investor Dashboard"}
                         </Link>
                         <Link
                           href="/data-room"

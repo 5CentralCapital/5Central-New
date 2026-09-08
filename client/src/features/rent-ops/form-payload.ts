@@ -13,7 +13,7 @@ export const RENT_OPS_QUICK_ADD_ACTIONS: QuickAction[] = [
 ];
 
 export function mutationPayload(action: QuickAction, values: FormValues, initialValues: FormValues = {}, changedFields: ReadonlySet<string> = new Set()): Record<string, unknown> {
-  const helperKeys = new Set(["amountDollars", "marketRentDollars", "agencyDollars", "tenantDollars", "address1", "city", "stateCode", "postalCode"]);
+  const helperKeys = new Set(["amountDollars", "marketRentDollars", "defaultDepositDollars", "amenitiesText", "agencyDollars", "tenantDollars", "address1", "city", "stateCode", "postalCode"]);
   const editing = typeof values.revision === "number" && Number.isSafeInteger(values.revision) && values.revision > 0;
   const changedValue = (key: string): FormValue => sparseEditValue(values[key], initialValues[key], Object.prototype.hasOwnProperty.call(initialValues, key), editing, changedFields.has(key)) as FormValue;
   const clean = Object.fromEntries(Object.keys(values).flatMap((key) => {
@@ -50,6 +50,7 @@ export function mutationPayload(action: QuickAction, values: FormValues, initial
       chargeDefinitionId,
       category,
       scheduleDescription,
+      billingFrequency: values.billingFrequency,
       primaryFinanciallyResponsible: values.primaryFinanciallyResponsible === "true",
       members: memberIds.map((applicationMemberId) => ({
         applicationMemberId,
@@ -63,7 +64,7 @@ export function mutationPayload(action: QuickAction, values: FormValues, initial
     const address = Object.fromEntries([["line1", changedValue("address1")], ["city", changedValue("city")], ["state", changedValue("stateCode")], ["postalCode", changedValue("postalCode")]].filter((entry): entry is [string, FormValue] => entry[1] !== undefined));
     return finish({ id, ...(changedValue("name") !== undefined ? { name: changedValue("name") } : {}), ...(changedValue("slug") !== undefined ? { slug: changedValue("slug") } : {}), ...(Object.keys(address).length ? { address } : {}), ...(changedValue("propertyType") !== undefined ? { propertyType: changedValue("propertyType") } : {}), ...(changedValue("propertyState") !== undefined ? { state: changedValue("propertyState") } : {}), ...(changedValue("operatingContact") !== undefined ? { operatingContact: changedValue("operatingContact") } : {}) });
   }
-  if (action === "save-unit") return finish({ ...clean, id, ...(values.bedrooms === "" ? (editing && changedValue("bedrooms") === null ? { bedrooms: null } : {}) : { bedrooms: Number(values.bedrooms) }), ...(values.bathrooms === "" ? (editing && changedValue("bathrooms") === null ? { bathrooms: null } : {}) : { bathrooms: Number(values.bathrooms) }), ...(optionalCents("marketRentDollars") !== undefined ? { marketRentCents: optionalCents("marketRentDollars") } : {}) });
+  if (action === "save-unit") return finish({ ...clean, id, ...(changedValue("squareFeet") !== undefined && (editing || values.squareFeet !== "") ? { squareFeet: values.squareFeet === "" ? null : Number(values.squareFeet) } : {}), ...(changedValue("amenitiesText") !== undefined && (editing || values.amenitiesText) ? { amenities: String(values.amenitiesText ?? "").split(/[,\n]/).map(value => value.trim()).filter(Boolean) } : {}), ...(optionalCents("defaultDepositDollars") !== undefined ? { defaultDepositCents: optionalCents("defaultDepositDollars") } : {}), ...(values.bedrooms === "" ? (editing && changedValue("bedrooms") === null ? { bedrooms: null } : {}) : { bedrooms: Number(values.bedrooms) }), ...(values.bathrooms === "" ? (editing && changedValue("bathrooms") === null ? { bathrooms: null } : {}) : { bathrooms: Number(values.bathrooms) }), ...(optionalCents("marketRentDollars") !== undefined ? { marketRentCents: optionalCents("marketRentDollars") } : {}) });
   if (action === "save-person") return finish({ ...clean, id });
   if (action === "save-household-membership") return finish({ ...clean, id });
   if (action === "save-tenancy") return finish({ ...clean, id });
@@ -95,6 +96,7 @@ export function mutationPayload(action: QuickAction, values: FormValues, initial
       category: requiredValue("category", "Charge category"),
       description: requiredValue("description", "Description"),
       amountCents,
+      billingFrequency: requiredValue("billingFrequency", "Billing frequency"),
       effectiveFrom: requiredValue("effectiveFrom", "Effective start date"),
       active: activeValue === "true" || activeValue === true,
     };
@@ -118,6 +120,7 @@ export function mutationPayload(action: QuickAction, values: FormValues, initial
       const amountCents = requireCentsInput(values.amountDollars, "Replacement amount");
       if (amountCents <= 0) throw new Error("Replacement amount must be greater than zero.");
       body.amountCents = amountCents;
+      if (values.billingFrequency === "monthly") body.billingFrequency = "monthly";
     }
     return body;
   }

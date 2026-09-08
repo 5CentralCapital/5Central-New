@@ -15,7 +15,17 @@ export interface TenantAccountRecord {
   activatedAt: string | null;
 }
 
+export interface AuditedAccountMutation {
+  action: "grant" | "reissue" | "revoke"; id: string; actorSubject: string; now: string;
+  expectedCredentialRevision?: number; email?: string; personId?: string; tenancyId?: string; tokenHash?: string; expiresAt?: string;
+}
+
+export type AccountDeliveryOutcome = "accepted" | "failed" | "indeterminate";
 export interface TenantAccountStore {
+  issueAuditedDelivery?(input: {commandId:string;accountId:string;actorSubject:string;tokenHash:string;expiresAt:string;now:string}): Promise<TenantAccountRecord | undefined>;
+  auditedDeliveryOutcome?(commandId:string): Promise<AccountDeliveryOutcome>;
+  finishAuditedDelivery?(input:{commandId:string;accountId:string;actorSubject:string;outcome:AccountDeliveryOutcome;now:string}): Promise<void>;
+  auditedMutation?(input: AuditedAccountMutation): Promise<TenantAccountRecord | undefined>;
   list(): Promise<TenantAccountRecord[]>;
   getById(id: string): Promise<TenantAccountRecord | undefined>;
   getByEmail(email: string): Promise<TenantAccountRecord | undefined>;
@@ -53,6 +63,54 @@ export class PostgresTenantAccountStore implements TenantAccountStore {
 
   private async one(sql: string, values: unknown[]): Promise<TenantAccountRecord | undefined> {
     return record((await this.database.query(sql, values)).rows[0]);
+  }
+
+  async issueAuditedDelivery(input:{commandId:string;accountId:string;actorSubject:string;tokenHash:string;expiresAt:string;now:string}) {
+    return this.one(`WITH command AS (
+      INSERT INTO rent_ops_activity_events (id,person_id,tenancy_id,type,occurred_at,actor,summary,metadata,
+        person_link_knowledge,tenancy_link_knowledge,type_knowledge,occurred_at_knowledge,actor_knowledge,summary_knowledge)
+      SELECT $1,person_id,tenancy_id,'system',$6,$3,'Tenant account access delivery requested',jsonb_build_object('accountId',id,'delivery','indeterminate'),
+        'exact','exact','manual','manual','manual','manual' FROM rent_ops_tenant_accounts WHERE id=$2 AND status IN ('pending','active')
+      ON CONFLICT(id) DO NOTHING RETURNING id), changed AS (
+      UPDATE rent_ops_tenant_accounts SET activation_token_hash=$4,invitation_expires_at=$5,updated_at=$6
+      WHERE id=$2 AND status IN ('pending','active') AND EXISTS(SELECT 1 FROM command) RETURNING ${columns})
+      SELECT * FROM changed`,[input.commandId,input.accountId,input.actorSubject,input.tokenHash,input.expiresAt,input.now]);
+  }
+  async auditedDeliveryOutcome(commandId:string):Promise<AccountDeliveryOutcome> {
+    const result=await this.database.query<{metadata:{delivery?:unknown}}>("SELECT metadata FROM rent_ops_activity_events WHERE id=$1",[commandId+"-outcome"]);
+    const outcome=result.rows[0]?.metadata?.delivery;
+    return outcome==="accepted"||outcome==="failed"?outcome:"indeterminate";
+  }
+  async finishAuditedDelivery(input:{commandId:string;accountId:string;actorSubject:string;outcome:AccountDeliveryOutcome;now:string}) {
+    await this.database.query(`INSERT INTO rent_ops_activity_events (id,person_id,tenancy_id,type,occurred_at,actor,summary,metadata,
+      person_link_knowledge,tenancy_link_knowledge,type_knowledge,occurred_at_knowledge,actor_knowledge,summary_knowledge)
+      SELECT $1,person_id,tenancy_id,'system',$5,$3,'Tenant account access delivery outcome',jsonb_build_object('accountId',id,'delivery',$4::text),
+      'exact','exact','manual','manual','manual','manual' FROM rent_ops_tenant_accounts WHERE id=$2 ON CONFLICT(id) DO NOTHING`,
+      [input.commandId+"-outcome",input.accountId,input.actorSubject,input.outcome,input.now]);
+  }
+
+  async auditedMutation(input: AuditedAccountMutation): Promise<TenantAccountRecord | undefined> {
+    const values: unknown[] = [input.id,input.actorSubject,input.now];
+    let mutation: string;
+    if(input.action === "grant") {
+      values.push(input.email,input.personId,input.tenancyId,input.tokenHash,input.expiresAt);
+      mutation = `INSERT INTO rent_ops_tenant_accounts (id,email,person_id,tenancy_id,status,activation_token_hash,invitation_expires_at,created_at,updated_at)
+        VALUES ($1,$4,$5,$6,'pending',$7,$8,$3,$3) ON CONFLICT DO NOTHING RETURNING ${columns}`;
+    } else {
+      values.push(input.expectedCredentialRevision,input.tokenHash??null,input.expiresAt??null);
+      mutation = `UPDATE rent_ops_tenant_accounts SET password_hash=NULL,status='${input.action === "revoke" ? "revoked" : "pending"}',
+        activation_token_hash=$5,invitation_expires_at=$6,session_version=session_version+1,updated_at=$3
+        WHERE id=$1 AND session_version=$4 RETURNING ${columns}`;
+    }
+    // One statement is atomic even for pooled executors: audit errors roll back
+    // the credential mutation, and stale revisions produce neither mutation nor audit.
+    return this.one(`WITH changed AS (${mutation}), audit AS (
+      INSERT INTO rent_ops_activity_events (id,person_id,tenancy_id,type,occurred_at,actor,summary,metadata,
+        person_link_knowledge,tenancy_link_knowledge,type_knowledge,occurred_at_knowledge,actor_knowledge,summary_knowledge)
+      SELECT 'account-audit-' || md5(id || ':' || "sessionVersion"::text || ':${input.action}'), "personId", "tenancyId", 'system',$3,$2,
+        'Tenant account ${input.action}',jsonb_build_object('accountId',id,'credentialRevision',"sessionVersion"),
+        'exact','exact','manual','manual','manual','manual' FROM changed RETURNING id)
+      SELECT changed.* FROM changed JOIN audit ON true`,values);
   }
 
   async list(): Promise<TenantAccountRecord[]> {

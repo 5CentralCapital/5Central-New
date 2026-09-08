@@ -1,9 +1,11 @@
+import { createEmailRecipientPolicy } from "../email/recipient-policy";
 import type { TenantAccessDelivery } from "./delivery";
 type GmailDelivery = Omit<TenantAccessDelivery, "purpose"> & { purpose: TenantAccessDelivery["purpose"] | "application_resume" };
 
 const mailbox = (value: string) => /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(value) && value.length <= 240;
 /** Direct documented Gmail API transport. No browser cookies or new OAuth grants. */
 export function createGmailTenantNotifier(env: Record<string,string|undefined>, fetchImpl: typeof fetch = fetch, getAccessToken?: () => Promise<string>, managedProxy = false): (input: GmailDelivery) => Promise<void> {
+  const recipient = createEmailRecipientPolicy(env.RENT_OPS_EMAIL_ALLOWED_RECIPIENTS);
   const from = env.RENT_OPS_GMAIL_FROM ?? "";
   const clientId = env.RENT_OPS_GMAIL_CLIENT_ID ?? "";
   const clientSecret = env.RENT_OPS_GMAIL_CLIENT_SECRET ?? "";
@@ -11,6 +13,7 @@ export function createGmailTenantNotifier(env: Record<string,string|undefined>, 
   const app = new URL(env.RENT_OPS_PUBLIC_APP_URL ?? "");
   if (!mailbox(from) || (!getAccessToken && (!clientId || !clientSecret || !refreshToken)) || app.protocol !== "https:" || app.username || app.password) throw new Error("Gmail tenant delivery configuration is incomplete");
   return async input => {
+    input = { ...input, email: recipient(input?.email) };
     if (!mailbox(input.email) || !/^[A-Za-z0-9_-]{1,160}$/.test(input.issuanceId) || !/^[A-Za-z0-9_-]{43}$/.test(input.token)) throw new Error("Invalid tenant delivery request");
     const accessToken = getAccessToken ? await getAccessToken() : await (async () => {
       const authorization = await fetchImpl("https://oauth2.googleapis.com/token",{method:"POST",signal:AbortSignal.timeout(10_000),headers:{"Content-Type":"application/x-www-form-urlencoded"},

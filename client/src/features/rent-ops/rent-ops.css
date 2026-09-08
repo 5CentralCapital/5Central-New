@@ -910,3 +910,15 @@ button.ro-stat:hover {
 }
 
 }
+
+.ro-panel-message, .ro-income-form { padding: 0 20px 20px; }
+.ro-income-form fieldset { border: 0; padding: 0; margin: 0; }
+.ro-allocation { display: flex; justify-content: space-between; gap: 16px; margin: 12px 0; align-items: center; }
+.ro-allocation input { max-width: 160px; }
+.ro-income-form .ro-actions { margin-top: 20px; }
+
+.ro-opening-balance { background: #F5F0E8; font-weight: 600; }
+
+.ro-phone-editor { padding: 20px; }
+.ro-phone-editor fieldset { border: 0; padding: 0; }
+.ro-phone-editor .ro-form-grid { margin-bottom: 20px; }

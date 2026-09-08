@@ -31,7 +31,8 @@ export class PostgresTenantPaymentStore implements TenantPaymentStore {
     if (!this.executor.transaction) throw new TenantPaymentError("payment_atomic_storage_required", 503);
     return this.executor.transaction((executor) => work(new PostgresTenantPaymentStore(executor, new PostgresRentOpsRepository(executor), true)), { readOnly: false });
   }
-  async lockAccount(id: string): Promise<void> { await this.executor.query("SELECT id FROM rent_ops_people WHERE id = $1 FOR UPDATE", [id]); }
+  // Match manual receipts: advance the tuple version, preserving all person values.
+  async lockAccount(id: string): Promise<void> { await this.executor.query("UPDATE rent_ops_people SET id = id WHERE id = $1 RETURNING id", [id]); }
   snapshot(): Promise<RentOpsSnapshot> { return this.repository.getSnapshot(); }
   async list(personId: string): Promise<TenantPayment[]> { const result = await this.executor.query(`SELECT ${fields.join(",")} FROM rent_ops_tenant_payments WHERE person_id=$1 ORDER BY created_at DESC`, [personId]); return result.rows.map(payment); }
   async findByRequest(accountId: string, requestId: string): Promise<TenantPayment | undefined> { const result = await this.executor.query(`SELECT ${fields.join(",")} FROM rent_ops_tenant_payments WHERE account_id=$1 AND request_id=$2${this.insideTransaction ? " FOR UPDATE" : ""}`, [accountId, requestId]); return result.rows[0] && payment(result.rows[0]); }

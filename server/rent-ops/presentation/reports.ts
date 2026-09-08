@@ -217,6 +217,8 @@ export function serializeLedgerRow(value: unknown): JsonObject {
     allocatedCents: number(input, "allocatedCents"),
     openCents: number(input, "openCents"),
     runningBalanceCents: number(input, "runningBalanceCents"),
+    rowType: input.rowType === "opening_balance" ? "opening_balance" : undefined,
+    openingBalanceCents: number(input, "openingBalanceCents"),
   });
 }
 

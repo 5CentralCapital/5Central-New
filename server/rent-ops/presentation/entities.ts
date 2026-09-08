@@ -360,6 +360,9 @@ export function serializeAdminLeaseTerm(value: RentOpsLeaseTerm): AdminLeaseTerm
 }
 
 export interface AdminRecurringScheduleView {
+  /** Opaque target definition ID; never the provider source ID or key. */
+  chargeDefinitionId?: string | null;
+  billingFrequency?: string | null;
   recordRevision?: number;
   id?: string;
   scopeType?: string | null;
@@ -384,6 +387,8 @@ export interface AdminRecurringScheduleView {
 export function serializeAdminRecurringSchedule(value: RentOpsRecurringChargeSchedule): AdminRecurringScheduleView {
   const input = inputOf(value);
   return presentationObject({
+    chargeDefinitionId: nullableStringValue(input.chargeDefinitionId),
+    billingFrequency: nullableStringValue(input.billingFrequency),
     id: text(input, "id"),
     scopeType: nullableStringValue(input.scopeType),
     scopeId: nullableStringValue(input.scopeId),
@@ -1006,6 +1011,10 @@ export interface AdminDashboardSummaryView {
   offMarketUnits?: number;
   physicalOccupancyPercent?: number;
   scheduledRentCents?: number;
+  scheduledRentConfirmedCents?: number;
+  scheduledRentUnresolvedCount?: number;
+  scheduledRentComplete?: boolean;
+  scheduledRentCadenceComplete?: boolean;
   collectedRentCents?: number;
   rentOnlyDelinquencyCents?: number;
   totalDelinquencyCents?: number;
@@ -1062,6 +1071,8 @@ function serializeFilterValue(value: unknown): JsonObject {
     tenancyId: text(input, "tenancyId"),
     personId: text(input, "personId"),
     asOfDate: dateText(input, "asOfDate"),
+    fromDate: dateText(input, "fromDate"),
+    toDate: dateText(input, "toDate"),
     month: dateText(input, "month"),
     occupancy: allowedArray("occupancy", ["current", "future_preleased", "vacant", "unknown"]),
     readiness: allowedArray("readiness", ["ready", "not_ready", "off_market"]),
@@ -1100,6 +1111,10 @@ export function serializeDashboardSummary(value: DashboardSummary): AdminDashboa
     offMarketUnits: number(input, "offMarketUnits"),
     physicalOccupancyPercent: number(input, "physicalOccupancyPercent"),
     scheduledRentCents: number(input, "scheduledRentCents"),
+    scheduledRentConfirmedCents: number(input, "scheduledRentConfirmedCents"),
+    scheduledRentUnresolvedCount: number(input, "scheduledRentUnresolvedCount"),
+    scheduledRentComplete: bool(input, "scheduledRentComplete"),
+    scheduledRentCadenceComplete: bool(input, "scheduledRentCadenceComplete"),
     collectedRentCents: number(input, "collectedRentCents"),
     rentOnlyDelinquencyCents: number(input, "rentOnlyDelinquencyCents"),
     totalDelinquencyCents: number(input, "totalDelinquencyCents"),
@@ -1186,7 +1201,7 @@ export interface AdminTenantProfileView {
   tenancies?: AdminTenancyView[];
   leaseTerms: AdminLeaseTermView[];
   schedules: AdminRecurringScheduleView[];
-  ledger: Array<{ transaction: AdminLedgerTransactionView; allocatedCents?: number; openCents?: number; runningBalanceCents?: number }>;
+  ledger: Array<{ transaction: AdminLedgerTransactionView; allocatedCents?: number; openCents?: number; runningBalanceCents?: number; rowType?: string; openingBalanceCents?: number }>;
   deposits: AdminSecurityDepositView[];
   subsidyContracts: AdminSubsidyContractView[];
   documents: AdminDocumentView[];
@@ -1202,6 +1217,8 @@ function serializeLedgerRows(value: unknown): AdminTenantProfileView["ledger"] {
     allocatedCents: number(inputOf(item), "allocatedCents"),
     openCents: number(inputOf(item), "openCents"),
     runningBalanceCents: number(inputOf(item), "runningBalanceCents"),
+    rowType: inputOf(item).rowType === "opening_balance" ? "opening_balance" : undefined,
+    openingBalanceCents: number(inputOf(item), "openingBalanceCents"),
   }));
 }
 

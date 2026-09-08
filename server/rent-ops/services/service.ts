@@ -1,3 +1,5 @@
+import { phoneMethodsSchema } from "../domain/phone-methods";
+import { manualPaymentSchema, createChargeDefinitionSchema, patchChargeDefinitionSchema, type CreateChargeDefinitionInput, type PatchChargeDefinitionInput, type ManualPaymentInput } from "./operational-inputs";
 import { postedReversalTargets } from "../domain/invariants";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable, Transform } from "node:stream";
@@ -18,6 +20,7 @@ import type {
   RentOpsHouseholdMembership,
   RentOpsImportRun,
   RentOpsLedgerTransaction,
+  RentOpsChargeDefinition,
   RentOpsPaymentAllocation,
   RentOpsPerson,
   RentOpsProperty,
@@ -35,7 +38,7 @@ import type {
   ApplicantPublicView,
   DashboardSummary,
 } from "../../../shared/rent-ops-contracts";
-import { deriveApplicantPipeline, deriveCollectedIncome, deriveDashboardSummary, deriveDepositLiability, deriveDelinquency, deriveFixedReport, deriveHap, deriveLeaseExpirations, deriveRentRoll, deriveScheduledIncome, deriveScheduledVsCollected, deriveTenantLedger, deriveTenantProfile, toApplicantPublicView } from "../domain/reports";
+import { validateReportFilters, deriveApplicantPipeline, deriveCollectedIncome, deriveDashboardSummary, deriveDepositLiability, deriveDelinquency, deriveFixedReport, deriveHap, deriveLeaseExpirations, deriveRentRoll, deriveScheduledIncome, deriveScheduledVsCollected, deriveTenantLedger, deriveTenantProfile, toApplicantPublicView } from "../domain/reports";
 import { assertApplicationStatusTransition, assertCents, assertPositiveCents, assertPrivateStorageKey, buildReversal, documentReferenceViolations, effectiveSchedules, RentOpsInvariantError, validateAllocation, validateSnapshot } from "../domain/invariants";
 import { addDays, addMonths, nowIsoDate, nowIsoTimestamp } from "../domain/dates";
 import { isPublicApplicationInventory } from "../presentation/public";
@@ -45,6 +48,7 @@ import { MagicLinkDeliveryError } from "./notifier";
 import { assertExactVersion, exactVersion, hasExactVersion, type ContentAddressedObjectStore, type SourceBinaryBinding, type StorageByteStream, type StorageReadAdapter, type StorageVersionOptions, type VerifiedObjectOpen } from "../storage";
 
 export interface ApplicationConversionFacts {
+  billingFrequency: "monthly";
   propertyId: string;
   unitId: string;
   plannedMoveInOn: string;
@@ -66,6 +70,7 @@ export interface ApplicationConversionFacts {
 }
 
 export interface RecurringScheduleSuccessorInput {
+  billingFrequency?: "monthly";
   /** Target-only id supplied for retry-safe creation. */
   id: string;
   expectedRevision: number;
@@ -137,9 +142,10 @@ export interface RentOpsAdminPatchContext {
 }
 
 const PATCH_FIELDS: Record<RentOpsPatchEntityType, ReadonlySet<string>> = {
+  charge_definition: new Set(["displayName", "active"]),
   property: new Set(["name", "slug", "address", "propertyType", "state", "operatingContact"]),
   unit: new Set(["propertyId", "unitNumber", "unitType", "bedrooms", "bathrooms", "squareFeet", "marketRentCents", "defaultDepositCents", "readiness", "listing", "amenities", "accessNotes"]),
-  person: new Set(["firstName", "lastName", "email", "phone", "renterInsuranceExpiresOn", "archived"]),
+  person: new Set(["firstName", "lastName", "email", "phone", "phoneMethods", "renterInsuranceExpiresOn", "archived"]),
   household_membership: new Set(["tenancyId", "applicationId", "accountPersonId", "personId", "role", "relationship", "isFinanciallyResponsible"]),
   tenancy: new Set(["propertyId", "unitId", "primaryPersonId", "status", "plannedMoveInOn", "actualMoveInOn", "noticeOn", "expectedMoveOutOn", "actualMoveOutOn", "applicationId", "endedAt"]),
   lease_term: new Set(["tenancyId", "status", "contractStartOn", "contractEndOn", "monthToMonth", "signedOn", "executedDocumentId", "renewalOfId"]),
@@ -153,6 +159,7 @@ const PATCH_FIELDS: Record<RentOpsPatchEntityType, ReadonlySet<string>> = {
 };
 
 const PATCH_KNOWLEDGE: Record<RentOpsPatchEntityType, Readonly<Record<string, string>>> = {
+  charge_definition: {displayName: "displayNameKnowledge", active: "activeKnowledge"},
   property: { name: "nameKnowledge", address: "addressKnowledge", propertyType: "propertyTypeKnowledge", state: "stateKnowledge", operatingContact: "operatingContactKnowledge" },
   unit: { propertyId: "propertyLinkKnowledge", unitNumber: "unitNumberKnowledge", unitType: "unitTypeKnowledge", readiness: "readinessKnowledge", listing: "listingKnowledge" },
   person: { firstName: "firstNameKnowledge", lastName: "lastNameKnowledge", email: "emailKnowledge", phone: "phoneKnowledge", archived: "archivedKnowledge" },
@@ -179,6 +186,7 @@ function manualCreationKnowledge<T extends RentOpsTenancy | RentOpsLeaseTerm | R
 }
 
 const PATCH_COLLECTIONS: Record<RentOpsPatchEntityType, keyof RentOpsSnapshot> = {
+  charge_definition: "chargeDefinitions",
   property: "properties",
   unit: "units",
   person: "people",
@@ -445,6 +453,7 @@ export class RentOpsService {
   }
 
   async dashboard(filters: RentOpsFilters = {}): Promise<DashboardSummary> {
+    validateReportFilters("dashboard", filters);
     return deriveDashboardSummary(await this.snapshot(), filters);
   }
 
@@ -796,6 +805,7 @@ export class RentOpsService {
   async convertApplication(applicationId: string, facts?: ApplicationConversionFacts, context?: RentOpsAdminPatchContext): Promise<{ application: RentOpsApplicationRecord; tenancy: RentOpsTenancy }> {
     if (!facts) throw new RentOpsInvariantError("Explicit admin-approved conversion facts are required");
     if (!context) throw new RentOpsInvariantError("Authenticated admin context is required");
+    if (facts.billingFrequency !== "monthly") throw new RentOpsInvariantError("Explicit monthly billing frequency required");
     assertAdminPatchContext(context);
     return this.repository.transaction((repository) => this.withRepository(repository).convertApplicationRecords(applicationId, facts, context), { lockApplicationId: applicationId });
   }
@@ -894,7 +904,7 @@ export class RentOpsService {
     const term: RentOpsLeaseTerm = { id: `lease-term:application:${application.id}`, tenancyId: tenancy.id, status: facts.leaseStatus, contractStartOn: facts.contractStartOn, contractEndOn: facts.contractEndOn, monthToMonth: facts.monthToMonth, createdAt: this.now().toISOString(), tenancyLinkKnowledge: "manual", statusKnowledge: "manual", contractStartKnowledge: "manual", contractEndKnowledge: facts.contractEndOn ? "manual" : "unknown", monthToMonthKnowledge: "manual", createdAtKnowledge: "manual" };
     await this.repository.saveLeaseTerm(term);
     const scheduleId = `schedule:application:${application.id}:base-rent`;
-    await this.saveRecurringScheduleRecords({ id: scheduleId, scopeType: "tenant", scopeId: person.id, scopeTypeKnowledge: "manual", scopeLinkKnowledge: "manual", chargeDefinitionId: facts.chargeDefinitionId, chargeDefinitionLinkKnowledge: "manual", tenancyId: tenancy.id, personId: person.id, propertyId: facts.propertyId, unitId: facts.unitId, category: facts.category, categoryKnowledge: "manual", description: facts.scheduleDescription, descriptionKnowledge: "manual", amountCents: facts.baseRentCents, amountKnowledge: "known", effectiveFrom: facts.contractStartOn, effectiveFromKnowledge: "manual", effectiveTo: facts.contractEndOn, active: true, activeKnowledge: "manual", sourceConfidence: "confirmed", lineageRootId: scheduleId, lineageRootOrigin: "manual", versionOrigin: "manual", versionAction: "root" }, context);
+    await this.saveRecurringScheduleRecords({ id: scheduleId, billingFrequency: facts.billingFrequency, scopeType: "tenant", scopeId: person.id, scopeTypeKnowledge: "manual", scopeLinkKnowledge: "manual", chargeDefinitionId: facts.chargeDefinitionId, chargeDefinitionLinkKnowledge: "manual", tenancyId: tenancy.id, personId: person.id, propertyId: facts.propertyId, unitId: facts.unitId, category: facts.category, categoryKnowledge: "manual", description: facts.scheduleDescription, descriptionKnowledge: "manual", amountCents: facts.baseRentCents, amountKnowledge: "known", effectiveFrom: facts.contractStartOn, effectiveFromKnowledge: "manual", effectiveTo: facts.contractEndOn, active: true, activeKnowledge: "manual", sourceConfidence: "confirmed", lineageRootId: scheduleId, lineageRootOrigin: "manual", versionOrigin: "manual", versionAction: "root" }, context);
     await this.repository.saveActivity({ id: `activity:application:${application.id}:converted`, applicationId, tenancyId: tenancy.id, personId: person.id, propertyId: facts.propertyId, unitId: facts.unitId, type: "system", occurredAt: this.now().toISOString(), actor: "admin", summary: "Application converted to future tenancy from explicit approved facts" });
     if (!this.repository.applyRecordPatch || !this.repository.saveRecordChange) throw new RentOpsInvariantError("Application conversion persistence is unavailable");
     const revision = application.recordRevision ?? 1;
@@ -907,6 +917,11 @@ export class RentOpsService {
   }
 
   async patchRecord(entityType: RentOpsPatchEntityType | "recurring_schedule", targetId: string, expectedRevision: number, patch: Record<string, unknown>, context: RentOpsAdminPatchContext): Promise<unknown> {
+    if (entityType === "person" && patch.phoneMethods !== undefined) {
+      const parsed = phoneMethodsSchema.safeParse(patch.phoneMethods);
+      if (!parsed.success) throw new RentOpsInvariantError("Invalid phone methods");
+      patch = {...patch,phoneMethods:parsed.data};
+    }
     if (entityType === "recurring_schedule") throw new RentOpsInvariantError("versioned_schedule_required");
     if (entityType === "activity") throw new RentOpsInvariantError("activity_append_only");
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) throw new RentOpsInvariantError("Record revision is required");
@@ -981,6 +996,7 @@ export class RentOpsService {
   }
 
   private validateAdminPatch(entityType: RentOpsPatchEntityType, existing: Record<string, unknown>, next: Record<string, unknown>, snapshot: RentOpsSnapshot): void {
+    if (entityType === "charge_definition" && !patchChargeDefinitionSchema.safeParse({...(next.displayName !== existing.displayName ? {displayName: next.displayName} : {}), ...(next.active !== existing.active ? {active: next.active} : {})}).success) throw new RentOpsInvariantError("Invalid charge definition patch");
     const collection = PATCH_COLLECTIONS[entityType];
     const currentRows = snapshot[collection] as unknown as Array<Record<string, unknown>>;
     const candidate = {
@@ -1039,7 +1055,28 @@ export class RentOpsService {
 
   async saveProperty(property: RentOpsProperty): Promise<RentOpsProperty> { if ((await this.snapshot()).properties.some((candidate) => candidate.id === property.id)) throw new RentOpsInvariantError("Property already exists; use PATCH for an existing record"); const saved = await this.repository.saveProperty(manualCreationKnowledge("property", property)); await this.recordAdminChange(`Property ${property.name} saved`, { propertyId: property.id }); return saved; }
   async saveUnit(unit: RentOpsUnit): Promise<RentOpsUnit> { if ((await this.snapshot()).units.some((candidate) => candidate.id === unit.id)) throw new RentOpsInvariantError("Unit already exists; use PATCH for an existing record"); const saved = await this.repository.saveUnit(manualCreationKnowledge("unit", unit)); await this.recordAdminChange(`Unit ${unit.unitNumber} saved`, { propertyId: unit.propertyId, unitId: unit.id }); return saved; }
-  async savePerson(person: RentOpsPerson): Promise<RentOpsPerson> { if ((await this.snapshot()).people.some((candidate) => candidate.id === person.id)) throw new RentOpsInvariantError("Person already exists; use PATCH for an existing record"); const saved = await this.repository.savePerson(manualCreationKnowledge("person", person)); await this.recordAdminChange(`Person ${person.firstName} ${person.lastName} saved`, { personId: person.id }); return saved; }
+  async savePerson(person: RentOpsPerson, context?: RentOpsAdminPatchContext): Promise<RentOpsPerson> {
+    if(person.phoneMethods!==undefined) {
+      const parsed=phoneMethodsSchema.safeParse(person.phoneMethods);
+      if(!parsed.success) throw new RentOpsInvariantError("Invalid phone methods");
+      person={...person,phoneMethods:parsed.data};
+      if(!context) throw new RentOpsInvariantError("Authenticated admin context is required");
+    }
+    if(context) {
+      assertAdminPatchContext(context);
+      return this.repository.transaction(async repository=>{
+        if(!repository.saveRecordChange) throw new RentOpsInvariantError("Person audit persistence is unavailable");
+        if((await repository.getSnapshot()).people.some(candidate=>candidate.id===person.id)) throw new RentOpsInvariantError("Person already exists; use PATCH for an existing record");
+        const saved=await repository.savePerson({...manualCreationKnowledge("person",person),recordRevision:1});
+        const changedFields=Object.keys(person).filter(field=>PATCH_FIELDS.person.has(field)&&(person as unknown as Record<string,unknown>)[field]!==undefined).sort();
+        await repository.saveRecordChange({id:`record-change:${randomUUID()}`,entityType:"person",targetId:saved.id,revision:1,origin:"admin",actorSubject:context.actorSubject,occurredAt:context.occurredAt,changedFields});
+        return saved;
+      });
+    }
+    if ((await this.snapshot()).people.some(candidate=>candidate.id===person.id)) throw new RentOpsInvariantError("Person already exists; use PATCH for an existing record");
+    const saved=await this.repository.savePerson(manualCreationKnowledge("person",person));
+    await this.recordAdminChange(`Person ${person.firstName} ${person.lastName} saved`,{personId:person.id});return saved;
+  }
   async saveHouseholdMembership(membership: RentOpsHouseholdMembership): Promise<RentOpsHouseholdMembership> { if ((await this.snapshot()).householdMemberships.some((candidate) => candidate.id === membership.id)) throw new RentOpsInvariantError("Household membership already exists; use PATCH for an existing record"); const saved = await this.repository.saveHouseholdMembership(membership); await this.recordAdminChange(`Household membership ${membership.id} saved`, { tenancyId: membership.tenancyId, personId: membership.personId }); return saved; }
   async saveTenancy(tenancy: RentOpsTenancy): Promise<RentOpsTenancy> {
     const snapshot = await this.snapshot();
@@ -1081,6 +1118,7 @@ export class RentOpsService {
   private async saveRecurringScheduleRecords(schedule: RentOpsRecurringChargeSchedule, context: RentOpsAdminPatchContext): Promise<RentOpsRecurringChargeSchedule> {
     if (!this.repository.saveRecordChange) throw new RentOpsInvariantError("Recurring schedule audit persistence is unavailable");
     assertPositiveCents(schedule.amountCents, "Recurring schedule amount");
+    if (schedule.billingFrequency !== "monthly") throw new RentOpsInvariantError("Explicit monthly billing frequency required");
     if (!schedule.effectiveFrom) throw new RentOpsInvariantError("A manual recurring schedule requires an explicit effective date");
     if (schedule.effectiveTo && schedule.effectiveTo < schedule.effectiveFrom) throw new RentOpsInvariantError("Recurring schedule end cannot predate its start");
     if (schedule.source || schedule.sourceArtifactSha256 || schedule.artifactObservationOn) throw new RentOpsInvariantError("Manual recurring schedules cannot claim imported source evidence");
@@ -1140,7 +1178,7 @@ export class RentOpsService {
     const saved = await this.repository.saveRecurringSchedule(normalized);
     const changedFields = [
       "active", "activeKnowledge", "amountCents", "amountKnowledge", "category", "categoryKnowledge",
-      "chargeDefinitionId", "chargeDefinitionKnowledge", "chargeDefinitionLinkKnowledge", "description", "descriptionKnowledge",
+      "billingFrequency", "chargeDefinitionId", "chargeDefinitionKnowledge", "chargeDefinitionLinkKnowledge", "description", "descriptionKnowledge",
       "effectiveFrom", "effectiveFromKnowledge", "effectiveTo", "lineageRootId", "lineageRootOrigin", "personId",
       "propertyId", "recordRevision", "scopeId", "scopeLinkKnowledge", "scopeType", "scopeTypeKnowledge",
       "sourceConfidence", "tenancyId", "unitId", "versionAction", "versionOrigin",
@@ -1197,9 +1235,11 @@ export class RentOpsService {
       throw new RentOpsInvariantError("Recurring schedule successor requires trusted scope and charge-definition links");
     }
 
+    if (input.billingFrequency !== undefined && (input.billingFrequency !== "monthly" || input.action !== "replace")) throw new RentOpsInvariantError("Monthly billing confirmation requires replacement");
     const isEnd = input.action === "end";
     const successor: RentOpsRecurringChargeSchedule = {
       ...predecessor,
+      billingFrequency: input.billingFrequency ?? predecessor.billingFrequency ?? null,
       id: input.id,
       recordRevision: predecessorRevision + 1,
       source: undefined,
@@ -1218,6 +1258,7 @@ export class RentOpsService {
     };
     const changedFields = [
       ...(isEnd ? ["active", "activeKnowledge", "effectiveTo"] : []),
+      ...(input.billingFrequency ? ["billingFrequency"] : []),
       "amountCents",
       "amountKnowledge",
       "effectiveFrom",
@@ -1238,6 +1279,67 @@ export class RentOpsService {
       changedFields,
     };
     return this.repository.saveRecurringScheduleSuccessor({ predecessorId, successor, expectedRevision: input.expectedRevision, change });
+  }
+
+  async createChargeDefinition(raw: CreateChargeDefinitionInput, context: RentOpsAdminPatchContext): Promise<RentOpsChargeDefinition> {
+    const parsed = createChargeDefinitionSchema.safeParse(raw);
+    if (!parsed.success || !context.actorSubject?.trim()) throw new RentOpsInvariantError("Invalid charge definition input");
+    return this.repository.transaction(async repository => {
+      if (!repository.saveChargeDefinition || !repository.saveRecordChange) throw new RentOpsInvariantError("Charge definition persistence unavailable");
+      if ((await repository.getSnapshot()).chargeDefinitions.some(row => row.id === parsed.data.id)) throw new RentOpsInvariantError("Charge definition already exists");
+      const saved = await repository.saveChargeDefinition({...parsed.data, displayNameKnowledge: "manual", categoryKnowledge: "manual", activeKnowledge: "manual", recordRevision: 1});
+      await repository.saveRecordChange({id: `record-change:${randomUUID()}`, entityType: "charge_definition", targetId: saved.id, revision: 1, origin: "admin", actorSubject: context.actorSubject, occurredAt: context.occurredAt, changedFields: ["active", "category", "displayName"]});
+      return saved;
+    });
+  }
+
+  async patchChargeDefinition(id: string, expectedRevision: number, raw: PatchChargeDefinitionInput, context: RentOpsAdminPatchContext): Promise<RentOpsChargeDefinition> {
+    const parsed = patchChargeDefinitionSchema.safeParse(raw);
+    if (!parsed.success) throw new RentOpsInvariantError("Invalid charge definition patch");
+    return this.patchRecord("charge_definition", id, expectedRevision, parsed.data, context) as Promise<RentOpsChargeDefinition>;
+  }
+
+  async recordManualPayment(raw: ManualPaymentInput, context: RentOpsAdminPatchContext): Promise<{ payment: RentOpsLedgerTransaction; allocations: RentOpsPaymentAllocation[]; replayed: boolean }> {
+    const parsed = manualPaymentSchema.safeParse(raw);
+    if (!parsed.success || !context.actorSubject?.trim()) throw new RentOpsInvariantError("Invalid manual payment input");
+    const input = parsed.data;
+    if (new Set(input.allocations.map(row => row.chargeTransactionId)).size !== input.allocations.length) throw new RentOpsInvariantError("Duplicate allocation target");
+    const total = input.allocations.reduce((sum, row) => sum + row.amountCents, 0);
+    if (!Number.isSafeInteger(total) || total > input.amountCents) throw new RentOpsInvariantError("Allocations exceed payment amount");
+    const initial = (await this.snapshot()).tenancies.find(row => row.id === input.tenancyId);
+    if (!initial?.primaryPersonId) throw new RentOpsInvariantError("Exact payment tenancy required");
+    return this.repository.transaction(async repository => {
+      const service = this.withRepository(repository);
+      const snapshot = await repository.getSnapshot();
+      const tenancy = snapshot.tenancies.find(row => row.id === input.tenancyId);
+      const unit = snapshot.units.find(row => row.id === tenancy?.unitId);
+      if (!tenancy || tenancy.primaryPersonId !== initial.primaryPersonId || !unit || unit.propertyId !== tenancy.propertyId || tenancy.status === "cancelled" || !snapshot.people.some(row => row.id === tenancy.primaryPersonId)) throw new RentOpsInvariantError("Exact payment tenancy required");
+      if ((snapshot.modelVersion === 3 || tenancy.source) && [tenancy.propertyLinkKnowledge, tenancy.unitLinkKnowledge, tenancy.primaryPersonLinkKnowledge, unit.propertyLinkKnowledge].some(value => value !== "manual" && value !== "exact")) throw new RentOpsInvariantError("Payment tenancy links need review");
+      const payment: RentOpsLedgerTransaction = { id: input.id, propertyId: tenancy.propertyId, unitId: unit.id, tenancyId: tenancy.id, personId: tenancy.primaryPersonId,
+        kind: "payment", category: input.category, categoryKnowledge: "manual", amountCents: input.amountCents, amountKnowledge: "known", status: "posted", statusKnowledge: "manual",
+        postedOn: input.postedOn, postedOnKnowledge: "manual", description: input.description, descriptionKnowledge: "manual", paymentMethod: input.paymentMethod, paymentMethodKnowledge: "manual",
+        payer: "tenant", payerKnowledge: "manual", propertyLinkKnowledge: "manual", unitLinkKnowledge: "manual", tenancyLinkKnowledge: "manual", personLinkKnowledge: "manual", chargeDefinitionId: null, chargeDefinitionLinkKnowledge: "unknown", dueOn: null, dueOnKnowledge: "unknown" };
+      const allocations: RentOpsPaymentAllocation[] = [...input.allocations].sort((a,b) => a.chargeTransactionId.localeCompare(b.chargeTransactionId)).map(row => ({
+        id: `manual-allocation:${createHash("sha256").update(JSON.stringify([input.id, row.chargeTransactionId])).digest("hex")}`, kind: "allocation", paymentTransactionId: payment.id, chargeTransactionId: row.chargeTransactionId,
+        amountCents: row.amountCents, amountKnowledge: "known", allocatedOn: input.postedOn, allocatedOnKnowledge: "manual", paymentLinkKnowledge: "manual", chargeLinkKnowledge: "manual" }));
+      const existing = snapshot.ledgerTransactions.find(row => row.id === payment.id);
+      if (existing) {
+        const savedAllocations = snapshot.paymentAllocations.filter(row => row.paymentTransactionId === payment.id);
+        const equal = (a: object, b: object) => Object.entries(b).every(([key,value]) => (a as Record<string,unknown>)[key] === value);
+        if (existing.source || !equal(existing,payment) || savedAllocations.length !== allocations.length || allocations.some(row => !savedAllocations.some(saved => equal(saved,row)))) throw new RentOpsInvariantError("Manual payment id conflicts with an existing operation");
+        return { payment: existing, allocations: savedAllocations, replayed: true };
+      }
+      for (const allocation of allocations) {
+        const charge = snapshot.ledgerTransactions.find(row => row.id === allocation.chargeTransactionId);
+        if (!charge || charge.tenancyId !== tenancy.id || charge.propertyId !== tenancy.propertyId || charge.unitId !== unit.id || charge.personId !== tenancy.primaryPersonId || !["base_rent", "recurring_fee", "one_time_fee", "other"].includes(charge.category ?? "") || charge.payer !== "tenant" || charge.amountKnowledge === "unknown") throw new RentOpsInvariantError("Allocation requires an exact non-deposit tenant charge");
+        if ((snapshot.modelVersion === 3 || charge.source) && [charge.propertyLinkKnowledge, charge.unitLinkKnowledge, charge.tenancyLinkKnowledge, charge.personLinkKnowledge].some(value => value !== "manual" && value !== "exact")) throw new RentOpsInvariantError("Charge links need review");
+        if (snapshot.paymentAllocations.some(row => row.chargeTransactionId === charge.id && (row.amountCents === null || row.amountKnowledge === "unknown"))) throw new RentOpsInvariantError("Charge allocation amount needs review");
+      }
+      await repository.saveLedgerTransaction(payment);
+      for (const allocation of allocations) await service.savePaymentAllocationRecord(allocation);
+      await repository.saveActivity({id: `activity:manual-payment:${createHash("sha256").update(payment.id).digest("hex")}`, tenancyId: tenancy.id, personId: tenancy.primaryPersonId, propertyId: tenancy.propertyId, unitId: unit.id, type: "system", actor: "admin", occurredAt: context.occurredAt, summary: `Manual payment recorded by ${context.actorSubject}`});
+      return { payment, allocations, replayed: false };
+    }, { lockAccountPersonId: initial.primaryPersonId, lockTransactionIds: input.allocations.map(row => row.chargeTransactionId) });
   }
 
   async saveLedgerTransaction(transaction: RentOpsLedgerTransaction): Promise<RentOpsLedgerTransaction> {

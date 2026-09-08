@@ -7,7 +7,7 @@ import { bootstrapAdministrator } from "../../admin-bootstrap";
 test("tenant email is opt-in and uses distinct issuance keys without exposing secret",async()=>{
  assert.equal(createTenantAccessNotifier({}),undefined);
  const requests:RequestInit[]=[];
- const notify=createTenantAccessNotifier({RENT_OPS_TENANT_EMAIL_ENABLED:"true",RENT_OPS_MAGIC_LINK_WEBHOOK_URL:"https://delivery.example.test",RENT_OPS_PUBLIC_APP_URL:"https://portal.example.test",RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET:"synthetic-secret-12345"},async(_url,init)=>{requests.push(init!);return new Response("",{status:202});})!;
+ const notify=createTenantAccessNotifier({RENT_OPS_EMAIL_ALLOWED_RECIPIENTS:"synthetic@example.test,resident@example.test",RENT_OPS_TENANT_EMAIL_ENABLED:"true",RENT_OPS_MAGIC_LINK_WEBHOOK_URL:"https://delivery.example.test",RENT_OPS_PUBLIC_APP_URL:"https://portal.example.test",RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET:"synthetic-secret-12345"},async(_url,init)=>{requests.push(init!);return new Response("",{status:202});})!;
  for(const issuanceId of ["one","two"]) await notify({issuanceId,accountId:"account",email:"synthetic@example.test",token:"opaque",expiresAt:"2026-09-08T00:00:00Z",purpose:"password_reset"});
  assert.notEqual((requests[0].headers as Record<string,string>)["Idempotency-Key"],(requests[1].headers as Record<string,string>)["Idempotency-Key"]);
  assert.match(String(requests[0].body),/tenant#activate=opaque/);
@@ -40,26 +40,26 @@ test("admin bootstrap rejects weak input and never overwrites existing accounts"
 
 test("direct Gmail refreshes authorized credentials and sends MIME through official endpoint",async()=>{
  const calls:Array<{url:string;init:RequestInit}>=[];
- const notify=createTenantAccessNotifier({RENT_OPS_TENANT_EMAIL_ENABLED:"true",RENT_OPS_TENANT_EMAIL_PROVIDER:"gmail",RENT_OPS_GMAIL_FROM:"sender@example.test",RENT_OPS_GMAIL_CLIENT_ID:"synthetic-client",RENT_OPS_GMAIL_CLIENT_SECRET:"synthetic-secret",RENT_OPS_GMAIL_REFRESH_TOKEN:"synthetic-refresh",RENT_OPS_PUBLIC_APP_URL:"https://portal.example.test"},async(url,init)=>{calls.push({url:String(url),init:init!});return Response.json(calls.length===1?{access_token:"synthetic-access"}:{id:"accepted-message"});})!;
+ const notify=createTenantAccessNotifier({RENT_OPS_EMAIL_ALLOWED_RECIPIENTS:"synthetic@example.test,resident@example.test",RENT_OPS_TENANT_EMAIL_ENABLED:"true",RENT_OPS_TENANT_EMAIL_PROVIDER:"gmail",RENT_OPS_GMAIL_FROM:"sender@example.test",RENT_OPS_GMAIL_CLIENT_ID:"synthetic-client",RENT_OPS_GMAIL_CLIENT_SECRET:"synthetic-secret",RENT_OPS_GMAIL_REFRESH_TOKEN:"synthetic-refresh",RENT_OPS_PUBLIC_APP_URL:"https://portal.example.test"},async(url,init)=>{calls.push({url:String(url),init:init!});return Response.json(calls.length===1?{access_token:"synthetic-access"}:{id:"accepted-message"});})!;
  const input={issuanceId:"synthetic-issue",accountId:"account",email:"resident@example.test",token:"a".repeat(43),expiresAt:"2026-09-08T00:00:00Z",purpose:"invitation" as const};
  await notify(input);
  assert.equal(calls[0].url,"https://oauth2.googleapis.com/token");
  assert.equal(calls[1].url,"https://gmail.googleapis.com/gmail/v1/users/me/messages/send");
  const mime=Buffer.from(JSON.parse(String(calls[1].init.body)).raw,"base64url").toString();
  assert.match(mime,/To: <resident@example.test>/); assert.doesNotMatch(mime,/synthetic-secret|synthetic-refresh/);
- await assert.rejects(notify({...input,email:"resident@example.test\r\nBcc: other@example.test"}),/Invalid/);
+ await assert.rejects(notify({...input,email:"resident@example.test\r\nBcc: other@example.test"}),/email_recipient_invalid/);
 });
 
 test("Gmail accepts a managed credential supplier without manual refresh credentials",async()=>{
  const {createGmailTenantNotifier}=await import("./gmail-delivery");
  let supplied=0; const urls:string[]=[];
- const notify=createGmailTenantNotifier({RENT_OPS_GMAIL_FROM:"sender@example.test",RENT_OPS_PUBLIC_APP_URL:"https://portal.example.test"},async(url,init)=>{urls.push(String(url));assert.equal((init?.headers as Record<string,string>).Authorization,"Bearer managed-synthetic");return Response.json({id:"accepted"});},async()=>{supplied++;return "managed-synthetic";});
+ const notify=createGmailTenantNotifier({RENT_OPS_EMAIL_ALLOWED_RECIPIENTS:"recipient@example.test",RENT_OPS_GMAIL_FROM:"sender@example.test",RENT_OPS_PUBLIC_APP_URL:"https://portal.example.test"},async(url,init)=>{urls.push(String(url));assert.equal((init?.headers as Record<string,string>).Authorization,"Bearer managed-synthetic");return Response.json({id:"accepted"});},async()=>{supplied++;return "managed-synthetic";});
  await notify({issuanceId:"managed-issue",accountId:"account",email:"recipient@example.test",token:"a".repeat(43),expiresAt:"2026-09-08T00:00:00Z",purpose:"password_reset"});
  assert.equal(supplied,1);assert.deepEqual(urls,["https://gmail.googleapis.com/gmail/v1/users/me/messages/send"]);
 });
 
 test("managed Gmail proxy receives no app-supplied bearer credential",async()=>{
  const {createGmailTenantNotifier}=await import("./gmail-delivery");
- const notify=createGmailTenantNotifier({RENT_OPS_GMAIL_FROM:"sender@example.test",RENT_OPS_PUBLIC_APP_URL:"https://portal.example.test"},async(_url,init)=>{assert.equal((init?.headers as Record<string,string>).Authorization,undefined);return Response.json({id:"accepted"});},async()=>"managed-proxy",true);
+ const notify=createGmailTenantNotifier({RENT_OPS_EMAIL_ALLOWED_RECIPIENTS:"recipient@example.test",RENT_OPS_GMAIL_FROM:"sender@example.test",RENT_OPS_PUBLIC_APP_URL:"https://portal.example.test"},async(_url,init)=>{assert.equal((init?.headers as Record<string,string>).Authorization,undefined);return Response.json({id:"accepted"});},async()=>"managed-proxy",true);
  await notify({issuanceId:"managed-issue",accountId:"account",email:"recipient@example.test",token:"a".repeat(43),expiresAt:"2026-09-08T00:00:00Z",purpose:"invitation"});
 });

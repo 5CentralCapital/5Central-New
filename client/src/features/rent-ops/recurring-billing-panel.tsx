@@ -5,6 +5,7 @@ import { rentOpsAuthClient } from "./auth";
 const cents = z.number().int().nonnegative().safe();
 const previewSchema = z.object({
   month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/), billingOn: z.string(), previewToken: z.string().regex(/^[a-f0-9]{64}$/),
+  scope: z.object({ propertyId: z.string().optional(), tenancyId: z.string().optional() }).optional(),
   rows: z.array(z.object({
     scheduleId: z.string(), propertyName: z.string(), unitNumber: z.string(), tenantName: z.string(), description: z.string(),
     amountCents: z.number().int().safe().nullable(), billingOn: z.string(), status: z.enum(["ready", "blocked", "posted", "excluded"]), reasons: z.array(z.string()),
@@ -24,7 +25,7 @@ const errorMessages: Record<string, string> = {
 const money = (value: number | null): string => value === null ? "Needs review" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value / 100);
 const statusLabels = { ready: "Ready", blocked: "Needs review", posted: "Posted", excluded: "Separate workflow" };
 
-async function requestBilling(path: string, body?: { month: string; previewToken: string }): Promise<unknown> {
+async function requestBilling(path: string, body?: { month: string; previewToken: string; scope?: { propertyId?: string } }): Promise<unknown> {
   const response = await rentOpsAuthClient.request(`/api/rent-ops/billing/${path}`, body ? {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   } : undefined);
@@ -36,7 +37,7 @@ async function requestBilling(path: string, body?: { month: string; previewToken
   return result;
 }
 
-export function RecurringBillingPanel({ onPosted, businessDate }: { onPosted?: () => void | Promise<void>; businessDate?: string }): JSX.Element {
+export function RecurringBillingPanel({ onPosted, businessDate, propertyId }: { propertyId?: string; onPosted?: () => void | Promise<void>; businessDate?: string }): JSX.Element {
   const [selectedMonth, setMonth] = useState<string>();
   const month = selectedMonth ?? businessDate?.slice(0, 7) ?? "";
   const [preview, setPreview] = useState<Preview>();
@@ -46,7 +47,7 @@ export function RecurringBillingPanel({ onPosted, businessDate }: { onPosted?: (
 
   async function loadPreview(): Promise<void> {
     setBusy(true); setError(""); setResult(""); setPreview(undefined);
-    try { setPreview(previewSchema.parse(await requestBilling(`preview?month=${encodeURIComponent(month)}`))); }
+    try { setPreview(previewSchema.parse(await requestBilling(`preview?month=${encodeURIComponent(month)}${propertyId ? `&propertyId=${encodeURIComponent(propertyId)}` : ""}`))); }
     catch (failure) { setError(failure instanceof z.ZodError ? "Billing returned an invalid response." : failure instanceof Error ? failure.message : "Billing preview is unavailable."); }
     finally { setBusy(false); }
   }
@@ -55,7 +56,7 @@ export function RecurringBillingPanel({ onPosted, businessDate }: { onPosted?: (
     if (!preview || preview.month !== month || busy || !preview.readyCount) return;
     setBusy(true); setError(""); setResult("");
     try {
-      const posted = postSchema.parse(await requestBilling("post", { month, previewToken: preview.previewToken }));
+      const posted = postSchema.parse(await requestBilling("post", { month, previewToken: preview.previewToken, ...(propertyId ? { scope: { propertyId } } : {}) }));
       setPreview(posted.preview);
       setResult(posted.postedCount ? `${posted.postedCount} charges totaling ${money(posted.postedCents)} posted.` : `${posted.alreadyPostedCount} charges were already posted. No duplicate charges were created.`);
       try { await onPosted?.(); }

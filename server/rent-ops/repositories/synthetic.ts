@@ -122,6 +122,7 @@ function assertRecurringSuccessor(
 }
 
 const recurringChangeFields = new Set([
+  "billingFrequency",
   "scopeType", "scopeId", "scopeTypeKnowledge", "scopeLinkKnowledge", "chargeDefinitionId", "chargeDefinitionKey",
   "tenancyId", "personId", "propertyId", "unitId", "category", "categoryKnowledge", "description", "descriptionKnowledge",
   "amountCents", "amountKnowledge", "effectiveFrom", "effectiveFromKnowledge", "effectiveTo", "active", "activeKnowledge",
@@ -138,6 +139,7 @@ function assertRecurringChange(change: RentOpsRecordChange, successor: RentOpsRe
 }
 
 export class SyntheticRentOpsRepository implements RentOpsRepository {
+  private transactionTail: Promise<void> = Promise.resolve();
   private state: RentOpsSnapshot;
   private recordChanges: RentOpsRecordChange[];
 
@@ -149,6 +151,11 @@ export class SyntheticRentOpsRepository implements RentOpsRepository {
   }
 
   async transaction<T>(work: (repository: RentOpsRepository) => Promise<T>, _options?: RentOpsTransactionOptions): Promise<T> {
+    const preceding = this.transactionTail;
+    let release!: () => void;
+    this.transactionTail = new Promise<void>(resolve => { release = resolve; });
+    await preceding;
+    try {
     const staged = new SyntheticRentOpsRepository(this.state);
     staged.recordChanges = clone(this.recordChanges);
     const result = await work(staged);
@@ -158,6 +165,7 @@ export class SyntheticRentOpsRepository implements RentOpsRepository {
     this.state = committed;
     this.recordChanges = clone(staged.recordChanges);
     return result;
+    } finally { release(); }
   }
 
   async getSnapshot(): Promise<RentOpsSnapshot> {
@@ -378,6 +386,7 @@ export class SyntheticRentOpsRepository implements RentOpsRepository {
 
   async applyRecordPatch(update: RentOpsRecordPatchUpdate): Promise<void> {
     const collections: Record<string, keyof RentOpsSnapshot> = {
+      charge_definition: "chargeDefinitions",
       property: "properties",
       unit: "units",
       person: "people",

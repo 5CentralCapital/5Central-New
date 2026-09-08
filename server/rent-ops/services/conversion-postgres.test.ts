@@ -32,7 +32,7 @@ test("PostgreSQL prospect conversion commits one audited schedule and rolls back
     await service.certifyPublicApplication(started.resumeToken!);
     await service.submitPublicApplication(started.resumeToken!);
     await service.updateApplicationStatus(id, "approved");
-    const facts: ApplicationConversionFacts = { propertyId: "p", unitId: "u", plannedMoveInOn: "2026-10-01", leaseStatus: "executed", contractStartOn: "2026-10-01", contractEndOn: "2027-09-30", monthToMonth: false, baseRentCents: 125000, chargeDefinitionId: "rent", category: "base_rent", scheduleDescription: "Monthly rent", primaryFinanciallyResponsible: true, members: [{ applicationMemberId: "primary", role: "primary", isFinanciallyResponsible: true }] };
+    const facts: ApplicationConversionFacts = { propertyId: "p", unitId: "u", plannedMoveInOn: "2026-10-01", leaseStatus: "executed", contractStartOn: "2026-10-01", contractEndOn: "2027-09-30", monthToMonth: false, billingFrequency:"monthly",baseRentCents: 125000, chargeDefinitionId: "rent", category: "base_rent", scheduleDescription: "Monthly rent", primaryFinanciallyResponsible: true, members: [{ applicationMemberId: "primary", role: "primary", isFinanciallyResponsible: true }] };
     const context = { actorSubject: "qa-operator", occurredAt: "2026-09-07T12:00:00.000Z" };
     failAudit = true;
     await assert.rejects(service.convertApplication(id, facts, context), /synthetic audit unavailable/);

@@ -1,3 +1,4 @@
+import { createEmailRecipientPolicy } from "../email/recipient-policy";
 import { ReplitConnectors } from "@replit/connectors-sdk";
 import { createHash } from "node:crypto";
 import { createGmailTenantNotifier } from "../tenant-portal/gmail-delivery";
@@ -14,6 +15,7 @@ export interface MagicLinkWebhookConfig {
   publicAppUrl: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  allowedRecipients?: string;
 }
 
 export type MagicLinkNotifier = (input: MagicLinkDeliveryInput) => Promise<void>;
@@ -44,6 +46,7 @@ function httpsUrl(value: string, label: string): URL {
  * undefined so public application start remains intentionally disabled.
  */
 export function createMagicLinkWebhookNotifier(config: MagicLinkWebhookConfig): MagicLinkNotifier {
+  const recipient = createEmailRecipientPolicy(config.allowedRecipients);
   const webhookUrl = httpsUrl(config.webhookUrl, "RENT_OPS_MAGIC_LINK_WEBHOOK_URL").toString();
   const publicAppUrl = httpsUrl(config.publicAppUrl, "RENT_OPS_PUBLIC_APP_URL").toString().replace(/\/$/, "");
   if (config.webhookSecret.trim().length < 16 || config.webhookSecret.length > 500) throw new Error("RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET must be 16-500 characters");
@@ -54,6 +57,7 @@ export function createMagicLinkWebhookNotifier(config: MagicLinkWebhookConfig): 
     const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
+      email = recipient(email);
       const request = fetchImpl(webhookUrl, {
         method: "POST",
         headers: {
@@ -90,6 +94,7 @@ export function createMagicLinkWebhookNotifierFromEnv(
   env: Record<string, string | undefined> = process.env,
   fetchImpl?: typeof fetch,
 ): MagicLinkNotifier | undefined {
+  createEmailRecipientPolicy(env.RENT_OPS_EMAIL_ALLOWED_RECIPIENTS);
   const provider = env.RENT_OPS_TENANT_EMAIL_PROVIDER;
   if (provider === "gmail" || provider === "replit-gmail") {
     if (env.RENT_OPS_TENANT_EMAIL_ENABLED !== "true") return undefined;
@@ -106,5 +111,5 @@ export function createMagicLinkWebhookNotifierFromEnv(
   const publicAppUrl = env.RENT_OPS_PUBLIC_APP_URL;
   if (!webhookUrl && !webhookSecret && !publicAppUrl) return undefined;
   if (!webhookUrl || !webhookSecret || !publicAppUrl) throw new Error("Magic-link webhook configuration requires URL, secret, and public application URL");
-  return createMagicLinkWebhookNotifier({ webhookUrl, webhookSecret, publicAppUrl, fetchImpl });
+  return createMagicLinkWebhookNotifier({ webhookUrl, webhookSecret, publicAppUrl, fetchImpl, allowedRecipients: env.RENT_OPS_EMAIL_ALLOWED_RECIPIENTS });
 }

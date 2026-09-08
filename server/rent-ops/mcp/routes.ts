@@ -3,10 +3,10 @@ import type { Express } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { RentOpsService } from '../services/service';
 import type { RentOpsRepository } from '../../../shared/rent-ops-contracts';
-import { createRentOpsMcpServer } from './tools';
+import { createRentOpsMcpServer, type McpOperationalOptions } from './tools';
 import { oauthConfigFromEnv, READ_SCOPE, WRITE_SCOPE, validateIssuer, verifyOAuthToken } from './oauth';
 
-export async function registerRentOpsMcpRoutes(app: Express, repository: RentOpsRepository, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+export async function registerRentOpsMcpRoutes(app: Express, repository: RentOpsRepository, env: NodeJS.ProcessEnv = process.env, options: McpOperationalOptions = {}): Promise<void> {
   const config = oauthConfigFromEnv(env);
   if (!config) return;
   if (new URL(config.resource).pathname !== '/mcp') throw new Error('RENT_OPS_MCP_RESOURCE must use /mcp');
@@ -29,7 +29,7 @@ export async function registerRentOpsMcpRoutes(app: Express, repository: RentOps
       }
     }
     catch { res.set('WWW-Authenticate',challenge).status(401).json({error:'invalid_token'}); return; }
-    const server = createRentOpsMcpServer(new RentOpsService(repository),principal,config.resource);
+    const server = createRentOpsMcpServer(new RentOpsService(repository),principal,config.resource,options);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator:undefined,enableJsonResponse:true });
     res.on('close',() => { void transport.close(); void server.close(); });
     try { await server.connect(transport); await transport.handleRequest(req,res,req.body); }

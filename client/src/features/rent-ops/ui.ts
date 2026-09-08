@@ -51,3 +51,9 @@ export function sectionCreateAction(section: string): { action: import("./types"
   };
   return actions[section];
 }
+
+/** Suppress the aggregate when source uncertainty could change its meaning. */
+export function scheduledRentNeedsReview(rows: import("./types").ScheduledIncomeRow[]): boolean {
+  return rows.some(row => (row.category === "base_rent" || row.category == null || row.unclassified === true)
+    && (row.known !== true || row.uncertain === true || row.temporalUncertainty === true || row.unclassified === true || row.amountCents == null));
+}

@@ -24,7 +24,7 @@ const body = {
 };
 
 const forbiddenKeys = new Set([
-  "source", "sourceId", "sourceSystem", "sourceUpdatedAt", "sourceRecord", "sourceRecords", "importRuns", "importRecord", "importRecords", "import", "manifest", "checkpoint", "resume", "token", "hash", "digest", "raw", "rawPayload", "restricted", "restrictedPayload", "payload", "storage", "storageKey", "checksum", "checksumSha256", "backend", "bucket", "key", "generation", "version", "signedUrl", "downloadUrl", "provenance", "sourceDefinitionId", "sourceDefinitionKey", "chargeDefinitionId", "chargeDefinitionKey",
+  "source", "sourceId", "sourceSystem", "sourceUpdatedAt", "sourceRecord", "sourceRecords", "importRuns", "importRecord", "importRecords", "import", "manifest", "checkpoint", "resume", "token", "hash", "digest", "raw", "rawPayload", "restricted", "restrictedPayload", "payload", "storage", "storageKey", "checksum", "checksumSha256", "backend", "bucket", "key", "generation", "version", "signedUrl", "downloadUrl", "provenance", "sourceDefinitionId", "sourceDefinitionKey", "chargeDefinitionKey",
 ]);
 
 const canaryFields = {
@@ -511,7 +511,7 @@ test("admin and public routes enforce nested positive allowlists, including repo
     exactKeys(snapshot.body, ["generatedAt", "summary", "snapshot", "rentRoll", "occupancy", "scheduledIncome", "collectedIncome", "scheduledVsCollected", "delinquency", "ledger", "leaseExpiration", "depositLiability", "hap", "tenants", "applicants", "documents", "activities", "reports"]);
     assert.equal("raw" in snapshot.body, false);
     exactKeys(snapshot.body.snapshot, ["properties", "units", "people", "householdMemberships", "tenancies", "leaseTerms", "recurringSchedules", "ledgerTransactions", "paymentAllocations", "securityDeposits", "subsidyContracts", "applications", "applicationHouseholdMembers", "applicationRequirements", "documents", "activityEvents"]);
-    assert.equal("chargeDefinitionId" in (snapshot.body.snapshot as Record<string, unknown>).recurringSchedules[0], false);
+    assert.equal((snapshot.body.snapshot as Record<string, any>).recurringSchedules[0].chargeDefinitionId, "rm-charge-id");
     assert.equal("chargeDefinitionKey" in (snapshot.body.snapshot as Record<string, unknown>).recurringSchedules[0], false);
 
     const dashboard = await request(baseUrl, "/dashboard");
@@ -775,6 +775,7 @@ test("manual recurring root accepts only a positive body and authenticated subje
       method: "POST",
       body: {
         id: "schedule:manual-root",
+        billingFrequency: "monthly",
         scopeType: "property",
         scopeId: "demo-property-a",
         propertyId: "demo-property-a",
@@ -793,6 +794,7 @@ test("manual recurring root accepts only a positive body and authenticated subje
       method: "POST",
       body: {
         id: "schedule:manual-root",
+        billingFrequency: "monthly",
         scopeType: "property",
         scopeId: "demo-property-a",
         propertyId: "demo-property-a",
@@ -805,7 +807,7 @@ test("manual recurring root accepts only a positive body and authenticated subje
       },
     });
     assert.equal(accepted.status, 201);
-    assert.equal("chargeDefinitionId" in accepted.body, false);
+    assert.equal(accepted.body.chargeDefinitionId, "demo-charge-definition-utility-fee");
     assert.equal("source" in accepted.body, false);
   });
 });
@@ -829,4 +831,26 @@ test("Quick Add UI-shaped tenancy and lease requests use trusted server creation
     assert.equal((await request(base,"/tenancies",{method:"POST",body:{...tenancy,createdAt:"2000-01-01T00:00:00Z"}})).status,400);
     assert.equal((await repository.getSnapshot()).tenancies.find(t=>t.id===tenancy.id)?.createdAt, now);
   });
+});
+
+test("person phone methods save and read back with audit, exact revision, and strict curated fields",async()=>{
+ const snapshot=syntheticRentOpsSnapshot();
+ const repository=new SyntheticRentOpsRepository(snapshot);
+ const originalPhone=snapshot.people[0].phone;
+ const methods=[{id:"method-one",value:"+1 555 0100",type:"Mobile",isPrimary:true,isTextReady:false},{value:"555 0101"}];
+ await withServer({repository,requireAdmin:(req,_res,next)=>{req.rentOpsAdminUser={id:"phone-admin"} as never;next();}},async baseUrl=>{
+  const changed=await request(baseUrl,"/people/demo-person-1",{method:"PATCH",body:{revision:1,phoneMethods:methods}});
+  assert.equal(changed.status,200);assert.deepEqual(changed.body.phoneMethods,methods);assert.equal(changed.body.recordRevision,2);
+  const saved=(await repository.getSnapshot()).people.find(row=>row.id==="demo-person-1")!;
+  assert.deepEqual(saved.phoneMethods,methods);assert.equal(saved.phone,originalPhone);
+  const stale=await request(baseUrl,"/people/demo-person-1",{method:"PATCH",body:{revision:1,phoneMethods:[]}});
+  assert.equal(stale.status,409);
+  for(const phoneMethods of [[{value:"1",extra:"secret"}],[{value:"1",isPrimary:true},{value:"2",isPrimary:true}],null,[{value:""}],[{id:"same",value:"1"},{id:"same",value:"2"}],Array.from({length:21},()=>({value:"1"}))]) {
+   assert.equal((await request(baseUrl,"/people/demo-person-1",{method:"PATCH",body:{revision:2,phoneMethods}})).status,400);
+  }
+  const created=await request(baseUrl,"/people",{method:"POST",body:{id:"phone-new",firstName:"Synthetic",lastName:"Phone",phoneMethods:methods}});
+  assert.equal(created.status,201);assert.deepEqual(created.body.phoneMethods,methods);
+  const cleared=await request(baseUrl,"/people/demo-person-1",{method:"PATCH",body:{revision:2,phoneMethods:[]}});
+  assert.equal(cleared.status,200);assert.equal(cleared.body.phoneMethods,undefined);assert.deepEqual((await repository.getSnapshot()).people.find(row=>row.id==="demo-person-1")!.phoneMethods,[]);
+ });
 });

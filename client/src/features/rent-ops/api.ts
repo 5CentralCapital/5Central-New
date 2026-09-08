@@ -127,7 +127,7 @@ const FORBIDDEN_RESPONSE_KEYS = new Set([
   "rawpayload", "rawjson", "restricted", "restrictedpayload", "restrictedrows", "payload", "storage", "storagekey",
   "checksum", "checksumsha256", "metadatachecksumsha256", "backend", "bucket", "key", "generation", "version",
   "immutablegeneration", "logicalkey", "verification", "signedurl", "downloadurl", "provenance", "provenancesha256",
-  "sourcedefinitionid", "sourcedefinitionkey", "chargedefinitionid", "chargedefinitionkey",
+  "sourcedefinitionid", "sourcedefinitionkey", "chargedefinitionkey",
 ]);
 
 export class RentOpsApiError extends Error {
@@ -596,9 +596,11 @@ function decodeLeaseTerm(value: unknown): AdminLeaseTermView {
 }
 
 function decodeRecurringSchedule(value: unknown): AdminRecurringScheduleView {
-  const input = exactRecord(value, "recurring schedule", ["id", "scopeType", "scopeId", "tenancyId", "personId", "propertyId", "unitId", "category", "description", "descriptionKnowledge", "amountCents", "effectiveFrom", "effectiveFromKnowledge", "effectiveTo", "active", "activeKnowledge", "sourceConfidence", "chargeDefinitionKnowledge", "recordRevision"]);
+  const input = exactRecord(value, "recurring schedule", ["id", "chargeDefinitionId", "billingFrequency", "scopeType", "scopeId", "tenancyId", "personId", "propertyId", "unitId", "category", "description", "descriptionKnowledge", "amountCents", "effectiveFrom", "effectiveFromKnowledge", "effectiveTo", "active", "activeKnowledge", "sourceConfidence", "chargeDefinitionKnowledge", "recordRevision"]);
   return {
     id: optionalId(input, "id"),
+    chargeDefinitionId: optionalId(input, "chargeDefinitionId"),
+    billingFrequency: optionalEnum(input, "billingFrequency", ["monthly"] as const),
     scopeType: nullableAllowed(input, "scopeType", RECURRING_SCOPES),
     scopeId: nullableId(input, "scopeId"),
     tenancyId: nullableId(input, "tenancyId"),
@@ -1084,8 +1086,10 @@ function decodeActivity(value: unknown): AdminActivityView {
 }
 
 function decodeLedgerRow(value: unknown): LedgerRow {
-  const input = exactRecord(value, "ledger row", ["transaction", "allocatedCents", "openCents", "runningBalanceCents"]);
+  const input = exactRecord(value, "ledger row", ["transaction", "allocatedCents", "openCents", "runningBalanceCents", "rowType", "openingBalanceCents"]);
   return {
+    rowType: optionalEnum(input, "rowType", ["transaction", "opening_balance"] as const),
+    openingBalanceCents: optionalMoney(input, "openingBalanceCents") ?? undefined,
     transaction: decodeLedgerTransaction(input.transaction),
     allocatedCents: optionalMoney(input, "allocatedCents"),
     openCents: optionalMoney(input, "openCents"),
@@ -1136,7 +1140,7 @@ function decodeSnapshotView(value: unknown): AdminSnapshotView {
 }
 
 function decodeApiFilters(value: unknown): ApiFilters {
-  const input = exactRecord(value, "report filters", ["propertyScope", "propertyId", "unitId", "tenancyId", "personId", "asOfDate", "month", "occupancy", "readiness", "listing", "balanceStatus", "status", "search"]);
+  const input = exactRecord(value, "report filters", ["propertyScope", "propertyId", "unitId", "tenancyId", "personId", "asOfDate", "month", "fromDate", "toDate", "occupancy", "readiness", "listing", "balanceStatus", "status", "search"]);
   return {
     propertyScope: optionalEnum(input, "propertyScope", ["active", "all"] as const),
     propertyId: optionalId(input, "propertyId"),
@@ -1145,6 +1149,8 @@ function decodeApiFilters(value: unknown): ApiFilters {
     personId: optionalId(input, "personId"),
     asOfDate: optionalDate(input, "asOfDate"),
     month: optionalMonth(input, "month"),
+    fromDate: optionalDate(input, "fromDate"),
+    toDate: optionalDate(input, "toDate"),
     occupancy: optionalStrings(input, "occupancy"),
     readiness: optionalStrings(input, "readiness"),
     listing: optionalStrings(input, "listing"),
@@ -1157,7 +1163,7 @@ function decodeApiFilters(value: unknown): ApiFilters {
 const DASHBOARD_DRILLDOWN_KEYS = ["occupiedUnits", "futurePreleasedUnits", "genuineVacantUnits", "rentOnlyDelinquencyCents", "securityDepositLiabilityCents"] as const;
 
 function decodeDashboardSummary(value: unknown): DashboardSummary {
-  const input = exactRecord(value, "dashboard summary", ["asOfDate", "propertyCount", "unitCount", "occupiedUnits", "futurePreleasedUnits", "genuineVacantUnits", "readyVacantUnits", "notReadyUnits", "offMarketUnits", "physicalOccupancyPercent", "scheduledRentCents", "collectedRentCents", "rentOnlyDelinquencyCents", "totalDelinquencyCents", "unappliedCashCents", "expiringIn30Days", "expiringIn60Days", "expiringIn90Days", "monthToMonthCount", "applicationsSubmitted", "applicationsMissingInformation", "securityDepositLiabilityCents", "drilldowns"]);
+  const input = exactRecord(value, "dashboard summary", ["asOfDate", "propertyCount", "unitCount", "occupiedUnits", "futurePreleasedUnits", "genuineVacantUnits", "readyVacantUnits", "notReadyUnits", "offMarketUnits", "physicalOccupancyPercent", "scheduledRentConfirmedCents", "scheduledRentUnresolvedCount", "scheduledRentComplete", "scheduledRentCadenceComplete", "scheduledRentCents", "collectedRentCents", "rentOnlyDelinquencyCents", "totalDelinquencyCents", "unappliedCashCents", "expiringIn30Days", "expiringIn60Days", "expiringIn90Days", "monthToMonthCount", "applicationsSubmitted", "applicationsMissingInformation", "securityDepositLiabilityCents", "drilldowns"]);
   const drilldownInput = exactRecord(input.drilldowns, "dashboard drilldowns", DASHBOARD_DRILLDOWN_KEYS);
   const drilldowns: DashboardSummary["drilldowns"] = {};
   for (const key of DASHBOARD_DRILLDOWN_KEYS) {
@@ -1180,6 +1186,10 @@ function decodeDashboardSummary(value: unknown): DashboardSummary {
     notReadyUnits: requiredInteger(input, "notReadyUnits"),
     offMarketUnits: requiredInteger(input, "offMarketUnits"),
     physicalOccupancyPercent: requiredFinite(input, "physicalOccupancyPercent"),
+    scheduledRentConfirmedCents: optionalMoney(input, "scheduledRentConfirmedCents") ?? undefined,
+    scheduledRentUnresolvedCount: optionalInteger(input, "scheduledRentUnresolvedCount") ?? undefined,
+    scheduledRentCadenceComplete: optionalBoolean(input, "scheduledRentCadenceComplete") ?? undefined,
+    scheduledRentComplete: optionalBoolean(input, "scheduledRentComplete") ?? undefined,
     scheduledRentCents: requiredMoney(input, "scheduledRentCents"),
     collectedRentCents: requiredMoney(input, "collectedRentCents"),
     rentOnlyDelinquencyCents: requiredMoney(input, "rentOnlyDelinquencyCents"),
@@ -1337,6 +1347,8 @@ export function buildRentOpsQuery(filters: RentOpsQueryFilters = {}): string {
   addQueryParam(params, "personId", filters.personId);
   addQueryParam(params, "asOfDate", filters.asOfDate);
   addQueryParam(params, "month", filters.month);
+  addQueryParam(params, "fromDate", filters.fromDate);
+  addQueryParam(params, "toDate", filters.toDate);
   addQueryParam(params, "occupancy", filters.occupancy);
   addQueryParam(params, "readiness", filters.readiness);
   addQueryParam(params, "listing", filters.listing);
@@ -1719,6 +1731,7 @@ export async function postRentOpsMutation(mutation: RentOpsMutation): Promise<Re
         chargeDefinitionId: source.chargeDefinitionId,
         category: source.category,
         scheduleDescription: source.scheduleDescription,
+        billingFrequency: source.billingFrequency,
         primaryFinanciallyResponsible: source.primaryFinanciallyResponsible,
         members: source.members,
       };
@@ -1749,7 +1762,11 @@ export function filterReportRows(report: ReportDefinition, filters: { propertyId
       const value = reportCell(row, column.key);
       return value === undefined ? [] : [String(value)];
     });
-    const propertyMatches = !propertyName || values.includes(propertyName);
+    const rowPropertyId = "propertyId" in row ? row.propertyId : "transaction" in row ? row.transaction.propertyId : undefined;
+    const rowPropertyName = "propertyName" in row ? row.propertyName : undefined;
+    // API snapshots are already scoped. Prefer stable identity; a ledger row
+    // need not render the property name among its columns to remain visible.
+    const propertyMatches = filters.propertyId === "all" || (rowPropertyId ? rowPropertyId === filters.propertyId : rowPropertyName ? rowPropertyName === propertyName : true);
     const statusMatches = filters.status === "all" || values.some((value) => value.toLowerCase().replaceAll("_", " ") === normalizedStatus);
     const searchMatches = !normalizedSearch || values.some((value) => value.toLowerCase().includes(normalizedSearch));
     return propertyMatches && statusMatches && searchMatches;

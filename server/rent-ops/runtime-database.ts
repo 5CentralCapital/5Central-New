@@ -42,6 +42,13 @@ export class RentOpsRuntimeDatabaseError extends Error {
   }
 }
 
+/** Safe retry signal only; never retains database diagnostics or credentials. */
+export class RentOpsRetryableConflict extends Error {
+  readonly code = "rent_ops_retryable_conflict";
+  readonly status = 409;
+  constructor() { super("Rent Operations changed concurrently; retry the same request"); this.name = "RentOpsRetryableConflict"; }
+}
+
 const MISSING_CREDENTIAL_MESSAGE = "RENT_OPS_RUNTIME_DATABASE_URL must be configured for the Rent Operations runtime";
 const INVALID_CREDENTIAL_MESSAGE = "RENT_OPS_RUNTIME_DATABASE_URL is invalid";
 const INITIALIZATION_MESSAGE = "Rent Operations runtime database could not be initialized";
@@ -77,7 +84,8 @@ async function safeQuery<T>(
 ): Promise<{ rows: T[] }> {
   try {
     return await query(text, values);
-  } catch {
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "40001") throw new RentOpsRetryableConflict();
     // Do not retain the driver error as `cause`: connection errors can embed
     // a full connection string or other credential-bearing diagnostics.
     throw redactedOperationError();

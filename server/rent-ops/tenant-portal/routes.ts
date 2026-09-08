@@ -1,16 +1,18 @@
+import { TenantAccountAdminService, TenantPortalError } from "./admin-service";
+export { tenantAccountSummary } from "./admin-service";
 import { Readable } from "node:stream";
 import { RentOpsService } from "../services/service";
 import type { StorageReadAdapter } from "../storage";
 import { isTenantLeaseFile } from "./lease-files";
 import { createTenantAccessNotifier, type TenantAccessNotifier } from "./delivery";
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { Router, type Express, type Request, type RequestHandler, type Response } from "express";
 import { z } from "zod";
 import type { RentOpsRepository } from "../../../shared/rent-ops-contracts";
-import type { TenantAccountSummary, TenantIdentity, TenantSessionResponse } from "../../../shared/tenant-portal-contracts";
+import type { TenantIdentity, TenantSessionResponse } from "../../../shared/tenant-portal-contracts";
 import type { RentOpsQueryExecutor } from "../repositories/postgres";
 import { hashTenantPassword, validTenantPassword, verifyTenantPassword } from "./passwords";
-import { eligibleTenantTenancies, presentTenantHome, resolveTenantBinding } from "./presentation";
+import { presentTenantHome, resolveTenantBinding } from "./presentation";
 import { PostgresTenantAccountStore, type TenantAccountRecord, type TenantAccountStore } from "./store";
 
 declare module "express-session" {
@@ -39,28 +41,17 @@ export interface TenantPortalOptions {
   accessNotifier?: TenantAccessNotifier;
 }
 
-class TenantPortalError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
-}
-
 const emailSchema = z.string().trim().email().max(240).transform((value) => value.toLowerCase());
 const passwordSchema = z.string().refine(validTenantPassword, "Use 12 to 128 characters for your password.");
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 const idSchema = z.string().min(1).max(160);
-const ACTIVATION_TTL_MS = 24 * 60 * 60 * 1000;
 const AUTH_WINDOW_MS = 15 * 60 * 1000;
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
-const tokenPair = () => { const token = randomBytes(32).toString("base64url"); return { token, hash: digest(token) }; };
 
 export function tenantIdentity(record: TenantAccountRecord): TenantIdentity {
   if (record.status !== "active") throw new TenantPortalError(401, "Sign in to your tenant account.");
   return { id: record.id, email: record.email, personId: record.personId, tenancyId: record.tenancyId, status: "active" };
-}
-
-export function tenantAccountSummary(record: TenantAccountRecord): TenantAccountSummary {
-  return { id: record.id, email: record.email, personId: record.personId, tenancyId: record.tenancyId, status: record.status,
-    createdAt: record.createdAt, activatedAt: record.activatedAt, invitationExpiresAt: record.invitationExpiresAt };
 }
 
 export function getTenantIdentity(req: Request): TenantIdentity | undefined { return req.tenantAccount; }
@@ -174,20 +165,8 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
     res.json(await establishSession(req, record));
   }));
 
-  async function deliverAccess(record: TenantAccountRecord, purpose: "invitation" | "password_reset") {
-    if (!notifier) throw new TenantPortalError(503, "Email delivery is unavailable. Contact management for an access link.");
-    const token = tokenPair(); const timestamp = now();
-    const expiresAt = new Date(timestamp.getTime() + 30 * 60 * 1000).toISOString();
-    const issued = await store.issueRecovery(record.id, token.hash, expiresAt, timestamp.toISOString());
-    if (!issued) return;
-    try { await notifier({ issuanceId: randomUUID(), accountId: record.id, email: record.email, token: token.token, expiresAt, purpose }); }
-    catch {
-      // A timeout may mean accepted delivery. Invalidate only this issuance;
-      // a late email cannot change a password and a newer request survives.
-      await store.invalidateToken(record.id, token.hash);
-      throw new TenantPortalError(503, "Email delivery could not be confirmed. Request a new link or contact management.");
-    }
-  }
+  const accountAdmin = new TenantAccountAdminService({ repository: options.repository, store, notifier, now });
+  const deliverAccess = (record: TenantAccountRecord, _purpose: "invitation" | "password_reset") => accountAdmin.sendLink(record.id);
 
   router.post("/auth/recovery", safeHandler(async (req, res) => {
     const input = z.object({ email: emailSchema }).strict().parse(req.body);
@@ -289,42 +268,21 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
   admin.use(options.requireAdmin);
   admin.use((_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
   admin.get("/", safeHandler(async (_req, res) => {
-    const accounts = await store.list();
-    const snapshot = await options.repository.getSnapshot();
-    res.json({ deliveryAvailable: !!notifier, accounts: accounts.map(tenantAccountSummary), eligibleTenancies: eligibleTenantTenancies(snapshot) });
+    res.json(await accountAdmin.list());
   }));
   admin.post("/", safeHandler(async (req, res) => {
-    const input = z.object({ email: emailSchema, personId: idSchema, tenancyId: idSchema }).strict().parse(req.body);
-    const snapshot = await options.repository.getSnapshot();
-    if (!eligibleTenantTenancies(snapshot).some((row) => row.personId === input.personId && row.tenancyId === input.tenancyId)) throw new TenantPortalError(400, "Select an exact current or future primary tenant before creating an account.");
-    const token = tokenPair(); const timestamp = now(); const expiresAt = new Date(timestamp.getTime() + ACTIVATION_TTL_MS).toISOString();
-    const account = await store.create({ id: `tenant-account-${randomUUID()}`, ...input, tokenHash: token.hash, expiresAt, now: timestamp.toISOString() });
-    if (!account) throw new TenantPortalError(409, "An account already uses this email or tenancy. Reissue its secure link instead.");
-    res.status(201).json({ account: tenantAccountSummary(account), activationPath: `/tenant#activate=${token.token}`, expiresAt });
+    res.status(201).json(await accountAdmin.grant(req.body));
   }));
   admin.post("/:id/reissue", safeHandler(async (req, res) => {
-    const id = idSchema.parse(req.params.id);
-    const existing = await store.getById(id);
-    if (!existing) throw new TenantPortalError(404, "Tenant account was not found.");
-    if (!resolveTenantBinding(await options.repository.getSnapshot(), existing.personId, existing.tenancyId)) throw new TenantPortalError(409, "Review the person and tenancy association before reissuing access.");
-    const token = tokenPair(); const timestamp = now(); const expiresAt = new Date(timestamp.getTime() + ACTIVATION_TTL_MS).toISOString();
-    const account = await store.rotateActivation(id, token.hash, expiresAt, timestamp.toISOString());
-    if (!account) throw new TenantPortalError(404, "Tenant account was not found.");
-    res.json({ account: tenantAccountSummary(account), activationPath: `/tenant#activate=${token.token}`, expiresAt });
+    res.json(await accountAdmin.reissue(idSchema.parse(req.params.id)));
   }));
   admin.post("/:id/send-link", safeHandler(async (req, res) => {
     await limit(req, "admin-delivery", 20);
-    const record = await store.getById(idSchema.parse(req.params.id));
-    if (!record || record.status === "revoked") throw new TenantPortalError(404, "An eligible account was not found.");
-    if (!resolveTenantBinding(await options.repository.getSnapshot(), record.personId, record.tenancyId)) throw new TenantPortalError(409, "Review the tenancy association first.");
-    await deliverAccess(record, record.status === "active" ? "password_reset" : "invitation");
-    res.json({ delivery: "accepted", message: "The email provider accepted the access-link request." });
+    res.json(await accountAdmin.sendLink(idSchema.parse(req.params.id)));
   }));
   admin.post("/:id/revoke", safeHandler(async (req, res) => {
-    const account = await store.revoke(idSchema.parse(req.params.id), now().toISOString());
-    if (!account) throw new TenantPortalError(404, "Tenant account was not found.");
-    res.json({ account: tenantAccountSummary(account) });
+    res.json(await accountAdmin.revoke(idSchema.parse(req.params.id)));
   }));
   app.use("/api/rent-ops/tenant-accounts", admin);
-  return { requireTenant, getTenantIdentity, getTenantHome };
+  return { requireTenant, getTenantIdentity, getTenantHome, accountAdmin };
 }

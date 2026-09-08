@@ -101,7 +101,7 @@ test("admin entity serializers use exact positive allowlists at nested depth", (
     chargeDefinitionId: "rm-charge-id",
     chargeDefinitionKey: "rm-charge-key",
   } as never);
-  exactKeys(schedule, ["id", "scopeType", "scopeId", "propertyId", "category", "description", "amountCents", "active"]);
+  exactKeys(schedule, ["id", "scopeType", "scopeId", "propertyId", "category", "description", "amountCents", "active", "chargeDefinitionId"]);
   assertNoForbiddenKeys(schedule);
 
   const document = serializeAdminDocument({
@@ -268,7 +268,7 @@ test("application, documents, and snapshot arrays never carry server-only fields
   exactKeys(snapshot, ["properties", "units", "people", "householdMemberships", "tenancies", "leaseTerms", "recurringSchedules", "ledgerTransactions", "paymentAllocations", "securityDeposits", "subsidyContracts", "applications", "applicationHouseholdMembers", "applicationRequirements", "documents", "activityEvents"]);
   assert.equal("sourceRecords" in snapshot, false);
   assert.equal("importRuns" in snapshot, false);
-  assert.equal("chargeDefinitionId" in snapshot.recurringSchedules[0], false);
+  assert.equal(snapshot.recurringSchedules[0].chargeDefinitionId, "source-definition");
   assert.equal("chargeDefinitionKey" in snapshot.recurringSchedules[0], false);
   assertNoForbiddenKeys(snapshot);
 });
@@ -437,7 +437,7 @@ test("admin tenant profile canaries are removed below every nested collection", 
   });
   exactKeys(profile.person, ["id", "firstName", "lastName"]);
   exactKeys(profile.household[0], ["id", "personId", "role", "isFinanciallyResponsible"]);
-  exactKeys(profile.schedules[0], ["id", "propertyId", "category", "description", "amountCents", "active"]);
+  exactKeys(profile.schedules[0], ["id", "propertyId", "category", "description", "amountCents", "active", "chargeDefinitionId"]);
   exactKeys(profile.ledger[0], ["transaction", "allocatedCents", "openCents", "runningBalanceCents"]);
   exactKeys(profile.ledger[0].transaction, ["id"]);
   assertNoForbiddenKeys(profile);
@@ -455,7 +455,7 @@ test("v8 nullable financial fields remain explicit and charge definitions stay p
   assert.equal(schedule.amountCents, null);
   assert.equal(schedule.effectiveFrom, null);
   assert.equal(schedule.active, null);
-  assert.equal("chargeDefinitionId" in schedule, false);
+  assert.equal(schedule.chargeDefinitionId, "source-id");
   const definition = serializeAdminChargeDefinition({ id: "charge-definition:rent", displayName: null, displayNameKnowledge: "unknown", category: "base_rent", categoryKnowledge: "source", active: true, activeKnowledge: "source", source: { sourceId: "provider" } } as never);
   assert.deepEqual(definition, { id: "charge-definition:rent", displayName: null, displayNameKnowledge: "unknown", category: "base_rent", categoryKnowledge: "source", active: true, activeKnowledge: "source" });
   assert.equal("source" in definition, false);

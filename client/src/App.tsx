@@ -4,6 +4,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/auth-context";
+import { ACCOUNT_ENTRY_ROUTES } from "@/components/account-entry";
 import Navigation from "@/components/navigation";
 import ProtectedRoute from "@/components/protected-route";
 import Home from "@/pages/home";
@@ -46,8 +47,8 @@ function Router() {
           <AdminDashboard />
         </ProtectedRoute>
       </Route>
-      <Route path="/ops" component={RentOpsPage} />
-      <Route path="/tenant" component={TenantPortalPage} />
+      <Route path={ACCOUNT_ENTRY_ROUTES.manager} component={RentOpsPage} />
+      <Route path={ACCOUNT_ENTRY_ROUTES.resident} component={TenantPortalPage} />
       <Route path="/apply" component={RentOpsApplyPage} />
       <Route path="/apply/:propertySlug" component={RentOpsApplyPage} />
       <Route component={NotFound} />

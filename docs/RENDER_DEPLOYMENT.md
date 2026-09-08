@@ -30,6 +30,11 @@ multiple instances.
    web startup rejects importer database and object-store credentials. Provision the host `user_sessions` table as part of the
    reviewed host schema. Never point either URL at the other role or at the
    host application's shared role.
+   On Replit, set the reviewed host connection as `RENT_OPS_HOST_DATABASE_URL`
+   when publishing replaces `DATABASE_URL` with its managed database. This
+   optional override takes priority for host queries and sessions, and startup
+   validates it against the separate Rent Ops database. An empty or invalid
+   override fails startup; it never falls back to the provider connection.
 4. Configure a private, encrypted, versioned S3-compatible bucket and the
    two web identities named in the Blueprint plus a separate operator importer
    identity. Set endpoint, region, bucket, prefix and the runtime/upload
