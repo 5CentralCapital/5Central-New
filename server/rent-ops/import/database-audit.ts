@@ -731,7 +731,7 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
   // Ordered migration evidence lives in the v2 ledger. The legacy v1
   // schema_meta row remains immutable and is never queried as v2 evidence.
   schemaMeta: "SELECT version, checksum_sha256 FROM rent_ops_schema_migrations ORDER BY version ASC",
-  schema: "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ANY($1::text[])",
+  schema: "SELECT c.relname AS table_name FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relname = ANY($1::text[])",
   counts: `
     SELECT 'properties'::text AS metric, COUNT(*)::bigint AS value FROM rent_ops_properties
     UNION ALL SELECT 'units', COUNT(*)::bigint FROM rent_ops_units
