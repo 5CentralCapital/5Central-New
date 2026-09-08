@@ -1766,7 +1766,7 @@ async function assertExistingImportRuns(executor: RentOpsQueryExecutor, runs: re
 
 async function assertSchemaReady(executor: RentOpsQueryExecutor): Promise<void> {
   try {
-    const result = await executor.query<{ table_name?: string }>("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ANY($1::text[])", [Array.from(RENT_OPS_MIGRATION_REQUIRED_TABLES)]);
+    const result = await executor.query<{ table_name?: string }>("SELECT c.relname AS table_name FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relname = ANY($1::text[])", [Array.from(RENT_OPS_MIGRATION_REQUIRED_TABLES)]);
     const found = new Set(result.rows.map((row) => String(row.table_name ?? "")));
     if (RENT_OPS_MIGRATION_REQUIRED_TABLES.some((table) => !found.has(table))) throw new PersistenceImportPreconditionError(["rent_ops_schema_missing"]);
   } catch (error) {

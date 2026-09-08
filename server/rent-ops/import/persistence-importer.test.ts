@@ -118,7 +118,7 @@ class MemoryExecutor implements RentOpsQueryExecutor {
   async query<T = Record<string, unknown>>(text: string, values: unknown[] = []): Promise<{ rows: T[] }> {
     this.queries.push(text);
     this.allQueries.push(text);
-    if (/information_schema\.tables/i.test(text)) return { rows: RENT_OPS_REQUIRED_TABLES.map((table_name) => ({ table_name })) as T[] };
+    if (/pg_catalog\.pg_class/i.test(text)) return { rows: RENT_OPS_REQUIRED_TABLES.map((table_name) => ({ table_name })) as T[] };
     const restrictedTable = text.match(/FROM (rent_ops_restricted_parity_(?:observations|collection_occurrences|row_occurrences))/i)?.[1];
     if (restrictedTable) {
       const table = this.tableRows(restrictedTable);
