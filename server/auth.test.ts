@@ -53,3 +53,14 @@ test("host login limiter bounds account attempts across IPs and expires", () => 
   for (let i = 0; i < 30; i++) assert.equal(limit("one-ip", `account-${i}`), 0);
   assert.equal(limit("one-ip", "new-account"), 900);
 });
+
+test("OAuth manager session rejects a removed subject allowlist before loading the host user", async () => {
+  const prior = process.env.RENT_OPS_OAUTH_ADMIN_SUBJECTS;
+  process.env.RENT_OPS_OAUTH_ADMIN_SUBJECTS = "";
+  let status = 0;
+  try {
+    await auth.requireRentOpsAdmin({ session: { rentOpsAdminUserId: "admin", rentOpsOAuthSubject: "google-oauth2|118183229923455274061" }, headers: {} } as never,
+      { status(code: number) { status = code; return { json() {} }; } } as never, () => assert.fail("revoked subject reached route"));
+    assert.equal(status, 403);
+  } finally { if (prior === undefined) delete process.env.RENT_OPS_OAUTH_ADMIN_SUBJECTS; else process.env.RENT_OPS_OAUTH_ADMIN_SUBJECTS = prior; }
+});

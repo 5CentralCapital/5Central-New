@@ -1,6 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { scrypt, randomBytes, timingSafeEqual, createHash } from "crypto";
 import { storage } from "./storage";
+import { managerOAuthAllowed, registerManagerOAuthRoutes } from "./admin-oauth";
 import type { User } from "@shared/schema";
 
 const MAX_PASSWORD_BYTES = 1024;
@@ -232,6 +233,10 @@ export async function requireRentOpsAdmin(req: Request, res: Response, next: Nex
     return;
   }
   try {
+    if (req.session.rentOpsOAuthSubject && !managerOAuthAllowed(process.env, req.session.rentOpsOAuthSubject)) {
+      res.status(403).json({ message: "Rent Ops administrator access required" });
+      return;
+    }
     const user = await storage.getUser(req.session.rentOpsAdminUserId);
     const configuredEmail = normalizedEmail(process.env.RENT_OPS_ADMIN_EMAIL);
     if (!user || user.role !== "admin" || (configuredEmail && normalizedEmail(user.email) !== configuredEmail)) {
@@ -279,6 +284,7 @@ export function requireInvestor(req: Request, res: Response, next: NextFunction)
 
 export function registerAuthRoutes(app: Express) {
   const limitLoginAttempt = createLoginAttemptLimiter();
+  registerManagerOAuthRoutes(app, { getAdmin: () => storage.getUserByEmail("michael@5central.capital"), csrfToken: createRentOpsCsrfToken, limit: createLoginAttemptLimiter() });
   const loginRateLimit = (req: Request, res: Response, next: NextFunction) => {
     res.set("Cache-Control", "no-store");
     const retryAfter = limitLoginAttempt(req.ip || req.socket.remoteAddress || "unknown", normalizedEmail(req.body?.email));

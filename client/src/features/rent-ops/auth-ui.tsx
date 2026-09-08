@@ -19,6 +19,13 @@ export function RentOpsAdminLogin({ message }: { message?: string }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | undefined>(message);
   const [submitting, setSubmitting] = useState(false);
+  const [googleEnabled, setGoogleEnabled] = useState(false);
+  useEffect(() => {
+    let active = true;
+    if (new URLSearchParams(window.location.search).get("login") === "failed") setError("Google sign-in was not accepted. Please try again.");
+    fetch("/api/rent-ops/auth/oauth/config", { credentials: "include" }).then(r => r.ok ? r.json() : {}).then(value => { if (active) setGoogleEnabled(typeof value === "object" && value !== null && "enabled" in value && value.enabled === true); }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (message) setError(message);
@@ -46,6 +53,7 @@ export function RentOpsAdminLogin({ message }: { message?: string }) {
       <h1 id="rent-ops-login-title">Rent Operations</h1>
       <p className="ro-auth-intro">Sign in with the dedicated administrator account to view and update operational records.</p>
       {error && <div className="ro-error" role="alert"><AlertCircle aria-hidden="true" /><span>{error}</span></div>}
+      {googleEnabled && <a className="primary ro-auth-submit" href="/api/rent-ops/auth/oauth/start">Continue with Google</a>}
       <form onSubmit={submit}>
         <label htmlFor="rent-ops-email">Email</label>
         <input id="rent-ops-email" type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required disabled={submitting} />
