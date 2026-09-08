@@ -779,11 +779,11 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
         WHEN kind = 'adjustment' AND adjustment_direction = 'credit' THEN -amount_cents
         WHEN kind = 'reversal' AND reversal_of_id IS NOT NULL THEN
           CASE
-            WHEN NOT EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = reversal_of_id) THEN 0
-            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = reversal_of_id AND original.kind = 'reversal') THEN 0
-            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = reversal_of_id AND (original.kind IN ('payment', 'credit') OR (original.kind = 'adjustment' AND original.adjustment_direction = 'credit'))) THEN amount_cents
-            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = reversal_of_id AND original.kind = 'adjustment' AND original.adjustment_direction = 'debit') THEN -amount_cents
-            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = reversal_of_id AND original.kind = 'charge') THEN -amount_cents
+            WHEN NOT EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = ledger.reversal_of_id) THEN 0
+            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = ledger.reversal_of_id AND original.kind = 'reversal') THEN 0
+            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = ledger.reversal_of_id AND (original.kind IN ('payment', 'credit') OR (original.kind = 'adjustment' AND original.adjustment_direction = 'credit'))) THEN amount_cents
+            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = ledger.reversal_of_id AND original.kind = 'adjustment' AND original.adjustment_direction = 'debit') THEN -amount_cents
+            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = ledger.reversal_of_id AND original.kind = 'charge') THEN -amount_cents
             ELSE 0
           END
         WHEN kind = 'reversal' THEN 0
@@ -795,11 +795,11 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
         WHEN kind = 'adjustment' AND adjustment_direction = 'credit' THEN -amount_cents
         WHEN kind = 'reversal' AND reversal_of_id IS NOT NULL THEN
           CASE
-            WHEN NOT EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = reversal_of_id) THEN 0
-            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = reversal_of_id AND original.kind = 'reversal') THEN 0
-            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = reversal_of_id AND (original.kind IN ('payment', 'credit') OR (original.kind = 'adjustment' AND original.adjustment_direction = 'credit'))) THEN amount_cents
-            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = reversal_of_id AND original.kind = 'adjustment' AND original.adjustment_direction = 'debit') THEN -amount_cents
-            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = reversal_of_id AND original.kind = 'charge') THEN -amount_cents
+            WHEN NOT EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = ledger.reversal_of_id) THEN 0
+            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = ledger.reversal_of_id AND original.kind = 'reversal') THEN 0
+            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = ledger.reversal_of_id AND (original.kind IN ('payment', 'credit') OR (original.kind = 'adjustment' AND original.adjustment_direction = 'credit'))) THEN amount_cents
+            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = ledger.reversal_of_id AND original.kind = 'adjustment' AND original.adjustment_direction = 'debit') THEN -amount_cents
+            WHEN EXISTS (SELECT 1 FROM rent_ops_ledger_transactions original WHERE original.id = ledger.reversal_of_id AND original.kind = 'charge') THEN -amount_cents
             ELSE 0
           END
         WHEN kind = 'reversal' THEN 0
@@ -814,13 +814,13 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
       (SELECT COUNT(*) FROM rent_ops_subsidy_tenants WHERE amount_knowledge = 'unknown' OR amount_cents IS NULL) AS hap_subsidy_tenant_unknown_amount_count,
       (SELECT COUNT(*) FROM rent_ops_subsidy_payments WHERE amount_knowledge = 'known' AND amount_cents IS NOT NULL) AS hap_subsidy_payment_known_amount_count,
       (SELECT COUNT(*) FROM rent_ops_subsidy_payments WHERE amount_knowledge = 'unknown' OR amount_cents IS NULL) AS hap_subsidy_payment_unknown_amount_count
-    FROM rent_ops_ledger_transactions
+    FROM rent_ops_ledger_transactions ledger
   `,
   orphans: `
     SELECT
       (SELECT COUNT(*) FROM rent_ops_units u LEFT JOIN rent_ops_properties p ON p.id = u.property_id WHERE p.id IS NULL) AS units_property,
       (SELECT COUNT(*) FROM rent_ops_tenancies t LEFT JOIN rent_ops_properties p ON p.id = t.property_id WHERE p.id IS NULL) AS tenancies_property,
-      (SELECT COUNT(*) FROM rent_ops_tenancies t LEFT JOIN rent_ops_units u ON u.id = t.unit_id WHERE u.id IS NULL) AS tenancies_unit,
+      (SELECT COUNT(*) FROM rent_ops_tenancies t LEFT JOIN rent_ops_units u ON u.id = t.unit_id WHERE t.unit_id IS NOT NULL AND u.id IS NULL) AS tenancies_unit,
       (SELECT COUNT(*) FROM rent_ops_tenancies t LEFT JOIN rent_ops_people p ON p.id = t.primary_person_id WHERE p.id IS NULL) AS tenancies_primary_person,
       (SELECT COUNT(*) FROM rent_ops_tenancies t LEFT JOIN rent_ops_applications a ON a.id = t.application_id WHERE t.application_id IS NOT NULL AND a.id IS NULL) AS tenancies_application,
       (SELECT COUNT(*) FROM rent_ops_household_memberships h LEFT JOIN rent_ops_people p ON p.id = h.person_id WHERE p.id IS NULL) AS household_person,
@@ -1329,6 +1329,10 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
       (SELECT COUNT(*)::bigint FROM hap_payment_sources) AS hap_payment_source_row_count,
       (SELECT COUNT(DISTINCT (source_system, source_id))::bigint FROM rent_ops_subsidy_payments WHERE source_system IS NOT NULL AND source_id IS NOT NULL) AS hap_payment_distinct_target_identity_count,
       (SELECT COUNT(DISTINCT (source_system, source_id))::bigint FROM hap_payment_sources) AS hap_payment_distinct_source_identity_count,
+      (SELECT COUNT(*)::bigint FROM rent_ops_subsidy_tenants WHERE amount_knowledge = 'known' AND amount_cents IS NOT NULL) AS hap_subsidy_tenant_known_amount_count,
+      (SELECT COUNT(*)::bigint FROM rent_ops_subsidy_tenants WHERE amount_knowledge = 'unknown' OR amount_cents IS NULL) AS hap_subsidy_tenant_unknown_amount_count,
+      (SELECT COUNT(*)::bigint FROM rent_ops_subsidy_payments WHERE amount_knowledge = 'known' AND amount_cents IS NOT NULL) AS hap_subsidy_payment_known_amount_count,
+      (SELECT COUNT(*)::bigint FROM rent_ops_subsidy_payments WHERE amount_knowledge = 'unknown' OR amount_cents IS NULL) AS hap_subsidy_payment_unknown_amount_count,
       (SELECT COUNT(*)::bigint FROM rent_ops_subsidy_contracts WHERE status IS NOT NULL AND status_knowledge = 'source') AS hap_contract_known_status_count,
       (SELECT COUNT(*)::bigint FROM rent_ops_subsidy_contracts WHERE status IS NULL OR status_knowledge IS DISTINCT FROM 'source') AS hap_contract_unknown_status_count,
       (SELECT COUNT(*)::bigint FROM rent_ops_subsidy_tenants WHERE status IS NOT NULL AND status_knowledge = 'source') AS hap_tenant_known_status_count,

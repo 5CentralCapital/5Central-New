@@ -310,15 +310,21 @@ async function readBinary(root: string, relativePath: string): Promise<Uint8Arra
   return readPrivateFileFromDescriptor(candidate, "restricted_derivative_binary_unreadable");
 }
 
-function binaryDescriptors(envelope: ExportEnvelope): DocumentBinaryDescriptor[] {
+export function binaryDescriptors(envelope: ExportEnvelope): DocumentBinaryDescriptor[] {
   const descriptors = [...envelope.documentBinaries, ...(Array.isArray(envelope.payload.documentBinaries) ? envelope.payload.documentBinaries : [])];
   const byPath = new Map<string, DocumentBinaryDescriptor>();
+  const bySource = new Map<string, DocumentBinaryDescriptor>();
   for (const descriptor of descriptors) {
     if (!descriptor || descriptor.binaryAvailable !== true) continue;
     const path = safeBinaryRelativePath(descriptor.archivePath);
+    const sameSource = bySource.get(descriptor.sourceId);
+    if (sameSource && canonicalJson(sameSource) !== canonicalJson(descriptor)) throw new RestrictedSupplementDerivativeArchiveError(["restricted_derivative_binary_conflict"]);
+    bySource.set(descriptor.sourceId, descriptor);
     const prior = byPath.get(path);
-    if (prior && canonicalJson(prior) !== canonicalJson(descriptor)) throw new RestrictedSupplementDerivativeArchiveError(["restricted_derivative_binary_conflict"]);
-    byPath.set(path, descriptor);
+    // Distinct source documents may share identical content-addressed bytes.
+    // Preserve every descriptor in the envelope; copy the verified bytes once.
+    if (prior && (prior.sha256 !== descriptor.sha256 || prior.sizeBytes !== descriptor.sizeBytes)) throw new RestrictedSupplementDerivativeArchiveError(["restricted_derivative_binary_conflict"]);
+    if (!prior) byPath.set(path, descriptor);
   }
   return Array.from(byPath.values()).sort((left, right) => String(left.archivePath).localeCompare(String(right.archivePath)));
 }

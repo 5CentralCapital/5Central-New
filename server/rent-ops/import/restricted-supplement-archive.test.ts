@@ -14,6 +14,7 @@ import {
 } from "./restricted-supplement";
 import {
   applyRestrictedSupplementPackage,
+  binaryDescriptors,
   RESTRICTED_SUPPLEMENT_PACKAGE_VERSION,
   RESTRICTED_SUPPLEMENT_PROVENANCE_FILE,
   RestrictedSupplementDerivativeArchiveError,
@@ -554,4 +555,17 @@ test("manual derivative page retains only manifest-bound added rows from a share
     assert.equal(JSON.parse(manual[0].canonicalPayload).sourceId, "synthetic-answer");
     assert.equal((await readRestrictedMigrationArchive(source)).auditReceipt.fileSetSha256, before.auditReceipt.fileSetSha256);
   } finally { await rm(fixture.parent, { recursive: true, force: true }); }
+});
+
+
+test("distinct source file identities share content-addressed bytes without losing metadata", () => {
+  const first = {sourceId: "Files:1", fileName: "original.pdf", metadataAvailable: true, binaryAvailable: true, descriptorOnly: false, sha256: "a".repeat(64), sizeBytes: 12, archivePath: `binaries/${"a".repeat(64)}.bin`, contentType: "application/pdf"};
+  const second = {...first, sourceId: "Files:2", fileName: "current.pdf"};
+  const envelope = {documentBinaries: [first, second], payload: {documentBinaries: [first, second]}} as unknown as ExportEnvelope;
+  assert.equal(binaryDescriptors(envelope).length, 1);
+  assert.equal(envelope.documentBinaries.length, 2);
+  assert.equal(envelope.documentBinaries[1].fileName, "current.pdf");
+  for (const conflicting of [{...second, sha256: "b".repeat(64)}, {...second, sizeBytes: 13}, {...second, sourceId: first.sourceId}]) {
+    assert.throws(() => binaryDescriptors({...envelope, documentBinaries: [first, conflicting]}), RestrictedSupplementDerivativeArchiveError);
+  }
 });
