@@ -36,7 +36,7 @@ try {
  const nextMonth=new Date();nextMonth.setUTCMonth(nextMonth.getUTCMonth()+1,1);
  const moveIn=nextMonth.toISOString().slice(0,10);
  const year=Number(moveIn.slice(0,4));
- const converted=expected(await manager.request(`/api/rent-ops/applications/${application.id}/convert`,{propertyId:'qa-property',unitId:'qa-unit-1',plannedMoveInOn:moveIn,leaseStatus:'executed',contractStartOn:moveIn,contractEndOn:`${year+1}-09-30`,monthToMonth:false,baseRentCents:125000,chargeDefinitionId:'qa-base-rent',category:'base_rent',scheduleDescription:'TEST monthly rent',primaryFinanciallyResponsible:true,members:[{applicationMemberId:'primary',role:'primary',isFinanciallyResponsible:true}]}),201,'conversion');
+ const converted=expected(await manager.request(`/api/rent-ops/applications/${application.id}/convert`,{propertyId:'qa-property',unitId:'qa-unit-1',plannedMoveInOn:moveIn,leaseStatus:'executed',contractStartOn:moveIn,contractEndOn:`${year+1}-09-30`,monthToMonth:false,baseRentCents:125000,billingFrequency:'monthly',chargeDefinitionId:'qa-base-rent',category:'base_rent',scheduleDescription:'TEST monthly rent',primaryFinanciallyResponsible:true,members:[{applicationMemberId:'primary',role:'primary',isFinanciallyResponsible:true}]}),201,'conversion');
  const tenancyId=converted.tenancy.id;
  const snapshot=await qa.repository.getSnapshot();const tenancy=snapshot.tenancies.find(t=>t.id===tenancyId)!;
  assert.equal(snapshot.applications.find(a=>a.id===application.id)?.status,'converted');assert.ok(snapshot.leaseTerms.some(t=>t.tenancyId===tenancyId));assert.ok(snapshot.recurringSchedules.some(t=>t.tenancyId===tenancyId));pass('manager review, approval and atomic application-to-tenancy/lease/schedule conversion');
@@ -79,10 +79,12 @@ try {
  expected(await tenant.request('/api/tenant/auth/activate',{token,password:'LocalQA-Reset-2026'}),200,'reset consume');
  const oldClient=new Client();oldClient.cookie=oldCookie;expected(await oldClient.request('/api/tenant/home'),401,'old session revoked');
  expected(await applicant.request('/api/tenant/auth/login',{email:'resident@example.test',password:'LocalQA-Only-2026'}),401,'old password rejected');pass('password reset preserves access until consumption then revokes prior session/password');
- const month=moveIn.slice(0,7);const preview=expected(await manager.request(`/api/rent-ops/billing/preview?month=${month}`),200,'billing preview');
+ const month=moveIn.slice(0,7);const preview=expected(await manager.request(`/api/rent-ops/billing/preview?month=${month}&tenancyId=${encodeURIComponent(tenancyId)}`),200,'scoped billing preview');
+ assert.deepEqual(preview.scope,{tenancyId});
 
- const posted=expected(await manager.request('/api/rent-ops/billing/post',{month,previewToken:preview.previewToken}),200,'billing post');pass('billing preview/post');
- assert.equal(posted.postedCount,1);const replay=expected(await manager.request('/api/rent-ops/billing/post',{month,previewToken:preview.previewToken}),200,'billing replay');assert.equal(replay.postedCount,0);pass('billing replay does not duplicate monthly rent');
+ const billingScope={tenancyId};
+ const posted=expected(await manager.request('/api/rent-ops/billing/post',{month,scope:billingScope,previewToken:preview.previewToken}),200,'scoped billing post');pass('scoped tenant billing preview/post');
+ assert.equal(posted.postedCount,1);const replay=expected(await manager.request('/api/rent-ops/billing/post',{month,scope:billingScope,previewToken:preview.previewToken}),200,'scoped billing replay');assert.equal(replay.postedCount,0);pass('scoped billing replay does not duplicate monthly rent');
  if(options.untilBilling){completed=true;console.log('SYNTHETIC RESIDENT READY: resident@example.test / LocalQA-Reset-2026; due $1,250.00; no checkout invoked');return;}
  const payments=expected(await tenant.request('/api/tenant/payments'),200,'payments');assert.ok(payments.accounts[0].payableCents>0,JSON.stringify(payments));
  const payment=expected(await tenant.request('/api/tenant/payments/checkout',{tenancyId,amountCents:5000,requestId:randomUUID()}),200,'checkout');
