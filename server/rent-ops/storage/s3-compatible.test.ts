@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   S3CompatiblePrivateVersionedObjectStoreClient,
   createProductionRentOpsObjectStoresFromEnv,
+  createProductionRentOpsWebObjectStoresFromEnv,
   type S3CompatibleTransport,
 } from "./object-store";
 
@@ -127,6 +128,9 @@ test("S3 startup rejects denied reads, successful forbidden operations, and inco
   ]) {
     const { transport, env } = productionFixture(overrides);
     await assert.rejects(() => createProductionRentOpsObjectStoresFromEnv({ env, transport }), /storage_privilege_probe_failed/);
+    const webEnv: Record<string,string> = {...env};
+    delete webEnv.RENT_OPS_OBJECT_STORE_IMPORTER_TOKEN; delete webEnv.RENT_OPS_OBJECT_STORE_IMPORTER_IDENTITY;
+    await assert.rejects(() => createProductionRentOpsWebObjectStoresFromEnv({ env: webEnv, transport }), /storage_privilege_probe_failed/);
   }
 });
 
@@ -141,4 +145,20 @@ test("S3 adapter refuses missing immutable version IDs", async () => {
     transport: async () => new Response(null, { status: 200, headers: { "content-length": "1" } }),
   });
   await assert.rejects(() => client.stat(logicalKey), /storage_version_missing/);
+});
+
+test("web storage probes only its two principals and rejects importer credentials before network", async () => {
+ const {env:full,transport,calls}=productionFixture();
+ const env:Record<string,string>={...full};
+ delete env.RENT_OPS_OBJECT_STORE_IMPORTER_TOKEN; delete env.RENT_OPS_OBJECT_STORE_IMPORTER_IDENTITY;
+ const stores=await createProductionRentOpsWebObjectStoresFromEnv({env,transport});
+ assert.equal("importerStorage" in stores,false);
+ assert.equal("importer" in stores.privilegeReport,false);
+ assert.equal(JSON.stringify(calls).includes("restricted-importer"),false);
+ for(const key of ["RENT_OPS_DATABASE_URL","RENT_OPS_OBJECT_STORE_IMPORTER_TOKEN"]){
+  const before=calls.length;
+  await assert.rejects(()=>createProductionRentOpsWebObjectStoresFromEnv({env:{...env,[key]:"operator-secret"},transport}),/storage_privilege_probe_failed/);
+  assert.equal(calls.length,before);
+ }
+ await assert.rejects(()=>createProductionRentOpsObjectStoresFromEnv({env,transport}),/storage_privilege_probe_failed/);
 });

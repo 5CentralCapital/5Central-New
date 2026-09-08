@@ -17,7 +17,6 @@ function completeProductionEnvironment(): Record<string, string> {
     NODE_ENV: "production",
     DATABASE_URL: "postgresql://host-role:secret@db.example/host",
     RENT_OPS_RUNTIME_DATABASE_URL: "postgresql://runtime-role:secret@db.example/rent_ops",
-    RENT_OPS_DATABASE_URL: "postgresql://importer-role:secret@db.example/rent_ops",
     SESSION_SECRET: "session-secret",
     RENT_OPS_SESSION_SECRET: "synthetic-rent-ops-session-secret-32-characters",
     RENT_OPS_ADMIN_EMAIL: "operator@example.com",
@@ -35,8 +34,6 @@ function completeProductionEnvironment(): Record<string, string> {
     RENT_OPS_OBJECT_STORE_RUNTIME_TOKEN: "runtime-token",
     RENT_OPS_OBJECT_STORE_UPLOAD_IDENTITY: "applicant-upload",
     RENT_OPS_OBJECT_STORE_UPLOAD_TOKEN: "upload-token",
-    RENT_OPS_OBJECT_STORE_IMPORTER_IDENTITY: "restricted-importer",
-    RENT_OPS_OBJECT_STORE_IMPORTER_TOKEN: "importer-token",
     RENT_OPS_PUBLIC_LIMITER_MODE: "database",
     RENT_OPS_INSTANCE_MODE: "single",
   };
@@ -50,7 +47,7 @@ test("Render Blueprint declares the reviewed fail-closed service contract", () =
   assert.match(blueprint, /healthCheckPath:\s*\/healthz/);
   assert.doesNotMatch(blueprint, /migrate|migration/i);
   for (const key of RENT_OPS_DEPLOYMENT_ENV_VARS) assert.match(blueprint, new RegExp(`key:\\s*${key}\\b`), key);
-  for (const key of ["DATABASE_URL", "RENT_OPS_RUNTIME_DATABASE_URL", "RENT_OPS_DATABASE_URL", "RENT_OPS_ADMIN_EMAIL", "RENT_OPS_MAGIC_LINK_WEBHOOK_URL", "RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET", "RENT_OPS_PUBLIC_APP_URL", "RENT_OPS_OBJECT_STORE_ENDPOINT", "RENT_OPS_OBJECT_STORE_REGION", "RENT_OPS_OBJECT_STORE_BUCKET", "RENT_OPS_OBJECT_STORE_RUNTIME_IDENTITY", "RENT_OPS_OBJECT_STORE_RUNTIME_TOKEN", "RENT_OPS_OBJECT_STORE_UPLOAD_IDENTITY", "RENT_OPS_OBJECT_STORE_UPLOAD_TOKEN", "RENT_OPS_OBJECT_STORE_IMPORTER_IDENTITY", "RENT_OPS_OBJECT_STORE_IMPORTER_TOKEN"]) {
+  for (const key of ["DATABASE_URL", "RENT_OPS_RUNTIME_DATABASE_URL", "RENT_OPS_ADMIN_EMAIL", "RENT_OPS_MAGIC_LINK_WEBHOOK_URL", "RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET", "RENT_OPS_PUBLIC_APP_URL", "RENT_OPS_OBJECT_STORE_ENDPOINT", "RENT_OPS_OBJECT_STORE_REGION", "RENT_OPS_OBJECT_STORE_BUCKET", "RENT_OPS_OBJECT_STORE_RUNTIME_IDENTITY", "RENT_OPS_OBJECT_STORE_RUNTIME_TOKEN", "RENT_OPS_OBJECT_STORE_UPLOAD_IDENTITY", "RENT_OPS_OBJECT_STORE_UPLOAD_TOKEN"]) {
     const block = blueprint.match(new RegExp(`- key: ${key}([\\s\\S]*?)(?=\\n      - key:|$)`))?.[1] ?? "";
     assert.match(block, /sync:\s*false/);
   }
@@ -95,4 +92,13 @@ test("readiness is closed until startup completes and cannot expose payload data
   assert.equal(readiness.state(), "ready");
   readiness.markFailed();
   assert.equal(readiness.state(), "failed");
+});
+
+ test("web startup rejects importer credentials instead of requesting them", () => {
+  for (const key of ["RENT_OPS_DATABASE_URL", "RENT_OPS_OBJECT_STORE_IMPORTER_TOKEN"]) {
+    const env = {...completeProductionEnvironment(), [key]: "operator-only-secret"};
+    assert.equal(validateRentOpsProductionConfiguration(env).valid, false);
+    assert.ok(validateRentOpsProductionConfiguration(env).blockingReasons.includes(`production_importer_credential_forbidden_${key.toLowerCase()}`));
+    assert.doesNotMatch(blueprint, new RegExp(`key: ${key}\\b`));
+  }
 });

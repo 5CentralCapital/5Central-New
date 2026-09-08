@@ -24,22 +24,26 @@ multiple instances.
    integrations; if enabled, fill their `sync: false` values from the
    provider Dashboard without recording the values in source control.
 3. Provision the host database URL as `DATABASE_URL`. Provision separate
-   Rent Ops runtime and importer database roles and place their URLs in
-   `RENT_OPS_RUNTIME_DATABASE_URL` and `RENT_OPS_DATABASE_URL`. The runtime
-   role is application-only; the importer role is restricted and is not used
-   by the web process. Provision the host `user_sessions` table as part of the
+   Rent Ops runtime and importer database roles. Put only the runtime URL in
+   `RENT_OPS_RUNTIME_DATABASE_URL` in the web deployment. Keep
+   `RENT_OPS_DATABASE_URL` exclusively in the restricted operator job. The
+   web startup rejects importer database and object-store credentials. Provision the host `user_sessions` table as part of the
    reviewed host schema. Never point either URL at the other role or at the
    host application's shared role.
 4. Configure a private, encrypted, versioned S3-compatible bucket and the
-   three identities named in the Blueprint. Set the endpoint, region, bucket,
-   prefix, and each identity/token pair from the provider Dashboard. The
+   two web identities named in the Blueprint plus a separate operator importer
+   identity. Set endpoint, region, bucket, prefix and the runtime/upload
+   identity/token pairs in the web environment. Keep the importer token only
+   in the restricted operator environment. The
    runtime identity may Head/Get only (Put/List/Delete denied); the
    applicant-upload identity may Put/Head/Get; the importer identity may
    Put/Head/Get. None may List or Delete. Keep the bucket private and prevent
    provider public ACLs and redirect/follow behavior. The server uses a
    built-in HTTPS SigV4 adapter; it starts only after the provider probe sees
    the pre-provisioned `sha256:` startup canary, enabled versioning, private
-   access, and every permitted/forbidden operation. No provider SDK calls are
+   access, and every permitted/forbidden operation for its two identities. The
+   separate operator factory still requires and probes all three principals;
+   the web process does not fabricate an importer attestation. No provider SDK calls are
    made by tests or deployment review.
 
    The probe canary's exact key is

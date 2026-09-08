@@ -16,8 +16,6 @@ services:
         sync: false
       - key: RENT_OPS_RUNTIME_DATABASE_URL
         sync: false
-      - key: RENT_OPS_DATABASE_URL
-        sync: false
       - key: SESSION_SECRET
         generateValue: true
       - key: RENT_OPS_SESSION_SECRET
@@ -51,10 +49,6 @@ services:
       - key: RENT_OPS_OBJECT_STORE_UPLOAD_IDENTITY
         sync: false
       - key: RENT_OPS_OBJECT_STORE_UPLOAD_TOKEN
-        sync: false
-      - key: RENT_OPS_OBJECT_STORE_IMPORTER_IDENTITY
-        sync: false
-      - key: RENT_OPS_OBJECT_STORE_IMPORTER_TOKEN
         sync: false
       - key: RENT_OPS_PUBLIC_LIMITER_MODE
         value: database

@@ -1009,3 +1009,59 @@ export async function createProductionRentOpsObjectStoresFromEnv(options: S3Comp
   const configured = createS3CompatibleProductionObjectStoreFactory(options);
   return createProductionRentOpsObjectStores({ env, ...configured, maxUploadConcurrency: options.maxUploadConcurrency, spoolRoot: options.spoolRoot });
 }
+
+/** Web processes never receive or construct the restricted importer identity. */
+export type WebObjectStorePrivilegeReport = Pick<PrivateObjectStorePrivilegeReport, "privateOnly" | "versioningEnabled" | "runtime"> & {
+  uploadWriter: NonNullable<PrivateObjectStorePrivilegeReport["uploadWriter"]>;
+};
+export interface WebObjectStoreFactoryOptions {
+  env?: Readonly<Record<string, string | undefined>>;
+  clients: Pick<ProductionObjectStoreClients, "runtime" | "applicantUpload">;
+  privilegeProbe: { probe(): Promise<WebObjectStorePrivilegeReport> };
+  maxUploadConcurrency?: number;
+  spoolRoot?: string;
+}
+export async function createProductionRentOpsWebObjectStores(options: WebObjectStoreFactoryOptions) {
+  const env = options.env ?? process.env;
+  if (env.RENT_OPS_DATABASE_URL || env.RENT_OPS_OBJECT_STORE_IMPORTER_TOKEN
+    || productionStoreConfigValue(env, "RENT_OPS_OBJECT_STORE_BACKEND") !== "private-versioned"
+    || productionStoreConfigValue(env, "RENT_OPS_OBJECT_STORE_ENCRYPTION") !== "required"
+    || productionStoreConfigValue(env, "RENT_OPS_OBJECT_STORE_VERSIONING") !== "required") throw storageError("storage_privilege_probe_failed");
+  const report = await options.privilegeProbe.probe();
+  if (!report.privateOnly || !report.versioningEnabled) throw storageError("storage_privilege_probe_failed");
+  validateIdentityPrivileges(report.runtime, "runtime");
+  validateIdentityPrivileges(report.uploadWriter, "uploadWriter");
+  if (report.runtime.identity !== productionStoreConfigValue(env, "RENT_OPS_OBJECT_STORE_RUNTIME_IDENTITY")
+    || report.uploadWriter.identity !== productionStoreConfigValue(env, "RENT_OPS_OBJECT_STORE_UPLOAD_IDENTITY")
+    || report.runtime.identity === report.uploadWriter.identity
+    || comparablePrivatePrefix(report.runtime.prefix) !== comparablePrivatePrefix(report.uploadWriter.prefix)) throw storageError("storage_privilege_probe_failed");
+  return {
+    documentStorage: createReadOnlyObjectStoreAdapter(new SpoolingPrivateVersionedObjectStoreAdapter(options.clients.runtime, { spoolRoot: options.spoolRoot })),
+    documentUploadStorage: new BoundedUploadObjectStore(new SpoolingPrivateVersionedObjectStoreAdapter(options.clients.applicantUpload, { spoolRoot: options.spoolRoot }), options.maxUploadConcurrency ?? 4),
+    privilegeReport: report,
+  };
+}
+
+export async function createProductionRentOpsWebObjectStoresFromEnv(options: S3CompatibleProductionObjectStoreOptions = {}) {
+  const env = options.env ?? process.env;
+  // Fail before creating any client or performing a provider request.
+  if (env.RENT_OPS_DATABASE_URL || env.RENT_OPS_OBJECT_STORE_IMPORTER_TOKEN) throw storageError("storage_privilege_probe_failed");
+  const common = {
+    endpoint: requiredS3Environment(env, "RENT_OPS_OBJECT_STORE_ENDPOINT"),
+    region: requiredS3Environment(env, "RENT_OPS_OBJECT_STORE_REGION"),
+    bucket: requiredS3Environment(env, "RENT_OPS_OBJECT_STORE_BUCKET"),
+    prefix: requiredS3Environment(env, "RENT_OPS_OBJECT_STORE_PREFIX"),
+    transport: options.transport,
+  };
+  const runtime = new S3CompatiblePrivateVersionedObjectStoreClient({ ...common, accessKeyId: requiredS3Environment(env, "RENT_OPS_OBJECT_STORE_RUNTIME_IDENTITY"), secretAccessKey: requiredS3Environment(env, "RENT_OPS_OBJECT_STORE_RUNTIME_TOKEN") });
+  const uploadWriter = new S3CompatiblePrivateVersionedObjectStoreClient({ ...common, accessKeyId: requiredS3Environment(env, "RENT_OPS_OBJECT_STORE_UPLOAD_IDENTITY"), secretAccessKey: requiredS3Environment(env, "RENT_OPS_OBJECT_STORE_UPLOAD_TOKEN") });
+  return createProductionRentOpsWebObjectStores({
+    env, clients: { runtime, applicantUpload: uploadWriter }, maxUploadConcurrency: options.maxUploadConcurrency, spoolRoot: options.spoolRoot,
+    privilegeProbe: { async probe() {
+      const [privateOnly, versioningEnabled, runtimeReport, uploadReport] = await Promise.all([
+        runtime.probePrivate(), runtime.probeVersioning(), probeIdentity(runtime, runtime.identity), probeIdentity(uploadWriter, uploadWriter.identity),
+      ]);
+      return { privateOnly, versioningEnabled, runtime: runtimeReport, uploadWriter: uploadReport };
+    } },
+  });
+}

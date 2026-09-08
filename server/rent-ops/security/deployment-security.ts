@@ -26,7 +26,6 @@ export const RENT_OPS_DEPLOYMENT_ENV_VARS = [
   "NODE_ENV",
   "DATABASE_URL",
   "RENT_OPS_RUNTIME_DATABASE_URL",
-  "RENT_OPS_DATABASE_URL",
   "SESSION_SECRET",
   "RENT_OPS_SESSION_SECRET",
   "RENT_OPS_ADMIN_EMAIL",
@@ -44,8 +43,6 @@ export const RENT_OPS_DEPLOYMENT_ENV_VARS = [
   "RENT_OPS_OBJECT_STORE_RUNTIME_TOKEN",
   "RENT_OPS_OBJECT_STORE_UPLOAD_IDENTITY",
   "RENT_OPS_OBJECT_STORE_UPLOAD_TOKEN",
-  "RENT_OPS_OBJECT_STORE_IMPORTER_IDENTITY",
-  "RENT_OPS_OBJECT_STORE_IMPORTER_TOKEN",
   "RENT_OPS_PUBLIC_LIMITER_MODE",
   "RENT_OPS_INSTANCE_MODE",
 ] as const;
@@ -82,14 +79,15 @@ export function validateRentOpsProductionConfiguration(
 ): RentOpsProductionConfigurationValidation {
   const blockingReasons: string[] = [];
   if (configured(env, "NODE_ENV") !== RENT_OPS_DEPLOYMENT_ENVIRONMENT) blockingReasons.push("production_node_env_required");
-  for (const key of ["DATABASE_URL", "RENT_OPS_RUNTIME_DATABASE_URL", "RENT_OPS_DATABASE_URL"] as const) {
+  for (const key of ["DATABASE_URL", "RENT_OPS_RUNTIME_DATABASE_URL"] as const) {
     if (!postgresUrl(configured(env, key))) blockingReasons.push(`production_${key.toLowerCase()}_invalid`);
   }
   const hostDatabase = configured(env, "DATABASE_URL");
   const runtimeDatabase = configured(env, "RENT_OPS_RUNTIME_DATABASE_URL");
-  const importerDatabase = configured(env, "RENT_OPS_DATABASE_URL");
-  if (runtimeDatabase && importerDatabase && runtimeDatabase === importerDatabase) blockingReasons.push("production_runtime_importer_database_must_be_distinct");
-  if (hostDatabase && (hostDatabase === runtimeDatabase || hostDatabase === importerDatabase)) blockingReasons.push("production_host_and_rent_ops_databases_must_be_distinct");
+  for (const key of ["RENT_OPS_DATABASE_URL", "RENT_OPS_OBJECT_STORE_IMPORTER_TOKEN"]) {
+    if (env[key]) blockingReasons.push(`production_importer_credential_forbidden_${key.toLowerCase()}`);
+  }
+  if (hostDatabase && hostDatabase === runtimeDatabase) blockingReasons.push("production_host_and_rent_ops_databases_must_be_distinct");
   const emailProvider = configured(env, "RENT_OPS_TENANT_EMAIL_PROVIDER");
   const gmailDelivery = emailProvider === "gmail" || emailProvider === "replit-gmail";
   if (gmailDelivery) {
@@ -114,12 +112,11 @@ export function validateRentOpsProductionConfiguration(
   const identityKeys = [
     "RENT_OPS_OBJECT_STORE_RUNTIME_IDENTITY",
     "RENT_OPS_OBJECT_STORE_UPLOAD_IDENTITY",
-    "RENT_OPS_OBJECT_STORE_IMPORTER_IDENTITY",
   ] as const;
   for (const key of identityKeys) if (!safeDeploymentValue(configured(env, key), /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/)) blockingReasons.push(`production_${key.toLowerCase()}_invalid`);
   const identities = identityKeys.map((key) => configured(env, key)).filter((value): value is string => Boolean(value));
   if (new Set(identities).size !== identities.length) blockingReasons.push("production_object_store_identities_must_be_distinct");
-  for (const key of ["RENT_OPS_OBJECT_STORE_RUNTIME_TOKEN", "RENT_OPS_OBJECT_STORE_UPLOAD_TOKEN", "RENT_OPS_OBJECT_STORE_IMPORTER_TOKEN"] as const) {
+  for (const key of ["RENT_OPS_OBJECT_STORE_RUNTIME_TOKEN", "RENT_OPS_OBJECT_STORE_UPLOAD_TOKEN"] as const) {
     if (!configured(env, key)) blockingReasons.push(`production_${key.toLowerCase()}_required`);
   }
   const limiterMode = configured(env, "RENT_OPS_PUBLIC_LIMITER_MODE");
