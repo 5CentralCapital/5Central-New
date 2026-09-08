@@ -53,8 +53,10 @@ export function registerManagerOAuthRoutes(app: Express, options: Options) {
     const retry = options.limit(req.ip || req.socket.remoteAddress || "unknown");
     if (retry) { res.set("Retry-After", String(retry)).status(429).send("Too many sign-in attempts. Try again later."); return; }
     if (!configured()) { res.status(503).send("Manager Google sign-in is not configured."); return; }
+    let stage = "issuer_discovery";
     try {
       await ready();
+      stage = "session_save";
       const state = randomBytes(32).toString("base64url");
       const verifier = randomBytes(48).toString("base64url");
       req.session.rentOpsOAuthPending = { state, verifier, expiresAt: now() + 5 * 60 * 1000 };
@@ -64,7 +66,7 @@ export function registerManagerOAuthRoutes(app: Express, options: Options) {
         audience: config.resource, scope: `openid ${READ_SCOPE}`, connection: "google-oauth2", state,
         code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256" }).toString();
       res.redirect(302, url.toString());
-    } catch { res.status(503).send("Manager sign-in is temporarily unavailable."); }
+    } catch { console.error("manager_oauth_start_unavailable", { stage }); res.status(503).send("Manager sign-in is temporarily unavailable."); }
   });
   app.get("/api/rent-ops/auth/oauth/callback", async (req, res) => {
     res.set({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
