@@ -193,3 +193,20 @@ test("application fields without answer records and unavailable document binarie
   assert.equal(documentCandidate.artifact, undefined);
   assert.ok(documentCandidate.report.blockingReasons.includes("document_binaries_not_fully_archived"));
 });
+
+test("source-absent optional unit facts remain warnings without hiding invalid references", async () => {
+  const exported = await fixtureExport();
+  const unit = exported.envelope.payload.units![0] as Record<string, unknown>;
+  for (const key of ["MarketRent", "marketRent", "marketRentCents"]) delete unit[key];
+  const lease = exported.envelope.payload.leases![0] as Record<string, unknown>;
+  for (const key of ["UnitID", "unitId", "Unit"]) delete lease[key];
+  exported.manifest.archiveEnvelopeSha256 = sha256(canonicalJson(exported.envelope));
+  const absent = buildRentManagerMigrationArtifact(exported.envelope, exported.manifest);
+  assert.ok(absent.normalizedResult.exceptions.some((e) => e.code === "normalization_leases_lease_unit_not_returned" && e.severity === "warning"));
+  assert.ok(absent.normalizedResult.exceptions.some((e) => e.code === "normalization_units_market_rent_not_returned" && e.severity === "warning"));
+  assert.equal(absent.normalizedResult.snapshot.tenancies.length, exported.envelope.payload.leases!.length);
+  lease.UnitID = "present-invalid-unit"; lease.unitId = "present-invalid-unit";
+  exported.manifest.archiveEnvelopeSha256 = sha256(canonicalJson(exported.envelope));
+  const invalid = buildRentManagerMigrationArtifact(exported.envelope, exported.manifest);
+  assert.ok(invalid.report.blockingReasons.includes("mapping_normalization_leases_lease_unit_not_resolved"));
+});

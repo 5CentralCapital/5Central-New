@@ -1,3 +1,4 @@
+import { ALLOCATION_OVERLAY_COLLECTION, ALLOCATION_OVERLAY_FILE, verifyAllocationOverlay } from "../import/allocation-overlay";
 import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
@@ -150,6 +151,9 @@ export async function auditRestrictedExportArchive(rootInput: string): Promise<R
     for (const path of Array.from(entries.files.keys())) {
       const allowed = required.includes(path)
         || path === "restricted-supplement-provenance.json"
+        || path === "observation-boundary-provenance.json"
+        || path === "financial-metadata-provenance.json"
+        || path === ALLOCATION_OVERLAY_FILE
         || /^pages\/[A-Za-z0-9._-]+\.json$/.test(path)
         || /^binaries\/[a-f0-9]{64}\.bin$/.test(path);
       if (!allowed) addReason(reasons, "archive_unexpected_file");
@@ -174,6 +178,13 @@ export async function auditRestrictedExportArchive(rootInput: string): Promise<R
     if (manifest.archiveEnvelopeSha256 !== report.envelopeSha256) addReason(reasons, "archive_envelope_hash_mismatch");
     if (canonicalJson(coverageFile.value) !== canonicalJson(manifest.collections)) addReason(reasons, "archive_coverage_manifest_mismatch");
 
+    if (manifest.collections.some(row => row.name === ALLOCATION_OVERLAY_COLLECTION) && !entries.files.has(ALLOCATION_OVERLAY_FILE) && !entries.files.has("restricted-supplement-provenance.json")) addReason(reasons, "allocation_overlay_provenance_missing");
+    if (entries.files.has(ALLOCATION_OVERLAY_FILE)) {
+      const overlay = await readJson<unknown>(root, ALLOCATION_OVERLAY_FILE);
+      const verified = verifyAllocationOverlay(envelope, manifest, checkpointFile.bytes, coverageFile.bytes, overlay.value);
+      const overlayPage = await readJson<unknown>(root, "pages/charge-allocation-supplement.json");
+      if (canonicalJson(overlayPage.value) !== canonicalJson(verified.rows)) addReason(reasons, "allocation_overlay_page_mismatch");
+    }
     const payload = envelope.payload as Record<string, unknown>;
     for (const [key, expected] of Object.entries(manifest.counts ?? {})) {
       const value = payload[key];

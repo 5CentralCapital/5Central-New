@@ -35,3 +35,16 @@ test("notifier env factory fails closed on partial or non-HTTPS configuration", 
   assert.throws(() => createMagicLinkWebhookNotifierFromEnv({ RENT_OPS_MAGIC_LINK_WEBHOOK_URL: "https://notify.example.test", RENT_OPS_PUBLIC_APP_URL: "https://apply.example.test" }), /requires URL, secret/i);
   assert.throws(() => createMagicLinkWebhookNotifierFromEnv({ RENT_OPS_MAGIC_LINK_WEBHOOK_URL: "http://notify.example.test", RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET: "synthetic-secret-1234", RENT_OPS_PUBLIC_APP_URL: "https://apply.example.test" }), /HTTPS/i);
 });
+
+test("managed Gmail application email uses resume link and typed uncertain failure",async()=>{
+ const env={RENT_OPS_TENANT_EMAIL_PROVIDER:"replit-gmail",RENT_OPS_TENANT_EMAIL_ENABLED:"true",RENT_OPS_GMAIL_FROM:"sender@example.test",RENT_OPS_PUBLIC_APP_URL:"https://portal.example.test"};
+ let mime="";
+ const input={applicationId:"application:synthetic",email:"applicant@example.test",token:"a".repeat(43),expiresAt:"2026-09-08T00:00:00Z"};
+ const send=createMagicLinkWebhookNotifierFromEnv(env,async(_url,init)=>{mime=Buffer.from(JSON.parse(String(init?.body)).raw,"base64url").toString();return Response.json({id:"accepted"});})!;
+ await send(input);
+ const body=Buffer.from(mime.split("\r\n\r\n")[1].replace(/\r\n/g,""),"base64").toString();
+ assert.match(body,/\/apply#resume=/);assert.doesNotMatch(body,/\/tenant#activate=/);
+ const failed=createMagicLinkWebhookNotifierFromEnv(env,async()=>{throw new Error("synthetic timeout");})!;
+ await assert.rejects(failed(input),MagicLinkDeliveryError);
+ assert.equal(createMagicLinkWebhookNotifierFromEnv({...env,RENT_OPS_TENANT_EMAIL_ENABLED:"false"}),undefined);
+});

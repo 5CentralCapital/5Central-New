@@ -265,7 +265,7 @@ function requirement(value: RentOpsApplicationRequirementOccurrence): AdminAppli
 
 function answer(value: RentOpsApplicationCase["answers"][number]): AdminApplicationHistoryAnswerView {
   return presentationObject({
-    valueType: allowed(value.valueType, APPLICATION_HISTORY_ANSWER_VALUE_TYPES) ?? "text",
+    valueType: allowed(value.valueType, APPLICATION_HISTORY_ANSWER_VALUE_TYPES) ?? "unknown",
     valueKnowledge: allowed(value.valueKnowledge, APPLICATION_HISTORY_VALUE_KNOWLEDGE) ?? "unknown",
     fieldLinkKnowledge: linkKnowledge(value.fieldLinkKnowledge),
   });

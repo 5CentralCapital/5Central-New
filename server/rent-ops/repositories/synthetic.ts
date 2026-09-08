@@ -1,3 +1,4 @@
+import { isSourceAllocationReversal } from "../domain/invariants";
 import type {
   RentOpsActivityEvent,
   RentOpsApplicationRecord,
@@ -317,20 +318,22 @@ export class SyntheticRentOpsRepository implements RentOpsRepository {
 
   async savePaymentAllocation(allocation: RentOpsPaymentAllocation): Promise<RentOpsPaymentAllocation> {
     assertImportedAllocation(allocation);
-    assertCents(allocation.amountCents, "allocation amountCents");
-    if (allocation.amountCents <= 0) throw new RentOpsInvariantError("Allocation amount must be positive");
+    if (!isSourceAllocationReversal(allocation)) assertCents(allocation.amountCents, "allocation amountCents");
+    if (allocation.amountCents! <= 0 && !isSourceAllocationReversal(allocation)) throw new RentOpsInvariantError("Allocation amount must be positive");
     const existing = this.state.paymentAllocations.find((candidate) => candidate.id === allocation.id);
     if (existing) {
       if (JSON.stringify(existing) !== JSON.stringify(allocation)) throw new RentOpsInvariantError("Payment allocations are append-only; an existing id has a different payload");
       return clone(allocation);
     }
-    const existingPair = this.state.paymentAllocations.find((candidate) => candidate.paymentTransactionId === allocation.paymentTransactionId && candidate.chargeTransactionId === allocation.chargeTransactionId && candidate.id !== allocation.id);
+    const existingPair = !allocation.source && this.state.paymentAllocations.find((candidate) => !candidate.source && candidate.paymentTransactionId === allocation.paymentTransactionId && candidate.chargeTransactionId === allocation.chargeTransactionId && candidate.id !== allocation.id);
     if (existingPair) throw new RentOpsInvariantError("Payment-to-charge allocation already exists");
     return upsert(this.state.paymentAllocations, allocation);
   }
 
   async saveSecurityDeposit(deposit: RentOpsSecurityDeposit): Promise<RentOpsSecurityDeposit> {
-    assertPositiveCents(deposit.amountHeldCents, "deposit amountHeldCents");
+    if (deposit.amountHeldCents === null) {
+      if (deposit.source?.system !== "rent_manager" || !Number.isSafeInteger(deposit.sourceBalanceCents) || deposit.sourceBalanceCents! >= 0) throw new RentOpsInvariantError("Unknown held deposit requires signed source balance");
+    } else { assertCents(deposit.amountHeldCents, "deposit amountHeldCents"); if (deposit.amountHeldCents < 0) throw new RentOpsInvariantError("Held deposit cannot be negative"); }
     return upsert(this.state.securityDeposits, deposit);
   }
 

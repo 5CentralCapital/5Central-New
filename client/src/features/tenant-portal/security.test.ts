@@ -68,3 +68,25 @@ test('password change adopts the rotated session CSRF for the next write', async
   await client.logout();
   assert.deepEqual(tokens, [null, session.csrfToken, rotated]);
 });
+
+test('recovery preserves the server non-enumeration response and never sends email in a URL', async () => {
+  let requested = ''; let init: RequestInit | undefined;
+  const message = 'If an eligible account uses this email, a reset request has been made.';
+  const client = new TenantPortalClient((async (path: unknown, options?: RequestInit) => { requested = String(path); init = options; return json({ message }); }) as typeof fetch);
+  assert.deepEqual(await client.recovery('resident@example.test'), { message });
+  assert.equal(requested, '/api/tenant/auth/recovery');
+  assert.equal(init?.method, 'POST');
+  assert.deepEqual(JSON.parse(String(init?.body)), { email: 'resident@example.test' });
+  assert.equal(init?.cache, 'no-store');
+});
+
+test('setup or reset activation transmits a one-time token only in JSON and adopts the new session', async () => {
+  const calls: Array<{ path: string; init?: RequestInit }> = [];
+  const client = new TenantPortalClient((async (path: unknown, init?: RequestInit) => { calls.push({ path: String(path), init }); return calls.length === 1 ? json(session) : json({ ok: true }); }) as typeof fetch);
+  await client.activate(token, 'Synthetic-new-password');
+  await client.logout();
+  assert.equal(calls[0].path, '/api/tenant/auth/activate');
+  assert.deepEqual(JSON.parse(String(calls[0].init?.body)), { token, password: 'Synthetic-new-password' });
+  assert.equal(new Headers(calls[1].init?.headers).get('x-tenant-csrf'), session.csrfToken);
+  assert.ok(calls.every(call => !call.path.includes(token)));
+});

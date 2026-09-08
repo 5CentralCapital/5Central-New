@@ -62,7 +62,7 @@ export interface DashboardSummary {
   monthToMonthCount: number;
   applicationsSubmitted: number;
   applicationsMissingInformation: number;
-  securityDepositLiabilityCents: number;
+  securityDepositLiabilityCents: number | null;
   drilldowns: Record<string, { report: string; filters: ApiFilters }>;
 }
 
@@ -309,7 +309,8 @@ export interface AdminSecurityDepositView {
   personLinkKnowledge?: string;
   type?: string;
   typeKnowledge?: string;
-  amountHeldCents?: number;
+  amountHeldCents?: number | null;
+  sourceBalanceCents?: number | null;
   receivedOn?: string;
   receivedOnKnowledge?: string;
   dispositionStatus?: string;
@@ -737,10 +738,12 @@ export interface DepositLiabilityRow {
   tenancyId?: string;
   personId?: string;
   tenantName?: string;
-  securityHeldCents?: number;
-  refundablePetHeldCents?: number;
-  otherRefundableHeldCents?: number;
-  totalHeldCents?: number;
+  securityHeldCents?: number | null;
+  refundablePetHeldCents?: number | null;
+  otherRefundableHeldCents?: number | null;
+  totalHeldCents?: number | null;
+  sourceBalanceCents?: number | null;
+  unknownHeldCount?: number;
   dispositionStatus?: string;
   unknownReceiptCount?: number;
   hasUnknownReceiptDate?: boolean;

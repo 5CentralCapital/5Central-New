@@ -137,3 +137,14 @@ test("closing a case restores focus to the card trigger", () => {
   restoreApplicationCaseFocus(undefined);
   assert.equal(focused, 1);
 });
+
+test("unknown answer type decodes as restricted metadata and rejects raw values", () => {
+  const fixture = historyFixture({ answers: [{ valueType: "unknown", valueKnowledge: "restricted", fieldLinkKnowledge: "exact" }], unknownRestricted: { ...historyFixture().unknownRestricted, restrictedAnswerCount: 1 } });
+  const decoded = decodeRentOpsApplicationHistoryCase(fixture);
+  assert.equal(decoded.answers[0]?.valueType, "unknown");
+  assert.equal(decoded.answers[0]?.valueKnowledge, "restricted");
+  assert.equal(applicationHistorySectionState(decoded, "answers"), "full");
+  const polluted = structuredClone(fixture);
+  Object.assign(polluted.answers[0]!, { value: "RESTRICTED_CANARY", InputFieldType: "None" });
+  assert.throws(() => decodeRentOpsApplicationHistoryCase(polluted), /invalid response/);
+});

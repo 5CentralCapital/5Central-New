@@ -90,10 +90,17 @@ export function validateRentOpsProductionConfiguration(
   const importerDatabase = configured(env, "RENT_OPS_DATABASE_URL");
   if (runtimeDatabase && importerDatabase && runtimeDatabase === importerDatabase) blockingReasons.push("production_runtime_importer_database_must_be_distinct");
   if (hostDatabase && (hostDatabase === runtimeDatabase || hostDatabase === importerDatabase)) blockingReasons.push("production_host_and_rent_ops_databases_must_be_distinct");
-  for (const key of ["SESSION_SECRET", "RENT_OPS_SESSION_SECRET", "RENT_OPS_ADMIN_EMAIL", "RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET"] as const) {
+  const emailProvider = configured(env, "RENT_OPS_TENANT_EMAIL_PROVIDER");
+  const gmailDelivery = emailProvider === "gmail" || emailProvider === "replit-gmail";
+  if (gmailDelivery) {
+    if (configured(env, "RENT_OPS_TENANT_EMAIL_ENABLED") !== "true") blockingReasons.push("production_email_delivery_disabled");
+    if (!safeDeploymentValue(configured(env, "RENT_OPS_GMAIL_FROM"), /^[^\s@]+@[^\s@]+\.[^\s@]+$/)) blockingReasons.push("production_gmail_sender_required");
+    if (emailProvider === "gmail") for (const key of ["RENT_OPS_GMAIL_CLIENT_ID", "RENT_OPS_GMAIL_CLIENT_SECRET", "RENT_OPS_GMAIL_REFRESH_TOKEN"]) if (!configured(env,key)) blockingReasons.push(`production_${key.toLowerCase()}_required`);
+  }
+  for (const key of ["SESSION_SECRET", "RENT_OPS_SESSION_SECRET", "RENT_OPS_ADMIN_EMAIL", ...(!gmailDelivery ? ["RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET"] : [])]) {
     if (!configured(env, key)) blockingReasons.push(`production_${key.toLowerCase()}_required`);
   }
-  for (const key of ["RENT_OPS_MAGIC_LINK_WEBHOOK_URL", "RENT_OPS_PUBLIC_APP_URL"] as const) {
+  for (const key of ["RENT_OPS_PUBLIC_APP_URL", ...(!gmailDelivery ? ["RENT_OPS_MAGIC_LINK_WEBHOOK_URL"] : [])]) {
     if (!safeDeploymentValue(configured(env, key), /^https:\/\/[^\s]+$/)) blockingReasons.push(`production_${key.toLowerCase()}_invalid`);
   }
   if (configured(env, "RENT_OPS_OBJECT_STORE_BACKEND") !== "private-versioned") blockingReasons.push("production_private_object_store_required");

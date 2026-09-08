@@ -1,3 +1,6 @@
+import { ReplitConnectors } from "@replit/connectors-sdk";
+import { createHash } from "node:crypto";
+import { createGmailTenantNotifier } from "../tenant-portal/gmail-delivery";
 export interface MagicLinkDeliveryInput {
   applicationId: string;
   email: string;
@@ -87,6 +90,17 @@ export function createMagicLinkWebhookNotifierFromEnv(
   env: Record<string, string | undefined> = process.env,
   fetchImpl?: typeof fetch,
 ): MagicLinkNotifier | undefined {
+  const provider = env.RENT_OPS_TENANT_EMAIL_PROVIDER;
+  if (provider === "gmail" || provider === "replit-gmail") {
+    if (env.RENT_OPS_TENANT_EMAIL_ENABLED !== "true") return undefined;
+    const managed = provider === "replit-gmail";
+    const send = createGmailTenantNotifier(env, fetchImpl ?? (managed ? new ReplitConnectors().createProxyFetch("gmail") : fetch), managed ? async () => "managed-proxy" : undefined, managed);
+    return async input => {
+      try { await send({ ...input, accountId: input.applicationId,
+        issuanceId: createHash("sha256").update(input.applicationId + ":" + input.token).digest("hex"), purpose: "application_resume" }); }
+      catch { throw new MagicLinkDeliveryError("Application email could not be confirmed"); }
+    };
+  }
   const webhookUrl = env.RENT_OPS_MAGIC_LINK_WEBHOOK_URL;
   const webhookSecret = env.RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET;
   const publicAppUrl = env.RENT_OPS_PUBLIC_APP_URL;

@@ -402,7 +402,8 @@ function normalizeUnit(record: Raw, properties: Map<string, Raw>, unitTypes: Map
   const marketRentRows = Array.isArray(marketRentValue)
     ? marketRentValue.filter((candidate): candidate is Raw => Boolean(candidate) && typeof candidate === "object" && !Array.isArray(candidate))
     : marketRentValue && typeof marketRentValue === "object" ? [marketRentValue as Raw] : [];
-  if (marketRentRows.length > 0) {
+  if (marketRentValue !== null && typeof marketRentValue === "object") {
+    // Empty embeds also mean unknown, never a numeric zero.
     // `normalizeRmRecord` used to copy an embedded row into marketRent before
     // this interval selector ran.  Keep an independently supplied scalar
     // field, but clear object/array-derived aliases so excluded rows cannot
@@ -541,6 +542,10 @@ function exactTenantPartitionStatus(
       rawValue: partition,
     }))
     .filter((status): status is "future" | "current" | "past" | "notice" | "cancelled" => status === "future" || status === "current" || status === "past" || status === "notice" || status === "cancelled");
+  const directTenantStatus = tenant && financialSemanticCrosswalkValue(crosswalk, {
+    artifactSha256, sourceCollection: "tenants", sourceField: "Status", semanticKind: "tenancy_status", rawValue: value(tenant, "Status"),
+  });
+  if (directTenantStatus === "current" || directTenantStatus === "future" || directTenantStatus === "past" || directTenantStatus === "notice" || directTenantStatus === "cancelled") statuses.push(directTenantStatus);
   const unique = new Set(statuses);
   return unique.size === 1 ? statuses[0] : undefined;
 }
@@ -595,7 +600,7 @@ function normalizeLease(
   }
   for (const [field, index, message] of [["propertyId", properties, "lease_property_not_resolved"], ["unitId", units, "lease_unit_not_resolved"], ["tenantId", tenants, "lease_tenant_not_resolved"]] as const) {
     const linked = text(normalized, field);
-    if (!linked || !index.has(linked)) addException(exceptions, "missing_relationship", "leases", normalized, message);
+    if (!linked || !index.has(linked)) addException(exceptions, "missing_relationship", "leases", normalized, field === "unitId" && !linked ? "lease_unit_not_returned" : message);
   }
   return normalized;
 }
@@ -1057,7 +1062,7 @@ function answerFieldPath(record: Raw): string | undefined {
 }
 
 function answerValue(record: Raw): unknown {
-  return value(record, "answer", "Answer", "response", "Response", "responseValue", "ResponseValue", "value", "Value", "text", "Text");
+  return value(record, "answer", "Answer", "ApplicationValue", "response", "Response", "responseValue", "ResponseValue", "value", "Value", "text", "Text");
 }
 
 function canonicalAnswerEvidence(valueToCanonicalize: unknown): unknown {
@@ -1513,8 +1518,31 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
     return chargesByReference.get(unnamespaced);
   };
   const payments = (payload.payments ?? []).map((record) => {
-    const normalized = normalizeLedger(record as Raw, "payments", tenantsIndex, leasesIndex, exceptions);
     const allocationValue = value(record as Raw, "Allocations", "allocations");
+    // An unallocated RM prepayment carries its own explicit property/unit.
+    // Preserve its transaction date; neither the account location nor export
+    // date proves this money was received for the current reporting period.
+    const paymentRecord = structuredClone(record) as Raw;
+    if (!Array.isArray(allocationValue) || allocationValue.length === 0) {
+      const prepayProperty = text(paymentRecord, "PrepayPropertyID", "PrepayPropertyId");
+      const prepayUnit = text(paymentRecord, "PrepayUnitID", "PrepayUnitId");
+      if (!text(paymentRecord, "propertyId", "PropertyID", "PropertyId") && prepayProperty) paymentRecord.propertyId = prepayProperty;
+      if (!text(paymentRecord, "unitId", "UnitID", "UnitId") && prepayUnit) paymentRecord.unitId = prepayUnit;
+    }
+    const normalized = normalizeLedger(paymentRecord, "payments", tenantsIndex, leasesIndex, exceptions);
+    const paymentReversal = embeddedRecord(paymentRecord, "PaymentReversal");
+    if (paymentReversal) {
+      const parent = text(paymentRecord, "PaymentID", "PaymentId");
+      const reversalParent = text(paymentReversal, "PaymentID", "PaymentId");
+      if (parent && reversalParent === parent) {
+        for (const field of ["ReversalType", "ReversalDate", "ReversalReason"]) {
+          const returned = value(paymentReversal, field);
+          if (normalized[field] === undefined || normalized[field] === null) normalized[field] = returned;
+          else if (returned !== undefined && returned !== null && normalized[field] !== returned) addException(exceptions, "missing_relationship", "payments", normalized, "payment_reversal_fields_conflict", "ambiguous");
+        }
+      } else addException(exceptions, "missing_relationship", "payments", normalized, "payment_reversal_parent_not_exact", "unresolved");
+    }
+
     const allocations = Array.isArray(allocationValue)
       ? (allocationValue as RentManagerRawRecord[]).map((allocation) => structuredClone(allocation) as Raw)
       : [];
@@ -1533,7 +1561,28 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
     const hasUnresolvedChargeReference = references.some((reference, index) => !reference || !referencedCharges[index]);
     const hasChargeWithoutProperty = referencedCharges.some((charge) => !charge || !text(charge, "propertyId", "PropertyID", "PropertyId"));
     if (referencedPropertyIds.size > 1) {
-      addException(exceptions, "missing_relationship", "payments", normalized, "payment_allocated_charges_span_multiple_properties", "ambiguous");
+      const exactCents = (raw: unknown): number | undefined => {
+        const text = String(raw ?? "").trim();
+        if (!/^-?\d+(?:\.\d{1,2})?$/.test(text)) return undefined;
+        const negative = text.startsWith("-"); const [whole,fraction=""] = text.replace(/^-/,"").split(".");
+        const cents = Number(whole)*100+Number((fraction+"00").slice(0,2));
+        return Number.isSafeInteger(cents) ? (negative?-cents:cents) : undefined;
+      };
+      const account = text(normalized,"tenantId");
+      const applied = allocationRows.filter(row => text(row,"AllocationType") !== "EntityTransfer");
+      const receiptCents = exactCents(value(normalized,"amount","Amount"));
+      const appliedCents = applied.map(row => exactCents(value(row,"Amount","amount")));
+      const exactScope = !hasUnresolvedChargeReference && !hasChargeWithoutProperty && !!account && allocationRows.every((allocation,index) => {
+        const charge = referencedCharges[index]!;
+        return text(charge,"tenantId") === account
+          && (!text(allocation,"PropertyID") || text(allocation,"PropertyID") === text(charge,"propertyId"))
+          && (!text(allocation,"UnitID") || text(allocation,"UnitID") === text(charge,"unitId"));
+      });
+      if (exactScope && receiptCents !== undefined && receiptCents > 0 && appliedCents.every(amount=>amount!==undefined) && appliedCents.reduce<number>((sum,amount)=>sum+(amount??0),0) === receiptCents) {
+        // One account receipt, exact applications across properties. Neither
+        // the prepay property nor the current lease owns the whole receipt.
+        normalized.allocationMode = "multi_property";
+      } else addException(exceptions, "missing_relationship", "payments", normalized, "payment_allocated_charges_span_multiple_properties", "ambiguous");
     } else if (!directPropertyId) {
       if (allocationRows.length === 0) {
         addException(exceptions, "missing_relationship", "payments", normalized, "payment_property_not_resolved_unallocated", "unresolved");
@@ -1552,10 +1601,13 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
   const prospects = (payload.prospects ?? []).map((record) => augment(record, ["ProspectID"], { contactId: ["ContactID"], propertyId: ["PropertyID"], unitId: ["UnitID"] }, undefined, "prospect"));
   const applications = (payload.applications ?? []).map((record) => {
     const normalized = augment(record, ["ProspectApplicationID", "ApplicationID"], { contactId: ["ContactID", "ContactId"], webUserId: ["WebUserID", "WebUserId", "UserID", "UserId"], webUserAccountId: ["WebUserAccountID", "WebUserAccountId", "AccountID", "AccountId", "WebAccountID", "WebAccountId"], prospectId: ["ProspectID", "ProspectId"], firstName: ["FirstName", "first_name"], lastName: ["LastName", "last_name"], email: ["Email", "EmailAddress"], status: ["Status", "ApplicationStatus"], submittedOn: ["SubmittedDate", "ApplicationDate", "ApplicationSubmissionDate"], createdAt: ["CreatedAt", "CreatedDate", "CreateDate"], updatedAt: ["UpdatedAt", "UpdateDate", "ModifiedDate"] }, undefined, "application");
+    // RM -1 explicitly means no linked web account; AccountID is not a substitute.
+    const unknownWebAccount = text(record, "WebUserAccountID", "WebUserAccountId") === "-1";
+    if (unknownWebAccount) normalized.webUserAccountId = undefined;
     const embeddedWebUser = embeddedRecord(record, "WebUser", "User");
     const embeddedWebAccount = embeddedRecord(record, "WebUserAccount", "WebAccount", "Account");
     normalized.webUserId ??= embeddedWebUser ? text(embeddedWebUser, "WebUserID", "WebUserId", "UserID", "UserId", "ID", "Id") : undefined;
-    normalized.webUserAccountId ??= embeddedWebAccount ? text(embeddedWebAccount, "WebUserAccountID", "WebUserAccountId", "AccountID", "AccountId", "WebAccountID", "WebAccountId", "ID", "Id") : undefined;
+    if (!unknownWebAccount) normalized.webUserAccountId ??= embeddedWebAccount ? text(embeddedWebAccount, "WebUserAccountID", "WebUserAccountId", "AccountID", "AccountId", "WebAccountID", "WebAccountId", "ID", "Id") : undefined;
     const prospectId = text(normalized, "prospectId");
     const prospect = prospectId ? prospects.find((candidate) => id(candidate, ["ProspectID"]) === prospectId) : undefined;
     if (prospect) {
@@ -1572,9 +1624,9 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
       normalized.lastName ??= value(contact, "LastName");
     } else if (contactId) addException(exceptions, "missing_relationship", "prospectApplications", normalized, "application_contact_not_resolved");
     const webUserId = text(normalized, "WebUserID", "webUserId");
-    const webUserAccountId = text(normalized, "WebUserAccountID", "webUserAccountId");
+    const webUserAccountId = unknownWebAccount ? undefined : text(normalized, "WebUserAccountID", "webUserAccountId");
     const webUser = webUserId ? (payload.webUsers ?? []).find((user) => id(user as Raw, ["WebUserID", "WebUserId", "UserID", "UserId"]) === webUserId) : undefined;
-    const webUserAccount = (payload.webUserAccounts ?? []).find((account) => {
+    const webUserAccount = unknownWebAccount ? undefined : (payload.webUserAccounts ?? []).find((account) => {
       const row = account as Raw;
       if (webUserAccountId && id(row, ["WebUserAccountID", "WebUserAccountId", "AccountID", "AccountId", "WebAccountID", "WebAccountId"]) === webUserAccountId) return true;
       return Boolean(webUserId && id(row, ["WebUserID", "WebUserId", "UserID", "UserId"]) === webUserId);
@@ -1643,22 +1695,25 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
   // plus the separately joined renewal rows, never from lookup definitions.
   const leaseTerms = [...contractTerms, ...renewals];
   const normalizeAllocation = (record: RentManagerRawRecord): Raw => {
-    // An allocation date is its own source fact. Payment/transaction dates
-    // are deliberately not aliases: substituting them changes period
-    // reporting while appearing source-confirmed.
-    const normalized = augment(record, ["PaymentAllocationID", "AllocationID", "PaymentAllocationId"], { paymentId: ["PaymentID", "PaymentSourceID", "PaymentTransactionID", "PaymentSourceTransactionID"], chargeId: ["ChargeID", "ChargeSourceID", "ChargeTransactionID", "ChargeSourceTransactionID"], amount: ["Amount", "AllocationAmount"], allocatedOn: ["AllocatedOn", "AllocationDate", "AllocatedOnDate"] }, "allocation", "payment_allocation");
+    // TransactionDate belongs to this exact Allocation row, not its parent
+    // payment. RM uses it for both direct and reverse allocation facts.
+    const normalized = augment(record, ["PaymentAllocationID", "AllocationID", "PaymentAllocationId"], { paymentId: ["PaymentID", "PaymentSourceID", "PaymentTransactionID", "PaymentSourceTransactionID"], chargeId: ["ChargeID", "ChargeSourceID", "ChargeTransactionID", "ChargeSourceTransactionID"], amount: ["Amount", "AllocationAmount"], allocatedOn: ["AllocatedOn", "AllocationDate", "AllocatedOnDate", "TransactionDate"] }, "allocation", "payment_allocation");
     normalized.paymentId ??= embeddedId(record, ["Payment", "PaymentTransaction"], ["PaymentID", "PaymentId", "ID", "Id"]);
+    if (text(record, "AllocationType") === "CreditAllocation") normalized.creditId = text(record, "AppliedCreditID");
     normalized.chargeId ??= embeddedId(record, ["Charge", "ChargeTransaction"], ["ChargeID", "ChargeId", "ID", "Id"]);
     const allocationId = text(normalized, "PaymentAllocationID", "AllocationID", "sourceId")?.replace(/^(?:payment_)?allocation:/, "");
     if (allocationId) normalized.sourceId = `payment_allocation:${allocationId}`;
     const payment = text(normalized, "paymentId");
     const charge = text(normalized, "chargeId");
+    const credit = text(normalized, "creditId");
+    if (credit) normalized.creditId = `credit:${credit.replace(/^credit:/, "")}`;
     if (payment) normalized.paymentId = `payment:${payment.replace(/^payment:/, "")}`;
     if (charge) normalized.chargeId = `charge:${charge.replace(/^charge:/, "")}`;
     return normalized;
   };
   const normalizedAllocationRows = [
     ...(payload.allocations ?? []),
+    ...charges.flatMap(charge => Array.isArray(charge.Allocations) ? charge.Allocations as RentManagerRawRecord[] : []),
     ...payments.flatMap((payment) => {
       const row = payment as Raw;
       const nested = row.allocations ?? row.Allocations;

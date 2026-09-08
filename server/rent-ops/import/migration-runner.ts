@@ -1,3 +1,6 @@
+import { ALLOCATION_OVERLAY_FILE, verifyAllocationOverlay } from "./allocation-overlay";
+import { FINANCIAL_METADATA_PROVENANCE_FILE, verifyFinancialMetadata } from "./financial-metadata";
+import { OBSERVATION_PROVENANCE_FILE, verifyObservationBoundary } from "./observation-boundary";
 import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, parse, relative, resolve, sep } from "node:path";
@@ -10,7 +13,7 @@ import { ledgerBalanceSign } from "../domain/invariants";
 import { projectFinancialSchedules, type FinancialScheduleProjection } from "../domain/financial-projection";
 import { assertMigrationArtifactIntegrity, buildRentManagerMigrationArtifact, type MigrationArtifactReport } from "./migration-artifact";
 import { approvedArchiveEnvelopeSha256, PersistenceImporter, type PersistenceImporterOptions, type PersistenceImportSummary, type RestrictedDocumentTransferOrphanEvidence, type RestrictedVerifiedDocumentTransfer, type VerifiedSupplementReceiptBinding } from "./persistence-importer";
-import { createRestrictedImportObservationFromChunks, type RestrictedParitySourceChunk } from "./restricted-parity";
+import { createRestrictedImportObservationFromChunks, RESTRICTED_PARITY_STREAM_LIMITS, type RestrictedParityChunkRow, type RestrictedParitySourceChunk } from "./restricted-parity";
 import { auditPersistedRestrictedParity, createRestrictedParityPersistenceWriter, type RestrictedParityPersistenceInput } from "./restricted-parity-persistence";
 import { createRestrictedSourcePayloadWriter, restrictedSourceBinaryId, restrictedSourcePayloadBindings } from "./restricted-source-payloads";
 import type { DatabaseAuditExpected, DatabaseAuditExpectedFinancialReport, DatabaseAuditExpectedFinancialReportProperty, DatabaseAuditExpectedProperty, DatabaseAuditRestrictedBinaryDescriptor, DatabaseAuditRestrictedVersion } from "./database-audit";
@@ -18,6 +21,16 @@ import type { VerifiedDocumentArchiveInput } from "../services/service";
 import type { PrivateObjectStorePrivilegeProbe } from "../storage/types";
 import { probePrivateObjectStorePrivileges } from "../storage/object-store";
 import { RENT_OPS_REQUIRED_TABLES, RENT_OPS_SCHEMA_VERSION, rentOpsMigrationChecksumForVersion } from "../persistence";
+
+/** Keep physical page receipts unchanged while feeding bounded, ordered
+ * records to the parity scanner. RM page sizes need not equal stream sizes. */
+export function partitionRestrictedSourceRows(collectionName: string, path: string, rows: readonly RestrictedParityChunkRow[]): RestrictedParitySourceChunk[] {
+  const chunks: RestrictedParitySourceChunk[] = [];
+  for (let offset = 0; offset < Math.max(rows.length, 1); offset += RESTRICTED_PARITY_STREAM_LIMITS.maxChunkRows) {
+    chunks.push({ collectionName, path, present: true, rows: rows.slice(offset, offset + RESTRICTED_PARITY_STREAM_LIMITS.maxChunkRows) });
+  }
+  return chunks;
+}
 
 export interface RestrictedMigrationArchive {
   envelope: ExportEnvelope;
@@ -596,7 +609,7 @@ async function readRestrictedArchiveParitySource(
           if (state.hashes[stateRowIndex] !== rowHash) throw new RestrictedMigrationArchiveError(["restricted_archive_page_checkpoint_mismatch"]);
           stateRowIndex += 1;
         }
-        sourceChunks.push({ path: collection.path, present: true, rows });
+        sourceChunks.push(...partitionRestrictedSourceRows(collection.name, collection.path, rows));
         pageDigests.push({ pathSha256: sha256(pagePath), sha256: pageFile.sha256 });
       }
       if (stateRowIndex !== state.received || stateRowIndex !== collection.received || stateRowIndex !== state.hashes.length) {
@@ -605,7 +618,7 @@ async function readRestrictedArchiveParitySource(
     } else {
       const present = state?.status === "complete" || collection.status === "empty";
       if (state && (!Array.isArray(state.hashes) || state.received !== 0 || state.hashes.length !== 0)) throw new RestrictedMigrationArchiveError(["restricted_archive_page_checkpoint_mismatch"]);
-      sourceChunks.push({ path: collection.path, present, rows: [] });
+      sourceChunks.push({ collectionName: collection.name, path: collection.path, present, rows: [] });
     }
     const knownAbsent = collection.status === "not_available" && state?.status === "not_available";
     if (state && collection.status !== "empty" && !knownAbsent && state.status !== "complete") throw new RestrictedMigrationArchiveError(["restricted_archive_collection_incomplete"]);
@@ -649,6 +662,19 @@ function restrictedDocumentSourceId(record: Record<string, unknown>): string | u
   return restrictedRecordText(record, "sourceId", "id", "ID", "DocumentID");
 }
 
+/** Resolve only source names and byte-proven PDF MIME when the archive lacks a MIME label. */
+export function restrictedDocumentTransferMetadata(document: Pick<RentOpsDocument, "fileName" | "mimeType">, metadata: Record<string, unknown> | undefined, binary: Pick<RestrictedVerifiedArchiveBinary, "bytes" | "contentType">): { fileName?: string; mimeType?: string } {
+  const fileName = (typeof document.fileName === "string" && document.fileName.trim() ? document.fileName.trim() : undefined)
+    ?? (metadata ? restrictedRecordText(metadata, "fileName", "name", "FileName", "Name") : undefined);
+  const declared = (typeof document.mimeType === "string" && document.mimeType.trim() ? document.mimeType.trim() : undefined)
+    ?? binary.contentType
+    ?? (metadata ? restrictedRecordText(metadata, "mimeType", "contentType", "ContentType") : undefined);
+  const isPdf = Buffer.from(binary.bytes).subarray(0, 5).toString("ascii") === "%PDF-";
+  if ((isPdf && declared && declared !== "application/pdf" && declared !== "application/octet-stream")
+    || (declared === "application/pdf" && !isPdf)) throw new RestrictedMigrationArchiveError(["restricted_document_mime_bytes_mismatch"]);
+  return { fileName, mimeType: declared ?? (isPdf ? "application/pdf" : undefined) };
+}
+
 function restrictedDocumentBinaryInputs(
   archive: RestrictedMigrationArchive,
   importRunId: string,
@@ -675,11 +701,7 @@ function restrictedDocumentBinaryInputs(
     if (matches.length !== 1) throw new RestrictedMigrationArchiveError([matches.length === 0 ? "restricted_document_binary_target_missing" : "restricted_document_binary_target_ambiguous"]);
     const document = matches[0]!;
     const metadata = documentMetadata.get(binary.sourceId);
-    const fileName = (typeof document.fileName === "string" && document.fileName.trim() ? document.fileName.trim() : undefined)
-      ?? (metadata ? restrictedRecordText(metadata, "fileName", "name", "FileName") : undefined);
-    const mimeType = (typeof document.mimeType === "string" && document.mimeType.trim() ? document.mimeType.trim() : undefined)
-      ?? binary.contentType
-      ?? (metadata ? restrictedRecordText(metadata, "mimeType", "contentType", "ContentType") : undefined);
+    const { fileName, mimeType } = restrictedDocumentTransferMetadata(document, metadata, binary);
     if (!fileName || !mimeType || !document.id) throw new RestrictedMigrationArchiveError(["restricted_document_metadata_invalid"]);
     const bindingId = restrictedSourceBinaryId("rent_manager", binary.sourceCollection, binary.sourceId, binary.sha256);
     inputs.push({
@@ -856,7 +878,7 @@ function perPropertyControls(snapshot: RentOpsSnapshot, asOfDate: string): Datab
       paymentsCents: sumAmounts(ledger.filter((transaction) => transaction.kind === "payment"), (transaction) => transaction.amountCents),
       creditsCents: sumAmounts(ledger.filter((transaction) => transaction.kind === "credit"), (transaction) => transaction.amountCents),
       allocationsCents: sumAmounts(allocations, (allocation) => allocation.amountCents),
-      depositsCents: sumAmounts(snapshot.securityDeposits.filter((deposit) => deposit.propertyId === property.id), (deposit) => deposit.amountHeldCents),
+      depositsCents: sumAmounts(snapshot.securityDeposits.filter((deposit) => deposit.propertyId === property.id), (deposit) => deposit.sourceBalanceCents ?? deposit.amountHeldCents),
       activeHapContracts: propertyContracts.length,
       hapAgencyCents: sumAmounts(propertyContracts, (contract) => contract.agencyObligationCents),
       hapTenantCents: sumAmounts(propertyContracts, (contract) => contract.tenantObligationCents),
@@ -978,11 +1000,11 @@ function expectedFidelityControls(snapshot: RentOpsSnapshot, sourceRecords: read
     deposit_distinct_target_identity_count: distinctSourceCount(deposits.flatMap((row) => row.source ? [{ ...row.source, entityType: "deposit" as const, id: row.id, importedAt: "", targetId: row.id }] : [])),
     deposit_distinct_source_identity_count: distinctSourceCount(depositSources),
     deposit_unknown_unit_count: deposits.filter((row) => row.unitId === undefined).length,
-    deposit_unknown_unit_amount_cents: sumAmounts(deposits.filter((row) => row.unitId === undefined), (row) => row.amountHeldCents),
+    deposit_unknown_unit_amount_cents: sumAmounts(deposits.filter((row) => row.unitId === undefined), (row) => row.sourceBalanceCents ?? row.amountHeldCents),
     deposit_unknown_receipt_date_count: deposits.filter((row) => row.receivedOn === undefined || row.receivedOnKnowledge === "unknown").length,
-    deposit_unknown_receipt_amount_cents: sumAmounts(deposits.filter((row) => row.receivedOn === undefined || row.receivedOnKnowledge === "unknown"), (row) => row.amountHeldCents),
+    deposit_unknown_receipt_amount_cents: sumAmounts(deposits.filter((row) => row.receivedOn === undefined || row.receivedOnKnowledge === "unknown"), (row) => row.sourceBalanceCents ?? row.amountHeldCents),
     deposit_known_receipt_date_count: deposits.filter((row) => row.receivedOn !== undefined && row.receivedOnKnowledge === "source").length,
-    deposit_known_receipt_amount_cents: sumAmounts(deposits.filter((row) => row.receivedOn !== undefined && row.receivedOnKnowledge === "source"), (row) => row.amountHeldCents),
+    deposit_known_receipt_amount_cents: sumAmounts(deposits.filter((row) => row.receivedOn !== undefined && row.receivedOnKnowledge === "source"), (row) => row.sourceBalanceCents ?? row.amountHeldCents),
     hap_contract_row_count: snapshot.subsidyContracts.length,
     hap_contract_source_row_count: contractSources.length,
     hap_contract_distinct_target_identity_count: distinctSourceCount(snapshot.subsidyContracts.flatMap((row) => row.source ? [{ ...row.source, entityType: "subsidy" as const, id: row.id, importedAt: "", targetId: row.id }] : [])),
@@ -1185,7 +1207,7 @@ function buildDatabaseAuditExpected(
     netLedgerCents: ledgerNet,
     netLedgerBalanceCents: ledgerNet,
     allocationsCents: sumAmounts(snapshot.paymentAllocations, (row) => row.amountCents),
-    depositsCents: sumAmounts(snapshot.securityDeposits, (row) => row.amountHeldCents),
+    depositsCents: sumAmounts(snapshot.securityDeposits, (row) => row.sourceBalanceCents ?? row.amountHeldCents),
     hapAgencyObligationCents: sumAmounts(snapshot.subsidyContracts, (row) => row.agencyObligationCents),
     hapTenantObligationCents: sumAmounts(snapshot.subsidyContracts, (row) => row.tenantObligationCents),
     hapSubsidyTenantCents: sumAmounts(childTenantRows.filter((row) => row.amountKnowledge === "known"), (row) => row.amountCents),
@@ -1257,6 +1279,43 @@ export async function readRestrictedMigrationArchive(
     readRestrictedFileFromDescriptor(canonicalRoot, checkpointPath, "restricted_archive_checkpoint_unreadable"),
     readRestrictedFileFromDescriptor(canonicalRoot, coveragePath, "restricted_archive_coverage_unreadable"),
   ]);
+  let observationProvenanceSha256: string | undefined;
+  let financialProvenanceSha256: string | undefined;
+  let observationFile: { bytes: Uint8Array; sha256: string } | undefined;
+  try {
+    const path = resolve(canonicalRoot, OBSERVATION_PROVENANCE_FILE);
+    const stats = await lstat(path);
+    observationFile = await readRestrictedFileFromDescriptor(canonicalRoot, path, "observation_boundary_provenance_unreadable", stats);
+    observationProvenanceSha256 = observationFile.sha256;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new RestrictedMigrationArchiveError(["observation_boundary_provenance_invalid"]);
+  }
+  let overlayParent = { envelope, manifest, checkpointBytes: checkpointFile.bytes };
+  let allocationProvenanceSha256: string | undefined;
+  try {
+    const path = resolve(canonicalRoot, ALLOCATION_OVERLAY_FILE);
+    const stats = await lstat(path);
+    const file = await readRestrictedFileFromDescriptor(canonicalRoot, path, "allocation_overlay_provenance_unreadable", stats);
+    overlayParent = verifyAllocationOverlay(envelope, manifest, checkpointFile.bytes, coverageFile.bytes, parseRestrictedJson<unknown>(Buffer.from(file.bytes).toString("utf8"), "allocation_overlay_provenance_invalid"));
+    allocationProvenanceSha256 = file.sha256;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new RestrictedMigrationArchiveError(["allocation_overlay_provenance_invalid"]);
+  }
+  let observationParent = { envelope: overlayParent.envelope, manifest: overlayParent.manifest };
+  try {
+    const path = resolve(canonicalRoot, FINANCIAL_METADATA_PROVENANCE_FILE);
+    const stats = await lstat(path);
+    const file = await readRestrictedFileFromDescriptor(canonicalRoot, path, "financial_metadata_provenance_unreadable", stats);
+    if (!observationFile) throw new Error("financial_metadata_observation_provenance_missing");
+    observationParent = verifyFinancialMetadata(overlayParent.envelope, overlayParent.manifest, overlayParent.checkpointBytes, observationFile.bytes, parseRestrictedJson<unknown>(Buffer.from(file.bytes).toString("utf8"), "financial_metadata_provenance_invalid"));
+    financialProvenanceSha256 = file.sha256;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new RestrictedMigrationArchiveError(["financial_metadata_provenance_invalid"]);
+  }
+  if (observationFile) {
+    try { verifyObservationBoundary(observationParent.envelope, observationParent.manifest, overlayParent.checkpointBytes, parseRestrictedJson<unknown>(Buffer.from(observationFile.bytes).toString("utf8"), "observation_boundary_provenance_invalid")); }
+    catch { throw new RestrictedMigrationArchiveError(["observation_boundary_provenance_invalid"]); }
+  }
   const parity = await readRestrictedArchiveParitySource(canonicalRoot, envelope, manifest, checkpointFile, coverageFile);
   const binaries = await verifyRestrictedArchiveBinaries(canonicalRoot, envelope);
   const independentAudit = await auditRestrictedExportArchive(canonicalRoot);
@@ -1276,6 +1335,9 @@ export async function readRestrictedMigrationArchive(
     { kind: "coverage", sha256: coverageFile.sha256 },
     { kind: "pages", sha256: parity.pageFileSetSha256 },
     { kind: "binaries", sha256: binaries.descriptorDigestSha256 },
+    ...(observationProvenanceSha256 ? [{ kind: "observation_provenance", sha256: observationProvenanceSha256 }] : []),
+    ...(financialProvenanceSha256 ? [{ kind: "financial_provenance", sha256: financialProvenanceSha256 }] : []),
+    ...(allocationProvenanceSha256 ? [{ kind: "allocation_overlay_provenance", sha256: allocationProvenanceSha256 }] : []),
   ]));
   return {
     envelope,

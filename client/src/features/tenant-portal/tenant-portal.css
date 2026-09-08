@@ -81,3 +81,6 @@
 @keyframes tp-spin { to { transform: rotate(360deg); } }
 @media (max-width: 760px) { .tp-main { padding: 24px 16px 50px; } .tp-welcome { grid-template-columns: 1fr; gap: 28px; } .tp-welcome-copy { padding: 12px 8px; } .tp-welcome-copy > svg { display: none; } .tp-welcome-copy h1 { font-size: 36px; } .tp-login { max-width: none; padding: 26px; } .tp-overview, .tp-detail-grid { grid-template-columns: 1fr; } .tp-brand em { display: none; } .tp-brand strong { font-size: 15px; } .tp-card { padding: 22px; } .tp-greeting { align-items: flex-start; } .tp-greeting h1 { font-size: 32px; } .tp-greeting > button { padding: 9px; font-size: 0; } .tp-admin-accounts { margin: 14px; padding: 16px; } }
 @media (prefers-reduced-motion: reduce) { .tp-spin { animation: none; } .tp-root button { transition: none; } }
+
+.tp-lease-files { display: grid; gap: .75rem; margin-top: 1.25rem; }
+.tp-lease-files a { justify-content: flex-start; text-decoration: none; overflow-wrap: anywhere; }

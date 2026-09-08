@@ -66,8 +66,8 @@ export class TenantPortalClient {
     }), "This link is invalid or has expired. Contact management for a new link.");
   }
 
-  async recovery(email: string): Promise<void> {
-    await readResponse(await this.fetch("/api/tenant/auth/recovery", {
+  async recovery(email: string): Promise<{ message: string }> {
+    return readResponse<{ message: string }>(await this.fetch("/api/tenant/auth/recovery", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }),
     }));
   }

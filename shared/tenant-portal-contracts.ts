@@ -31,6 +31,7 @@ export interface TenantEligibleTenancy {
 }
 
 export interface TenantAccountsResponse {
+  deliveryAvailable: boolean;
   accounts: TenantAccountSummary[];
   eligibleTenancies: TenantEligibleTenancy[];
 }
@@ -56,6 +57,8 @@ export interface TenantLedgerEntry {
   balanceCents: number | null;
 }
 
+export interface TenantLeaseFile { id: string; fileName: string; downloadPath: string; }
+
 export interface TenantHome {
   account: TenantIdentity;
   resident: { firstName: string; lastName: string };
@@ -70,6 +73,7 @@ export interface TenantHome {
   };
   balance: { amountCents: number | null; complete: boolean; asOfDate: string };
   ledger: TenantLedgerEntry[];
+  leaseFiles: TenantLeaseFile[];
   leases: Array<{ id: string; status: string; startDate: string | null; endDate: string | null; monthToMonth: boolean | null }>;
-  deposits: Array<{ id: string; type: string; amountHeldCents: number; status: string }>;
+  deposits: Array<{ id: string; type: string; amountHeldCents: number | null; sourceBalanceCents?: number | null; status: string }>;
 }

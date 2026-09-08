@@ -508,3 +508,50 @@ test("verified application-history derivative reaches artifact projection and wr
     await rm(fixture.parent, { recursive: true, force: true });
   }
 });
+
+test("derivative page reconstruction keeps distinct registry partitions sharing an endpoint", async () => {
+  const fixture = await createFixture();
+  try {
+    const source = join(fixture.parent, "source");
+    fixture.manifest.collections.push({ ...fixture.manifest.collections[0], name: "properties.empty", status: "empty", pages: 0, requested: 0, received: 0, expected: 0, recordHashes: [] });
+    const checkpoint = JSON.parse(await readFile(join(source, "checkpoint.json"), "utf8"));
+    checkpoint.collections["properties.empty"] = { ...checkpoint.collections.properties, pages: 0, received: 0, hashes: [], pageFiles: [], nextPage: 1 };
+    await writeFile(join(source, "manifest.json"), canonicalJson(fixture.manifest), { mode: 0o600 });
+    await writeFile(join(source, "coverage.json"), canonicalJson(fixture.manifest.collections), { mode: 0o600 });
+    await writeFile(join(source, "checkpoint.json"), canonicalJson(checkpoint), { mode: 0o600 });
+    const result = await writeRestrictedSupplementDerivativeArchive({ archiveRoot: source, derivativeRoot: fixture.derivative, supplementPackage: packageFor(fixture.envelope, fixture.manifest), externalVerifier });
+    assert.equal(result.status, "written");
+    const readback = await readRestrictedMigrationArchive(fixture.derivative, { supplementReceiptVerifier });
+    assert.equal(readback.manifest.collections.find((collection) => collection.name === "properties")?.received, 1);
+    assert.equal(readback.manifest.collections.find((collection) => collection.name === "properties.empty")?.received, 0);
+  } finally { await rm(fixture.parent, { recursive: true, force: true }); }
+});
+
+test("manual derivative page retains only manifest-bound added rows from a shared parent output array", async () => {
+  const fixture = await createFixture();
+  try {
+    const source = join(fixture.parent, "source");
+    const retained = { entityType: "application_answer", sourceId: "retained-answer", sourceCollection: "ApplicationAnswers", ApplicationID: "retained-application", Answer: "retained value" };
+    fixture.envelope.payload.applicationAnswerRecords = [retained];
+    fixture.manifest.counts.applicationAnswerRecords = 1;
+    fixture.manifest.archiveEnvelopeSha256 = sha256(canonicalJson(fixture.envelope));
+    const collection = { ...fixture.manifest.collections[0], name: "retained.answers", path: "/ApplicationAnswers", outputKey: "applicationAnswerRecords", recordHashes: [hashRecord(retained)] };
+    fixture.manifest.collections.push(collection);
+    const checkpoint = JSON.parse(await readFile(join(source, "checkpoint.json"), "utf8"));
+    checkpoint.collections[collection.name] = { ...checkpoint.collections.properties, hashes: collection.recordHashes, pageFiles: ["pages/retained-answers.json"] };
+    await writeFile(join(source, "pages/retained-answers.json"), canonicalJson([retained]), { mode: 0o600 });
+    await writeFile(join(source, "export-envelope.json"), canonicalJson(fixture.envelope), { mode: 0o600 });
+    await writeFile(join(source, "manifest.json"), canonicalJson(fixture.manifest), { mode: 0o600 });
+    await writeFile(join(source, "coverage.json"), canonicalJson(fixture.manifest.collections), { mode: 0o600 });
+    await writeFile(join(source, "checkpoint.json"), canonicalJson(checkpoint), { mode: 0o600 });
+    const before = await readRestrictedMigrationArchive(source);
+    await writeRestrictedSupplementDerivativeArchive({ archiveRoot: source, derivativeRoot: fixture.derivative, supplementPackage: packageFor(fixture.envelope, fixture.manifest), externalVerifier });
+    const after = await readRestrictedMigrationArchive(fixture.derivative, { supplementReceiptVerifier });
+    assert.equal(after.envelope.payload.applicationAnswerRecords?.length, 2);
+    assert.equal(after.parity.sourceChunks.filter(chunk => chunk.collectionName === "retained.answers").flatMap(chunk => Array.from(chunk.rows)).length, 1);
+    const manual = after.parity.sourceChunks.filter(chunk => chunk.path === "manual://applicationAnswerRecords").flatMap(chunk => Array.from(chunk.rows));
+    assert.equal(manual.length, 1);
+    assert.equal(JSON.parse(manual[0].canonicalPayload).sourceId, "synthetic-answer");
+    assert.equal((await readRestrictedMigrationArchive(source)).auditReceipt.fileSetSha256, before.auditReceipt.fileSetSha256);
+  } finally { await rm(fixture.parent, { recursive: true, force: true }); }
+});

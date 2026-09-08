@@ -811,7 +811,7 @@ test("recurring schedules preserve unknown open starts and direct unit/property 
   assert.equal(property.effectiveTo, "2026-12-31");
 });
 
-test("ledger normalization resolves payment property only from unanimous direct allocation charge refs", () => {
+test("ledger normalization resolves single-property receipts and retains proven shared receipts", () => {
   const normalized = normalizeRentManagerExport({
     properties: [
       { PropertyID: "p1", PropertyName: "One", AddressLine1: "1 Test Way", City: "Testville", State: "FL", PostalCode: "00001" },
@@ -841,7 +841,8 @@ test("ledger normalization resolves payment property only from unanimous direct 
   assert.equal(byId.get("pay4")?.propertyId, undefined);
   assert.equal(byId.get("pay5")?.propertyId, undefined);
   assert.ok(normalized.exceptions.some((item) => item.detail === "payment_property_conflicts_with_allocated_charge"));
-  assert.ok(normalized.exceptions.some((item) => item.detail === "payment_allocated_charges_span_multiple_properties"));
+  assert.equal(byId.get("pay4")?.allocationMode, "multi_property");
+  assert.equal(normalized.exceptions.some((item) => item.detail === "payment_allocated_charges_span_multiple_properties"), false);
   assert.ok(normalized.exceptions.some((item) => item.detail === "payment_property_not_resolved_unallocated"));
   assert.equal(normalized.input.allocations?.length, 5);
 });
@@ -1106,3 +1107,25 @@ test("canonical registry runs all tenant partitions and documents explicit unsup
 // Keep TypeScript from erasing the raw-record import in isolated test builds.
 void ({} as RentManagerRawRecord);
 void ({} as MemoryCheckpointStore);
+
+test("application web-account sentinel preserves raw source without inventing account identity", () => {
+  const normalized = normalizeRentManagerExport({
+    applications: [{ ProspectApplicationID: 1, WebUserAccountID: -1, AccountID: 502, ApplicationStatus: "Complete" }],
+    webUserAccounts: [{ WebUserAccountID: 502, Email: "wrong@example.test" }, { WebUserAccountID: -1, Email: "sentinel@example.test" }],
+  });
+  const application = normalized.input.applications?.[0] as Record<string, unknown>;
+  assert.equal(application.WebUserAccountID, -1);
+  assert.equal(application.AccountID, 502);
+  assert.equal(application.ApplicationStatus, "Complete");
+  assert.equal(application.webUserAccountId, undefined);
+  assert.equal(application.email, undefined);
+  assert.ok(!normalized.exceptions.some((row) => row.detail === "application_web_user_or_account_not_resolved"));
+});
+
+test('payment reversal embed supplies reason only through exact PaymentID binding',()=>{
+ const base={PaymentID:527,AccountID:1,Amount:820,TransactionDate:'2022-11-01T00:00:00',ReversalType:'ePay',ReversalDate:'2022-11-19T00:00:00'};
+ const exact=normalizeRentManagerExport({payments:[{...base,PaymentReversal:{PaymentID:527,ReversalType:'ePay',ReversalDate:'2022-11-19T00:00:00',ReversalReason:'Overpaid'}}]});
+ assert.equal((exact.input.payments![0] as Record<string,unknown>).ReversalReason,'Overpaid');
+ const wrong=normalizeRentManagerExport({payments:[{...base,PaymentReversal:{PaymentID:999,ReversalReason:'Wrong account'}}]});
+ assert.equal((wrong.input.payments![0] as Record<string,unknown>).ReversalReason,undefined);
+});

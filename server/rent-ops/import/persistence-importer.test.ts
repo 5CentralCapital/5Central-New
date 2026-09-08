@@ -687,3 +687,22 @@ test("restricted RM binary transfer failure rolls back DB rows and emits only re
   assert.doesNotMatch(redacted, /restricted-import-binary/);
   assert.match(redacted, /database_binding_failed/);
 });
+
+test("unknown money controls are scoped to their own ledger kind", async () => {
+  const fixture = mappedFixture();
+  const charge = fixture.snapshot.ledgerTransactions.find((row) => row.kind === "charge")!;
+  charge.amountCents = null; charge.amountKnowledge = "unknown";
+  fixture.exceptions.push({ code: "ledger_amount_unknown", severity: "warning", sourceId: charge.source!.sourceId, entityType: "ledger_transaction", message: "Synthetic source-absent charge amount" });
+  const result = await new PersistenceImporter().run(fixture, undefined, { mode: "dry_run", controls: { unknownCounts: { charges: 1, payments: 0, credits: 0 } } });
+  assert.equal(result.blockedReasons.some((reason) => reason.startsWith("control_unknown_money_mismatch")), false);
+});
+
+test("persistence validates present tenancy references alongside a source-absent unknown unit", async () => {
+  const fixture = mappedFixture();
+  const tenancy = fixture.snapshot.tenancies[0]; tenancy.unitId = ""; tenancy.unitLinkKnowledge = "unknown";
+  const absent = await new PersistenceImporter().run(fixture, undefined, { mode: "dry_run", controls: {} });
+  assert.equal(absent.blockedReasons.includes("orphan_tenancy"), false);
+  tenancy.propertyId = "invalid-present-property";
+  const invalid = await new PersistenceImporter().run(fixture, undefined, { mode: "dry_run", controls: {} });
+  assert.equal(invalid.blockedReasons.includes("orphan_tenancy"), true);
+});

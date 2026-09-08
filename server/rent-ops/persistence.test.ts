@@ -23,7 +23,7 @@ test("Rent Operations dry-run is read-only and exposes the version/checksum plan
   const result = await ensureRentOpsSchema({ apply: false, executor: async () => { calls += 1; } });
   assert.equal(calls, 0);
   assert.equal(result.mode, "dry_run");
-  assert.equal(result.version, 13);
+  assert.equal(result.version, RENT_OPS_SCHEMA_VERSION);
   assert.deepEqual(Object.keys(result.migrationChecksums ?? {}).map(Number), RENT_OPS_SUPPORTED_SCHEMA_VERSIONS);
   assert.ok(result.checksum.match(/^[a-f0-9]{64}$/));
   assert.ok(result.requiredTables.includes("rent_ops_schema_meta"));
@@ -154,9 +154,24 @@ test("additive application migrations preserve all previously recorded source ch
   assert.equal(new Set(definitions.map((definition) => definition.fileName)).size, RENT_OPS_SCHEMA_VERSION);
   for (const definition of definitions) {
     assert.doesNotMatch(definition.renderedSql, /__RENT_OPS_V\d+_CHECKSUM__/);
-    assert.match(definition.renderedSql, new RegExp(`version = ${definition.version} AND checksum_sha256 = '${definition.checksum}'`));
+    assert.match(definition.renderedSql, new RegExp(`version\\s*=\\s*${definition.version} AND checksum_sha256\\s*=\\s*'${definition.checksum}'`));
   }
   for (const version of [0, -1, 1.5, Number.NaN, RENT_OPS_SCHEMA_VERSION + 1]) {
     assert.throws(() => renderRentOpsMigrationSqlForVersion(version), /Unknown Rent Operations migration version/);
   }
+});
+
+test('verified installed migration chain skips old DDL and rejects a changed checksum or gap', async () => {
+  const definitions = rentOpsMigrationDefinitions();
+  const installed = definitions.map(migration => ({version:migration.version,checksum_sha256:migration.checksum}));
+  const commands:string[]=[];
+  const query=async(sql:string)=>({rows:sql.includes('to_regclass')?[{migration_table:'rent_ops_schema_migrations'}]:installed});
+  const result=await ensureRentOpsSchema({apply:true,query,executor:async sql=>{commands.push(sql);}});
+  assert.deepEqual(commands,['BEGIN','COMMIT']);assert.equal(result.statementCount,2);
+  installed[0].checksum_sha256='0'.repeat(64);commands.length=0;
+  await assert.rejects(ensureRentOpsSchema({apply:true,query,executor:async sql=>{commands.push(sql);}}),/checksum_mismatch/);
+  assert.deepEqual(commands,['BEGIN','ROLLBACK']);
+  installed.shift();commands.length=0;
+  await assert.rejects(ensureRentOpsSchema({apply:true,query,executor:async sql=>{commands.push(sql);}}),/chain_gap/);
+  assert.deepEqual(commands,['BEGIN','ROLLBACK']);
 });

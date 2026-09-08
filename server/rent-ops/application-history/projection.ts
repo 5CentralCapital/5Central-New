@@ -458,7 +458,7 @@ function templateKind(row: Raw): "template" | "section" | "field" {
   if (collection.includes("field")) return "field";
   if (collection.includes("section")) return "section";
   if (text(row, "fieldId", "FieldID", "ApplicationFieldID", "ApplicationTemplateFieldID")) return "field";
-  if (text(row, "sectionId", "SectionID", "MajorSectionID", "MinorSectionID")) return "section";
+  if (text(row, "sectionId", "SectionID", "MajorSectionID", "MinorSectionID", "ApplicationMinorSectionID")) return "section";
   return "template";
 }
 
@@ -725,7 +725,7 @@ function buildTemplates(rows: readonly Raw[], options: ApplicationHistoryProject
       ...(templateId ? { templateId, templateLinkKnowledge: "exact" as const } : { templateLinkKnowledge: templateSource ? "unknown" as const : null }),
       name: text(row, "name", "Name", "SectionName", "Label") ?? null,
       nameKnowledge: fact(value(row, "name", "Name", "SectionName", "Label")),
-      sourceOrder: numberValue(row, "sourceOrder", "SourceOrder", "Order", "DisplayOrder", "Sequence") ?? null,
+      sourceOrder: numberValue(row, "sourceOrder", "SourceOrder", "SortOrder", "Order", "DisplayOrder", "Sequence") ?? null,
       recordRevision: 1,
     });
   });
@@ -735,10 +735,10 @@ function buildTemplates(rows: readonly Raw[], options: ApplicationHistoryProject
     if (!source) return;
     const sourceCollection = rowCollection(row);
     const templateSource = text(row, "templateId", "TemplateID", "ApplicationTemplateID");
-    const sectionSource = text(row, "sectionId", "SectionID", "MajorSectionID", "MinorSectionID");
+    const sectionSource = text(row, "sectionId", "SectionID", "MajorSectionID", "MinorSectionID", "ApplicationMinorSectionID");
     const templateId = templateSource ? templateTargets.get(templateSource) : undefined;
     const sectionId = sectionSource ? sectionTargets.get(sectionSource) : undefined;
-    const type = answerValueType(value(row, "valueType", "ValueType", "DataType", "FieldType", "Type"));
+    const type = answerValueType(value(row, "valueType", "ValueType", "DataType", "FieldType", "InputFieldType", "Type"));
     const sensitive = booleanValue(row, "sensitive", "Sensitive", "IsSensitive", "Restricted") === true;
     const id = fieldTargets.get(source) ?? targetFor(options, "application_template_field", sourceIdentity(sourceCollection, source));
     const field = {
@@ -747,10 +747,10 @@ function buildTemplates(rows: readonly Raw[], options: ApplicationHistoryProject
       ...(templateId ? { templateId, templateLinkKnowledge: "exact" as const } : { templateLinkKnowledge: templateSource ? "unknown" as const : null }),
       ...(sectionId ? { sectionId, sectionLinkKnowledge: "exact" as const } : { sectionLinkKnowledge: sectionSource ? "unknown" as const : null }),
       key: text(row, "key", "Key", "FieldKey", "FieldName") ?? null,
-      label: text(row, "label", "Label", "Name", "Question") ?? null,
-      valueType: type ?? null,
+      label: text(row, "label", "Label", "LabelText", "Name", "Question") ?? null,
+      valueType: type ?? "unknown",
       sensitive,
-      sourceOrder: numberValue(row, "sourceOrder", "SourceOrder", "Order", "DisplayOrder", "Sequence") ?? null,
+      sourceOrder: numberValue(row, "sourceOrder", "SourceOrder", "SortOrder", "Order", "DisplayOrder", "Sequence") ?? null,
       recordRevision: 1,
     } satisfies RentOpsApplicationTemplateFieldDefinition;
     fields.push(field);
@@ -787,8 +787,8 @@ function buildAnswers(
     // projection requires a separately authenticated field/value receipt and
     // remains deliberately disabled here.
     unknownRestricted.restrictedAnswerCount += 1;
-    if (!mapping?.type || mapping.sensitive) unknownRestricted.unmappedAnswerCount += 1;
-    const answerType = type ?? "text";
+    if (!mapping) unknownRestricted.unmappedAnswerCount += 1;
+    const answerType = type ?? "unknown";
     return [{
       id: targetFor(options, "application_answer", sourceIdentity(rowCollection(row), source)),
       source: sourceRef(row, rowCollection(row), "application_answer", source),

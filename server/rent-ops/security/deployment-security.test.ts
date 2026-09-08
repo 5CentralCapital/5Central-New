@@ -328,3 +328,10 @@ test("database public limiter is explicit and edge mode still requires its secre
   const memory = validateRentOpsProductionConfiguration({ NODE_ENV: "production", RENT_OPS_PUBLIC_LIMITER_MODE: "process-memory" });
   assert.ok(memory.blockingReasons.includes("production_global_public_limiter_required"));
 });
+
+test("managed Gmail startup does not require an unused webhook receiver or manual OAuth secrets",()=>{
+ const configured=validateRentOpsProductionConfiguration({NODE_ENV:"production",RENT_OPS_TENANT_EMAIL_PROVIDER:"replit-gmail",RENT_OPS_TENANT_EMAIL_ENABLED:"true",RENT_OPS_GMAIL_FROM:"sender@example.test",RENT_OPS_PUBLIC_APP_URL:"https://portal.example.test"});
+ assert.equal(configured.blockingReasons.some(reason=>/webhook|gmail_client|gmail_refresh|email_delivery_disabled|gmail_sender/.test(reason)),false);
+ const disabled=validateRentOpsProductionConfiguration({NODE_ENV:"production",RENT_OPS_TENANT_EMAIL_PROVIDER:"replit-gmail"});
+ assert.ok(disabled.blockingReasons.includes("production_email_delivery_disabled"));
+});

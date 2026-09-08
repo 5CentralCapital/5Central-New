@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { ArrowRight, Building2, Check, CreditCard, Loader2, LockKeyhole, LogOut, RefreshCw } from "lucide-react";
+import { ArrowRight, Building2, Check, CreditCard, FileDown, Loader2, LockKeyhole, LogOut, RefreshCw } from "lucide-react";
 import type { TenantHome } from "@shared/tenant-portal-contracts";
 import { TenantApiError, TenantPortalClient, trustedCheckoutUrl, type TenantPayments, type TenantSessionAccount } from "./api";
 import { centsFromAmount, consumeActivationLink, type ActivationLink } from "./link";
+import { noPaymentDueMessage } from "./payment-view";
+import { depositAmounts } from "./deposit-view";
 import "./tenant-portal.css";
 
 function money(cents: number | null | undefined): string {
@@ -36,8 +38,8 @@ function SignIn({ client, link, onSignIn, onDiscardLink }: { client: TenantPorta
     setBusy(true);
     try {
       if (mode === "recovery" && !link.token) {
-        await client.recovery(email.trim());
-        setMessage("Contact management to request a new secure sign-in link. For your privacy, account details are not shown here.");
+        const result = await client.recovery(email.trim());
+        setMessage(result.message);
       } else {
         onSignIn(link.token ? await client.activate(link.token, password) : await client.login(email.trim(), password));
       }
@@ -49,17 +51,17 @@ function SignIn({ client, link, onSignIn, onDiscardLink }: { client: TenantPorta
     <div className="tp-welcome-copy"><Building2 aria-hidden="true" /><h1>Your home,<br />in one place.</h1><p>View your balance, payments, and lease.</p></div>
     <section className="tp-card tp-login" aria-labelledby="tp-login-title">
       <LockKeyhole aria-hidden="true" className="tp-lock" />
-      <h2 id="tp-login-title">{link.token ? "Set your password" : mode === "recovery" ? "Account access" : "Welcome home"}</h2>
-      <p>{link.token ? "Choose a password to activate or restore your account." : mode === "recovery" ? "Request help accessing your tenant account." : "Sign in with the email registered to your tenancy."}</p>
+      <h2 id="tp-login-title">{link.token ? "Set your password" : mode === "recovery" ? "Reset your password" : "Welcome home"}</h2>
+      <p>{link.token ? "Choose a password to activate or restore your account." : mode === "recovery" ? "Enter your sign-in email to request a secure password reset link." : "Sign in with the email registered to your tenancy."}</p>
       <form onSubmit={submit}>
         {!link.token && <label>Email<input type="email" name="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={240} disabled={busy} /></label>}
         {(link.token || mode === "login") && <label>{link.token ? "New password" : "Password"}<input type="password" name="password" autoComplete={link.token ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={link.token ? 12 : undefined} maxLength={128} required disabled={busy} />{link.token && <small>Use at least 12 characters.</small>}</label>}
         {link.token && <label>Confirm password<input type="password" name="confirm-password" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} minLength={12} maxLength={128} required disabled={busy} /></label>}
         {error && <p className="tp-error" role="alert">{error}</p>}
         {message && <p className="tp-notice" role="status">{message}</p>}
-        <button className="tp-primary" disabled={busy}>{busy ? <Loader2 className="tp-spin" /> : <ArrowRight />}{link.token ? "Save password and sign in" : mode === "recovery" ? "Get account help" : "Sign in"}</button>
+        <button className="tp-primary" disabled={busy}>{busy ? <Loader2 className="tp-spin" /> : <ArrowRight />}{link.token ? "Save password and sign in" : mode === "recovery" ? "Send reset link" : "Sign in"}</button>
       </form>
-      <button className="tp-text-button" disabled={busy} onClick={() => { onDiscardLink(); setMode(mode === "login" && !link.token ? "recovery" : "login"); setPassword(""); setConfirm(""); setMessage(""); setError(""); }}>{mode === "recovery" || link.token ? "Back to sign in" : "Need help signing in?"}</button>
+      <button className="tp-text-button" disabled={busy} onClick={() => { onDiscardLink(); setMode(mode === "login" && !link.token ? "recovery" : "login"); setPassword(""); setConfirm(""); setMessage(""); setError(""); }}>{mode === "recovery" || link.token ? "Back to sign in" : "Forgot your password?"}</button>
       {!link.token && mode === "login" && <p className="tp-account-help">New to the portal? Ask management for your account activation link.</p>}
     </section>
   </div>;
@@ -84,9 +86,10 @@ function PaymentPanel({ client, payments, tenancyId, onError }: { client: Tenant
       window.location.assign(trustedCheckoutUrl(result.checkoutUrl));
     } catch (error) { onError(error); setBusy(false); }
   }
+  const noPaymentMessage = noPaymentDueMessage(account);
   const enabled = payments?.available && account?.available && account.payableCents >= 50;
   return <section className="tp-card" aria-labelledby="tp-pay-title"><div className="tp-section-heading"><CreditCard aria-hidden="true" /><h2 id="tp-pay-title">Make a payment</h2></div>
-    {!payments ? <p>Payment availability could not be loaded. Refresh to try again.</p> : !payments.available ? <p>Online payments are not available yet. Continue using your current payment arrangement.</p> : !account?.available ? <p>Online payment is unavailable for this account. Contact management for assistance.</p> : account.payableCents < 50 ? <p>{account.pendingCents > 0 ? "Your outstanding balance is covered by payments in progress." : account.payableCents > 0 ? "Online payments require at least $0.50. Contact management about this remaining balance." : "There is no balance available to pay."}</p> : <form onSubmit={checkout}><label>Payment amount<input type="number" inputMode="decimal" min="0.50" max={(Math.min(account.payableCents, 99_999_999) / 100).toFixed(2)} step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required disabled={busy} /></label><button className="tp-primary" disabled={!enabled || busy}>{busy ? <Loader2 className="tp-spin" /> : <CreditCard />}Continue to payment</button></form>}
+    {!payments ? <p>Payment availability could not be loaded. Refresh to try again.</p> : !payments.available ? <p>Online payments are not available yet. Continue using your current payment arrangement.</p> : noPaymentMessage ? <p>{noPaymentMessage}</p> : !account?.available ? <p>Online payment is unavailable for this account. Contact management for assistance.</p> : account.payableCents < 50 ? <p>{account.pendingCents > 0 ? "Your outstanding balance is covered by payments in progress." : account.payableCents > 0 ? "Online payments require at least $0.50. Contact management about this remaining balance." : "There is no balance available to pay."}</p> : <form onSubmit={checkout}><label>Payment amount<input type="number" inputMode="decimal" min="0.50" max={(Math.min(account.payableCents, 99_999_999) / 100).toFixed(2)} step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required disabled={busy} /></label><button className="tp-primary" disabled={!enabled || busy}>{busy ? <Loader2 className="tp-spin" /> : <CreditCard />}Continue to payment</button></form>}
     {!!account?.pendingCents && <p className="tp-notice">{money(account.pendingCents)} in progress. Processing payments are not yet posted to your ledger.</p>}
     {!!payments?.payments.length && <div className="tp-payment-history"><h3>Recent online payments</h3>{payments.payments.slice(0, 8).map((payment) => <div key={payment.id}><span>{date(payment.createdAt)}<small>{label(payment.status)}</small></span><strong>{money(payment.amountCents)}</strong></div>)}</div>}
   </section>;
@@ -145,7 +148,7 @@ export default function TenantPortal() {
     const oldTitle = document.title;
     document.title = "Tenant Portal | 5Central Capital";
     const paymentReturn = new URLSearchParams(window.location.search).get("payment");
-    if (paymentReturn === "return") setMessage("Your payment status will update after confirmation. Returning here does not confirm payment.");
+    if (paymentReturn === "return" || paymentReturn === "returned") setMessage("Your payment status will update after confirmation. Returning here does not confirm payment.");
     if (paymentReturn === "cancelled") setMessage("Payment checkout was closed. Check recent payments before trying again.");
     const restoreGeneration = generation.current;
     if (!link.token) client.restore().then((restored) => { if (mounted.current && generation.current === restoreGeneration) setAccount(restored); }).catch((caught) => { if (mounted.current && generation.current === restoreGeneration) handleError(caught); }).finally(() => { if (mounted.current) setLoading(false); });
@@ -174,7 +177,7 @@ export default function TenantPortal() {
       <div className="tp-greeting"><div><p>{home.tenancy.propertyName} · Unit {home.tenancy.unitNumber}</p><h1>Hello, {home.resident.firstName || "resident"}.</h1><p>{home.tenancy.address}</p></div><button className="tp-secondary" onClick={refresh} disabled={refreshing}><RefreshCw className={refreshing ? "tp-spin" : ""} />Refresh</button></div>
       <div className="tp-overview"><section className="tp-balance"><span>Account balance</span><strong>{home.balance.complete ? money(home.balance.amountCents) : "Unavailable"}</strong><p>{home.balance.complete ? `As of ${date(home.balance.asOfDate)}${(home.balance.amountCents ?? 0) < 0 ? " · Account credit" : ""}` : "Your balance needs confirmation. Contact management before making a payment."}</p></section><PaymentPanel client={client} payments={payments} tenancyId={home.tenancy.id} onError={handleError} /></div>
       <section className="tp-card tp-ledger"><h2>Account activity</h2>{!home.ledger.length ? <p>No transactions are available.</p> : <div className="tp-table-wrap"><table><thead><tr><th>Date</th><th>Activity</th><th>Type</th><th className="tp-money">Amount</th><th className="tp-money">Balance</th></tr></thead><tbody>{home.ledger.map((entry) => <tr key={entry.id}><td>{date(entry.date)}</td><td>{entry.description}<small>{entry.status && label(entry.status)}</small></td><td>{label(entry.kind)}</td><td className="tp-money">{money(entry.amountCents)}</td><td className="tp-money">{money(entry.balanceCents)}</td></tr>)}</tbody></table></div>}</section>
-      <div className="tp-detail-grid"><section className="tp-card"><h2>Your lease</h2>{home.leases.length ? home.leases.map((lease) => <div className="tp-lease" key={lease.id}><strong>{label(lease.status)}</strong><dl><div><dt>Starts</dt><dd>{date(lease.startDate)}</dd></div><div><dt>Ends</dt><dd>{lease.monthToMonth === true ? "Month to month" : date(lease.endDate)}</dd></div></dl></div>) : <p>Your lease details are not available yet.</p>}{!!home.deposits.length && <><h3>Deposits held</h3>{home.deposits.map((deposit) => <div className="tp-deposit" key={deposit.id}><span>{label(deposit.type)}<small>{label(deposit.status)}</small></span><strong>{money(deposit.amountHeldCents)}</strong></div>)}</>}</section><PasswordPanel client={client} onError={handleError} onChanged={() => { setMessage("Your password was updated. Other sessions have been signed out."); }} /></div>
+      <div className="tp-detail-grid"><section className="tp-card"><h2>Your lease</h2>{home.leases.length ? home.leases.map((lease) => <div className="tp-lease" key={lease.id}><strong>{label(lease.status)}</strong><dl><div><dt>Starts</dt><dd>{date(lease.startDate)}</dd></div><div><dt>Ends</dt><dd>{lease.monthToMonth === true ? "Month to month" : date(lease.endDate)}</dd></div></dl></div>) : <p>Your lease details are not available yet.</p>}{home.leaseFiles.length ? <div className="tp-lease-files"><h3>Lease documents</h3>{home.leaseFiles.map((file) => <a className="tp-secondary" key={file.id} href={`/api/tenant/lease-files/${encodeURIComponent(file.id)}/download`}><FileDown aria-hidden="true" />{file.fileName}</a>)}</div> : <p>No verified lease PDF is available yet. Contact management for a copy.</p>}{!!home.deposits.length && <><h3>Deposits</h3>{home.deposits.map((deposit) => { const amounts = depositAmounts(deposit); return <div className="tp-deposit" key={deposit.id}><span>{label(deposit.type)}<small>{label(deposit.status)}</small></span><span className="tp-money"><strong>{amounts.held}</strong><small>Amount held</small>{amounts.sourceBalance !== undefined && <small>Source balance {amounts.sourceBalance}</small>}</span></div>; })}</>}</section><PasswordPanel client={client} onError={handleError} onChanged={() => { setMessage("Your password was updated. Other sessions have been signed out."); }} /></div>
     </>}
   </main></div>;
 }

@@ -134,6 +134,8 @@ test("preview is read-only; explicit post and replay create exactly one charge",
 test("unknown amounts, partial months, and existing manual charges block posting", () => {
   for (const mutate of [
     (data: BillingData) => { data.snapshot.recurringSchedules[0].amountKnowledge = "unknown"; },
+    (data: BillingData) => { data.snapshot.recurringSchedules[0].active = null; data.snapshot.recurringSchedules[0].activeKnowledge = "unknown"; },
+    (data: BillingData) => { data.snapshot.recurringSchedules[0].effectiveFrom = null; data.snapshot.recurringSchedules[0].effectiveFromKnowledge = "unknown_open_start"; },
     (data: BillingData) => { data.snapshot.recurringSchedules[0].effectiveFrom = "2025-05-15"; },
     (data: BillingData) => { data.snapshot.tenancies[0].actualMoveInOn = "2025-05-15"; },
     (data: BillingData) => { data.snapshot.ledgerTransactions.push({id: "manual", tenancyId: "tenancy-u1", kind: "charge", status: "posted", category: "base_rent", amountCents: 125000, postedOn: "2025-05-01"}); },

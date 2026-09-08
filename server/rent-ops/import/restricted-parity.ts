@@ -162,6 +162,8 @@ export interface RestrictedParityChunkRow {
 
 /** One bounded, ordered source collection chunk. Repeated paths are allowed. */
 export interface RestrictedParitySourceChunk {
+  /** Audited registry partition identity; endpoint paths may be shared. */
+  readonly collectionName?: string;
   readonly path: string;
   readonly present: boolean;
   readonly rows: Iterable<RestrictedParityChunkRow>;

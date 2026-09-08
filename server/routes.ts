@@ -61,7 +61,7 @@ export async function registerRoutes(app: Express, options: { onTenantPaymentSer
     } : {}),
   });
 
-  const tenantPortal = registerTenantPortalRoutes(app, { repository: rentOpsRepository, database: rentOpsRuntimeDatabase, requireAdmin: requireRentOpsAdmin });
+  const tenantPortal = registerTenantPortalRoutes(app, { repository: rentOpsRepository, database: rentOpsRuntimeDatabase, requireAdmin: requireRentOpsAdmin, ...(rentOpsObjectStores ? { documentStorage: rentOpsObjectStores.documentStorage } : {}) });
   const tenantPaymentService = createTenantPaymentService({ executor: rentOpsRuntimeDatabase, rentOpsRepository, env: process.env });
   options.onTenantPaymentService?.(tenantPaymentService);
   registerTenantPaymentRoutes(app, { service: tenantPaymentService, requireTenant: tenantPortal.requireTenant, getTenantIdentity: tenantPortal.getTenantIdentity });

@@ -19,9 +19,9 @@ The module is mounted at `/api/rent-ops` by `server/routes.ts`.
 
 - Admin session required: `/snapshot`, `/dashboard`, `/reports/:report`, `/tenants/:personId`, `/properties`, `/units`, `/people`, `/tenancies`, `/lease-terms`, `/recurring-schedules`, `/ledger/*`, `/deposits`, `/subsidies`, `/applications/*`, `/documents`, and `/activity`.
 - Public and rate-limited: `/public/application-options`, `/public/applications/start`, and bearer-token-scoped `/public/applications/resume` save/household/document/certify/submit routes.
-- Tenant account grants: `/api/rent-ops/tenant-accounts` and `/:id/reissue` / `/:id/revoke` require the admin session and CSRF. Creating a link does not send it.
+- Tenant account grants: `/api/rent-ops/tenant-accounts` and `/:id/reissue` / `/:id/revoke` require the admin session and CSRF. Creating a link does not send it. `/:id/send-link` explicitly requests invitation/reset delivery and reports provider acceptance.
 - Recurring billing: `/api/rent-ops/billing/preview` and `/post` require admin access; posting binds to a reviewed preview token.
-- Tenant sessions: `/api/tenant/auth/login`, `/activate`, `/session`, `/password`, `/logout`, `/recovery`, and `/api/tenant/home`. Tenant identity is separate from administrator/investor identity.
+- Tenant sessions: `/api/tenant/auth/login`, `/activate`, `/session`, `/password`, `/logout`, `/recovery`, and `/api/tenant/home`; `/api/tenant/lease-files/:id/download` serves only an exactly owned verified lease PDF. Tenant identity is separate from administrator/investor identity.
 - Payments: `/api/tenant/payments` and `/checkout` require tenant access; `/api/tenant/payments/webhook` verifies the raw Stripe signature before JSON parsing. Missing Stripe connection disables checkout.
 - UI: `/tenant` is the tenant account portal. `/ops` is admin-only. `/apply` and `/apply/:propertySlug` are public. Applicant HTML and public APIs send `Referrer-Policy: no-referrer` and `Cache-Control: no-store`.
 
@@ -39,7 +39,7 @@ The provider-neutral adapter posts only `applicationId`, `email`, `resumeUrl`, a
 
 ## Schema and cutover
 
-`migrations/001_rent_ops.sql` through `013_rent_ops_public_rate_limits.sql` form the immutable migration chain. Versions 10–13 add tenant accounts/auth throttles, payment reconciliation, recurring billing, and database-backed public limits. Run `npm run rent-ops:migration:render:all` to render every checksum-bound SQL artifact into `dist/migrations/`; review and apply these in numeric order through the approved operator workflow. Application startup does not migrate. It checks schema checksums, required tables, and runtime privileges and fails closed if they differ.
+`migrations/001_rent_ops.sql` through the version 22 migration form the immutable migration chain. Versions 10–22 add tenant accounts/auth throttles, payment reconciliation, recurring billing, database-backed public limits, preserved source application/deposit/allocation states, recurring-root audit support, opaque answer types, account-parent household links, proven credit allocations, observed tenancy status bindings, and preserved parity collection identities. Run `npm run rent-ops:migration:render:all` to render every checksum-bound SQL artifact into `dist/migrations/`; review and apply these in numeric order through the approved operator workflow. Application startup does not migrate. It checks schema checksums, required tables, and runtime privileges and fails closed if they differ.
 
 Cutover sequence:
 

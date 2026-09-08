@@ -24,11 +24,22 @@ export class InMemoryTenantAccountStore implements TenantAccountStore {
   async rotateActivation(id: string, tokenHash: string, expiresAt: string, _now: string) {
     const record = this.accounts.get(id);
     if (!record) return undefined;
-    if (record.status === "revoked") { record.passwordHash = null; record.status = "pending"; }
+    record.passwordHash = null; record.status = "pending";
     record.activationTokenHash = tokenHash;
     record.invitationExpiresAt = expiresAt;
     record.sessionVersion++;
     return this.copy(record);
+  }
+
+  async issueRecovery(id: string, tokenHash: string, expiresAt: string, _now: string) {
+    const record = this.accounts.get(id);
+    if (!record || record.status === "revoked") return undefined;
+    record.activationTokenHash = tokenHash; record.invitationExpiresAt = expiresAt;
+    return this.copy(record);
+  }
+  async invalidateToken(id: string, tokenHash: string) {
+    const record = this.accounts.get(id);
+    if (record?.activationTokenHash === tokenHash) { record.activationTokenHash = null; record.invitationExpiresAt = null; }
   }
 
   async consumeActivation(tokenHash: string, passwordHash: string, now: string) {

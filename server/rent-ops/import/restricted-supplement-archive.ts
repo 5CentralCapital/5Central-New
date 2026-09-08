@@ -11,7 +11,7 @@ import {
   type RestrictedSupplementRequest,
   type RestrictedSupplementResult,
 } from "./restricted-supplement";
-import { readRestrictedMigrationArchive, verifyRestrictedArchiveBinaries, type VerifiedSupplementReceiptBinding, type VerifiedSupplementReceiptVerifier } from "./migration-runner";
+import { RestrictedMigrationArchiveError, readRestrictedMigrationArchive, verifyRestrictedArchiveBinaries, type VerifiedSupplementReceiptBinding, type VerifiedSupplementReceiptVerifier } from "./migration-runner";
 
 /** Public archive-boundary name for the aggregate-only trust-root receipt. */
 export type { VerifiedSupplementReceiptBinding } from "./migration-runner";
@@ -535,7 +535,7 @@ async function writeDerivativeControlFiles(
   let pageIndex = 0;
   await ensureDirectory(resolve(temporaryRoot, "pages"), 0o700, "restricted_derivative_directory_invalid");
   for (const collection of manifest.collections) {
-    const matchingChunks = sourceArchive.parity.sourceChunks.filter((chunk) => chunk.present && chunk.path === collection.path);
+    const matchingChunks = sourceArchive.parity.sourceChunks.filter((chunk) => chunk.present && chunk.collectionName === collection.name && chunk.path === collection.path);
     const rawPages: unknown[][] = [];
     for (const chunk of matchingChunks) {
       const rows: unknown[] = [];
@@ -545,12 +545,22 @@ async function writeDerivativeControlFiles(
       }
       if (rows.length > 0) rawPages.push(rows);
     }
-    // Manual supplement collections have no source page in the parent
-    // archive. Their outputKey is an explicit, bounded array in the fresh
-    // derivative envelope, so it can be represented by one new page.
+    // A manual collection shares its output array with retained parent rows.
+    // Its manifest hashes bind only the added partition, in exact source order.
     if (rawPages.length === 0 && collection.path.startsWith("manual://")) {
       const candidate = (envelope.payload as unknown as Record<string, unknown>)[collection.outputKey];
-      if (Array.isArray(candidate) && candidate.length > 0) rawPages.push(candidate);
+      const expected = collection.recordHashes;
+      const expectedSet = new Set(expected);
+      const selected = new Map<string, unknown>();
+      if (expectedSet.size !== expected.length) throw new RestrictedSupplementDerivativeArchiveError(["restricted_derivative_page_reconstruction_invalid"]);
+      for (const row of Array.isArray(candidate) ? candidate : []) {
+        const hash = hashRecord(row);
+        if (!expectedSet.has(hash)) continue;
+        if (selected.has(hash)) throw new RestrictedSupplementDerivativeArchiveError(["restricted_derivative_page_reconstruction_invalid"]);
+        selected.set(hash, row);
+      }
+      if (selected.size !== expected.length) throw new RestrictedSupplementDerivativeArchiveError(["restricted_derivative_page_reconstruction_mismatch"]);
+      if (expected.length > 0) rawPages.push(expected.map((hash) => selected.get(hash)!));
     }
     const received = rawPages.reduce((total, rows) => total + rows.length, 0);
     if (received !== collection.received) throw new RestrictedSupplementDerivativeArchiveError(["restricted_derivative_page_reconstruction_mismatch"]);
@@ -708,6 +718,8 @@ export async function writeRestrictedSupplementDerivativeArchive(options: {
     await ensureDirectory(resolve(temporaryRoot, "binaries"), 0o700, "restricted_derivative_directory_invalid");
     await writePrivateFile(resolve(temporaryRoot, "export-envelope.json"), canonicalJson(result.envelope));
     await writePrivateFile(resolve(temporaryRoot, "manifest.json"), canonicalJson(result.manifest));
+    // Rebuild source pages, including verified allocation overlay collections. Parent
+    // provenance sidecars are not copied: the external receipt binds the exact parent.
     await writeDerivativeControlFiles(temporaryRoot, archive, result.envelope, result.manifest);
     await copyDerivativeBinaries(archiveRoot, temporaryRoot, result.envelope, request);
     await writePrivateFile(resolve(temporaryRoot, RESTRICTED_SUPPLEMENT_PROVENANCE_FILE), provenanceText);
@@ -727,7 +739,7 @@ export async function writeRestrictedSupplementDerivativeArchive(options: {
     if (temporaryRoot) await rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
     if (committed) await rm(derivativeRoot, { recursive: true, force: true }).catch(() => undefined);
     if (error instanceof RestrictedSupplementDerivativeArchiveError) throw error;
-    if (error instanceof RestrictedSupplementIntegrityError) throw new RestrictedSupplementDerivativeArchiveError(error.reasons);
+    if (error instanceof RestrictedSupplementIntegrityError || error instanceof RestrictedMigrationArchiveError) throw new RestrictedSupplementDerivativeArchiveError(error.reasons);
     throw new RestrictedSupplementDerivativeArchiveError(["restricted_derivative_write_failed"]);
   }
 }

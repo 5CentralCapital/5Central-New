@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-export const RENT_OPS_SCHEMA_VERSION = 13;
+export const RENT_OPS_SCHEMA_VERSION = 22;
 export const RENT_OPS_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V1_CHECKSUM__";
 export const RENT_OPS_V2_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V2_CHECKSUM__";
 export const RENT_OPS_V3_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V3_CHECKSUM__";
@@ -31,6 +31,15 @@ const RENT_OPS_MIGRATION_FILES = [
   "011_rent_ops_payments.sql",
   "012_rent_ops_recurring_billing.sql",
   "013_rent_ops_public_rate_limits.sql",
+  "014_rent_ops_application_source_states.sql",
+  "015_rent_ops_deposit_source_balances.sql",
+  "016_rent_ops_allocation_reversals.sql",
+  "017_rent_ops_recurring_root_audit.sql",
+  "018_rent_ops_unknown_answer_type.sql",
+  "019_rent_ops_household_account_parent.sql",
+  "020_rent_ops_credit_allocations.sql",
+  "021_rent_ops_observed_tenancy_status_binding.sql",
+  "022_rent_ops_parity_collection_identity.sql",
 ] as const;
 
 export const RENT_OPS_SUPPORTED_SCHEMA_VERSIONS = RENT_OPS_MIGRATION_FILES.map((_, index) => index + 1);
@@ -290,7 +299,7 @@ export function splitRentOpsSqlStatements(sql: string): string[] {
  * apply:true. Apply is transactional and fails closed; a checksum/version
  * guard in the SQL source rejects a changed migration after v1 was applied.
  */
-export async function ensureRentOpsSchema(options: { executor?: RentOpsSqlExecutor; apply?: boolean } = {}): Promise<RentOpsSchemaEnsureResult> {
+export async function ensureRentOpsSchema(options: { executor?: RentOpsSqlExecutor; query?: (statement: string) => Promise<{ rows: Record<string, unknown>[] }>; apply?: boolean } = {}): Promise<RentOpsSchemaEnsureResult> {
   const migrations = rentOpsMigrationDefinitions();
   const checksum = migrations.at(-1)?.checksum ?? rentOpsMigrationChecksum();
   const statements = migrations.flatMap((migration) => splitRentOpsSqlStatements(migration.renderedSql));
@@ -306,8 +315,32 @@ export async function ensureRentOpsSchema(options: { executor?: RentOpsSqlExecut
       message: "Rent Operations schema is not applied. Wire an explicit executor and apply:true after backup/approval.",
     };
   }
+  if (process.env.NODE_ENV === "production" && !options.query) throw new Error("rent_ops_migration_query_executor_required");
+  let appliedCommands = commands;
   try {
-    for (const statement of commands) await options.executor(statement);
+    if (options.query) {
+      await options.executor("BEGIN");
+      const existence = await options.query("SELECT to_regclass('public.rent_ops_schema_migrations') AS migration_table");
+      const installed = existence.rows[0]?.migration_table
+        ? (await options.query("SELECT version, checksum_sha256 FROM rent_ops_schema_migrations ORDER BY version")).rows
+        : [];
+      const installedVersions = new Set<number>();
+      for (const row of installed) {
+        const version = Number(row.version);
+        const definition = migrations.find(migration => migration.version === version);
+        if (!definition || installedVersions.has(version) || row.checksum_sha256 !== definition.checksum) throw new Error(`rent_ops_migration_checksum_mismatch:${version}`);
+        installedVersions.add(version);
+      }
+      const highest = Math.max(0, ...Array.from(installedVersions));
+      for (let version = 1; version <= highest; version++) if (!installedVersions.has(version)) throw new Error(`rent_ops_migration_chain_gap:${version}`);
+      const pending = migrations.filter(migration => !installedVersions.has(migration.version));
+      appliedCommands = ["BEGIN", ...pending.flatMap(migration => splitRentOpsSqlStatements(migration.renderedSql)), "COMMIT"];
+      for (const statement of appliedCommands.slice(1)) await options.executor(statement);
+    } else {
+      // Query-less executors are retained for isolated SQL-plan fixtures only.
+      // They execute the complete chain and never claim an installed version.
+      for (const statement of commands) await options.executor(statement);
+    }
   } catch (error) {
     try {
       await options.executor("ROLLBACK");
@@ -320,7 +353,7 @@ export async function ensureRentOpsSchema(options: { executor?: RentOpsSqlExecut
     version: RENT_OPS_SCHEMA_VERSION,
     mode: "applied",
     requiredTables: RENT_OPS_REQUIRED_TABLES,
-    statementCount: commands.length,
+    statementCount: appliedCommands.length,
     checksum,
     migrationChecksums: Object.fromEntries(migrations.map((migration) => [migration.version, migration.checksum])),
     message: "Rent Operations schema migration applied explicitly inside a transaction.",

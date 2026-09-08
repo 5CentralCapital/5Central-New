@@ -72,7 +72,7 @@ const MONEY_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   rent_ops_recurring_charge_schedules: ["amount_cents"],
   rent_ops_ledger_transactions: ["amount_cents"],
   rent_ops_payment_allocations: ["amount_cents"],
-  rent_ops_security_deposits: ["amount_held_cents"],
+  rent_ops_security_deposits: ["amount_held_cents", "source_balance_cents"],
   rent_ops_subsidy_contracts: ["agency_obligation_cents", "tenant_obligation_cents"],
   rent_ops_subsidy_tenants: ["amount_cents"],
   rent_ops_subsidy_payments: ["amount_cents"],

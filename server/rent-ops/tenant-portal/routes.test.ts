@@ -1,3 +1,4 @@
+import type { TenantAccessNotifier, TenantAccessDelivery } from "./delivery";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import type { AddressInfo } from "node:net";
@@ -27,7 +28,7 @@ function assertNoPrivateFields(value: unknown): void {
   }
 }
 
-async function fixture(t: TestContext, source: RentOpsSnapshot = structuredClone(syntheticRentOpsSnapshot())) {
+async function fixture(t: TestContext, source: RentOpsSnapshot = structuredClone(syntheticRentOpsSnapshot()), accessNotifier?: TenantAccessNotifier) {
   const repository = new SyntheticRentOpsRepository(source);
   const store = new InMemoryTenantAccountStore();
   let timestamp = new Date("2026-09-07T16:00:00.000Z");
@@ -45,7 +46,7 @@ async function fixture(t: TestContext, source: RentOpsSnapshot = structuredClone
     res.json({ userId: data.userId ?? null, rentOpsAdminUserId: data.rentOpsAdminUserId ?? null,
       rentOpsCsrfToken: data.rentOpsCsrfToken ?? null, hasReqUser: !!req.user, tenantAccountId: data.tenantAccountId ?? null });
   });
-  registerTenantPortalRoutes(app, { repository, accountStore: store, now: () => new Date(timestamp), publicAppUrl: "https://tenant.example.test",
+  registerTenantPortalRoutes(app, { accessNotifier, repository, accountStore: store, now: () => new Date(timestamp), publicAppUrl: "https://tenant.example.test",
     requireAdmin: (req, res, next) => { if (req.get("x-test-admin") === "authorized-test-admin") next(); else res.status(403).json({ message: "Administrator required." }); } });
   const server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
@@ -308,4 +309,31 @@ test("public recovery and login rate limits are shared across clients and reset 
   f.advance(15 * 60 * 1000);
   assert.equal((await f.client().request(`${tenantPath}/auth/recovery`, { method: "POST", body: { email: "unknown@example.test" } })).status, 200);
   assert.equal((await f.client().request(`${tenantPath}/auth/login`, { method: "POST", body: { email: "unknown@example.test", password: initialPassword } })).status, 401);
+});
+
+
+test("configured reset is nonenumerating, preserves access until use, and rejects replay", async t => {
+  const deliveries: TenantAccessDelivery[] = [];
+  let fail = false;
+  const f = await fixture(t, undefined, async input => { deliveries.push(input); if (fail) throw new Error("synthetic timeout"); });
+  const {target,invite} = await f.activate();
+  const before = (await f.store.getById(invite.account.id))!;
+  const known = await f.client().request(`${tenantPath}/auth/recovery`, {method:"POST",body:{email:binding.email}});
+  const unknown = await f.client().request(`${tenantPath}/auth/recovery`, {method:"POST",body:{email:"unknown@example.test"}});
+  assert.deepEqual(known.body,unknown.body);
+  assert.equal(deliveries.length,1);
+  assert.equal((await f.store.getById(invite.account.id))!.sessionVersion,before.sessionVersion);
+  assert.equal((await target.request(`${tenantPath}/auth/session`)).status,200);
+  const reset = await f.client().request(`${tenantPath}/auth/activate`,{method:"POST",body:{token:deliveries[0].token,password:changedPassword}});
+  assert.equal(reset.status,200);
+  assert.equal((await target.request(`${tenantPath}/auth/session`)).status,401);
+  assert.equal((await f.client().request(`${tenantPath}/auth/activate`,{method:"POST",body:{token:deliveries[0].token,password:initialPassword}})).status,400);
+  fail=true;
+  const failed=await f.client().request(`${tenantPath}/auth/recovery`,{method:"POST",body:{email:binding.email}});
+  assert.deepEqual(failed.body,unknown.body);
+  assert.equal((await f.store.getById(invite.account.id))!.activationTokenHash,null);
+  assert.equal((await f.admin.request(`${adminPath}/${invite.account.id}/send-link`,{method:"POST",body:{}})).status,503);
+  fail=false;
+  const sent=await f.admin.request(`${adminPath}/${invite.account.id}/send-link`,{method:"POST",body:{}});
+  assert.equal(sent.status,200); assert.equal(sent.body.delivery,"accepted");
 });

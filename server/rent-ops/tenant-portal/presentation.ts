@@ -1,3 +1,4 @@
+import { isTenantLeaseFile, tenantLeaseFile } from "./lease-files";
 import type { RentOpsSnapshot, RentOpsTenancy, RentOpsLedgerTransaction } from "../../../shared/rent-ops-contracts";
 import type { TenantEligibleTenancy, TenantHome, TenantIdentity } from "../../../shared/tenant-portal-contracts";
 
@@ -109,6 +110,7 @@ export function presentTenantHome(snapshot: RentOpsSnapshot, account: TenantIden
       address: address ? [address.line1, address.line2, address.city, address.state, address.postalCode].filter(Boolean).join(", ") : "", status: tenancy.status },
     balance: { amountCents: complete ? balanceCents : null, complete, asOfDate },
     ledger,
+    leaseFiles: snapshot.documents.filter(document => isTenantLeaseFile(document, account, tenancy)).map(tenantLeaseFile),
     leases: snapshot.leaseTerms.filter((row) => row.tenancyId === tenancy.id && exactLink(row.tenancyLinkKnowledge, sourceStrict(snapshot, row)) && row.status !== "draft" && row.status !== "cancelled").map((row) => {
       const strict = sourceStrict(snapshot, row);
       return { id: row.id, status: knownFact(row.statusKnowledge, strict) ? row.status : "Unconfirmed",
@@ -119,10 +121,10 @@ export function presentTenantHome(snapshot: RentOpsSnapshot, account: TenantIden
     deposits: snapshot.securityDeposits.filter((row) => row.tenancyId === tenancy.id && row.personId === person.id && row.propertyId === tenancy.propertyId
       && (!row.unitId || row.unitId === tenancy.unitId)
       && exactLink(row.personLinkKnowledge, sourceStrict(snapshot, row))
-      && exactLink(row.propertyLinkKnowledge, sourceStrict(snapshot, row))
-      && Number.isSafeInteger(row.amountHeldCents) && row.amountHeldCents >= 0).map((row) => ({
+      && exactLink(row.propertyLinkKnowledge, sourceStrict(snapshot, row))).map((row) => ({
       id: row.id, type: knownFact(row.typeKnowledge, sourceStrict(snapshot, row)) ? row.type ?? "Deposit" : "Deposit",
-      amountHeldCents: row.amountHeldCents, status: knownFact(row.dispositionStatusKnowledge, sourceStrict(snapshot, row)) ? row.dispositionStatus ?? "Unconfirmed" : "Unconfirmed",
+      amountHeldCents: typeof row.amountHeldCents === "number" && Number.isSafeInteger(row.amountHeldCents) && row.amountHeldCents >= 0 ? row.amountHeldCents : null,
+      sourceBalanceCents: typeof row.sourceBalanceCents === "number" && Number.isSafeInteger(row.sourceBalanceCents) ? row.sourceBalanceCents : null, status: knownFact(row.dispositionStatusKnowledge, sourceStrict(snapshot, row)) ? row.dispositionStatus ?? "Unconfirmed" : "Unconfirmed",
     })),
   };
 }

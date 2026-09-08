@@ -6,6 +6,7 @@ import {
   type RentOpsSnapshot,
 } from "../../../shared/rent-ops-contracts";
 import {
+  assertApplicationStatusTransition,
   baseRentScheduleViolations,
   effectiveSchedules,
   validateSnapshot,
@@ -164,4 +165,44 @@ test('historical allocations survive reversals while new allocations and effecti
   snapshot.paymentAllocations=[allocation];snapshot.ledgerTransactions=[charge,payment,{...reversal,reversalOfId:'charge'}];
   assert.deepEqual(validateSnapshot(snapshot).filter(v=>v.code.startsWith('allocation')),[]);
   assert.ok(validateAllocation({...allocation,id:'new'},payment,charge,snapshot.ledgerTransactions).some(v=>v.code==='allocation_charge_reversed'));
+});
+
+
+test("source application progress cannot bypass manual approval or conversion", () => {
+  for (const status of ["complete", "in_progress", "awaiting_payment"] as const) {
+    assert.doesNotThrow(() => assertApplicationStatusTransition(status, status));
+    assert.doesNotThrow(() => assertApplicationStatusTransition(status, "missing_information"));
+    assert.throws(() => assertApplicationStatusTransition(status, "approved"));
+    assert.throws(() => assertApplicationStatusTransition(status, "converted"));
+  }
+  assert.doesNotThrow(() => assertApplicationStatusTransition("complete", "under_review"));
+  assert.doesNotThrow(() => assertApplicationStatusTransition("in_progress", "submitted"));
+  assert.doesNotThrow(() => assertApplicationStatusTransition("awaiting_payment", "submitted"));
+});
+
+
+test('artifact-bound source update retains a future-effective allocation created before an NSF', async () => {
+ const { validateAllocation }=await import('./invariants');
+ const payment={id:'p',kind:'payment' as const,status:'posted' as const,propertyId:'property',amountCents:18935,postedOn:'2023-10-23'} as any;
+ const charge={...payment,id:'c',kind:'charge'};
+ const reversal={...payment,id:'r',kind:'reversal',reversalOfId:'p',postedOn:'2023-10-26'};
+ const allocation={id:'7318',paymentTransactionId:'p',chargeTransactionId:'c',amountCents:18935,allocatedOn:'2023-11-01',paymentLinkKnowledge:'exact',chargeLinkKnowledge:'exact',sourceArtifactSha256:'a'.repeat(64),source:{system:'rent_manager',entityType:'payment_allocation',sourceId:'7318',sourceUpdatedAt:'2023-10-24T05:04:01Z'}} as any;
+ assert.deepEqual(validateAllocation(allocation,payment,charge,[payment,charge,reversal],true),[]);
+ assert.equal(allocation.allocatedOn,'2023-11-01');
+ assert.ok(validateAllocation(allocation,payment,charge,[payment,charge,reversal]).some(v=>v.code==='allocation_payment_reversed'));
+ for(const change of [{sourceArtifactSha256:null},{source:{...allocation.source,sourceUpdatedAt:'2023-10-27T05:04:01Z'}},{source:{...allocation.source,sourceUpdatedAt:'invalid'}},{paymentLinkKnowledge:'unknown'}]) assert.ok(validateAllocation({...allocation,...change},payment,charge,[payment,charge,reversal],true).some(v=>v.code==='allocation_payment_reversed'));
+});
+
+test("v3 absent unit link stays unknown while every present tenancy reference is validated", async () => {
+  const { syntheticRentOpsSnapshot } = await import("../fixtures/synthetic");
+  const snapshot = syntheticRentOpsSnapshot(); snapshot.modelVersion = 3;
+  const tenancy = snapshot.tenancies[0]; tenancy.unitId = ""; tenancy.unitLinkKnowledge = "unknown";
+  const own = () => validateSnapshot(snapshot).filter((v) => v.entityId === tenancy.id && v.code === "tenancy_reference_invalid");
+  assert.equal(own().length, 0);
+  const originalProperty = tenancy.propertyId; tenancy.propertyId = "invalid-present";
+  assert.equal(own().length, 1);
+  tenancy.propertyId = originalProperty; tenancy.unitId = "invalid-present";
+  assert.equal(own().length, 1);
+  tenancy.unitId = ""; tenancy.unitLinkKnowledge = "ambiguous";
+  assert.equal(own().length, 1);
 });

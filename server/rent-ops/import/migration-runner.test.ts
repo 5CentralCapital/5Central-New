@@ -9,7 +9,7 @@ import { createSyntheticRentManagerTransport, SYNTHETIC_HAP_ARTIFACT_SHA256, syn
 import { sha256 } from "../export/hash";
 import { RM_EXPORT_COLLECTIONS } from "../export/registry";
 import type { ExportEnvelope, RedactedExportManifest } from "../export/types";
-import { assertRequiredFinancialReportControls, buildFinancialReportExpected, readRestrictedMigrationArchive, RestrictedMigrationArchiveError, runRestrictedMigrationArchive } from "./migration-runner";
+import { restrictedDocumentTransferMetadata, partitionRestrictedSourceRows, assertRequiredFinancialReportControls, buildFinancialReportExpected, readRestrictedMigrationArchive, RestrictedMigrationArchiveError, runRestrictedMigrationArchive } from "./migration-runner";
 import { buildRentManagerMigrationArtifact } from "./migration-artifact";
 import { createKeyedTargetIdFactory } from "./rm-mapper";
 import { syntheticRentOpsSnapshot } from "../fixtures/synthetic";
@@ -262,4 +262,24 @@ test("apply mode fails closed before opening a database executor", async () => {
   } finally {
     await rm(fixture.parent, { recursive: true, force: true });
   }
+});
+
+
+test("large source pages partition into bounded parity chunks without losing order or partition identity", () => {
+  const rows = Array.from({ length: 21600 }, (_, index) => ({ system: "rent_manager", sourceCollection: "applicationAnswers", sourceId: String(index), canonicalPayload: JSON.stringify({ index }), checksumSha256: sha256(JSON.stringify({ index })) }));
+  const chunks = partitionRestrictedSourceRows("manual.applicationAnswerRecords", "manual://applicationAnswerRecords", rows);
+  assert.equal(chunks.length, 43);
+  assert.ok(chunks.every((chunk) => Array.from(chunk.rows).length <= 512 && chunk.collectionName === "manual.applicationAnswerRecords"));
+  assert.deepEqual(chunks.flatMap((chunk) => Array.from(chunk.rows)), rows);
+  const empty = partitionRestrictedSourceRows("tenants.future", "/Tenants", []);
+  assert.equal(empty.length, 1); assert.equal(empty[0].present, true);
+});
+
+
+test("restricted transfer uses source Name and verified PDF bytes without inventing metadata", () => {
+  const bytes = new TextEncoder().encode("%PDF-1.4\nsource document\n%%EOF");
+  assert.deepEqual(restrictedDocumentTransferMetadata({}, { Name: "Executed lease packet" }, { bytes }), {fileName:"Executed lease packet",mimeType:"application/pdf"});
+  assert.equal(restrictedDocumentTransferMetadata({}, { Name: "document.pdf" }, { bytes:new Uint8Array([1,2,3]) }).mimeType, undefined);
+  assert.throws(() => restrictedDocumentTransferMetadata({}, { Name:"packet",ContentType:"image/png" }, {bytes}), /restricted_document_mime_bytes_mismatch/);
+  assert.throws(() => restrictedDocumentTransferMetadata({mimeType:"application/pdf"}, undefined, {bytes:new Uint8Array([1,2,3])}), /restricted_document_mime_bytes_mismatch/);
 });

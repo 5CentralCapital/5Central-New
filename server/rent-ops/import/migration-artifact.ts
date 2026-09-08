@@ -186,6 +186,7 @@ function controlsFor(input: RentManagerImportInput): ImportControlTotals {
 function normalizationSeverity(exception: NormalizationException): ImportMappingException["severity"] {
   if (exception.confidence === "ambiguous") return "error";
   if (exception.collection === "hap") return "error";
+  if ((exception.collection === "leases" && exception.detail === "lease_unit_not_returned") || (exception.collection === "units" && exception.detail === "market_rent_not_returned")) return "warning";
   if (/deposit_property_not_resolved|deposit_tenant_not_resolved/.test(exception.detail)) return "warning";
   if (exception.detail === "deposit_unit_id_not_returned_by_rm") return "warning";
   if (/_inferred(?:_|$)/.test(exception.detail)) return "warning";

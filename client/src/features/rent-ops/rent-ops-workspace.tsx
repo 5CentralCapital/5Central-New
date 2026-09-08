@@ -33,6 +33,7 @@ import { RentOpsAdminLogin, RentOpsAuthLoading, useRentOpsAuth } from "./auth-ui
 import { handleRentOpsMutationError, refreshRentOpsAfterConflict } from "./ui";
 import { ApplicationCaseDetail } from "./application-case-detail";
 import { RecurringBillingPanel } from "./recurring-billing-panel";
+import { depositAmounts, depositMoney } from "../tenant-portal/deposit-view";
 import { TenantPortalAccountsPanel } from "../tenant-portal/admin-accounts";
 import { mutationPayload, RENT_OPS_QUICK_ADD_ACTIONS, type FormValues, type QuickAction } from "./form-payload";
 import {
@@ -60,13 +61,15 @@ const SECTIONS: Array<{ key: SectionKey; label: string; icon: typeof FileText }>
 ];
 
 const TENANT_TABS: TenantTab[] = ["summary", "household", "tenancy", "charges", "ledger", "deposits", "housing-assistance", "documents", "activity"];
-const APPLICATION_STATUSES = ["draft", "submitted", "missing_information", "under_review", "approved", "declined", "withdrawn", "converted"];
+const APPLICATION_STATUSES = ["draft", "submitted", "missing_information", "under_review", "approved", "declined", "withdrawn", "converted", "complete", "in_progress", "awaiting_payment"];
 
 function today(): string {
   return currentLocalIsoDate();
 }
 
 function title(value: unknown): string {
+  if (value === "amountHeldCents") return "Amount held";
+  if (value === "sourceBalanceCents") return "Source balance";
   return String(value ?? "—").replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
@@ -78,6 +81,7 @@ function money(cents: unknown): string {
 }
 
 function formatCell(value: unknown, key: string, format?: string): string {
+  if (/HeldCents$/.test(key) || key === "sourceBalanceCents") return depositMoney(value);
   if (value == null || value === "") return "Needs review";
   if (/knowledge/i.test(key)) {
     if (["unknown", "ambiguous", "inferred"].includes(String(value))) return "Needs review";
@@ -194,7 +198,7 @@ function rawActionFields(action: QuickAction, snapshot: AdminSnapshot, initialVa
     case "post-ledger-transaction": return [property, unit, tenancy, person, { name: "kind", label: "Entry type", type: "select", required: true, options: [["charge", "Charge"], ["payment", "Payment"], ["credit", "Credit"]] }, { name: "category", label: "Category", type: "select", required: true, options: [["base_rent", "Base rent"], ["recurring_fee", "Recurring fee"], ["subsidy", "Housing assistance"], ["security_deposit", "Security deposit"], ["other", "Other"]] }, dollars, { name: "status", label: "Entry status", type: "select", required: true, options: [["posted", "Posted"], ["pending", "Pending"], ["voided", "Voided"]] }, { name: "postedOn", label: "Posted date", type: "date", required: true }, { name: "dueOn", label: "Due date", type: "date" }, { name: "payer", label: "Payer", type: "select", options: [["tenant", "Tenant"], ["agency", "Agency"], ["owner", "Owner"], ["unknown", "Unknown"]] }, { name: "paymentMethod", label: "Payment method", type: "select", options: ["ach", "zelle", "check", "cash", "money_order", "card", "other"].map((value) => [value, title(value)] as [string, string]) }, { name: "description", label: "Description", required: true }];
     case "save-payment-allocation": return [{ name: "paymentTransactionId", label: "Payment", type: "select", required: true, options: options.payments }, { name: "chargeTransactionId", label: "Charge", type: "select", required: true, options: options.charges }, dollars, { name: "allocatedOn", label: "Allocation date", type: "date", required: true }];
     case "reverse-ledger-transaction": return [{ name: "originalId", label: "Entry to reverse", type: "select", required: true, options: options.ledger }, { name: "postedOn", label: "Reversal date", type: "date", required: true }, { name: "status", label: "Reversal status", type: "select", required: true, options: [["posted", "Posted"], ["voided", "Voided"], ["pending", "Pending"]] }, { name: "description", label: "Reason", type: "textarea", required: true }];
-    case "save-security-deposit": return [property, unit, tenancy, { ...person, required: true }, { name: "type", label: "Deposit type", type: "select", required: true, options: [["security", "Security"], ["refundable_pet", "Refundable pet"], ["other_refundable", "Other refundable"]] }, dollars, { name: "receivedOn", label: "Received date", type: "date" }, { name: "receivedOnKnowledge", label: "Receipt-date knowledge", type: "select", options: [["source", "Known source date"], ["unknown", "Unknown"]] }, { name: "dispositionStatus", label: "Disposition", type: "select", required: true, options: [["held", "Held"], ["partially_disposed", "Partially disposed"], ["disposed", "Disposed"], ["returned", "Returned"]] }, { name: "disposedOn", label: "Disposition date", type: "date" }, { name: "dispositionNotes", label: "Disposition notes", type: "textarea" }];
+    case "save-security-deposit": return [property, unit, tenancy, { ...person, required: true }, { name: "type", label: "Deposit type", type: "select", required: true, options: [["security", "Security"], ["refundable_pet", "Refundable pet"], ["other_refundable", "Other refundable"]] }, { ...dollars, label: "Amount held" }, { name: "receivedOn", label: "Received date", type: "date" }, { name: "receivedOnKnowledge", label: "Receipt-date knowledge", type: "select", options: [["source", "Known source date"], ["unknown", "Unknown"]] }, { name: "dispositionStatus", label: "Disposition", type: "select", required: true, options: [["held", "Held"], ["partially_disposed", "Partially disposed"], ["disposed", "Disposed"], ["returned", "Returned"]] }, { name: "disposedOn", label: "Disposition date", type: "date" }, { name: "dispositionNotes", label: "Disposition notes", type: "textarea" }];
     case "save-subsidy-contract": return [property, { ...unit, required: true }, { ...tenancy, required: true }, { name: "agencyName", label: "Housing agency", required: true }, { name: "contractNumber", label: "Contract number" }, { name: "effectiveFrom", label: "Effective from", type: "date", required: true }, { name: "effectiveTo", label: "Effective through", type: "date" }, { name: "agencyDollars", label: "Agency portion", type: "number", required: true }, { name: "tenantDollars", label: "Tenant portion", type: "number", required: true }, { name: "status", label: "Contract status", type: "select", required: true, options: [["active", "Active"], ["ended", "Ended"], ["pending", "Pending"], ["exception", "Exception"]] }];
     case "convert-application": {
       const applicationId = typeof initialValues.applicationId === "string" ? initialValues.applicationId : "";
@@ -250,6 +254,8 @@ function confirmedChargeDefinition(snapshot: AdminSnapshot, id: unknown, categor
 
 function ActionDialog({ action, snapshot, initialValues = {}, onClose, onSaved, onConflict }: { action: QuickAction; snapshot: AdminSnapshot; initialValues?: FormValues; onClose: () => void; onSaved: (message: string) => void; onConflict?: () => void }) {
   const fields = actionFields(action, snapshot, initialValues);
+  const deposit = action === "save-security-deposit" ? snapshot.snapshot.securityDeposits.find((item) => item.id === initialValues.id) : undefined;
+  const depositView = deposit ? depositAmounts(deposit) : undefined;
   const [values, setValues] = useState<FormValues>(() => ({ ...Object.fromEntries(fields.map((field) => [field.name, field.type === "checkbox" ? false : ""])), ...initialValues }));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
@@ -279,6 +285,7 @@ function ActionDialog({ action, snapshot, initialValues = {}, onClose, onSaved, 
       <section className="ro-dialog" role="dialog" aria-modal="true" aria-labelledby="ro-action-title">
         <header><div><span className="eyebrow">Audited admin action</span><h2 id="ro-action-title">{ACTION_LABELS[action]}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close"><X /></button></header>
         <form onSubmit={submit}>
+          {depositView && <p>Current amount held: {depositView.held}.{depositView.sourceBalance !== undefined && <> Source balance: {depositView.sourceBalance}.</>} Leave unknown held amounts blank until confirmed.</p>}
           <div className="ro-form-grid">
             {fields.map((field) => <label key={field.name} className={field.type === "textarea" ? "wide" : ""}>{field.label}{field.required && <sup> *</sup>}{field.type === "select" ? <select required={field.required} value={String(values[field.name] ?? "")} onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))}><option value="">Select…</option>{field.options?.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : field.type === "textarea" ? <textarea required={field.required} value={String(values[field.name] ?? "")} onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))} /> : field.type === "checkbox" ? <input type="checkbox" checked={Boolean(values[field.name])} onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.checked }))} /> : <input required={field.required} type={field.type ?? "text"} step={field.type === "number" ? "0.01" : undefined} value={String(values[field.name] ?? "")} onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))} />}</label>)}
           </div>
@@ -306,7 +313,7 @@ function TenantDetail({ tenant, tab, onTab, onEdit }: { tenant: TenantView; tab:
     tenancy: [...(tenant.tenancies ?? (tenant.tenancy ? [tenant.tenancy] : [])), ...(tenant.leaseTerms ?? [])],
     charges: tenant.schedules ?? [],
     ledger: tenant.ledger ?? [],
-    deposits: tenant.deposits ?? [],
+    deposits: (tenant.deposits ?? []).map((deposit) => ({ type: deposit.type, amountHeldCents: deposit.amountHeldCents, sourceBalanceCents: deposit.sourceBalanceCents, dispositionStatus: deposit.dispositionStatus, receivedOn: deposit.receivedOn, disposedOn: deposit.disposedOn, dispositionNotes: deposit.dispositionNotes })),
     "housing-assistance": tenant.subsidyContracts ?? [],
     documents: tenant.documents ?? [],
     activity: tenant.activity ?? [],
@@ -443,7 +450,7 @@ export default function RentOpsWorkspace() {
     <div className="ro-main"><header className="ro-topbar"><div><span className="eyebrow">Portfolio records</span><h1>{SECTIONS.find((item) => item.key === section)?.label}</h1></div><button className="primary" onClick={() => openAction(section === "properties" ? "save-property" : section === "income" ? "post-ledger-transaction" : section === "documents" ? "save-activity" : "save-person")}><Plus /> Add record</button></header>
       {(warning || notice || error) && <div className={`ro-banner ${error ? "error" : ""}`}><AlertCircle />{error ?? notice ?? warning}<button onClick={() => { setNotice(undefined); setError(undefined); }} aria-label="Dismiss"><X /></button></div>}
       <FilterBar filters={filters} snapshot={snapshot} onChange={setFilters} onRefresh={() => void load()} refreshing={loading} />
-      {section === "reports" && <><div className="ro-stats"><StatCard label="Occupied" value={`${summary.occupiedUnits}/${summary.unitCount}`} onClick={() => openDrilldown("occupiedUnits", "occupancy")} /><StatCard label="Ready vacancies" value={String(summary.readyVacantUnits)} tone={summary.readyVacantUnits ? "warn" : "good"} onClick={() => openDrilldown("genuineVacantUnits", "occupancy")} /><StatCard label="Scheduled rent" value={money(summary.scheduledRentCents)} onClick={() => openDrilldown("scheduledRentCents", "scheduled-income")} /><StatCard label="Rent delinquency" value={money(summary.rentOnlyDelinquencyCents)} tone={summary.rentOnlyDelinquencyCents ? "warn" : "good"} onClick={() => openDrilldown("rentOnlyDelinquencyCents", "delinquency")} /><StatCard label="Expiring ≤ 60 days" value={String(summary.expiringIn60Days)} onClick={() => openDrilldown("expiringIn60Days", "lease-expiration")} /><StatCard label="Deposit liability" value={money(summary.securityDepositLiabilityCents)} onClick={() => openDrilldown("securityDepositLiabilityCents", "security-deposit")} /></div><Reports snapshot={snapshot} filters={filters} selected={reportKey} onSelect={setReportKey} /></>}
+      {section === "reports" && <><div className="ro-stats"><StatCard label="Occupied" value={`${summary.occupiedUnits}/${summary.unitCount}`} onClick={() => openDrilldown("occupiedUnits", "occupancy")} /><StatCard label="Ready vacancies" value={String(summary.readyVacantUnits)} tone={summary.readyVacantUnits ? "warn" : "good"} onClick={() => openDrilldown("genuineVacantUnits", "occupancy")} /><StatCard label="Scheduled rent" value={money(summary.scheduledRentCents)} onClick={() => openDrilldown("scheduledRentCents", "scheduled-income")} /><StatCard label="Rent delinquency" value={money(summary.rentOnlyDelinquencyCents)} tone={summary.rentOnlyDelinquencyCents ? "warn" : "good"} onClick={() => openDrilldown("rentOnlyDelinquencyCents", "delinquency")} /><StatCard label="Expiring ≤ 60 days" value={String(summary.expiringIn60Days)} onClick={() => openDrilldown("expiringIn60Days", "lease-expiration")} /><StatCard label="Deposit liability" value={depositMoney(summary.securityDepositLiabilityCents)} onClick={() => openDrilldown("securityDepositLiabilityCents", "security-deposit")} /></div><Reports snapshot={snapshot} filters={filters} selected={reportKey} onSelect={setReportKey} /></>}
       {section === "income" && <RecurringBillingPanel onPosted={load} />}
       {sectionReport[section] && <Reports snapshot={snapshot} filters={filters} selected={sectionReport[section]!} onSelect={(key) => { setReportKey(key); setSection("reports"); }} />}
       {section === "tenants" && <div className="ro-split"><section className="ro-panel tenant-list"><div className="ro-panel-heading"><div><span className="eyebrow">People, not ledger accounts</span><h2>{visibleTenants.length} residents</h2></div><button className="secondary" onClick={() => openAction("save-person")}><Plus /> Resident</button></div>{visibleTenants.map((tenant) => <button key={tenant.person.id} className={selectedTenant?.person.id === tenant.person.id ? "active" : ""} onClick={() => { setSelectedTenantId(tenant.person.id); setTenantTab("summary"); }}><strong>{tenant.person.firstName} {tenant.person.lastName}</strong><span>{tenant.property?.name ?? "No property"} · {tenant.unit?.unitNumber ?? "No unit"}</span></button>)}</section>{selectedTenant ? <TenantDetail tenant={selectedTenant} tab={tenantTab} onTab={setTenantTab} onEdit={openAction} /> : <section className="ro-panel"><EmptyState message="No tenant profiles match the current filters." /></section>}</div>}

@@ -355,3 +355,27 @@ test("manual recurring and conversion payloads require positive explicit facts",
   const end = mutationPayload("end-recurring-schedule", { predecessorId: "schedule:one", expectedRevision: 2, effectiveFrom: "2026-09-01", amountDollars: "10.00" });
   assert.equal("amountCents" in end, false);
 });
+
+test("deposit browser decoders preserve null held, known zero, and signed source balances", async () => {
+  const bundle = serializedServerDocumentBundle();
+  (bundle.snapshot as Record<string, unknown>).securityDeposits = [
+    { id: "deposit:unknown", amountHeldCents: null, sourceBalanceCents: -155000 },
+    { id: "deposit:zero", amountHeldCents: 0, sourceBalanceCents: 0 },
+  ];
+  (bundle.summary as Record<string, unknown>).securityDepositLiabilityCents = null;
+  const restore = stubJsonResponse(bundle);
+  try {
+    const loaded = await loadRentOpsAdminSnapshot();
+    assert.equal(loaded.snapshot.snapshot.securityDeposits[0].amountHeldCents, null);
+    assert.equal(loaded.snapshot.snapshot.securityDeposits[0].sourceBalanceCents, -155000);
+    assert.equal(loaded.snapshot.snapshot.securityDeposits[1].amountHeldCents, 0);
+    assert.equal(loaded.snapshot.summary.securityDepositLiabilityCents, null);
+  } finally { restore(); }
+  const restoreReport = stubJsonResponse({ report: "security-deposit", filters: {}, rows: [{ totalHeldCents: null, securityHeldCents: null, refundablePetHeldCents: 0, otherRefundableHeldCents: 0, sourceBalanceCents: -155000, unknownHeldCount: 1 }] });
+  try {
+    const [row] = await loadRentOpsReport("security-deposit");
+    assert.equal(reportCell(row, "totalHeldCents"), null);
+    assert.equal(reportCell(row, "sourceBalanceCents"), -155000);
+    assert.equal(reportCell(row, "refundablePetHeldCents"), 0);
+  } finally { restoreReport(); }
+});

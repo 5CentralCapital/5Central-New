@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PGlite } from "@electric-sql/pglite";
-import { ensureRentOpsSchema, rentOpsMigrationDefinitions, RENT_OPS_REQUIRED_TABLES } from "../persistence";
+import { ensureRentOpsSchema, rentOpsMigrationDefinitions, RENT_OPS_REQUIRED_TABLES, RENT_OPS_SCHEMA_VERSION } from "../persistence";
 import { createRentOpsSecurityManifest, renderRentOpsSecuritySql, RENT_OPS_APPLICATION_TABLES, RENT_OPS_RUNTIME_EPHEMERAL_TABLES } from "../security/deployment-security";
 
 // Always isolated in-memory PostgreSQL; never uses any environment database URL.
 test("complete immutable migration chain replays and enforces actual role boundaries", async () => {
+  assert.equal(RENT_OPS_SCHEMA_VERSION, rentOpsMigrationDefinitions().length);
+  assert.equal(RENT_OPS_SCHEMA_VERSION, rentOpsMigrationDefinitions().at(-1)!.version);
   const db = new PGlite();
   try {
     for (let run = 0; run < 2; run++) {
-      await ensureRentOpsSchema({ apply: true, executor: async (statement) => { await db.exec(statement); } });
+      await ensureRentOpsSchema({ apply: true, query: sql => db.query(sql), executor: async (statement) => { await db.exec(statement); } });
       const versions = await db.query<{ version: number; checksum_sha256: string }>("SELECT version, checksum_sha256 FROM rent_ops_schema_migrations ORDER BY version");
       assert.deepEqual(versions.rows, rentOpsMigrationDefinitions().map(m => ({ version: m.version, checksum_sha256: m.checksum })));
     }
@@ -30,6 +32,6 @@ test("complete immutable migration chain replays and enforces actual role bounda
       }
     }
     await db.exec("UPDATE rent_ops_schema_migrations SET checksum_sha256 = repeat('0',64) WHERE version = 13");
-    await assert.rejects(() => ensureRentOpsSchema({ apply: true, executor: async statement => { await db.exec(statement); } }), /division by zero/);
+    await assert.rejects(() => ensureRentOpsSchema({ apply: true, query: sql => db.query(sql), executor: async statement => { await db.exec(statement); } }), /checksum_mismatch/);
   } finally { await db.close(); }
 });

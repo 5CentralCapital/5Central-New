@@ -242,6 +242,26 @@ function moneyField(record: RawRecord, ...keys: string[]): MoneyRead {
   return parsed === undefined ? { present: true, invalid: true } : { present: true, value: parsed, invalid: false };
 }
 
+function allocationMoneyField(record: RawRecord, ...keys: string[]): MoneyRead {
+  if (!["ReverseDirectAllocation", "ReversePrepayAllocation"].includes(stringValue(record, "AllocationType") ?? "")) return moneyField(record, ...keys);
+  const key = keys.find(key => record[key] !== undefined && record[key] !== null && record[key] !== "");
+  if (!key) return { present: false, invalid: false };
+  const raw = String(record[key]).trim();
+  if (!raw.startsWith("-")) return { present: true, invalid: true };
+  const amount = decimalToCents(raw.slice(1), key.toLowerCase().includes("cents"));
+  return amount && amount > 0 ? { present: true, invalid: false, value: -amount } : { present: true, invalid: true };
+}
+
+function depositBalanceField(record: RawRecord): MoneyRead {
+  const keys = ["sourceBalanceCents", "amountHeldCents", "amount", "balance"];
+  const key = keys.find(key => record[key] !== undefined && record[key] !== null && record[key] !== "");
+  if (!key) return { present: false, invalid: false };
+  const text = String(record[key]).trim();
+  const negative = text.startsWith("-");
+  const parsed = decimalToCents(negative ? text.slice(1) : text, key.toLowerCase().includes("cents"));
+  return parsed === undefined ? {present:true,invalid:true} : {present:true,invalid:false,value:negative ? -parsed : parsed};
+}
+
 function centsValue(record: RawRecord, ...keys: string[]): number | undefined {
   return moneyField(record, ...keys).value;
 }
@@ -266,7 +286,7 @@ export function moneyControlCounts(input: RentManagerImportInput): RentManagerMo
     let unknown = 0;
     let invalid = 0;
     for (const raw of records ?? []) {
-      const read = moneyField(raw as RawRecord, ...keys);
+      const read = name === "deposits" ? depositBalanceField(raw as RawRecord) : name === "allocations" ? allocationMoneyField(raw as RawRecord, ...keys) : moneyField(raw as RawRecord, ...keys);
       if (!read.present) unknown += 1;
       else if (read.invalid || read.value === undefined) invalid += 1;
       else total += read.value;
@@ -1217,7 +1237,7 @@ function resolveRecurringScope(
 ): RecurringScopeResolution | undefined {
   const explicitTenancySource = sourceLink(record, "tenancyId", "leaseId", "TenancyID", "LeaseID");
   const tenancy = explicitTenancySource ? tenancyBySource.get(explicitTenancySource) : undefined;
-  const rawScopeType = stringValue(record, "scopeType", "EntityType", "EntityTypeName", "ScopeType");
+  const rawScopeType = stringValue(record, "EntityType", "scopeType", "EntityTypeName", "ScopeType");
   const rawScopeId = stringValue(record, "scopeId", "EntityKeyID", "EntityKeyId");
   // v3 requires RM's explicit EntityType/ScopeType.  Inferring a scope from
   // convenient link fields changes the meaning of a source row and can make
@@ -1528,7 +1548,7 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
   for (const raw of input.recurringSchedules ?? []) {
     const record = raw as RawRecord;
     if (!claimSource("recurring_schedule", record)) continue;
-    const rawScopeType = stringValue(record, "scopeType", "EntityType", "EntityTypeName", "ScopeType");
+    const rawScopeType = stringValue(record, "EntityType", "scopeType", "EntityTypeName", "ScopeType");
     const strictScopeType = strictFinancialValue(context, {
       sourceCollection: "recurringSchedules",
       sourceField: "EntityType",
@@ -1545,7 +1565,8 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
       }
     }
     if (!amountCents.present || amountCents.invalid || amountCents.value === undefined || amountCents.value <= 0) {
-      exception(exceptions, "recurring_schedule_fact_incomplete", "Recurring schedule was quarantined because a positive amount is required", "recurring_schedule", record, amountCents.value, "error");
+      const sourceAmountAbsent = isV3(context) && !amountCents.present;
+      exception(exceptions, sourceAmountAbsent ? "recurring_schedule_amount_unknown" : "recurring_schedule_fact_incomplete", sourceAmountAbsent ? "Recurring schedule source amount was not returned; retained as unknown and nonbillable" : "Recurring schedule requires a valid positive amount", "recurring_schedule", record, amountCents.value, sourceAmountAbsent ? "warning" : "error");
       if (!isV3(context)) {
         addSource("recurring_schedule", record, `rm:exception:recurring_schedule:${sourceId(record)}`);
         continue;
@@ -1771,7 +1792,38 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
     const record = raw as RawRecord;
     if (!claimSource("ledger_transaction", record)) continue;
     const transaction = mapLedger(record, "payment");
-    if (transaction) { snapshot.ledgerTransactions.push(transaction); addSource("ledger_transaction", record, transaction.id); }
+    if (transaction) {
+      snapshot.ledgerTransactions.push(transaction); addSource("ledger_transaction", record, transaction.id);
+      const reversalType = stringValue(record, "ReversalType");
+      const reversalDate = dateField(record, "ReversalDate");
+      if (reversalType || reversalDate.present) {
+        // RM encodes these exact reversal enums as a dated fact on its Payment
+        // row. Preserve that payment and its allocations; never turn the
+        // original into a void or manufacture a second receipt of money.
+        if (!["NSF", "ePay", "Void"].includes(reversalType ?? "") || !reversalDate.value || reversalDate.invalid || !transaction.postedOn || reversalDate.value < transaction.postedOn || transaction.amountCents === null || transaction.amountCents <= 0 || transaction.kind !== "payment" || (transaction.status !== null && transaction.status !== "posted")) {
+          exception(exceptions, "payment_reversal_unresolved", "Payment reversal fields require an exact supported type, positive original amount, and valid reversal date on or after the payment", "ledger_transaction", record, transaction.amountCents ?? undefined, "error");
+        } else {
+          const factSourceId = `${sourceId(record)}:ReversalType:${reversalType}`;
+          const id = targetId(context, "ledger_transaction", factSourceId);
+          if (id.length > 160 || snapshot.ledgerTransactions.some(row => row.id === id)) {
+            exception(exceptions, "payment_reversal_identity_conflict", "Derived payment reversal identity is unavailable", "ledger_transaction", record, transaction.amountCents, "error");
+          } else {
+            // This field-qualified identity identifies the original record's
+            // explicit reversal fact, not a separate RM source record. Source
+            // record counts and raw checksums therefore remain unchanged.
+            snapshot.ledgerTransactions.push({ ...transaction, id,
+              source: { ...transaction.source!, sourceId: factSourceId },
+              kind: "reversal", reversalOfId: transaction.id,
+              postedOn: reversalDate.value, postedOnKnowledge: "source",
+              status: "posted", statusKnowledge: "source",
+              description: stringValue(record, "ReversalReason") ?? null,
+              descriptionKnowledge: stringValue(record, "ReversalReason") ? "source" : "unknown",
+              dueOn: null, dueOnKnowledge: "unknown",
+            });
+          }
+        }
+      }
+    }
   }
   for (const raw of input.credits ?? []) {
     const record = raw as RawRecord;
@@ -1783,15 +1835,19 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
   for (const raw of input.allocations ?? []) {
     const record = raw as RawRecord;
     if (!claimSource("payment_allocation", record)) continue;
+    const sourceCredit = stringValue(record, "AllocationType") === "CreditAllocation";
+    const credit = sourceCredit ? transactionBySource.get(sourceLink(record, "creditId", "AppliedCreditID")) : undefined;
     const payment = transactionBySource.get(sourceLink(record, "paymentId", "paymentSourceId"));
     const charge = transactionBySource.get(sourceLink(record, "chargeId", "chargeSourceId"));
-    if (isV3(context)) {
-      const amountRead = moneyField(record, "amountCents", "amount");
+    const sourceReversal = ["ReverseDirectAllocation", "ReversePrepayAllocation"].includes(stringValue(record, "AllocationType") ?? "");
+    const sourceTransfer = stringValue(record, "AllocationType") === "EntityTransfer";
+    if (isV3(context) || sourceReversal || sourceTransfer || sourceCredit) {
+      const amountRead = allocationMoneyField(record, "amountCents", "amount");
       const allocatedRead = dateField(record, "allocatedOn", "date");
       if (!amountRead.present) exception(exceptions, "allocation_amount_unknown", "Allocation amount was not returned as a reportable value", "payment_allocation", record, undefined, "warning");
       else if (amountRead.invalid) exception(exceptions, "allocation_amount_invalid", "Allocation amount was not a reportable monetary value", "payment_allocation", record, undefined, "warning");
       if (allocatedRead.invalid) exception(exceptions, "invalid_date", "allocatedOn", "payment_allocation", record, undefined, "warning");
-      if (!payment || !charge) exception(exceptions, "allocation_reference_unknown", "Allocation payment or charge link is unknown; the raw allocation is retained", "payment_allocation", record, amountRead.value, "warning");
+      if (!(sourceCredit ? credit : payment) || !charge) exception(exceptions, "allocation_reference_unknown", "Allocation payment or charge link is unknown; the raw allocation is retained", "payment_allocation", record, amountRead.value, "warning");
       if (allocatedRead.value && payment?.postedOn && charge?.postedOn && (allocatedRead.value < payment.postedOn || allocatedRead.value < charge.postedOn)) {
         exception(exceptions, "allocation_date_before_fact", "Allocation date precedes a linked payment or charge and is excluded from date-specific reporting", "payment_allocation", record, amountRead.value, "warning");
       }
@@ -1802,6 +1858,11 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
       }
       const allocation: RentOpsPaymentAllocation = {
         id: targetId(context, "payment_allocation", sourceId(record)),
+        kind: sourceCredit ? "credit_allocation" : sourceReversal ? "reversal" : sourceTransfer ? "transfer" : "allocation",
+        creditTransactionId: sourceCredit ? credit?.id ?? null : null,
+        creditLinkKnowledge: sourceCredit && credit ? "exact" : "unknown",
+        sourceArtifactSha256: context.artifactSha256 ?? null,
+        artifactObservationOn: context.artifactObservationOn ?? null,
         source: { system: SYSTEM, entityType: "payment_allocation", sourceId: sourceId(record), sourceUpdatedAt: sourceUpdatedAt(record) },
         paymentTransactionId: payment?.id ?? null,
         chargeTransactionId: charge?.id ?? null,
@@ -1860,6 +1921,18 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
       transaction.allocationMode = allocations.length === 0 || allocations.some((allocation) => allocation.chargeLinkKnowledge !== "exact") || properties.size === 0
         ? "unknown"
         : properties.size === 1 ? "allocation_single" : "multi_property";
+      if (transaction.allocationMode === "multi_property") {
+        const applied = allocations.filter(row=>row.kind !== "transfer");
+        const exactShared = !!transaction.personId && transaction.personLinkKnowledge === "exact" && applied.length > 0 && applied.every(row => {
+          const charge = snapshot.ledgerTransactions.find(candidate=>candidate.id===row.chargeTransactionId);
+          return row.paymentLinkKnowledge === "exact" && row.chargeLinkKnowledge === "exact" && typeof row.amountCents === "number" && Number.isSafeInteger(row.amountCents) && !!row.allocatedOn
+            && !!charge?.propertyId && charge.propertyLinkKnowledge === "exact" && charge.personId === transaction.personId && charge.personLinkKnowledge === "exact";
+        }) && applied.reduce((sum,row)=>sum+(row.amountCents??0),0) === transaction.amountCents;
+        if (exactShared) {
+          transaction.propertyId=null;transaction.unitId=null;transaction.tenancyId=null;
+          transaction.propertyLinkKnowledge="unknown";transaction.unitLinkKnowledge="unknown";transaction.tenancyLinkKnowledge="unknown";
+        } else exception(exceptions,"shared_payment_scope_unresolved","Shared receipt requires complete exact account and allocation scopes with a full amount tie-out","ledger_transaction",undefined,transaction.amountCents??undefined,"error");
+      }
     }
   }
   const subsidyBySource = new Map<string, RentOpsSubsidyContract>();
@@ -2028,7 +2101,10 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
     const property = isV3(context)
       ? explicitProperty
       : explicitProperty ?? (tenancy ? Array.from(propertyBySource.values()).find((candidate) => candidate.id === tenancy.propertyId) : unit ? Array.from(propertyBySource.values()).find((candidate) => candidate.id === unit.propertyId) : undefined);
-    const amountHeldCents = requiredMoney(record, ["amountHeldCents", "amount"], exceptions, "deposit", "amountHeldCents", true);
+    const signedBalance = isV3(context) ? depositBalanceField(record) : undefined;
+    const amountHeldCents = signedBalance && signedBalance.present && !signedBalance.invalid
+      ? signedBalance.value
+      : requiredMoney(record, ["amountHeldCents", "amount"], exceptions, "deposit", "amountHeldCents", true);
     const receivedOnRead = dateField(record, "receivedOn", "ReceivedOn", "ReceivedDate");
     if (receivedOnRead.invalid) fieldException(exceptions, "invalid_date", "receivedOn", "deposit", record);
     const receivedOn = receivedOnRead.value;
@@ -2092,7 +2168,8 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
       personLinkKnowledge: person ? "exact" : "unknown",
       type,
       typeKnowledge: parsedType ? "source" : "unknown",
-      amountHeldCents,
+      amountHeldCents: amountHeldCents < 0 ? null : amountHeldCents,
+      ...(isV3(context) ? { sourceBalanceCents: amountHeldCents } : {}),
       receivedOn,
       receivedOnKnowledge: receivedOn ? "source" : "unknown",
       dispositionStatus,

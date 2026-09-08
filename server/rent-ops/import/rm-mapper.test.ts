@@ -454,3 +454,105 @@ test("unknown recurring definitions retain distinct schedule identities without 
   assert.ok(schedules.every((schedule) => schedule.chargeDefinitionLinkKnowledge === "unknown"));
   assert.ok(mapped.exceptions.some((item) => item.code === "recurring_charge_definition_unknown"));
 });
+
+test("RM progress states remain exact and never imply application approval", () => {
+  const artifactSha256 = "a".repeat(64);
+  const states = [["Complete", "complete"], ["InProgress", "in_progress"], ["AwaitingPayment", "awaiting_payment"]] as const;
+  const applications = states.map(([ApplicationStatus], index) => ({ entityType: "application", sourceId: `progress-${index}`, sourceCollection: "prospectApplications", ApplicationStatus }));
+  const mapped = mapRentManagerExport({
+    ...input(), applications,
+    applicationHistoryStatusCrosswalk: states.map(([sourceValue, targetStatus]) => ({ artifactSha256, sourceCollection: "prospectApplications", sourceField: "ApplicationStatus", sourceValue, targetStatus })),
+  }, { fidelityVersion: 3, artifactSha256, targetIdFactory: deterministicTestTargetIdFactory });
+  assert.deepEqual(mapped.snapshot.applications.map((row) => row.status), states.map(([, status]) => status));
+  assert.ok(mapped.snapshot.applications.every((row) => row.statusKnowledge === "source" && row.status !== "approved"));
+  const unknown = mapRentManagerExport({ ...input(), applications }, { fidelityVersion: 3, artifactSha256, targetIdFactory: deterministicTestTargetIdFactory });
+  assert.ok(unknown.snapshot.applications.every((row) => row.status === null));
+});
+
+test('explicit RM NSF fields retain original receipt and allocations plus a deterministic dated reversal', () => {
+  const data=input();const original=data.payments![0];
+  Object.assign(original,{ReversalType:'NSF',ReversalDate:'2026-08-05T00:00:00'});
+  data.payments!.push({...original,sourceId:'replacement',ReversalType:undefined,ReversalDate:undefined,postedOn:'2026-08-06'});
+  data.allocations!.push({...data.allocations![0],sourceId:'replacement-allocation',paymentId:'replacement',allocatedOn:'2026-08-06'});
+  const first=mapRentManagerExport(data),second=mapRentManagerExport(data);
+  const payment=first.snapshot.ledgerTransactions.find(row=>row.source?.sourceId==='pay1')!;
+  const reversal=first.snapshot.ledgerTransactions.find(row=>row.reversalOfId===payment.id)!;
+  assert.equal(payment.kind,'payment');assert.equal(payment.postedOn,'2026-08-02');
+  assert.equal(reversal.postedOn,'2026-08-05');assert.equal(reversal.amountCents,85000);assert.equal(reversal.status,'posted');
+  assert.equal(reversal.id,second.snapshot.ledgerTransactions.find(row=>row.kind==='reversal')?.id);
+  assert.equal(first.snapshot.paymentAllocations.length,2);
+  assert.equal(first.sourceRecords.filter(row=>row.entityType==='ledger_transaction').length,5);
+  assert.equal(first.exceptions.some(row=>row.code==='snapshot_invariant_failed'),false);
+});
+
+test('unsupported or incomplete reversal evidence never invents an NSF or erases a payment', () => {
+  for(const fields of [{ReversalType:'Unsupported',ReversalDate:'2026-08-05'}, {ReversalType:'NSF'}, {ReversalType:'NSF',ReversalDate:'2026-07-01'}, {ReversalDate:'2026-08-05'}]) {
+    const data=input();Object.assign(data.payments![0],fields);const result=mapRentManagerExport(data);
+    assert.equal(result.snapshot.ledgerTransactions.filter(row=>row.kind==='reversal').length,0);
+    assert.equal(result.snapshot.ledgerTransactions.filter(row=>row.kind==='payment').length,1);
+    assert.ok(result.exceptions.some(row=>row.code==='payment_reversal_unresolved'&&row.severity==='error'));
+  }
+});
+
+test('source reverse allocation is signed, dated, artifact-bound and does not double reverse an NSF', async () => {
+  const { deriveTenantLedger }=await import('../domain/reports');
+  const data=input();data.artifactSha256='a'.repeat(64);data.artifactObservationOn='2026-08-16';
+  Object.assign(data.payments![0],{ReversalType:'NSF',ReversalDate:'2026-08-05'});
+  data.allocations!.push({entityType:'allocation',sourceId:'reverse-a1',paymentId:'pay1',chargeId:'c1',amount:-850,allocatedOn:'2026-08-05',AllocationType:'ReverseDirectAllocation'});
+  const result=mapRentManagerExport(data),negative=result.snapshot.paymentAllocations.find(row=>row.amountCents!<0)!;
+  assert.equal(negative.amountCents,-85000);assert.equal(negative.kind,'reversal');assert.equal(negative.sourceArtifactSha256,'a'.repeat(64));
+  assert.equal(result.exceptions.some(row=>row.code==='snapshot_invariant_failed'),false);
+  const tenancy=result.snapshot.tenancies[0].id,charge=result.snapshot.ledgerTransactions.find(row=>row.source?.sourceId==='c1')!;
+  assert.equal(deriveTenantLedger(result.snapshot,tenancy,{asOfDate:'2026-08-04'}).find(row=>row.transaction.id===charge.id)?.openCents,0);
+  assert.equal(deriveTenantLedger(result.snapshot,tenancy,{asOfDate:'2026-08-06'}).find(row=>row.transaction.id===charge.id)?.openCents,85000);
+});
+
+test('EntityTransfer remains source history while only EntityTransferAllocation applies to the charge', async () => {
+  const { deriveTenantLedger }=await import('../domain/reports');
+  const data=input();data.artifactSha256='a'.repeat(64);data.artifactObservationOn='2026-08-16';
+  Object.assign(data.allocations![0],{AllocationType:'EntityTransferAllocation'});
+  data.allocations!.push({...data.allocations![0],sourceId:'transfer-side',AllocationType:'EntityTransfer'});
+  const result=mapRentManagerExport(data),transfer=result.snapshot.paymentAllocations.find(row=>row.kind==='transfer')!;
+  assert.equal(transfer.amountCents,85000);assert.equal(result.snapshot.paymentAllocations.length,2);
+  assert.equal(result.exceptions.some(row=>row.code==='snapshot_invariant_failed'),false);
+  const charge=result.snapshot.ledgerTransactions.find(row=>row.source?.sourceId==='c1')!;
+  assert.equal(deriveTenantLedger(result.snapshot,result.snapshot.tenancies[0].id,{asOfDate:'2026-08-16'}).find(row=>row.transaction.id===charge.id)?.openCents,0);
+});
+
+test('exact ePay and Void source reversal enums retain dated reversal and source reason without NSF relabeling',()=>{
+ for(const type of ['ePay','Void']){
+  const data=input();Object.assign(data.payments![0],{ReversalType:type,ReversalDate:'2026-08-05',ReversalReason:'Overpaid'});
+  const result=mapRentManagerExport(data),reversal=result.snapshot.ledgerTransactions.find(row=>row.kind==='reversal')!;
+  assert.ok(reversal.source?.sourceId.endsWith(`:ReversalType:${type}`));assert.equal(reversal.description,'Overpaid');assert.equal(reversal.descriptionKnowledge,'source');assert.equal(reversal.postedOn,'2026-08-05');assert.equal(reversal.amountCents,85000);
+  assert.equal(result.snapshot.ledgerTransactions.filter(row=>row.kind==='payment').length,1);
+  assert.equal(result.exceptions.some(row=>row.code==='payment_reversal_unresolved'),false);
+ }
+});
+
+test("v3 source-absent recurring amount remains retained unknown; invalid and nonpositive amounts block", () => {
+  const artifactSha256 = "a".repeat(64);
+  const financialSemanticCrosswalk: RentManagerFinancialSemanticCrosswalk = { artifactSha256, normalization: "exact_v1", entries: [{ artifactSha256, sourceCollection: "recurringSchedules", sourceField: "EntityType", semanticKind: "recurring_scope", normalization: "exact_v1", normalizedValue: "Tenant", targetValue: "tenant" }] };
+  const base = { ...input(), financialSemanticCrosswalk, recurringSchedules: [{ sourceId: "absent-amount", EntityType: "Tenant", EntityKeyID: "t1", tenantId: "t1" }] };
+  const mapped = mapRentManagerExport(base, { fidelityVersion: 3, artifactSha256, targetIdFactory: deterministicTestTargetIdFactory });
+  assert.equal(mapped.snapshot.recurringSchedules.length, 1);
+  assert.equal(mapped.snapshot.recurringSchedules[0].amountCents, null);
+  assert.equal(mapped.snapshot.recurringSchedules[0].amountKnowledge, "unknown");
+  assert.equal(mapped.snapshot.recurringSchedules[0].active, null);
+  assert.ok(mapped.exceptions.some((x) => x.code === "recurring_schedule_amount_unknown" && x.severity === "warning"));
+  for (const amount of [0, -1, "not-money"]) {
+    const result = mapRentManagerExport({ ...base, recurringSchedules: [{ ...base.recurringSchedules[0], amount }] }, { fidelityVersion: 3, artifactSha256, targetIdFactory: deterministicTestTargetIdFactory });
+    assert.ok(result.exceptions.some((x) => x.code === "recurring_schedule_fact_incomplete" && x.severity === "error"));
+  }
+});
+
+test('exact CreditAllocation applies an existing credit and never invents a payment',()=>{
+ const data=input();
+ Object.assign(data,{artifactSha256:'a'.repeat(64),artifactObservationOn:'2026-08-16'});
+ data.allocations.push({entityType:'allocation',sourceId:'credit-application',paymentId:'',chargeId:'c1',amount:25,allocatedOn:'2026-08-04',AllocationType:'CreditAllocation',creditId:'credit1'} as any);
+ // Leave room for the credit application in the original charge.
+ data.allocations[0].amount=825;
+ const result=mapRentManagerExport(data),row=result.snapshot.paymentAllocations.find(a=>a.kind==='credit_allocation')!;
+ assert.ok(row);assert.equal(row.paymentTransactionId,null);assert.equal(row.creditTransactionId,result.snapshot.ledgerTransactions.find(t=>t.source?.sourceId==='credit1')?.id);
+ assert.equal(result.snapshot.ledgerTransactions.filter(t=>t.kind==='payment').length,1);
+ assert.equal(result.exceptions.some(e=>e.code==='snapshot_invariant_failed'),false);
+});

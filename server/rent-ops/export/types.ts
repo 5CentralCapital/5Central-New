@@ -70,6 +70,8 @@ export interface ExportPayload extends RentManagerImportInput {
 
 export interface DocumentBinaryDescriptor {
   sourceId: string;
+  /** Exact source filename, when independently preserved with a supplement. */
+  fileName?: string;
   metadataAvailable: boolean;
   binaryAvailable: boolean;
   descriptorOnly: boolean;

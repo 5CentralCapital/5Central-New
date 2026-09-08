@@ -49,10 +49,10 @@ function trustedNative(input: JsonObject): boolean {
 function knownFact(input: JsonObject, knowledgeField: string, isNative = trustedNative(input)): boolean {
   const knowledge = input[knowledgeField];
   // Native rows may rely on their bounded app's local facts. Imported rows
-  // must carry explicit source/confirmed knowledge; unknown, ambiguous, and
+  // must carry explicit source, confirmed, or manual knowledge; unknown, ambiguous, and
   // inferred values never become applicant-facing inventory.
   if (knowledge === undefined) return isNative;
-  return knowledge === "source" || knowledge === "confirmed";
+  return knowledge === "source" || knowledge === "confirmed" || knowledge === "manual";
 }
 
 function nonEmptyText(value: unknown): value is string {
@@ -73,7 +73,7 @@ type VacancyState = "vacant" | "occupied" | "unknown";
 
 function linkState(input: JsonObject, idField: string, knowledgeField: string, targetId: string, isNative: boolean): LinkState {
   if (!nonEmptyText(input[idField])) return "unknown";
-  const exact = input[knowledgeField] === "exact" || (input[knowledgeField] === undefined && isNative);
+  const exact = input[knowledgeField] === "exact" || input[knowledgeField] === "manual" || (input[knowledgeField] === undefined && isNative);
   if (!exact) return "unknown";
   return input[idField] === targetId ? "exact" : "other";
 }
@@ -97,8 +97,8 @@ function publicUnitFacts(value: unknown, propertyId: string): boolean {
   if (!knownFact(input, "unitNumberKnowledge", isNative) || !knownFact(input, "readinessKnowledge", isNative) || !knownFact(input, "listingKnowledge", isNative)) return false;
   // The unit-to-property relationship is part of the public inventory
   // boundary. Native rows may use their typed local relationship; imported
-  // rows must prove an exact source relationship.
-  return input.propertyLinkKnowledge === "exact" || (input.propertyLinkKnowledge === undefined && isNative);
+  // rows must prove an exact source or explicitly reviewed manual relationship.
+  return input.propertyLinkKnowledge === "exact" || input.propertyLinkKnowledge === "manual" || (input.propertyLinkKnowledge === undefined && isNative);
 }
 
 function tenancyRelation(value: unknown, propertyId: string, unitId: string): "linked" | "none" | "unknown" {

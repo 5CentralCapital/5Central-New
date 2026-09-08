@@ -100,6 +100,9 @@ export const DEPOSIT_UNIT_LINK_KNOWLEDGE = ["exact", "unknown", "manual"] as con
 export type DepositUnitLinkKnowledge = (typeof DEPOSIT_UNIT_LINK_KNOWLEDGE)[number];
 
 export const APPLICATION_STATUSES = [
+  "complete",
+  "in_progress",
+  "awaiting_payment",
   "draft",
   "submitted",
   "missing_information",
@@ -240,7 +243,7 @@ export function selectFinancialSemanticCrosswalk(
 }
 
 const FINANCIAL_SEMANTIC_SOURCE_FIELDS: Record<FinancialSemanticKind, readonly string[]> = {
-  tenancy_status: ["tenants.current\u0000$partition", "tenants.future\u0000$partition", "tenants.former\u0000$partition"],
+  tenancy_status: ["tenants\u0000Status", "tenants.current\u0000$partition", "tenants.future\u0000$partition", "tenants.former\u0000$partition"],
   // The v4 artifact did not expose a lease/ledger status field. Keep the
   // semantic kind closed for future supplements, but do not admit an
   // unobserved parallel namespace into the production crosswalk.
@@ -621,6 +624,11 @@ export interface RentOpsChargeDefinition {
 
 export interface RentOpsPaymentAllocation {
   id: string;
+  kind?: "allocation" | "reversal" | "transfer" | "credit_allocation";
+  creditTransactionId?: string | null;
+  creditLinkKnowledge?: LinkKnowledge | null;
+  sourceArtifactSha256?: string | null;
+  artifactObservationOn?: IsoDate | null;
   source?: SourceRef;
   paymentTransactionId: string | null;
   chargeTransactionId: string | null;
@@ -647,7 +655,9 @@ export interface RentOpsSecurityDeposit {
   personLinkKnowledge?: LinkKnowledge;
   type?: DepositType;
   typeKnowledge?: FactKnowledge;
-  amountHeldCents: Cents;
+  amountHeldCents: Cents | null;
+  /** Exact signed RM summary balance; a negative value is not cash held. */
+  sourceBalanceCents?: Cents | null;
   receivedOn?: IsoDate;
   receivedOnKnowledge?: DepositDateKnowledge;
   dispositionStatus?: "held" | "partially_disposed" | "disposed" | "returned";
@@ -951,6 +961,7 @@ export const APPLICATION_HISTORY_ORIGINS = ["source", "manual", "unknown"] as co
 export type ApplicationHistoryOrigin = (typeof APPLICATION_HISTORY_ORIGINS)[number];
 
 export const APPLICATION_HISTORY_ANSWER_VALUE_TYPES = [
+  "unknown",
   "text",
   "integer",
   "decimal",
@@ -1500,10 +1511,12 @@ export interface DepositLiabilityRow {
   tenancyId?: string;
   personId: string;
   tenantName: string;
-  securityHeldCents: Cents;
-  refundablePetHeldCents: Cents;
-  otherRefundableHeldCents: Cents;
-  totalHeldCents: Cents;
+  securityHeldCents: Cents | null;
+  refundablePetHeldCents: Cents | null;
+  otherRefundableHeldCents: Cents | null;
+  totalHeldCents: Cents | null;
+  sourceBalanceCents?: Cents | null;
+  unknownHeldCount?: number;
   dispositionStatus: RentOpsSecurityDeposit["dispositionStatus"] | "none";
   unknownReceiptCount: number;
   hasUnknownReceiptDate: boolean;
@@ -1568,7 +1581,7 @@ export interface DashboardSummary {
   monthToMonthCount: number;
   applicationsSubmitted: number;
   applicationsMissingInformation: number;
-  securityDepositLiabilityCents: Cents;
+  securityDepositLiabilityCents: Cents | null;
   drilldowns: Record<string, { report: string; filters: RentOpsFilters }>;
 }
 

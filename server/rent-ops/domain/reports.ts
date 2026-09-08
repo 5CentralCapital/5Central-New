@@ -1,3 +1,4 @@
+import { isSourceAllocationReversal } from "./invariants";
 import type {
   ApplicantPublicView,
   ApplicantPipelineRow,
@@ -287,12 +288,14 @@ function effectiveAllocations(snapshot: RentOpsSnapshot, asOf: IsoDate, tenancyI
   const reversed = reversalSets(snapshot, asOf);
   const result: EffectiveAllocation[] = [];
   for (const allocation of snapshot.paymentAllocations) {
+    if (allocation.kind === "transfer" || allocation.kind === "credit_allocation") continue;
     // Money/date-specific reports exclude unknown allocation dates or
     // amounts; the immutable allocation row remains in the snapshot.
     const paymentTransactionId = allocation.paymentTransactionId;
     const chargeTransactionId = allocation.chargeTransactionId;
     const allocatedOn = allocation.allocatedOn;
     const amountCents = allocation.amountCents;
+    if (typeof amountCents === "number" && amountCents < 0 && !isSourceAllocationReversal(allocation)) continue;
     if (!paymentTransactionId || !chargeTransactionId || !allocatedOn || !knownAmount(amountCents) || allocatedOn > asOf) continue;
     const payment = transactions.get(paymentTransactionId);
     const charge = transactions.get(chargeTransactionId);
@@ -314,6 +317,49 @@ function effectiveAllocations(snapshot: RentOpsSnapshot, asOf: IsoDate, tenancyI
   return result;
 }
 
+function effectiveCreditAllocations(snapshot: RentOpsSnapshot, cutoff: IsoDate) {
+  const transactions = new Map(snapshot.ledgerTransactions.map(row => [row.id, row]));
+  const reversed = reversalSets(snapshot, cutoff);
+  return snapshot.paymentAllocations.flatMap(allocation => {
+    if (allocation.kind !== "credit_allocation" || allocation.paymentTransactionId || !allocation.creditTransactionId || !allocation.chargeTransactionId ||
+      allocation.creditLinkKnowledge !== "exact" || allocation.chargeLinkKnowledge !== "exact" ||
+      !knownAmount(allocation.amountCents) || allocation.amountCents <= 0 || !allocation.allocatedOn || allocation.allocatedOn > cutoff) return [];
+    const credit = transactions.get(allocation.creditTransactionId);
+    const charge = transactions.get(allocation.chargeTransactionId);
+    if (!credit || credit.kind !== "credit" || !charge || charge.kind !== "charge" ||
+      credit.status !== "posted" || charge.status !== "posted" || !credit.postedOn || !charge.postedOn ||
+      credit.postedOn > allocation.allocatedOn || charge.postedOn > allocation.allocatedOn ||
+      !knownAmount(credit.amountCents) || !knownAmount(charge.amountCents) ||
+      reversed.creditIds.has(credit.id) || reversed.chargeIds.has(charge.id)) return [];
+    return [{ allocation: { ...allocation, amountCents: allocation.amountCents, allocatedOn: allocation.allocatedOn }, credit, charge }];
+  });
+}
+
+/** A receipt remains one source transaction; property applications are views,
+ * and the remainder belongs only to the shared root. */
+export function deriveSharedPaymentApplications(snapshot: RentOpsSnapshot, filters: Pick<RentOpsFilters, "asOfDate"> = {}) {
+  const cutoff = asOfDate(filters);
+  const reversed = reversalSets(snapshot, cutoff);
+  const allocations = effectiveAllocations(snapshot, cutoff);
+  return snapshot.ledgerTransactions.filter((payment) =>
+    payment.kind === "payment" && payment.allocationMode === "multi_property" &&
+    payment.status === "posted" && payment.postedOn && payment.postedOn <= cutoff &&
+    knownAmount(payment.amountCents) && !reversed.paymentIds.has(payment.id),
+  ).map((payment) => {
+    const byProperty = new Map<string, Cents>();
+    for (const { allocation, charge, payment: parent } of allocations) {
+      if (parent.id !== payment.id || !charge.propertyId) continue;
+      byProperty.set(charge.propertyId, (byProperty.get(charge.propertyId) ?? 0) + allocation.amountCents);
+    }
+    const propertyApplications = Array.from(byProperty).sort(([left], [right]) => left.localeCompare(right))
+      .map(([propertyId, allocatedCents]) => ({ propertyId, allocatedCents }));
+    const allocatedCents = propertyApplications.reduce((sum, row) => sum + row.allocatedCents, 0);
+    return { paymentTransactionId: payment.id, personId: payment.personId ?? null,
+      paymentOn: payment.postedOn!, receiptAmountCents: payment.amountCents!,
+      propertyApplications, allocatedCents, unappliedCents: payment.amountCents! - allocatedCents };
+  });
+}
+
 function accountBalance(snapshot: RentOpsSnapshot, tenancyId: string, asOf: IsoDate): AccountBalance {
   const transactions = snapshot.ledgerTransactions.filter((transaction) =>
     transaction.tenancyId === tenancyId && transaction.status === "posted" && !!transaction.postedOn && knownAmount(transaction.amountCents) && transaction.postedOn <= asOf,
@@ -325,6 +371,11 @@ function accountBalance(snapshot: RentOpsSnapshot, tenancyId: string, asOf: IsoD
   for (const effective of effectiveAllocations(snapshot, asOf, tenancyId)) {
     allocationsByCharge.set(effective.charge.id, (allocationsByCharge.get(effective.charge.id) ?? 0) + effective.allocation.amountCents);
     allocationsByPayment.set(effective.payment.id, (allocationsByPayment.get(effective.payment.id) ?? 0) + effective.allocation.amountCents);
+  }
+  const allocationsByCredit = new Map<string, number>();
+  for (const { allocation, credit, charge } of effectiveCreditAllocations(snapshot, asOf)) {
+    if (charge.tenancyId === tenancyId) allocationsByCharge.set(charge.id, (allocationsByCharge.get(charge.id) ?? 0) + allocation.amountCents);
+    if (credit.tenancyId === tenancyId) allocationsByCredit.set(credit.id, (allocationsByCredit.get(credit.id) ?? 0) + allocation.amountCents);
   }
   let rentOnly = 0;
   let nonRent = 0;
@@ -345,8 +396,9 @@ function accountBalance(snapshot: RentOpsSnapshot, tenancyId: string, asOf: IsoD
       }
     } else if (transaction.kind === "credit") {
       if (reversed.creditIds.has(transaction.id)) continue;
-      if (transaction.category === "base_rent") rentOnly -= transaction.amountCents;
-      else nonRent -= transaction.amountCents;
+      const remainingCredit = transaction.amountCents - (allocationsByCredit.get(transaction.id) ?? 0);
+      if (transaction.category === "base_rent") rentOnly -= remainingCredit;
+      else nonRent -= remainingCredit;
     } else if (transaction.kind === "adjustment") {
       const signed = transaction.adjustmentDirection === "credit" ? -transaction.amountCents : transaction.amountCents;
       if (transaction.category === "base_rent") rentOnly += signed;
@@ -583,6 +635,10 @@ function deriveTruthCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
   let uncertainCents = 0;
   const uncertaintyCodes = new Set<string>();
   for (const allocation of snapshot.paymentAllocations) {
+    if (allocation.kind === "transfer" || allocation.kind === "credit_allocation") continue;
+    // Application visibility follows its own date, while receipt-month
+    // attribution remains tied to the original payment date.
+    if (allocation.allocatedOn && allocation.allocatedOn > cutoff) continue;
     const payment = allocation.paymentTransactionId ? transactions.get(allocation.paymentTransactionId) : undefined;
     const charge = allocation.chargeTransactionId ? transactions.get(allocation.chargeTransactionId) : undefined;
     const propertyId = charge?.propertyId ?? payment?.propertyId;
@@ -594,6 +650,7 @@ function deriveTruthCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
     }
     if (filters.unitId && (charge?.unitId ?? payment?.unitId) !== filters.unitId) continue;
     const category = charge?.category ?? null;
+    if (allocation.kind === "reversal" && (!isSourceAllocationReversal(allocation) || !allocation.allocatedOn || allocation.allocatedOn > cutoff)) continue;
     const amountKnown = typeof allocation.amountCents === "number" && Number.isSafeInteger(allocation.amountCents) && allocation.amountKnowledge !== "unknown";
     const postedKnown = payment?.kind === "payment" && payment.status === "posted" && typeof paymentOn === "string" && paymentOn <= cutoff;
     const chargeKnown = charge?.kind === "charge" && charge.status === "posted" && typeof charge.postedOn === "string" && charge.postedOn <= cutoff;
@@ -610,6 +667,7 @@ function deriveTruthCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
       continue;
     }
     const uncertainty: string[] = [];
+    if (!allocation.allocatedOn) uncertainty.push("collected_allocation_date_unknown");
     if (!amountKnown) { unknownAmountCount += 1; uncertainty.push("collected_amount_unknown"); }
     if (!postedKnown) uncertainty.push("collected_payment_posted_unknown");
     if (!chargeKnown) uncertainty.push("collected_charge_posted_unknown");
@@ -984,21 +1042,40 @@ export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string,
   const allocationByCharge = new Map<string, number>();
   const allocationByPayment = new Map<string, number>();
   for (const { allocation, payment, charge } of effectiveAllocations(snapshot, allocationCutoff, tenancyId)) {
-    if (!transactionMap.has(payment.id) || !transactionMap.has(charge.id)) continue;
+    if (!transactionMap.has(charge.id)) continue;
+    if (!transactionMap.has(payment.id)) {
+      if (payment.allocationMode !== "multi_property") continue;
+      // Read-only application event: never persist a second receipt or give
+      // the scoped account any of the shared root's unapplied cash.
+      transactions.push({ ...payment, id: `shared-application:${allocation.id}`,
+        source: undefined, propertyId: charge.propertyId, unitId: charge.unitId,
+        tenancyId: charge.tenancyId, personId: charge.personId ?? payment.personId,
+        postedOn: allocation.allocatedOn, amountCents: allocation.amountCents,
+        allocationMode: null, description: `Application of shared receipt ${payment.id}` });
+      allocationByPayment.set(`shared-application:${allocation.id}`, allocation.amountCents);
+    }
     allocationByCharge.set(charge.id, (allocationByCharge.get(charge.id) ?? 0) + allocation.amountCents);
     allocationByPayment.set(payment.id, (allocationByPayment.get(payment.id) ?? 0) + allocation.amountCents);
   }
+  const allocationByCredit = new Map<string, number>();
+  for (const { allocation, credit, charge } of effectiveCreditAllocations(snapshot, allocationCutoff)) {
+    if (transactionMap.has(credit.id)) allocationByCredit.set(credit.id, (allocationByCredit.get(credit.id) ?? 0) + allocation.amountCents);
+    if (!transactionMap.has(charge.id)) continue;
+    allocationByCharge.set(charge.id, (allocationByCharge.get(charge.id) ?? 0) + allocation.amountCents);
+
+  }
+  transactions.sort((left, right) => compareOptionalTimestamp(left.postedOn, right.postedOn) || left.id.localeCompare(right.id));
   let running = 0;
   return transactions.map((transaction) => {
     const amountCents = transaction.amountCents;
     if (!knownAmount(amountCents)) return { transaction, allocatedCents: 0, openCents: 0, runningBalanceCents: running };
-    const allocatedCents = transaction.kind === "charge" ? allocationByCharge.get(transaction.id) ?? 0 : transaction.kind === "payment" ? allocationByPayment.get(transaction.id) ?? 0 : 0;
+    const allocatedCents = transaction.kind === "charge" ? allocationByCharge.get(transaction.id) ?? 0 : transaction.kind === "payment" ? allocationByPayment.get(transaction.id) ?? 0 : transaction.kind === "credit" ? allocationByCredit.get(transaction.id) ?? 0 : 0;
     const openCents = transaction.kind === "charge"
       ? (reversed.chargeIds.has(transaction.id) ? 0 : amountCents - allocatedCents)
       : transaction.kind === "payment"
         ? (reversed.paymentIds.has(transaction.id) ? 0 : amountCents - allocatedCents)
         : transaction.kind === "credit"
-          ? (reversed.creditIds.has(transaction.id) ? 0 : -amountCents)
+          ? (reversed.creditIds.has(transaction.id) ? 0 : -(amountCents - allocatedCents))
           : transaction.kind === "reversal" ? 0 : 0;
     if (transaction.status === "posted") running += ledgerBalanceSign(transaction, transactionMap) * amountCents;
     return { transaction, allocatedCents, openCents, runningBalanceCents: running };
@@ -1078,16 +1155,25 @@ export function deriveDepositLiability(snapshot: RentOpsSnapshot, filters: RentO
       unknownReceiptCount: 0,
       hasUnknownReceiptDate: false,
       temporalUncertainty: false,
+      unknownHeldCount: 0,
+      sourceBalanceCents: undefined,
     };
     const unknownReceipt = !deposit.receivedOn;
     const disposedByAsOf = (deposit.dispositionStatus === "disposed" || deposit.dispositionStatus === "returned") && !!deposit.disposedOn && deposit.disposedOn <= asOf;
-    const held = disposedByAsOf ? 0 : deposit.amountHeldCents;
+    const held = deposit.amountHeldCents === null ? null : disposedByAsOf ? 0 : deposit.amountHeldCents;
     const statusAtAsOf = !disposedByAsOf && (deposit.dispositionStatus === "disposed" || deposit.dispositionStatus === "returned") ? "held" : deposit.dispositionStatus;
-    if (deposit.type === "security") existing.securityHeldCents += held;
-    else if (deposit.type === "refundable_pet") existing.refundablePetHeldCents += held;
-    else if (deposit.type === "other_refundable") existing.otherRefundableHeldCents += held;
-    else existing.temporalUncertainty = true;
-    existing.totalHeldCents += held;
+    if (deposit.sourceBalanceCents != null) existing.sourceBalanceCents = (existing.sourceBalanceCents ?? 0) + deposit.sourceBalanceCents;
+    if (held === null) {
+      existing.unknownHeldCount = (existing.unknownHeldCount ?? 0) + 1;
+      existing.securityHeldCents = existing.refundablePetHeldCents = existing.otherRefundableHeldCents = existing.totalHeldCents = null;
+      existing.temporalUncertainty = true;
+    } else {
+      if (deposit.type === "security" && existing.securityHeldCents !== null) existing.securityHeldCents += held;
+      else if (deposit.type === "refundable_pet" && existing.refundablePetHeldCents !== null) existing.refundablePetHeldCents += held;
+      else if (deposit.type === "other_refundable" && existing.otherRefundableHeldCents !== null) existing.otherRefundableHeldCents += held;
+      else existing.temporalUncertainty = true;
+      if (existing.totalHeldCents !== null) existing.totalHeldCents += held;
+    }
     if (unknownReceipt) {
       existing.unknownReceiptCount += 1;
       existing.hasUnknownReceiptDate = true;
@@ -1309,7 +1395,7 @@ export function deriveDashboardSummary(snapshot: RentOpsSnapshot, filters: RentO
     monthToMonthCount: expirations.filter((row) => row.monthToMonth).length,
     applicationsSubmitted: activeApplications.filter((application) => application.status === "submitted" || application.status === "under_review").length,
     applicationsMissingInformation: activeApplications.filter((application) => application.status === "missing_information").length,
-    securityDepositLiabilityCents: deposits.reduce((sum, row) => sum + row.totalHeldCents, 0),
+    securityDepositLiabilityCents: deposits.some(row => row.totalHeldCents === null) ? null : deposits.reduce((sum, row) => sum + row.totalHeldCents!, 0),
     drilldowns: {
       occupiedUnits: { report: "occupancy", filters: { ...filters, occupancy: ["current"] } },
       futurePreleasedUnits: { report: "rent-roll", filters: { ...filters, occupancy: ["future_preleased"] } },

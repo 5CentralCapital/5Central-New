@@ -501,6 +501,7 @@ export function serializeAdminLedgerTransaction(value: RentOpsLedgerTransaction)
 
 export interface AdminPaymentAllocationView {
   id?: string;
+  kind?: string;
   paymentTransactionId?: string;
   chargeTransactionId?: string;
   amountCents?: number;
@@ -515,6 +516,7 @@ export function serializeAdminPaymentAllocation(value: RentOpsPaymentAllocation)
   const input = inputOf(value);
   return presentationObject({
     id: text(input, "id"),
+    kind: text(input, "kind"),
     paymentTransactionId: text(input, "paymentTransactionId"),
     chargeTransactionId: text(input, "chargeTransactionId"),
     amountCents: number(input, "amountCents"),
@@ -538,7 +540,8 @@ export interface AdminSecurityDepositView {
   personLinkKnowledge?: string;
   type?: string;
   typeKnowledge?: string;
-  amountHeldCents?: number;
+  amountHeldCents?: number | null;
+  sourceBalanceCents?: number | null;
   receivedOn?: string;
   receivedOnKnowledge?: string;
   dispositionStatus?: string;
@@ -560,7 +563,8 @@ export function serializeAdminSecurityDeposit(value: RentOpsSecurityDeposit): Ad
     personLinkKnowledge: text(input, "personLinkKnowledge"),
     type: text(input, "type"),
     typeKnowledge: text(input, "typeKnowledge"),
-    amountHeldCents: number(input, "amountHeldCents"),
+    amountHeldCents: input.amountHeldCents === null ? null : number(input, "amountHeldCents"),
+    sourceBalanceCents: number(input, "sourceBalanceCents"),
     receivedOn: dateText(input, "receivedOn"),
     receivedOnKnowledge: text(input, "receivedOnKnowledge"),
     dispositionStatus: text(input, "dispositionStatus"),
@@ -1012,7 +1016,7 @@ export interface AdminDashboardSummaryView {
   monthToMonthCount?: number;
   applicationsSubmitted?: number;
   applicationsMissingInformation?: number;
-  securityDepositLiabilityCents?: number;
+  securityDepositLiabilityCents?: number | null;
   drilldowns?: Record<string, { report?: string; filters?: JsonObject }>;
 }
 
@@ -1105,7 +1109,7 @@ export function serializeDashboardSummary(value: DashboardSummary): AdminDashboa
     monthToMonthCount: number(input, "monthToMonthCount"),
     applicationsSubmitted: number(input, "applicationsSubmitted"),
     applicationsMissingInformation: number(input, "applicationsMissingInformation"),
-    securityDepositLiabilityCents: number(input, "securityDepositLiabilityCents"),
+    securityDepositLiabilityCents: input.securityDepositLiabilityCents === null ? null : number(input, "securityDepositLiabilityCents"),
     drilldowns,
   });
 }

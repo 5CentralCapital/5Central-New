@@ -273,3 +273,21 @@ test("template target identity stays collection-qualified when RM reuses a raw I
   assert.notEqual(snapshot.templateSections[0]!.id, snapshot.templateSections[1]!.id);
   assert.notEqual(snapshot.templateSections[0]!.source.sourceId, snapshot.templateSections[1]!.source.sourceId);
 });
+
+test("unknown and sensitive answer types retain exact linkage without exposing source values", () => {
+  for (const metadata of [{ InputFieldType: "None" }, { ValueType: "text", Sensitive: true }]) {
+    const snapshot = project(input({
+      applicationTemplates: [raw({ sourceId: "field-1", sourceCollection: "ApplicationTemplateFields", FieldID: "field-1", LabelText: "Question", SortOrder: 4, ...metadata })],
+      applicationAnswerRecords: [raw({ sourceId: "answer-1", ApplicationID: "application-1", FieldID: "field-1", Answer: "RESTRICTED_CANARY" })],
+    }));
+    assert.equal(snapshot.answers[0]?.valueType, "InputFieldType" in metadata ? "unknown" : "text");
+    assert.equal(snapshot.answers[0]?.fieldLinkKnowledge, "exact");
+    assert.equal(snapshot.answers[0]?.applicationLinkKnowledge, "exact");
+    assert.equal(snapshot.answers[0]?.valueKnowledge, "restricted");
+    assert.equal(snapshot.unknownRestricted.unmappedAnswerCount, 0);
+    assert.equal(snapshot.unknownRestricted.restrictedAnswerCount, 1);
+    assert.equal(JSON.stringify(snapshot).includes("RESTRICTED_CANARY"), false);
+  }
+  const missing = project(input({ applicationAnswerRecords: [raw({ sourceId: "answer-1", ApplicationID: "application-1", FieldID: "missing" })] }));
+  assert.equal(missing.unknownRestricted.unmappedAnswerCount, 1);
+});

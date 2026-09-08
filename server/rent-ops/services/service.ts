@@ -838,17 +838,17 @@ export class RentOpsService {
 
     const personId = `person:application:${application.id}`;
     let person = snapshot.people.find((candidate) => candidate.id === personId);
-    if (!person) person = await this.repository.savePerson({ id: personId, firstName: application.firstName, lastName: application.lastName, email: application.email, phone: application.phone });
-    const tenancy: RentOpsTenancy = { id: `tenancy:application:${application.id}`, propertyId: facts.propertyId, unitId: facts.unitId, primaryPersonId: person.id, status: "future", plannedMoveInOn: facts.plannedMoveInOn, applicationId: application.id, createdAt: this.now().toISOString() };
+    if (!person) person = await this.repository.savePerson({ id: personId, firstName: application.firstName, lastName: application.lastName, email: application.email, phone: application.phone, firstNameKnowledge: "manual", lastNameKnowledge: "manual", emailKnowledge: application.email ? "manual" : "unknown", phoneKnowledge: application.phone ? "manual" : "unknown", archived: false, archivedKnowledge: "manual" });
+    const tenancy: RentOpsTenancy = { id: `tenancy:application:${application.id}`, propertyId: facts.propertyId, unitId: facts.unitId, primaryPersonId: person.id, status: "future", plannedMoveInOn: facts.plannedMoveInOn, applicationId: application.id, createdAt: this.now().toISOString(), propertyLinkKnowledge: "manual", unitLinkKnowledge: "manual", primaryPersonLinkKnowledge: "manual", statusKnowledge: "manual", plannedMoveInKnowledge: "manual", createdAtKnowledge: "manual" };
     await this.repository.saveTenancy(tenancy);
-    await this.repository.saveHouseholdMembership({ id: `household:application:${application.id}:primary`, tenancyId: tenancy.id, personId: person.id, role: primaryFact.role, isFinanciallyResponsible: primaryFact.isFinanciallyResponsible, relationship: primaryFact.relationship });
+    await this.repository.saveHouseholdMembership({ id: `household:application:${application.id}:primary`, tenancyId: tenancy.id, personId: person.id, role: primaryFact.role, isFinanciallyResponsible: primaryFact.isFinanciallyResponsible, relationship: primaryFact.relationship, roleKnowledge: "manual", responsibilityKnowledge: "manual", relationshipKnowledge: primaryFact.relationship ? "manual" : "unknown" });
     for (const fact of facts.members.filter((member) => member.applicationMemberId !== "primary")) {
       const member = applicationMembers.find((candidate) => candidate.id === fact.applicationMemberId);
       if (!member) throw new RentOpsInvariantError("Conversion member ID is not an exact application member");
-      const memberPerson = await this.repository.savePerson({ id: `person:application-member:${member.id}`, firstName: member.firstName, lastName: member.lastName, email: member.email, phone: member.phone });
-      await this.repository.saveHouseholdMembership({ id: `household:application-member:${member.id}`, tenancyId: tenancy.id, personId: memberPerson.id, role: fact.role, relationship: fact.relationship, isFinanciallyResponsible: fact.isFinanciallyResponsible });
+      const memberPerson = await this.repository.savePerson({ id: `person:application-member:${member.id}`, firstName: member.firstName, lastName: member.lastName, email: member.email, phone: member.phone, firstNameKnowledge: "manual", lastNameKnowledge: "manual", emailKnowledge: member.email ? "manual" : "unknown", phoneKnowledge: member.phone ? "manual" : "unknown", archived: false, archivedKnowledge: "manual" });
+      await this.repository.saveHouseholdMembership({ id: `household:application-member:${member.id}`, tenancyId: tenancy.id, personId: memberPerson.id, role: fact.role, relationship: fact.relationship, isFinanciallyResponsible: fact.isFinanciallyResponsible, roleKnowledge: "manual", responsibilityKnowledge: "manual", relationshipKnowledge: fact.relationship ? "manual" : "unknown" });
     }
-    const term: RentOpsLeaseTerm = { id: `lease-term:application:${application.id}`, tenancyId: tenancy.id, status: facts.leaseStatus, contractStartOn: facts.contractStartOn, contractEndOn: facts.contractEndOn, monthToMonth: facts.monthToMonth, createdAt: this.now().toISOString() };
+    const term: RentOpsLeaseTerm = { id: `lease-term:application:${application.id}`, tenancyId: tenancy.id, status: facts.leaseStatus, contractStartOn: facts.contractStartOn, contractEndOn: facts.contractEndOn, monthToMonth: facts.monthToMonth, createdAt: this.now().toISOString(), tenancyLinkKnowledge: "manual", statusKnowledge: "manual", contractStartKnowledge: "manual", contractEndKnowledge: facts.contractEndOn ? "manual" : "unknown", monthToMonthKnowledge: "manual", createdAtKnowledge: "manual" };
     await this.repository.saveLeaseTerm(term);
     const scheduleId = `schedule:application:${application.id}:base-rent`;
     await this.saveRecurringScheduleRecords({ id: scheduleId, scopeType: "tenant", scopeId: person.id, scopeTypeKnowledge: "manual", scopeLinkKnowledge: "manual", chargeDefinitionId: facts.chargeDefinitionId, chargeDefinitionLinkKnowledge: "manual", tenancyId: tenancy.id, personId: person.id, propertyId: facts.propertyId, unitId: facts.unitId, category: facts.category, categoryKnowledge: "manual", description: facts.scheduleDescription, descriptionKnowledge: "manual", amountCents: facts.baseRentCents, amountKnowledge: "known", effectiveFrom: facts.contractStartOn, effectiveFromKnowledge: "manual", effectiveTo: facts.contractEndOn, active: true, activeKnowledge: "manual", sourceConfidence: "confirmed", lineageRootId: scheduleId, lineageRootOrigin: "manual", versionOrigin: "manual", versionAction: "root" }, context);
@@ -959,7 +959,9 @@ export class RentOpsService {
     }
     if (entityType === "security_deposit") {
       const deposit = next as unknown as RentOpsSecurityDeposit;
-      assertPositiveCents(deposit.amountHeldCents, "Deposit amount");
+      if (deposit.amountHeldCents === null) {
+        if (deposit.source?.system !== "rent_manager" || !Number.isSafeInteger(deposit.sourceBalanceCents) || deposit.sourceBalanceCents! >= 0) throw new RentOpsInvariantError("Unknown held deposit requires signed source balance");
+      } else assertPositiveCents(deposit.amountHeldCents, "Deposit amount");
       const property = snapshot.properties.find((candidate) => candidate.id === deposit.propertyId);
       const person = snapshot.people.find((candidate) => candidate.id === deposit.personId);
       const unit = deposit.unitId ? snapshot.units.find((candidate) => candidate.id === deposit.unitId) : undefined;
@@ -1212,9 +1214,9 @@ export class RentOpsService {
     const charge = allocation.chargeTransactionId ? snapshot.ledgerTransactions.find((transaction) => transaction.id === allocation.chargeTransactionId) : undefined;
     const violations = validateAllocation(allocation, payment, charge, snapshot.ledgerTransactions);
     if (violations.length > 0) throw new RentOpsInvariantError("Payment allocation failed validation", violations);
-    const paymentTotal = snapshot.paymentAllocations.filter((candidate) => candidate.paymentTransactionId === allocation.paymentTransactionId && candidate.id !== allocation.id && typeof candidate.amountCents === "number").reduce((sum, candidate) => sum + (candidate.amountCents ?? 0), 0) + amountCents;
+    const paymentTotal = snapshot.paymentAllocations.filter((candidate) => candidate.kind !== "transfer" && candidate.paymentTransactionId === allocation.paymentTransactionId && candidate.id !== allocation.id && typeof candidate.amountCents === "number").reduce((sum, candidate) => sum + (candidate.amountCents ?? 0), 0) + amountCents;
     const reversedTargets = postedReversalTargets(snapshot.ledgerTransactions);
-    const chargeTotal = snapshot.paymentAllocations.filter((candidate) => !!candidate.paymentTransactionId && !reversedTargets.has(candidate.paymentTransactionId) && !!candidate.chargeTransactionId && !reversedTargets.has(candidate.chargeTransactionId) && candidate.chargeTransactionId === allocation.chargeTransactionId && candidate.id !== allocation.id && typeof candidate.amountCents === "number").reduce((sum, candidate) => sum + (candidate.amountCents ?? 0), 0) + amountCents;
+    const chargeTotal = snapshot.paymentAllocations.filter((candidate) => candidate.kind !== "transfer" && !!(candidate.paymentTransactionId ?? candidate.creditTransactionId) && !reversedTargets.has((candidate.paymentTransactionId ?? candidate.creditTransactionId)!) && !!candidate.chargeTransactionId && !reversedTargets.has(candidate.chargeTransactionId) && candidate.chargeTransactionId === allocation.chargeTransactionId && candidate.id !== allocation.id && typeof candidate.amountCents === "number").reduce((sum, candidate) => sum + (candidate.amountCents ?? 0), 0) + amountCents;
     if (payment && typeof payment.amountCents === "number" && paymentTotal > payment.amountCents) throw new RentOpsInvariantError("Allocations exceed payment amount");
     if (charge && typeof charge.amountCents === "number" && chargeTotal > charge.amountCents) throw new RentOpsInvariantError("Allocations exceed charge amount");
     const saved = await this.repository.savePaymentAllocation(allocation);

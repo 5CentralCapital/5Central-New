@@ -21,6 +21,8 @@ export interface TenantAccountStore {
   getByEmail(email: string): Promise<TenantAccountRecord | undefined>;
   create(input: { id: string; email: string; personId: string; tenancyId: string; tokenHash: string; expiresAt: string; now: string }): Promise<TenantAccountRecord | undefined>;
   rotateActivation(id: string, tokenHash: string, expiresAt: string, now: string): Promise<TenantAccountRecord | undefined>;
+  issueRecovery(id: string, tokenHash: string, expiresAt: string, now: string): Promise<TenantAccountRecord | undefined>;
+  invalidateToken(id: string, tokenHash: string): Promise<void>;
   consumeActivation(tokenHash: string, passwordHash: string, now: string): Promise<TenantAccountRecord | undefined>;
   changePassword(id: string, expectedVersion: number, passwordHash: string, now: string): Promise<TenantAccountRecord | undefined>;
   recordLogin(id: string, expectedVersion: number, now: string): Promise<TenantAccountRecord | undefined>;
@@ -72,6 +74,17 @@ export class PostgresTenantAccountStore implements TenantAccountStore {
       password_hash = NULL, status = 'pending',
       activation_token_hash = $2, invitation_expires_at = $3, session_version = session_version + 1, updated_at = $4
       WHERE id = $1 RETURNING ${columns}`, [id, tokenHash, expiresAt, now]);
+  }
+
+  issueRecovery(id: string, tokenHash: string, expiresAt: string, now: string) {
+    return this.one(`UPDATE rent_ops_tenant_accounts SET activation_token_hash = $2,
+      invitation_expires_at = $3, updated_at = $4 WHERE id = $1 AND status IN ('pending', 'active') RETURNING ${columns}`,
+      [id, tokenHash, expiresAt, now]);
+  }
+
+  async invalidateToken(id: string, tokenHash: string): Promise<void> {
+    await this.database.query(`UPDATE rent_ops_tenant_accounts SET activation_token_hash = NULL, invitation_expires_at = NULL
+      WHERE id = $1 AND activation_token_hash = $2`, [id, tokenHash]);
   }
 
   consumeActivation(tokenHash: string, passwordHash: string, now: string) {

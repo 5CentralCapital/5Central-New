@@ -105,13 +105,13 @@ const DEPOSIT_TYPES = ["security", "refundable_pet", "other_refundable"];
 const DEPOSIT_STATUSES = ["held", "partially_disposed", "disposed", "returned"];
 const SUBSIDY_STATUSES = ["active", "ended", "pending", "exception"];
 const APPLICATION_SOURCES = ["public_portal", "manual", "rm_import", "referral", "other"];
-const APPLICATION_STATUSES = ["draft", "submitted", "missing_information", "under_review", "approved", "declined", "withdrawn", "converted"];
+const APPLICATION_STATUSES = ["draft", "submitted", "missing_information", "under_review", "approved", "declined", "withdrawn", "converted", "complete", "in_progress", "awaiting_payment"];
 const REQUIREMENT_STATUSES = ["requested", "received", "waived", "rejected"];
 const DOCUMENT_TYPES = ["lease", "addendum", "identity", "insurance", "notice", "application_attachment", "housing_assistance", "deposit_record", "other"];
 const DOCUMENT_STATES = ["requested", "received", "signed", "executed", "filed", "current", "verified", "rejected", "expired", "archived"];
 const DOCUMENT_AVAILABILITIES = ["metadata", "requested", "unavailable", "verified"];
 const ACTIVITY_TYPES = ["note", "call", "email", "text", "promise_to_pay", "hold", "notice", "system"];
-const HISTORY_ANSWER_TYPES = ["text", "integer", "decimal", "boolean", "date", "choice", "multi_choice", "money"];
+const HISTORY_ANSWER_TYPES = ["unknown", "text", "integer", "decimal", "boolean", "date", "choice", "multi_choice", "money"];
 const HISTORY_VALUE_KNOWLEDGE = ["known", "unknown", "ambiguous", "restricted"];
 const HISTORY_BLOCKER_CODES = ["application_answers_missing"];
 const HISTORY_BLOCKER_REASONS = ["source_collection_missing", "source_collection_empty", "source_rows_unusable"];
@@ -681,7 +681,7 @@ function decodePaymentAllocation(value: unknown): AdminPaymentAllocationView {
 }
 
 function decodeSecurityDeposit(value: unknown): AdminSecurityDepositView {
-  const input = exactRecord(value, "security deposit", ["id", "propertyId", "propertyLinkKnowledge", "unitId", "unitLinkKnowledge", "tenancyId", "personId", "personLinkKnowledge", "type", "typeKnowledge", "amountHeldCents", "receivedOn", "receivedOnKnowledge", "dispositionStatus", "dispositionStatusKnowledge", "disposedOn", "dispositionNotes", "recordRevision"]);
+  const input = exactRecord(value, "security deposit", ["id", "propertyId", "propertyLinkKnowledge", "unitId", "unitLinkKnowledge", "tenancyId", "personId", "personLinkKnowledge", "type", "typeKnowledge", "amountHeldCents", "sourceBalanceCents", "receivedOn", "receivedOnKnowledge", "dispositionStatus", "dispositionStatusKnowledge", "disposedOn", "dispositionNotes", "recordRevision"]);
   return {
     id: optionalId(input, "id"),
     propertyId: optionalId(input, "propertyId"),
@@ -693,7 +693,8 @@ function decodeSecurityDeposit(value: unknown): AdminSecurityDepositView {
     personLinkKnowledge: optionalAllowed(input, "personLinkKnowledge", LINK_KNOWLEDGE),
     type: optionalAllowed(input, "type", DEPOSIT_TYPES),
     typeKnowledge: optionalAllowed(input, "typeKnowledge", FACT_KNOWLEDGE),
-    amountHeldCents: optionalMoney(input, "amountHeldCents"),
+    amountHeldCents: nullableMoney(input, "amountHeldCents"),
+    sourceBalanceCents: nullableMoney(input, "sourceBalanceCents"),
     receivedOn: optionalDate(input, "receivedOn"),
     receivedOnKnowledge: optionalAllowed(input, "receivedOnKnowledge", DEPOSIT_DATE_KNOWLEDGE),
     dispositionStatus: optionalAllowed(input, "dispositionStatus", DEPOSIT_STATUSES),
@@ -1188,7 +1189,7 @@ function decodeDashboardSummary(value: unknown): DashboardSummary {
     monthToMonthCount: requiredInteger(input, "monthToMonthCount"),
     applicationsSubmitted: requiredInteger(input, "applicationsSubmitted"),
     applicationsMissingInformation: requiredInteger(input, "applicationsMissingInformation"),
-    securityDepositLiabilityCents: requiredMoney(input, "securityDepositLiabilityCents"),
+    securityDepositLiabilityCents: input.securityDepositLiabilityCents === null ? null : requiredMoney(input, "securityDepositLiabilityCents"),
     drilldowns,
   };
 }
@@ -1274,8 +1275,8 @@ function decodeLeaseExpirationRow(value: unknown): LeaseExpirationRow {
 }
 
 function decodeDepositLiabilityRow(value: unknown): DepositLiabilityRow {
-  const input = exactRecord(value, "security-deposit row", ["propertyId", "propertyName", "unitId", "unitNumber", "tenancyId", "personId", "tenantName", "securityHeldCents", "refundablePetHeldCents", "otherRefundableHeldCents", "totalHeldCents", "dispositionStatus", "unknownReceiptCount", "hasUnknownReceiptDate", "temporalUncertainty"]);
-  return { propertyId: optionalId(input, "propertyId"), propertyName: optionalText(input, "propertyName"), unitId: optionalId(input, "unitId"), unitNumber: optionalText(input, "unitNumber"), tenancyId: optionalId(input, "tenancyId"), personId: optionalId(input, "personId"), tenantName: optionalText(input, "tenantName"), securityHeldCents: optionalMoney(input, "securityHeldCents"), refundablePetHeldCents: optionalMoney(input, "refundablePetHeldCents"), otherRefundableHeldCents: optionalMoney(input, "otherRefundableHeldCents"), totalHeldCents: optionalMoney(input, "totalHeldCents"), dispositionStatus: optionalAllowed(input, "dispositionStatus", DEPOSIT_STATUSES), unknownReceiptCount: optionalInteger(input, "unknownReceiptCount"), hasUnknownReceiptDate: optionalBoolean(input, "hasUnknownReceiptDate"), temporalUncertainty: optionalBoolean(input, "temporalUncertainty") };
+  const input = exactRecord(value, "security-deposit row", ["propertyId", "propertyName", "unitId", "unitNumber", "tenancyId", "personId", "tenantName", "securityHeldCents", "refundablePetHeldCents", "otherRefundableHeldCents", "totalHeldCents", "sourceBalanceCents", "unknownHeldCount", "dispositionStatus", "unknownReceiptCount", "hasUnknownReceiptDate", "temporalUncertainty"]);
+  return { propertyId: optionalId(input, "propertyId"), propertyName: optionalText(input, "propertyName"), unitId: optionalId(input, "unitId"), unitNumber: optionalText(input, "unitNumber"), tenancyId: optionalId(input, "tenancyId"), personId: optionalId(input, "personId"), tenantName: optionalText(input, "tenantName"), securityHeldCents: nullableMoney(input, "securityHeldCents"), refundablePetHeldCents: nullableMoney(input, "refundablePetHeldCents"), otherRefundableHeldCents: nullableMoney(input, "otherRefundableHeldCents"), totalHeldCents: nullableMoney(input, "totalHeldCents"), sourceBalanceCents: nullableMoney(input, "sourceBalanceCents"), unknownHeldCount: optionalInteger(input, "unknownHeldCount"), dispositionStatus: optionalAllowed(input, "dispositionStatus", DEPOSIT_STATUSES), unknownReceiptCount: optionalInteger(input, "unknownReceiptCount"), hasUnknownReceiptDate: optionalBoolean(input, "hasUnknownReceiptDate"), temporalUncertainty: optionalBoolean(input, "temporalUncertainty") };
 }
 
 function decodeApplicantPipelineRow(value: unknown): ApplicantPipelineRow {
@@ -1381,6 +1382,8 @@ export async function downloadRentOpsDocument(documentId: string): Promise<Blob>
 }
 
 function toLabel(key: string): string {
+  const depositLabels: Record<string, string> = { sourceBalanceCents: "Source balance", securityHeldCents: "Security held", refundablePetHeldCents: "Pet deposit held", otherRefundableHeldCents: "Other deposit held", totalHeldCents: "Total held", unknownHeldCount: "Unknown held amounts" };
+  if (depositLabels[key]) return depositLabels[key];
   return key.replace(/([A-Z])/g, " $1").replace(/^./, (letter) => letter.toUpperCase());
 }
 

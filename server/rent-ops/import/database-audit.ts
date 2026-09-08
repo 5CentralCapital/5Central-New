@@ -805,7 +805,7 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
         WHEN kind = 'reversal' THEN 0
         ELSE 0 END), 0)::bigint AS net_ledger_balance_cents,
       (SELECT COALESCE(SUM(amount_cents), 0)::bigint FROM rent_ops_payment_allocations) AS allocations_cents,
-      (SELECT COALESCE(SUM(amount_held_cents), 0)::bigint FROM rent_ops_security_deposits) AS deposits_cents,
+      (SELECT COALESCE(SUM(COALESCE(source_balance_cents, amount_held_cents)), 0)::bigint FROM rent_ops_security_deposits) AS deposits_cents,
       (SELECT COALESCE(SUM(agency_obligation_cents), 0)::bigint FROM rent_ops_subsidy_contracts) AS hap_agency_obligation_cents,
       (SELECT COALESCE(SUM(tenant_obligation_cents), 0)::bigint FROM rent_ops_subsidy_contracts) AS hap_tenant_obligation_cents,
       (SELECT COALESCE(SUM(amount_cents) FILTER (WHERE amount_knowledge = 'known' AND amount_cents IS NOT NULL), 0)::bigint FROM rent_ops_subsidy_tenants) AS hap_subsidy_tenant_cents,
@@ -834,7 +834,7 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
       (SELECT COUNT(*) FROM rent_ops_recurring_charge_schedules s LEFT JOIN rent_ops_tenancies t ON t.id = s.tenancy_id WHERE s.tenancy_id IS NOT NULL AND t.id IS NULL) AS schedules_tenancy,
       (SELECT COUNT(*) FROM rent_ops_recurring_charge_schedules s LEFT JOIN rent_ops_properties p ON p.id = s.property_id WHERE p.id IS NULL) AS schedules_property,
       (SELECT COUNT(*) FROM rent_ops_recurring_charge_schedules s LEFT JOIN rent_ops_units u ON u.id = s.unit_id WHERE s.unit_id IS NOT NULL AND u.id IS NULL) AS schedules_unit,
-      (SELECT COUNT(*) FROM rent_ops_ledger_transactions l LEFT JOIN rent_ops_properties p ON p.id = l.property_id WHERE p.id IS NULL) AS ledger_property,
+      (SELECT COUNT(*) FROM rent_ops_ledger_transactions l LEFT JOIN rent_ops_properties p ON p.id = l.property_id WHERE p.id IS NULL AND NOT (l.kind='payment' AND l.allocation_mode='multi_property' AND l.source_system='rent_manager' AND l.source_artifact_sha256 IS NOT NULL AND l.person_id IS NOT NULL AND l.person_link_knowledge='exact')) AS ledger_property,
       (SELECT COUNT(*) FROM rent_ops_ledger_transactions l LEFT JOIN rent_ops_units u ON u.id = l.unit_id WHERE l.unit_id IS NOT NULL AND u.id IS NULL) AS ledger_unit,
       (SELECT COUNT(*) FROM rent_ops_ledger_transactions l LEFT JOIN rent_ops_tenancies t ON t.id = l.tenancy_id WHERE l.tenancy_id IS NOT NULL AND t.id IS NULL) AS ledger_tenancy,
       (SELECT COUNT(*) FROM rent_ops_ledger_transactions l LEFT JOIN rent_ops_people p ON p.id = l.person_id WHERE l.person_id IS NOT NULL AND p.id IS NULL) AS ledger_person,
@@ -938,33 +938,37 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
    */
   allocationInvariants: `
     SELECT
-      (SELECT COUNT(*) FROM rent_ops_payment_allocations a LEFT JOIN rent_ops_ledger_transactions p ON p.id = a.payment_transaction_id WHERE p.id IS NULL) AS allocation_payment_missing,
+      (SELECT COUNT(*) FROM rent_ops_payment_allocations a LEFT JOIN rent_ops_ledger_transactions p ON p.id = a.payment_transaction_id WHERE p.id IS NULL AND a.kind <> 'credit_allocation') AS allocation_payment_missing,
       (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions p ON p.id = a.payment_transaction_id WHERE p.kind <> 'payment') AS allocation_payment_not_payment,
       (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions p ON p.id = a.payment_transaction_id WHERE p.status <> 'posted') AS allocation_payment_not_posted,
       (SELECT COUNT(*) FROM rent_ops_payment_allocations a LEFT JOIN rent_ops_ledger_transactions c ON c.id = a.charge_transaction_id WHERE c.id IS NULL) AS allocation_charge_missing,
       (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions c ON c.id = a.charge_transaction_id WHERE c.kind <> 'charge') AS allocation_charge_not_charge,
       (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions c ON c.id = a.charge_transaction_id WHERE c.status <> 'posted') AS allocation_charge_not_posted,
-      (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions p ON p.id = a.payment_transaction_id JOIN rent_ops_ledger_transactions c ON c.id = a.charge_transaction_id WHERE p.property_id IS DISTINCT FROM c.property_id) AS allocation_property_mismatch,
+      (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions p ON p.id = a.payment_transaction_id JOIN rent_ops_ledger_transactions c ON c.id = a.charge_transaction_id WHERE p.property_id IS DISTINCT FROM c.property_id AND NOT (p.kind='payment' AND p.allocation_mode='multi_property' AND p.property_id IS NULL AND p.source_system='rent_manager' AND p.source_artifact_sha256 IS NOT NULL AND p.person_id=c.person_id AND p.person_link_knowledge='exact' AND c.person_link_knowledge='exact')) AS allocation_property_mismatch,
       (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions p ON p.id = a.payment_transaction_id JOIN rent_ops_ledger_transactions c ON c.id = a.charge_transaction_id WHERE p.tenancy_id IS NOT NULL AND c.tenancy_id IS NOT NULL AND p.tenancy_id IS DISTINCT FROM c.tenancy_id) AS allocation_tenancy_mismatch,
-      (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions p ON p.id = a.payment_transaction_id WHERE a.amount_cents <= 0) AS allocation_non_positive,
-      (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions p ON p.id = a.payment_transaction_id WHERE EXISTS (SELECT 1 FROM rent_ops_ledger_transactions r WHERE r.kind = 'reversal' AND r.status = 'posted' AND r.reversal_of_id = p.id)) AS allocation_payment_reversed,
-      (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions c ON c.id = a.charge_transaction_id WHERE EXISTS (SELECT 1 FROM rent_ops_ledger_transactions r WHERE r.kind = 'reversal' AND r.status = 'posted' AND r.reversal_of_id = c.id)) AS allocation_charge_reversed,
+      (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions p ON p.id = a.payment_transaction_id WHERE a.amount_cents <= 0 AND NOT ((a.kind = 'reversal' AND a.source_system = 'rent_manager' AND a.source_artifact_sha256 ~ '^[a-f0-9]{64}$' AND a.artifact_observation_on IS NOT NULL AND a.payment_link_knowledge='exact' AND a.charge_link_knowledge='exact' AND a.amount_knowledge='known' AND a.allocated_on_knowledge='source') IS TRUE)) AS allocation_non_positive,
+      (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions p ON p.id = a.payment_transaction_id WHERE EXISTS (SELECT 1 FROM rent_ops_ledger_transactions r WHERE r.kind = 'reversal' AND r.status = 'posted' AND r.reversal_of_id = p.id AND (r.posted_on IS NULL OR ((a.allocated_on IS NULL OR a.allocated_on > r.posted_on) AND NOT COALESCE((a.source_system = 'rent_manager' AND a.source_artifact_sha256 ~ '^[a-f0-9]{64}$' AND a.payment_link_knowledge = 'exact' AND a.charge_link_knowledge = 'exact' AND a.source_updated_at IS NOT NULL AND (a.source_updated_at AT TIME ZONE 'UTC')::date <= r.posted_on), false))))) AS allocation_payment_reversed,
+      (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions c ON c.id = a.charge_transaction_id WHERE EXISTS (SELECT 1 FROM rent_ops_ledger_transactions r WHERE r.kind = 'reversal' AND r.status = 'posted' AND r.reversal_of_id = c.id AND (r.posted_on IS NULL OR ((a.allocated_on IS NULL OR a.allocated_on > r.posted_on) AND NOT COALESCE((a.source_system = 'rent_manager' AND a.source_artifact_sha256 ~ '^[a-f0-9]{64}$' AND a.payment_link_knowledge = 'exact' AND a.charge_link_knowledge = 'exact' AND a.source_updated_at IS NOT NULL AND (a.source_updated_at AT TIME ZONE 'UTC')::date <= r.posted_on), false))))) AS allocation_charge_reversed,
       (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions p ON p.id = a.payment_transaction_id WHERE p.status = 'voided') AS allocation_payment_voided,
       (SELECT COUNT(*) FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions c ON c.id = a.charge_transaction_id WHERE c.status = 'voided') AS allocation_charge_voided,
       (SELECT COUNT(*) FROM (
-        SELECT a.payment_transaction_id
+        SELECT COALESCE(a.payment_transaction_id,a.credit_transaction_id)
         FROM rent_ops_payment_allocations a
-        JOIN rent_ops_ledger_transactions p ON p.id = a.payment_transaction_id
-        GROUP BY a.payment_transaction_id, p.amount_cents
+        JOIN rent_ops_ledger_transactions p ON p.id = COALESCE(a.payment_transaction_id,a.credit_transaction_id)
+        WHERE a.kind <> 'transfer'
+        GROUP BY COALESCE(a.payment_transaction_id,a.credit_transaction_id), p.amount_cents
         HAVING SUM(a.amount_cents) > p.amount_cents
       ) over_allocated_payments) AS allocations_exceed_payment,
       (SELECT COUNT(*) FROM (
         SELECT a.charge_transaction_id
         FROM rent_ops_payment_allocations a
         JOIN rent_ops_ledger_transactions c ON c.id = a.charge_transaction_id
+        WHERE a.kind <> 'transfer' AND NOT EXISTS (SELECT 1 FROM rent_ops_ledger_transactions r WHERE r.kind='reversal' AND r.status='posted' AND (r.reversal_of_id=COALESCE(a.payment_transaction_id,a.credit_transaction_id) OR r.reversal_of_id=a.charge_transaction_id))
         GROUP BY a.charge_transaction_id, c.amount_cents
         HAVING SUM(a.amount_cents) > c.amount_cents
-      ) over_allocated_charges) AS allocations_exceed_charge
+      ) over_allocated_charges) AS allocations_exceed_charge,
+      (SELECT COUNT(*) FROM rent_ops_payment_allocations a LEFT JOIN rent_ops_ledger_transactions c ON c.id=a.credit_transaction_id LEFT JOIN rent_ops_ledger_transactions q ON q.id=a.charge_transaction_id WHERE a.kind='credit_allocation' AND (c.id IS NULL OR c.kind IS DISTINCT FROM 'credit' OR a.payment_transaction_id IS NOT NULL OR a.credit_link_knowledge IS DISTINCT FROM 'exact' OR (c.status IS NOT NULL AND c.status<>'posted') OR (c.property_id IS NOT NULL AND q.property_id IS NOT NULL AND c.property_id<>q.property_id) OR (c.tenancy_id IS NOT NULL AND q.tenancy_id IS NOT NULL AND c.tenancy_id<>q.tenancy_id) OR (c.person_id IS NOT NULL AND q.person_id IS NOT NULL AND c.person_id<>q.person_id))) AS credit_allocation_parent_invalid,
+      (SELECT COUNT(*) FROM (SELECT SUM(amount_cents) OVER (PARTITION BY payment_transaction_id,charge_transaction_id ORDER BY allocated_on,amount_cents DESC,id ROWS UNBOUNDED PRECEDING) AS running_amount FROM rent_ops_payment_allocations WHERE kind <> 'transfer') a WHERE running_amount < 0) AS allocation_reversal_exceeds_history
   `,
   /**
    * Reversal and void controls mirror the domain validator.  They remain an
@@ -1046,7 +1050,7 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
       ) AS overlapping_lease_term_pairs,
       (
         SELECT COUNT(*) FROM (
-          SELECT payment_transaction_id, charge_transaction_id FROM rent_ops_payment_allocations GROUP BY payment_transaction_id, charge_transaction_id HAVING COUNT(*) > 1
+          SELECT payment_transaction_id, charge_transaction_id FROM rent_ops_payment_allocations WHERE source_system IS NULL GROUP BY payment_transaction_id, charge_transaction_id HAVING COUNT(*) > 1
         ) allocation_pairs
       ) AS duplicate_payment_charge_pairs,
       (
@@ -1101,7 +1105,7 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
       (SELECT COUNT(*) FROM rent_ops_ledger_transactions l WHERE l.property_id = p.id AND l.kind = 'credit') AS credit_count,
       (SELECT COALESCE(SUM(l.amount_cents), 0)::bigint FROM rent_ops_ledger_transactions l WHERE l.property_id = p.id AND l.kind = 'credit') AS credits_cents,
       (SELECT COALESCE(SUM(a.amount_cents), 0)::bigint FROM rent_ops_payment_allocations a JOIN rent_ops_ledger_transactions pay ON pay.id = a.payment_transaction_id JOIN rent_ops_ledger_transactions charge ON charge.id = a.charge_transaction_id WHERE pay.property_id = p.id OR charge.property_id = p.id) AS allocations_cents,
-      (SELECT COALESCE(SUM(d.amount_held_cents), 0)::bigint FROM rent_ops_security_deposits d WHERE d.property_id = p.id) AS deposits_cents,
+      (SELECT COALESCE(SUM(COALESCE(d.source_balance_cents, d.amount_held_cents)), 0)::bigint FROM rent_ops_security_deposits d WHERE d.property_id = p.id) AS deposits_cents,
       (SELECT COUNT(*) FROM rent_ops_subsidy_contracts s WHERE s.property_id = p.id AND s.status <> 'pending' AND NOT (s.status = 'ended' AND s.effective_to IS NULL) AND s.effective_from <= DATE_TRUNC('month', $1::date)::date AND (s.effective_to IS NULL OR s.effective_to >= DATE_TRUNC('month', $1::date)::date)) AS active_hap_contracts,
       (SELECT COALESCE(SUM(s.agency_obligation_cents), 0)::bigint FROM rent_ops_subsidy_contracts s WHERE s.property_id = p.id AND s.status <> 'pending' AND NOT (s.status = 'ended' AND s.effective_to IS NULL) AND s.effective_from <= DATE_TRUNC('month', $1::date)::date AND (s.effective_to IS NULL OR s.effective_to >= DATE_TRUNC('month', $1::date)::date)) AS hap_agency_cents,
       (SELECT COALESCE(SUM(s.tenant_obligation_cents), 0)::bigint FROM rent_ops_subsidy_contracts s WHERE s.property_id = p.id AND s.status <> 'pending' AND NOT (s.status = 'ended' AND s.effective_to IS NULL) AND s.effective_from <= DATE_TRUNC('month', $1::date)::date AND (s.effective_to IS NULL OR s.effective_to >= DATE_TRUNC('month', $1::date)::date)) AS hap_tenant_cents
@@ -1266,8 +1270,8 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
     SELECT
       (SELECT COUNT(*)::bigint FROM schedule_rows) AS schedule_row_count,
       (SELECT COUNT(*)::bigint FROM schedule_sources) AS schedule_source_row_count,
-      (SELECT COUNT(DISTINCT source_system || chr(0) || source_id)::bigint FROM schedule_rows WHERE source_system IS NOT NULL AND source_id IS NOT NULL) AS schedule_distinct_target_identity_count,
-      (SELECT COUNT(DISTINCT source_system || chr(0) || source_id)::bigint FROM schedule_sources) AS schedule_distinct_source_identity_count,
+      (SELECT COUNT(DISTINCT (source_system, source_id))::bigint FROM schedule_rows WHERE source_system IS NOT NULL AND source_id IS NOT NULL) AS schedule_distinct_target_identity_count,
+      (SELECT COUNT(DISTINCT (source_system, source_id))::bigint FROM schedule_sources) AS schedule_distinct_source_identity_count,
       (SELECT COALESCE(SUM(row_count - 1), 0)::bigint FROM schedule_target_duplicates) AS schedule_duplicate_identity_rows,
       (SELECT COUNT(*)::bigint FROM schedule_sources src WHERE NOT EXISTS (SELECT 1 FROM schedule_rows s WHERE s.source_system = src.source_system AND s.source_id = src.source_id)) AS schedule_missing_target_identity_rows,
       (SELECT COUNT(*)::bigint FROM schedule_rows s WHERE s.source_system IS NOT NULL AND s.source_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM schedule_sources src WHERE src.source_system = s.source_system AND src.source_id = s.source_id)) AS schedule_unexpected_target_identity_rows,
@@ -1294,18 +1298,18 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
       (SELECT COUNT(*)::bigint FROM property_schedules p WHERE EXISTS (SELECT 1 FROM schedule_rows specific WHERE specific.property_id = p.property_id AND specific.category = p.category AND specific.definition_key = p.definition_key AND specific.scope_type IN ('tenant', 'unit') AND specific.active IS DISTINCT FROM FALSE)) AS property_definition_overridden_rows,
       (SELECT COUNT(*)::bigint FROM rent_ops_security_deposits) AS deposit_row_count,
       (SELECT COUNT(*)::bigint FROM deposit_sources) AS deposit_source_row_count,
-      (SELECT COUNT(DISTINCT source_system || chr(0) || source_id)::bigint FROM rent_ops_security_deposits WHERE source_system IS NOT NULL AND source_id IS NOT NULL) AS deposit_distinct_target_identity_count,
-      (SELECT COUNT(DISTINCT source_system || chr(0) || source_id)::bigint FROM deposit_sources) AS deposit_distinct_source_identity_count,
+      (SELECT COUNT(DISTINCT (source_system, source_id))::bigint FROM rent_ops_security_deposits WHERE source_system IS NOT NULL AND source_id IS NOT NULL) AS deposit_distinct_target_identity_count,
+      (SELECT COUNT(DISTINCT (source_system, source_id))::bigint FROM deposit_sources) AS deposit_distinct_source_identity_count,
       (SELECT COALESCE(SUM(row_count - 1), 0)::bigint FROM deposit_target_duplicates) AS deposit_duplicate_identity_rows,
       (SELECT COUNT(*)::bigint FROM deposit_sources src WHERE NOT EXISTS (SELECT 1 FROM rent_ops_security_deposits d WHERE d.source_system = src.source_system AND d.source_id = src.source_id)) AS deposit_missing_target_identity_rows,
       (SELECT COUNT(*)::bigint FROM rent_ops_security_deposits d WHERE d.source_system IS NOT NULL AND d.source_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM deposit_sources src WHERE src.source_system = d.source_system AND src.source_id = d.source_id)) AS deposit_unexpected_target_identity_rows,
       (SELECT COUNT(*)::bigint FROM rent_ops_security_deposits d WHERE d.tenancy_id IS NOT NULL AND (NOT EXISTS (SELECT 1 FROM rent_ops_tenancies t WHERE t.id = d.tenancy_id AND t.property_id = d.property_id AND t.primary_person_id = d.person_id AND (d.unit_id IS NULL OR d.unit_id = t.unit_id)))) AS deposit_tenancy_reference_violation_rows,
       (SELECT COUNT(*)::bigint FROM rent_ops_security_deposits d WHERE d.unit_id IS NULL) AS deposit_unknown_unit_count,
-      (SELECT COALESCE(SUM(amount_held_cents) FILTER (WHERE unit_id IS NULL), 0)::bigint FROM rent_ops_security_deposits) AS deposit_unknown_unit_amount_cents,
+      (SELECT COALESCE(SUM(COALESCE(source_balance_cents, amount_held_cents)) FILTER (WHERE unit_id IS NULL), 0)::bigint FROM rent_ops_security_deposits) AS deposit_unknown_unit_amount_cents,
       (SELECT COUNT(*)::bigint FROM rent_ops_security_deposits d WHERE d.received_on IS NULL OR d.received_on_knowledge = 'unknown') AS deposit_unknown_receipt_date_count,
-      (SELECT COALESCE(SUM(amount_held_cents) FILTER (WHERE received_on IS NULL OR received_on_knowledge = 'unknown'), 0)::bigint FROM rent_ops_security_deposits) AS deposit_unknown_receipt_amount_cents,
+      (SELECT COALESCE(SUM(COALESCE(source_balance_cents, amount_held_cents)) FILTER (WHERE received_on IS NULL OR received_on_knowledge = 'unknown'), 0)::bigint FROM rent_ops_security_deposits) AS deposit_unknown_receipt_amount_cents,
       (SELECT COUNT(*)::bigint FROM rent_ops_security_deposits d WHERE d.received_on IS NOT NULL AND d.received_on_knowledge = 'source') AS deposit_known_receipt_date_count,
-      (SELECT COALESCE(SUM(amount_held_cents) FILTER (WHERE received_on IS NOT NULL AND received_on_knowledge = 'source'), 0)::bigint FROM rent_ops_security_deposits) AS deposit_known_receipt_amount_cents,
+      (SELECT COALESCE(SUM(COALESCE(source_balance_cents, amount_held_cents)) FILTER (WHERE received_on IS NOT NULL AND received_on_knowledge = 'source'), 0)::bigint FROM rent_ops_security_deposits) AS deposit_known_receipt_amount_cents,
       (SELECT COUNT(*)::bigint FROM rent_ops_security_deposits d WHERE (d.received_on IS NULL AND d.received_on_knowledge IS DISTINCT FROM 'unknown') OR (d.received_on IS NOT NULL AND d.received_on_knowledge IS DISTINCT FROM 'source')) AS deposit_date_knowledge_violation_rows,
       (SELECT COUNT(*)::bigint FROM held_deposits) AS held_deposit_row_count,
       (SELECT COALESCE(SUM(amount_held_cents) FILTER (WHERE type = 'security'), 0)::bigint FROM held_deposits) AS held_security_deposit_cents,
@@ -1315,16 +1319,16 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
       (SELECT COALESCE(SUM(amount_held_cents) FILTER (WHERE received_on IS NOT NULL AND received_on > $1::date), 0)::bigint FROM rent_ops_security_deposits) AS future_known_receipt_excluded_cents,
       (SELECT COUNT(*)::bigint FROM rent_ops_subsidy_contracts) AS hap_contract_row_count,
       (SELECT COUNT(*)::bigint FROM hap_contract_sources) AS hap_contract_source_row_count,
-      (SELECT COUNT(DISTINCT source_system || chr(0) || source_id)::bigint FROM rent_ops_subsidy_contracts WHERE source_system IS NOT NULL AND source_id IS NOT NULL) AS hap_contract_distinct_target_identity_count,
-      (SELECT COUNT(DISTINCT source_system || chr(0) || source_id)::bigint FROM hap_contract_sources) AS hap_contract_distinct_source_identity_count,
+      (SELECT COUNT(DISTINCT (source_system, source_id))::bigint FROM rent_ops_subsidy_contracts WHERE source_system IS NOT NULL AND source_id IS NOT NULL) AS hap_contract_distinct_target_identity_count,
+      (SELECT COUNT(DISTINCT (source_system, source_id))::bigint FROM hap_contract_sources) AS hap_contract_distinct_source_identity_count,
       (SELECT COUNT(*)::bigint FROM rent_ops_subsidy_tenants) AS hap_tenant_row_count,
       (SELECT COUNT(*)::bigint FROM hap_tenant_sources) AS hap_tenant_source_row_count,
-      (SELECT COUNT(DISTINCT source_system || chr(0) || source_id)::bigint FROM rent_ops_subsidy_tenants WHERE source_system IS NOT NULL AND source_id IS NOT NULL) AS hap_tenant_distinct_target_identity_count,
-      (SELECT COUNT(DISTINCT source_system || chr(0) || source_id)::bigint FROM hap_tenant_sources) AS hap_tenant_distinct_source_identity_count,
+      (SELECT COUNT(DISTINCT (source_system, source_id))::bigint FROM rent_ops_subsidy_tenants WHERE source_system IS NOT NULL AND source_id IS NOT NULL) AS hap_tenant_distinct_target_identity_count,
+      (SELECT COUNT(DISTINCT (source_system, source_id))::bigint FROM hap_tenant_sources) AS hap_tenant_distinct_source_identity_count,
       (SELECT COUNT(*)::bigint FROM rent_ops_subsidy_payments) AS hap_payment_row_count,
       (SELECT COUNT(*)::bigint FROM hap_payment_sources) AS hap_payment_source_row_count,
-      (SELECT COUNT(DISTINCT source_system || chr(0) || source_id)::bigint FROM rent_ops_subsidy_payments WHERE source_system IS NOT NULL AND source_id IS NOT NULL) AS hap_payment_distinct_target_identity_count,
-      (SELECT COUNT(DISTINCT source_system || chr(0) || source_id)::bigint FROM hap_payment_sources) AS hap_payment_distinct_source_identity_count,
+      (SELECT COUNT(DISTINCT (source_system, source_id))::bigint FROM rent_ops_subsidy_payments WHERE source_system IS NOT NULL AND source_id IS NOT NULL) AS hap_payment_distinct_target_identity_count,
+      (SELECT COUNT(DISTINCT (source_system, source_id))::bigint FROM hap_payment_sources) AS hap_payment_distinct_source_identity_count,
       (SELECT COUNT(*)::bigint FROM rent_ops_subsidy_contracts WHERE status IS NOT NULL AND status_knowledge = 'source') AS hap_contract_known_status_count,
       (SELECT COUNT(*)::bigint FROM rent_ops_subsidy_contracts WHERE status IS NULL OR status_knowledge IS DISTINCT FROM 'source') AS hap_contract_unknown_status_count,
       (SELECT COUNT(*)::bigint FROM rent_ops_subsidy_tenants WHERE status IS NOT NULL AND status_knowledge = 'source') AS hap_tenant_known_status_count,

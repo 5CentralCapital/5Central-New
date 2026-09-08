@@ -1,5 +1,6 @@
 import { canonicalJson, hashRecord, sha256 } from "../export/hash";
-import { RestrictedCredentialFieldError, assertNoCredentialShapedFields } from "../export/collector";
+import { RestrictedCredentialFieldError } from "../export/collector";
+import { scanSupplementCredentialBoundary } from "./supplement-credential-scan";
 import type {
   DocumentBinaryDescriptor,
   ExportEnvelope,
@@ -516,6 +517,17 @@ const SOURCE_EVIDENCE_KEYS = [
   "sourceFileSha256", "sourceFileDescriptorSha256", "sourceFileHash", "sourceFileSizeBytes", "sourceFileContentType",
 ] as const;
 
+/** RM source timestamps may omit an offset. Preserve that local literal;
+ * assigning UTC would invent a source instant. Attestation times remain UTC. */
+function sourceTimestamp(value: unknown): string {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?$/.test(value)) {
+    const seconds = value.slice(0, 19);
+    const parsed = new Date(`${seconds}Z`);
+    if (Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 19) === seconds) return value;
+  }
+  return requiredTimestamp(value, "supplement_source_timestamp_invalid");
+}
+
 function validateSourceEvidence(
   value: unknown,
   attestation: RestrictedSupplementOperatorAttestation,
@@ -525,7 +537,7 @@ function validateSourceEvidence(
   assertAllowedKeys(value, [...SOURCE_EVIDENCE_KEYS, ...(valueKind === "row" ? ["record"] : ["descriptor", "bytes"])], valueKind === "row" ? "supplement_row_unsupported_field" : "supplement_binary_unsupported_field");
   const sourceCollection = requiredText(value.sourceCollection, "supplement_source_collection_invalid", SAFE_TOKEN);
   const sourceId = requiredText(value.sourceId, "supplement_source_id_invalid", SAFE_REFERENCE);
-  const sourceUpdatedAt = requiredTimestamp(value.sourceUpdatedAt, "supplement_source_timestamp_invalid");
+  const sourceUpdatedAt = sourceTimestamp(value.sourceUpdatedAt);
   const sourceReference = requiredText(value.sourceReference, "supplement_source_reference_invalid", SAFE_REFERENCE);
   const claimedSourceSha256 = requiredSha256(value.sourceSha256, "supplement_source_hash_invalid");
   const operatorReference = requiredText(value.operatorReference, "supplement_operator_reference_invalid", SAFE_REFERENCE);
@@ -675,7 +687,7 @@ function validateBinary(value: unknown, attestation: RestrictedSupplementOperato
   const rawEvidence = validateSourceEvidence(value, attestation, "binary");
   if (!isRecord(value.descriptor)) throw new RestrictedSupplementIntegrityError(["supplement_binary_descriptor_invalid"]);
   const descriptorValue = value.descriptor;
-  assertAllowedKeys(descriptorValue, ["sourceId", "metadataAvailable", "binaryAvailable", "descriptorOnly", "contentType", "sizeBytes", "sha256", "archivePath", "availabilityReason"], "supplement_binary_descriptor_unsupported_field");
+  assertAllowedKeys(descriptorValue, ["sourceId", "fileName", "metadataAvailable", "binaryAvailable", "descriptorOnly", "contentType", "sizeBytes", "sha256", "archivePath", "availabilityReason"], "supplement_binary_descriptor_unsupported_field");
   const descriptorSourceId = requiredText(descriptorValue.sourceId, "supplement_binary_source_id_invalid", SAFE_REFERENCE);
   if (descriptorSourceId !== rawEvidence.sourceId) throw new RestrictedSupplementIntegrityError(["supplement_binary_source_id_conflict"]);
   if (descriptorValue.metadataAvailable !== true || descriptorValue.binaryAvailable !== true || descriptorValue.descriptorOnly === true) {
@@ -697,8 +709,11 @@ function validateBinary(value: unknown, attestation: RestrictedSupplementOperato
     else throw new RestrictedSupplementIntegrityError(["supplement_binary_bytes_invalid"]);
     if (bytes.byteLength !== sizeBytes || sha256(bytes) !== checksum) throw new RestrictedSupplementIntegrityError(["supplement_binary_content_mismatch"]);
   }
+  const fileName = optionalText(descriptorValue.fileName, "supplement_binary_filename_invalid", SAFE_REFERENCE);
+  if (fileName && (fileName.includes("/") || fileName.includes("\\") || fileName === "." || fileName === "..")) throw new RestrictedSupplementIntegrityError(["supplement_binary_filename_invalid"]);
   const descriptor: DocumentBinaryDescriptor = {
     sourceId: descriptorSourceId,
+    ...(fileName === undefined ? {} : { fileName }),
     metadataAvailable: true,
     binaryAvailable: true,
     descriptorOnly: false,
@@ -773,8 +788,7 @@ function updateCoverage(
   const rowIds = new Set(records.map((record) => record.rowId));
   const recordHashes = candidateRows
     .filter((row: Record<string, unknown>) => typeof row.supplementRowId === "string" && rowIds.has(row.supplementRowId))
-    .map((row) => hashRecord(row))
-    .sort();
+    .map((row) => hashRecord(row));
   if (recordHashes.length !== records.length) throw new RestrictedSupplementIntegrityError(["supplement_manifest_row_binding_invalid"]);
   return {
     name: info.collectionName,
@@ -887,7 +901,12 @@ function rebuildManifest(
     if (!collection.required) return collection.status === "complete" || collection.status === "empty" || collection.status === "not_available";
     return (collection.status === "complete" || collection.status === "empty") && collection.errors.length === 0 && collection.exceptions.length === 0;
   });
-  candidate.complete = allCoverageResolved && candidate.errors.length === 0 && candidate.exceptions.length === 0;
+  // Collector completeness permits an explicitly unavailable optional endpoint.
+  // Keep its evidence in the manifest; it is not an unfinished required read.
+  const optionalUnavailable = (collectionName: string | undefined) => typeof collectionName === "string" && candidate.collections.some((collection) => collection.name === collectionName && !collection.required && collection.status === "not_available");
+  candidate.complete = allCoverageResolved
+    && candidate.errors.every((error) => optionalUnavailable(error.collection))
+    && candidate.exceptions.every((exception) => optionalUnavailable(exception.collection));
   return { manifest: candidate, removedExceptionHashes: removedExceptionHashes.sort() };
 }
 
@@ -908,7 +927,7 @@ export function buildRestrictedSupplement(request: RestrictedSupplementRequest):
     // The collector's recursive boundary is reused here before any
     // derivative clone, source hash, or manifest write.  Supplement rows are
     // untrusted inputs even when their operator envelope is well-shaped.
-    assertNoCredentialShapedFields(requestValue);
+    scanSupplementCredentialBoundary(requestValue);
   } catch (error) {
     if (error instanceof RestrictedCredentialFieldError) {
       throw new RestrictedSupplementIntegrityError(["credential_field_rejected"]);

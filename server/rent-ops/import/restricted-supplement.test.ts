@@ -322,6 +322,7 @@ test("binary supplements require a private archive path and matching bytes hash/
     operatorReference: OPERATOR,
     descriptor: {
       sourceId: "document-1",
+      fileName: "Exact source document.pdf",
       metadataAvailable: true,
       binaryAvailable: true,
       descriptorOnly: false,
@@ -349,7 +350,18 @@ test("binary supplements require a private archive path and matching bytes hash/
   });
   const result = buildRestrictedSupplement(request({ applicationAnswers: undefined, documentBinaries: [binary], operatorAttestation: attestation(["document_binaries"]) }));
   assert.equal(result.envelope.documentBinaries.length, 1);
+  assert.equal(result.envelope.documentBinaries[0].fileName, binary.descriptor.fileName);
+  assert.equal(result.envelope.payload.documentBinaryDescriptors?.[0].fileName, binary.descriptor.fileName);
+  const renamed = structuredClone(binary);
+  renamed.descriptor.fileName = "Changed source document.pdf";
+  assert.throws(() => buildRestrictedSupplement(request({ applicationAnswers: undefined, documentBinaries: [renamed], operatorAttestation: attestation(["document_binaries"]) })), RestrictedSupplementIntegrityError);
   assert.equal(result.manifest.documentBinarySummary.binaryAvailableCount, 1);
+
+  for (const fileName of ["../private.pdf", "folder/private.pdf", "folder\\private.pdf", ".", "..", "bad\nname.pdf"]) {
+    const unsafe = structuredClone(binary);
+    unsafe.descriptor.fileName = fileName;
+    assert.throws(() => buildRestrictedSupplement(request({ applicationAnswers: undefined, documentBinaries: [unsafe], operatorAttestation: attestation(["document_binaries"]) })), (error: unknown) => error instanceof RestrictedSupplementIntegrityError && error.reasons.includes("supplement_binary_filename_invalid"));
+  }
 
   const bad = structuredClone(binary);
   bad.descriptor.sha256 = "c".repeat(64);
@@ -447,4 +459,31 @@ test("only the exact bound missing-source exception is removed", () => {
   assert.equal(result.manifest.exceptions.some((item) => item.code === "missing_source_id"), false);
   assert.equal(result.manifest.exceptions.some((item) => item.code === "incomplete_coverage"), true);
   assert.equal(result.report.exceptionsRemoved, 2);
+});
+
+test("source-local RM update timestamp remains literal while attestation time stays canonical", () => {
+  const row = applicationRow();
+  row.sourceUpdatedAt = "2022-04-06T23:12:02";
+  const { record, sourceSha256: _hash, ...evidence } = row;
+  row.sourceSha256 = restrictedSupplementSourceSha256({ kind: "application_answers", evidence, payload: record, attestation: attestation(["application_answers"]) });
+  const result = buildRestrictedSupplement(request({ applicationAnswers: [row] }));
+  assert.equal(result.envelope.payload.applicationAnswerRecords?.[0].supplementEvidence && (result.envelope.payload.applicationAnswerRecords[0].supplementEvidence as Record<string, unknown>).sourceUpdatedAt, "2022-04-06T23:12:02");
+  assert.throws(() => buildRestrictedSupplement(request({ applicationAnswers: [{ ...row, sourceUpdatedAt: "2022-02-31T23:12:02" }] })), /supplement_source_timestamp_invalid/);
+  assert.throws(() => buildRestrictedSupplement(request({ operatorAttestation: { ...attestation(["application_answers"]), verifiedAt: "2022-04-06T23:12:02" } })), /evidence_attestation_timestamp_invalid/);
+});
+
+test("manual coverage hashes retain emitted row order and optional unavailable evidence remains complete", () => {
+  const first = applicationRow("answer-z"), second = applicationRow("answer-a");
+  const input = request({ applicationAnswers: [first, second] });
+  const unavailable = { code: "unsupported_endpoint", collection: "optionalSource", detail: "not_available" } as any;
+  input.manifest.collections.push({ name: "optionalSource", path: "/Optional", outputKey: "optional", kind: "collection", required: false, status: "not_available", pages: 0, requested: 0, received: 0, expected: 0, recordHashes: [], errors: [], exceptions: [unavailable] });
+  input.manifest.exceptions.push(unavailable);
+  const result = buildRestrictedSupplement(input);
+  assert.equal(result.manifest.complete, true);
+  assert.equal(result.manifest.exceptions.length, 1);
+  const rows = result.envelope.payload.applicationAnswerRecords!;
+  const coverage = result.manifest.collections.find((collection) => collection.name === "manual.applicationAnswerRecords")!;
+  assert.deepEqual(coverage.recordHashes, rows.map((row) => sha256(canonicalJson(row))));
+  const unresolved = request(); unresolved.manifest.exceptions.push({ ...unavailable, collection: "unknownSource" });
+  assert.equal(buildRestrictedSupplement(unresolved).manifest.complete, false);
 });

@@ -33,6 +33,10 @@ export class RentOpsInvariantError extends Error {
  * is not reachable through the generic status endpoint.
  */
 export const APPLICATION_STATUS_TRANSITIONS: Readonly<Record<ApplicationStatus, readonly ApplicationStatus[]>> = {
+  // Imported progress states require an explicit review step before approval.
+  complete: ["under_review", "missing_information", "withdrawn"],
+  in_progress: ["submitted", "missing_information", "withdrawn"],
+  awaiting_payment: ["submitted", "missing_information", "withdrawn"],
   draft: ["submitted", "withdrawn"],
   submitted: ["under_review", "missing_information", "approved", "declined", "withdrawn"],
   missing_information: ["submitted", "under_review", "approved", "declined", "withdrawn"],
@@ -250,6 +254,21 @@ function optionalRangesOverlap(leftStart: string | null | undefined, leftEnd: st
   return true;
 }
 
+/** Only a complete artifact-bound RM reverse allocation may carry a negative amount. */
+export function isSourceAllocationReversal(allocation: RentOpsPaymentAllocation): boolean {
+  return allocation.kind === "reversal" && typeof allocation.amountCents === "number" && Number.isSafeInteger(allocation.amountCents) && allocation.amountCents < 0
+    && allocation.source?.system === "rent_manager" && !!allocation.source.sourceId
+    && /^[a-f0-9]{64}$/.test(allocation.sourceArtifactSha256 ?? "") && isoDateSchema.safeParse(allocation.artifactObservationOn).success
+    && !!allocation.paymentTransactionId && allocation.paymentLinkKnowledge === "exact"
+    && !!allocation.chargeTransactionId && allocation.chargeLinkKnowledge === "exact"
+    && allocation.amountKnowledge === "known" && allocation.allocatedOnKnowledge === "source" && isoDateSchema.safeParse(allocation.allocatedOn).success;
+}
+
+export function isSourceAllocationTransfer(allocation: RentOpsPaymentAllocation): boolean {
+  return allocation.kind === "transfer" && typeof allocation.amountCents === "number" && allocation.amountCents > 0
+    && isSourceAllocationReversal({...allocation, kind:"reversal", amountCents:-allocation.amountCents});
+}
+
 export function postedReversalTargets(transactions: RentOpsLedgerTransaction[]): Set<string> {
   return new Set(transactions.filter(row => row.kind === "reversal" && row.status === "posted" && row.reversalOfId).map(row => row.reversalOfId!));
 }
@@ -262,6 +281,21 @@ export function validateAllocation(
   historical = false,
 ): InvariantViolation[] {
   const violations: InvariantViolation[] = [];
+  if (allocation.kind === "credit_allocation") {
+    const credit = transactions.find(row => row.id === allocation.creditTransactionId);
+    const bound = historical && allocation.source?.system === "rent_manager" && /^[a-f0-9]{64}$/.test(allocation.sourceArtifactSha256 ?? "") && !!allocation.artifactObservationOn
+      && allocation.paymentTransactionId === null && allocation.creditLinkKnowledge === "exact" && allocation.chargeLinkKnowledge === "exact" && allocation.amountKnowledge === "known" && allocation.allocatedOnKnowledge === "source";
+    if (!bound) violations.push({code:"credit_allocation_source_invalid",entityId:allocation.id,message:"Credit application requires exact artifact-bound source evidence"});
+    if (!credit || credit.kind !== "credit") violations.push({code:"credit_allocation_credit_invalid",entityId:allocation.id,message:"Credit application requires its original credit ledger entry"});
+    else {
+      const creditView = {...credit, kind:"payment" as const};
+      violations.push(...validateAllocation({...allocation,kind:"allocation",creditTransactionId:null,paymentTransactionId:credit.id,paymentLinkKnowledge:allocation.creditLinkKnowledge},creditView,charge,transactions,historical));
+      if (credit.personId && charge?.personId && credit.personId !== charge.personId) violations.push({code:"credit_allocation_person_mismatch",entityId:allocation.id,message:"Credit and charge belong to different source accounts"});
+    }
+    return violations;
+  }
+  if (allocation.creditTransactionId) violations.push({code:"allocation_parent_union_invalid",entityId:allocation.id,message:"Only credit applications may reference a credit parent"});
+  if (allocation.kind === "transfer" && (!historical || !isSourceAllocationTransfer(allocation))) violations.push({code:"allocation_transfer_source_invalid",entityId:allocation.id,message:"Transfer movement requires exact artifact-bound source evidence"});
   const paymentUnknown = allocation.paymentLinkKnowledge === "unknown" || allocation.paymentLinkKnowledge === "ambiguous";
   const chargeUnknown = allocation.chargeLinkKnowledge === "unknown" || allocation.chargeLinkKnowledge === "ambiguous";
   if (!payment && !paymentUnknown) violations.push({ code: "allocation_payment_missing", entityId: allocation.id, message: `Payment ${String(allocation.paymentTransactionId ?? "") } is missing` });
@@ -277,10 +311,17 @@ export function validateAllocation(
   if (allocatedOnKnown && !isoDateSchema.safeParse(allocatedOn).success) violations.push({ code: "allocation_date_invalid", entityId: allocation.id, message: "Allocation date must be a real calendar date" });
   if (allocatedOnKnown && payment && typeof payment.postedOn === "string" && allocatedOn < payment.postedOn) violations.push({ code: "allocation_predates_payment", entityId: allocation.id, message: `Allocation ${allocation.id} predates payment ${payment.id}` });
   if (allocatedOnKnown && charge && typeof charge.postedOn === "string" && allocatedOn < charge.postedOn) violations.push({ code: "allocation_predates_charge", entityId: allocation.id, message: `Allocation ${allocation.id} predates charge ${charge.id}` });
-  const invalidReversal = (id: string) => transactions.some(transaction => transaction.kind === "reversal" && transaction.status === "posted" && transaction.reversalOfId === id && (!historical || !allocatedOnKnown || !transaction.postedOn || allocatedOn > transaction.postedOn));
+  // A source allocation can have a future effective date while its immutable source
+  // update proves it already existed before a reversal. Keep both dates intact.
+  const sourceUpdatedAt = allocation.source?.sourceUpdatedAt;
+  const sourceHistoryDate = allocation.source?.system === "rent_manager" && /^[a-f0-9]{64}$/.test(allocation.sourceArtifactSha256 ?? "")
+    && allocation.paymentLinkKnowledge === "exact" && allocation.chargeLinkKnowledge === "exact"
+    && typeof sourceUpdatedAt === "string" && /^\d{4}-\d{2}-\d{2}T/.test(sourceUpdatedAt) && Number.isFinite(Date.parse(sourceUpdatedAt))
+    && isoDateSchema.safeParse(sourceUpdatedAt.slice(0, 10)).success ? sourceUpdatedAt.slice(0, 10) : undefined;
+  const invalidReversal = (id: string) => transactions.some(transaction => transaction.kind === "reversal" && transaction.status === "posted" && transaction.reversalOfId === id && (!historical || !transaction.postedOn || (!allocatedOnKnown || allocatedOn > transaction.postedOn) && (!sourceHistoryDate || sourceHistoryDate > transaction.postedOn)));
   if (payment && invalidReversal(payment.id)) violations.push({ code: "allocation_payment_reversed", entityId: allocation.id, message: `Payment ${payment.id} has already been reversed` });
   if (charge && invalidReversal(charge.id)) violations.push({ code: "allocation_charge_reversed", entityId: allocation.id, message: `Charge ${charge.id} has already been reversed` });
-  if (typeof allocation.amountCents === "number" && allocation.amountCents <= 0) violations.push({ code: "allocation_non_positive", entityId: allocation.id, message: "Allocation amount must be greater than zero" });
+  if ((allocation.kind === "reversal" && (!historical || !isSourceAllocationReversal(allocation))) || (typeof allocation.amountCents === "number" && allocation.amountCents <= 0 && !(historical && isSourceAllocationReversal(allocation)))) violations.push({ code: "allocation_non_positive", entityId: allocation.id, message: "Allocation amount must be greater than zero" });
   return violations;
 }
 
@@ -390,11 +431,12 @@ export function validateSnapshot(snapshot: RentOpsSnapshot): InvariantViolation[
     if (!propertyIds.has(unit.propertyId)) violations.push({ code: "unit_property_missing", entityId: unit.id, message: `Unit ${unit.id} references a missing property` });
   }
   for (const tenancy of snapshot.tenancies) {
-    if (v3 && (!tenancy.propertyId || !tenancy.unitId || !tenancy.primaryPersonId)
-      && [tenancy.propertyId ? undefined : tenancy.propertyLinkKnowledge, tenancy.unitId ? undefined : tenancy.unitLinkKnowledge, tenancy.primaryPersonId ? undefined : tenancy.primaryPersonLinkKnowledge]
-        .every((knowledge) => knowledge === "unknown" || knowledge === "ambiguous")) continue;
     const unit = units.get(tenancy.unitId);
-    if (!propertyIds.has(tenancy.propertyId) || !unit || unit.propertyId !== tenancy.propertyId || !personIds.has(tenancy.primaryPersonId)) violations.push({ code: "tenancy_reference_invalid", entityId: tenancy.id, message: `Tenancy ${tenancy.id} has an invalid property, unit, or primary person reference` });
+    const propertyValid = tenancy.propertyId ? propertyIds.has(tenancy.propertyId) : v3 && tenancy.propertyLinkKnowledge === "unknown";
+    const unitValid = tenancy.unitId ? Boolean(unit && (!tenancy.propertyId || unit.propertyId === tenancy.propertyId)) : v3 && tenancy.unitLinkKnowledge === "unknown";
+    const personValid = tenancy.primaryPersonId ? personIds.has(tenancy.primaryPersonId) : v3 && tenancy.primaryPersonLinkKnowledge === "unknown";
+    // Unknown source-absent links do not bypass validation of present links.
+    if (!propertyValid || !unitValid || !personValid) violations.push({ code: "tenancy_reference_invalid", entityId: tenancy.id, message: `Tenancy ${tenancy.id} has an invalid property, unit, or primary person reference` });
   }
   for (const membership of snapshot.householdMemberships) {
     if (!personIds.has(membership.personId) || membership.accountPersonId && !personIds.has(membership.accountPersonId) || membership.tenancyId && !tenancies.has(membership.tenancyId) || membership.applicationId && !applicationIds.has(membership.applicationId) || (!membership.tenancyId && !membership.applicationId && !membership.accountPersonId)) {
@@ -497,6 +539,9 @@ export function validateSnapshot(snapshot: RentOpsSnapshot): InvariantViolation[
     if (transaction.kind !== "adjustment" && transaction.adjustmentDirection) violations.push({ code: "adjustment_direction_unexpected", entityId: transaction.id, message: "Only adjustments may specify an adjustment direction" });
   }
   for (const deposit of snapshot.securityDeposits) {
+    const signedUnknownHeld = deposit.amountHeldCents === null && deposit.source?.system === "rent_manager" && Number.isSafeInteger(deposit.sourceBalanceCents) && deposit.sourceBalanceCents! < 0;
+    if (!signedUnknownHeld && (!Number.isSafeInteger(deposit.amountHeldCents) || deposit.amountHeldCents! < 0)) violations.push({code:"deposit_amount_invalid",entityId:deposit.id,message:"Held deposit amount must be known nonnegative cents or a signed source exception"});
+    if (deposit.sourceBalanceCents != null && (!deposit.source || !Number.isSafeInteger(deposit.sourceBalanceCents))) violations.push({code:"deposit_source_balance_invalid",entityId:deposit.id,message:"Signed source balance requires exact source cents"});
     const tenancy = deposit.tenancyId ? tenancies.get(deposit.tenancyId) : undefined;
     const unit = deposit.unitId ? units.get(deposit.unitId) : undefined;
     const propertyLinkKnowledge = (deposit as { propertyLinkKnowledge?: string }).propertyLinkKnowledge;
@@ -561,13 +606,34 @@ export function validateSnapshot(snapshot: RentOpsSnapshot): InvariantViolation[
   }
   violations.push(...baseRentScheduleViolations(snapshot.recurringSchedules));
   violations.push(...activeTenancyViolations(snapshot));
+  for (const payment of snapshot.ledgerTransactions.filter(row=>row.kind==="payment" && row.allocationMode==="multi_property")) {
+    const rows = snapshot.paymentAllocations.filter(row=>row.paymentTransactionId===payment.id && row.kind!=="transfer");
+    const properties = new Set(rows.map(row=>transactionMap.get(row.chargeTransactionId??"")?.propertyId).filter(Boolean));
+    const valid = payment.source?.system==="rent_manager" && /^[a-f0-9]{64}$/.test(payment.sourceArtifactSha256??"") && !!payment.personId && payment.personLinkKnowledge==="exact"
+      && payment.propertyId===null && payment.unitId===null && payment.tenancyId===null && properties.size>1
+      && rows.every(row=>row.paymentLinkKnowledge==="exact" && row.chargeLinkKnowledge==="exact" && !!row.allocatedOn && typeof row.amountCents==="number" && transactionMap.get(row.chargeTransactionId??"")?.personId===payment.personId)
+      && rows.reduce((sum,row)=>sum+(row.amountCents??0),0)===payment.amountCents;
+    if(!valid) violations.push({code:"shared_payment_scope_invalid",entityId:payment.id,message:"Shared payment requires exact source account, complete allocations and a full receipt tie-out"});
+  }
   const allocationsByPayment = new Map<string, number>();
   const allocationsByCharge = new Map<string, number>();
   const reversedAllocationTargets = postedReversalTargets(snapshot.ledgerTransactions);
+  const allocationPairs = new Map<string, RentOpsPaymentAllocation[]>();
   for (const allocation of snapshot.paymentAllocations) {
+    const allocationParentId = allocation.kind === "credit_allocation" ? allocation.creditTransactionId : allocation.paymentTransactionId;
+    if (allocation.kind !== "transfer" && allocation.paymentTransactionId && allocation.chargeTransactionId) {const key = `${allocation.paymentTransactionId}\0${allocation.chargeTransactionId}`; const rows = allocationPairs.get(key) ?? []; rows.push(allocation); allocationPairs.set(key, rows);}
     violations.push(...validateAllocation(allocation, allocation.paymentTransactionId ? transactionMap.get(allocation.paymentTransactionId) : undefined, allocation.chargeTransactionId ? transactionMap.get(allocation.chargeTransactionId) : undefined, snapshot.ledgerTransactions, true));
-    if (allocation.paymentTransactionId && typeof allocation.amountCents === "number") allocationsByPayment.set(allocation.paymentTransactionId, (allocationsByPayment.get(allocation.paymentTransactionId) ?? 0) + allocation.amountCents);
-    if (allocation.chargeTransactionId && !reversedAllocationTargets.has(allocation.chargeTransactionId) && !!allocation.paymentTransactionId && !reversedAllocationTargets.has(allocation.paymentTransactionId) && typeof allocation.amountCents === "number") allocationsByCharge.set(allocation.chargeTransactionId, (allocationsByCharge.get(allocation.chargeTransactionId) ?? 0) + allocation.amountCents);
+    if (allocation.kind !== "transfer" && allocationParentId && typeof allocation.amountCents === "number") allocationsByPayment.set(allocationParentId, (allocationsByPayment.get(allocationParentId) ?? 0) + allocation.amountCents);
+    if (allocation.kind !== "transfer" && allocation.chargeTransactionId && !reversedAllocationTargets.has(allocation.chargeTransactionId) && !!allocationParentId && !reversedAllocationTargets.has(allocationParentId) && typeof allocation.amountCents === "number") allocationsByCharge.set(allocation.chargeTransactionId, (allocationsByCharge.get(allocation.chargeTransactionId) ?? 0) + allocation.amountCents);
+  }
+  for (const rows of Array.from(allocationPairs.values())) {
+    // A source reverse row has no invented target-allocation link. Its exact
+    // payment/charge pair must have sufficient dated allocation history.
+    let net = 0;
+    for (const row of rows.sort((a,b) => (a.allocatedOn ?? "").localeCompare(b.allocatedOn ?? "") || (b.amountCents ?? 0) - (a.amountCents ?? 0))) {
+      net += row.amountCents ?? 0;
+      if (net < 0) violations.push({code:"allocation_reversal_exceeds_history",entityId:row.id,message:"Reverse allocation exceeds its exact payment and charge allocation history"});
+    }
   }
   for (const [paymentId, amount] of Array.from(allocationsByPayment.entries())) {
     const payment = transactionMap.get(paymentId);
