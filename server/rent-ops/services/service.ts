@@ -1347,6 +1347,17 @@ export class RentOpsService {
   }
 
   async saveLedgerTransaction(transaction: RentOpsLedgerTransaction): Promise<RentOpsLedgerTransaction> {
+    if (Object.entries(transaction).some(([key, value]) => value != null && (key.startsWith("source") || key === "artifactObservationOn" || key === "reversalOfId" || key === "allocationMode" || key === "chargeDefinitionId"))) throw new RentOpsInvariantError("Manual ledger entries cannot override source or system provenance");
+    const knowledge = {
+      categoryKnowledge: "manual", statusKnowledge: "manual", amountKnowledge: "known", postedOnKnowledge: "manual", descriptionKnowledge: "manual",
+      propertyLinkKnowledge: transaction.propertyId ? "manual" : "unknown", unitLinkKnowledge: transaction.unitId ? "manual" : "unknown",
+      tenancyLinkKnowledge: transaction.tenancyId ? "manual" : "unknown", personLinkKnowledge: transaction.personId ? "manual" : "unknown",
+      dueOnKnowledge: transaction.dueOn ? "manual" : "unknown", paymentMethodKnowledge: transaction.paymentMethod ? "manual" : "unknown",
+      payerKnowledge: transaction.payer && transaction.payer !== "unknown" ? "manual" : "unknown", chargeDefinitionLinkKnowledge: "unknown",
+    } as const;
+    for (const [key, value] of Object.entries(knowledge)) if ((transaction as unknown as Record<string, unknown>)[key] != null && (transaction as unknown as Record<string, unknown>)[key] !== value) throw new RentOpsInvariantError("Manual ledger knowledge must match explicit facts");
+    transaction = { ...transaction, ...knowledge };
+
     assertCents(transaction.amountCents, "Ledger amount");
     if (!transaction.propertyId || !transaction.kind || !transaction.category || !transaction.status || !transaction.postedOn || !transaction.description?.trim()) {
       throw new RentOpsInvariantError("A native ledger entry requires explicit property, kind, category, status, date, and description facts");
@@ -1367,6 +1378,11 @@ export class RentOpsService {
   }
 
   private async savePaymentAllocationRecord(allocation: RentOpsPaymentAllocation): Promise<RentOpsPaymentAllocation> {
+    if (Object.entries(allocation).some(([key,value]) => value != null && (key.startsWith("source") || key === "artifactObservationOn" || key === "creditTransactionId" || (key === "kind" && value !== "allocation")))) throw new RentOpsInvariantError("Manual allocations cannot override source or system provenance");
+    const knowledge = { paymentLinkKnowledge: "manual", chargeLinkKnowledge: "manual", amountKnowledge: "known", allocatedOnKnowledge: "manual" } as const;
+    for (const [key,value] of Object.entries(knowledge)) if ((allocation as unknown as Record<string,unknown>)[key] != null && (allocation as unknown as Record<string,unknown>)[key] !== value) throw new RentOpsInvariantError("Manual allocation knowledge must match explicit facts");
+    allocation = { ...allocation, ...knowledge, kind: "allocation" };
+
     const amountCents = allocation.amountCents;
     assertCents(amountCents, "Allocation amount");
     const snapshot = await this.snapshot();
