@@ -210,6 +210,11 @@ function party(value: RentOpsProspect | RentOpsHistoricalApplication): AdminAppl
   });
 }
 
+/** Curated read-only prospect identity for exact-ID administrative clients. */
+export function serializeAdminProspect(value: RentOpsProspect): AdminApplicationHistoryPartyView & {id:string;recordRevision?:number} {
+  return presentationObject({id:text(value.id) ?? "unknown",recordRevision:safeInteger(value.recordRevision),...party(value)});
+}
+
 function application(value: RentOpsHistoricalApplication): AdminApplicationHistoryApplicationView {
   return presentationObject({ id: text(value.id) ?? "unknown", ...party(value) });
 }
