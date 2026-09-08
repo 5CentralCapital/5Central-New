@@ -100,6 +100,9 @@ export const rentOpsUnits = pgTable("rent_ops_units", {
 
 export const rentOpsPeople = pgTable("rent_ops_people", {
   id: id("id").primaryKey(),
+  paymentReviewReason: text("payment_review_reason"),
+  paymentReviewArtifactSha256: varchar("payment_review_artifact_sha256", { length: 64 }),
+  paymentReviewSourceReference: text("payment_review_source_reference"),
   sourceSystem: text("source_system"),
   sourceId: text("source_id"),
   firstName: text("first_name"),

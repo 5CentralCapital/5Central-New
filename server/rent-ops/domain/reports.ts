@@ -1,3 +1,4 @@
+import { tenantAccountLedgerRows } from "./account-ledger";
 import { isSourceAllocationReversal } from "./invariants";
 import type {
   ApplicantPublicView,
@@ -49,13 +50,30 @@ function reportMonth(filters: RentOpsFilters = {}): IsoMonth {
 }
 
 function scopedProperties(snapshot: RentOpsSnapshot, filters: RentOpsFilters): RentOpsProperty[] {
-  return snapshot.properties.filter((property) => !filters.propertyId || property.id === filters.propertyId);
+  const selected = snapshot.properties.filter((property) => !filters.propertyId || property.id === filters.propertyId);
+  // An explicit property selection is already a deliberate scope choice. The
+  // active portfolio scope only narrows the unselected operational default;
+  // omitted scope remains the complete imported snapshot for migration/audit
+  // callers that need source totals.
+  if (filters.propertyId || filters.propertyScope !== "active") return selected;
+  return selected.filter((property) => property.state === "active");
+}
+
+function scopedPropertyIds(snapshot: RentOpsSnapshot, filters: RentOpsFilters): Set<string> {
+  return new Set(scopedProperties(snapshot, filters).map((property) => property.id));
+}
+
+function matchesPropertyScope(propertyId: string | null | undefined, filters: RentOpsFilters, propertyIds: ReadonlySet<string>, includeUnassigned = false): boolean {
+  if (filters.propertyId) return propertyId === filters.propertyId;
+  // The full source view must retain unresolved property links and amounts.
+  if (filters.propertyScope !== "active") return true;
+  return propertyId ? propertyIds.has(propertyId) : includeUnassigned;
 }
 
 function scopedUnits(snapshot: RentOpsSnapshot, filters: RentOpsFilters): RentOpsUnit[] {
-  const propertyIds = new Set(scopedProperties(snapshot, filters).map((property) => property.id));
+  const propertyIds = scopedPropertyIds(snapshot, filters);
   return snapshot.units.filter((unit) =>
-    (!filters.propertyId || propertyIds.has(unit.propertyId)) &&
+    matchesPropertyScope(unit.propertyId, filters, propertyIds) &&
     (!filters.unitId || unit.id === filters.unitId) &&
     (!filters.readiness || filters.readiness.includes(unit.readiness)) &&
     (!filters.listing || filters.listing.includes(unit.listing)),
@@ -587,6 +605,7 @@ function attachReportControls(rows: readonly unknown[], controls: FinancialRepor
 
 function deriveTruthScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOpsFilters): ScheduledIncomeRow[] {
   const month = truthMonth(filters);
+  const propertyIds = scopedPropertyIds(snapshot, filters);
   const projection = projectFinancialSchedules(snapshot, month, {
     propertyId: filters.propertyId,
     unitId: filters.unitId,
@@ -597,6 +616,7 @@ function deriveTruthScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
     // An unknown category remains visible as an explicitly unclassified row;
     // it is never silently reinterpreted as rent or a fee.
     .filter((row) => isPositiveIncomeCategory(row.category))
+    .filter((row) => matchesPropertyScope(row.propertyId, filters, propertyIds))
     .filter((row) => !filters.tenancyId || row.tenancyId === filters.tenancyId)
     .filter((row) => searchMatches(`${row.propertyName} ${row.unitNumber ?? ""} ${row.tenantName ?? ""}`, filters.search));
   const projectionControls = financialProjectionControls(projection);
@@ -619,7 +639,7 @@ interface TruthCollectedResult {
 function deriveTruthCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsFilters): TruthCollectedResult {
   const month = truthMonth(filters);
   const cutoff = filters.asOfDate ?? ("9999-12-31" as IsoDate);
-  const propertyIds = new Set(scopedProperties(snapshot, filters).map((property) => property.id));
+  const propertyIds = scopedPropertyIds(snapshot, filters);
   const properties = propertyMap(snapshot);
   const units = unitMap(snapshot);
   const people = personMap(snapshot);
@@ -990,11 +1010,12 @@ export function deriveDelinquency(snapshot: RentOpsSnapshot, filters: RentOpsFil
   const properties = propertyMap(snapshot);
   const units = unitMap(snapshot);
   const people = personMap(snapshot);
+  const propertyIds = scopedPropertyIds(snapshot, filters);
   const reversedPaymentIds = reversalSets(snapshot, asOf).paymentIds;
   const rows: DelinquencyRow[] = [];
   for (const tenancy of snapshot.tenancies) {
     if (tenancy.status !== "current" && tenancy.status !== "notice") continue;
-    if (filters.propertyId && tenancy.propertyId !== filters.propertyId) continue;
+    if (!matchesPropertyScope(tenancy.propertyId, filters, propertyIds)) continue;
     if (filters.unitId && tenancy.unitId !== filters.unitId) continue;
     const balance = accountBalance(snapshot, tenancy.id, asOf);
     if (filters.balanceStatus === "due" && balance.rentOnlyBalanceCents <= 0 && balance.nonRentBalanceCents <= 0) continue;
@@ -1032,16 +1053,16 @@ export function deriveDelinquency(snapshot: RentOpsSnapshot, filters: RentOpsFil
   return rows.filter((row) => searchMatches(`${row.propertyName} ${row.unitNumber ?? ""} ${row.tenantName}`, filters.search));
 }
 
-export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string, filters: RentOpsFilters = {}): LedgerRow[] {
+export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string, filters: RentOpsFilters = {}, accountTransactionIds?: ReadonlySet<string>): LedgerRow[] {
   const allocationCutoff = filters.asOfDate ?? ("9999-12-31" as IsoDate);
   const transactions = snapshot.ledgerTransactions
-    .filter((transaction) => transaction.tenancyId === tenancyId && !!transaction.postedOn && knownAmount(transaction.amountCents) && (!filters.asOfDate || transaction.postedOn <= filters.asOfDate))
+    .filter((transaction) => (accountTransactionIds ? accountTransactionIds.has(transaction.id) : transaction.tenancyId === tenancyId) && !!transaction.postedOn && knownAmount(transaction.amountCents) && (!filters.asOfDate || transaction.postedOn <= filters.asOfDate))
     .sort((left, right) => compareOptionalTimestamp(left.postedOn, right.postedOn) || left.id.localeCompare(right.id));
   const transactionMap = new Map(transactions.map((transaction) => [transaction.id, transaction]));
   const reversed = reversalSets(snapshot, allocationCutoff);
   const allocationByCharge = new Map<string, number>();
   const allocationByPayment = new Map<string, number>();
-  for (const { allocation, payment, charge } of effectiveAllocations(snapshot, allocationCutoff, tenancyId)) {
+  for (const { allocation, payment, charge } of effectiveAllocations(snapshot, allocationCutoff, accountTransactionIds ? undefined : tenancyId)) {
     if (!transactionMap.has(charge.id)) continue;
     if (!transactionMap.has(payment.id)) {
       if (payment.allocationMode !== "multi_property") continue;
@@ -1082,6 +1103,22 @@ export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string,
   });
 }
 
+/** Account entries remain account-scoped; never assign them to one of the
+ * account's leases merely to make them visible in a manager report. */
+export function deriveManagerAccountLedger(snapshot: RentOpsSnapshot, personId: string, tenancyIds: readonly string[], filters: RentOpsFilters = {}): LedgerRow[] {
+  const propertyIds = scopedPropertyIds(snapshot, filters);
+  const selectedTenancyIds = new Set(tenancyIds);
+  const candidateIds = new Set(tenantAccountLedgerRows(snapshot, { personId }).map(row => row.id));
+  for (const row of snapshot.ledgerTransactions) if (row.tenancyId && selectedTenancyIds.has(row.tenancyId)) candidateIds.add(row.id);
+  const scopedIds = new Set(snapshot.ledgerTransactions.filter(row => {
+    if (!candidateIds.has(row.id)) return false;
+    const tenancy = row.tenancyId ? snapshot.tenancies.find(candidate => candidate.id === row.tenancyId) : undefined;
+    const propertyId = row.propertyId ?? tenancy?.propertyId;
+    return matchesPropertyScope(propertyId, filters, propertyIds) && (!filters.unitId || (row.unitId ?? tenancy?.unitId) === filters.unitId);
+  }).map(row => row.id));
+  return deriveTenantLedger(snapshot, "", filters, scopedIds);
+}
+
 export function deriveLeaseExpirations(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): LeaseExpirationRow[] {
   const asOf = asOfDate(filters);
   assertNoAmbiguousOccupancy(snapshot, asOf);
@@ -1090,10 +1127,11 @@ export function deriveLeaseExpirations(snapshot: RentOpsSnapshot, filters: RentO
   const properties = propertyMap(snapshot);
   const units = unitMap(snapshot);
   const people = personMap(snapshot);
+  const propertyIds = scopedPropertyIds(snapshot, filters);
   const rows: LeaseExpirationRow[] = [];
   for (const tenancy of snapshot.tenancies) {
     if (tenancy.status !== "current" && tenancy.status !== "notice") continue;
-    if (filters.propertyId && filters.propertyId !== tenancy.propertyId) continue;
+    if (!matchesPropertyScope(tenancy.propertyId, filters, propertyIds)) continue;
     const term = activeLeaseTerm(snapshot, tenancy.id, asOf);
     if (!term) continue;
     const unit = units.get(tenancy.unitId);
@@ -1125,9 +1163,10 @@ export function deriveDepositLiability(snapshot: RentOpsSnapshot, filters: RentO
   const properties = propertyMap(snapshot);
   const units = unitMap(snapshot);
   const people = personMap(snapshot);
+  const propertyIds = scopedPropertyIds(snapshot, filters);
   const grouped = new Map<string, DepositLiabilityRow>();
   for (const deposit of snapshot.securityDeposits) {
-    if (filters.propertyId && deposit.propertyId !== filters.propertyId) continue;
+    if (!matchesPropertyScope(deposit.propertyId, filters, propertyIds)) continue;
     if (filters.unitId && deposit.unitId !== filters.unitId) continue;
     // A known future receipt is excluded at the as-of boundary. Unknown
     // receipt dates remain in held liability and are explicitly flagged.
@@ -1193,11 +1232,13 @@ export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {
   const properties = propertyMap(snapshot);
   const units = unitMap(snapshot);
   const people = personMap(snapshot);
+  const propertyIds = scopedPropertyIds(snapshot, filters);
   // Match collected income: payment date selects the month, while an
   // explicit as-of date controls historical visibility of allocations.
   const reportCutoff = filters.asOfDate ?? nowIsoDate();
   const rows: HapRow[] = [];
   const effectiveContracts = snapshot.subsidyContracts.filter((contract) =>
+    matchesPropertyScope(contract.propertyId, filters, propertyIds) &&
     contract.status !== "pending" &&
     !!contract.status && (!filters.status?.length || filters.status.includes(contract.status)) &&
     // An ended contract remains reportable only through its explicit end date.
@@ -1209,7 +1250,7 @@ export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {
   // A non-null source contract with no normalized status cannot be safely
   // classified as active/ended/pending. Do not silently turn it into zero
   // HAP; the caller must resolve the artifact-bound status crosswalk first.
-  if (snapshot.subsidyContracts.some((contract) => !contract.status && (!filters.propertyId || contract.propertyId === filters.propertyId))) {
+  if (snapshot.subsidyContracts.some((contract) => !contract.status && matchesPropertyScope(contract.propertyId, filters, propertyIds))) {
     throw new RentOpsInvariantError("HAP report is blocked by an unknown subsidy contract status");
   }
   const contractsByTenancy = new Map<string, RentOpsSubsidyContract[]>();
@@ -1313,7 +1354,7 @@ export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {
       unknownReceiptCount,
       uncertainty,
       uncertaintyCodes: uncertaintyCodes.size > 0 ? Array.from(uncertaintyCodes).sort() : undefined,
-    });
+  });
   }
   return rows.filter((row) => searchMatches(`${row.propertyName} ${row.unitNumber} ${row.tenantName} ${row.agencyName}`, filters.search));
 }
@@ -1322,8 +1363,9 @@ export function deriveApplicantPipeline(snapshot: RentOpsSnapshot, filters: Rent
   const asOf = asOfDate(filters);
   const properties = propertyMap(snapshot);
   const units = unitMap(snapshot);
+  const propertyIds = scopedPropertyIds(snapshot, filters);
   return snapshot.applications
-    .filter((application) => !filters.propertyId || application.propertyId === filters.propertyId)
+    .filter((application) => matchesPropertyScope(application.propertyId, filters, propertyIds, true))
     .filter((application) => !filters.status?.length || filters.status.includes(application.status))
     .map((application): ApplicantPipelineRow | undefined => {
       const property = application.propertyId ? properties.get(application.propertyId) : undefined;
@@ -1362,7 +1404,7 @@ export function deriveDashboardSummary(snapshot: RentOpsSnapshot, filters: RentO
   const propertyIds = new Set(scopedProperties(snapshot, filters).map((property) => property.id));
   const activeApplications = snapshot.applications.filter((application) =>
     (application.status === "submitted" || application.status === "under_review" || application.status === "approved" || application.status === "missing_information") &&
-    (!application.propertyId || propertyIds.has(application.propertyId)),
+    matchesPropertyScope(application.propertyId, filters, propertyIds, true),
   );
   const activeUnits = occupancy.filter((row) => propertyIds.has(row.propertyId));
   const occupiedUnits = activeUnits.filter((row) => row.occupancy === "current").length;
@@ -1412,8 +1454,9 @@ export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string,
   const asOf = asOfDate(filters);
   const profileMemberships = snapshot.householdMemberships.filter((membership) => membership.personId === personId || membership.accountPersonId === personId);
   const membershipTenancyIds = new Set(profileMemberships.filter((membership) => membership.tenancyId).map((membership) => membership.tenancyId!));
+  const propertyIds = scopedPropertyIds(snapshot, filters);
   const tenancies = [...snapshot.tenancies]
-    .filter((candidate) => (candidate.primaryPersonId === personId || membershipTenancyIds.has(candidate.id)) && (!filters.propertyId || candidate.propertyId === filters.propertyId))
+    .filter((candidate) => (candidate.primaryPersonId === personId || membershipTenancyIds.has(candidate.id)) && matchesPropertyScope(candidate.propertyId, filters, propertyIds))
     .sort((left, right) => compareOptionalTimestamp(right.createdAt, left.createdAt) || right.id.localeCompare(left.id));
   const effective = tenancies.filter((candidate) => candidate.status !== "cancelled" && occupancyMoveInOn(candidate) && occupancyMoveInOn(candidate)! <= asOf && (!candidate.actualMoveOutOn || candidate.actualMoveOutOn > asOf));
   const future = tenancies.filter((candidate) => candidate.status === "future" && occupancyMoveInOn(candidate) && occupancyMoveInOn(candidate)! > asOf);
@@ -1432,7 +1475,7 @@ export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string,
       schedule.scopeType === "property" && !!tenancy && schedule.propertyId === tenancy.propertyId ||
       schedule.scopeType === "unit" && !!tenancy && schedule.unitId === tenancy.unitId,
     ),
-    ledger: tenancies.flatMap((candidate) => deriveTenantLedger(snapshot, candidate.id, filters)),
+    ledger: deriveManagerAccountLedger(snapshot, personId, tenancies.map(candidate => candidate.id), filters),
     deposits: snapshot.securityDeposits
       .filter((deposit) => (deposit.personId === personId || tenancyIds.has(deposit.tenancyId ?? "")) && (!deposit.receivedOn || deposit.receivedOn <= asOf))
       .map((deposit) => deposit.disposedOn && deposit.disposedOn > asOf && (deposit.dispositionStatus === "disposed" || deposit.dispositionStatus === "returned") ? { ...deposit, dispositionStatus: "held" as const, disposedOn: undefined, dispositionNotes: undefined } : deposit),
@@ -1477,8 +1520,25 @@ export function deriveFixedReport(snapshot: RentOpsSnapshot, report: FixedReport
     case "scheduled-vs-collected": return deriveScheduledVsCollected(snapshot, filters);
     case "delinquency": return deriveDelinquency(snapshot, filters);
     case "tenant-ledger": {
-      const tenancies = filters.tenancyId ? snapshot.tenancies.filter((tenancy) => tenancy.id === filters.tenancyId) : snapshot.tenancies;
-      return tenancies.flatMap((tenancy) => deriveTenantLedger(snapshot, tenancy.id, filters));
+      const propertyIds = scopedPropertyIds(snapshot, filters);
+      const tenancies = snapshot.tenancies.filter((tenancy) =>
+        (!filters.tenancyId || tenancy.id === filters.tenancyId) &&
+        matchesPropertyScope(tenancy.propertyId, filters, propertyIds),
+      );
+      const accounts = new Map<string, string[]>();
+      for (const tenancy of tenancies) {
+        if (filters.personId && tenancy.primaryPersonId !== filters.personId) continue;
+        accounts.set(tenancy.primaryPersonId, [...(accounts.get(tenancy.primaryPersonId) ?? []), tenancy.id]);
+      }
+      // Source account rows can exist without any canonical lease record.
+      if (!filters.tenancyId) for (const person of snapshot.people) {
+        if ((!filters.personId || person.id === filters.personId) && !accounts.has(person.id)) accounts.set(person.id, []);
+      }
+      const rows = new Map<string, LedgerRow>();
+      for (const [personId, tenancyIds] of Array.from(accounts.entries())) for (const row of deriveManagerAccountLedger(snapshot, personId, tenancyIds, filters)) {
+        if (!rows.has(row.transaction.id)) rows.set(row.transaction.id, row);
+      }
+      return Array.from(rows.values());
     }
     case "lease-expirations": return deriveLeaseExpirations(snapshot, filters);
     case "lease-expiration": return deriveLeaseExpirations(snapshot, filters);

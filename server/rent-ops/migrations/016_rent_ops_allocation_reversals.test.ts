@@ -9,8 +9,9 @@ import type { RentOpsLedgerTransaction, RentOpsPaymentAllocation } from '../../.
 
 test('PostgreSQL persists exact signed source allocations and forbids native negatives or mutation',async()=>{
  const db=new PGlite();try{
-  await ensureRentOpsSchema({apply:true,executor:async sql=>{await db.exec(sql);}});
-  await ensureRentOpsSchema({apply:true,executor:async sql=>{await db.exec(sql);}});
+  await ensureRentOpsSchema({apply:true,executor:async sql=>{await db.exec(sql);},query:sql=>db.query(sql)});
+  const repeated = await ensureRentOpsSchema({apply:true,executor:async sql=>{await db.exec(sql);},query:sql=>db.query(sql)});
+  assert.equal(repeated.statementCount,2,"Installed migration chain must only begin and commit on repeat");
   const executor:RentOpsQueryExecutor={async query<T>(sql,args){if(sql.includes('has_table_privilege'))return{rows:(args![0] as string[]).map(table_name=>({table_name,can_select:false,can_insert:false,can_update:false,can_delete:false})) as T[]};return db.query<T>(sql,args?.map(v=>v===undefined?null:v));}};
   const repo=new PostgresRentOpsRepository(executor);
   await db.exec(`INSERT INTO rent_ops_properties(id,slug) VALUES('p','p');INSERT INTO rent_ops_units(id,property_id,property_link_knowledge)VALUES('u','p','manual');INSERT INTO rent_ops_people(id)VALUES('person');INSERT INTO rent_ops_tenancies(id,property_id,unit_id,primary_person_id,status,created_at,property_link_knowledge,unit_link_knowledge,primary_person_link_knowledge,status_knowledge)VALUES('t','p','u','person','current',NOW(),'manual','manual','manual','manual');`);

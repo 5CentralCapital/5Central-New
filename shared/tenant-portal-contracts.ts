@@ -21,6 +21,7 @@ export interface TenantAccountSummary {
 }
 
 export interface TenantEligibleTenancy {
+  paymentReviewReason?: "assistance_responsibility_unverified" | null;
   personId: string;
   tenancyId: string;
   personName: string;

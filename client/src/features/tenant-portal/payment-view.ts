@@ -6,3 +6,8 @@ export function noPaymentDueMessage(account: TenantPayableAccount | undefined): 
   if (account.payableCents > 0) return "Online payments require at least $0.50. Contact management about this remaining balance.";
   return "No payment is due.";
 }
+
+export function paymentReviewMessage(account: TenantPayableAccount | undefined): string | undefined {
+  if (account?.reason === "assistance_responsibility_unverified") return "Management is confirming your share of the account balance and any housing assistance. Online payment will be available after that review.";
+  return undefined;
+}

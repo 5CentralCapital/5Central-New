@@ -115,7 +115,7 @@ function restrictedIdentityReasons(payload: Record<string, unknown>): string[] {
     // The artifact-bound HAP status crosswalk is immutable metadata, not a
     // source-row collection. It is keyed by its artifact hash and therefore
     // intentionally has no sourceId field.
-    if (collection === "hapStatusCrosswalk" || collection === "applicationHistoryStatusCrosswalk") continue;
+    if (collection === "hapStatusCrosswalk" || collection === "applicationHistoryStatusCrosswalk" || collection === "financialReviewHolds") continue;
     if (!Array.isArray(value)) continue;
     for (const candidate of value) {
       if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return ["restricted_source_row_invalid"];

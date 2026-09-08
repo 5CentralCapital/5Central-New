@@ -4,9 +4,9 @@ import { TenantPaymentError, type PaymentAdjustment, type PaymentReceipt, type P
 
 export interface TenantPaymentStore {
   transaction<T>(work: (store: TenantPaymentStore) => Promise<T>): Promise<T>;
-  lockTenancy(tenancyId: string): Promise<void>;
+  lockAccount(personId: string): Promise<void>;
   snapshot(): Promise<RentOpsSnapshot>;
-  list(tenancyId: string): Promise<TenantPayment[]>;
+  list(personId: string): Promise<TenantPayment[]>;
   findByRequest(accountId: string, requestId: string): Promise<TenantPayment | undefined>;
   findForEvent(event: ProcessorEvent): Promise<TenantPayment | undefined>;
   insert(payment: TenantPayment): Promise<void>;
@@ -31,9 +31,9 @@ export class PostgresTenantPaymentStore implements TenantPaymentStore {
     if (!this.executor.transaction) throw new TenantPaymentError("payment_atomic_storage_required", 503);
     return this.executor.transaction((executor) => work(new PostgresTenantPaymentStore(executor, new PostgresRentOpsRepository(executor), true)), { readOnly: false });
   }
-  async lockTenancy(id: string): Promise<void> { await this.executor.query("SELECT id FROM rent_ops_tenancies WHERE id = $1 FOR UPDATE", [id]); }
+  async lockAccount(id: string): Promise<void> { await this.executor.query("SELECT id FROM rent_ops_people WHERE id = $1 FOR UPDATE", [id]); }
   snapshot(): Promise<RentOpsSnapshot> { return this.repository.getSnapshot(); }
-  async list(tenancyId: string): Promise<TenantPayment[]> { const result = await this.executor.query(`SELECT ${fields.join(",")} FROM rent_ops_tenant_payments WHERE tenancy_id=$1 ORDER BY created_at DESC`, [tenancyId]); return result.rows.map(payment); }
+  async list(personId: string): Promise<TenantPayment[]> { const result = await this.executor.query(`SELECT ${fields.join(",")} FROM rent_ops_tenant_payments WHERE person_id=$1 ORDER BY created_at DESC`, [personId]); return result.rows.map(payment); }
   async findByRequest(accountId: string, requestId: string): Promise<TenantPayment | undefined> { const result = await this.executor.query(`SELECT ${fields.join(",")} FROM rent_ops_tenant_payments WHERE account_id=$1 AND request_id=$2${this.insideTransaction ? " FOR UPDATE" : ""}`, [accountId, requestId]); return result.rows[0] && payment(result.rows[0]); }
   async findForEvent(event: ProcessorEvent): Promise<TenantPayment | undefined> {
     const result = await this.executor.query(`SELECT ${fields.join(",")} FROM rent_ops_tenant_payments WHERE ($1::text IS NOT NULL AND id=$1) OR ($2::text IS NOT NULL AND payment_intent_id=$2) OR ($3::text IS NOT NULL AND checkout_session_id=$3)`, [event.paymentId ?? null, event.paymentIntentId ?? null, event.checkoutSessionId ?? null]);

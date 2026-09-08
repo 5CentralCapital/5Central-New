@@ -9,7 +9,7 @@ import { stripeProvider, type PaymentProvider } from './provider';
 export class TenantPaymentService {
   constructor(readonly store:TenantPaymentStore, readonly provider?:PaymentProvider, readonly now=()=>new Date()) {}
   async list(identity:TenantIdentity):Promise<TenantPaymentsView> {
-    const snapshot=await this.store.snapshot(), payments=await this.store.list(identity.tenancyId);
+    const snapshot=await this.store.snapshot(), payments=await this.store.list(identity.personId);
     const account=payableAccount(snapshot,identity,payments,this.now());
     return {available:!!this.provider,...(!this.provider?{reason:'stripe_not_configured' as const}:{}),accounts:[account],payments:payments.map(({id,tenancyId,amountCents,currency,status,createdAt,postedOn})=>({id,tenancyId,amountCents,currency,status,createdAt,postedOn}))};
   }
@@ -18,11 +18,11 @@ export class TenantPaymentService {
     const input=tenantCheckoutSchema.safeParse(raw); if(!input.success) throw new TenantPaymentError('invalid_payment_request',400);
     if(input.data.tenancyId!==identity.tenancyId) throw new TenantPaymentError('tenant_account_unavailable',403);
     const payment=await this.store.transaction(async store=>{
-      await store.lockTenancy(identity.tenancyId);
+      await store.lockAccount(identity.personId);
       const snapshot=await store.snapshot(); const {tenancy}=exactPaymentTenancy(snapshot,identity);
       const existing=await store.findByRequest(identity.id,input.data.requestId);
       if(existing) {if(existing.amountCents!==input.data.amountCents || existing.tenancyId!==identity.tenancyId) throw new TenantPaymentError('request_id_conflict'); return existing;}
-      const account=payableAccount(snapshot,identity,await store.list(identity.tenancyId),this.now());
+      const account=payableAccount(snapshot,identity,await store.list(identity.personId),this.now());
       if(!account.available || input.data.amountCents>account.payableCents) throw new TenantPaymentError(account.reason??'amount_exceeds_payable_balance');
       const now=this.now(); const p:TenantPayment={id:`tp_${randomUUID()}`,accountId:identity.id,personId:identity.personId,tenancyId:identity.tenancyId,propertyId:tenancy.propertyId,unitId:tenancy.unitId,requestId:input.data.requestId,amountCents:input.data.amountCents,currency:'usd',status:'creating',expiresAt:new Date(now.getTime()+35*60000).toISOString(),createdAt:now.toISOString(),updatedAt:now.toISOString(),currentLedgerCents:0,ledgerRevision:0}; await store.insert(p); return p;
     });
@@ -31,7 +31,7 @@ export class TenantPaymentService {
     if(payment.status!=='creating' || payment.expiresAt<=this.now().toISOString()) throw new TenantPaymentError('payment_request_expired');
     // Keep an uncertain provider failure reserved; retry uses the same Stripe key.
     const session=await this.provider.createCheckout(payment);
-    await this.store.transaction(async store=>{await store.lockTenancy(payment.tenancyId); const p=await store.findByRequest(identity.id,payment.requestId); if(!p) throw new Error('payment_missing'); p.checkoutSessionId=session.id;p.checkoutUrl=session.url;p.paymentIntentId??=session.paymentIntentId;if(p.status==='creating')p.status='pending';p.updatedAt=this.now().toISOString();await store.save(p);});
+    await this.store.transaction(async store=>{await store.lockAccount(payment.personId); const p=await store.findByRequest(identity.id,payment.requestId); if(!p) throw new Error('payment_missing'); p.checkoutSessionId=session.id;p.checkoutUrl=session.url;p.paymentIntentId??=session.paymentIntentId;if(p.status==='creating')p.status='pending';p.updatedAt=this.now().toISOString();await store.save(p);});
     return {id:payment.id,checkoutUrl:session.url,status:'pending'};
   }
   async webhook(body:Buffer,signature:string) {if(!this.provider) throw new TenantPaymentError('stripe_not_configured',503); let event:ProcessorEvent;try{event=await this.provider.verify(body,signature);}catch{throw new TenantPaymentError('invalid_signature',400);} return this.process(event);}
@@ -39,7 +39,7 @@ export class TenantPaymentService {
     if(!this.provider || event.live!==this.provider.live) throw new TenantPaymentError('processor_mode_mismatch',400);
     return this.store.transaction(async store=>{
       const initial=await store.findForEvent(event);
-      if(initial) await store.lockTenancy(initial.tenancyId);
+      if(initial) await store.lockAccount(initial.personId);
       if(await store.hasEvent(event.id)) return;
       const p=initial && await store.findForEvent(event); let outcome:'processed'|'ignored'|'review_required'='ignored';
       if(p && event.state!=='ignored') {

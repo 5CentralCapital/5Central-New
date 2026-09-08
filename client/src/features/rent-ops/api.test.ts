@@ -52,6 +52,7 @@ test("money parsing rejects fractional cents instead of rounding", () => {
 
 test("report query serialization includes every supported identity and unit filter", () => {
   const query = buildRentOpsQuery({
+    propertyScope: "active",
     propertyId: "property:one",
     unitId: "unit:one",
     tenancyId: "tenancy:one",
@@ -66,6 +67,7 @@ test("report query serialization includes every supported identity and unit filt
     search: "Smith",
   });
   const params = new URLSearchParams(query);
+  assert.equal(params.get("propertyScope"), "active");
   assert.equal(params.get("propertyId"), "property:one");
   assert.equal(params.get("unitId"), "unit:one");
   assert.equal(params.get("tenancyId"), "tenancy:one");

@@ -313,6 +313,9 @@ function boolValue(record: RawRecord, ...keys: string[]): boolean {
 }
 
 function propertyStateFromEvidence(record: RawRecord): RentOpsProperty["state"] | null {
+  // IsActive=false does not establish the stronger canonical archived state.
+  if (record.IsActive === true) return "active";
+  if (record.IsActive === false) return null;
   const archived = value(record, "archived", "isArchived", "Archived", "IsArchived");
   if (archived !== undefined) return boolValue(record, "archived", "isArchived", "Archived", "IsArchived") ? "archived" : "active";
   const text = stringValue(record, "stateStatus", "status", "propertyStatus", "State", "StateStatus")?.toLowerCase();
@@ -1039,7 +1042,7 @@ function mapApplicationProfile(record: RawRecord, exceptions: ImportMappingExcep
   };
 }
 
-function mapTenancy(context: MappingContext, record: RawRecord, propertyBySource: Map<string, RentOpsProperty>, unitBySource: Map<string, RentOpsUnit>, personBySource: Map<string, RentOpsPerson>, exceptions: ImportMappingException[], importedAt: string): RentOpsTenancy | undefined {
+function mapTenancy(context: MappingContext, record: RawRecord, propertyBySource: Map<string, RentOpsProperty>, unitBySource: Map<string, RentOpsUnit>, personBySource: Map<string, RentOpsPerson>, exceptions: ImportMappingException[], importedAt: string, observedCurrent = false): RentOpsTenancy | undefined {
   const propertySource = sourceLink(record, "propertyId", "propertySourceId");
   const unitSource = sourceLink(record, "unitId", "unitSourceId");
   const personSource = sourceLink(record, "tenantId", "personId", "tenantSourceId");
@@ -1067,8 +1070,10 @@ function mapTenancy(context: MappingContext, record: RawRecord, propertyBySource
     semanticKind: "tenancy_status",
     rawValue: observedPartition,
   });
+  const currentEvidenceConflict = observedCurrent && strictStatus !== undefined && strictStatus !== "current";
+  if (currentEvidenceConflict) exception(exceptions, "current_tenancy_status_evidence_conflict", "Exact lease status conflicts with the observed Current account interval; neither source is silently overridden", "tenancy", record, undefined, "error");
   const status = isV3(context)
-    ? strictStatus === "current" || strictStatus === "future" || strictStatus === "past" || strictStatus === "notice" || strictStatus === "cancelled" ? strictStatus : null
+    ? observedCurrent && !currentEvidenceConflict ? "current" : strictStatus === "current" || strictStatus === "future" || strictStatus === "past" || strictStatus === "notice" || strictStatus === "cancelled" ? strictStatus : null
     : statusSource
       ? (/future|prelease/.test(statusText) ? "future" : /current|active|occupied/.test(statusText) ? "current" : /past|former|ended/.test(statusText) ? "past" : /notice/.test(statusText) ? "notice" : /cancel/.test(statusText) ? "cancelled" : null)
       : actualMoveOutOn ? "past" : null;
@@ -1432,6 +1437,13 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
     if (!claimSource("person", record)) continue;
     const person = mapPerson(context, record, exceptions);
     if (!person) continue;
+    const reviews = (input.financialReviewHolds ?? []).filter(hold => hold.tenantSourceId === sourceId(record));
+    if (reviews.length > 1) exception(exceptions, "person_financial_review_ambiguous", "Financial review evidence is ambiguous", "person", record, undefined, "error");
+    else if (reviews.length === 1) {
+      const hold = reviews[0];
+      if (!isV3(context) || hold.artifactSha256 !== context.artifactSha256 || hold.reason !== "assistance_responsibility_unverified" || !/^[a-f0-9]{64}$/.test(hold.evidenceRecordSha256) || !hold.sourceReference || hold.sourceReference.length > 512) exception(exceptions, "person_financial_review_evidence_invalid", "Financial review requires exact artifact-bound source evidence", "person", record, undefined, "error");
+      else { person.paymentReviewReason = hold.reason; person.paymentReviewArtifactSha256 = hold.artifactSha256; person.paymentReviewSourceReference = hold.sourceReference; }
+    }
     snapshot.people.push(person);
     personBySource.set(sourceId(record), person);
     addSource("person", record, person.id);
@@ -1461,10 +1473,43 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
     tenantContacts.push({ record: contactRecord, tenantSourceId, person, primary });
     addSource("person", contactRecord, person.id);
   }
+  // Tenant status describes the account. Resolve its unique occupancy interval
+  // at the sealed observation date before assigning that status to one lease.
+  const observedCurrentLeaseIds = new Set<string>();
+  if (isV3(context) && context.artifactObservationOn && isValidCalendarDate(context.artifactObservationOn)) {
+    for (const rawTenant of input.tenants ?? []) {
+      const tenant = rawTenant as RawRecord;
+      const status = strictFinancialValue(context, {sourceCollection: "tenants", sourceField: "Status", semanticKind: "tenancy_status", rawValue: value(tenant, "Status")});
+      if (status !== "current") continue;
+      const tenantId = sourceId(tenant);
+      const candidates = (input.leases ?? []).filter(raw => {
+        const lease = raw as RawRecord;
+        if (sourceLink(lease, "tenantId", "personId", "tenantSourceId") !== tenantId) return false;
+        const start = dateField(lease, "actualMoveInOn", "moveInDate", "MoveInDate");
+        const end = dateField(lease, "actualMoveOutOn", "moveOutDate", "MoveOutDate");
+        return !start.invalid && Boolean(start.value) && start.value! <= context.artifactObservationOn!
+          && !end.invalid && (!end.value || end.value > context.artifactObservationOn!);
+      });
+      if (candidates.length !== 1) {
+        exception(exceptions, "current_tenant_active_lease_ambiguous", "Current source tenant requires one exact date-active lease at the source observation", "tenancy", tenant, undefined, "error");
+        continue;
+      }
+      const lease = candidates[0] as RawRecord;
+      const property = propertyBySource.get(sourceLink(lease, "propertyId", "propertySourceId") ?? "");
+      const unit = unitBySource.get(sourceLink(lease, "unitId", "unitSourceId") ?? "");
+      const person = personBySource.get(tenantId);
+      const tenantProperty = propertyBySource.get(sourceLink(tenant, "propertyId", "propertySourceId") ?? "");
+      if (!property || !unit || !person || !tenantProperty || tenantProperty.id !== property.id || unit.propertyId !== property.id) {
+        exception(exceptions, "current_tenant_active_lease_relationship_invalid", "Current source tenancy requires exact property, unit and person relationships", "tenancy", lease, undefined, "error");
+        continue;
+      }
+      observedCurrentLeaseIds.add(sourceId(lease));
+    }
+  }
   for (const raw of input.leases ?? []) {
     const record = raw as RawRecord;
     if (!claimSource("tenancy", record)) continue;
-    const tenancy = mapTenancy(context, record, propertyBySource, unitBySource, personBySource, exceptions, importedAt);
+    const tenancy = mapTenancy(context, record, propertyBySource, unitBySource, personBySource, exceptions, importedAt, observedCurrentLeaseIds.has(sourceId(record)));
     if (!tenancy) { exception(exceptions, "lease_reference_missing", "Lease cannot be mapped without exact references", "tenancy", record, undefined, isV3(context) ? "warning" : "error"); continue; }
     snapshot.tenancies.push(tenancy);
     tenancyBySource.set(sourceId(record), tenancy);
@@ -1682,7 +1727,13 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
       const isReversal = Boolean(reversalOfSource) || explicitReversalKind;
       const mappedKind: RentOpsLedgerTransaction["kind"] = isReversal ? "reversal" : kind;
       const statusSource = stringValue(raw, "status", "transactionStatus");
-      const status = isV3(context) ? null : ledgerStatusFromEvidence(raw);
+      // Protocol crosswalk means recorded in the source account ledger; it
+      // does not mean bank-cleared, settled, presently due or tenant-payable.
+      const protocolStatus = strictFinancialValue(context, {sourceCollection: stringValue(raw, "sourceCollection") ?? "", sourceField: "TransactionType", semanticKind: "ledger_status", rawValue: value(raw, "TransactionType")});
+      const explicitStatus = stringValue(raw, "status", "transactionStatus", "Status", "TransactionStatus");
+      const conflictingStatus = protocolStatus === "posted" && ((explicitStatus !== undefined && ledgerStatusFromEvidence(raw) !== "posted") || boolValue(raw, "voided", "isVoided", "Voided", "IsVoided"));
+      if (isV3(context) && conflictingStatus) exception(exceptions, "ledger_status_evidence_conflict", "Recorded-ledger protocol conflicts with explicit source status; review required", "ledger_transaction", raw, amountRead.value, "error");
+      const status = isV3(context) ? protocolStatus === "posted" && !conflictingStatus ? "posted" : null : ledgerStatusFromEvidence(raw);
       if (!isV3(context) && statusSource && !status) exception(exceptions, "ledger_status_unknown", "Ledger status was not a recognized explicit RM value; retained as explicit unknown", "ledger_transaction", raw, amountRead.value, "warning");
       if (explicitReversalKind && !reversalOfSource) exception(exceptions, "ledger_reversal_link_unknown", "Ledger reversal kind was explicit but its parent transaction link was not returned", "ledger_transaction", raw, amountRead.value, "warning");
       const description = stringValue(raw, "description", "memo", "name");
@@ -1723,7 +1774,7 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
         postedOnKnowledge: postedRead.value ? "source" : "unknown",
         dueOnKnowledge: dueRead.value ? "source" : "unknown",
         descriptionKnowledge: description ? "source" : "unknown",
-        statusKnowledge: isV3(context) ? "unknown" : status ? "source" : "unknown",
+        statusKnowledge: status ? "source" : "unknown",
         allocationMode: isV3(context) ? null : undefined,
         chargeDefinitionId,
         chargeDefinitionLinkKnowledge: isV3(context) ? chargeDefinitionId ? "exact" : "unknown" : undefined,

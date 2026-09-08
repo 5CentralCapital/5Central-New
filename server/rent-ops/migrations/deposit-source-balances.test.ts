@@ -23,6 +23,9 @@ test('signed source summary maps and persists as unknown held; report and DTO ne
   const repo=new PostgresRentOpsRepository(executor);await repo.saveSecurityDeposit(deposit);
   const snapshot=await repo.getSnapshot();assert.equal(snapshot.securityDeposits[0].amountHeldCents,null);assert.equal(snapshot.securityDeposits[0].sourceBalanceCents,-155000);
   const rows=deriveDepositLiability(snapshot,{asOfDate:'2026-09-07'});assert.equal(rows[0].totalHeldCents,null);assert.equal(rows[0].sourceBalanceCents,-155000);assert.equal(rows[0].unknownHeldCount,1);
+  assert.deepEqual(deriveDepositLiability(snapshot,{asOfDate:'2026-09-07',propertyScope:'all'}),rows);
+  assert.equal(deriveDepositLiability(snapshot,{asOfDate:'2026-09-07',propertyScope:'active'}).length,0);
+  assert.equal(deriveDepositLiability(snapshot,{asOfDate:'2026-09-07',propertyId:'unrelated-property'}).length,0);
   await db.exec("RESET ROLE");
   await assert.rejects(db.query("UPDATE rent_ops_security_deposits SET source_balance_cents=-1 WHERE id=$1",[deposit.id]),/immutable/);
   await ensureRentOpsSchema({apply:true,query:sql=>db.query(sql),executor:async sql=>{await db.exec(sql);}});

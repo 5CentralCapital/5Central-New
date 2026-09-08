@@ -1056,6 +1056,7 @@ function serializeFilterValue(value: unknown): JsonObject {
     return items?.filter((item) => values.includes(item));
   };
   return presentationObject({
+    propertyScope: ["active", "all"].includes(text(input, "propertyScope") ?? "") ? text(input, "propertyScope") : undefined,
     propertyId: text(input, "propertyId"),
     unitId: text(input, "unitId"),
     tenancyId: text(input, "tenancyId"),

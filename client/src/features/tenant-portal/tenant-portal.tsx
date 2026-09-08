@@ -3,7 +3,7 @@ import { ArrowRight, Building2, Check, CreditCard, FileDown, Loader2, LockKeyhol
 import type { TenantHome } from "@shared/tenant-portal-contracts";
 import { TenantApiError, TenantPortalClient, trustedCheckoutUrl, type TenantPayments, type TenantSessionAccount } from "./api";
 import { centsFromAmount, consumeActivationLink, type ActivationLink } from "./link";
-import { noPaymentDueMessage } from "./payment-view";
+import { noPaymentDueMessage, paymentReviewMessage } from "./payment-view";
 import { depositAmounts } from "./deposit-view";
 import "./tenant-portal.css";
 const LeaseViewer=lazy(()=>import("./lease-viewer").then(module=>({default:module.LeaseViewer})));
@@ -88,9 +88,10 @@ function PaymentPanel({ client, payments, tenancyId, onError }: { client: Tenant
     } catch (error) { onError(error); setBusy(false); }
   }
   const noPaymentMessage = noPaymentDueMessage(account);
+  const reviewMessage = paymentReviewMessage(account);
   const enabled = payments?.available && account?.available && account.payableCents >= 50;
   return <section className="tp-card" aria-labelledby="tp-pay-title"><div className="tp-section-heading"><CreditCard aria-hidden="true" /><h2 id="tp-pay-title">Make a payment</h2></div>
-    {!payments ? <p>Payment availability could not be loaded. Refresh to try again.</p> : !payments.available ? <p>Online payments are not available yet. Continue using your current payment arrangement.</p> : noPaymentMessage ? <p>{noPaymentMessage}</p> : !account?.available ? <p>Online payment is unavailable for this account. Contact management for assistance.</p> : account.payableCents < 50 ? <p>{account.pendingCents > 0 ? "Your outstanding balance is covered by payments in progress." : account.payableCents > 0 ? "Online payments require at least $0.50. Contact management about this remaining balance." : "There is no balance available to pay."}</p> : <form onSubmit={checkout}><label>Payment amount<input type="number" inputMode="decimal" min="0.50" max={(Math.min(account.payableCents, 99_999_999) / 100).toFixed(2)} step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required disabled={busy} /></label><button className="tp-primary" disabled={!enabled || busy}>{busy ? <Loader2 className="tp-spin" /> : <CreditCard />}Continue to payment</button></form>}
+    {!payments ? <p>Payment availability could not be loaded. Refresh to try again.</p> : reviewMessage ? <p>{reviewMessage}</p> : !payments.available ? <p>Online payments are not available yet. Continue using your current payment arrangement.</p> : noPaymentMessage ? <p>{noPaymentMessage}</p> : !account?.available ? <p>Online payment is unavailable for this account. Contact management for assistance.</p> : account.payableCents < 50 ? <p>{account.pendingCents > 0 ? "Your outstanding balance is covered by payments in progress." : account.payableCents > 0 ? "Online payments require at least $0.50. Contact management about this remaining balance." : "There is no balance available to pay."}</p> : <form onSubmit={checkout}><label>Payment amount<input type="number" inputMode="decimal" min="0.50" max={(Math.min(account.payableCents, 99_999_999) / 100).toFixed(2)} step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required disabled={busy} /></label><button className="tp-primary" disabled={!enabled || busy}>{busy ? <Loader2 className="tp-spin" /> : <CreditCard />}Continue to payment</button></form>}
     {!!account?.pendingCents && <p className="tp-notice">{money(account.pendingCents)} in progress. Processing payments are not yet posted to your ledger.</p>}
     {!!payments?.payments.length && <div className="tp-payment-history"><h3>Recent online payments</h3>{payments.payments.slice(0, 8).map((payment) => <div key={payment.id}><span>{date(payment.createdAt)}<small>{label(payment.status)}</small></span><strong>{money(payment.amountCents)}</strong></div>)}</div>}
   </section>;

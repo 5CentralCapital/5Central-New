@@ -386,6 +386,9 @@ function asList(value: unknown): string[] | undefined {
 
 function parseFilters(query: Request["query"], defaultAsOfDate?: string): RentOpsFilters {
   const candidate = {
+    // Admin report callers default to the operational portfolio. Direct
+    // domain/migration callers omit this field when they need source totals.
+    propertyScope: asString(query.propertyScope) ?? "active",
     propertyId: asString(query.propertyId),
     unitId: asString(query.unitId),
     tenancyId: asString(query.tenancyId),
@@ -591,6 +594,13 @@ function buildClientSnapshot(snapshot: Awaited<ReturnType<RentOpsService["snapsh
     .filter((person) => profilePersonIds.has(person.id))
     .map((person) => deriveTenantProfile(snapshot, person.id, filters))
     .filter((profile): profile is NonNullable<ReturnType<typeof deriveTenantProfile>> => Boolean(profile))
+    // A scoped operational bundle must not turn a person whose only tenancy
+    // is outside the selected portfolio into a resident card. The profile
+    // derivation already applies the exact property scope to `tenancies`; an
+    // explicit all-history request keeps the complete imported contact set.
+    .filter((profile) =>
+      (!filters.propertyId && filters.propertyScope !== "active") || (profile.tenancies?.length ?? 0) > 0,
+    )
     .map((profile) => {
       const personId = profile.person.id;
       const hasPrimaryTenancy = snapshot.tenancies.some((tenancy) => tenancy.primaryPersonId === personId);
@@ -627,7 +637,12 @@ function buildClientSnapshot(snapshot: Awaited<ReturnType<RentOpsService["snapsh
     snapshot,
     reports,
     tenants: tenantProfiles,
-    applicants: snapshot.applications,
+    // Keep applicant cards aligned with the pipeline report's property,
+    // status, and search scope. An all-history query expands the same
+    // report-derived set back to every imported property.
+    applicants: snapshot.applications.filter((application) =>
+      reports["applicant-pipeline"].some((row) => row.id === application.id),
+    ),
     documents: snapshot.documents,
     activities: snapshot.activityEvents,
   });
@@ -848,10 +863,8 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
     try {
       const snapshot = await service.snapshot();
       const existing = snapshot.tenancies.find((tenancy) => tenancy.id === parsed.data.id);
-      // Imported creation time is immutable. An edit may supply an explicit
-      // operational timestamp only for a record that has no existing value.
-      const createdAt = existing?.createdAt ?? parsed.data.createdAt;
-      if (!createdAt) { res.status(400).json(errorBody("invalid_input")); return; }
+      // New manual records receive the server clock; POST cannot rewrite an existing record.
+      const createdAt = existing?.createdAt ?? configuredNow().toISOString();
       res.status(201).json(serializeAdminTenancy(await service.saveTenancy({ ...parsed.data, createdAt })));
     } catch (error) { adminError(res, error); }
   });
@@ -862,10 +875,8 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
     try {
       const snapshot = await service.snapshot();
       const existing = snapshot.leaseTerms.find((term) => term.id === parsed.data.id);
-      // Imported creation time is immutable. An edit may supply an explicit
-      // operational timestamp only for a record that has no existing value.
-      const createdAt = existing?.createdAt ?? parsed.data.createdAt;
-      if (!createdAt) { res.status(400).json(errorBody("invalid_input")); return; }
+      // New manual records receive the server clock; POST cannot rewrite an existing record.
+      const createdAt = existing?.createdAt ?? configuredNow().toISOString();
       res.status(201).json(serializeAdminLeaseTerm(await service.saveLeaseTerm({ ...parsed.data, createdAt })));
     } catch (error) { adminError(res, error); }
   });
@@ -997,6 +1008,22 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
       };
       const result = await conversionService.convertApplication(req.params.id, parsed.data, { actorSubject, occurredAt: patchOccurredAt() });
       res.status(201).json({ application: serializeAdminApplication(result.application as Parameters<typeof serializeAdminApplication>[0]), tenancy: serializeAdminTenancy(result.tenancy as Parameters<typeof serializeAdminTenancy>[0]) });
+    } catch (error) { adminError(res, error); }
+  });
+  adminRouter.post("/tenancies/:id/lease-files", async (req, res) => {
+    try {
+      const actor = patchActorSubject(req);
+      if (Object.keys(req.query).length || ["x-document-id", "x-person-id", "x-tenancy-id", "x-property-id", "x-unit-id", "x-application-id", "x-application-requirement-id"].some(name => req.get(name))) throw new RentOpsInvariantError("Lease scope is resolved from the tenancy only");
+      if ((req.get("content-type") ?? "").split(";", 1)[0].trim() !== "application/pdf") throw new RentOpsInvariantError("Manager lease upload must be a PDF");
+      const fileName = documentHeader(req, "x-document-name");
+      if (!fileName) throw new RentOpsInvariantError("Document upload filename is required");
+      const configured = options.documentUploadMaxBytes;
+      const maxBytes = configured && Number.isSafeInteger(configured) && configured > 0 ? Math.min(configured, MAX_DOCUMENT_UPLOAD_BYTES) : MAX_DOCUMENT_UPLOAD_BYTES;
+      const upload = boundedUploadStream(req, maxBytes);
+      if (!upload) throw new RentOpsInvariantError("Document upload body is missing");
+      const document = await service.saveManagerLeaseFile(req.params.id, { fileName, mimeType: "application/pdf", stream: upload.stream, sizeBytes: upload.sizeBytes }, actor);
+      const documents = (await service.snapshot()).documents.filter(d => d.tenancyId === document.tenancyId && d.personId === document.personId && d.propertyId === document.propertyId && d.unitId === document.unitId && d.type === "lease");
+      res.status(201).json({ document: serializeAdminDocument(document), documents: documents.map(serializeAdminDocument) });
     } catch (error) { adminError(res, error); }
   });
   // Metadata-only admin registration remains unavailable. Verified archive

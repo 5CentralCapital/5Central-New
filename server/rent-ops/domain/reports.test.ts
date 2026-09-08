@@ -63,6 +63,34 @@ function truthSchedule(input: Partial<RentOpsRecurringChargeSchedule> & Pick<Ren
   };
 }
 
+function activePortfolioScopeSnapshot(): RentOpsSnapshot {
+  const value = snapshot();
+  const activeProperties = ["active-extra-1", "active-extra-2"];
+  for (const propertyId of activeProperties) {
+    value.properties.push({ id: propertyId, name: propertyId, slug: propertyId, address: { line1: "1 Main", city: "Town", state: "FL", postalCode: "00000" }, propertyType: "multifamily", state: "active" });
+  }
+  for (const index of Array.from({ length: 48 }, (_, offset) => offset)) {
+    const propertyId = activeProperties[index < 24 ? 0 : 1]!;
+    value.units.push({ id: `active-unit-${index + 1}`, propertyId, unitNumber: String(index + 1), readiness: "ready", listing: "listed", propertyLinkKnowledge: "exact" });
+  }
+  for (const index of Array.from({ length: 13 }, (_, offset) => offset)) {
+    const propertyId = `historical-${index + 1}`;
+    value.properties.push({ id: propertyId, name: propertyId, slug: propertyId, address: { line1: "1 Main", city: "Town", state: "FL", postalCode: "00000" }, propertyType: "multifamily", state: null });
+    const unitCount = index < 5 ? 12 : 11;
+    for (const unitIndex of Array.from({ length: unitCount }, (_, offset) => offset)) {
+      value.units.push({ id: `${propertyId}-unit-${unitIndex + 1}`, propertyId, unitNumber: String(unitIndex + 1), readiness: "ready", listing: "listed", propertyLinkKnowledge: "exact" });
+    }
+  }
+  const activeUnits = value.units.filter((unit) => value.properties.find((property) => property.id === unit.propertyId)?.state === "active");
+  const usedUnitIds = new Set(value.tenancies.map((tenancy) => tenancy.unitId));
+  for (const [index, unit] of activeUnits.filter((unit) => !usedUnitIds.has(unit.id)).slice(0, 35).entries()) {
+    const personId = `scope-person-${index + 1}`;
+    value.people.push({ id: personId, firstName: "Scope", lastName: `Tenant ${index + 1}` });
+    value.tenancies.push({ id: `scope-tenancy-${index + 1}`, propertyId: unit.propertyId, unitId: unit.id, primaryPersonId: personId, status: "current", actualMoveInOn: "2026-01-01", createdAt: "2026-01-01T00:00:00.000Z", propertyLinkKnowledge: "exact", unitLinkKnowledge: "exact", primaryPersonLinkKnowledge: "exact", statusKnowledge: "source", actualMoveInKnowledge: "source" });
+  }
+  return value;
+}
+
 test("rent roll preserves one row per physical unit, half baths, future rent, readiness, and listing", () => {
   const rows = deriveRentRoll(snapshot(), { asOfDate });
   assert.equal(rows.length, 7);
@@ -84,6 +112,21 @@ test("dashboard counts physical vacancy and not-ready units without charging sta
   assert.equal(summary.genuineVacantUnits, 4);
   assert.equal(summary.notReadyUnits, 1);
   assert.equal(summary.offMarketUnits, 1);
+});
+
+test("active portfolio scope excludes unknown historical properties while omitted scope preserves source totals", () => {
+  const current = activePortfolioScopeSnapshot();
+  const active = deriveDashboardSummary(current, { asOfDate, propertyScope: "active" });
+  assert.equal(active.propertyCount, 4);
+  assert.equal(active.unitCount, 55);
+  assert.equal(active.occupiedUnits, 37);
+  assert.equal(deriveRentRoll(current, { asOfDate, propertyScope: "active" }).length, 55);
+
+  const allImported = deriveDashboardSummary(current, { asOfDate, propertyScope: "all" });
+  assert.equal(allImported.propertyCount, 17);
+  assert.equal(allImported.unitCount, 203);
+  assert.equal(allImported.occupiedUnits, 37);
+  assert.equal(deriveRentRoll(current, { asOfDate }).length, 203);
 });
 
 test("scheduled, collected, deposit, HAP, and applicant reports use fixed semantics", () => {

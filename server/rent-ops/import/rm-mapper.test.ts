@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
-import type { RentManagerFinancialSemanticCrosswalk } from "../../../shared/rent-ops-contracts";
+import { createFinancialSemanticCrosswalkEntry, type RentManagerFinancialSemanticCrosswalk } from "../../../shared/rent-ops-contracts";
 import { serializeAdminRecurringSchedule } from "../presentation";
 import { mapRentManagerExport, reconcileRentManagerImport, type RentOpsTargetIdFactory } from "./rm-mapper";
 
@@ -555,4 +555,68 @@ test('exact CreditAllocation applies an existing credit and never invents a paym
  assert.ok(row);assert.equal(row.sourcePropertyId,result.snapshot.properties[0].id);assert.equal(row.paymentTransactionId,null);assert.equal(row.creditTransactionId,result.snapshot.ledgerTransactions.find(t=>t.source?.sourceId==='credit1')?.id);
  assert.equal(result.snapshot.ledgerTransactions.filter(t=>t.kind==='payment').length,1);
  assert.equal(result.exceptions.some(e=>e.code==='snapshot_invariant_failed'),false);
+});
+
+test("observed Current account selects only its unique active lease interval with exact source crosswalk", () => {
+ const digest="a".repeat(64);
+ const crosswalk:RentManagerFinancialSemanticCrosswalk={artifactSha256:digest,normalization:"trim_lower_unicode_v1",entries:[{artifactSha256:digest,sourceCollection:"tenants",sourceField:"Status",semanticKind:"tenancy_status",normalization:"trim_lower_unicode_v1",normalizedValue:"current",targetValue:"current"}]};
+ const source={...input(),tenants:[{...input().tenants[0],propertyId:"p1",Status:"Current"}],leases:[
+  {entityType:"lease",sourceId:"old",tenantId:"t1",propertyId:"p1",unitId:"u1",actualMoveInOn:"2025-01-01",actualMoveOutOn:"2026-04-01"},
+  {entityType:"lease",sourceId:"active",tenantId:"t1",propertyId:"p1",unitId:"u1",actualMoveInOn:"2026-04-01",actualMoveOutOn:"2027-03-31"},
+ ]};
+ const options={fidelityVersion:3 as const,artifactSha256:digest,artifactObservationOn:"2026-09-07",financialSemanticCrosswalk:crosswalk,targetIdFactory:deterministicTestTargetIdFactory};
+ const result=mapRentManagerExport(source,options);
+ assert.equal(result.snapshot.tenancies.find(t=>t.source?.sourceId==="active")?.status,"current");
+ assert.equal(result.snapshot.tenancies.find(t=>t.source?.sourceId==="old")?.status,null);
+ const duplicate=mapRentManagerExport({...source,leases:[...source.leases,{...source.leases[1],sourceId:"overlap"}]},options);
+ assert.equal(duplicate.snapshot.tenancies.filter(t=>t.status==="current").length,0);
+ assert(duplicate.exceptions.some(e=>e.code==="current_tenant_active_lease_ambiguous"));
+ for(const change of [{artifactObservationOn:undefined},{financialSemanticCrosswalk:{...crosswalk,artifactSha256:"b".repeat(64)}}]){
+  assert.equal(mapRentManagerExport(source,{...options,...change}).snapshot.tenancies.filter(t=>t.status==="current").length,0);
+ }
+});
+
+
+test("observed Current account never overrides a contradictory exact lease status", () => {
+ const digest="a".repeat(64);
+ for(const status of ["future","past","cancelled","notice"]){
+  const crosswalk:RentManagerFinancialSemanticCrosswalk={artifactSha256:digest,normalization:"trim_lower_unicode_v1",entries:[
+   {artifactSha256:digest,sourceCollection:"tenants",sourceField:"Status",semanticKind:"tenancy_status",normalization:"trim_lower_unicode_v1",normalizedValue:"current",targetValue:"current"},
+   {artifactSha256:digest,sourceCollection:"tenants.future",sourceField:"$partition",semanticKind:"tenancy_status",normalization:"trim_lower_unicode_v1",normalizedValue:"future",targetValue:status},
+  ]};
+  const result=mapRentManagerExport({...input(),tenants:[{...input().tenants[0],propertyId:"p1",Status:"Current"}],leases:[{entityType:"lease",sourceId:"active",tenantId:"t1",propertyId:"p1",unitId:"u1",actualMoveInOn:"2026-04-01",sourceCollection:"tenants.future",$partition:"future"}]},{fidelityVersion:3,artifactSha256:digest,artifactObservationOn:"2026-09-07",financialSemanticCrosswalk:crosswalk,targetIdFactory:deterministicTestTargetIdFactory});
+  assert.equal(result.snapshot.tenancies[0].status,status);
+  assert(result.exceptions.some(e=>e.code==="current_tenancy_status_evidence_conflict"));
+ }
+});
+
+
+test("recorded ledger protocol is exact and artifact bound, retaining conflicting source status", () => {
+ const artifactSha256="a".repeat(64);
+ const financialSemanticCrosswalk:RentManagerFinancialSemanticCrosswalk={artifactSha256,normalization:"exact_v1",entries:[createFinancialSemanticCrosswalkEntry({artifactSha256,sourceCollection:"charges",sourceField:"TransactionType",semanticKind:"ledger_status",normalization:"exact_v1",rawValue:"Charge",targetValue:"posted"})!]};
+ const row={...input().charges[0],sourceCollection:"charges",TransactionType:"Charge"};
+ const run=(charge:typeof row, digest=artifactSha256)=>mapRentManagerExport({...input(),charges:[charge]},{fidelityVersion:3,artifactSha256:digest,financialSemanticCrosswalk,targetIdFactory:deterministicTestTargetIdFactory});
+ assert.equal(run(row).snapshot.ledgerTransactions.find(x=>x.source?.sourceId==="c1")?.status,"posted");
+ for(const changed of [{...row,TransactionType:"PendingCharge"},{...row,sourceCollection:"payments"}])assert.equal(run(changed).snapshot.ledgerTransactions.find(x=>x.source?.sourceId==="c1")?.status,null);
+ assert.equal(run(row,"b".repeat(64)).snapshot.ledgerTransactions.find(x=>x.source?.sourceId==="c1")?.status,null);
+ for(const flags of [{status:"pending"},{IsVoided:true}]){
+  const result=run({...row,...flags});
+  assert.equal(result.snapshot.ledgerTransactions.find(x=>x.source?.sourceId==="c1")?.status,null);
+  assert.ok(result.exceptions.some(x=>x.code==="ledger_status_evidence_conflict"));
+ }
+});
+
+
+test("person assistance review holds retain exact source binding and reject stale evidence",()=>{
+ const artifactSha256="a".repeat(64);const hold={tenantSourceId:"t1",reason:"assistance_responsibility_unverified" as const,artifactSha256,evidenceCollection:"tenants" as const,evidenceSourceId:"t1",evidenceRecordSha256:"b".repeat(64),sourceReference:"export-envelope.json#/payload/tenants/0;sha256="+"b".repeat(64)};
+ const run=(h:typeof hold)=>mapRentManagerExport({...input(),financialReviewHolds:[h]},{fidelityVersion:3,artifactSha256,targetIdFactory:deterministicTestTargetIdFactory});
+ const person=run(hold).snapshot.people.find(p=>p.source?.sourceId==="t1");
+ assert.equal(person?.paymentReviewReason,"assistance_responsibility_unverified");assert.equal(person?.paymentReviewArtifactSha256,artifactSha256);assert.equal(person?.paymentReviewSourceReference,hold.sourceReference);
+ const stale=run({...hold,artifactSha256:"c".repeat(64)});assert.ok(stale.exceptions.some(x=>x.code==="person_financial_review_evidence_invalid"));assert.equal(stale.snapshot.people.find(p=>p.source?.sourceId==="t1")?.paymentReviewReason,undefined);
+});
+
+
+test("exact active property boolean marks active without treating false as archived",()=>{
+ const run=(IsActive:unknown)=>mapRentManagerExport({...input(),properties:[{...input().properties[0],IsActive}]},{fidelityVersion:3,targetIdFactory:deterministicTestTargetIdFactory}).snapshot.properties[0];
+ assert.equal(run(true).state,"active");for(const raw of [false,undefined,"true",1])assert.equal(run(raw).state,null);
 });

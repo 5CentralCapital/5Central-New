@@ -26,6 +26,7 @@ export type ReportKey =
 /** Browser-owned query shape.  It deliberately contains no persistence
  * entity types or source/import fields. */
 export interface ApiFilters {
+  propertyScope?: "active" | "all";
   propertyId?: string;
   unitId?: string;
   tenancyId?: string;
@@ -79,6 +80,7 @@ export type TenantTab =
 
 /** Local display state; API filters use the browser-owned ApiFilters shape. */
 export interface ViewFilters {
+  propertyScope: "active" | "all";
   propertyId: string;
   asOfDate: string;
   status: string;
@@ -858,6 +860,7 @@ export interface RentOpsMutation {
     | "save-security-deposit"
     | "save-subsidy-contract"
     | "save-activity"
+    | "assign-application-unit"
     | "update-application-status"
     | "save-application-requirement"
     | "convert-application";

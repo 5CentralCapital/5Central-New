@@ -72,7 +72,7 @@ function directArrayCollections(input: RestrictedSourcePayloadPersistenceContext
   const rows = Object.entries(source)
     // HAP status crosswalks are artifact-bound metadata, not source rows. They
     // have no sourceId by design and must not be persisted as raw collections.
-    .filter(([name, value]) => name !== "hapStatusCrosswalk" && name !== "applicationHistoryStatusCrosswalk" && Array.isArray(value)) as Array<[string, unknown[]]>;
+    .filter(([name, value]) => name !== "hapStatusCrosswalk" && name !== "applicationHistoryStatusCrosswalk" && name !== "financialReviewHolds" && Array.isArray(value)) as Array<[string, unknown[]]>;
   if (isRecord(input) && Array.isArray(input.documentBinaries) && !rows.some(([name]) => name === "documentBinaries")) {
     rows.push(["documentBinaries", input.documentBinaries]);
   }

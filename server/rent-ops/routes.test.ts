@@ -434,6 +434,56 @@ test("manager preview context and omitted reports follow the injected business c
   });
 });
 
+test("admin report routes default to active properties and expose imported history explicitly", async () => {
+  const snapshot = structuredClone(syntheticRentOpsSnapshot());
+  snapshot.properties.push({ id: "historical-property", name: "Historical property", slug: "historical-property", address: { line1: "1 Old Way", city: "Town", state: "FL", postalCode: "00000" }, propertyType: "multifamily", state: null });
+  snapshot.units.push({ id: "historical-unit", propertyId: "historical-property", unitNumber: "H-1", readiness: "ready", listing: "listed" });
+  await withServer({ repository: new SyntheticRentOpsRepository(snapshot), requireAdmin: (_req, _res, next) => next() }, async (baseUrl) => {
+    const active = await request(baseUrl, "/dashboard");
+    assert.equal(active.status, 200);
+    assert.equal(active.body.propertyCount, 2);
+    assert.equal(active.body.unitCount, 7);
+    const allImported = await request(baseUrl, "/dashboard?propertyScope=all");
+    assert.equal(allImported.status, 200);
+    assert.equal(allImported.body.propertyCount, 3);
+    assert.equal(allImported.body.unitCount, 8);
+  });
+});
+
+test("admin snapshot tenant and applicant cards follow the selected property scope", async () => {
+  const snapshot = structuredClone(syntheticRentOpsSnapshot());
+  snapshot.properties.push({ id: "historical-property", name: "Historical property", slug: "historical-property", address: { line1: "1 Old Way", city: "Town", state: "FL", postalCode: "00000" }, propertyType: "multifamily", state: null });
+  snapshot.units.push({ id: "historical-unit", propertyId: "historical-property", unitNumber: "H-1", readiness: "ready", listing: "listed" });
+  snapshot.people.push({ id: "historical-person", firstName: "Historical", lastName: "Resident", email: "historical.resident@example.test", phone: "+1-555-0198" });
+  snapshot.tenancies.push({ id: "historical-tenancy", propertyId: "historical-property", unitId: "historical-unit", primaryPersonId: "historical-person", status: "past", actualMoveInOn: "2020-01-01", actualMoveOutOn: "2020-12-31", createdAt: "2020-01-01T12:00:00.000Z" });
+  snapshot.householdMemberships.push({ id: "historical-household", tenancyId: "historical-tenancy", personId: "historical-person", role: "primary", isFinanciallyResponsible: true });
+  snapshot.applications.push({ id: "historical-application", sourceType: "manual", status: "submitted", email: "historical.applicant@example.test", firstName: "Historical", lastName: "Applicant", phone: "+1-555-0197", propertyId: "historical-property", createdAt: "2020-01-01T12:00:00.000Z", updatedAt: "2020-01-02T12:00:00.000Z", submittedOn: "2020-01-02" });
+  await withServer({ repository: new SyntheticRentOpsRepository(snapshot), requireAdmin: (_req, _res, next) => next() }, async (baseUrl) => {
+    const active = await request(baseUrl, "/snapshot");
+    assert.equal(active.status, 200);
+    const activeTenants = active.body.tenants as Array<{ person: { id: string } }>;
+    const activeApplicants = active.body.applicants as Array<{ id: string }>;
+    assert.equal(activeTenants.some((tenant) => tenant.person.id === "demo-person-1"), true);
+    assert.equal(activeTenants.some((tenant) => tenant.person.id === "historical-person"), false);
+    assert.equal(activeApplicants.some((application) => application.id === "historical-application"), false);
+
+    const activePipeline = await request(baseUrl, "/applications");
+    assert.equal(activePipeline.status, 200);
+    assert.equal((activePipeline.body as Array<{ id: string }>).some((application) => application.id === "historical-application"), false);
+
+    const allImported = await request(baseUrl, "/snapshot?propertyScope=all");
+    assert.equal(allImported.status, 200);
+    const allTenants = allImported.body.tenants as Array<{ person: { id: string } }>;
+    const allApplicants = allImported.body.applicants as Array<{ id: string }>;
+    assert.equal(allTenants.some((tenant) => tenant.person.id === "historical-person"), true);
+    assert.equal(allApplicants.some((application) => application.id === "historical-application"), true);
+
+    const allPipeline = await request(baseUrl, "/applications?propertyScope=all");
+    assert.equal(allPipeline.status, 200);
+    assert.equal((allPipeline.body as Array<{ id: string }>).some((application) => application.id === "historical-application"), true);
+  });
+});
+
 test("invalid filters and malformed financial writes fail with 400 instead of silent defaults", async () => {
   await withServer({ repository: createSyntheticRentOpsRepository(), requireAdmin: (_req, _res, next) => next() }, async (baseUrl) => {
     assert.equal((await request(baseUrl, "/reports/rent-roll?asOfDate=2026-02-31")).status, 400);
@@ -560,12 +610,12 @@ test("admin POSTs reject existing tenancy and lease IDs instead of upserting imp
     assert.equal(lease.status, 400);
     assert.deepEqual(lease.body, { code: "invalid_input" });
 
-    const missingTenancyTimestamp = await request(baseUrl, "/tenancies", {
+    const missingFutureMoveIn = await request(baseUrl, "/tenancies", {
       method: "POST",
       body: { id: "new-tenancy-without-created-at", propertyId: "demo-property-a", unitId: "demo-unit-a-3", primaryPersonId: "demo-person-2", status: "future", actualMoveInOn: "2027-01-01" },
     });
-    assert.equal(missingTenancyTimestamp.status, 400);
-    assert.deepEqual(missingTenancyTimestamp.body, { code: "invalid_input" });
+    assert.equal(missingFutureMoveIn.status, 400);
+    assert.deepEqual(missingFutureMoveIn.body, { code: "request_failed" });
   });
 });
 
@@ -757,5 +807,26 @@ test("manual recurring root accepts only a positive body and authenticated subje
     assert.equal(accepted.status, 201);
     assert.equal("chargeDefinitionId" in accepted.body, false);
     assert.equal("source" in accepted.body, false);
+  });
+});
+
+test("Quick Add UI-shaped tenancy and lease requests use trusted server creation timestamps", async () => {
+  const { mutationPayload } = await import("../../client/src/features/rent-ops/form-payload");
+  const repository = createSyntheticRentOpsRepository();
+  const snapshot = await repository.getSnapshot();
+  const unit = snapshot.units[0];
+  const now = "2026-08-16T12:00:00.000Z";
+  await withServer({ repository, now: () => new Date(now), requireAdmin: (req, _res, next) => { req.rentOpsAdminUser = {id:"manager"} as any; next(); } }, async base => {
+    const tenancy = mutationPayload("save-tenancy", { id: "manual:ui-tenancy", propertyId: unit.propertyId, unitId: unit.id, primaryPersonId: snapshot.people[0].id, status: "past", actualMoveInOn: "2020-01-01", actualMoveOutOn: "2020-12-31" });
+    assert.equal("createdAt" in tenancy, false);
+    const created = await request(base, "/tenancies", { method:"POST", body:tenancy });
+    assert.equal(created.status, 201);
+    assert.equal((await repository.getSnapshot()).tenancies.find(t=>t.id===tenancy.id)?.createdAt, now);
+    const lease = mutationPayload("save-lease-term", { id:"manual:ui-lease", tenancyId:String(tenancy.id), status:"expired", contractStartOn:"2020-01-01", contractEndOn:"2020-12-31", monthToMonth:false });
+    assert.equal("createdAt" in lease, false);
+    assert.equal((await request(base,"/lease-terms",{method:"POST",body:lease})).status,201);
+    assert.equal((await repository.getSnapshot()).leaseTerms.find(t=>t.id===lease.id)?.createdAt, now);
+    assert.equal((await request(base,"/tenancies",{method:"POST",body:{...tenancy,createdAt:"2000-01-01T00:00:00Z"}})).status,400);
+    assert.equal((await repository.getSnapshot()).tenancies.find(t=>t.id===tenancy.id)?.createdAt, now);
   });
 });

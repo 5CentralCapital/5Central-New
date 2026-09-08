@@ -12,10 +12,10 @@ export const RENT_OPS_QUICK_ADD_ACTIONS: QuickAction[] = [
   "save-security-deposit", "save-activity",
 ];
 
-export function mutationPayload(action: QuickAction, values: FormValues, initialValues: FormValues = {}): Record<string, unknown> {
+export function mutationPayload(action: QuickAction, values: FormValues, initialValues: FormValues = {}, changedFields: ReadonlySet<string> = new Set()): Record<string, unknown> {
   const helperKeys = new Set(["amountDollars", "marketRentDollars", "agencyDollars", "tenantDollars", "address1", "city", "stateCode", "postalCode"]);
   const editing = typeof values.revision === "number" && Number.isSafeInteger(values.revision) && values.revision > 0;
-  const changedValue = (key: string): FormValue => sparseEditValue(values[key], initialValues[key], Object.prototype.hasOwnProperty.call(initialValues, key), editing) as FormValue;
+  const changedValue = (key: string): FormValue => sparseEditValue(values[key], initialValues[key], Object.prototype.hasOwnProperty.call(initialValues, key), editing, changedFields.has(key)) as FormValue;
   const clean = Object.fromEntries(Object.keys(values).flatMap((key) => {
     if (helperKeys.has(key) || key === "id" || key === "revision" || key === "recordRevision") return [];
     const value = changedValue(key);
@@ -65,7 +65,7 @@ export function mutationPayload(action: QuickAction, values: FormValues, initial
   }
   if (action === "save-unit") return finish({ ...clean, id, ...(values.bedrooms === "" ? (editing && changedValue("bedrooms") === null ? { bedrooms: null } : {}) : { bedrooms: Number(values.bedrooms) }), ...(values.bathrooms === "" ? (editing && changedValue("bathrooms") === null ? { bathrooms: null } : {}) : { bathrooms: Number(values.bathrooms) }), ...(optionalCents("marketRentDollars") !== undefined ? { marketRentCents: optionalCents("marketRentDollars") } : {}) });
   if (action === "save-person") return finish({ ...clean, id });
-  if (action === "save-household-membership") return finish({ ...clean, id, ...(editing ? {} : { isFinanciallyResponsible: values.isFinanciallyResponsible === true }) });
+  if (action === "save-household-membership") return finish({ ...clean, id });
   if (action === "save-tenancy") return finish({ ...clean, id });
   if (action === "save-lease-term") {
     const monthToMonth = changedValue("monthToMonth");

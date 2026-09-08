@@ -2,11 +2,12 @@ import { RentOpsApiError } from "./api";
 
 export const RENT_OPS_CONFLICT_NOTICE = "The record changed while you were editing. The workspace was refreshed; reopen the edit.";
 
-export function sparseEditValue(value: unknown, original: unknown, hasOriginal: boolean, editing: boolean): unknown {
+export function sparseEditValue(value: unknown, original: unknown, hasOriginal: boolean, editing: boolean, explicitlyChanged = false): unknown {
   if (!editing) return value;
+  if (explicitlyChanged) return value === "" ? null : value;
   // An unchecked checkbox is the form default, not an operator edit, when an
   // imported row has no value for that fact.
-  if (!hasOriginal && (value === false || value === "" || value === undefined)) return undefined;
+  if ((!hasOriginal || original === null || original === undefined || original === "") && (value === false || value === "" || value === undefined || value === null)) return undefined;
   if (String(value ?? "") === String(original ?? "")) return undefined;
   return value === "" ? null : value;
 }
@@ -38,4 +39,15 @@ export function handleRentOpsMutationError(
     return;
   }
   setError(cause instanceof Error ? cause.message : "The record could not be saved.");
+}
+
+/** Creation controls have explicit section semantics; report views are not create forms. */
+export function sectionCreateAction(section: string): { action: import("./types").RentOpsMutation["action"]; label: string } | undefined {
+  const actions: Record<string, { action: import("./types").RentOpsMutation["action"]; label: string }> = {
+    properties: { action: "save-property", label: "Add property" },
+    tenants: { action: "save-person", label: "Add resident" },
+    leases: { action: "save-lease-term", label: "Add lease" },
+    income: { action: "post-ledger-transaction", label: "Add transaction" },
+  };
+  return actions[section];
 }

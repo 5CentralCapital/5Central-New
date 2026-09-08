@@ -1136,8 +1136,9 @@ function decodeSnapshotView(value: unknown): AdminSnapshotView {
 }
 
 function decodeApiFilters(value: unknown): ApiFilters {
-  const input = exactRecord(value, "report filters", ["propertyId", "unitId", "tenancyId", "personId", "asOfDate", "month", "occupancy", "readiness", "listing", "balanceStatus", "status", "search"]);
+  const input = exactRecord(value, "report filters", ["propertyScope", "propertyId", "unitId", "tenancyId", "personId", "asOfDate", "month", "occupancy", "readiness", "listing", "balanceStatus", "status", "search"]);
   return {
+    propertyScope: optionalEnum(input, "propertyScope", ["active", "all"] as const),
     propertyId: optionalId(input, "propertyId"),
     unitId: optionalId(input, "unitId"),
     tenancyId: optionalId(input, "tenancyId"),
@@ -1329,6 +1330,7 @@ function addQueryParam(params: URLSearchParams, key: string, value: unknown): vo
 
 export function buildRentOpsQuery(filters: RentOpsQueryFilters = {}): string {
   const params = new URLSearchParams();
+  addQueryParam(params, "propertyScope", filters.propertyScope);
   addQueryParam(params, "propertyId", filters.propertyId);
   addQueryParam(params, "unitId", filters.unitId);
   addQueryParam(params, "tenancyId", filters.tenancyId);
@@ -1625,8 +1627,12 @@ const PATCH_ACTION_PATHS: Partial<Record<RentOpsMutation["action"], string>> = {
   "save-activity": "/api/rent-ops/activity",
 };
 
+export function assertWritableRentOpsTransport(previewOnly: boolean): void {
+  if (previewOnly) throw new Error("Read-only preview. No records were saved.");
+}
+
 export async function postRentOpsMutation(mutation: RentOpsMutation): Promise<RentOpsMutationResult> {
-  if (DEMO_ALLOWED) return { ok: true, message: "Demo action accepted locally; no records were written." };
+  assertWritableRentOpsTransport(DEMO_ALLOWED);
   const source = { ...mutation.payload };
   const id = typeof source.id === "string" ? source.id : undefined;
   const mutationRevision = typeof source.revision === "number" && Number.isSafeInteger(source.revision) && source.revision > 0 ? source.revision : undefined;
@@ -1669,6 +1675,14 @@ export async function postRentOpsMutation(mutation: RentOpsMutation): Promise<Re
       path = `/api/rent-ops/ledger/${encodeURIComponent(originalId)}/reverse`;
       body = { ...source };
       delete body.originalId;
+      break;
+    }
+    case "assign-application-unit": {
+      const applicationId = typeof source.applicationId === "string" ? source.applicationId : undefined;
+      if (!applicationId) throw new Error("An application is required before assigning a unit.");
+      path = `/api/rent-ops/applications/${encodeURIComponent(applicationId)}`;
+      method = "PATCH";
+      body = { revision: source.revision, propertyId: source.propertyId, unitId: source.unitId };
       break;
     }
     case "update-application-status": {

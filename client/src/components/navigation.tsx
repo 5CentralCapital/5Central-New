@@ -33,6 +33,8 @@ export default function Navigation() {
     { href: "/founder", label: "Founder" },
     { href: "/vision", label: "Vision" },
     { href: "/investor", label: "Investor" },
+    { href: "/tenant", label: "Residents" },
+    { href: "/apply", label: "Apply" },
   ];
 
   const NavLink = ({ href, label, mobile = false }: { href: string; label: string; mobile?: boolean }) => {

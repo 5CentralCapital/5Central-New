@@ -9,3 +9,9 @@ test("paid account says no payment due without masking genuine unavailable state
   assert.equal(noPaymentDueMessage({ ...account, reason: "incomplete_ledger" }), undefined);
   assert.equal(noPaymentDueMessage(undefined), undefined);
 });
+
+test("assistance review explains tenant payable hold without declaring no balance", async () => {
+  const {paymentReviewMessage}=await import("./payment-view");
+  assert.match(paymentReviewMessage({...account,reason:"assistance_responsibility_unverified"})!,/confirming your share/);
+  assert.equal(noPaymentDueMessage({...account,reason:"assistance_responsibility_unverified"}),undefined);
+});

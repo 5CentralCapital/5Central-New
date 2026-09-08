@@ -6,7 +6,9 @@ import {createRequire} from 'node:module';
 import {Client} from '@replit/object-storage';
 import {canonicalJson,sha256} from '../server/rent-ops/export/hash';
 import {createKeyedTargetIdFactory} from '../server/rent-ops/import/rm-mapper';
-import {runRestrictedMigrationArchive} from '../server/rent-ops/import/migration-runner';
+import {readRestrictedMigrationArchive,runRestrictedMigrationArchive} from '../server/rent-ops/import/migration-runner';
+import {buildRentManagerMigrationArtifact} from '../server/rent-ops/import/migration-artifact';
+import {verifyImportedFinancialControls} from '../server/rent-ops/import/financial-readiness-controls';
 import {inspectDatabaseTarget,runDatabaseAudit} from '../server/rent-ops/import/database-audit';
 import {captureRentOpsTargetState,assertEmptyRentOpsTargetState,assertIdenticalRentOpsTargetState} from '../server/rent-ops/import/target-state';
 import {APPLY_RENT_OPS_PRODUCTION_PHRASE,KNOWN_LIVE_PRIMARY_FINGERPRINT} from '../server/rent-ops/import/persistence-importer';
@@ -44,7 +46,12 @@ async function main(){
  const now=new Date();await save('operator-start.json',{startedAt:now.toISOString(),fingerprint,identity:identity.identity,receiptSha256:c.receiptSha256});
  const options:any={archiveRoot:archive,executor:ex,parityAuditExecutor:auditEx,supplementReceiptVerifier:verifier,now,managedStorageReadiness:{profile:'replit-managed-gcs',probe:async()=>{stores=await createReplitManagedGcsObjectStores({bucket,prefix:c.prefix});return stores.managedHostingReport}},restrictedVerifiedDocumentTransfer:new ProductionRestrictedVerifiedDocumentTransfer(stores.importerStorage),restrictedDocumentOrphanSink:(e:any)=>save('document-orphan.json',e),importerOptions:{targetClassification:'production',targetIdFactory:identity.factory,targetIdentity:identity.identity,expectedDatabaseFingerprint:c.expectedDatabaseFingerprint,forbiddenDatabaseFingerprints:[KNOWN_LIVE_PRIMARY_FINGERPRINT],expectedMigrationChecksum:checksum,renderedMigrationChecksum:checksum,backupAttestation:c.backupAttestation}};
  operatorStage='source_dry_run';
- const dry=await runRestrictedMigrationArchive({...options,mode:'dry_run'});assert.equal(dry.report.blockingReasons.length,0);assert.equal(dry.summary?.errorCount,0);await save('dry-run.json',dry);
+ const dry=await runRestrictedMigrationArchive({...options,mode:'dry_run'});assert.equal(dry.report.blockingReasons.length,0);assert.equal(dry.report.archiveEnvelopeSha256,c.expectedArchiveEnvelopeSha256);assert.equal(dry.summary?.errorCount,0);const occupied=(dry.databaseAuditContext?.expected.perProperty??[]).reduce((n,row)=>n+(row.currentOccupiedUnits??0),0);assert.equal(occupied,c.expectedCurrentOccupiedUnits);await save('dry-run.json',dry);
+ operatorStage='financial_readiness';
+ const controlBytes=await readFile(resolve(root,c.financialControlsPath));assert.equal(sha256(controlBytes),c.financialControlsSha256);
+ const sourceArchive=await readRestrictedMigrationArchive(archive,{supplementReceiptVerifier:verifier});
+ const sourceCandidate=buildRentManagerMigrationArtifact(sourceArchive.envelope,sourceArchive.manifest,{verifiedSupplementReceipt:sourceArchive.verifiedSupplementReceipt,targetIdFactory:identity.factory,targetIdentity:identity.identity,now});
+ await save('financial-readiness.json',verifyImportedFinancialControls(sourceCandidate.normalizedResult.snapshot,JSON.parse(controlBytes.toString())));
  let state1:any;
  for(let i=1;i<=2;i++){
  operatorStage='import_'+i;

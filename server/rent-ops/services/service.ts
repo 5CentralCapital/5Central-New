@@ -166,6 +166,18 @@ const PATCH_KNOWLEDGE: Record<RentOpsPatchEntityType, Readonly<Record<string, st
   activity: { type: "typeKnowledge", summary: "summaryKnowledge", propertyId: "propertyLinkKnowledge", unitId: "unitLinkKnowledge", personId: "personLinkKnowledge", tenancyId: "tenancyLinkKnowledge", applicationId: "applicationLinkKnowledge" },
 };
 
+/** New native records use the same explicit-field knowledge map as manual PATCH. */
+function manualCreationKnowledge<T extends RentOpsTenancy | RentOpsLeaseTerm | RentOpsProperty | RentOpsUnit | RentOpsPerson>(type: "tenancy" | "lease_term" | "property" | "unit" | "person", value: T): T {
+  if (value.source) return value;
+  const knowledge: Record<string, string> = {};
+  const fields = value as unknown as Record<string, unknown>;
+  if (fields.createdAt !== undefined && fields.createdAt !== null) knowledge.createdAtKnowledge = "manual";
+  for (const [field, marker] of Object.entries(PATCH_KNOWLEDGE[type])) {
+    if (fields[field] !== undefined && fields[field] !== null) knowledge[marker] = "manual";
+  }
+  return { ...value, ...knowledge };
+}
+
 const PATCH_COLLECTIONS: Record<RentOpsPatchEntityType, keyof RentOpsSnapshot> = {
   property: "properties",
   unit: "units",
@@ -601,18 +613,23 @@ export class RentOpsService {
   }
 
 
-  private async persistVerifiedDocument(document: RentOpsDocument, binding: RentOpsDocumentObjectBinding, requirement?: RentOpsApplicationRequirement): Promise<RentOpsDocument> {
+  private async persistVerifiedDocument(document: RentOpsDocument, binding: RentOpsDocumentObjectBinding, requirement?: RentOpsApplicationRequirement, adminActor?: string): Promise<RentOpsDocument> {
     const canBind = typeof this.repository.saveDocumentObjectBinding === "function";
     if (!canBind && !this.allowEphemeralDocumentBindings) throw new RentOpsInvariantError("Verified document storage binding is unavailable");
     try {
       await this.repository.transaction(async (repository) => {
+        if (adminActor) {
+          const currentSnapshot = await repository.getSnapshot();
+          const current = currentSnapshot.tenancies.find(t => t.id === document.tenancyId);
+          if (!current || current.primaryPersonId !== document.personId || current.propertyId !== document.propertyId || current.unitId !== document.unitId || !currentSnapshot.units.some(u => u.id === current.unitId && u.propertyId === current.propertyId) || !currentSnapshot.people.some(p => p.id === current.primaryPersonId)) throw new RentOpsInvariantError("Tenancy scope changed during upload");
+        }
         await repository.saveDocument(document);
         if (repository.saveDocumentObjectBinding) await repository.saveDocumentObjectBinding(binding);
         if (requirement) {
           await repository.saveApplicationRequirement({ ...requirement, status: "received", documentId: document.id, resolvedOn: nowIsoDate(this.now()) });
         }
-        await repository.saveActivity({ id: `activity:document:${document.id}:verified`, applicationId: document.applicationId, propertyId: document.propertyId, unitId: document.unitId, personId: document.personId, tenancyId: document.tenancyId, type: "system", occurredAt: this.now().toISOString(), actor: "system", summary: "Verified document uploaded and bound to immutable storage object" });
-      }, document.applicationId ? { lockApplicationId: document.applicationId } : undefined);
+        await repository.saveActivity({ id: `activity:document:${document.id}:verified`, applicationId: document.applicationId, propertyId: document.propertyId, unitId: document.unitId, personId: document.personId, tenancyId: document.tenancyId, type: "system", occurredAt: this.now().toISOString(), actor: adminActor ?? "system", summary: adminActor ? "Manager uploaded a verified lease PDF; signature status is not asserted" : "Verified document uploaded and bound to immutable storage object" });
+      }, document.applicationId ? { lockApplicationId: document.applicationId } : adminActor ? { lockRecord: { entityType: "tenancy", targetId: document.tenancyId! } } : undefined);
     } catch (error) {
       // The verified object remains in storage for inventory/manual review.
       // Never attempt a compensating delete in this layer.
@@ -646,6 +663,19 @@ export class RentOpsService {
     const { document, binding } = await this.buildVerifiedDocument(input, { applicationId: application.id });
     await this.persistVerifiedDocument(document, binding, requirement);
     return toApplicantPublicView(await this.snapshot(), (await this.repository.getApplicationById(application.id)) ?? application);
+  }
+
+  /** Manager asserts lease classification, never source provenance or signature status. */
+  async saveManagerLeaseFile(tenancyId: string, input: Pick<VerifiedDocumentUploadInput, "fileName" | "mimeType" | "bytes" | "stream" | "sizeBytes">, actorSubject: string): Promise<RentOpsDocument> {
+    if (!actorSubject.trim() || input.mimeType !== "application/pdf") throw new RentOpsInvariantError("Manager lease upload must be a PDF");
+    const snapshot = await this.snapshot();
+    const tenancy = snapshot.tenancies.find(t => t.id === tenancyId);
+    if (!tenancy || !snapshot.people.some(p => p.id === tenancy.primaryPersonId) || !snapshot.units.some(u => u.id === tenancy.unitId && u.propertyId === tenancy.propertyId) || !snapshot.properties.some(p => p.id === tenancy.propertyId)) throw new RentOpsInvariantError("Tenancy not found");
+    const { document, binding } = await this.buildVerifiedDocument({ ...input, type: "lease" }, { tenancyId: tenancy.id, personId: tenancy.primaryPersonId, propertyId: tenancy.propertyId, unitId: tenancy.unitId });
+    document.typeKnowledge = "manual";
+    document.stateKnowledge = "manual";
+    binding.bindingKind = "admin";
+    return this.persistVerifiedDocument(document, binding, undefined, actorSubject);
   }
 
   /** Import seam: transfer the verified RM/archive bytes before DB binding. */
@@ -866,8 +896,13 @@ export class RentOpsService {
     const scheduleId = `schedule:application:${application.id}:base-rent`;
     await this.saveRecurringScheduleRecords({ id: scheduleId, scopeType: "tenant", scopeId: person.id, scopeTypeKnowledge: "manual", scopeLinkKnowledge: "manual", chargeDefinitionId: facts.chargeDefinitionId, chargeDefinitionLinkKnowledge: "manual", tenancyId: tenancy.id, personId: person.id, propertyId: facts.propertyId, unitId: facts.unitId, category: facts.category, categoryKnowledge: "manual", description: facts.scheduleDescription, descriptionKnowledge: "manual", amountCents: facts.baseRentCents, amountKnowledge: "known", effectiveFrom: facts.contractStartOn, effectiveFromKnowledge: "manual", effectiveTo: facts.contractEndOn, active: true, activeKnowledge: "manual", sourceConfidence: "confirmed", lineageRootId: scheduleId, lineageRootOrigin: "manual", versionOrigin: "manual", versionAction: "root" }, context);
     await this.repository.saveActivity({ id: `activity:application:${application.id}:converted`, applicationId, tenancyId: tenancy.id, personId: person.id, propertyId: facts.propertyId, unitId: facts.unitId, type: "system", occurredAt: this.now().toISOString(), actor: "admin", summary: "Application converted to future tenancy from explicit approved facts" });
-    const updated: RentOpsApplicationRecord = { ...application, status: "converted", convertedTenancyId: tenancy.id, updatedAt: this.now().toISOString() };
-    await this.repository.saveApplication(updated);
+    if (!this.repository.applyRecordPatch || !this.repository.saveRecordChange) throw new RentOpsInvariantError("Application conversion persistence is unavailable");
+    const revision = application.recordRevision ?? 1;
+    const updated: RentOpsApplicationRecord = { ...application, status: "converted", statusKnowledge: "manual", convertedTenancyId: tenancy.id, updatedAt: this.now().toISOString(), updatedAtKnowledge: "manual", recordRevision: revision + 1 };
+    // Update the existing row: an UPSERT would attempt to establish its immutable
+    // imported source pair again under the runtime role before conflict handling.
+    await this.repository.applyRecordPatch({ entityType: "application", targetId: application.id, expectedRevision: revision, nextRevision: revision + 1, values: { status: updated.status, status_knowledge: "manual", converted_tenancy_id: tenancy.id, updated_at: updated.updatedAt, updated_at_knowledge: "manual" } });
+    await this.repository.saveRecordChange({ id: `record-change:${randomUUID()}`, entityType: "application", targetId: application.id, revision: revision + 1, origin: "admin", actorSubject: context.actorSubject, occurredAt: context.occurredAt, changedFields: ["status"] });
     return { application: updated, tenancy };
   }
 
@@ -957,6 +992,12 @@ export class RentOpsService {
     const introducedViolations = validateSnapshot(candidate).filter((violation) => !baselineViolations.has(violationKey(violation)));
     if (introducedViolations.length > 0) throw new RentOpsInvariantError("Patch would violate Rent Operations relationship or sibling invariants", introducedViolations);
     if (entityType === "application" && existing.status !== next.status && typeof existing.status === "string" && typeof next.status === "string") assertApplicationStatusTransition(existing.status as RentOpsApplication["status"], next.status as RentOpsApplication["status"]);
+    if (entityType === "application" && (existing.propertyId !== next.propertyId || existing.unitId !== next.unitId)) {
+      if (existing.status === "converted" || existing.convertedTenancyId) throw new RentOpsInvariantError("Converted application assignment cannot change");
+      const property = snapshot.properties.find((row) => row.id === next.propertyId);
+      const unit = snapshot.units.find((row) => row.id === next.unitId);
+      if (!property || !unit || unit.propertyId !== property.id) throw new RentOpsInvariantError("Application assignment requires an exact property and unit pair");
+    }
     if (entityType === "tenancy") {
       const tenancy = next as unknown as RentOpsTenancy;
       const unit = snapshot.units.find((candidate) => candidate.id === tenancy.unitId);
@@ -996,9 +1037,9 @@ export class RentOpsService {
     }
   }
 
-  async saveProperty(property: RentOpsProperty): Promise<RentOpsProperty> { if ((await this.snapshot()).properties.some((candidate) => candidate.id === property.id)) throw new RentOpsInvariantError("Property already exists; use PATCH for an existing record"); const saved = await this.repository.saveProperty(property); await this.recordAdminChange(`Property ${property.name} saved`, { propertyId: property.id }); return saved; }
-  async saveUnit(unit: RentOpsUnit): Promise<RentOpsUnit> { if ((await this.snapshot()).units.some((candidate) => candidate.id === unit.id)) throw new RentOpsInvariantError("Unit already exists; use PATCH for an existing record"); const saved = await this.repository.saveUnit(unit); await this.recordAdminChange(`Unit ${unit.unitNumber} saved`, { propertyId: unit.propertyId, unitId: unit.id }); return saved; }
-  async savePerson(person: RentOpsPerson): Promise<RentOpsPerson> { if ((await this.snapshot()).people.some((candidate) => candidate.id === person.id)) throw new RentOpsInvariantError("Person already exists; use PATCH for an existing record"); const saved = await this.repository.savePerson(person); await this.recordAdminChange(`Person ${person.firstName} ${person.lastName} saved`, { personId: person.id }); return saved; }
+  async saveProperty(property: RentOpsProperty): Promise<RentOpsProperty> { if ((await this.snapshot()).properties.some((candidate) => candidate.id === property.id)) throw new RentOpsInvariantError("Property already exists; use PATCH for an existing record"); const saved = await this.repository.saveProperty(manualCreationKnowledge("property", property)); await this.recordAdminChange(`Property ${property.name} saved`, { propertyId: property.id }); return saved; }
+  async saveUnit(unit: RentOpsUnit): Promise<RentOpsUnit> { if ((await this.snapshot()).units.some((candidate) => candidate.id === unit.id)) throw new RentOpsInvariantError("Unit already exists; use PATCH for an existing record"); const saved = await this.repository.saveUnit(manualCreationKnowledge("unit", unit)); await this.recordAdminChange(`Unit ${unit.unitNumber} saved`, { propertyId: unit.propertyId, unitId: unit.id }); return saved; }
+  async savePerson(person: RentOpsPerson): Promise<RentOpsPerson> { if ((await this.snapshot()).people.some((candidate) => candidate.id === person.id)) throw new RentOpsInvariantError("Person already exists; use PATCH for an existing record"); const saved = await this.repository.savePerson(manualCreationKnowledge("person", person)); await this.recordAdminChange(`Person ${person.firstName} ${person.lastName} saved`, { personId: person.id }); return saved; }
   async saveHouseholdMembership(membership: RentOpsHouseholdMembership): Promise<RentOpsHouseholdMembership> { if ((await this.snapshot()).householdMemberships.some((candidate) => candidate.id === membership.id)) throw new RentOpsInvariantError("Household membership already exists; use PATCH for an existing record"); const saved = await this.repository.saveHouseholdMembership(membership); await this.recordAdminChange(`Household membership ${membership.id} saved`, { tenancyId: membership.tenancyId, personId: membership.personId }); return saved; }
   async saveTenancy(tenancy: RentOpsTenancy): Promise<RentOpsTenancy> {
     const snapshot = await this.snapshot();
@@ -1011,7 +1052,7 @@ export class RentOpsService {
     const peers = snapshot.tenancies.filter((candidate) => candidate.id !== tenancy.id && candidate.unitId === tenancy.unitId);
     if ((tenancy.status === "current" || tenancy.status === "notice") && peers.some((candidate) => candidate.status === "current" || candidate.status === "notice")) throw new RentOpsInvariantError("Unit already has a current or notice tenancy");
     if (tenancy.status === "future" && peers.some((candidate) => candidate.status === "future")) throw new RentOpsInvariantError("Unit already has a future tenancy");
-    const saved = await this.repository.saveTenancy(tenancy);
+    const saved = await this.repository.saveTenancy(manualCreationKnowledge("tenancy", tenancy));
     await this.recordAdminChange(`Tenancy ${tenancy.id} saved`, { propertyId: tenancy.propertyId, unitId: tenancy.unitId, personId: tenancy.primaryPersonId, tenancyId: tenancy.id });
     return saved;
   }
@@ -1024,7 +1065,7 @@ export class RentOpsService {
     const candidate = { ...snapshot, leaseTerms: [...snapshot.leaseTerms.filter((existing) => existing.id !== term.id), term] };
     const violations = validateSnapshot(candidate).filter((violation) => violation.code === "overlapping_lease_terms");
     if (violations.length) throw new RentOpsInvariantError("Lease term overlaps an existing term", violations);
-    const saved = await this.repository.saveLeaseTerm(term);
+    const saved = await this.repository.saveLeaseTerm(manualCreationKnowledge("lease_term", term));
     await this.recordAdminChange(`Lease term ${term.id} saved`, { tenancyId: term.tenancyId });
     return saved;
   }

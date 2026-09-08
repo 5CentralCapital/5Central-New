@@ -1,3 +1,6 @@
+import {isExactNativeAccountEntry} from "../domain/account-ledger";
+import { tenantAccountLedgerRows } from "../domain/account-ledger";
+export { tenantAccountLedgerRows } from "../domain/account-ledger";
 import { isTenantLeaseFile, tenantLeaseFile } from "./lease-files";
 import type { RentOpsSnapshot, RentOpsTenancy, RentOpsLedgerTransaction } from "../../../shared/rent-ops-contracts";
 import type { TenantEligibleTenancy, TenantHome, TenantIdentity } from "../../../shared/tenant-portal-contracts";
@@ -35,7 +38,7 @@ export function eligibleTenantTenancies(snapshot: RentOpsSnapshot): TenantEligib
     const property = snapshot.properties.find((row) => row.id === tenancy.propertyId)!;
     const unit = snapshot.units.find((row) => row.id === tenancy.unitId)!;
     return [{ personId: person.id, tenancyId: tenancy.id, personName: [person.firstName, person.lastName].filter(Boolean).join(" "),
-      email: person.email ?? null, propertyName: property.name || "Property", unitNumber: unit.unitNumber || "Unit", status: tenancy.status }];
+      email: person.email ?? null, paymentReviewReason: person.paymentReviewReason ?? null, propertyName: property.name || "Property", unitNumber: unit.unitNumber || "Unit", status: tenancy.status }];
   });
 }
 
@@ -66,13 +69,15 @@ export function presentTenantHome(snapshot: RentOpsSnapshot, account: TenantIden
   const property = snapshot.properties.find((row) => row.id === tenancy.propertyId)!;
   const unit = snapshot.units.find((row) => row.id === tenancy.unitId)!;
   let complete = true;
-  const candidateRows = snapshot.ledgerTransactions.filter((row) => row.tenancyId === tenancy.id);
+  const candidateRows = tenantAccountLedgerRows(snapshot, account);
+  const scopedIds = new Set(candidateRows.map(row => row.id));
   // Preserve uncertainty when a person's imported account entries do not
   // resolve to a specific tenancy; never silently declare those amounts zero.
-  if (snapshot.ledgerTransactions.some((row) => row.personId === person.id && (!row.tenancyId || !exactLink(row.tenancyLinkKnowledge, sourceStrict(snapshot, row))))) complete = false;
+  if (snapshot.ledgerTransactions.some((row) => row.personId === person.id && !scopedIds.has(row.id))) complete = false;
   const rows = candidateRows.filter((row) => {
     const strict = sourceStrict(snapshot, row);
-    if (!exactLink(row.tenancyLinkKnowledge, strict) || (row.propertyId && row.propertyId !== tenancy.propertyId) || (row.unitId && row.unitId !== tenancy.unitId) || (row.personId && row.personId !== person.id)) {
+    const importedAccountRow = person.source?.system === "rent_manager" && /^(?:tenant:)?[0-9]+$/.test(person.source.sourceId) && row.source?.system === "rent_manager" && row.source.entityType === "ledger_transaction" && /^[a-f0-9]{64}$/.test(row.sourceArtifactSha256 ?? "") && row.personId === person.id && row.personLinkKnowledge === "exact";
+    if ((!importedAccountRow && !isExactNativeAccountEntry(snapshot,row,person.id) && (!exactLink(row.tenancyLinkKnowledge, strict) || (row.propertyId && row.propertyId !== tenancy.propertyId) || (row.unitId && row.unitId !== tenancy.unitId))) || (row.personId && row.personId !== person.id)) {
       complete = false;
       return false;
     }

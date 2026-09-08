@@ -248,7 +248,7 @@ const FINANCIAL_SEMANTIC_SOURCE_FIELDS: Record<FinancialSemanticKind, readonly s
   // semantic kind closed for future supplements, but do not admit an
   // unobserved parallel namespace into the production crosswalk.
   lease_status: [],
-  ledger_status: [],
+  ledger_status: ["charges\u0000TransactionType", "payments\u0000TransactionType", "credits\u0000TransactionType"],
   charge_category: ["chargeTypes\u0000ChargeTypeID"],
   charge_definition_active: ["chargeTypes\u0000IsActive"],
   recurring_active: [],
@@ -426,6 +426,10 @@ export interface RentOpsUnit {
 
 export interface RentOpsPerson {
   id: string;
+  /** Source-backed review uncertainty, never a subsidy amount or contract. */
+  paymentReviewReason?: "assistance_responsibility_unverified" | null;
+  paymentReviewArtifactSha256?: string | null;
+  paymentReviewSourceReference?: string | null;
   recordRevision?: number;
   source?: SourceRef;
   firstName: string;
@@ -908,7 +912,7 @@ export interface RentOpsDocument {
 export interface RentOpsDocumentObjectBinding {
   documentId: string;
   /** Applicant uploads and restricted import transfers are separate trust domains. */
-  bindingKind: "applicant" | "import";
+  bindingKind: "applicant" | "import" | "admin";
   /** Exact restricted source-binary row for an imported archive transfer. */
   sourceBinaryId?: string;
   /** Must be the import run referenced by sourceBinaryId for an import binding. */
@@ -1324,6 +1328,12 @@ export const emptyRentOpsSnapshot = (): RentOpsSnapshot => ({
 });
 
 export interface RentOpsFilters {
+  /**
+   * Operational reports may opt into the active portfolio. The omitted
+   * value intentionally preserves the complete imported snapshot for
+   * migration/audit callers; admin preview routes choose "active" explicitly.
+   */
+  propertyScope?: "active" | "all";
   propertyId?: string;
   unitId?: string;
   tenancyId?: string;
@@ -1339,6 +1349,7 @@ export interface RentOpsFilters {
 }
 
 export const rentOpsFiltersSchema = z.object({
+  propertyScope: z.enum(["active", "all"]).optional(),
   propertyId: idSchema.optional(),
   unitId: idSchema.optional(),
   tenancyId: idSchema.optional(),
@@ -1884,7 +1895,18 @@ export interface RentManagerApplicationStatusCrosswalkEntry {
   targetStatus: ApplicationStatus;
 }
 
+export interface RentManagerFinancialReviewHold {
+  tenantSourceId: string;
+  reason: "assistance_responsibility_unverified";
+  artifactSha256: string;
+  evidenceCollection: "tenants" | "payments";
+  evidenceSourceId: string;
+  evidenceRecordSha256: string;
+  sourceReference: string;
+}
+
 export interface RentManagerImportInput {
+  financialReviewHolds?: RentManagerFinancialReviewHold[];
   properties?: RentManagerRawRecord[];
   units?: RentManagerRawRecord[];
   tenants?: RentManagerRawRecord[];

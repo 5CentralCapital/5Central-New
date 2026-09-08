@@ -161,3 +161,11 @@ test("insert-only source payload retries verify the existing conflict instead of
     /restricted_source_payload_conflict/u,
   );
 });
+
+
+test("source-bound financial review holds are metadata, while actual source identities stay required",()=>{
+ const input=context();const payload=(input.input as {payload:Record<string,unknown>}).payload;
+ payload.financialReviewHolds=[{tenantSourceId:"7",reason:"assistance_responsibility_unverified",artifactSha256:"a".repeat(64),evidenceRecordSha256:"b".repeat(64),sourceReference:"export-envelope.json#/payload/tenants/0"}];
+ const summary=restrictedSourcePayloadControlSummary(input);assert.equal(summary.payloadCount,3);assert.equal(summary.collectionCounts.financialReviewHolds,undefined);assert.deepEqual(summary.blockingReasons,[]);
+ payload.actualSourceRows=[{Amount:1}];assert.throws(()=>restrictedSourcePayloadControlSummary(input),/restricted_source_identity_missing/);
+});

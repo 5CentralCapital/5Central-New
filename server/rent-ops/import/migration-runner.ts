@@ -1,3 +1,4 @@
+import { effectiveFidelityScheduleAmounts } from './schedule-report-controls';
 import { verifyManagedStorageReadiness, type ManagedStorageReadiness } from "./managed-storage-readiness";
 import { ALLOCATION_OVERLAY_FILE, verifyAllocationOverlay } from "./allocation-overlay";
 import { FINANCIAL_METADATA_PROVENANCE_FILE, verifyFinancialMetadata } from "./financial-metadata";
@@ -968,9 +969,7 @@ function expectedFidelityControls(snapshot: RentOpsSnapshot, sourceRecords: read
   const contractSources = sourceRecords.filter((row) => row.entityType === "subsidy");
   const tenantSources = sourceRecords.filter((row) => row.entityType === "subsidy_tenant");
   const paymentSources = sourceRecords.filter((row) => row.entityType === "subsidy_payment");
-  const activeSchedules = schedules.filter((schedule) => schedule.active !== false
-    && (!schedule.effectiveFrom || schedule.effectiveFrom <= asOfDate)
-    && (!schedule.effectiveTo || schedule.effectiveTo >= asOfDate));
+  const effectiveAmounts = effectiveFidelityScheduleAmounts(snapshot, asOfDate);
   const knownTenantDates = tenants.filter((row) => row.effectiveFrom !== undefined && row.effectiveFromKnowledge === "source" && row.effectiveTo !== undefined && row.effectiveToKnowledge === "source");
   const knownPaymentDates = payments.filter((row) => row.paymentOn !== undefined && row.paymentOnKnowledge === "source");
   const childAmountControls = (rows: readonly (RentOpsSubsidyTenant | RentOpsSubsidyPayment)[]) => ({
@@ -994,8 +993,8 @@ function expectedFidelityControls(snapshot: RentOpsSnapshot, sourceRecords: read
     schedule_known_start_amount_cents: sumAmounts(schedules.filter((row) => row.effectiveFrom !== undefined && row.effectiveFromKnowledge === "source"), (row) => row.amountCents),
     schedule_unknown_start_count: schedules.filter((row) => row.effectiveFrom === undefined || row.effectiveFromKnowledge === "unknown_open_start").length,
     schedule_unknown_start_amount_cents: sumAmounts(schedules.filter((row) => row.effectiveFrom === undefined || row.effectiveFromKnowledge === "unknown_open_start"), (row) => row.amountCents),
-    effective_base_rent_cents_independent: sumAmounts(activeSchedules.filter((row) => row.category === "base_rent"), (row) => row.amountCents),
-    effective_recurring_fees_cents_independent: sumAmounts(activeSchedules.filter((row) => row.category === "recurring_fee"), (row) => row.amountCents),
+    effective_base_rent_cents_independent: effectiveAmounts.baseRentCents,
+    effective_recurring_fees_cents_independent: effectiveAmounts.recurringFeesCents,
     deposit_row_count: deposits.length,
     deposit_source_row_count: depositSources.length,
     deposit_distinct_target_identity_count: distinctSourceCount(deposits.flatMap((row) => row.source ? [{ ...row.source, entityType: "deposit" as const, id: row.id, importedAt: "", targetId: row.id }] : [])),

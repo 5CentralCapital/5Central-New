@@ -1,3 +1,4 @@
+import type { FinancialProtocolPlan } from "./financial-protocol";
 import { constants } from "node:fs";
 import { chmod, cp, lstat, mkdir, mkdtemp, open, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
@@ -7,7 +8,7 @@ import { OBSERVATION_PROVENANCE_FILE } from "./observation-boundary";
 import { deriveFinancialMetadata, FINANCIAL_METADATA_PROVENANCE_FILE } from "./financial-metadata";
 
 /** Local-only metadata repair. Never overwrites or mutates the sealed source. */
-export async function writeFinancialMetadataArchive(archiveRoot: string, derivativeRoot: string) {
+export async function writeFinancialMetadataArchive(archiveRoot: string, derivativeRoot: string, protocolPlan?: FinancialProtocolPlan) {
   if (![archiveRoot, derivativeRoot].every((path) => isAbsolute(path) && !path.split(/[\\/]/).includes(".."))) throw new Error("financial_metadata_archive_path_invalid");
   const source = await realpath(archiveRoot), destination = resolve(derivativeRoot);
   if (source === destination || !relative(source, destination).startsWith("..")) throw new Error("financial_metadata_archive_must_be_distinct");
@@ -27,7 +28,7 @@ export async function writeFinancialMetadataArchive(archiveRoot: string, derivat
   const observationHandle = await open(join(source, OBSERVATION_PROVENANCE_FILE), constants.O_RDONLY | constants.O_NOFOLLOW);
   let observationBytes: Buffer;
   try { observationBytes = await observationHandle.readFile(); } finally { await observationHandle.close(); }
-  const derived = deriveFinancialMetadata(archive.envelope, archive.manifest, checkpoint, observationBytes);
+  const derived = deriveFinancialMetadata(archive.envelope, archive.manifest, checkpoint, observationBytes, protocolPlan);
   const staging = await mkdtemp(join(parent, ".financial-metadata-"));
   await chmod(staging, 0o700);
   try {

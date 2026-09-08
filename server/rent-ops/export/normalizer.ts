@@ -1803,6 +1803,7 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
     // Preserve an invalid explicit claim for the mapper's exact-one/artifact
     // gate; never replace it with the first array member or erase the reason.
     financialSemanticCrosswalk: financialCrosswalkSelection.valid ? financialCrosswalk : financialCrosswalkValue,
+    ...(payload.financialReviewHolds ? { financialReviewHolds: payload.financialReviewHolds.map(row => ({...row})) } : {}),
     credits: credits,
     ...(options.artifactObservationOn ?? payload.artifactObservationOn ? { artifactObservationOn: options.artifactObservationOn ?? payload.artifactObservationOn } : {}),
   };
