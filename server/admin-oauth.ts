@@ -66,7 +66,10 @@ export function registerManagerOAuthRoutes(app: Express, options: Options) {
         audience: config.resource, scope: `openid ${READ_SCOPE}`, connection: "google-oauth2", state,
         code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256" }).toString();
       res.redirect(302, url.toString());
-    } catch { console.error("manager_oauth_start_unavailable", { stage }); res.status(503).send("Manager sign-in is temporarily unavailable."); }
+    } catch (error) {
+      const rawCode = error && typeof error === "object" && "code" in error ? error.code : undefined;
+      const code = typeof rawCode === "string" && (/^[0-9A-Z]{5}$/.test(rawCode) || ["ECONNREFUSED", "ETIMEDOUT", "ENOTFOUND"].includes(rawCode)) ? rawCode : "unclassified";
+      console.error("manager_oauth_start_unavailable", { stage, code }); res.status(503).send("Manager sign-in is temporarily unavailable."); }
   });
   app.get("/api/rent-ops/auth/oauth/callback", async (req, res) => {
     res.set({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
