@@ -218,3 +218,24 @@ test("unknown cadence blocks billing until an explicit monthly successor is conf
  assert.equal(previewRecurringBilling(data,"2025-05").readyCount,1);
  assert.equal(original.billingFrequency,null);
 });
+
+test('unknown-active imported schedule can end and become a new confirmed monthly root without duplicate billing',async()=>{
+ const {RentOpsService}=await import('../services/service');const {SyntheticRentOpsRepository}=await import('../repositories/synthetic');
+ const data=fixture();const original=data.snapshot.recurringSchedules[0];
+ Object.assign(original,{active:null,activeKnowledge:'unknown',billingFrequency:null,effectiveFromKnowledge:'source',lineageRootOrigin:'artifact',versionOrigin:'artifact',source:{system:'rm',sourceId:'source-rent'},sourceArtifactSha256:'a'.repeat(64),artifactObservationOn:'2025-01-01'});
+ const originalBefore=structuredClone(original);
+ const repository=new SyntheticRentOpsRepository(data.snapshot);const service=new RentOpsService(repository);
+ const context={actorSubject:'qa-admin',occurredAt:'2025-04-30T12:00:00.000Z'};
+ await service.createChargeDefinition({id:original.chargeDefinitionId!,displayName:'Rent',category:'base_rent',active:true},context);
+ const end=await service.saveRecurringScheduleSuccessor(original.id,{id:'qa-ended-source',expectedRevision:1,action:'end',effectiveFrom:'2025-05-01'},context);
+ assert.equal(end.versionAction,'end');assert.equal(end.active,false);
+ assert.equal(previewRecurringBilling({snapshot:await service.snapshot(),receipts:[]},'2025-05').readyCount,0);
+ await service.saveRecurringSchedule({id:'qa-new-monthly',scopeType:'tenant',scopeId:original.personId!,personId:original.personId,tenancyId:original.tenancyId,propertyId:original.propertyId,unitId:original.unitId,chargeDefinitionId:original.chargeDefinitionId,category:'base_rent',description:'Confirmed monthly rent',amountCents:125000,effectiveFrom:'2025-05-01',active:true,billingFrequency:'monthly',lineageRootId:'qa-new-monthly',lineageRootOrigin:'manual',versionOrigin:'manual',versionAction:'root'},context);
+ const snapshot=await service.snapshot();assert.deepEqual(snapshot.recurringSchedules.find(row=>row.id===original.id),originalBefore);
+ const projected=previewRecurringBilling({snapshot,receipts:[]},'2025-05');
+ assert.equal(projected.readyCount,1);assert.equal(projected.readyCents,125000);assert.deepEqual(projected.rows.filter(row=>row.status==='ready').map(row=>row.scheduleId),['qa-new-monthly']);
+ assert.equal(projected.rows.some(row=>row.scheduleId===original.id),false);
+ const store=memoryStore({snapshot,receipts:[]});const billing=new RecurringBillingService(store);
+ const result=await billing.post({month:'2025-05',previewToken:projected.previewToken,actorSubject:'qa-admin'});assert.equal(result.postedCount,1);
+ const replay=await billing.post({month:'2025-05',previewToken:projected.previewToken,actorSubject:'qa-admin'});assert.equal(replay.postedCount,0);assert.equal(replay.alreadyPostedCount,1);
+});
