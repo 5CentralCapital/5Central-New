@@ -30,3 +30,13 @@ test("applicant HTML is non-cacheable and sends no referrer", () => {
   assert.equal(headers.get("Permissions-Policy"), "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
   assert.equal(nextCalled, true);
 });
+
+test('only tenant pages permit the same-origin PDF worker; no eval, frames or external workers',()=>{
+ for(const path of ['/tenant','/tenant?payment=returned','/apply','/tenant-other']){
+  const headers=new Map<string,string>();
+  applicantPageSecurityHeaders({originalUrl:path} as never,{setHeader:(key:string,value:string)=>headers.set(key,value)} as never,()=>{});
+  const policy=headers.get('Content-Security-Policy')!;
+  assert.ok(policy.includes(`worker-src ${path==='/tenant'||path.startsWith('/tenant?')?"'self'":"'none'"}`));
+  assert.ok(!policy.includes('unsafe-eval'));assert.ok(!policy.includes('blob:'));assert.ok(policy.includes("object-src 'none'"));
+ }
+});

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowRight, Building2, Check, CreditCard, FileDown, Loader2, LockKeyhole, LogOut, RefreshCw } from "lucide-react";
 import type { TenantHome } from "@shared/tenant-portal-contracts";
 import { TenantApiError, TenantPortalClient, trustedCheckoutUrl, type TenantPayments, type TenantSessionAccount } from "./api";
@@ -6,6 +6,7 @@ import { centsFromAmount, consumeActivationLink, type ActivationLink } from "./l
 import { noPaymentDueMessage } from "./payment-view";
 import { depositAmounts } from "./deposit-view";
 import "./tenant-portal.css";
+const LeaseViewer=lazy(()=>import("./lease-viewer").then(module=>({default:module.LeaseViewer})));
 
 function money(cents: number | null | undefined): string {
   return typeof cents === "number" && Number.isSafeInteger(cents)
@@ -117,6 +118,7 @@ export default function TenantPortal() {
   const [link, setLink] = useState(() => consumeActivationLink(window.location, window.history));
   const [client] = useState(() => new TenantPortalClient());
   const [account, setAccount] = useState<TenantSessionAccount | null>(null);
+  const [viewLease,setViewLease]=useState<{id:string;fileName:string}>();
   const [home, setHome] = useState<TenantHome | null>(null);
   const [payments, setPayments] = useState<TenantPayments | null>(null);
   const [loading, setLoading] = useState(!link.token);
@@ -126,7 +128,7 @@ export default function TenantPortal() {
   const mounted = useRef(true);
   const generation = useRef(0);
   function handleError(caught: unknown) {
-    if (caught instanceof TenantApiError && caught.status === 401) { generation.current++; client.clear(); setAccount(null); setHome(null); setPayments(null); }
+    if (caught instanceof TenantApiError && caught.status === 401) { generation.current++; client.clear(); setAccount(null); setViewLease(undefined); setHome(null); setPayments(null); }
     setError(errorText(caught));
   }
   async function refresh() {
@@ -158,7 +160,7 @@ export default function TenantPortal() {
     function acceptLink() {
       if (!window.location.hash) return;
       const next = consumeActivationLink(window.location, window.history);
-      generation.current++; client.clear(); setAccount(null); setHome(null); setPayments(null);
+      generation.current++; client.clear(); setAccount(null); setViewLease(undefined); setHome(null); setPayments(null);
       setLink(next); setLoading(false); setError(""); setMessage("");
     }
     window.addEventListener("hashchange", acceptLink);
@@ -167,7 +169,7 @@ export default function TenantPortal() {
   useEffect(() => { if (account) void refresh(); }, [account?.id]);
   async function logout() {
     setError("");
-    try { await client.logout(); generation.current++; setHome(null); setPayments(null); setAccount(null); setMessage(""); }
+    try { await client.logout(); generation.current++; setHome(null); setPayments(null); setViewLease(undefined); setAccount(null); setMessage(""); }
     catch (caught) { handleError(caught); }
   }
   return <div className="tp-root"><header className="tp-header"><a href="/tenant" aria-label="5Central tenant portal" className="tp-brand"><span>5C</span><strong>5Central Capital</strong><em>Tenant portal</em></a>{account && <button className="tp-secondary" onClick={logout}><LogOut />Sign out</button>}</header><main className="tp-main">
@@ -177,7 +179,8 @@ export default function TenantPortal() {
       <div className="tp-greeting"><div><p>{home.tenancy.propertyName} · Unit {home.tenancy.unitNumber}</p><h1>Hello, {home.resident.firstName || "resident"}.</h1><p>{home.tenancy.address}</p></div><button className="tp-secondary" onClick={refresh} disabled={refreshing}><RefreshCw className={refreshing ? "tp-spin" : ""} />Refresh</button></div>
       <div className="tp-overview"><section className="tp-balance"><span>Account balance</span><strong>{home.balance.complete ? money(home.balance.amountCents) : "Unavailable"}</strong><p>{home.balance.complete ? `As of ${date(home.balance.asOfDate)}${(home.balance.amountCents ?? 0) < 0 ? " · Account credit" : ""}` : "Your balance needs confirmation. Contact management before making a payment."}</p></section><PaymentPanel client={client} payments={payments} tenancyId={home.tenancy.id} onError={handleError} /></div>
       <section className="tp-card tp-ledger"><h2>Account activity</h2>{!home.ledger.length ? <p>No transactions are available.</p> : <div className="tp-table-wrap"><table><thead><tr><th>Date</th><th>Activity</th><th>Type</th><th className="tp-money">Amount</th><th className="tp-money">Balance</th></tr></thead><tbody>{home.ledger.map((entry) => <tr key={entry.id}><td>{date(entry.date)}</td><td>{entry.description}<small>{entry.status && label(entry.status)}</small></td><td>{label(entry.kind)}</td><td className="tp-money">{money(entry.amountCents)}</td><td className="tp-money">{money(entry.balanceCents)}</td></tr>)}</tbody></table></div>}</section>
-      <div className="tp-detail-grid"><section className="tp-card"><h2>Your lease</h2>{home.leases.length ? home.leases.map((lease) => <div className="tp-lease" key={lease.id}><strong>{label(lease.status)}</strong><dl><div><dt>Starts</dt><dd>{date(lease.startDate)}</dd></div><div><dt>Ends</dt><dd>{lease.monthToMonth === true ? "Month to month" : date(lease.endDate)}</dd></div></dl></div>) : <p>Your lease details are not available yet.</p>}{home.leaseFiles.length ? <div className="tp-lease-files"><h3>Lease documents</h3>{home.leaseFiles.map((file) => <a className="tp-secondary" key={file.id} href={`/api/tenant/lease-files/${encodeURIComponent(file.id)}/download`}><FileDown aria-hidden="true" />{file.fileName}</a>)}</div> : <p>No verified lease PDF is available yet. Contact management for a copy.</p>}{!!home.deposits.length && <><h3>Deposits</h3>{home.deposits.map((deposit) => { const amounts = depositAmounts(deposit); return <div className="tp-deposit" key={deposit.id}><span>{label(deposit.type)}<small>{label(deposit.status)}</small></span><span className="tp-money"><strong>{amounts.held}</strong><small>Amount held</small>{amounts.sourceBalance !== undefined && <small>Source balance {amounts.sourceBalance}</small>}</span></div>; })}</>}</section><PasswordPanel client={client} onError={handleError} onChanged={() => { setMessage("Your password was updated. Other sessions have been signed out."); }} /></div>
+      {viewLease && <Suspense fallback={<p role="status">Opening lease viewer…</p>}><LeaseViewer key={viewLease.id} {...viewLease} onClose={()=>setViewLease(undefined)} onError={handleError} /></Suspense>}
+      <div className="tp-detail-grid"><section className="tp-card"><h2>Your lease</h2>{home.leases.length ? home.leases.map((lease) => <div className="tp-lease" key={lease.id}><strong>{label(lease.status)}</strong><dl><div><dt>Starts</dt><dd>{date(lease.startDate)}</dd></div><div><dt>Ends</dt><dd>{lease.monthToMonth === true ? "Month to month" : date(lease.endDate)}</dd></div></dl></div>) : <p>Your lease details are not available yet.</p>}{home.leaseFiles.length ? <div className="tp-lease-files"><h3>Lease documents</h3>{home.leaseFiles.map((file) => <button type="button" className="tp-secondary" key={file.id} onClick={()=>setViewLease(file)}><FileDown aria-hidden="true" />View {file.fileName}</button>)}</div> : <p>No verified lease PDF is available yet. Contact management for a copy.</p>}{!!home.deposits.length && <><h3>Deposits</h3>{home.deposits.map((deposit) => { const amounts = depositAmounts(deposit); return <div className="tp-deposit" key={deposit.id}><span>{label(deposit.type)}<small>{label(deposit.status)}</small></span><span className="tp-money"><strong>{amounts.held}</strong><small>Amount held</small>{amounts.sourceBalance !== undefined && <small>Source balance {amounts.sourceBalance}</small>}</span></div>; })}</>}</section><PasswordPanel client={client} onError={handleError} onChanged={() => { setMessage("Your password was updated. Other sessions have been signed out."); }} /></div>
     </>}
   </main></div>;
 }

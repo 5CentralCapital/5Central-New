@@ -84,3 +84,5 @@
 
 .tp-lease-files { display: grid; gap: .75rem; margin-top: 1.25rem; }
 .tp-lease-files a { justify-content: flex-start; text-decoration: none; overflow-wrap: anywhere; }
+
+.tp-pdf-viewer{background:#F5F0E8;border:1px solid #d5d0c8;border-radius:12px;padding:20px;margin:24px 0}.tp-pdf-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}.tp-pdf-toolbar h3{margin:0;overflow-wrap:anywhere}.tp-pdf-toolbar select{padding:8px;background:white;border:1px solid #aaa;border-radius:5px}.tp-pdf-page{overflow:auto;max-height:75vh;background:#ddd;padding:12px;text-align:center}.tp-pdf-page canvas{background:white;box-shadow:0 1px 6px #999}.tp-pdf-text{white-space:pre-wrap;line-height:1.7}.tp-pdf-viewer details{margin-top:12px}

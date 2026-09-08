@@ -15,13 +15,13 @@ export function privatePortalHtml(html: string, url: string): string {
 }
 
 /** Protects token-bearing applicant SPA URLs before any HTML is served. */
-export const applicantPageSecurityHeaders: RequestHandler = (_req, res, next) => {
+export const applicantPageSecurityHeaders: RequestHandler = (req, res, next) => {
   // The applicant bundle is self-contained. Keep the policy deliberately
   // narrow because a resume credential can be present in the URL fragment
   // before the SPA consumes and removes it.
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; media-src 'none'; worker-src 'none';",
+    `default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; media-src 'none'; worker-src ${/^\/tenant(?:\/|\?|$)/.test(req.originalUrl) ? "'self'" : "'none'"};`,
   );
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Cache-Control", "no-store");
