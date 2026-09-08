@@ -20,11 +20,11 @@ test('credit application reduces charge only when applied and never counts credi
  for(const modelVersion of [2,3] as const){snapshot.modelVersion=modelVersion;assert.deepEqual(deriveCollectedIncome(snapshot,{month:'2026-08',asOfDate:'2026-08-06'}),[]);}
  snapshot.modelVersion=original.modelVersion;assert.deepEqual(snapshot,original);
 });
-test('unresolved links and negative credit applications do not reduce charges',()=>{
+test('unresolved links and negative credit applications keep derived balances unavailable',()=>{
  for(const invalid of ['link','negative'] as const){
   const {snapshot,tenancyId}=fixture();
   if(invalid==='link')snapshot.paymentAllocations[0].creditLinkKnowledge='unknown';else snapshot.paymentAllocations[0].amountCents=-3000;
-  assert.equal(deriveTenantLedger(snapshot,tenancyId,{asOfDate:'2026-08-06'})[0].openCents,10000);
+  const row=deriveTenantLedger(snapshot,tenancyId,{asOfDate:'2026-08-06'})[0]; assert.equal(row.openCents,null); assert.equal(row.transaction.amountCents,10000); assert.equal(row.balanceComplete,false);
  }
 });
 test('reversed credit reopens its applied charge without inferred negative allocations',()=>{

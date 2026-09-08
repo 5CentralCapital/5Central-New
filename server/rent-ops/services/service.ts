@@ -442,6 +442,12 @@ export class RentOpsService {
 
   async snapshot(): Promise<RentOpsSnapshot> { return this.repository.getSnapshot(); }
 
+  async chargeDefinitions(): Promise<RentOpsChargeDefinition[]> {
+    return this.repository.getChargeDefinitions
+      ? this.repository.getChargeDefinitions()
+      : (await this.snapshot()).chargeDefinitions;
+  }
+
   /**
    * Read one immutable v9 historical case through the repository boundary.
    * The route owns the positive serializer; this service method deliberately

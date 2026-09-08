@@ -1011,6 +1011,11 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     return result.rows;
   }
 
+  async getChargeDefinitions(): Promise<RentOpsChargeDefinition[]> {
+    await this.assertReady();
+    return (await this.rows("rent_ops_charge_definitions")).map(rowToChargeDefinition);
+  }
+
   async getPublicInventory(): Promise<Pick<RentOpsSnapshot, "properties" | "units" | "tenancies">> {
     await this.assertReady();
     const load = async (executor: RentOpsQueryExecutor) => {

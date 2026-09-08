@@ -1372,6 +1372,8 @@ export const rentOpsFiltersSchema = z.object({
 }).strict();
 
 export interface RentRollRow {
+  balanceComplete?: boolean;
+  balanceUncertaintyCodes?: string[];
   propertyId: string;
   propertyName: string;
   unitId: string;
@@ -1399,7 +1401,7 @@ export interface RentRollRow {
   subsidyCents: Cents;
   tenantPortionCents?: Cents;
   totalScheduledCents: Cents;
-  balanceDueCents: Cents;
+  balanceDueCents: Cents | null;
   oldestUnpaidRentOn?: IsoDate;
   exceptionCodes: string[];
 }
@@ -1480,6 +1482,8 @@ export interface ScheduledVsCollectedRow {
 }
 
 export interface DelinquencyRow {
+  balanceComplete?: boolean;
+  balanceUncertaintyCodes?: string[];
   propertyId: string;
   propertyName: string;
   unitId?: string;
@@ -1487,13 +1491,13 @@ export interface DelinquencyRow {
   tenancyId: string;
   personId: string;
   tenantName: string;
-  rentOnlyBalanceCents: Cents;
-  nonRentBalanceCents: Cents;
-  grossBalanceCents: Cents;
-  totalBalanceCents: Cents;
-  netAccountBalanceCents: Cents;
-  unappliedCashCents: Cents;
-  prepaidCents: Cents;
+  rentOnlyBalanceCents: Cents | null;
+  nonRentBalanceCents: Cents | null;
+  grossBalanceCents: Cents | null;
+  totalBalanceCents: Cents | null;
+  netAccountBalanceCents: Cents | null;
+  unappliedCashCents: Cents | null;
+  prepaidCents: Cents | null;
   oldestUnpaidRentOn?: IsoDate;
   lastPaymentOn?: IsoDate;
   hasPromiseOrHold: boolean;
@@ -1501,13 +1505,15 @@ export interface DelinquencyRow {
 }
 
 export interface LedgerRow {
+  balanceComplete?: boolean;
+  balanceUncertaintyCodes?: string[];
   /** Opening rows are report-only, never ledger transactions. */
   rowType?: "transaction" | "opening_balance";
-  openingBalanceCents?: Cents;
+  openingBalanceCents?: Cents | null;
   transaction: RentOpsLedgerTransaction;
-  allocatedCents: Cents;
-  openCents: Cents;
-  runningBalanceCents: Cents;
+  allocatedCents: Cents | null;
+  openCents: Cents | null;
+  runningBalanceCents: Cents | null;
 }
 
 export interface LeaseExpirationRow {
@@ -1582,6 +1588,9 @@ export interface ApplicantPipelineRow {
 }
 
 export interface DashboardSummary {
+  balanceComplete?: boolean;
+  balanceUncertaintyCodes?: string[];
+  balanceUnresolvedCount?: number;
   asOfDate: IsoDate;
   propertyCount: number;
   unitCount: number;
@@ -1599,9 +1608,9 @@ export interface DashboardSummary {
   /** Recurring configuration is not a monthly projection without cadence evidence. */
   scheduledRentCadenceComplete: boolean;
   collectedRentCents: Cents;
-  rentOnlyDelinquencyCents: Cents;
-  totalDelinquencyCents: Cents;
-  unappliedCashCents: Cents;
+  rentOnlyDelinquencyCents: Cents | null;
+  totalDelinquencyCents: Cents | null;
+  unappliedCashCents: Cents | null;
   expiringIn30Days: number;
   expiringIn60Days: number;
   expiringIn90Days: number;
@@ -1795,6 +1804,8 @@ export interface RentOpsRepository {
   /** Runs a multi-record business operation atomically. */
   transaction<T>(work: (repository: RentOpsRepository) => Promise<T>, options?: RentOpsTransactionOptions): Promise<T>;
   getSnapshot(): Promise<RentOpsSnapshot>;
+  /** Dedicated catalog read avoids loading unrelated financial and history rows. */
+  getChargeDefinitions?(): Promise<RentOpsChargeDefinition[]>;
   /** Public inventory needs complete tenancy evidence, but no financial/history rows. */
   getPublicInventory?(): Promise<Pick<RentOpsSnapshot, "properties" | "units" | "tenancies">>;
   saveProperty(property: RentOpsProperty): Promise<RentOpsProperty>;

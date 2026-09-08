@@ -800,7 +800,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   /** Positive catalog used by manual recurring roots and application conversion. */
   adminRouter.get("/charge-definitions", async (_req, res) => {
     try {
-      res.json((await service.snapshot()).chargeDefinitions.map(serializeAdminChargeDefinition));
+      res.json((await service.chargeDefinitions()).map(serializeAdminChargeDefinition));
     } catch (error) { adminError(res, error); }
   });
   adminRouter.post("/charge-definitions", async (req, res) => {

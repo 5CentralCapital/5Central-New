@@ -1000,6 +1000,9 @@ export function serializeAdminApplicationView(input: AdminApplicationContext): A
 }
 
 export interface AdminDashboardSummaryView {
+  balanceComplete?: boolean;
+  balanceUncertaintyCodes?: string[];
+  balanceUnresolvedCount?: number;
   asOfDate?: string;
   propertyCount?: number;
   unitCount?: number;
@@ -1016,9 +1019,9 @@ export interface AdminDashboardSummaryView {
   scheduledRentComplete?: boolean;
   scheduledRentCadenceComplete?: boolean;
   collectedRentCents?: number;
-  rentOnlyDelinquencyCents?: number;
-  totalDelinquencyCents?: number;
-  unappliedCashCents?: number;
+  rentOnlyDelinquencyCents?: number | null;
+  totalDelinquencyCents?: number | null;
+  unappliedCashCents?: number | null;
   expiringIn30Days?: number;
   expiringIn60Days?: number;
   expiringIn90Days?: number;
@@ -1116,9 +1119,12 @@ export function serializeDashboardSummary(value: DashboardSummary): AdminDashboa
     scheduledRentComplete: bool(input, "scheduledRentComplete"),
     scheduledRentCadenceComplete: bool(input, "scheduledRentCadenceComplete"),
     collectedRentCents: number(input, "collectedRentCents"),
-    rentOnlyDelinquencyCents: number(input, "rentOnlyDelinquencyCents"),
-    totalDelinquencyCents: number(input, "totalDelinquencyCents"),
-    unappliedCashCents: number(input, "unappliedCashCents"),
+    balanceComplete: bool(input, "balanceComplete"),
+    balanceUncertaintyCodes: stringArrayValue(input.balanceUncertaintyCodes),
+    balanceUnresolvedCount: number(input, "balanceUnresolvedCount"),
+    rentOnlyDelinquencyCents: nullableNumberValue(input.rentOnlyDelinquencyCents),
+    totalDelinquencyCents: nullableNumberValue(input.totalDelinquencyCents),
+    unappliedCashCents: nullableNumberValue(input.unappliedCashCents),
     expiringIn30Days: number(input, "expiringIn30Days"),
     expiringIn60Days: number(input, "expiringIn60Days"),
     expiringIn90Days: number(input, "expiringIn90Days"),
@@ -1201,7 +1207,7 @@ export interface AdminTenantProfileView {
   tenancies?: AdminTenancyView[];
   leaseTerms: AdminLeaseTermView[];
   schedules: AdminRecurringScheduleView[];
-  ledger: Array<{ transaction: AdminLedgerTransactionView; allocatedCents?: number; openCents?: number; runningBalanceCents?: number; rowType?: string; openingBalanceCents?: number }>;
+  ledger: Array<{ transaction: AdminLedgerTransactionView; allocatedCents?: number | null; openCents?: number | null; runningBalanceCents?: number | null; rowType?: string; openingBalanceCents?: number | null; balanceComplete?: boolean; balanceUncertaintyCodes?: string[] }>;
   deposits: AdminSecurityDepositView[];
   subsidyContracts: AdminSubsidyContractView[];
   documents: AdminDocumentView[];
@@ -1214,11 +1220,13 @@ export interface AdminTenantProfileView {
 function serializeLedgerRows(value: unknown): AdminTenantProfileView["ledger"] {
   return (recordArrayValue(value) ?? []).map((item) => presentationObject({
     transaction: serializeAdminLedgerTransaction(inputOf(item).transaction as RentOpsLedgerTransaction),
-    allocatedCents: number(inputOf(item), "allocatedCents"),
-    openCents: number(inputOf(item), "openCents"),
-    runningBalanceCents: number(inputOf(item), "runningBalanceCents"),
+    allocatedCents: nullableNumberValue(inputOf(item).allocatedCents),
+    openCents: nullableNumberValue(inputOf(item).openCents),
+    runningBalanceCents: nullableNumberValue(inputOf(item).runningBalanceCents),
+    balanceComplete: bool(inputOf(item), "balanceComplete"),
+    balanceUncertaintyCodes: stringArrayValue(inputOf(item).balanceUncertaintyCodes),
     rowType: inputOf(item).rowType === "opening_balance" ? "opening_balance" : undefined,
-    openingBalanceCents: number(inputOf(item), "openingBalanceCents"),
+    openingBalanceCents: nullableNumberValue(inputOf(item).openingBalanceCents),
   }));
 }
 

@@ -61,3 +61,11 @@ test("scheduled dashboard value is withheld for uncertain or unclassified rent",
   assert.equal(scheduledRentNeedsReview([{category: null, unclassified: true, amountCents: 10000}]), true);
   assert.equal(scheduledRentNeedsReview([{category: "base_rent", known: true, amountCents: null}]), true);
 });
+
+import { balanceMetric } from "./ui";
+test("incomplete balances cannot become a good zero metric", () => {
+  assert.deepEqual(balanceMetric(null, false), { amountCents: null });
+  assert.deepEqual(balanceMetric(0, false), { amountCents: null });
+  assert.deepEqual(balanceMetric(0, true), { amountCents: 0, tone: "good" });
+  assert.deepEqual(balanceMetric(10000, true), { amountCents: 10000, tone: "warn" });
+});

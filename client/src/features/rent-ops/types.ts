@@ -45,6 +45,9 @@ export interface ApiFilters {
 }
 
 export interface DashboardSummary {
+  balanceUnresolvedCount?: number;
+  balanceComplete?: boolean;
+  balanceUncertaintyCodes?: string[];
   asOfDate: string;
   propertyCount: number;
   unitCount: number;
@@ -61,9 +64,9 @@ export interface DashboardSummary {
   scheduledRentCadenceComplete?: boolean;
   scheduledRentCents: number;
   collectedRentCents: number;
-  rentOnlyDelinquencyCents: number;
-  totalDelinquencyCents: number;
-  unappliedCashCents: number;
+  rentOnlyDelinquencyCents: number | null;
+  totalDelinquencyCents: number | null;
+  unappliedCashCents: number | null;
   expiringIn30Days: number;
   expiringIn60Days: number;
   expiringIn90Days: number;
@@ -576,12 +579,14 @@ export interface AdminActivityView {
 }
 
 export interface AdminLedgerRowView {
+  balanceComplete?: boolean;
+  balanceUncertaintyCodes?: string[];
   rowType?: "transaction" | "opening_balance";
-  openingBalanceCents?: number;
+  openingBalanceCents?: number | null;
   transaction: AdminLedgerTransactionView;
-  allocatedCents?: number;
-  openCents?: number;
-  runningBalanceCents?: number;
+  allocatedCents?: number | null;
+  openCents?: number | null;
+  runningBalanceCents?: number | null;
 }
 
 export interface TenantView {
@@ -605,6 +610,8 @@ export interface TenantView {
  * API adapter; these browser types intentionally contain no source or
  * persistence-definition fields. */
 export interface RentRollRow {
+  balanceComplete?: boolean;
+  balanceUncertaintyCodes?: string[];
   propertyId?: string;
   propertyName?: string;
   unitId?: string;
@@ -632,7 +639,7 @@ export interface RentRollRow {
   subsidyCents?: number;
   tenantPortionCents?: number;
   totalScheduledCents?: number;
-  balanceDueCents?: number;
+  balanceDueCents?: number | null;
   oldestUnpaidRentOn?: string;
   exceptionCodes?: string[];
 }
@@ -708,6 +715,8 @@ export interface ScheduledVsCollectedRow {
 }
 
 export interface DelinquencyRow {
+  balanceComplete?: boolean;
+  balanceUncertaintyCodes?: string[];
   propertyId?: string;
   propertyName?: string;
   unitId?: string;
@@ -715,13 +724,13 @@ export interface DelinquencyRow {
   tenancyId?: string;
   personId?: string;
   tenantName?: string;
-  rentOnlyBalanceCents?: number;
-  nonRentBalanceCents?: number;
-  grossBalanceCents?: number;
-  totalBalanceCents?: number;
-  netAccountBalanceCents?: number;
-  unappliedCashCents?: number;
-  prepaidCents?: number;
+  rentOnlyBalanceCents?: number | null;
+  nonRentBalanceCents?: number | null;
+  grossBalanceCents?: number | null;
+  totalBalanceCents?: number | null;
+  netAccountBalanceCents?: number | null;
+  unappliedCashCents?: number | null;
+  prepaidCents?: number | null;
   oldestUnpaidRentOn?: string;
   lastPaymentOn?: string;
   hasPromiseOrHold?: boolean;

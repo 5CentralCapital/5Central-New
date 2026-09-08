@@ -554,3 +554,18 @@ test("migration is explicit, versioned, and dry-runs without a database executor
   assert.equal(applied.mode, "applied");
   assert.equal(statements.length, applied.statementCount);
 });
+
+
+test("charge definition catalog reads only its table and preserves snapshot mapping and order", async () => {
+  const executor = new FakeExecutor();
+  executor.rowsByTable.set("rent_ops_charge_definitions", [
+    { id: "definition-z", record_revision: 3, display_name: null, display_name_knowledge: "unknown", category: null, category_knowledge: "unknown", active: null, active_knowledge: "unknown" },
+    { id: "definition-a", record_revision: 1, display_name: "Rent", display_name_knowledge: "manual", category: "base_rent", category_knowledge: "manual", active: true, active_knowledge: "manual" },
+  ]);
+  const repository = createPostgresRentOpsRepository(executor);
+  const expected = (await repository.getSnapshot()).chargeDefinitions;
+  executor.calls.length = 0;
+  assert.deepEqual(await repository.getChargeDefinitions(), expected);
+  assert.deepEqual(executor.calls.map(call => call.text), ["SELECT * FROM rent_ops_charge_definitions"]);
+  assert.deepEqual(expected.map(row => row.id), ["definition-z", "definition-a"]);
+});

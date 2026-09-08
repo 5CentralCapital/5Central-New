@@ -18,7 +18,9 @@ test("manager account ledger includes exact imported null-tenancy rows once acro
  const filters={asOfDate:"2026-09-07",propertyScope:"active" as const};
  const profile=deriveTenantProfile(snapshot,person.id,filters)!;
  assert.deepEqual(profile.ledger.map(row=>row.transaction.id),["account-charge","account-payment"]);
- assert.equal(profile.ledger[1].runningBalanceCents,7500);
+ assert.equal(profile.ledger[1].runningBalanceCents,null);
+ assert.equal(profile.ledger[1].balanceComplete,false);
+ assert.ok(profile.ledger[1].balanceUncertaintyCodes?.includes("account_ledger_link_unknown"));
  assert.ok(profile.ledger.every(row=>row.transaction.tenancyId===undefined));
  const report=deriveFixedReport(snapshot,"tenant-ledger",filters) as LedgerRow[];
  assert.equal(report.filter(row=>row.transaction.id==="account-charge").length,1);

@@ -534,3 +534,33 @@ test("actual payment allocation DTO preserves supported kinds and signed amounts
   const restoreInvalid = stubJsonResponse(compactSnapshotWire(legacy));
   try { await assert.rejects(loadRentOpsAdminSnapshot(), /invalid response/); } finally { restoreInvalid(); }
 });
+
+test("financial completeness contract preserves unknown balances across dashboard reports and tenant ledger", async () => {
+  const legacy = serializedServerDocumentBundle();
+  const unknown = { balanceComplete: false, balanceUncertaintyCodes: ["imported_history_unavailable"] };
+  Object.assign(legacy.summary as object, unknown, { balanceUnresolvedCount: 1, rentOnlyDelinquencyCents: null, totalDelinquencyCents: null, unappliedCashCents: null });
+  const reportMap = legacy.reports as Record<string, unknown>;
+  reportMap["rent-roll"] = [{ ...unknown, unitId: "unit:unknown", balanceDueCents: null }, { balanceComplete: true, balanceUncertaintyCodes: [], unitId: "unit:known", balanceDueCents: 0 }];
+  reportMap.delinquency = [{ ...unknown, personId: "person:unknown", rentOnlyBalanceCents: null, nonRentBalanceCents: null, grossBalanceCents: null, totalBalanceCents: null, netAccountBalanceCents: null, unappliedCashCents: null, prepaidCents: null }];
+  const ledger = [{ ...unknown, transaction: { id: "transaction:unknown", kind: "charge" }, allocatedCents: null, openCents: null, runningBalanceCents: null, openingBalanceCents: null }];
+  reportMap["tenant-ledger"] = ledger;
+  legacy.tenants = [{ person: { id: "person:unknown" }, household: [], tenancies: [], leaseTerms: [], schedules: [], ledger, deposits: [], subsidyContracts: [], documents: [], activity: [] }];
+  const restore = stubJsonResponse(compactSnapshotWire(legacy));
+  try {
+    const result = (await loadRentOpsAdminSnapshot()).snapshot;
+    assert.equal(result.summary.rentOnlyDelinquencyCents, null);
+    assert.equal(result.summary.balanceComplete, false);
+    assert.equal(result.summary.balanceUnresolvedCount, 1);
+    assert.equal(result.rentRoll[0].balanceDueCents, null);
+    assert.equal(result.rentRoll[1].balanceDueCents, 0);
+    assert.equal(result.delinquency[0].netAccountBalanceCents, null);
+    assert.deepEqual(result.delinquency[0].balanceUncertaintyCodes, unknown.balanceUncertaintyCodes);
+    for (const row of [result.ledger[0], result.tenants[0].ledger[0]]) {
+      assert.equal(row.openCents, null);
+      assert.equal(row.runningBalanceCents, null);
+      assert.equal(row.openingBalanceCents, null);
+      assert.equal(row.transaction.amountCents, undefined);
+      assert.equal(row.transaction.postedOn, undefined);
+    }
+  } finally { restore(); }
+});

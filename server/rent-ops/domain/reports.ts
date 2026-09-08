@@ -249,6 +249,8 @@ function isBalanceCategory(category: string | null): boolean {
 }
 
 interface AccountBalance {
+  balanceComplete?: boolean;
+  balanceUncertaintyCodes?: string[];
   rentOnlyBalanceCents: Cents;
   nonRentBalanceCents: Cents;
   totalBalanceCents: Cents;
@@ -392,6 +394,72 @@ export function deriveSharedPaymentApplications(snapshot: RentOpsSnapshot, filte
   });
 }
 
+function ledgerFactUncertainty(row: RentOpsSnapshot["ledgerTransactions"][number], requireCategory: boolean): string[] {
+  // Explicit pending/voided facts have no posted balance impact.
+  if (row.status === "pending" || row.status === "voided") return [];
+  const codes: string[] = [];
+  const unknown = (value: unknown) => value === "unknown" || value === "ambiguous" || value === null;
+  if (!knownAmount(row.amountCents) || unknown(row.amountKnowledge)) codes.push("ledger_amount_unknown");
+  if (!row.postedOn || unknown(row.postedOnKnowledge)) codes.push("ledger_date_unknown");
+  if (!row.status || unknown(row.statusKnowledge)) codes.push("ledger_status_unknown");
+  if (!row.kind) codes.push("ledger_kind_unknown");
+  if (requireCategory && (!row.category || unknown(row.categoryKnowledge))) codes.push("ledger_category_unknown");
+  if (row.kind === "adjustment" && row.adjustmentDirection !== "debit" && row.adjustmentDirection !== "credit") codes.push("ledger_adjustment_direction_unknown");
+  if (row.kind === "reversal" && !row.reversalOfId) codes.push("ledger_reversal_link_unknown");
+  return codes;
+}
+
+function allocationEvidenceUnknown(transactionIds: ReadonlySet<string>, allocation: RentOpsSnapshot["paymentAllocations"][number]): boolean {
+  if (allocation.kind === "transfer") return false;
+  const parentId = allocation.kind === "credit_allocation" ? allocation.creditTransactionId : allocation.paymentTransactionId;
+  const parentKnowledge = allocation.kind === "credit_allocation" ? allocation.creditLinkKnowledge : allocation.paymentLinkKnowledge;
+  return !parentId || !allocation.chargeTransactionId || !allocation.allocatedOn || !knownAmount(allocation.amountCents)
+    || !transactionIds.has(parentId) || !transactionIds.has(allocation.chargeTransactionId)
+    || [parentKnowledge, allocation.chargeLinkKnowledge, allocation.amountKnowledge, allocation.allocatedOnKnowledge].some(value => value === "unknown" || value === "ambiguous")
+    || (allocation.amountCents < 0 && !isSourceAllocationReversal(allocation));
+}
+
+function linkCanExclude(id: string | null | undefined, knowledge: unknown): boolean {
+  return !!id && knowledge !== "unknown" && knowledge !== "ambiguous" && knowledge !== null;
+}
+
+/** Account evidence may prevent a lease balance from being known; it must
+ * never be reassigned to that lease simply to produce a numeric balance. */
+function tenancyBalanceUncertainty(snapshot: RentOpsSnapshot, tenancyId: string, asOf: IsoDate): string[] {
+  const tenancy = snapshot.tenancies.find(row => row.id === tenancyId);
+  if (!tenancy) return ["tenancy_balance_scope_unknown"];
+  const tenancyById = new Map(snapshot.tenancies.map(row => [row.id, row]));
+  const transactionIds = new Set(snapshot.ledgerTransactions.map(row => row.id));
+  const relevant = snapshot.ledgerTransactions.filter(row => {
+    if (row.postedOn && row.postedOn > asOf || row.status === "pending" || row.status === "voided") return false;
+    if (row.tenancyId === tenancyId) return true;
+    const linked = tenancyById.get(row.tenancyId ?? "");
+    const conflictingLink = linked && ((row.personId && row.personId !== linked.primaryPersonId) || (row.propertyId && row.propertyId !== linked.propertyId) || (row.unitId && row.unitId !== linked.unitId));
+    if (linkCanExclude(row.tenancyId, row.tenancyLinkKnowledge) && linked && !conflictingLink) return false;
+    if (linkCanExclude(row.personId, row.personLinkKnowledge) && row.personId !== tenancy.primaryPersonId) return false;
+    if (linkCanExclude(row.propertyId, row.propertyLinkKnowledge) && row.propertyId !== tenancy.propertyId) return false;
+    if (linkCanExclude(row.unitId, row.unitLinkKnowledge) && row.unitId !== tenancy.unitId) return false;
+    return true;
+  });
+  const codes = new Set<string>();
+  for (const row of relevant) {
+    if (row.tenancyId !== tenancyId) codes.add("account_or_unlinked_ledger_scope");
+    const linked = tenancyById.get(row.tenancyId ?? "");
+    if (linked && ((row.personId && row.personId !== linked.primaryPersonId) || (row.propertyId && row.propertyId !== linked.propertyId) || (row.unitId && row.unitId !== linked.unitId))) codes.add("ledger_scope_conflict");
+    if ([row.tenancyLinkKnowledge, row.personLinkKnowledge, row.propertyLinkKnowledge, row.unitLinkKnowledge].some(value => value === "unknown" || value === "ambiguous")) codes.add("ledger_scope_unknown");
+    ledgerFactUncertainty(row, true).forEach(code => codes.add(code));
+  }
+  const ids = new Set(relevant.map(row => row.id));
+  for (const allocation of snapshot.paymentAllocations) {
+    if (allocation.allocatedOn && allocation.allocatedOn > asOf) continue;
+    if (!ids.has(allocation.paymentTransactionId ?? allocation.creditTransactionId ?? "") && !ids.has(allocation.chargeTransactionId ?? "")) continue;
+    if (allocationEvidenceUnknown(transactionIds, allocation)) codes.add("allocation_evidence_unknown");
+  }
+  const person = snapshot.people.find(row => row.id === tenancy.primaryPersonId);
+  if (!relevant.length && (person?.source?.system === "rent_manager" || tenancy.source?.system === "rent_manager")) codes.add("imported_account_history_unverified");
+  return Array.from(codes).sort();
+}
+
 function accountBalance(snapshot: RentOpsSnapshot, tenancyId: string, asOf: IsoDate): AccountBalance {
   const transactions = snapshot.ledgerTransactions.filter((transaction) =>
     transaction.tenancyId === tenancyId && transaction.status === "posted" && !!transaction.postedOn && knownAmount(transaction.amountCents) && transaction.postedOn <= asOf,
@@ -461,7 +529,8 @@ function accountBalance(snapshot: RentOpsSnapshot, tenancyId: string, asOf: IsoD
     }
   }
   unappliedCashCents = Math.max(0, unappliedCashCents);
-  return { rentOnlyBalanceCents: rentOnly, nonRentBalanceCents: nonRent, totalBalanceCents: rentOnly + nonRent - unappliedCashCents, unappliedCashCents, prepaidCents: unappliedCashCents, oldestUnpaidRentOn };
+  const balanceUncertaintyCodes = tenancyBalanceUncertainty(snapshot, tenancyId, asOf);
+  return { balanceComplete: balanceUncertaintyCodes.length === 0, balanceUncertaintyCodes, rentOnlyBalanceCents: rentOnly, nonRentBalanceCents: nonRent, totalBalanceCents: rentOnly + nonRent - unappliedCashCents, unappliedCashCents, prepaidCents: unappliedCashCents, oldestUnpaidRentOn };
 }
 
 function searchMatches(text: string, search?: string): boolean {
@@ -486,8 +555,8 @@ export function deriveRentRoll(snapshot: RentOpsSnapshot, filters: RentOpsFilter
     const scheduleAsOf = current ? asOf : (term?.contractStartOn ?? (selected ? occupancyMoveInOn(selected) : undefined) ?? asOf);
     const amounts = selected ? scheduledAmounts(snapshot, selected.id, scheduleAsOf) : { baseRentCents: undefined, recurringFeesCents: 0, subsidyCents: 0 };
     const subsidyContract = selected ? snapshot.subsidyContracts.find((contract) => contract.tenancyId === selected.id && isEffectiveOn(contract.effectiveFrom, contract.effectiveTo, scheduleAsOf)) : undefined;
-    const balance = current ? accountBalance(snapshot, current.id, asOf) : { rentOnlyBalanceCents: 0, nonRentBalanceCents: 0, totalBalanceCents: 0, unappliedCashCents: 0, prepaidCents: 0, oldestUnpaidRentOn: undefined };
     const unresolvedCodes = unresolvedTenancyForUnit(snapshot, unit, asOf);
+    const balance = selected ? accountBalance(snapshot, selected.id, asOf) : { balanceComplete: unresolvedCodes.length === 0, balanceUncertaintyCodes: unresolvedCodes.length ? ["tenancy_balance_scope_unknown"] : [], rentOnlyBalanceCents: 0, nonRentBalanceCents: 0, totalBalanceCents: 0, unappliedCashCents: 0, prepaidCents: 0, oldestUnpaidRentOn: undefined };
     const occupancy: OccupancyState = current ? "current" : future ? "future_preleased" : unresolvedCodes.length > 0 ? "unknown" : "vacant";
     const exceptionCodes: string[] = [];
     if (currentCandidates.length > 1) exceptionCodes.push("multiple_current_tenancies");
@@ -527,7 +596,9 @@ export function deriveRentRoll(snapshot: RentOpsSnapshot, filters: RentOpsFilter
       subsidyCents: amounts.subsidyCents,
       tenantPortionCents: subsidyContract?.tenantObligationCents,
       totalScheduledCents: (amounts.baseRentCents ?? 0) + amounts.recurringFeesCents,
-      balanceDueCents: balance.totalBalanceCents,
+      balanceDueCents: balance.balanceComplete === false ? null : balance.totalBalanceCents,
+      balanceComplete: balance.balanceComplete !== false,
+      balanceUncertaintyCodes: balance.balanceUncertaintyCodes ?? [],
       oldestUnpaidRentOn: balance.oldestUnpaidRentOn,
       exceptionCodes,
     };
@@ -536,8 +607,8 @@ export function deriveRentRoll(snapshot: RentOpsSnapshot, filters: RentOpsFilter
     return filters.occupancy.includes(row.occupancy);
   }).filter((row) => {
     if (!filters.balanceStatus || filters.balanceStatus === "all") return true;
-    if (filters.balanceStatus === "due") return row.balanceDueCents > 0;
-    if (filters.balanceStatus === "credit") return row.balanceDueCents < 0;
+    if (filters.balanceStatus === "due") return row.balanceDueCents === null || row.balanceDueCents > 0;
+    if (filters.balanceStatus === "credit") return row.balanceDueCents !== null && row.balanceDueCents < 0;
     return row.balanceDueCents === 0;
   });
 }
@@ -1040,9 +1111,9 @@ export function deriveDelinquency(snapshot: RentOpsSnapshot, filters: RentOpsFil
     if (!matchesPropertyScope(tenancy.propertyId, filters, propertyIds)) continue;
     if (filters.unitId && tenancy.unitId !== filters.unitId) continue;
     const balance = accountBalance(snapshot, tenancy.id, asOf);
-    if (filters.balanceStatus === "due" && balance.rentOnlyBalanceCents <= 0 && balance.nonRentBalanceCents <= 0) continue;
-    if (filters.balanceStatus === "credit" && balance.totalBalanceCents >= 0) continue;
-    if (filters.balanceStatus === "zero" && balance.totalBalanceCents !== 0) continue;
+    if (balance.balanceComplete !== false && filters.balanceStatus === "due" && balance.rentOnlyBalanceCents <= 0 && balance.nonRentBalanceCents <= 0) continue;
+    if (filters.balanceStatus === "credit" && (balance.balanceComplete === false || balance.totalBalanceCents >= 0)) continue;
+    if (filters.balanceStatus === "zero" && (balance.balanceComplete === false || balance.totalBalanceCents !== 0)) continue;
     const unit = units.get(tenancy.unitId);
     const person = people.get(tenancy.primaryPersonId);
     const activity = snapshot.activityEvents.some((event) =>
@@ -1059,13 +1130,15 @@ export function deriveDelinquency(snapshot: RentOpsSnapshot, filters: RentOpsFil
       tenancyId: tenancy.id,
       personId: tenancy.primaryPersonId,
       tenantName: displayName(person),
-      rentOnlyBalanceCents: balance.rentOnlyBalanceCents,
-      nonRentBalanceCents: balance.nonRentBalanceCents,
-      grossBalanceCents: balance.rentOnlyBalanceCents + balance.nonRentBalanceCents,
-      totalBalanceCents: balance.totalBalanceCents,
-      netAccountBalanceCents: balance.totalBalanceCents,
-      unappliedCashCents: balance.unappliedCashCents,
-      prepaidCents: balance.prepaidCents,
+      rentOnlyBalanceCents: balance.balanceComplete === false ? null : balance.rentOnlyBalanceCents,
+      nonRentBalanceCents: balance.balanceComplete === false ? null : balance.nonRentBalanceCents,
+      balanceComplete: balance.balanceComplete !== false,
+      balanceUncertaintyCodes: balance.balanceUncertaintyCodes ?? [],
+      grossBalanceCents: balance.balanceComplete === false ? null : balance.rentOnlyBalanceCents + balance.nonRentBalanceCents,
+      totalBalanceCents: balance.balanceComplete === false ? null : balance.totalBalanceCents,
+      netAccountBalanceCents: balance.balanceComplete === false ? null : balance.totalBalanceCents,
+      unappliedCashCents: balance.balanceComplete === false ? null : balance.unappliedCashCents,
+      prepaidCents: balance.balanceComplete === false ? null : balance.prepaidCents,
       oldestUnpaidRentOn: balance.oldestUnpaidRentOn,
       lastPaymentOn: lastPayment?.postedOn ?? undefined,
       hasPromiseOrHold: activity,
@@ -1075,12 +1148,22 @@ export function deriveDelinquency(snapshot: RentOpsSnapshot, filters: RentOpsFil
   return rows.filter((row) => searchMatches(`${row.propertyName} ${row.unitNumber ?? ""} ${row.tenantName}`, filters.search));
 }
 
-export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string, filters: RentOpsFilters = {}, accountTransactionIds?: ReadonlySet<string>): LedgerRow[] {
+export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string, filters: RentOpsFilters = {}, accountTransactionIds?: ReadonlySet<string>, inheritedBalanceCodes: string[] = []): LedgerRow[] {
   validateReportFilters("tenant-ledger", filters);
   const allocationCutoff = filters.asOfDate ?? ("9999-12-31" as IsoDate);
   const transactions = snapshot.ledgerTransactions
-    .filter((transaction) => (accountTransactionIds ? accountTransactionIds.has(transaction.id) : transaction.tenancyId === tenancyId) && !!transaction.postedOn && knownAmount(transaction.amountCents) && (!filters.asOfDate || transaction.postedOn <= filters.asOfDate))
+    .filter((transaction) => (accountTransactionIds ? accountTransactionIds.has(transaction.id) : transaction.tenancyId === tenancyId) && (!transaction.postedOn || !filters.asOfDate || transaction.postedOn <= filters.asOfDate))
     .sort((left, right) => compareOptionalTimestamp(left.postedOn, right.postedOn) || left.id.localeCompare(right.id));
+    const ledgerCodes = new Set([...inheritedBalanceCodes, ...(!transactions.length && tenancyId ? tenancyBalanceUncertainty(snapshot, tenancyId, allocationCutoff) : []), ...transactions.flatMap(row => ledgerFactUncertainty(row, false))]);
+  const ledgerIds = new Set(transactions.map(row => row.id));
+  const transactionIds = new Set(snapshot.ledgerTransactions.map(row => row.id));
+  for (const allocation of snapshot.paymentAllocations) {
+    if (allocation.allocatedOn && allocation.allocatedOn > allocationCutoff) continue;
+    if (!ledgerIds.has(allocation.paymentTransactionId ?? allocation.creditTransactionId ?? "") && !ledgerIds.has(allocation.chargeTransactionId ?? "")) continue;
+    if (allocationEvidenceUnknown(transactionIds, allocation)) ledgerCodes.add("allocation_evidence_unknown");
+  }
+  const balanceUncertaintyCodes = Array.from(ledgerCodes).sort();
+  const balanceComplete = balanceUncertaintyCodes.length === 0;
   const transactionMap = new Map(transactions.map((transaction) => [transaction.id, transaction]));
   const reversed = reversalSets(snapshot, allocationCutoff);
   const allocationByCharge = new Map<string, number>();
@@ -1112,7 +1195,7 @@ export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string,
   let running = 0;
   const ledgerRows: LedgerRow[] = transactions.map((transaction) => {
     const amountCents = transaction.amountCents;
-    if (!knownAmount(amountCents)) return { transaction, allocatedCents: 0, openCents: 0, runningBalanceCents: running };
+    if (!knownAmount(amountCents)) return { transaction, allocatedCents: null, openCents: null, runningBalanceCents: null, balanceComplete: false, balanceUncertaintyCodes };
     const allocatedCents = transaction.kind === "charge" ? allocationByCharge.get(transaction.id) ?? 0 : transaction.kind === "payment" ? allocationByPayment.get(transaction.id) ?? 0 : transaction.kind === "credit" ? allocationByCredit.get(transaction.id) ?? 0 : 0;
     const openCents = transaction.kind === "charge"
       ? (reversed.chargeIds.has(transaction.id) ? 0 : amountCents - allocatedCents)
@@ -1122,17 +1205,17 @@ export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string,
           ? (reversed.creditIds.has(transaction.id) ? 0 : -(amountCents - allocatedCents))
           : transaction.kind === "reversal" ? 0 : 0;
     if (transaction.status === "posted") running += ledgerBalanceSign(transaction, transactionMap) * amountCents;
-    return { transaction, allocatedCents, openCents, runningBalanceCents: running };
+    return { transaction, allocatedCents: balanceComplete ? allocatedCents : null, openCents: balanceComplete ? openCents : null, runningBalanceCents: balanceComplete ? running : null, balanceComplete, balanceUncertaintyCodes };
   });
   if (!filters.fromDate && !filters.toDate) return ledgerRows;
-  const openingBalanceCents = filters.fromDate
+  const openingBalanceCents = !balanceComplete ? null : filters.fromDate
     ? ledgerRows.filter(row => row.transaction.postedOn! < filters.fromDate!).at(-1)?.runningBalanceCents ?? 0
     : 0;
-  const activity = ledgerRows.filter(row => (!filters.fromDate || row.transaction.postedOn! >= filters.fromDate) && (!filters.toDate || row.transaction.postedOn! <= filters.toDate));
+  const activity = ledgerRows.filter(row => !row.transaction.postedOn || ((!filters.fromDate || row.transaction.postedOn >= filters.fromDate) && (!filters.toDate || row.transaction.postedOn <= filters.toDate)));
   if (!filters.fromDate) return activity;
   // Explicit presentation record, with no ledger kind/status/amount. It is
   // never persisted and survives periods with no transaction activity.
-  return [{ rowType: "opening_balance", openingBalanceCents,
+  return [{ rowType: "opening_balance", openingBalanceCents, balanceComplete, balanceUncertaintyCodes,
     transaction: { id: `report-opening:${tenancyId || transactions[0]?.personId || "account"}`, propertyId: filters.propertyId ?? null,
       personId: transactions[0]?.personId, tenancyId: tenancyId || undefined,
       kind: null, status: null, category: null, amountCents: null,
@@ -1154,7 +1237,16 @@ export function deriveManagerAccountLedger(snapshot: RentOpsSnapshot, personId: 
     return matchesPropertyScope(propertyId, filters, propertyIds) && (!filters.unitId || (row.unitId ?? tenancy?.unitId) === filters.unitId);
   }).map(row => row.id));
   if (scopedIds.size === 0 && tenancyIds.length === 0) return [];
-  return deriveTenantLedger(snapshot, "", filters, scopedIds).map(row => row.rowType === "opening_balance" ? { ...row, transaction: { ...row.transaction, id: `report-opening:${personId}`, personId } } : row);
+  const accountCodes: string[] = [];
+  const person = snapshot.people.find(row => row.id === personId);
+  if (!scopedIds.size && person?.source?.system === "rent_manager") accountCodes.push("imported_account_history_unverified");
+  const uncertainAccountLink = snapshot.ledgerTransactions.some(row => !candidateIds.has(row.id)
+    && row.personId === personId && (!row.postedOn || row.postedOn <= asOfDate(filters))
+    && row.status !== "pending" && row.status !== "voided"
+    && (!linkCanExclude(row.propertyId, row.propertyLinkKnowledge) || matchesPropertyScope(row.propertyId, filters, propertyIds))
+    && (!filters.unitId || !linkCanExclude(row.unitId, row.unitLinkKnowledge) || row.unitId === filters.unitId));
+  if (uncertainAccountLink) accountCodes.push("account_ledger_link_unknown");
+  return deriveTenantLedger(snapshot, "", filters, scopedIds, accountCodes).map(row => row.rowType === "opening_balance" ? { ...row, transaction: { ...row.transaction, id: `report-opening:${personId}`, personId } } : row);
 }
 
 export function deriveLeaseExpirations(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): LeaseExpirationRow[] {
@@ -1454,6 +1546,9 @@ export function deriveDashboardSummary(snapshot: RentOpsSnapshot, filters: RentO
   const scheduledRentUnresolvedCount = scheduledCandidates.filter(row => !confirmedSchedule(row)).length;
   const scheduledRentCents = scheduledRentConfirmedCents;
   const collectedRentCents = collected.filter((row) => row.category === "base_rent" || row.category === "recurring_fee").reduce((sum, row) => sum + (knownAmount(row.amountCents) ? row.amountCents : 0), 0);
+  const unresolvedOccupancyBalances = rentRoll.filter(row => row.occupancy === "unknown");
+  const balanceUnresolvedCount = delinquency.filter(row => row.balanceComplete === false).length + unresolvedOccupancyBalances.length;
+  const balanceUncertaintyCodes = Array.from(new Set([...delinquency.flatMap(row => row.balanceUncertaintyCodes ?? []), ...unresolvedOccupancyBalances.flatMap(row => row.balanceUncertaintyCodes ?? ["tenancy_balance_scope_unknown"])])).sort();
   const expiringIn30Days = expirations.filter((row) => row.actionStatus === "expiring" && row.contractEndOn && row.contractEndOn <= addDays(asOf, 30)).length;
   const expiringIn60Days = expirations.filter((row) => row.actionStatus === "expiring" && row.contractEndOn && row.contractEndOn <= addDays(asOf, 60)).length;
   const expiringIn90Days = expirations.filter((row) => row.actionStatus === "expiring").length;
@@ -1474,9 +1569,12 @@ export function deriveDashboardSummary(snapshot: RentOpsSnapshot, filters: RentO
     scheduledRentComplete: scheduledRentUnresolvedCount === 0,
     scheduledRentCadenceComplete: scheduledCandidates.every(row => snapshot.recurringSchedules.find(schedule => schedule.id === row.scheduleId)?.billingFrequency === "monthly"),
     collectedRentCents,
-    rentOnlyDelinquencyCents: delinquency.reduce((sum, row) => sum + Math.max(0, row.rentOnlyBalanceCents), 0),
-    totalDelinquencyCents: delinquency.reduce((sum, row) => sum + Math.max(0, row.totalBalanceCents), 0),
-    unappliedCashCents: delinquency.reduce((sum, row) => sum + row.unappliedCashCents, 0),
+    balanceComplete: balanceUnresolvedCount === 0,
+    balanceUnresolvedCount,
+    balanceUncertaintyCodes,
+    rentOnlyDelinquencyCents: balanceUnresolvedCount > 0 ? null : delinquency.reduce((sum, row) => sum + Math.max(0, row.rentOnlyBalanceCents!), 0),
+    totalDelinquencyCents: balanceUnresolvedCount > 0 ? null : delinquency.reduce((sum, row) => sum + Math.max(0, row.totalBalanceCents!), 0),
+    unappliedCashCents: balanceUnresolvedCount > 0 ? null : delinquency.reduce((sum, row) => sum + row.unappliedCashCents!, 0),
     expiringIn30Days,
     expiringIn60Days,
     expiringIn90Days,

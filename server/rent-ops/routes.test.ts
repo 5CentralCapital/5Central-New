@@ -855,3 +855,38 @@ test("person phone methods save and read back with audit, exact revision, and st
   assert.equal(cleared.status,200);assert.equal(cleared.body.phoneMethods,undefined);assert.deepEqual((await repository.getSnapshot()).people.find(row=>row.id==="demo-person-1")!.phoneMethods,[]);
  });
 });
+
+
+test("charge definition catalog uses narrow repository read with identical positive DTO and authentication", async () => {
+  const definitions = [
+    { id: "definition-z", recordRevision: 3, displayName: null, displayNameKnowledge: "unknown", category: null, categoryKnowledge: "unknown", active: null, activeKnowledge: "unknown", source: { system: "rent_manager", sourceId: "private-provider-id" }, sourceArtifactSha256: "private-hash" },
+    { id: "definition-a", recordRevision: 1, displayName: "Rent", displayNameKnowledge: "manual", category: "base_rent", categoryKnowledge: "manual", active: true, activeKnowledge: "manual" },
+  ];
+  const snapshot = structuredClone(syntheticRentOpsSnapshot());
+  snapshot.chargeDefinitions = definitions as typeof snapshot.chargeDefinitions;
+  const fallback = new SyntheticRentOpsRepository(snapshot);
+  let expected: unknown;
+  await withServer({ repository: fallback, requireAdmin: (_req, _res, next) => next() }, async baseUrl => {
+    const response = await request(baseUrl, "/charge-definitions");
+    assert.equal(response.status, 200);
+    expected = response.body;
+    assert.deepEqual(response.body, definitions.map(({ source, sourceArtifactSha256, ...dto }) => dto));
+    assertNoForbiddenRouteKeys(response.body);
+  });
+  let reads = 0;
+  const repository = Object.assign(new SyntheticRentOpsRepository(snapshot), {
+    async getChargeDefinitions() { reads += 1; return snapshot.chargeDefinitions; },
+    async getSnapshot(): Promise<typeof snapshot> { throw new Error("Catalog must not read the full snapshot"); },
+  });
+  await withServer({ repository }, async baseUrl => {
+    assert.equal((await request(baseUrl, "/charge-definitions")).status, 401);
+    assert.equal(reads, 0);
+  });
+  await withServer({ repository, requireAdmin: (_req, _res, next) => next() }, async baseUrl => {
+    const response = await request(baseUrl, "/charge-definitions");
+    assert.equal(response.status, 200);
+    assert.equal(response.headers["cache-control"], "no-store");
+    assert.deepEqual(response.body, expected);
+    assert.equal(reads, 1);
+  });
+});

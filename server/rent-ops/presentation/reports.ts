@@ -68,6 +68,8 @@ function row(input: JsonObject, fields: Record<string, unknown>): JsonObject {
 export function serializeRentRollRow(value: unknown): JsonObject {
   const input = inputOf(value);
   return row(input, {
+    balanceComplete: bool(input, "balanceComplete"),
+    balanceUncertaintyCodes: strings(input, "balanceUncertaintyCodes"),
     propertyId: text(input, "propertyId"),
     propertyName: text(input, "propertyName"),
     unitId: text(input, "unitId"),
@@ -95,7 +97,7 @@ export function serializeRentRollRow(value: unknown): JsonObject {
     subsidyCents: number(input, "subsidyCents"),
     tenantPortionCents: number(input, "tenantPortionCents"),
     totalScheduledCents: number(input, "totalScheduledCents"),
-    balanceDueCents: number(input, "balanceDueCents"),
+    balanceDueCents: nullableNumberValue(input.balanceDueCents),
     oldestUnpaidRentOn: dateText(input, "oldestUnpaidRentOn"),
     exceptionCodes: strings(input, "exceptionCodes"),
   });
@@ -189,6 +191,8 @@ export function serializeScheduledVsCollectedRow(value: unknown): JsonObject {
 export function serializeDelinquencyRow(value: unknown): JsonObject {
   const input = inputOf(value);
   return row(input, {
+    balanceComplete: bool(input, "balanceComplete"),
+    balanceUncertaintyCodes: strings(input, "balanceUncertaintyCodes"),
     propertyId: text(input, "propertyId"),
     propertyName: text(input, "propertyName"),
     unitId: text(input, "unitId"),
@@ -196,13 +200,13 @@ export function serializeDelinquencyRow(value: unknown): JsonObject {
     tenancyId: text(input, "tenancyId"),
     personId: text(input, "personId"),
     tenantName: text(input, "tenantName"),
-    rentOnlyBalanceCents: number(input, "rentOnlyBalanceCents"),
-    nonRentBalanceCents: number(input, "nonRentBalanceCents"),
-    grossBalanceCents: number(input, "grossBalanceCents"),
-    totalBalanceCents: number(input, "totalBalanceCents"),
-    netAccountBalanceCents: number(input, "netAccountBalanceCents"),
-    unappliedCashCents: number(input, "unappliedCashCents"),
-    prepaidCents: number(input, "prepaidCents"),
+    rentOnlyBalanceCents: nullableNumberValue(input.rentOnlyBalanceCents),
+    nonRentBalanceCents: nullableNumberValue(input.nonRentBalanceCents),
+    grossBalanceCents: nullableNumberValue(input.grossBalanceCents),
+    totalBalanceCents: nullableNumberValue(input.totalBalanceCents),
+    netAccountBalanceCents: nullableNumberValue(input.netAccountBalanceCents),
+    unappliedCashCents: nullableNumberValue(input.unappliedCashCents),
+    prepaidCents: nullableNumberValue(input.prepaidCents),
     oldestUnpaidRentOn: dateText(input, "oldestUnpaidRentOn"),
     lastPaymentOn: dateText(input, "lastPaymentOn"),
     hasPromiseOrHold: bool(input, "hasPromiseOrHold"),
@@ -213,12 +217,14 @@ export function serializeDelinquencyRow(value: unknown): JsonObject {
 export function serializeLedgerRow(value: unknown): JsonObject {
   const input = inputOf(value);
   return row(input, {
+    balanceComplete: bool(input, "balanceComplete"),
+    balanceUncertaintyCodes: strings(input, "balanceUncertaintyCodes"),
     transaction: serializeAdminLedgerTransaction(input.transaction as never),
-    allocatedCents: number(input, "allocatedCents"),
-    openCents: number(input, "openCents"),
-    runningBalanceCents: number(input, "runningBalanceCents"),
+    allocatedCents: nullableNumberValue(input.allocatedCents),
+    openCents: nullableNumberValue(input.openCents),
+    runningBalanceCents: nullableNumberValue(input.runningBalanceCents),
     rowType: input.rowType === "opening_balance" ? "opening_balance" : undefined,
-    openingBalanceCents: number(input, "openingBalanceCents"),
+    openingBalanceCents: nullableNumberValue(input.openingBalanceCents),
   });
 }
 

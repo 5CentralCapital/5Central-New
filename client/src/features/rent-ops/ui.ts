@@ -57,3 +57,8 @@ export function scheduledRentNeedsReview(rows: import("./types").ScheduledIncome
   return rows.some(row => (row.category === "base_rent" || row.category == null || row.unclassified === true)
     && (row.known !== true || row.uncertain === true || row.temporalUncertainty === true || row.unclassified === true || row.amountCents == null));
 }
+
+export function balanceMetric(value: number | null, complete?: boolean): { amountCents: number | null; tone?: "warn" | "good" } {
+  if (complete === false || value === null) return { amountCents: null };
+  return { amountCents: value, tone: value ? "warn" : "good" };
+}
