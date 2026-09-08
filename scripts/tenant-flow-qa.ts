@@ -46,6 +46,7 @@ try {
  assert.equal((await qa.repository.getSnapshot()).tenancies.find(t=>t.id===tenancyId)?.status,'current');pass('clock advances to planned date; manager records actual move-in and current tenancy');
  const previewContext=expected(await manager.request('/api/rent-ops/preview-context'),200,'manager preview context');
  assert.equal(previewContext.asOfDate,moveIn);
+ assert.equal(previewContext.dataMode,'synthetic');
  const defaultDashboard=expected(await manager.request('/api/rent-ops/dashboard'),200,'manager default dashboard');
  assert.equal(defaultDashboard.asOfDate,moveIn);
  const defaultSnapshot=expected(await manager.request('/api/rent-ops/snapshot'),200,'manager default snapshot');

@@ -1828,6 +1828,8 @@ export interface RentOpsRouteOptions {
   repository: RentOpsRepository;
   requireAdmin?: import("express").RequestHandler;
   now?: () => Date;
+  /** Source label shown by the manager preview context; production defaults to live. */
+  previewSource?: "live" | "synthetic";
   resumeTokenTtlMs?: number;
   enableDemoGuard?: boolean;
   resumeTokenNotifier?: (input: { applicationId: string; email: string; token: string; expiresAt: string }) => Promise<void>;

@@ -49,6 +49,7 @@ import type {
   ReportKey,
   ReportRow,
   RentOpsLoadResult,
+  RentOpsSource,
   RentOpsMutation,
   RentOpsMutationResult,
   TenantView,
@@ -1506,12 +1507,12 @@ export async function loadRentOpsAdminSnapshot(filters: RentOpsQueryFilters = {}
  * Local QA injects a simulated clock; production resolves the same value from
  * the server's real business clock so the browser never invents a report date.
  */
-export async function loadRentOpsPreviewContext(): Promise<{ asOfDate: string }> {
-  if (DEMO_ALLOWED) return { asOfDate: DEMO_AS_OF_DATE };
+export async function loadRentOpsPreviewContext(): Promise<{ asOfDate: string; source: RentOpsSource }> {
+  if (DEMO_ALLOWED) return { asOfDate: DEMO_AS_OF_DATE, source: "synthetic" };
   const payload = await requestJson("/api/rent-ops/preview-context");
   assertNoForbiddenResponseFields(payload);
-  const root = exactRecord(unwrapData(payload), "preview context", ["asOfDate"]);
-  return { asOfDate: requiredDate(root, "asOfDate") };
+  const root = exactRecord(unwrapData(payload), "preview context", ["asOfDate", "dataMode"]);
+  return { asOfDate: requiredDate(root, "asOfDate"), source: requiredAllowed(root, "dataMode", ["live", "synthetic"]) as RentOpsSource };
 }
 
 /**

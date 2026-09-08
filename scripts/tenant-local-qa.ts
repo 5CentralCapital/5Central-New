@@ -86,7 +86,7 @@ export async function createTenantQa(options: { provider?: PaymentProvider } = {
   testPaymentService=service;
   registerTenantPaymentRoutes(app,{service,requireTenant:portal.requireTenant,getTenantIdentity:portal.getTenantIdentity});
   registerRentOpsBillingRoutes(app,{executor,requireAdmin});
-  registerRentOpsRoutes(app,{repository,requireAdmin,now,documentStorage:storage,resumeTokenNotifier:async mail=>{if(control.failMail)throw new Error('Synthetic delivery failure');inbox.push({kind:'applicant',...mail});}});
+  registerRentOpsRoutes(app,{repository,requireAdmin,now,previewSource:'synthetic',documentStorage:storage,resumeTokenNotifier:async mail=>{if(control.failMail)throw new Error('Synthetic delivery failure');inbox.push({kind:'applicant',...mail});}});
   app.use(/^\/(?:tenant|apply)(?:\/|$)/,applicantPageSecurityHeaders);
   app.get('/qa',(_req,res)=>res.type('html').send(`<h1>TEST ONLY — Synthetic tenant workflow</h1>
     <p>No real tenants, emails, bank accounts, or charges. Data resets when this server restarts.</p>

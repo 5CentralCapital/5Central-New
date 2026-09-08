@@ -19,6 +19,11 @@ test("synthetic demo exposes the dedicated Rent Ops session contract without cre
     assert.equal(typeof session.csrfToken, "string");
     assert.ok(String(session.csrfToken).length >= 32);
 
+    const previewContextResponse = await fetch(`${baseUrl}/api/rent-ops/preview-context`);
+    const previewContext = await previewContextResponse.json() as Record<string, unknown>;
+    assert.equal(previewContextResponse.status, 200);
+    assert.equal(previewContext.dataMode, "synthetic");
+
     const csrfResponse = await fetch(`${baseUrl}/api/rent-ops/auth/csrf`);
     const csrf = await csrfResponse.json() as Record<string, unknown>;
     assert.equal(csrf.csrfToken, session.csrfToken);

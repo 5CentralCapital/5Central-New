@@ -804,7 +804,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
       res.json(await present(updated));
     } catch (error) { adminError(res, error); }
   };
-  adminRouter.get("/preview-context", (_req, res) => { res.json({ asOfDate: nowIsoDate(configuredNow()) }); });
+  adminRouter.get("/preview-context", (_req, res) => { res.json({ asOfDate: nowIsoDate(configuredNow()), dataMode: options.previewSource ?? "live" }); });
   adminRouter.get("/dashboard", async (req, res) => { try { res.json(serializeAdminDashboardSummary(await service.dashboard(parseAdminFilters(req.query)))); } catch (error) { adminError(res, error); } });
   adminRouter.get("/snapshot", async (req, res) => { try { res.json(buildClientSnapshot(await service.snapshot(), parseAdminFilters(req.query))); } catch (error) { adminError(res, error); } });
   /** Positive catalog used by manual recurring roots and application conversion. */

@@ -410,8 +410,9 @@ export default function RentOpsWorkspace() {
     if (auth.status !== "authenticated") return;
     let cancelled = false;
     setError(undefined);
-    void loadRentOpsPreviewContext().then(({ asOfDate }) => {
+    void loadRentOpsPreviewContext().then(({ asOfDate, source }) => {
       if (cancelled) return;
+      setSource(source);
       setFilters((current) => current.asOfDate ? current : { ...current, asOfDate });
     }).catch((cause) => {
       if (cancelled) return;
@@ -429,7 +430,7 @@ export default function RentOpsWorkspace() {
       // catalog route. A schedule/report bundle never supplies this identity.
       const chargeDefinitions = result.snapshot.chargeDefinitions.length ? result.snapshot.chargeDefinitions : await loadRentOpsChargeDefinitions();
       setSnapshot({ ...result.snapshot, chargeDefinitions });
-      setSource(result.source); setWarning(result.warning);
+      setWarning(result.warning);
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : "Rent Operations could not be loaded."); }
     finally { setLoading(false); }

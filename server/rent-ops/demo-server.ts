@@ -44,6 +44,7 @@ export function createRentOpsDemoApp(options: RentOpsDemoServerOptions = {}): Ex
     repository,
     requireAdmin: (_req, _res, next) => next(),
     enableDemoGuard: true,
+    previewSource: "synthetic",
     exposeResumeToken: true,
   });
   const publicDir = options.publicDir ?? path.resolve(process.cwd(), "dist/public");

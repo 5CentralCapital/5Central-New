@@ -415,10 +415,11 @@ test("manager preview context and omitted reports follow the injected business c
     repository: new SyntheticRentOpsRepository(correctedSnapshot),
     requireAdmin: (_req, _res, next) => next(),
     now: () => businessDate,
+    previewSource: "synthetic",
   }, async (baseUrl) => {
     const context = await request(baseUrl, "/preview-context");
     assert.equal(context.status, 200);
-    assert.deepEqual(context.body, { asOfDate: "2026-10-01" });
+    assert.deepEqual(context.body, { asOfDate: "2026-10-01", dataMode: "synthetic" });
 
     const dashboard = await request(baseUrl, "/dashboard");
     assert.equal(dashboard.status, 200);

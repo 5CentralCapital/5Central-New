@@ -18,9 +18,9 @@ test("live report defaults follow the current local calendar date", () => {
 });
 
 test("manager preview context uses the server-provided business date", async () => {
-  const restore = stubJsonResponse({ asOfDate: "2026-10-01" });
+  const restore = stubJsonResponse({ asOfDate: "2026-10-01", dataMode: "synthetic" });
   try {
-    assert.deepEqual(await loadRentOpsPreviewContext(), { asOfDate: "2026-10-01" });
+    assert.deepEqual(await loadRentOpsPreviewContext(), { asOfDate: "2026-10-01", source: "synthetic" });
   } finally {
     restore();
   }
