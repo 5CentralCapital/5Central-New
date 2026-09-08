@@ -125,7 +125,8 @@ export interface RentOpsDocumentServiceOptions {
 
 const MAX_DOCUMENT_NAME = 240;
 const MAX_DOCUMENT_MIME = 120;
-const SAFE_DOCUMENT_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._()'\-]{0,239}$/;
+// Source filenames may contain ordinary punctuation; paths/control characters remain forbidden.
+const SAFE_DOCUMENT_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._()',&\-]{0,239}$/;
 const SAFE_DOCUMENT_MIMES = new Set([
   "application/pdf",
   "image/jpeg",
@@ -269,9 +270,12 @@ function assertDocumentMime(mimeType: string): string {
   return mimeType.toLowerCase();
 }
 
+const IMPORTED_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 function hasDocumentMagic(bytes: Uint8Array, mimeType: string): boolean {
   if (mimeType === "application/octet-stream") return true;
   const value = Buffer.from(bytes);
+  if (mimeType === IMPORTED_DOCX_MIME) return value.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
   if (mimeType === "application/pdf") return value.subarray(0, 5).toString("ascii") === "%PDF-";
   if (mimeType === "image/jpeg") return value.length >= 3 && value[0] === 0xff && value[1] === 0xd8 && value[2] === 0xff;
   if (mimeType === "image/png") return value.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
@@ -347,7 +351,7 @@ async function verifyStoredObject(storage: StorageReadAdapter, result: { backend
   }
 
 async function prepareVerifiedDocument(storage: ContentAddressedObjectStore, nowClock: () => Date, input: VerifiedDocumentUploadInput | VerifiedDocumentArchiveInput, refs: { applicationId?: string; propertyId?: string; unitId?: string; personId?: string; tenancyId?: string }, sourceBinaryBinding?: VerifiedDocumentArchiveInput["sourceBinaryBinding"]): Promise<{ document: RentOpsDocument; binding: RentOpsDocumentObjectBinding }> {
-    const mimeType = sourceBinaryBinding && input.mimeType === "application/octet-stream" ? input.mimeType : assertDocumentMime(input.mimeType);
+    const mimeType = sourceBinaryBinding && (input.mimeType === "application/octet-stream" || input.mimeType === IMPORTED_DOCX_MIME) ? input.mimeType : assertDocumentMime(input.mimeType);
     const fileName = assertDocumentName(input.fileName);
     if (input.bytes === undefined && input.stream === undefined) throw new RentOpsInvariantError("Document upload body is missing");
     if (input.bytes !== undefined && input.stream !== undefined) throw new RentOpsInvariantError("Document upload body is ambiguous");
