@@ -116,8 +116,9 @@ test("security inventory matches all migration tables and repository runtime rea
     "rent_ops_application_history_blockers",
     "rent_ops_application_history_aggregates",
   ];
-  assert.deepEqual([...RENT_OPS_RUNTIME_TABLES].sort(), [...repositorySnapshotTables, ...RENT_OPS_APPLICATION_TABLES].sort());
+  assert.deepEqual([...RENT_OPS_RUNTIME_TABLES].sort(), [...repositorySnapshotTables, ...RENT_OPS_APPLICATION_TABLES, "rent_ops_schema_migrations"].sort());
   assert.deepEqual([...RENT_OPS_RUNTIME_READ_ONLY_TABLES], [
+    "rent_ops_schema_migrations",
     "rent_ops_prospects",
     "rent_ops_application_history",
     "rent_ops_application_interests",
@@ -150,7 +151,7 @@ test("security inventory matches all migration tables and repository runtime rea
     "rent_ops_application_history_blockers",
     "rent_ops_application_history_aggregates",
   ]);
-  assert.equal(RENT_OPS_RUNTIME_WRITABLE_TABLES.length, repositorySnapshotTables.length + RENT_OPS_APPLICATION_TABLES.length - RENT_OPS_RUNTIME_READ_ONLY_TABLES.length);
+  assert.equal(RENT_OPS_RUNTIME_WRITABLE_TABLES.length, RENT_OPS_RUNTIME_TABLES.length - RENT_OPS_RUNTIME_READ_ONLY_TABLES.length);
 
   // saveLedgerTransaction/savePaymentAllocation/saveActivity use insertOnly;
   // every other runtime save method uses the repository upsert path.
@@ -341,4 +342,17 @@ test("pre-launch production email requires an exact recipient allowlist when ena
   assert.ok(validate().includes("production_email_recipient_allowlist_required"));
   assert.ok(validate("*").includes("production_email_recipient_allowlist_invalid"));
   assert.equal(validate("qa@example.test").some(reason => reason.startsWith("production_email_recipient_allowlist_")), false);
+});
+
+
+test("runtime provisioning can read migration checksums without migration writes or schema-meta access", () => {
+  const plan = renderRentOpsSecuritySql(verifiedManifest());
+  assert.equal(plan.canApply, true);
+  const runtimeGrants = plan.statements.filter(statement => statement.startsWith("GRANT ") && statement.endsWith('TO "rent_ops_staging_web";'));
+  const migrationGrants = runtimeGrants.filter(statement => statement.includes('"rent_ops_schema_migrations"'));
+  assert.equal(migrationGrants.length, 1);
+  assert.match(migrationGrants[0], /^GRANT SELECT ON TABLE /);
+  assert.doesNotMatch(migrationGrants[0], /INSERT|UPDATE|DELETE|TRUNCATE|REFERENCES|TRIGGER/);
+  assert.ok(runtimeGrants.every(statement => !statement.includes('"rent_ops_schema_meta"')));
+  assert.ok(plan.statements.some(statement => statement.startsWith("REVOKE ALL PRIVILEGES ON TABLE ") && statement.includes('"rent_ops_schema_migrations"') && statement.endsWith('FROM "rent_ops_staging_web";')));
 });

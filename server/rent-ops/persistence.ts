@@ -106,12 +106,12 @@ export const RENT_OPS_REQUIRED_TABLES = [
  * Runtime readiness is intentionally narrower than the migration/audit
  * inventory.  The web role must be able to operate with restricted source
  * tables invisible; only business tables plus the verified-object binding
- * table belong to this contract.  Source records/import runs are importer
+ * table and read-only migration checksum metadata belong to this contract.
+ * Source records/import runs are importer
  * provenance and are not loaded by the web repository.
  */
 export const RENT_OPS_RUNTIME_REQUIRED_TABLES = RENT_OPS_REQUIRED_TABLES.filter((table) => ![
   "rent_ops_schema_meta",
-  "rent_ops_schema_migrations",
   "rent_ops_source_records",
   "rent_ops_import_runs",
   "rent_ops_source_payloads",

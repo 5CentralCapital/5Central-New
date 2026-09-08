@@ -274,10 +274,11 @@ export const RENT_OPS_RUNTIME_WRITABLE_TABLES = [
 ] as const;
 
 /**
- * Metadata tables read by PostgresRentOpsRepository.getSnapshot(). They are
+ * Metadata tables read by repository snapshots and provisioning schema checks. They are
  * intentionally read-only for the web role; the importer owns their writes.
  */
 export const RENT_OPS_RUNTIME_READ_ONLY_TABLES = [
+  "rent_ops_schema_migrations",
   "rent_ops_prospects",
   "rent_ops_application_history",
   "rent_ops_application_interests",

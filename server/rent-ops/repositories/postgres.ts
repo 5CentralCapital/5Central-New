@@ -989,11 +989,11 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       const found = new Set(result.rows.map((row) => row.table_name));
       const missing = RENT_OPS_RUNTIME_REQUIRED_TABLES.filter((tableName) => !found.has(tableName));
       if (missing.length > 0) throw new RentOpsTablesMissingError(missing);
-      const privilegeResult = await this.client.query<{ table_name?: string; can_select?: boolean; can_insert?: boolean; can_update?: boolean; can_delete?: boolean }>(
-        "SELECT table_name, has_table_privilege(current_user, table_name, 'SELECT') AS can_select, has_table_privilege(current_user, table_name, 'INSERT') AS can_insert, has_table_privilege(current_user, table_name, 'UPDATE') AS can_update, has_table_privilege(current_user, table_name, 'DELETE') AS can_delete FROM unnest($1::text[]) AS table_name",
-        [runtimeForbiddenTables],
+      const privilegeResult = await this.client.query<{ table_name?: string; can_select?: boolean; can_insert?: boolean; can_update?: boolean; can_delete?: boolean; can_truncate?: boolean; can_references?: boolean; can_trigger?: boolean }>(
+        "SELECT table_name, has_table_privilege(current_user, table_name, 'SELECT') AS can_select, has_table_privilege(current_user, table_name, 'INSERT') AS can_insert, has_table_privilege(current_user, table_name, 'UPDATE') AS can_update, has_table_privilege(current_user, table_name, 'DELETE') AS can_delete, has_table_privilege(current_user, table_name, 'TRUNCATE') AS can_truncate, has_table_privilege(current_user, table_name, 'REFERENCES') AS can_references, has_table_privilege(current_user, table_name, 'TRIGGER') AS can_trigger FROM unnest($1::text[]) AS table_name",
+        [[...runtimeForbiddenTables, "rent_ops_schema_migrations"]],
       );
-      if (privilegeResult.rows.length !== runtimeForbiddenTables.length || privilegeResult.rows.some((row) => row.can_select === true || row.can_insert === true || row.can_update === true || row.can_delete === true)) {
+      if (privilegeResult.rows.length !== runtimeForbiddenTables.length + 1 || privilegeResult.rows.some((row) => (row.table_name !== "rent_ops_schema_migrations" && row.can_select === true) || row.can_insert === true || row.can_update === true || row.can_delete === true || row.can_truncate === true || row.can_references === true || row.can_trigger === true)) {
         throw new RentOpsRuntimePrivilegeError();
       }
       this.ready = true;
