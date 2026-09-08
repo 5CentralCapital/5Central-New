@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { z } from "zod";
 import { rentOpsAuthClient } from "./auth";
 
@@ -36,11 +36,9 @@ async function requestBilling(path: string, body?: { month: string; previewToken
   return result;
 }
 
-export function RecurringBillingPanel({ onPosted }: { onPosted?: () => void | Promise<void> }): JSX.Element {
-  const [month, setMonth] = useState(() => {
-    const date = new Date();
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-  });
+export function RecurringBillingPanel({ onPosted, businessDate }: { onPosted?: () => void | Promise<void>; businessDate?: string }): JSX.Element {
+  const [selectedMonth, setMonth] = useState<string>();
+  const month = selectedMonth ?? businessDate?.slice(0, 7) ?? "";
   const [preview, setPreview] = useState<Preview>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");

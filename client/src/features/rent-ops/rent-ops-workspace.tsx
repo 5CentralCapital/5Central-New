@@ -388,6 +388,7 @@ export default function RentOpsWorkspace() {
   const auth = useRentOpsAuth();
   const [section, setSection] = useState<SectionKey>("reports");
   const [reportKey, setReportKey] = useState<ReportKey>("rent-roll");
+  const [businessDate, setBusinessDate] = useState<string>();
   const [filters, setFilters] = useState<ViewFilters>({ propertyId: "all", asOfDate: "", status: "all", search: "" });
   const [snapshot, setSnapshot] = useState<AdminSnapshot>();
   const [source, setSource] = useState<"live" | "synthetic">("live");
@@ -413,6 +414,7 @@ export default function RentOpsWorkspace() {
     void loadRentOpsPreviewContext().then(({ asOfDate, source }) => {
       if (cancelled) return;
       setSource(source);
+      setBusinessDate(asOfDate);
       setFilters((current) => current.asOfDate ? current : { ...current, asOfDate });
     }).catch((cause) => {
       if (cancelled) return;
@@ -468,7 +470,7 @@ export default function RentOpsWorkspace() {
       {(warning || notice || error) && <div className={`ro-banner ${error ? "error" : ""}`}><AlertCircle />{error ?? notice ?? warning}<button onClick={() => { setNotice(undefined); setError(undefined); }} aria-label="Dismiss"><X /></button></div>}
       <FilterBar filters={filters} snapshot={snapshot} onChange={setFilters} onRefresh={() => void load()} refreshing={loading} />
       {section === "reports" && <><div className="ro-stats"><StatCard label="Occupied" value={`${summary.occupiedUnits}/${summary.unitCount}`} onClick={() => openDrilldown("occupiedUnits", "occupancy")} /><StatCard label="Ready vacancies" value={String(summary.readyVacantUnits)} tone={summary.readyVacantUnits ? "warn" : "good"} onClick={() => openDrilldown("genuineVacantUnits", "occupancy")} /><StatCard label="Scheduled rent" value={money(summary.scheduledRentCents)} onClick={() => openDrilldown("scheduledRentCents", "scheduled-income")} /><StatCard label="Rent delinquency" value={money(summary.rentOnlyDelinquencyCents)} tone={summary.rentOnlyDelinquencyCents ? "warn" : "good"} onClick={() => openDrilldown("rentOnlyDelinquencyCents", "delinquency")} /><StatCard label="Expiring ≤ 60 days" value={String(summary.expiringIn60Days)} onClick={() => openDrilldown("expiringIn60Days", "lease-expiration")} /><StatCard label="Deposit liability" value={depositMoney(summary.securityDepositLiabilityCents)} onClick={() => openDrilldown("securityDepositLiabilityCents", "security-deposit")} /></div><Reports snapshot={snapshot} filters={filters} selected={reportKey} onSelect={setReportKey} /></>}
-      {section === "income" && <RecurringBillingPanel onPosted={load} />}
+      {section === "income" && <RecurringBillingPanel onPosted={load} businessDate={businessDate} />}
       {sectionReport[section] && <Reports snapshot={snapshot} filters={filters} selected={sectionReport[section]!} onSelect={(key) => { setReportKey(key); setSection("reports"); }} />}
       {section === "tenants" && <div className="ro-split"><section className="ro-panel tenant-list"><div className="ro-panel-heading"><div><span className="eyebrow">People, not ledger accounts</span><h2>{visibleTenants.length} residents</h2></div><button className="secondary" onClick={() => openAction("save-person")}><Plus /> Resident</button></div>{visibleTenants.map((tenant) => <button key={tenant.person.id} className={selectedTenant?.person.id === tenant.person.id ? "active" : ""} onClick={() => { setSelectedTenantId(tenant.person.id); setTenantTab("summary"); }}><strong>{tenant.person.firstName} {tenant.person.lastName}</strong><span>{tenant.property?.name ?? "No property"} · {tenant.unit?.unitNumber ?? "No unit"}</span></button>)}</section>{selectedTenant ? <TenantDetail tenant={selectedTenant} tab={tenantTab} onTab={setTenantTab} onEdit={openAction} /> : <section className="ro-panel"><EmptyState message="No tenant profiles match the current filters." /></section>}</div>}
       {section === "properties" && <><div className="ro-inline-actions"><button className="primary" onClick={() => openAction("save-property")}><Plus /> Property</button><button className="secondary" onClick={() => openAction("save-unit")}><Plus /> Unit</button></div><PropertyPanels snapshot={snapshot} filters={filters} onEdit={openAction} /></>}
