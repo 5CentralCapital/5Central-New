@@ -1479,27 +1479,32 @@ function decodeReports(value: unknown): Record<ReportKey, ReportDefinition> {
 
 function bundleToSnapshot(payload: unknown, _asOfDate: string): AdminSnapshot {
   assertNoForbiddenResponseFields(payload);
-  const bundle = exactRecord(unwrapData(payload), "snapshot root", ["generatedAt", "summary", "snapshot", "rentRoll", "occupancy", "scheduledIncome", "collectedIncome", "scheduledVsCollected", "delinquency", "ledger", "leaseExpiration", "depositLiability", "hap", "tenants", "applicants", "documents", "activities", "reports"]);
+  const root = unwrapData(payload);
+  const compact = "transportVersion" in root;
+  const bundle = exactRecord(root, "snapshot root", compact
+    ? ["transportVersion", "generatedAt", "summary", "snapshot", "reports", "tenants", "applicants"]
+    : ["generatedAt", "summary", "snapshot", "rentRoll", "occupancy", "scheduledIncome", "collectedIncome", "scheduledVsCollected", "delinquency", "ledger", "leaseExpiration", "depositLiability", "hap", "tenants", "applicants", "documents", "activities", "reports"]);
+  if (compact && bundle.transportVersion !== 1) invalidResponse();
   const reports = decodeReports(bundle.reports);
   const summary = decodeDashboardSummary(bundle.summary);
   const snapshot = decodeSnapshotView(bundle.snapshot);
-  const rentRoll = decodeReportRows("rent-roll", bundle.rentRoll) as RentRollRow[];
-  const occupancy = decodeReportRows("occupancy", bundle.occupancy) as OccupancyRow[];
-  const scheduledIncome = decodeReportRows("scheduled-income", bundle.scheduledIncome) as ScheduledIncomeRow[];
-  const collectedIncome = decodeReportRows("collected-income", bundle.collectedIncome) as CollectedIncomeRow[];
-  const scheduledVsCollected = decodeReportRows("scheduled-vs-collected", bundle.scheduledVsCollected) as ScheduledVsCollectedRow[];
-  const delinquency = decodeReportRows("delinquency", bundle.delinquency) as DelinquencyRow[];
-  const ledger = decodeReportRows("tenant-ledger", bundle.ledger) as LedgerRow[];
-  const leaseExpiration = decodeReportRows("lease-expiration", bundle.leaseExpiration) as LeaseExpirationRow[];
-  const depositLiability = decodeReportRows("security-deposit", bundle.depositLiability) as DepositLiabilityRow[];
-  const hap = decodeReportRows("hap", bundle.hap) as HapRow[];
+  const rentRoll = (compact ? reports["rent-roll"].rows : decodeReportRows("rent-roll", bundle.rentRoll)) as RentRollRow[];
+  const occupancy = (compact ? reports["occupancy"].rows : decodeReportRows("occupancy", bundle.occupancy)) as OccupancyRow[];
+  const scheduledIncome = (compact ? reports["scheduled-income"].rows : decodeReportRows("scheduled-income", bundle.scheduledIncome)) as ScheduledIncomeRow[];
+  const collectedIncome = (compact ? reports["collected-income"].rows : decodeReportRows("collected-income", bundle.collectedIncome)) as CollectedIncomeRow[];
+  const scheduledVsCollected = (compact ? reports["scheduled-vs-collected"].rows : decodeReportRows("scheduled-vs-collected", bundle.scheduledVsCollected)) as ScheduledVsCollectedRow[];
+  const delinquency = (compact ? reports["delinquency"].rows : decodeReportRows("delinquency", bundle.delinquency)) as DelinquencyRow[];
+  const ledger = (compact ? reports["tenant-ledger"].rows : decodeReportRows("tenant-ledger", bundle.ledger)) as LedgerRow[];
+  const leaseExpiration = (compact ? reports["lease-expiration"].rows : decodeReportRows("lease-expiration", bundle.leaseExpiration)) as LeaseExpirationRow[];
+  const depositLiability = (compact ? reports["security-deposit"].rows : decodeReportRows("security-deposit", bundle.depositLiability)) as DepositLiabilityRow[];
+  const hap = (compact ? reports["hap"].rows : decodeReportRows("hap", bundle.hap)) as HapRow[];
   return {
     generatedAt: requiredTimestamp(bundle, "generatedAt"), summary, snapshot,
     rentRoll, occupancy, scheduledIncome, collectedIncome, scheduledVsCollected, delinquency, ledger, leaseExpiration, depositLiability, hap,
     tenants: requiredArrayOf(bundle, "tenants", decodeAdminTenant),
     applicants: requiredArrayOf(bundle, "applicants", decodeApplication),
-    documents: requiredArrayOf(bundle, "documents", decodeDocument),
-    activities: requiredArrayOf(bundle, "activities", decodeActivity),
+    documents: compact ? snapshot.documents : requiredArrayOf(bundle, "documents", decodeDocument),
+    activities: compact ? snapshot.activityEvents : requiredArrayOf(bundle, "activities", decodeActivity),
     reports,
     // Charge definitions arrive through the dedicated positive catalog route;
     // the broad snapshot never receives persistence-definition identifiers.

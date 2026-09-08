@@ -508,7 +508,8 @@ test("admin and public routes enforce nested positive allowlists, including repo
     const snapshot = await request(baseUrl, "/snapshot");
     assert.equal(snapshot.status, 200);
     assertNoForbiddenRouteKeys(snapshot.body);
-    exactKeys(snapshot.body, ["generatedAt", "summary", "snapshot", "rentRoll", "occupancy", "scheduledIncome", "collectedIncome", "scheduledVsCollected", "delinquency", "ledger", "leaseExpiration", "depositLiability", "hap", "tenants", "applicants", "documents", "activities", "reports"]);
+    exactKeys(snapshot.body, ["transportVersion", "generatedAt", "summary", "snapshot", "tenants", "applicants", "reports"]);
+    assert.equal(snapshot.body.transportVersion, 1);
     assert.equal("raw" in snapshot.body, false);
     exactKeys(snapshot.body.snapshot, ["properties", "units", "people", "householdMemberships", "tenancies", "leaseTerms", "recurringSchedules", "ledgerTransactions", "paymentAllocations", "securityDeposits", "subsidyContracts", "applications", "applicationHouseholdMembers", "applicationRequirements", "documents", "activityEvents"]);
     assert.equal((snapshot.body.snapshot as Record<string, any>).recurringSchedules[0].chargeDefinitionId, "rm-charge-id");

@@ -445,3 +445,38 @@ test("recurring DTO accepts opaque charge catalog target but rejects raw source 
   try { await assert.rejects(loadRentOpsAdminSnapshot(), /invalid response/); }
   finally { restore(); }
 });
+
+function compactSnapshotWire(legacy: Record<string, unknown>): Record<string, unknown> {
+  return { transportVersion: 1, ...Object.fromEntries(["generatedAt", "summary", "snapshot", "reports", "tenants", "applicants"].map(key => [key, legacy[key]])) };
+}
+
+test("compact snapshot decodes to the same complete manager view as legacy positive DTO", async () => {
+  const legacy = serializedServerDocumentBundle();
+  const reports = legacy.reports as Record<string, unknown[]>;
+  const rentRoll = [{ propertyId: "property:contract", propertyName: "Example", unitId: "unit:1", unitNumber: "1", baseRentCents: 100000 }];
+  const ledger = [{ transaction: { id: "charge:1", propertyId: "property:contract", kind: "charge", category: "base_rent", status: "posted", amountCents: 100000, postedOn: "2026-08-01" }, runningBalanceCents: 100000 }];
+  reports["rent-roll"] = rentRoll; legacy.rentRoll = rentRoll;
+  reports["tenant-ledger"] = ledger; legacy.ledger = ledger;
+  const activities = [{ id: "activity:1", type: "note", summary: "Review", occurredAt: "2026-08-17T12:00:00.000Z" }];
+  (legacy.snapshot as Record<string, unknown>).activityEvents = activities; legacy.activities = activities;
+  let restore = stubJsonResponse(legacy);
+  let original: Awaited<ReturnType<typeof loadRentOpsAdminSnapshot>>;
+  try { original = await loadRentOpsAdminSnapshot(); } finally { restore(); }
+  restore = stubJsonResponse(compactSnapshotWire(legacy));
+  try {
+    const compact = await loadRentOpsAdminSnapshot();
+    assert.deepEqual(compact, original);
+    assert.strictEqual(compact.snapshot.rentRoll, compact.snapshot.reports["rent-roll"].rows);
+    assert.strictEqual(compact.snapshot.ledger, compact.snapshot.reports["tenant-ledger"].rows);
+    assert.strictEqual(compact.snapshot.documents, compact.snapshot.snapshot.documents);
+    assert.strictEqual(compact.snapshot.activities, compact.snapshot.snapshot.activityEvents);
+  } finally { restore(); }
+});
+
+test("compact snapshot rejects unknown versions, duplicate aliases and missing reports", async () => {
+  const compact = compactSnapshotWire(serializedServerDocumentBundle());
+  for (const value of [{ ...compact, transportVersion: 2 }, { ...compact, ledger: [] }, { ...compact, reports: {} }, { ...compact, sourceId: "raw" }]) {
+    const restore = stubJsonResponse(value);
+    try { await assert.rejects(loadRentOpsAdminSnapshot(), /invalid response/); } finally { restore(); }
+  }
+});
