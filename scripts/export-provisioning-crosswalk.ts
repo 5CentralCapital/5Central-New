@@ -1,3 +1,4 @@
+import {verifyProvisioningSchema} from './provisioning-schema';
 /** Separate private read-only source-role process. Never run inside the web process. */
 import {readFile,writeFile} from 'node:fs/promises';import {createHash} from 'node:crypto';import {resolve} from 'node:path';
 import {createRentOpsRuntimeDatabase} from '../server/rent-ops/runtime-database';
@@ -6,6 +7,7 @@ export function provisionTargetFingerprint(connectionString:string){const url=ne
 export async function verifiedImportReceiptHash(path:string){const bytes=await readFile(path);const receipt=JSON.parse(bytes.toString());if(receipt.summary?.committed!==true||receipt.postcommitAudit?.passed!==true)throw Error('Committed audited import receipt required');return createHash('sha256').update(bytes).digest('hex');}
 export async function exportSourceIdentityCrosswalk(db:RentOpsQueryExecutor){
  if(!db.transaction)throw Error('Pinned read-only transaction required');return db.transaction(async reader=>{
+  await verifyProvisioningSchema(reader);
   const rows=(await reader.query(`SELECT id,system,entity_type AS "entityType",source_id AS "sourceId",target_id AS "targetId",imported_at AS "importedAt" FROM rent_ops_source_records WHERE system='rent_manager' AND entity_type IN ('person','tenancy','property','unit') ORDER BY entity_type,source_id`)).rows;
   return {kind:'private_production_source_identity_crosswalk_v1',rows};
  },{readOnly:true});

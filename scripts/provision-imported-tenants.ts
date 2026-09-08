@@ -1,3 +1,4 @@
+import {PROVISIONING_APPROVAL,verifyProvisioningSchema} from './provisioning-schema';
 /** Private operator input only. No delivery adapter, activation token, or production ID derivation. */
 import {provisionTargetFingerprint,verifiedImportReceiptHash} from './export-provisioning-crosswalk';
 import {createHash,randomUUID} from 'node:crypto';
@@ -96,7 +97,7 @@ export async function runOperator(){
  if(args.includes('--verify-files')){for(const file of manifest.eligibleFiles)await verifiedLeaseBytes(packageRoot,file);console.log(JSON.stringify({state:'files_verified_offline',files:manifest.eligibleFiles.length,heldAccounts:manifest.heldAccounts.length,writes:0,emailsSent:0}));return;}
  if(!crosswalkPath)throw new Error('Production-source crosswalk export required; runtime cannot read restricted source tables');
  if(process.env.RENT_OPS_SOURCE_IDENTITY_DATABASE_URL||process.env.RENT_OPS_SOURCE_AUDIT_DATABASE_URL||process.env.RENT_OPS_DATABASE_URL)throw new Error('Source-role credentials must not enter the web-role provisioner process');
- if(apply && process.env.RENT_OPS_PROVISION_APPROVAL!=='two-imports-audited-schema25-approved')throw new Error('Explicit post-import provisioning approval required');
+ if(apply && process.env.RENT_OPS_PROVISION_APPROVAL!==PROVISIONING_APPROVAL)throw new Error('Explicit post-import provisioning approval required');
  const {createRentOpsRuntimeDatabase}=await import('../server/rent-ops/runtime-database');
  const {PostgresRentOpsRepository}=await import('../server/rent-ops/repositories/postgres');
  const {PostgresTenantAccountStore}=await import('../server/rent-ops/tenant-portal/store');
@@ -104,7 +105,7 @@ export async function runOperator(){
  const crosswalkBinding={targetFingerprint:provisionTargetFingerprint(process.env.RENT_OPS_RUNTIME_DATABASE_URL??''),importReceiptSha256:await verifiedImportReceiptHash(receiptPath)};
  const db=await createRentOpsRuntimeDatabase();
  try{
-  const schema=await db.query<{version:number}>('SELECT MAX(version)::int AS version FROM rent_ops_schema_migrations');if(schema.rows[0]?.version!==25)throw new Error('Reviewed schema25 required; no migration is applied by this operator');
+  await verifyProvisioningSchema(db);
   const repo=new PostgresRentOpsRepository(db),store=new PostgresTenantAccountStore(db);
   let service:import('../server/rent-ops/services/service').RentOpsService|undefined;
   const ensureService=async()=>{if(service)return service;const {createConfiguredRentOpsWebObjectStores}=await import('../server/rent-ops/storage/production-store');const stores=await createConfiguredRentOpsWebObjectStores();const {RentOpsService}=await import('../server/rent-ops/services/service');service=new RentOpsService(repo,()=>new Date(),undefined,undefined,false,{...stores,allowEphemeralDocumentBindings:false});return service;};
