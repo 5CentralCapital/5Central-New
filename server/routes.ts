@@ -1,3 +1,4 @@
+import { registerRentOpsMcpRoutes } from "./rent-ops/mcp/routes";
 import { createTenantPaymentService, type TenantPaymentService } from "./rent-ops/payments/service";
 import { registerTenantPaymentRoutes } from "./rent-ops/payments/routes";
 import type { Express } from "express";
@@ -50,6 +51,7 @@ export async function registerRoutes(app: Express, options: { onTenantPaymentSer
   const rentOpsObjectStores = process.env.NODE_ENV === "production"
     ? await createProductionRentOpsObjectStoresFromEnv()
     : undefined;
+  await registerRentOpsMcpRoutes(app, rentOpsRepository);
   registerRentOpsRoutes(app, {
     repository: rentOpsRepository,
     requireAdmin: requireRentOpsAdmin,
