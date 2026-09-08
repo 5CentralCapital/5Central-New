@@ -44,6 +44,13 @@ try {
  qa.control.clock.date=new Date(`${moveIn}T15:00:00Z`);
  expected(await manager.request(`/api/rent-ops/tenancies/${encodeURIComponent(tenancyId)}`,{revision:tenancy.recordRevision,status:'current',actualMoveInOn:moveIn},'PATCH'),200,'actual move-in');
  assert.equal((await qa.repository.getSnapshot()).tenancies.find(t=>t.id===tenancyId)?.status,'current');pass('clock advances to planned date; manager records actual move-in and current tenancy');
+ const previewContext=expected(await manager.request('/api/rent-ops/preview-context'),200,'manager preview context');
+ assert.equal(previewContext.asOfDate,moveIn);
+ const defaultDashboard=expected(await manager.request('/api/rent-ops/dashboard'),200,'manager default dashboard');
+ assert.equal(defaultDashboard.asOfDate,moveIn);
+ const defaultSnapshot=expected(await manager.request('/api/rent-ops/snapshot'),200,'manager default snapshot');
+ assert.equal(defaultSnapshot.summary.asOfDate,moveIn);
+ pass('manager preview follows the simulated business date after move-in');
  const leaseBytes=syntheticLeasePdf();
  const object=await qa.storage.putIfAbsent({bytes:leaseBytes});
  await qa.repository.saveDocument({id:'qa-lease',propertyId:'qa-property',unitId:'qa-unit-1',personId:tenancy.primaryPersonId,tenancyId,type:'lease',typeKnowledge:'manual',state:'verified',stateKnowledge:'manual',availability:'verified',mimeType:'application/pdf',fileName:'TEST-only-lease.pdf',sizeBytes:object.sizeBytes,checksumSha256:object.checksumSha256,storageKey:`documents/${object.checksumSha256}`,storageKeyKnowledge:'source',verifiedAt:new Date().toISOString()});

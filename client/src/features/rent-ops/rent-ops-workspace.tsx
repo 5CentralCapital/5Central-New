@@ -24,6 +24,7 @@ import {
   downloadRentOpsDocument,
   loadRentOpsAdminSnapshot,
   loadRentOpsChargeDefinitions,
+  loadRentOpsPreviewContext,
   postRentOpsMutation,
   reportCell,
   reportToCsv,
@@ -387,7 +388,7 @@ export default function RentOpsWorkspace() {
   const auth = useRentOpsAuth();
   const [section, setSection] = useState<SectionKey>("reports");
   const [reportKey, setReportKey] = useState<ReportKey>("rent-roll");
-  const [filters, setFilters] = useState<ViewFilters>({ propertyId: "all", asOfDate: today(), status: "all", search: "" });
+  const [filters, setFilters] = useState<ViewFilters>({ propertyId: "all", asOfDate: "", status: "all", search: "" });
   const [snapshot, setSnapshot] = useState<AdminSnapshot>();
   const [source, setSource] = useState<"live" | "synthetic">("live");
   const [warning, setWarning] = useState<string>();
@@ -405,6 +406,21 @@ export default function RentOpsWorkspace() {
     void rentOpsAuthClient.restore().catch(() => undefined);
   }, [auth.status]);
 
+  useEffect(() => {
+    if (auth.status !== "authenticated") return;
+    let cancelled = false;
+    setError(undefined);
+    void loadRentOpsPreviewContext().then(({ asOfDate }) => {
+      if (cancelled) return;
+      setFilters((current) => current.asOfDate ? current : { ...current, asOfDate });
+    }).catch((cause) => {
+      if (cancelled) return;
+      setLoading(false);
+      setError(cause instanceof Error ? cause.message : "Rent Operations preview context could not be loaded.");
+    });
+    return () => { cancelled = true; };
+  }, [auth.status]);
+
   const load = useCallback(async () => {
     setLoading(true); setError(undefined);
     try {
@@ -419,8 +435,8 @@ export default function RentOpsWorkspace() {
     finally { setLoading(false); }
   }, [filters.propertyId, filters.asOfDate]);
   useEffect(() => {
-    if (auth.status === "authenticated") void load();
-  }, [auth.status, load]);
+    if (auth.status === "authenticated" && filters.asOfDate) void load();
+  }, [auth.status, filters.asOfDate, load]);
 
   const visibleTenants = useMemo(() => snapshot?.tenants.filter((tenant) => !filters.search || `${tenant.person.firstName} ${tenant.person.lastName} ${tenant.person.email ?? ""}`.toLowerCase().includes(filters.search.toLowerCase())) ?? [], [snapshot, filters.search]);
   const selectedTenant = visibleTenants.find((tenant) => tenant.person.id === selectedTenantId) ?? visibleTenants[0];

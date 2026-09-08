@@ -137,8 +137,8 @@ export class RentOpsApiError extends Error {
         ? "Recurring schedules require a new version rather than an in-place edit."
       : code === "activity_append_only"
           ? "Activity records are append-only; add a new dated event instead."
-          : code === "hap_create_requires_provenance"
-            ? "New HAP contracts require explicit source provenance and are not available here."
+            : code === "hap_create_requires_provenance"
+              ? "New HAP contracts require explicit source provenance and are not available here."
             : `Rent Operations API returned ${status}.`);
     this.name = "RentOpsApiError";
   }
@@ -1352,11 +1352,13 @@ async function requestJson(path: string, init?: RequestInit): Promise<unknown> {
   if (!response.ok) {
     const errorPayload = await response.json().catch(() => undefined);
     const code = safeErrorCode(errorPayload);
+    const reportRequest = /\/api\/rent-ops\/(?:preview-context|dashboard|snapshot|reports(?:\/|$))/.test(path);
     const message = code === "not_authorized" ? "Rent Operations authorization is required."
       : code === "not_found" ? "The requested Rent Operations record was not found."
         : code === "conflict" || code === "versioned_schedule_required" ? undefined
           : code === "verified_upload_required" ? "Secure document upload is not available yet."
             : code === "temporarily_unavailable" ? "Rent Operations is temporarily unavailable."
+              : code === "invalid_input" ? reportRequest ? "The selected report date or filters cannot be used. Choose a valid date and try again." : "Rent Operations request contains invalid input."
               : `Rent Operations API returned ${response.status}.`;
     if (code === "conflict" || code === "versioned_schedule_required" || code === "activity_append_only" || code === "hap_create_requires_provenance") throw new RentOpsApiError(code, response.status);
     throw new Error(message);
@@ -1497,6 +1499,19 @@ export async function loadRentOpsAdminSnapshot(filters: RentOpsQueryFilters = {}
   // or unavailable admin session is surfaced instead of showing fixtures.
   const payload = await requestJson(`/api/rent-ops/snapshot${buildRentOpsQuery({ ...filters, asOfDate })}`);
   return { snapshot: bundleToSnapshot(payload, asOfDate), source: "live" };
+}
+
+/**
+ * Resolve the server's current business date before the first report request.
+ * Local QA injects a simulated clock; production resolves the same value from
+ * the server's real business clock so the browser never invents a report date.
+ */
+export async function loadRentOpsPreviewContext(): Promise<{ asOfDate: string }> {
+  if (DEMO_ALLOWED) return { asOfDate: DEMO_AS_OF_DATE };
+  const payload = await requestJson("/api/rent-ops/preview-context");
+  assertNoForbiddenResponseFields(payload);
+  const root = exactRecord(unwrapData(payload), "preview context", ["asOfDate"]);
+  return { asOfDate: requiredDate(root, "asOfDate") };
 }
 
 /**

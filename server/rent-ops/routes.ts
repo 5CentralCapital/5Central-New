@@ -19,6 +19,7 @@ import {
   type RentOpsRouteOptions,
 } from "../../shared/rent-ops-contracts";
 import { RentOpsInvariantError } from "./domain/invariants";
+import { nowIsoDate } from "./domain/dates";
 import { deriveApplicantPipeline, deriveDashboardSummary, deriveFixedReport, deriveRentRoll, deriveTenantProfile } from "./domain/reports";
 import { toCsv } from "./services/csv";
 import { RentOpsService } from "./services/service";
@@ -383,13 +384,13 @@ function asList(value: unknown): string[] | undefined {
   return stringValue ? stringValue.split(",").map((item) => item.trim()).filter(Boolean) : undefined;
 }
 
-function parseFilters(query: Request["query"]): RentOpsFilters {
+function parseFilters(query: Request["query"], defaultAsOfDate?: string): RentOpsFilters {
   const candidate = {
     propertyId: asString(query.propertyId),
     unitId: asString(query.unitId),
     tenancyId: asString(query.tenancyId),
     personId: asString(query.personId),
-    asOfDate: asString(query.asOfDate),
+    asOfDate: asString(query.asOfDate) ?? defaultAsOfDate,
     month: asString(query.month),
     occupancy: asList(query.occupancy),
     readiness: asList(query.readiness),
@@ -655,7 +656,9 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   const configuredUploadStorage = options.documentUploadStorage ?? options.documentUploadStore;
   const documentStorage = isStorageReadAdapter(configuredDocumentStorage) ? configuredDocumentStorage : undefined;
   const documentUploadStorage = isContentAddressedObjectStore(configuredUploadStorage) ? configuredUploadStorage : undefined;
-  const service = new RentOpsService(options.repository, options.now ?? (() => new Date()), options.resumeTokenTtlMs, options.resumeTokenNotifier, options.exposeResumeToken === true, { documentStorage, documentUploadStorage, allowEphemeralDocumentBindings: process.env.NODE_ENV !== "production" });
+  const configuredNow = options.now ?? (() => new Date());
+  const service = new RentOpsService(options.repository, configuredNow, options.resumeTokenTtlMs, options.resumeTokenNotifier, options.exposeResumeToken === true, { documentStorage, documentUploadStorage, allowEphemeralDocumentBindings: process.env.NODE_ENV !== "production" });
+  const parseAdminFilters = (query: Request["query"]): RentOpsFilters => parseFilters(query, nowIsoDate(configuredNow()));
   const router = Router();
   const publicRouter = Router();
   const adminRouter = Router();
@@ -801,8 +804,9 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
       res.json(await present(updated));
     } catch (error) { adminError(res, error); }
   };
-  adminRouter.get("/dashboard", async (req, res) => { try { res.json(serializeAdminDashboardSummary(await service.dashboard(parseFilters(req.query)))); } catch (error) { adminError(res, error); } });
-  adminRouter.get("/snapshot", async (req, res) => { try { res.json(buildClientSnapshot(await service.snapshot(), parseFilters(req.query))); } catch (error) { adminError(res, error); } });
+  adminRouter.get("/preview-context", (_req, res) => { res.json({ asOfDate: nowIsoDate(configuredNow()) }); });
+  adminRouter.get("/dashboard", async (req, res) => { try { res.json(serializeAdminDashboardSummary(await service.dashboard(parseAdminFilters(req.query)))); } catch (error) { adminError(res, error); } });
+  adminRouter.get("/snapshot", async (req, res) => { try { res.json(buildClientSnapshot(await service.snapshot(), parseAdminFilters(req.query))); } catch (error) { adminError(res, error); } });
   /** Positive catalog used by manual recurring roots and application conversion. */
   adminRouter.get("/charge-definitions", async (_req, res) => {
     try {
@@ -813,7 +817,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
     const report = reportAliases[req.params.report];
     if (!report) { res.status(404).json(errorBody("unknown_report")); return; }
     try {
-      const filters = parseFilters(req.query);
+      const filters = parseAdminFilters(req.query);
       const rows = serializeCsvRows(report, await service.report(report, filters));
       res.type("text/csv").set("Content-Disposition", `attachment; filename="rent-ops-${req.params.report}.csv"`).send(toCsv(rows));
     } catch (error) { adminError(res, error); }
@@ -822,7 +826,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
     const report = reportAliases[req.params.report];
     if (!report) { res.status(404).json(errorBody("unknown_report")); return; }
     try {
-      const filters = parseFilters(req.query);
+      const filters = parseAdminFilters(req.query);
       res.json(serializeReportEnvelope({ report, filters, rows: await service.report(report, filters) }));
     } catch (error) { adminError(res, error); }
   });
@@ -833,7 +837,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   adminRouter.post("/units", async (req, res) => { const parsed = unitSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminUnit(await service.saveUnit(parsed.data))); } catch (error) { adminError(res, error); } });
   adminRouter.patch("/units/:id", (req, res) => patchAdminRecord(req, res, "unit", patchUnitSchema, (value) => serializeAdminUnit(value as Parameters<typeof serializeAdminUnit>[0])));
   adminRouter.get("/tenants", async (req, res) => { try { const snapshot = await service.snapshot(); const personSearch = asString(req.query.search)?.toLowerCase(); res.json(snapshot.people.filter((person) => !personSearch || [person.firstName, person.lastName, person.email].filter((value): value is string => typeof value === "string").join(" ").toLowerCase().includes(personSearch)).map(serializeAdminPerson)); } catch (error) { adminError(res, error); } });
-  adminRouter.get("/tenants/:personId", async (req, res) => { try { const profile = await service.tenantProfile(req.params.personId, parseFilters(req.query)); if (!profile) { res.status(404).json(errorBody("not_found")); return; } res.json(serializeAdminTenantProfile(profile)); } catch (error) { adminError(res, error); } });
+  adminRouter.get("/tenants/:personId", async (req, res) => { try { const profile = await service.tenantProfile(req.params.personId, parseAdminFilters(req.query)); if (!profile) { res.status(404).json(errorBody("not_found")); return; } res.json(serializeAdminTenantProfile(profile)); } catch (error) { adminError(res, error); } });
   adminRouter.post("/people", async (req, res) => { const parsed = personSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminPerson(await service.savePerson(parsed.data))); } catch (error) { adminError(res, error); } });
   adminRouter.patch("/people/:id", (req, res) => patchAdminRecord(req, res, "person", patchPersonSchema, (value) => serializeAdminPerson(value as Parameters<typeof serializeAdminPerson>[0])));
   adminRouter.post("/household-memberships", async (req, res) => { const parsed = householdMembershipSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminHouseholdMembership(await service.saveHouseholdMembership(parsed.data))); } catch (error) { adminError(res, error); } });
@@ -910,7 +914,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   adminRouter.post("/ledger/transactions", async (req, res) => { const parsed = ledgerSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminLedgerTransaction(await service.saveLedgerTransaction(parsed.data))); } catch (error) { adminError(res, error); } });
   adminRouter.post("/ledger/allocations", async (req, res) => { const parsed = allocationSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminPaymentAllocation(await service.savePaymentAllocation(parsed.data))); } catch (error) { adminError(res, error); } });
   adminRouter.post("/ledger/:id/reverse", async (req, res) => { const parsed = z.object({ id: z.string().max(160).optional(), postedOn: isoDateSchema, description: z.string().trim().min(1).max(240), payer: z.enum(["tenant", "agency", "owner", "unknown"]).optional(), status: z.enum(["posted", "voided", "pending"]).default("posted") }).strict().safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminLedgerTransaction(await service.reverseLedgerTransaction(req.params.id, parsed.data))); } catch (error) { adminError(res, error); } });
-  adminRouter.get("/ledger/:tenancyId", async (req, res) => { try { res.json(serializeReportRows("tenant-ledger", await service.report("tenant-ledger", { ...parseFilters(req.query), tenancyId: req.params.tenancyId }))); } catch (error) { adminError(res, error); } });
+  adminRouter.get("/ledger/:tenancyId", async (req, res) => { try { res.json(serializeReportRows("tenant-ledger", await service.report("tenant-ledger", { ...parseAdminFilters(req.query), tenancyId: req.params.tenancyId }))); } catch (error) { adminError(res, error); } });
   adminRouter.post("/deposits", async (req, res) => { const parsed = depositSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminSecurityDeposit(await service.saveSecurityDeposit(parsed.data))); } catch (error) { adminError(res, error); } });
   adminRouter.patch("/deposits/:id", (req, res) => patchAdminRecord(req, res, "security_deposit", patchDepositSchema, (value) => serializeAdminSecurityDeposit(value as Parameters<typeof serializeAdminSecurityDeposit>[0])));
   // HAP creates stay disabled until agency/link/date/amount facts have
@@ -920,7 +924,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   adminRouter.get("/applications", async (req, res) => {
     try {
       const snapshot = await service.snapshot();
-      const rows = deriveApplicantPipeline(snapshot, parseFilters(req.query));
+      const rows = deriveApplicantPipeline(snapshot, parseAdminFilters(req.query));
       res.json(rows.map((row) => {
         const application = snapshot.applications.find((candidate) => candidate.id === row.id);
         return { ...serializeApplicantPipelineRow(row), application: application ? adminApplicationView(snapshot, application) : undefined };

@@ -401,6 +401,38 @@ test("default-date reports reject an elapsed future tenancy until its actual sta
   });
 });
 
+test("manager preview context and omitted reports follow the injected business clock", async () => {
+  const correctedSnapshot = structuredClone(syntheticRentOpsSnapshot());
+  const movedInTenancy = correctedSnapshot.tenancies.find((tenancy) => tenancy.id === "demo-tenancy-2")!;
+  movedInTenancy.status = "current";
+  movedInTenancy.actualMoveInOn = "2026-10-01";
+  const businessDate = new Date("2026-10-01T15:00:00.000Z");
+  await withServer({ repository: new SyntheticRentOpsRepository(correctedSnapshot), now: () => businessDate }, async (baseUrl) => {
+    const context = await request(baseUrl, "/preview-context");
+    assert.equal(context.status, 401);
+  });
+  await withServer({
+    repository: new SyntheticRentOpsRepository(correctedSnapshot),
+    requireAdmin: (_req, _res, next) => next(),
+    now: () => businessDate,
+  }, async (baseUrl) => {
+    const context = await request(baseUrl, "/preview-context");
+    assert.equal(context.status, 200);
+    assert.deepEqual(context.body, { asOfDate: "2026-10-01" });
+
+    const dashboard = await request(baseUrl, "/dashboard");
+    assert.equal(dashboard.status, 200);
+    assert.equal(dashboard.body.asOfDate, "2026-10-01");
+
+    const earlierDashboard = await request(baseUrl, "/dashboard?asOfDate=2026-09-07");
+    assert.equal(earlierDashboard.status, 400);
+
+    const snapshot = await request(baseUrl, "/snapshot");
+    assert.equal(snapshot.status, 200);
+    assert.equal((snapshot.body.summary as Record<string, unknown>).asOfDate, "2026-10-01");
+  });
+});
+
 test("invalid filters and malformed financial writes fail with 400 instead of silent defaults", async () => {
   await withServer({ repository: createSyntheticRentOpsRepository(), requireAdmin: (_req, _res, next) => next() }, async (baseUrl) => {
     assert.equal((await request(baseUrl, "/reports/rent-roll?asOfDate=2026-02-31")).status, 400);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { serializeAdminDashboard } from "../../../../server/rent-ops/presentation/dashboard";
-import { buildRentOpsQuery, currentLocalIsoDate, escapeCsvCell, loadRentOpsAdminSnapshot, loadRentOpsChargeDefinitions, loadRentOpsReport, postRentOpsMutation, reportCell, RentOpsApiError } from "./api";
+import { buildRentOpsQuery, currentLocalIsoDate, escapeCsvCell, loadRentOpsAdminSnapshot, loadRentOpsChargeDefinitions, loadRentOpsPreviewContext, loadRentOpsReport, postRentOpsMutation, reportCell, RentOpsApiError } from "./api";
 import type { ReportKey } from "./types";
 import { parseCentsInput, requireCentsInput } from "./money";
 import { mutationPayload } from "./form-payload";
@@ -15,6 +15,31 @@ test("CSV cells cannot become spreadsheet formulas", () => {
 
 test("live report defaults follow the current local calendar date", () => {
   assert.equal(currentLocalIsoDate(new Date(2027, 1, 3, 23, 45)), "2027-02-03");
+});
+
+test("manager preview context uses the server-provided business date", async () => {
+  const restore = stubJsonResponse({ asOfDate: "2026-10-01" });
+  try {
+    assert.deepEqual(await loadRentOpsPreviewContext(), { asOfDate: "2026-10-01" });
+  } finally {
+    restore();
+  }
+});
+
+test("report date input errors are clear while other invalid requests stay generic", async () => {
+  const reportRestore = stubJsonResponse({ code: "invalid_input" }, 400);
+  try {
+    await assert.rejects(loadRentOpsAdminSnapshot({ asOfDate: "2026-09-07" }), /selected report date or filters/i);
+  } finally {
+    reportRestore();
+  }
+
+  const mutationRestore = stubJsonResponse({ code: "invalid_input" }, 400);
+  try {
+    await assert.rejects(loadRentOpsChargeDefinitions(), /request contains invalid input/i);
+  } finally {
+    mutationRestore();
+  }
 });
 
 test("money parsing rejects fractional cents instead of rounding", () => {
@@ -51,9 +76,9 @@ test("report query serialization includes every supported identity and unit filt
   assert.equal(buildRentOpsQuery({ propertyId: "all", status: "all" }), "");
 });
 
-function stubJsonResponse(body: unknown): () => void {
+function stubJsonResponse(body: unknown, status = 200): () => void {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } })) as typeof fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } })) as typeof fetch;
   return () => { globalThis.fetch = originalFetch; };
 }
 
