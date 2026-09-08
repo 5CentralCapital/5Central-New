@@ -101,6 +101,11 @@ export function validateRentOpsProductionConfiguration(
   for (const key of ["RENT_OPS_PUBLIC_APP_URL", ...(!gmailDelivery ? ["RENT_OPS_MAGIC_LINK_WEBHOOK_URL"] : [])]) {
     if (!safeDeploymentValue(configured(env, key), /^https:\/\/[^\s]+$/)) blockingReasons.push(`production_${key.toLowerCase()}_invalid`);
   }
+  const storageProfile = configured(env, "RENT_OPS_OBJECT_STORE_BACKEND");
+  if (storageProfile === "replit-managed-gcs") {
+    if (!safeDeploymentValue(configured(env, "RENT_OPS_OBJECT_STORE_BUCKET"), /^replit-objstore-[a-f0-9-]{36}$/)) blockingReasons.push("production_managed_bucket_invalid");
+    if (!safeDeploymentValue(configured(env, "RENT_OPS_OBJECT_STORE_PREFIX"), /^[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/)) blockingReasons.push("production_managed_prefix_invalid");
+  } else {
   if (configured(env, "RENT_OPS_OBJECT_STORE_BACKEND") !== "private-versioned") blockingReasons.push("production_private_object_store_required");
   if (!safeDeploymentValue(configured(env, "RENT_OPS_OBJECT_STORE_ENDPOINT"), /^https:\/\/[^\s]+$/)) blockingReasons.push("production_object_store_endpoint_invalid");
   if (!safeDeploymentValue(configured(env, "RENT_OPS_OBJECT_STORE_REGION"), /^[A-Za-z0-9._-]{1,64}$/)) blockingReasons.push("production_object_store_region_invalid");
@@ -118,6 +123,7 @@ export function validateRentOpsProductionConfiguration(
   if (new Set(identities).size !== identities.length) blockingReasons.push("production_object_store_identities_must_be_distinct");
   for (const key of ["RENT_OPS_OBJECT_STORE_RUNTIME_TOKEN", "RENT_OPS_OBJECT_STORE_UPLOAD_TOKEN"] as const) {
     if (!configured(env, key)) blockingReasons.push(`production_${key.toLowerCase()}_required`);
+  }
   }
   const limiterMode = configured(env, "RENT_OPS_PUBLIC_LIMITER_MODE");
   if (limiterMode !== "edge-attestation" && limiterMode !== "database") blockingReasons.push("production_global_public_limiter_required");

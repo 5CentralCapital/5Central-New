@@ -102,3 +102,14 @@ test("readiness is closed until startup completes and cannot expose payload data
     assert.doesNotMatch(blueprint, new RegExp(`key: ${key}\\b`));
   }
 });
+
+test('managed Replit profile is explicit and does not require or fabricate S3 permissions', () => {
+ const env=completeProductionEnvironment();
+ for(const key of Object.keys(env))if(key.startsWith('RENT_OPS_OBJECT_STORE_'))delete env[key];
+ Object.assign(env,{RENT_OPS_OBJECT_STORE_BACKEND:'replit-managed-gcs',RENT_OPS_OBJECT_STORE_BUCKET:'replit-objstore-58d82ba4-34e9-4e75-b7fd-1b500bf3492b',RENT_OPS_OBJECT_STORE_PREFIX:'rent-ops/private'});
+ assert.deepEqual(validateRentOpsProductionConfiguration(env),{valid:true,blockingReasons:[]});
+ delete env.RENT_OPS_OBJECT_STORE_BUCKET;
+ assert.equal(validateRentOpsProductionConfiguration(env).valid,false);
+ env.RENT_OPS_OBJECT_STORE_BACKEND='private-versioned';
+ assert.ok(validateRentOpsProductionConfiguration(env).blockingReasons.includes('production_object_store_endpoint_invalid'));
+});

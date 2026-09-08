@@ -18,7 +18,7 @@ import { createRentOpsPoolExecutor, createRentOpsRuntimeDatabase } from "./rent-
 import { createMagicLinkWebhookNotifierFromEnv } from "./rent-ops/services/notifier";
 import { pool } from "./db";
 import { createRentOpsPublicRateLimiter } from "./rent-ops/security/deployment-runtime";
-import { createProductionRentOpsWebObjectStoresFromEnv } from "./rent-ops/storage/object-store";
+import { createConfiguredRentOpsWebObjectStores } from "./rent-ops/storage/production-store";
 
 // Helper: coerce ISO date strings to Date objects for Drizzle timestamp fields
 function coerceDates(body: Record<string, any>): Record<string, any> {
@@ -49,7 +49,7 @@ export async function registerRoutes(app: Express, options: { onTenantPaymentSer
   const rentOpsRepository = new PostgresRentOpsRepository(rentOpsRuntimeDatabase);
   if (process.env.NODE_ENV === "production") await rentOpsRepository.assertReady();
   const rentOpsObjectStores = process.env.NODE_ENV === "production"
-    ? await createProductionRentOpsWebObjectStoresFromEnv()
+    ? await createConfiguredRentOpsWebObjectStores()
     : undefined;
   await registerRentOpsMcpRoutes(app, rentOpsRepository);
   registerRentOpsRoutes(app, {
