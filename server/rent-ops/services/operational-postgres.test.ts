@@ -10,7 +10,7 @@ test("schema26 native charge configuration requires audited revision and preserv
  try {
   await ensureRentOpsSchema({apply:true,executor:async sql=>{await db.exec(sql);}});
   await db.exec("CREATE ROLE qa_operations; GRANT USAGE ON SCHEMA public TO qa_operations");
-  for(const table of RENT_OPS_RUNTIME_REQUIRED_TABLES) await db.exec(`GRANT SELECT, INSERT, UPDATE ON ${table} TO qa_operations`);
+  for(const table of RENT_OPS_RUNTIME_REQUIRED_TABLES) await db.exec(`GRANT ${table === "rent_ops_schema_migrations" ? "SELECT" : "SELECT, INSERT, UPDATE"} ON ${table} TO qa_operations`);
   await db.exec("SET ROLE qa_operations");
   let failAudit=false;
   const adapt=(connection:any):RentOpsQueryExecutor=>({query:async(sql,values)=>{if(failAudit && sql.startsWith("INSERT INTO rent_ops_record_changes"))throw Error("audit unavailable");return connection.query(sql,values?.map(value=>value===undefined?null:value));},transaction:async work=>connection.transaction?connection.transaction((tx:any)=>work(adapt(tx))):work(adapt(connection))});

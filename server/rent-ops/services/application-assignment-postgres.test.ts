@@ -13,7 +13,7 @@ test("imported unitless complete application can be assigned, reviewed and conve
  try {
   await ensureRentOpsSchema({apply:true,executor:async sql=>{await db.exec(sql);}});
   await db.exec("CREATE ROLE qa_assignment_runtime; GRANT USAGE ON SCHEMA public TO qa_assignment_runtime");
-  for(const table of RENT_OPS_RUNTIME_REQUIRED_TABLES) await db.exec(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${table} TO qa_assignment_runtime`);
+  for(const table of RENT_OPS_RUNTIME_REQUIRED_TABLES) await db.exec(`GRANT ${table === "rent_ops_schema_migrations" ? "SELECT" : "SELECT, INSERT, UPDATE, DELETE"} ON ${table} TO qa_assignment_runtime`);
   await db.exec("SET ROLE qa_assignment_runtime");
   const adapt=(connection:any):RentOpsQueryExecutor=>({query:(sql,values)=>connection.query(sql,values?.map(v=>v===undefined?null:v)),transaction:work=>connection.transaction?connection.transaction((tx:any)=>work(adapt(tx))):work(adapt(connection))});
   const repo=new PostgresRentOpsRepository(adapt(db));

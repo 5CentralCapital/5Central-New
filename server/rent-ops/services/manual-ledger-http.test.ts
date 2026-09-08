@@ -4,7 +4,7 @@ test('manual ledger HTTP facts persist on schema26 with server-owned knowledge a
  try{
   await ensureRentOpsSchema({apply:true,executor:async sql=>{await db.exec(sql);}});
   await db.exec("INSERT INTO rent_ops_properties(id,name,slug,address_line1,city,state,postal_code,property_type) VALUES('p','QA','qa','1 QA','QA','FL','00000','multifamily')");
-  await db.exec('CREATE ROLE qa_manual; GRANT USAGE ON SCHEMA public TO qa_manual');for(const table of RENT_OPS_RUNTIME_REQUIRED_TABLES)await db.exec(`GRANT SELECT,INSERT,UPDATE ON ${table} TO qa_manual`);await db.exec('SET ROLE qa_manual');
+  await db.exec('CREATE ROLE qa_manual; GRANT USAGE ON SCHEMA public TO qa_manual');for(const table of RENT_OPS_RUNTIME_REQUIRED_TABLES)await db.exec(`GRANT ${table==='rent_ops_schema_migrations'?'SELECT':'SELECT,INSERT,UPDATE'} ON ${table} TO qa_manual`);await db.exec('SET ROLE qa_manual');
   const adapt=(d:any):any=>({query:(sql:string,args:any[])=>d.query(sql,args?.map(x=>x===undefined?null:x)),transaction:(work:any)=>d.transaction?d.transaction((tx:any)=>work(adapt(tx))):work(adapt(d))});
   const repository=new PostgresRentOpsRepository(adapt(db));const app=express();app.use(express.json());registerRentOpsRoutes(app,{repository,requireAdmin:(_q,_s,next)=>next()});server=await new Promise<any>(r=>{const s=app.listen(0,'127.0.0.1',()=>r(s));});const base=`http://127.0.0.1:${server.address().port}/api/rent-ops`;
   const post=async(path:string,body:any)=>fetch(base+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
