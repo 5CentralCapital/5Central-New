@@ -16,7 +16,7 @@ export function createTenantAccessNotifier(env: Record<string,string|undefined> 
     const connector = new ReplitConnectors();
     // The official SDK manages Replit identity and provider authorization.
     // No Google access/refresh token is returned to or stored by this app.
-    return createGmailTenantNotifier(env, connector.createProxyFetch("gmail"), async () => "managed-proxy", true);
+    return createGmailTenantNotifier(env, connector.createProxyFetch("google-mail"), async () => "managed-proxy", true);
   }
   if (env.RENT_OPS_TENANT_EMAIL_PROVIDER === "gmail") return createGmailTenantNotifier(env, fetchImpl);
   const endpoint = new URL(env.RENT_OPS_MAGIC_LINK_WEBHOOK_URL ?? "");

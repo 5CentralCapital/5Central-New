@@ -39,7 +39,7 @@ The provider-neutral adapter posts only `applicationId`, `email`, `resumeUrl`, a
 
 ## Schema and cutover
 
-`migrations/001_rent_ops.sql` through the version 22 migration form the immutable migration chain. Versions 10–22 add tenant accounts/auth throttles, payment reconciliation, recurring billing, database-backed public limits, preserved source application/deposit/allocation states, recurring-root audit support, opaque answer types, account-parent household links, proven credit allocations, observed tenancy status bindings, and preserved parity collection identities. Run `npm run rent-ops:migration:render:all` to render every checksum-bound SQL artifact into `dist/migrations/`; review and apply these in numeric order through the approved operator workflow. Application startup does not migrate. It checks schema checksums, required tables, and runtime privileges and fails closed if they differ.
+`migrations/001_rent_ops.sql` through the version 23 migration form the immutable migration chain. Versions 10–23 add tenant accounts/auth throttles, payment reconciliation, recurring billing, database-backed public limits, preserved source application/deposit/allocation states, recurring-root audit support, opaque answer types, account-parent household links, proven credit allocations, observed tenancy status bindings, and preserved parity collection identities, and exact source-credit scope/history evidence. Run `npm run rent-ops:migration:render:all` to render every checksum-bound SQL artifact into `dist/migrations/`; review and apply these in numeric order through the approved operator workflow. Application startup does not migrate. It checks schema checksums, required tables, and runtime privileges and fails closed if they differ.
 
 Cutover sequence:
 

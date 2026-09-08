@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-export const RENT_OPS_SCHEMA_VERSION = 22;
+export const RENT_OPS_SCHEMA_VERSION = 23;
 export const RENT_OPS_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V1_CHECKSUM__";
 export const RENT_OPS_V2_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V2_CHECKSUM__";
 export const RENT_OPS_V3_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V3_CHECKSUM__";
@@ -40,6 +40,7 @@ const RENT_OPS_MIGRATION_FILES = [
   "020_rent_ops_credit_allocations.sql",
   "021_rent_ops_observed_tenancy_status_binding.sql",
   "022_rent_ops_parity_collection_identity.sql",
+  "023_rent_ops_credit_source_scope.sql",
 ] as const;
 
 export const RENT_OPS_SUPPORTED_SCHEMA_VERSIONS = RENT_OPS_MIGRATION_FILES.map((_, index) => index + 1);

@@ -548,11 +548,11 @@ test("v3 source-absent recurring amount remains retained unknown; invalid and no
 test('exact CreditAllocation applies an existing credit and never invents a payment',()=>{
  const data=input();
  Object.assign(data,{artifactSha256:'a'.repeat(64),artifactObservationOn:'2026-08-16'});
- data.allocations.push({entityType:'allocation',sourceId:'credit-application',paymentId:'',chargeId:'c1',amount:25,allocatedOn:'2026-08-04',AllocationType:'CreditAllocation',creditId:'credit1'} as any);
+ data.allocations.push({entityType:'allocation',sourceId:'credit-application',paymentId:'',chargeId:'c1',amount:25,allocatedOn:'2026-08-04',AllocationType:'CreditAllocation',creditId:'credit1',propertyId:'property:p1'} as any);
  // Leave room for the credit application in the original charge.
  data.allocations[0].amount=825;
  const result=mapRentManagerExport(data),row=result.snapshot.paymentAllocations.find(a=>a.kind==='credit_allocation')!;
- assert.ok(row);assert.equal(row.paymentTransactionId,null);assert.equal(row.creditTransactionId,result.snapshot.ledgerTransactions.find(t=>t.source?.sourceId==='credit1')?.id);
+ assert.ok(row);assert.equal(row.sourcePropertyId,result.snapshot.properties[0].id);assert.equal(row.paymentTransactionId,null);assert.equal(row.creditTransactionId,result.snapshot.ledgerTransactions.find(t=>t.source?.sourceId==='credit1')?.id);
  assert.equal(result.snapshot.ledgerTransactions.filter(t=>t.kind==='payment').length,1);
  assert.equal(result.exceptions.some(e=>e.code==='snapshot_invariant_failed'),false);
 });

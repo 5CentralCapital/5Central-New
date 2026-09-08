@@ -625,6 +625,7 @@ export interface RentOpsChargeDefinition {
 export interface RentOpsPaymentAllocation {
   id: string;
   kind?: "allocation" | "reversal" | "transfer" | "credit_allocation";
+  sourcePropertyId?: string | null;
   creditTransactionId?: string | null;
   creditLinkKnowledge?: LinkKnowledge | null;
   sourceArtifactSha256?: string | null;

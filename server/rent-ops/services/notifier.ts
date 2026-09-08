@@ -94,7 +94,7 @@ export function createMagicLinkWebhookNotifierFromEnv(
   if (provider === "gmail" || provider === "replit-gmail") {
     if (env.RENT_OPS_TENANT_EMAIL_ENABLED !== "true") return undefined;
     const managed = provider === "replit-gmail";
-    const send = createGmailTenantNotifier(env, fetchImpl ?? (managed ? new ReplitConnectors().createProxyFetch("gmail") : fetch), managed ? async () => "managed-proxy" : undefined, managed);
+    const send = createGmailTenantNotifier(env, fetchImpl ?? (managed ? new ReplitConnectors().createProxyFetch("google-mail") : fetch), managed ? async () => "managed-proxy" : undefined, managed);
     return async input => {
       try { await send({ ...input, accountId: input.applicationId,
         issuanceId: createHash("sha256").update(input.applicationId + ":" + input.token).digest("hex"), purpose: "application_resume" }); }

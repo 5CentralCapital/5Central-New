@@ -27,6 +27,7 @@ test('PostgreSQL retains recorded cancellation of a future prepay without rewrit
   assert.equal(snapshot.paymentAllocations.find(a=>a.id==='7359')?.allocatedOn,'2023-10-26');
   const audit=await db.query<Record<string,unknown>>(DATABASE_AUDIT_SQL.allocationInvariants);
   assert.equal(Number(audit.rows[0].allocation_reversal_exceeds_history),0);
+  assert.equal(Number((await db.query<Record<string,unknown>>(DATABASE_AUDIT_SQL.dates)).rows[0].allocation_before_charge),0);
   assert.equal(deriveTenantLedger(snapshot,'t',{asOfDate:'2023-11-02'}).find(r=>r.transaction.id==='charge')?.openCents,10000);
  }finally{await db.close();}
 });

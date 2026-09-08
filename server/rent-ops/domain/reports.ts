@@ -328,10 +328,10 @@ function effectiveCreditAllocations(snapshot: RentOpsSnapshot, cutoff: IsoDate) 
     const charge = transactions.get(allocation.chargeTransactionId);
     if (!credit || credit.kind !== "credit" || !charge || charge.kind !== "charge" ||
       credit.status !== "posted" || charge.status !== "posted" || !credit.postedOn || !charge.postedOn ||
-      credit.postedOn > allocation.allocatedOn || charge.postedOn > allocation.allocatedOn ||
+      credit.postedOn > cutoff || charge.postedOn > cutoff ||
       !knownAmount(credit.amountCents) || !knownAmount(charge.amountCents) ||
       reversed.creditIds.has(credit.id) || reversed.chargeIds.has(charge.id)) return [];
-    return [{ allocation: { ...allocation, amountCents: allocation.amountCents, allocatedOn: allocation.allocatedOn }, credit, charge }];
+    return [{ allocation: { ...allocation, amountCents: allocation.amountCents, allocatedOn: allocation.allocatedOn }, effectiveOn: [credit.postedOn,allocation.allocatedOn,charge.postedOn].sort().at(-1)!, credit, charge }];
   });
 }
 

@@ -1859,6 +1859,7 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
       const allocation: RentOpsPaymentAllocation = {
         id: targetId(context, "payment_allocation", sourceId(record)),
         kind: sourceCredit ? "credit_allocation" : sourceReversal ? "reversal" : sourceTransfer ? "transfer" : "allocation",
+        sourcePropertyId: sourceCredit ? sourceKeyVariants(sourceLink(record,"propertyId","PropertyID")).map(key=>propertyBySource.get(key)).find(Boolean)?.id ?? null : null,
         creditTransactionId: sourceCredit ? credit?.id ?? null : null,
         creditLinkKnowledge: sourceCredit && credit ? "exact" : "unknown",
         sourceArtifactSha256: context.artifactSha256 ?? null,

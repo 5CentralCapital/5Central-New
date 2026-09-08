@@ -301,7 +301,15 @@ export function validateAllocation(
     if (!credit || credit.kind !== "credit") violations.push({code:"credit_allocation_credit_invalid",entityId:allocation.id,message:"Credit application requires its original credit ledger entry"});
     else {
       const creditView = {...credit, kind:"payment" as const};
-      violations.push(...validateAllocation({...allocation,kind:"allocation",creditTransactionId:null,paymentTransactionId:credit.id,paymentLinkKnowledge:allocation.creditLinkKnowledge},creditView,charge,transactions,historical));
+      const sourceAssociation = bound && credit.source?.system==='rent_manager' && charge?.source?.system==='rent_manager'
+        && credit.sourceArtifactSha256===allocation.sourceArtifactSha256 && charge.sourceArtifactSha256===allocation.sourceArtifactSha256
+        && !!credit.personId && credit.personId===charge.personId && credit.personLinkKnowledge==='exact' && charge.personLinkKnowledge==='exact'
+        && !!allocation.sourcePropertyId && [credit.propertyId,charge.propertyId].includes(allocation.sourcePropertyId);
+      const parentChecks = validateAllocation({...allocation,kind:"allocation",creditTransactionId:null,paymentTransactionId:credit.id,paymentLinkKnowledge:allocation.creditLinkKnowledge},creditView,charge,transactions,historical);
+      const updated = charge?.source?.sourceUpdatedAt;
+      const recordedFutureCharge = sourceAssociation && typeof updated==='string' && Number.isFinite(Date.parse(updated)) && isoDateSchema.safeParse(updated.slice(0,10)).success && !!allocation.allocatedOn && updated.slice(0,10)<=allocation.allocatedOn;
+      violations.push(...parentChecks.filter(v=>!(sourceAssociation && v.code==='allocation_property_mismatch') && !(recordedFutureCharge && v.code==='allocation_predates_charge')));
+      if (allocation.sourcePropertyId && charge && ![credit.propertyId,charge.propertyId].includes(allocation.sourcePropertyId)) violations.push({code:'credit_allocation_property_unbound',entityId:allocation.id,message:'Source credit allocation property is unrelated to its exact parents'});
       if (credit.personId && charge?.personId && credit.personId !== charge.personId) violations.push({code:"credit_allocation_person_mismatch",entityId:allocation.id,message:"Credit and charge belong to different source accounts"});
     }
     return violations;

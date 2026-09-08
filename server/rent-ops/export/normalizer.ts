@@ -1717,6 +1717,8 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
     const normalized = augment(record, ["PaymentAllocationID", "AllocationID", "PaymentAllocationId"], { paymentId: ["PaymentID", "PaymentSourceID", "PaymentTransactionID", "PaymentSourceTransactionID"], chargeId: ["ChargeID", "ChargeSourceID", "ChargeTransactionID", "ChargeSourceTransactionID"], amount: ["Amount", "AllocationAmount"], allocatedOn: ["AllocatedOn", "AllocationDate", "AllocatedOnDate", "TransactionDate"] }, "allocation", "payment_allocation");
     normalized.paymentId ??= embeddedId(record, ["Payment", "PaymentTransaction"], ["PaymentID", "PaymentId", "ID", "Id"]);
     if (text(record, "AllocationType") === "CreditAllocation") normalized.creditId = text(record, "AppliedCreditID");
+    const allocationProperty = text(record,"PropertyID");
+    if (allocationProperty) normalized.propertyId = `property:${allocationProperty.replace(/^property:/, "")}`;
     normalized.chargeId ??= embeddedId(record, ["Charge", "ChargeTransaction"], ["ChargeID", "ChargeId", "ID", "Id"]);
     const allocationId = text(normalized, "PaymentAllocationID", "AllocationID", "sourceId")?.replace(/^(?:payment_)?allocation:/, "");
     if (allocationId) normalized.sourceId = `payment_allocation:${allocationId}`;
