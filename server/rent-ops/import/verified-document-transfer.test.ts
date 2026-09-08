@@ -6,6 +6,7 @@ import { ensureRentOpsSchema } from "../persistence";
 import { InMemoryObjectStore } from "../storage/object-store";
 import type { RentOpsQueryExecutor } from "../repositories/postgres";
 import type { VerifiedDocumentArchiveInput } from "../services/service";
+import { RentOpsService } from "../services/service";
 import { ProductionRestrictedVerifiedDocumentTransfer } from "./verified-document-transfer";
 
 function input(): VerifiedDocumentArchiveInput {
@@ -66,4 +67,32 @@ test("isolated PostgreSQL document write rolls back with caller transaction", as
     assert.equal((await db.query("SELECT id FROM rent_ops_documents WHERE id = 'doc:test'")).rows.length, 0);
     assert.equal((await db.query("SELECT document_id FROM rent_ops_document_objects")).rows.length, 0);
   } finally { await db.close(); }
+});
+
+test("import preserves comma and ampersand filenames while rejecting paths and unsafe names", async () => {
+ const adapter=new ProductionRestrictedVerifiedDocumentTransfer(new InMemoryObjectStore());
+ const bytes=Buffer.from('%PDF-1.4\nsynthetic document\n%%EOF');
+ const base={...input(),bytes,sizeBytes:bytes.length,checksumSha256:createHash('sha256').update(bytes).digest('hex'),mimeType:'application/pdf'};
+ for(const fileName of ['Lease, Addendum.pdf','Lease & Addendum.pdf']){
+  const result=await adapter.transferVerifiedDocument({...base,fileName},recorder().executor);
+  assert.equal(result.document.fileName,fileName);assert.equal(result.document.checksumSha256,base.checksumSha256);
+ }
+ for(const fileName of ['', '../lease.pdf','folder/lease.pdf','folder\\lease.pdf','a..pdf','a\n.pdf','a\u0000.pdf','a\u007f.pdf','a'.repeat(241),'.hidden.pdf']){
+  const tracked=recorder();await assert.rejects(adapter.transferVerifiedDocument({...base,fileName},tracked.executor),/filename/);assert.equal(tracked.queries.length,0);
+ }
+});
+
+test("source-bound DOCX preserves MIME and bytes, while invalid content and normal uploads reject", async () => {
+ const mimeType='application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+ const bytes=Buffer.from([0x50,0x4b,0x03,0x04,0,0,0,0]);
+ const store=new InMemoryObjectStore();const adapter=new ProductionRestrictedVerifiedDocumentTransfer(store);
+ const base={...input(),fileName:'Lease, Terms & Conditions.docx',mimeType,bytes,sizeBytes:bytes.length,checksumSha256:createHash('sha256').update(bytes).digest('hex')};
+ const result=await adapter.transferVerifiedDocument(base,recorder().executor);
+ assert.equal(result.document.fileName,base.fileName);assert.equal(result.document.mimeType,mimeType);assert.equal(result.document.checksumSha256,base.checksumSha256);assert.equal(result.document.sizeBytes,bytes.length);assert.equal(result.binding.sourceBinaryId,base.sourceBinaryBinding.bindingId);
+ const invalid=Buffer.from('not a ZIP');
+ await assert.rejects(adapter.transferVerifiedDocument({...base,bytes:invalid,sizeBytes:invalid.length,checksumSha256:createHash('sha256').update(invalid).digest('hex')},recorder().executor),/content does not match/);
+ await assert.rejects(adapter.transferVerifiedDocument({...base,mimeType:'application/pdf'},recorder().executor),/content does not match/);
+ await assert.rejects(adapter.transferVerifiedDocument({...base,sourceBinaryBinding:{...base.sourceBinaryBinding,bindingId:''}},recorder().executor),/exact source binary/);
+ const normal=new RentOpsService({} as never,undefined,undefined,undefined,false,{documentUploadStorage:store});
+ await assert.rejects((normal as any).buildVerifiedDocument({...base,sourceBinaryBinding:undefined},{}),/content type is invalid/);
 });
