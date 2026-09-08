@@ -41,7 +41,7 @@ import type {
 import { validateReportFilters, deriveApplicantPipeline, deriveCollectedIncome, deriveDashboardSummary, deriveDepositLiability, deriveDelinquency, deriveFixedReport, deriveHap, deriveLeaseExpirations, deriveRentRoll, deriveScheduledIncome, deriveScheduledVsCollected, deriveTenantLedger, deriveTenantProfile, toApplicantPublicView } from "../domain/reports";
 import { assertApplicationStatusTransition, assertCents, assertPositiveCents, assertPrivateStorageKey, buildReversal, documentReferenceViolations, effectiveSchedules, RentOpsInvariantError, validateAllocation, validateSnapshot } from "../domain/invariants";
 import { addDays, addMonths, nowIsoDate, nowIsoTimestamp } from "../domain/dates";
-import { isPublicApplicationInventory } from "../presentation/public";
+import { isPublicApplicationInventory, serializePublicListings } from "../presentation/public";
 export { isPublicApplicationInventory } from "../presentation/public";
 import { createResumeToken, DEFAULT_RESUME_TOKEN_TTL_MS, resolveResumeToken } from "./tokens";
 import { MagicLinkDeliveryError } from "./notifier";
@@ -569,14 +569,25 @@ export class RentOpsService {
   }
 
   async publicApplicationOptions(): Promise<Array<{ id: string; name: string; slug: string; units: Array<{ id: string; unitNumber: string; unitType?: string; bedrooms?: number; bathrooms?: number; marketRentCents?: Cents }> }>> {
-    const snapshot = await this.snapshot();
+    const snapshot = this.repository.getPublicInventory ? await this.repository.getPublicInventory() : await this.snapshot();
     const asOf = nowIsoDate(this.now());
-    return snapshot.properties.filter((property) => isPublicApplicationInventory(snapshot, property.id, undefined, asOf)).map((property) => ({
+    return snapshot.properties.filter((property) => isPublicApplicationInventory(property, undefined, snapshot.tenancies, asOf)).map((property) => ({
       id: property.id,
       name: property.name,
       slug: property.slug,
-      units: snapshot.units.filter((unit) => isPublicApplicationInventory(snapshot, property.id, unit.id, asOf)).map((unit) => ({ id: unit.id, unitNumber: unit.unitNumber, unitType: unit.unitType, bedrooms: unit.bedrooms, bathrooms: unit.bathrooms, marketRentCents: unit.marketRentCents })),
+      units: snapshot.units.filter((unit) => isPublicApplicationInventory(property, unit, snapshot.tenancies, asOf)).map((unit) => ({ id: unit.id, unitNumber: unit.unitNumber, unitType: unit.unitType, bedrooms: unit.bedrooms, bathrooms: unit.bathrooms, marketRentCents: unit.marketRentCents })),
     }));
+  }
+
+  async publicApplicationListings() {
+    const inventory = this.repository.getPublicInventory ? await this.repository.getPublicInventory() : await this.snapshot();
+    const asOf = nowIsoDate(this.now());
+    return serializePublicListings(inventory.properties
+      .filter(property => isPublicApplicationInventory(property, undefined, inventory.tenancies, asOf))
+      .map(property => ({ ...property, trustedNative: !property.source,
+        units: inventory.units.filter(unit => isPublicApplicationInventory(property, unit, inventory.tenancies, asOf))
+          .map(unit => ({ ...unit, trustedNative: !unit.source })),
+      })));
   }
 
   async submitPublicApplication(token: string): Promise<ApplicantPublicView> {

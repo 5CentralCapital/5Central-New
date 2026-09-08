@@ -1011,6 +1011,19 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     return result.rows;
   }
 
+  async getPublicInventory(): Promise<Pick<RentOpsSnapshot, "properties" | "units" | "tenancies">> {
+    await this.assertReady();
+    const load = async (executor: RentOpsQueryExecutor) => {
+      // Retain every tenancy: unknown links/status can block a vacancy and
+      // must not disappear through an optimistic SQL status filter.
+      const [properties, units, tenancies] = await Promise.all([
+        this.rows("rent_ops_properties", executor), this.rows("rent_ops_units", executor), this.rows("rent_ops_tenancies", executor),
+      ]);
+      return { properties: properties.map(rowToProperty), units: units.map(rowToUnit), tenancies: tenancies.map(rowToTenancy) };
+    };
+    return this.client.transaction ? this.client.transaction(load, { readOnly: true }) : load(this.client);
+  }
+
   async getSnapshot(): Promise<RentOpsSnapshot> {
     await this.assertReady();
     const snapshot = this.client.transaction

@@ -480,3 +480,57 @@ test("compact snapshot rejects unknown versions, duplicate aliases and missing r
     try { await assert.rejects(loadRentOpsAdminSnapshot(), /invalid response/); } finally { restore(); }
   }
 });
+
+test("actual recurring serializer preserves null imported cadence and links in compact snapshot and tenant profiles", async () => {
+  const { serializeAdminRecurringSchedule } = await import("../../../../server/rent-ops/presentation/entities");
+  const imported = serializeAdminRecurringSchedule({ id: "schedule:unknown", billingFrequency: null, chargeDefinitionId: null, amountCents: null, effectiveFrom: null, effectiveFromKnowledge: "unknown_open_start", sourceConfidence: "exception" } as never);
+  const confirmed = serializeAdminRecurringSchedule({ id: "schedule:confirmed", billingFrequency: "monthly", chargeDefinitionId: "definition:rent", amountCents: 120000, effectiveFrom: "2026-09-01", active: true } as never);
+  const legacy = serializedServerDocumentBundle();
+  (legacy.snapshot as Record<string, unknown>).recurringSchedules = [imported, confirmed];
+  legacy.tenants = [{ person: { id: "person:qa" }, household: [], tenancies: [], leaseTerms: [], schedules: [imported, confirmed], ledger: [], deposits: [], subsidyContracts: [], documents: [], activity: [] }];
+  const scheduledRows = [{ scheduleId: "schedule:unknown", category: null, amountCents: null, effectiveFromKnowledge: "unknown_open_start", temporalUncertainty: true, known: false, uncertain: true, unclassified: true }];
+  (legacy.reports as Record<string, unknown>)["scheduled-income"] = scheduledRows;
+  legacy.scheduledIncome = scheduledRows;
+  const restore = stubJsonResponse(compactSnapshotWire(legacy));
+  try {
+    const result = (await loadRentOpsAdminSnapshot()).snapshot;
+    for (const rows of [result.snapshot.recurringSchedules, result.tenants[0].schedules]) {
+      assert.equal(rows[0].billingFrequency, null);
+      assert.equal(rows[0].chargeDefinitionId, null);
+      assert.equal(rows[0].amountCents, null);
+      assert.equal(rows[1].billingFrequency, "monthly");
+      assert.equal(rows[1].chargeDefinitionId, "definition:rent");
+    }
+    assert.equal(result.scheduledIncome[0].uncertain, true);
+    assert.equal(result.scheduledIncome[0].amountCents, null);
+  } finally { restore(); }
+});
+
+test("nullable cadence contract still rejects unsupported frequency and invalid target ids", async () => {
+  for (const invalid of [{ billingFrequency: "weekly" }, { billingFrequency: 1 }, { chargeDefinitionId: "invalid target with spaces" }]) {
+    const legacy = serializedServerDocumentBundle();
+    (legacy.snapshot as Record<string, unknown>).recurringSchedules = [{ id: "schedule:qa", ...invalid }];
+    const restore = stubJsonResponse(compactSnapshotWire(legacy));
+    try { await assert.rejects(loadRentOpsAdminSnapshot(), /invalid response/); } finally { restore(); }
+  }
+});
+
+test("actual payment allocation DTO preserves supported kinds and signed amounts", async () => {
+  const { serializeAdminPaymentAllocation } = await import("../../../../server/rent-ops/presentation/entities");
+  const kinds = ["allocation", "reversal", "transfer", "credit_allocation"] as const;
+  const allocations = kinds.map((kind, index) => serializeAdminPaymentAllocation({ id: `allocation:${index}`, kind, amountCents: kind === "reversal" ? -12345 : 12345, allocatedOn: "2026-09-01" } as never));
+  allocations.push(serializeAdminPaymentAllocation({ id: "allocation:unknown" } as never));
+  const legacy = serializedServerDocumentBundle();
+  (legacy.snapshot as Record<string, unknown>).paymentAllocations = allocations;
+  const restore = stubJsonResponse(compactSnapshotWire(legacy));
+  try {
+    const rows = (await loadRentOpsAdminSnapshot()).snapshot.snapshot.paymentAllocations;
+    assert.deepEqual(rows.slice(0,4).map(row => row.kind), kinds);
+    assert.deepEqual(rows.slice(0,4).map(row => row.amountCents), [12345,-12345,12345,12345]);
+    assert.equal(rows[4].kind, undefined);
+    assert.equal(rows[4].amountCents, undefined);
+  } finally { restore(); }
+  (legacy.snapshot as Record<string, unknown>).paymentAllocations = [{ id: "allocation:invalid", kind: "unsupported" }];
+  const restoreInvalid = stubJsonResponse(compactSnapshotWire(legacy));
+  try { await assert.rejects(loadRentOpsAdminSnapshot(), /invalid response/); } finally { restoreInvalid(); }
+});

@@ -237,7 +237,7 @@ export interface AdminLeaseTermView {
   createdAtKnowledge?: string;
 }
 export interface AdminRecurringScheduleView {
-  chargeDefinitionId?: string;
+  chargeDefinitionId?: string | null;
   billingFrequency?: "monthly" | null;
   recordRevision?: number;
   id?: string;
@@ -298,6 +298,7 @@ export interface AdminLedgerTransactionView {
   allocationMode?: string;
 }
 export interface AdminPaymentAllocationView {
+  kind?: "allocation" | "reversal" | "transfer" | "credit_allocation";
   id?: string;
   paymentTransactionId?: string;
   chargeTransactionId?: string;

@@ -57,7 +57,6 @@ import {
   serializePresentationError,
   serializePublicApplication,
   serializePublicApplicationResult,
-  serializePublicListings,
   serializeReportEnvelope,
   serializeReportRows,
 } from "./presentation";
@@ -706,42 +705,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   publicRouter.use(publicLimit);
   const publicListings = async (_req: Request, res: Response) => {
     try {
-      const options = await service.publicApplicationOptions();
-      // The service intentionally returns a compact public shape. Reattach
-      // only state/address/readiness facts for the serializer's fail-closed
-      // checks; the public DTO never emits these private source fields.
-      const snapshot = await service.snapshot();
-      const properties = new Map(snapshot.properties.map((property) => [property.id, property]));
-      const units = new Map(snapshot.units.map((unit) => [unit.id, unit]));
-      const checkedOptions = options.map((option) => {
-        const property = properties.get(option.id);
-        return {
-          ...option,
-          name: property?.name ?? null,
-          slug: property?.slug ?? null,
-          state: property?.state ?? null,
-          address: property?.address ?? null,
-          nameKnowledge: property?.nameKnowledge,
-          addressKnowledge: property?.addressKnowledge,
-          stateKnowledge: property?.stateKnowledge,
-          trustedNative: Boolean(property && !property.source),
-          units: option.units.map((unit) => {
-            const sourceUnit = units.get(unit.id);
-            return {
-              ...unit,
-              unitNumber: sourceUnit?.unitNumber ?? null,
-              readiness: sourceUnit?.readiness ?? null,
-              listing: sourceUnit?.listing ?? null,
-              unitNumberKnowledge: sourceUnit?.unitNumberKnowledge,
-              readinessKnowledge: sourceUnit?.readinessKnowledge,
-              listingKnowledge: sourceUnit?.listingKnowledge,
-              propertyLinkKnowledge: sourceUnit?.propertyLinkKnowledge,
-              trustedNative: Boolean(sourceUnit && !sourceUnit.source),
-            };
-          }),
-        };
-      });
-      res.json(serializePublicListings(checkedOptions));
+      res.json(await service.publicApplicationListings());
     } catch (error) { publicError(res, error); }
   };
   publicRouter.get("/application-options", publicListings);

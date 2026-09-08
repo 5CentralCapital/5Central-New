@@ -1795,6 +1795,8 @@ export interface RentOpsRepository {
   /** Runs a multi-record business operation atomically. */
   transaction<T>(work: (repository: RentOpsRepository) => Promise<T>, options?: RentOpsTransactionOptions): Promise<T>;
   getSnapshot(): Promise<RentOpsSnapshot>;
+  /** Public inventory needs complete tenancy evidence, but no financial/history rows. */
+  getPublicInventory?(): Promise<Pick<RentOpsSnapshot, "properties" | "units" | "tenancies">>;
   saveProperty(property: RentOpsProperty): Promise<RentOpsProperty>;
   saveUnit(unit: RentOpsUnit): Promise<RentOpsUnit>;
   savePerson(person: RentOpsPerson): Promise<RentOpsPerson>;

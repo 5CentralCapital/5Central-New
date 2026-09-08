@@ -599,8 +599,8 @@ function decodeRecurringSchedule(value: unknown): AdminRecurringScheduleView {
   const input = exactRecord(value, "recurring schedule", ["id", "chargeDefinitionId", "billingFrequency", "scopeType", "scopeId", "tenancyId", "personId", "propertyId", "unitId", "category", "description", "descriptionKnowledge", "amountCents", "effectiveFrom", "effectiveFromKnowledge", "effectiveTo", "active", "activeKnowledge", "sourceConfidence", "chargeDefinitionKnowledge", "recordRevision"]);
   return {
     id: optionalId(input, "id"),
-    chargeDefinitionId: optionalId(input, "chargeDefinitionId"),
-    billingFrequency: optionalEnum(input, "billingFrequency", ["monthly"] as const),
+    chargeDefinitionId: nullableId(input, "chargeDefinitionId"),
+    billingFrequency: input.billingFrequency === null ? null : optionalEnum(input, "billingFrequency", ["monthly"] as const),
     scopeType: nullableAllowed(input, "scopeType", RECURRING_SCOPES),
     scopeId: nullableId(input, "scopeId"),
     tenancyId: nullableId(input, "tenancyId"),
@@ -669,9 +669,10 @@ function decodeLedgerTransaction(value: unknown): AdminLedgerTransactionView {
 }
 
 function decodePaymentAllocation(value: unknown): AdminPaymentAllocationView {
-  const input = exactRecord(value, "payment allocation", ["id", "paymentTransactionId", "chargeTransactionId", "amountCents", "allocatedOn", "paymentLinkKnowledge", "chargeLinkKnowledge", "amountKnowledge", "allocatedOnKnowledge"]);
+  const input = exactRecord(value, "payment allocation", ["id", "kind", "paymentTransactionId", "chargeTransactionId", "amountCents", "allocatedOn", "paymentLinkKnowledge", "chargeLinkKnowledge", "amountKnowledge", "allocatedOnKnowledge"]);
   return {
     id: optionalId(input, "id"),
+    kind: optionalEnum(input, "kind", ["allocation", "reversal", "transfer", "credit_allocation"] as const),
     paymentTransactionId: optionalId(input, "paymentTransactionId"),
     chargeTransactionId: optionalId(input, "chargeTransactionId"),
     amountCents: optionalMoney(input, "amountCents"),
