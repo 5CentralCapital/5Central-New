@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ExportEnvelope, RedactedExportManifest } from "../export/types";
 import { canonicalJson, sha256 } from "../export/hash";
+import { approvedSupplementEvidenceValid } from "../export/normalizer";
+import { verifiedSupplementReceiptReasons } from "./persistence-importer";
 import {
   buildRestrictedSupplement,
   RestrictedSupplementIntegrityError,
@@ -362,6 +364,32 @@ test("binary supplements require a private archive path and matching bytes hash/
     unsafe.descriptor.fileName = fileName;
     assert.throws(() => buildRestrictedSupplement(request({ applicationAnswers: undefined, documentBinaries: [unsafe], operatorAttestation: attestation(["document_binaries"]) })), (error: unknown) => error instanceof RestrictedSupplementIntegrityError && error.reasons.includes("supplement_binary_filename_invalid"));
   }
+
+  const mixed = buildRestrictedSupplement(request({ applicationAnswers: [applicationRow()], documentBinaries: [binary], operatorAttestation: attestation(["application_answers", "document_binaries"]) }));
+  assert.equal(approvedSupplementEvidenceValid(mixed.envelope.payload, mixed.envelope.supplementEvidence, RUN_ID), true);
+  const receipt = {
+    version: "rm-restricted-supplement-verification-receipt/v1" as const, sourceRunId: RUN_ID,
+    parentEnvelopeSha256: mixed.report.originalEnvelopeSha256, parentManifestSha256: mixed.report.originalManifestSha256,
+    derivativeEnvelopeSha256: mixed.report.derivativeEnvelopeSha256, derivativeManifestSha256: mixed.report.derivativeManifestSha256,
+    supplementSha256: mixed.report.supplementSha256, attestationSha256: mixed.report.attestationSha256, rowSetSha256: mixed.report.rowSetSha256!,
+    externalVerificationIdHash: "a".repeat(64), provenanceSha256: "b".repeat(64),
+  };
+  assert.deepEqual(verifiedSupplementReceiptReasons(mixed.envelope, receipt, mixed.report.derivativeManifestSha256), []);
+  const changedBinary = structuredClone(mixed.envelope);
+  changedBinary.documentBinaries[0].sha256 = "c".repeat(64);
+  // Structural cardinality is not byte verification: the outer exact receipt
+  // must reject a binary mutation even when every row count stays the same.
+  assert.equal(approvedSupplementEvidenceValid(changedBinary.payload, changedBinary.supplementEvidence, RUN_ID), true);
+  assert.ok(verifiedSupplementReceiptReasons(changedBinary, receipt, mixed.report.derivativeManifestSha256).includes("verified_supplement_receipt_envelope_mismatch"));
+  for (const invalid of [{...mixed.envelope.supplementEvidence, kinds: ["application_answers", "document_binaries", 1]}, {...mixed.envelope.supplementEvidence, rowHashes: [...mixed.envelope.supplementEvidence!.rowHashes, 1]}]) {
+    assert.equal(approvedSupplementEvidenceValid(mixed.envelope.payload, invalid, RUN_ID), false);
+  }
+  const changedAnswer = structuredClone(mixed.envelope);
+  changedAnswer.payload.applicationAnswerRecords![0].Answer = "changed";
+  assert.equal(approvedSupplementEvidenceValid(changedAnswer.payload, changedAnswer.supplementEvidence, RUN_ID), false);
+  const missingBinary = structuredClone(mixed.envelope);
+  missingBinary.payload.documentBinaryDescriptors = [];
+  assert.equal(approvedSupplementEvidenceValid(missingBinary.payload, missingBinary.supplementEvidence, RUN_ID), false);
 
   const bad = structuredClone(binary);
   bad.descriptor.sha256 = "c".repeat(64);

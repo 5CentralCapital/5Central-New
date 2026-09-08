@@ -1110,15 +1110,32 @@ export function approvedSupplementEvidenceValid(
   if (typeof envelopeEvidence.supplementSha256 !== "string" || !/^[a-f0-9]{64}$/i.test(envelopeEvidence.supplementSha256)) return false;
   if (typeof envelopeEvidence.attestationSha256 !== "string" || !/^[a-f0-9]{64}$/i.test(envelopeEvidence.attestationSha256)) return false;
   const kinds = Array.isArray(envelopeEvidence.kinds) ? envelopeEvidence.kinds.filter((kind): kind is string => typeof kind === "string") : [];
+  if (!Array.isArray(envelopeEvidence.kinds) || kinds.length !== envelopeEvidence.kinds.length) return false;
   const rows = payload.applicationAnswerRecords ?? [];
   const rowHashes = Array.isArray(envelopeEvidence.rowHashes) ? envelopeEvidence.rowHashes.filter((hash): hash is string => typeof hash === "string" && /^[a-f0-9]{64}$/i.test(hash)).sort() : [];
+  if (!Array.isArray(envelopeEvidence.rowHashes) || rowHashes.length !== envelopeEvidence.rowHashes.length) return false;
   if (typeof envelopeEvidence.rowSetSha256 !== "string" || !/^[a-f0-9]{64}$/i.test(envelopeEvidence.rowSetSha256) || envelopeEvidence.rowSetSha256.toLowerCase() !== createHash("sha256").update(rowHashes.join("\n")).digest("hex")) return false;
-  if (rows.length === 0) return !kinds.includes("application_answers") && rowHashes.length === 0;
+  if (kinds.some((kind) => !["application_answers", "document_binaries", "hap_subsidies"].includes(kind)) || new Set(kinds).size !== kinds.length) return false;
+  const supplementCount = (values: unknown): number => Array.isArray(values) ? values.filter((row) => row && typeof row === "object" && typeof row.supplementRowId === "string").length : 0;
+  const binaryCount = supplementCount(payload.documentBinaryDescriptors);
+  const hapCount = supplementCount(payload.subsidies);
+  if ((binaryCount > 0 && !kinds.includes("document_binaries")) || (hapCount > 0 && !kinds.includes("hap_subsidies"))) return false;
+  if (rows.length === 0) return !kinds.includes("application_answers") && rowHashes.length === binaryCount + hapCount;
   if (!kinds.includes("application_answers")) return false;
   const supplementedRows = rows.filter((candidate) => candidate && typeof candidate === "object" && !Array.isArray(candidate) && typeof (candidate as Record<string, unknown>).supplementRowId === "string");
-  if (supplementedRows.length !== rowHashes.length) return false;
-  const actualRowHashes = supplementedRows.map((candidate) => createHash("sha256").update(canonicalJson(candidate)).digest("hex")).sort();
-  if (actualRowHashes.length !== rowHashes.length || actualRowHashes.some((hash, index) => hash !== rowHashes[index])) return false;
+  if (supplementedRows.length + binaryCount + hapCount !== rowHashes.length) return false;
+  // The externally verified tuple binds the full mixed-kind row set. Answer
+  // rows use their canonical row hash; binary/HAP rows use builder wrapper
+  // hashes, so require exact answer membership without treating those hashes
+  // as additional answers. Cardinality still rejects anonymous extra claims.
+  const remaining = new Map<string, number>();
+  for (const hash of rowHashes) remaining.set(hash, (remaining.get(hash) ?? 0) + 1);
+  for (const candidate of supplementedRows) {
+    const hash = createHash("sha256").update(canonicalJson(candidate)).digest("hex");
+    const count = remaining.get(hash) ?? 0;
+    if (!count) return false;
+    remaining.set(hash, count - 1);
+  }
   return rows.every((candidate) => {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
     const row = candidate as Record<string, unknown>;
@@ -1729,7 +1746,18 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
   for (const payment of payments) {
     for (const variant of sourceIdVariants(payment as Raw, ["PaymentID", "PaymentId"])) retainedPaymentReferences.add(variant);
   }
+  const retainedCreditReferences = new Set<string>();
+  for (const credit of credits) {
+    for (const variant of sourceIdVariants(credit as Raw, ["CreditID", "CreditId"])) retainedCreditReferences.add(variant);
+  }
   const normalizedAllocations = Array.from(allocationBySource.values()).filter((allocation) => {
+    if (text(allocation, "AllocationType") === "CreditAllocation") {
+      const reference = text(allocation, "creditId");
+      const plain = reference?.replace(/^credit:/, "");
+      const retained = Boolean(reference && (retainedCreditReferences.has(reference) || (plain && retainedCreditReferences.has(plain))));
+      if (!retained) addException(exceptions, "missing_relationship", "allocations", allocation, "allocation_parent_credit_not_resolved", "unresolved");
+      return retained;
+    }
     const paymentReference = text(allocation, "paymentId", "PaymentID", "PaymentId", "PaymentSourceID", "PaymentSourceId", "PaymentTransactionID", "PaymentTransactionId", "PaymentSourceTransactionID", "PaymentSourceTransactionId");
     const unnamespaced = paymentReference?.replace(/^[a-z_]+:/i, "");
     const retained = Boolean(paymentReference && (retainedPaymentReferences.has(paymentReference) || (unnamespaced && retainedPaymentReferences.has(unnamespaced))));

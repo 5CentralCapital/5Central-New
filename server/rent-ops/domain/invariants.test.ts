@@ -206,3 +206,20 @@ test("v3 absent unit link stays unknown while every present tenancy reference is
   tenancy.unitId = ""; tenancy.unitLinkKnowledge = "ambiguous";
   assert.equal(own().length, 1);
 });
+
+
+test('source cancellation preserves dates when a future prepay application was already recorded before NSF',async()=>{
+ const {syntheticRentOpsSnapshot}=await import('../fixtures/synthetic');
+ const {validateAllocation}=await import('./invariants');
+ const snapshot=syntheticRentOpsSnapshot(),base=snapshot.ledgerTransactions[0];
+ const payment={...base,id:'1892',kind:'payment' as const,amountCents:75000,postedOn:'2023-10-23'};
+ const charge={...base,id:'2853',kind:'charge' as const,amountCents:75000,postedOn:'2023-11-01'};
+ snapshot.ledgerTransactions=[payment,charge,{...payment,id:'nsf',kind:'reversal',status:'posted',reversalOfId:'1892',postedOn:'2023-10-26'}];
+ const positive={id:'7318',kind:'allocation' as const,paymentTransactionId:'1892',chargeTransactionId:'2853',amountCents:18935,allocatedOn:'2023-11-01',paymentLinkKnowledge:'exact' as const,chargeLinkKnowledge:'exact' as const,amountKnowledge:'known' as const,allocatedOnKnowledge:'source' as const,sourceArtifactSha256:'a'.repeat(64),artifactObservationOn:'2026-09-07',source:{system:'rent_manager',entityType:'payment_allocation' as const,sourceId:'7318',sourceUpdatedAt:'2023-10-24T01:04:01Z'}};
+ const negative={...positive,id:'7359',kind:'reversal' as const,amountCents:-18935,allocatedOn:'2023-10-26',source:{...positive.source,sourceId:'7359',sourceUpdatedAt:'2023-10-26T07:09:22Z'}};
+ snapshot.paymentAllocations=[positive,negative];
+ assert.deepEqual(validateSnapshot(snapshot).filter(v=>v.code.startsWith('allocation')),[]);
+ assert.equal(snapshot.paymentAllocations[0].allocatedOn,'2023-11-01');assert.equal(snapshot.paymentAllocations[1].allocatedOn,'2023-10-26');
+ assert.ok(validateAllocation(negative,payment,charge,snapshot.ledgerTransactions,false,snapshot.paymentAllocations).some(v=>v.code==='allocation_predates_charge'));
+ for(const invalid of [{...positive,sourceArtifactSha256:'b'.repeat(64)},{...positive,source:{...positive.source,sourceUpdatedAt:'2023-10-27T01:04:01Z'}},{...positive,amountCents:18934}]) {snapshot.paymentAllocations=[invalid,negative];assert.ok(validateSnapshot(snapshot).some(v=>v.code==='allocation_reversal_exceeds_history'));}
+});

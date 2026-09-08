@@ -1129,3 +1129,22 @@ test('payment reversal embed supplies reason only through exact PaymentID bindin
  const wrong=normalizeRentManagerExport({payments:[{...base,PaymentReversal:{PaymentID:999,ReversalReason:'Wrong account'}}]});
  assert.equal((wrong.input.payments![0] as Record<string,unknown>).ReversalReason,undefined);
 });
+
+
+test("exact CreditAllocation retains its AppliedCreditID parent without requiring or inventing a payment",()=>{
+ const result=normalizeRentManagerExport({
+  credits:[{CreditID:7,AccountID:1,Amount:100,TransactionDate:'2026-08-01'}],
+  allocations:[
+   {AllocationID:1,AllocationType:'CreditAllocation',AppliedCreditID:7,ChargeID:2,Amount:100,TransactionDate:'2026-08-02'},
+   {AllocationID:2,AllocationType:'CreditAllocation',AppliedCreditID:8,ChargeID:2,Amount:100,TransactionDate:'2026-08-02'},
+   {AllocationID:3,AllocationType:'DirectAllocation',AppliedCreditID:7,ChargeID:2,Amount:100,TransactionDate:'2026-08-02'},
+  ],
+ } as any);
+ assert.equal(result.input.allocations?.length,1);
+ assert.equal(result.input.allocations?.[0].sourceId,'payment_allocation:1');
+ assert.equal(result.input.allocations?.[0].creditId,'credit:7');
+ assert.equal(result.input.allocations?.[0].paymentId,undefined);
+ assert.equal(result.input.payments?.length,0);
+ assert.ok(result.exceptions.some(e=>e.detail==='allocation_parent_credit_not_resolved'));
+ assert.ok(result.exceptions.some(e=>e.detail==='allocation_parent_payment_not_resolved'));
+});

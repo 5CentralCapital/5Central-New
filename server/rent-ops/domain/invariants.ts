@@ -273,12 +273,24 @@ export function postedReversalTargets(transactions: RentOpsLedgerTransaction[]):
   return new Set(transactions.filter(row => row.kind === "reversal" && row.status === "posted" && row.reversalOfId).map(row => row.reversalOfId!));
 }
 
+/** Source cancellation can precede a future application which already existed in RM.
+ * This proves recorded history only; neither effective date is rewritten. */
+function recordedFutureAllocationAmount(row: RentOpsPaymentAllocation, history: RentOpsPaymentAllocation[], transactions: RentOpsLedgerTransaction[]): number {
+  if (!isSourceAllocationReversal(row) || !transactions.some(t=>t.kind==='reversal' && t.status==='posted' && t.reversalOfId===row.paymentTransactionId && t.postedOn===row.allocatedOn)) return 0;
+  return history.filter(a=>a.kind!=="reversal" && a.kind!=="transfer" && a.kind!=="credit_allocation" && a.source?.system==='rent_manager' && a.sourceArtifactSha256===row.sourceArtifactSha256
+    && a.paymentTransactionId===row.paymentTransactionId && a.chargeTransactionId===row.chargeTransactionId && a.paymentLinkKnowledge==='exact' && a.chargeLinkKnowledge==='exact'
+    && a.amountKnowledge==='known' && typeof a.amountCents==='number' && a.amountCents>0 && !!a.allocatedOn && a.allocatedOn>row.allocatedOn!
+    && !!a.source.sourceUpdatedAt && Number.isFinite(Date.parse(a.source.sourceUpdatedAt)) && isoDateSchema.safeParse(a.source.sourceUpdatedAt.slice(0,10)).success && a.source.sourceUpdatedAt.slice(0,10)<row.allocatedOn!)
+    .reduce((sum,a)=>sum+a.amountCents!,0);
+}
+
 export function validateAllocation(
   allocation: RentOpsPaymentAllocation,
   payment: RentOpsLedgerTransaction | undefined,
   charge: RentOpsLedgerTransaction | undefined,
   transactions: RentOpsLedgerTransaction[] = [],
   historical = false,
+  allocationHistory: RentOpsPaymentAllocation[] = [],
 ): InvariantViolation[] {
   const violations: InvariantViolation[] = [];
   if (allocation.kind === "credit_allocation") {
@@ -310,7 +322,7 @@ export function validateAllocation(
   const allocatedOnKnown = typeof allocatedOn === "string" && allocatedOn.length > 0;
   if (allocatedOnKnown && !isoDateSchema.safeParse(allocatedOn).success) violations.push({ code: "allocation_date_invalid", entityId: allocation.id, message: "Allocation date must be a real calendar date" });
   if (allocatedOnKnown && payment && typeof payment.postedOn === "string" && allocatedOn < payment.postedOn) violations.push({ code: "allocation_predates_payment", entityId: allocation.id, message: `Allocation ${allocation.id} predates payment ${payment.id}` });
-  if (allocatedOnKnown && charge && typeof charge.postedOn === "string" && allocatedOn < charge.postedOn) violations.push({ code: "allocation_predates_charge", entityId: allocation.id, message: `Allocation ${allocation.id} predates charge ${charge.id}` });
+  if (allocatedOnKnown && charge && typeof charge.postedOn === "string" && allocatedOn < charge.postedOn && !(historical && recordedFutureAllocationAmount(allocation, allocationHistory, transactions) >= -(allocation.amountCents ?? 0) && isSourceAllocationReversal(allocation))) violations.push({ code: "allocation_predates_charge", entityId: allocation.id, message: `Allocation ${allocation.id} predates charge ${charge.id}` });
   // A source allocation can have a future effective date while its immutable source
   // update proves it already existed before a reversal. Keep both dates intact.
   const sourceUpdatedAt = allocation.source?.sourceUpdatedAt;
@@ -622,7 +634,7 @@ export function validateSnapshot(snapshot: RentOpsSnapshot): InvariantViolation[
   for (const allocation of snapshot.paymentAllocations) {
     const allocationParentId = allocation.kind === "credit_allocation" ? allocation.creditTransactionId : allocation.paymentTransactionId;
     if (allocation.kind !== "transfer" && allocation.paymentTransactionId && allocation.chargeTransactionId) {const key = `${allocation.paymentTransactionId}\0${allocation.chargeTransactionId}`; const rows = allocationPairs.get(key) ?? []; rows.push(allocation); allocationPairs.set(key, rows);}
-    violations.push(...validateAllocation(allocation, allocation.paymentTransactionId ? transactionMap.get(allocation.paymentTransactionId) : undefined, allocation.chargeTransactionId ? transactionMap.get(allocation.chargeTransactionId) : undefined, snapshot.ledgerTransactions, true));
+    violations.push(...validateAllocation(allocation, allocation.paymentTransactionId ? transactionMap.get(allocation.paymentTransactionId) : undefined, allocation.chargeTransactionId ? transactionMap.get(allocation.chargeTransactionId) : undefined, snapshot.ledgerTransactions, true, snapshot.paymentAllocations));
     if (allocation.kind !== "transfer" && allocationParentId && typeof allocation.amountCents === "number") allocationsByPayment.set(allocationParentId, (allocationsByPayment.get(allocationParentId) ?? 0) + allocation.amountCents);
     if (allocation.kind !== "transfer" && allocation.chargeTransactionId && !reversedAllocationTargets.has(allocation.chargeTransactionId) && !!allocationParentId && !reversedAllocationTargets.has(allocationParentId) && typeof allocation.amountCents === "number") allocationsByCharge.set(allocation.chargeTransactionId, (allocationsByCharge.get(allocation.chargeTransactionId) ?? 0) + allocation.amountCents);
   }
@@ -632,7 +644,7 @@ export function validateSnapshot(snapshot: RentOpsSnapshot): InvariantViolation[
     let net = 0;
     for (const row of rows.sort((a,b) => (a.allocatedOn ?? "").localeCompare(b.allocatedOn ?? "") || (b.amountCents ?? 0) - (a.amountCents ?? 0))) {
       net += row.amountCents ?? 0;
-      if (net < 0) violations.push({code:"allocation_reversal_exceeds_history",entityId:row.id,message:"Reverse allocation exceeds its exact payment and charge allocation history"});
+      if (net < 0 && recordedFutureAllocationAmount(row,rows,snapshot.ledgerTransactions) < -net) violations.push({code:"allocation_reversal_exceeds_history",entityId:row.id,message:"Reverse allocation exceeds its exact payment and charge allocation history"});
     }
   }
   for (const [paymentId, amount] of Array.from(allocationsByPayment.entries())) {
