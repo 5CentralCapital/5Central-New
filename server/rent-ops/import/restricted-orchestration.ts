@@ -1,3 +1,4 @@
+import type { ManagedStorageReadiness } from "./managed-storage-readiness";
 import { canonicalJson, sha256 } from "../export/hash";
 import type { RentOpsQueryExecutor } from "../repositories/postgres";
 import { DatabaseAuditError, inspectDatabaseTarget, runDatabaseAudit } from "./database-audit";
@@ -378,6 +379,7 @@ export async function runRestrictedMigrationArchiveOrchestration(options: {
   restrictedVerifiedDocumentTransfer?: RestrictedVerifiedDocumentTransfer;
   restrictedDocumentOrphanSink?: (evidence: RestrictedDocumentTransferOrphanEvidence) => Promise<void> | void;
   storagePrivilegeProbe?: PrivateObjectStorePrivilegeProbe;
+  managedStorageReadiness?: ManagedStorageReadiness;
   /** Independent trust-store verification for derivative supplement receipts.
    * The low-level archive reader requires this only when a provenance sidecar
    * is present; there is intentionally no default or auto-pass verifier. */
@@ -405,6 +407,7 @@ export async function runRestrictedMigrationArchiveOrchestration(options: {
       ...(options.restrictedVerifiedDocumentTransfer ? { restrictedVerifiedDocumentTransfer: options.restrictedVerifiedDocumentTransfer } : {}),
       ...(options.restrictedDocumentOrphanSink ? { restrictedDocumentOrphanSink: options.restrictedDocumentOrphanSink } : {}),
       ...(options.storagePrivilegeProbe ? { storagePrivilegeProbe: options.storagePrivilegeProbe } : {}),
+      ...(options.managedStorageReadiness ? { managedStorageReadiness: options.managedStorageReadiness } : {}),
       ...(options.supplementReceiptVerifier ? { supplementReceiptVerifier: options.supplementReceiptVerifier } : {}),
       now: orchestrationNow,
     });

@@ -61,6 +61,7 @@ import type { RestrictedParityPersistenceInput } from "./restricted-parity-persi
 import type { VerifiedDocumentArchiveInput } from "../services/service";
 
 export const APPLY_RENT_OPS_STAGING_PHRASE = "APPLY_RENT_OPS_STAGING_ONCE";
+export const APPLY_RENT_OPS_PRODUCTION_PHRASE = "APPLY_RENT_OPS_PRODUCTION_ONCE";
 export const KNOWN_LIVE_PRIMARY_FINGERPRINT = "a4a44f11352d8b2f";
 export const RENT_OPS_IMPORT_SYSTEM = "rent_manager";
 export const RENT_OPS_MIGRATION_VERSION = RENT_OPS_SCHEMA_VERSION;
@@ -81,7 +82,7 @@ export interface BackupAttestation {
 }
 
 export interface AffirmativeApplyGate {
-  phrase: typeof APPLY_RENT_OPS_STAGING_PHRASE;
+  phrase: typeof APPLY_RENT_OPS_STAGING_PHRASE | typeof APPLY_RENT_OPS_PRODUCTION_PHRASE;
   nonce: string;
 }
 
@@ -1319,7 +1320,7 @@ function forbiddenFingerprintPolicyReasons(options: PersistenceImporterOptions, 
 
 function applyGateReasons(options: PersistenceImporterOptions, inspection: DatabaseTargetInspection): string[] {
   const reasons: string[] = [];
-  if (options.targetClassification !== "staging") reasons.push("target_not_classified_staging");
+  if (options.targetClassification !== "staging" && options.targetClassification !== "production") reasons.push("target_not_classified_staging");
   if (inspection.redactedFingerprint === KNOWN_LIVE_PRIMARY_FINGERPRINT) reasons.push("known_live_primary_rejected");
   reasons.push(...forbiddenFingerprintPolicyReasons(options, inspection));
   if (!options.expectedDatabaseFingerprint || !validFingerprint(options.expectedDatabaseFingerprint)) reasons.push("expected_database_fingerprint_missing_or_invalid");
@@ -1335,13 +1336,13 @@ function applyGateReasons(options: PersistenceImporterOptions, inspection: Datab
   if (inspection.migrationChainValid === false) reasons.push("migration_chain_invalid");
   if (inspection.migrationVersion !== RENT_OPS_MIGRATION_VERSION) reasons.push("migration_version_mismatch");
   if (inspection.requiredTables !== RENT_OPS_MIGRATION_REQUIRED_TABLES.length) reasons.push("rent_ops_schema_missing");
-  if (options.affirmativeGate?.phrase !== APPLY_RENT_OPS_STAGING_PHRASE || typeof options.affirmativeGate.nonce !== "string" || options.affirmativeGate.nonce.length < 8 || options.affirmativeGate.nonce.length > 200) reasons.push("affirmative_apply_gate_missing");
+  if (options.affirmativeGate?.phrase !== (options.targetClassification === "production" ? APPLY_RENT_OPS_PRODUCTION_PHRASE : APPLY_RENT_OPS_STAGING_PHRASE) || typeof options.affirmativeGate.nonce !== "string" || options.affirmativeGate.nonce.length < 8 || options.affirmativeGate.nonce.length > 200) reasons.push("affirmative_apply_gate_missing");
   return reasons;
 }
 
 function missingInspectionGateReasons(options: PersistenceImporterOptions): string[] {
   const reasons: string[] = [];
-  if (options.targetClassification !== "staging") reasons.push("target_not_classified_staging");
+  if (options.targetClassification !== "staging" && options.targetClassification !== "production") reasons.push("target_not_classified_staging");
   reasons.push(...forbiddenFingerprintPolicyReasons(options));
   if (!options.expectedDatabaseFingerprint || !validFingerprint(options.expectedDatabaseFingerprint)) reasons.push("expected_database_fingerprint_missing_or_invalid");
   const backup = options.backupAttestation;
@@ -1350,7 +1351,7 @@ function missingInspectionGateReasons(options: PersistenceImporterOptions): stri
   if (!options.renderedMigrationChecksum || !SHA256_RE.test(options.renderedMigrationChecksum)) reasons.push("rendered_migration_checksum_missing_or_invalid");
   else if (options.renderedMigrationChecksum !== options.expectedMigrationChecksum) reasons.push("rendered_migration_checksum_mismatch");
   if (options.actualDatabaseFingerprint && !validFingerprint(options.actualDatabaseFingerprint)) reasons.push("actual_database_fingerprint_missing_or_invalid");
-  if (options.affirmativeGate?.phrase !== APPLY_RENT_OPS_STAGING_PHRASE || typeof options.affirmativeGate.nonce !== "string" || options.affirmativeGate.nonce.length < 8 || options.affirmativeGate.nonce.length > 200) reasons.push("affirmative_apply_gate_missing");
+  if (options.affirmativeGate?.phrase !== (options.targetClassification === "production" ? APPLY_RENT_OPS_PRODUCTION_PHRASE : APPLY_RENT_OPS_STAGING_PHRASE) || typeof options.affirmativeGate.nonce !== "string" || options.affirmativeGate.nonce.length < 8 || options.affirmativeGate.nonce.length > 200) reasons.push("affirmative_apply_gate_missing");
   return reasons;
 }
 

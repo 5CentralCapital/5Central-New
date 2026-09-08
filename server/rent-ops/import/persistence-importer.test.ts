@@ -15,6 +15,7 @@ import { runRestrictedMigrationArchiveOrchestration } from "./restricted-orchest
 import {
   APPROVED_RM_NORMALIZER_ARTIFACT,
   APPLY_RENT_OPS_STAGING_PHRASE,
+  APPLY_RENT_OPS_PRODUCTION_PHRASE,
   approvedArchiveEnvelopeSha256,
   KNOWN_LIVE_PRIMARY_FINGERPRINT,
   PersistenceImportPreconditionError,
@@ -705,4 +706,16 @@ test("persistence validates present tenancy references alongside a source-absent
   tenancy.propertyId = "invalid-present-property";
   const invalid = await new PersistenceImporter().run(fixture, undefined, { mode: "dry_run", controls: {} });
   assert.equal(invalid.blockedReasons.includes("orphan_tenancy"), true);
+});
+
+
+test("production classification requires its exact phrase and retains fingerprint and backup gates", async () => {
+ const options = {...applyOptions("synthetic-production-gate"), targetClassification: "production" as const};
+ await assert.rejects(new PersistenceImporter().run(mappedFixture(),new MemoryExecutor(),options), (error: unknown)=>error instanceof PersistenceImportPreconditionError && error.reasons.includes("affirmative_apply_gate_missing"));
+ options.affirmativeGate = {phrase:APPLY_RENT_OPS_PRODUCTION_PHRASE,nonce:"synthetic-production-gate-explicit"};
+ const result=await new PersistenceImporter().run(mappedFixture(),new MemoryExecutor(),options);
+ assert.equal(result.committed,true);
+ for(const patch of [{expectedDatabaseFingerprint:"b".repeat(16)},{backupAttestation:undefined}]) {
+  await assert.rejects(new PersistenceImporter().run(mappedFixture(),new MemoryExecutor(),{...options,...patch}),PersistenceImportPreconditionError);
+ }
 });

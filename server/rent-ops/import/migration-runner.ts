@@ -1,3 +1,4 @@
+import { verifyManagedStorageReadiness, type ManagedStorageReadiness } from "./managed-storage-readiness";
 import { ALLOCATION_OVERLAY_FILE, verifyAllocationOverlay } from "./allocation-overlay";
 import { FINANCIAL_METADATA_PROVENANCE_FILE, verifyFinancialMetadata } from "./financial-metadata";
 import { OBSERVATION_PROVENANCE_FILE, verifyObservationBoundary } from "./observation-boundary";
@@ -1372,10 +1373,12 @@ export async function runRestrictedMigrationArchive(options: {
   archiveRoot: string;
   mode?: "dry_run" | "apply";
   executor?: RentOpsQueryExecutor;
+  parityAuditExecutor?: RentOpsQueryExecutor;
   importerOptions?: PersistenceImporterOptions;
   restrictedVerifiedDocumentTransfer?: RestrictedVerifiedDocumentTransfer;
   restrictedDocumentOrphanSink?: (evidence: RestrictedDocumentTransferOrphanEvidence) => Promise<void> | void;
   storagePrivilegeProbe?: PrivateObjectStorePrivilegeProbe;
+  managedStorageReadiness?: ManagedStorageReadiness;
   supplementReceiptVerifier?: VerifiedSupplementReceiptVerifier;
   now?: Date;
 }): Promise<RestrictedMigrationRunResult> {
@@ -1434,9 +1437,11 @@ export async function runRestrictedMigrationArchive(options: {
   let restrictedVerifiedDocumentInputs: VerifiedDocumentArchiveInput[] = [];
   if (mode === "apply" && archive.verifiedBinaries.length > 0) {
     if (!options.restrictedVerifiedDocumentTransfer) throw new RestrictedMigrationArchiveError(["restricted_document_transfer_missing"]);
-    if (!options.storagePrivilegeProbe) throw new RestrictedMigrationArchiveError(["restricted_storage_privilege_probe_missing"]);
+    if (!options.storagePrivilegeProbe && !options.managedStorageReadiness) throw new RestrictedMigrationArchiveError(["restricted_storage_privilege_probe_missing"]);
     try {
-      await probePrivateObjectStorePrivileges({ ...options.storagePrivilegeProbe, requireUploadWriter: true });
+      if (options.storagePrivilegeProbe && options.managedStorageReadiness) throw new Error("storage_profile_ambiguous");
+      if (options.managedStorageReadiness) await verifyManagedStorageReadiness(options.managedStorageReadiness);
+      else await probePrivateObjectStorePrivileges({ ...options.storagePrivilegeProbe!, requireUploadWriter: true });
     } catch {
       throw new RestrictedMigrationArchiveError(["restricted_storage_privilege_probe_failed"]);
     }
@@ -1467,7 +1472,7 @@ export async function runRestrictedMigrationArchive(options: {
   let postcommitAudit: RestrictedMigrationPostcommitAudit | undefined;
   if (mode === "apply") {
     try {
-      const parityAudit = await auditPersistedRestrictedParity(options.executor!, parityInput);
+      const parityAudit = await auditPersistedRestrictedParity(options.parityAuditExecutor ?? options.executor!, parityInput);
       postcommitAudit = { passed: parityAudit.passed, blockingReasons: parityAudit.blockingReasons };
     } catch {
       postcommitAudit = { passed: false, blockingReasons: ["restricted_parity_postcommit_readback_failed"] };

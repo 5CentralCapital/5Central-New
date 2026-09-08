@@ -250,6 +250,7 @@ function assertDocumentMime(mimeType: string): string {
 }
 
 function hasDocumentMagic(bytes: Uint8Array, mimeType: string): boolean {
+  if (mimeType === "application/octet-stream") return true;
   const value = Buffer.from(bytes);
   if (mimeType === "application/pdf") return value.subarray(0, 5).toString("ascii") === "%PDF-";
   if (mimeType === "image/jpeg") return value.length >= 3 && value[0] === 0xff && value[1] === 0xd8 && value[2] === 0xff;
@@ -288,7 +289,7 @@ function validatedDocumentStream(source: StorageByteStream, mimeType: string): R
 
 function bindingFromStorage(documentId: string, result: { backend: string; logicalKey: string; checksumSha256: string; sizeBytes: number; immutableGeneration?: string; immutableVersion?: string; verifiedAt?: string }): RentOpsDocumentObjectBinding {
   const version = exactVersion(result);
-  if (!hasExactVersion(version) || !result.verifiedAt) throw new RentOpsInvariantError("Verified document object binding is incomplete");
+  if (!hasExactVersion(version) || !result.verifiedAt || !Number.isFinite(Date.parse(result.verifiedAt))) throw new RentOpsInvariantError("Verified document object binding is incomplete");
   return {
     documentId,
     bindingKind: "applicant",
@@ -310,6 +311,83 @@ function documentStorageKey(binding: RentOpsDocumentObjectBinding): string {
 
 function isWritableDocumentStorage(value: StorageReadAdapter | undefined): value is ContentAddressedObjectStore {
   return Boolean(value && typeof (value as Partial<ContentAddressedObjectStore>).putIfAbsent === "function");
+}
+
+async function verifyStoredObject(storage: StorageReadAdapter, result: { backend: string; logicalKey: string; checksumSha256: string; sizeBytes: number; immutableGeneration?: string; immutableVersion?: string; verifiedAt?: string }): Promise<RentOpsDocumentObjectBinding> {
+    const binding = bindingFromStorage("pending", result);
+    const version: StorageVersionOptions = { immutableGeneration: binding.immutableGeneration, immutableVersion: binding.immutableVersion };
+    const stat = await storage.stat(binding.logicalKey, version);
+    if (!stat) throw new RentOpsInvariantError("Verified document object is missing");
+    if (stat.backend !== binding.backend || stat.logicalKey !== binding.logicalKey || stat.checksumSha256 !== binding.checksumSha256 || stat.sizeBytes !== binding.sizeBytes) throw new RentOpsInvariantError("Verified document object changed");
+    assertExactVersion(stat, version, true);
+    const verified = await storage.verify(binding.logicalKey, { expectedChecksumSha256: binding.checksumSha256, expectedSizeBytes: binding.sizeBytes, ...version });
+    if (verified.backend !== binding.backend || verified.logicalKey !== binding.logicalKey || verified.verificationState !== "verified" || verified.checksumSha256 !== binding.checksumSha256 || verified.sizeBytes !== binding.sizeBytes) throw new RentOpsInvariantError("Verified document object could not be verified");
+    assertExactVersion(verified, version, true);
+    return { ...binding, verifiedAt: verified.verifiedAt ?? binding.verifiedAt };
+  }
+
+async function prepareVerifiedDocument(storage: ContentAddressedObjectStore, nowClock: () => Date, input: VerifiedDocumentUploadInput | VerifiedDocumentArchiveInput, refs: { applicationId?: string; propertyId?: string; unitId?: string; personId?: string; tenancyId?: string }, sourceBinaryBinding?: VerifiedDocumentArchiveInput["sourceBinaryBinding"]): Promise<{ document: RentOpsDocument; binding: RentOpsDocumentObjectBinding }> {
+    const mimeType = sourceBinaryBinding && input.mimeType === "application/octet-stream" ? input.mimeType : assertDocumentMime(input.mimeType);
+    const fileName = assertDocumentName(input.fileName);
+    if (input.bytes === undefined && input.stream === undefined) throw new RentOpsInvariantError("Document upload body is missing");
+    if (input.bytes !== undefined && input.stream !== undefined) throw new RentOpsInvariantError("Document upload body is ambiguous");
+    const bytes = input.bytes === undefined ? undefined : assertDocumentBytes(input.bytes, mimeType);
+    if (sourceBinaryBinding && (!sourceBinaryBinding.bindingId || !sourceBinaryBinding.importRunId || !sourceBinaryBinding.sourceSystem || !sourceBinaryBinding.sourceCollection)) throw new RentOpsInvariantError("Imported document binding requires an exact source binary, import run, system, and collection");
+    const storageBinding: SourceBinaryBinding | undefined = sourceBinaryBinding ? {
+      bindingId: sourceBinaryBinding.bindingId,
+      sourceSystem: sourceBinaryBinding.sourceSystem,
+      sourceCollection: sourceBinaryBinding.sourceCollection,
+      sourceIdHash: sourceBinaryBinding.sourceIdHash as SourceBinaryBinding["sourceIdHash"],
+      importRunId: sourceBinaryBinding.importRunId,
+    } : undefined;
+    const stored = await storage.putIfAbsent({
+      ...(bytes ? { bytes, expectedSizeBytes: bytes.byteLength } : { stream: validatedDocumentStream(input.stream!, mimeType), ...(input.sizeBytes !== undefined ? { expectedSizeBytes: input.sizeBytes } : {}) }),
+      expectedChecksumSha256: input.checksumSha256,
+      sourceBinaryBinding: storageBinding,
+    });
+    if (stored.verificationState !== "verified") throw new RentOpsInvariantError("Verified document object could not be verified");
+    if (input.checksumSha256 && stored.checksumSha256 !== input.checksumSha256.toLowerCase() || input.sizeBytes !== undefined && stored.sizeBytes !== input.sizeBytes) throw new RentOpsInvariantError("Verified document object differs from the source binary");
+    if (stored.backend !== storage.backend || stored.logicalKey !== `sha256:${stored.checksumSha256}`) throw new RentOpsInvariantError("Verified document object identity is invalid");
+    const binding = await verifyStoredObject(storage, stored);
+    const documentId = input.documentId ?? `document:verified:${randomUUID()}`;
+    const now = nowClock().toISOString();
+    const objectBinding: RentOpsDocumentObjectBinding = {
+      ...binding,
+      documentId,
+      bindingKind: sourceBinaryBinding ? "import" : "applicant",
+      ...(sourceBinaryBinding?.bindingId ? { sourceBinaryId: sourceBinaryBinding.bindingId } : {}),
+      ...(sourceBinaryBinding?.importRunId ? { importRunId: sourceBinaryBinding.importRunId } : {}),
+      ...(sourceBinaryBinding?.sourceSystem ? { sourceSystem: sourceBinaryBinding.sourceSystem } : {}),
+      ...(sourceBinaryBinding?.sourceCollection ? { sourceCollection: sourceBinaryBinding.sourceCollection } : {}),
+    };
+    const document: RentOpsDocument = {
+      id: documentId,
+      applicationId: refs.applicationId,
+      propertyId: refs.propertyId,
+      unitId: refs.unitId,
+      personId: refs.personId,
+      tenancyId: refs.tenancyId,
+      type: input.type,
+      typeKnowledge: "source",
+      state: "verified",
+      stateKnowledge: "source",
+      fileName,
+      mimeType,
+      sizeBytes: binding.sizeBytes,
+      checksumSha256: binding.checksumSha256,
+      storageKey: documentStorageKey(objectBinding),
+      uploadedAt: now,
+      verifiedAt: binding.verifiedAt,
+      availability: "verified",
+      storageKeyKnowledge: "source",
+    };
+    return { document, binding: objectBinding };
+  }
+
+/** Import preparation only: no repository reads, transactions, or persistence. */
+export async function prepareVerifiedImportedDocument(storage: ContentAddressedObjectStore, input: VerifiedDocumentArchiveInput, now: () => Date = () => new Date()): Promise<{ document: RentOpsDocument; binding: RentOpsDocumentObjectBinding }> {
+  if (!input.documentId || !input.checksumSha256 || !Number.isSafeInteger(input.sizeBytes)) throw new RentOpsInvariantError("Imported document requires exact identity, checksum and size");
+  return prepareVerifiedDocument(storage, now, input, input, input.sourceBinaryBinding);
 }
 
 export class RentOpsService {
@@ -522,18 +600,6 @@ export class RentOpsService {
     return this.documentUploadStorage;
   }
 
-  private async verifyStoredObject(storage: StorageReadAdapter, result: { backend: string; logicalKey: string; checksumSha256: string; sizeBytes: number; immutableGeneration?: string; immutableVersion?: string; verifiedAt?: string }): Promise<RentOpsDocumentObjectBinding> {
-    const binding = bindingFromStorage("pending", result);
-    const version: StorageVersionOptions = { immutableGeneration: binding.immutableGeneration, immutableVersion: binding.immutableVersion };
-    const stat = await storage.stat(binding.logicalKey, version);
-    if (!stat) throw new RentOpsInvariantError("Verified document object is missing");
-    if (stat.checksumSha256 !== binding.checksumSha256 || stat.sizeBytes !== binding.sizeBytes) throw new RentOpsInvariantError("Verified document object changed");
-    assertExactVersion(stat, version, true);
-    const verified = await storage.verify(binding.logicalKey, { expectedChecksumSha256: binding.checksumSha256, expectedSizeBytes: binding.sizeBytes, ...version });
-    if (verified.verificationState !== "verified" || verified.checksumSha256 !== binding.checksumSha256 || verified.sizeBytes !== binding.sizeBytes) throw new RentOpsInvariantError("Verified document object could not be verified");
-    assertExactVersion(verified, version, true);
-    return { ...binding, verifiedAt: verified.verifiedAt ?? binding.verifiedAt };
-  }
 
   private async persistVerifiedDocument(document: RentOpsDocument, binding: RentOpsDocumentObjectBinding, requirement?: RentOpsApplicationRequirement): Promise<RentOpsDocument> {
     const canBind = typeof this.repository.saveDocumentObjectBinding === "function";
@@ -558,60 +624,7 @@ export class RentOpsService {
   }
 
   private async buildVerifiedDocument(input: VerifiedDocumentUploadInput | VerifiedDocumentArchiveInput, refs: { applicationId?: string; propertyId?: string; unitId?: string; personId?: string; tenancyId?: string }, sourceBinaryBinding?: VerifiedDocumentArchiveInput["sourceBinaryBinding"]): Promise<{ document: RentOpsDocument; binding: RentOpsDocumentObjectBinding }> {
-    const storage = this.requireDocumentUploadStorage();
-    const mimeType = assertDocumentMime(input.mimeType);
-    const fileName = assertDocumentName(input.fileName);
-    if (input.bytes === undefined && input.stream === undefined) throw new RentOpsInvariantError("Document upload body is missing");
-    if (input.bytes !== undefined && input.stream !== undefined) throw new RentOpsInvariantError("Document upload body is ambiguous");
-    const bytes = input.bytes === undefined ? undefined : assertDocumentBytes(input.bytes, mimeType);
-    if (sourceBinaryBinding && (!sourceBinaryBinding.bindingId || !sourceBinaryBinding.importRunId || !sourceBinaryBinding.sourceSystem || !sourceBinaryBinding.sourceCollection)) throw new RentOpsInvariantError("Imported document binding requires an exact source binary, import run, system, and collection");
-    const storageBinding: SourceBinaryBinding | undefined = sourceBinaryBinding ? {
-      bindingId: sourceBinaryBinding.bindingId,
-      sourceSystem: sourceBinaryBinding.sourceSystem,
-      sourceCollection: sourceBinaryBinding.sourceCollection,
-      sourceIdHash: sourceBinaryBinding.sourceIdHash as SourceBinaryBinding["sourceIdHash"],
-      importRunId: sourceBinaryBinding.importRunId,
-    } : undefined;
-    const stored = await storage.putIfAbsent({
-      ...(bytes ? { bytes, expectedSizeBytes: bytes.byteLength } : { stream: validatedDocumentStream(input.stream!, mimeType), ...(input.sizeBytes !== undefined ? { expectedSizeBytes: input.sizeBytes } : {}) }),
-      expectedChecksumSha256: input.checksumSha256,
-      sourceBinaryBinding: storageBinding,
-    });
-    if (stored.verificationState !== "verified") throw new RentOpsInvariantError("Verified document object could not be verified");
-    const binding = await this.verifyStoredObject(storage, stored);
-    const documentId = input.documentId ?? `document:verified:${randomUUID()}`;
-    const now = this.now().toISOString();
-    const objectBinding: RentOpsDocumentObjectBinding = {
-      ...binding,
-      documentId,
-      bindingKind: sourceBinaryBinding ? "import" : "applicant",
-      ...(sourceBinaryBinding?.bindingId ? { sourceBinaryId: sourceBinaryBinding.bindingId } : {}),
-      ...(sourceBinaryBinding?.importRunId ? { importRunId: sourceBinaryBinding.importRunId } : {}),
-      ...(sourceBinaryBinding?.sourceSystem ? { sourceSystem: sourceBinaryBinding.sourceSystem } : {}),
-      ...(sourceBinaryBinding?.sourceCollection ? { sourceCollection: sourceBinaryBinding.sourceCollection } : {}),
-    };
-    const document: RentOpsDocument = {
-      id: documentId,
-      applicationId: refs.applicationId,
-      propertyId: refs.propertyId,
-      unitId: refs.unitId,
-      personId: refs.personId,
-      tenancyId: refs.tenancyId,
-      type: input.type,
-      typeKnowledge: "source",
-      state: "verified",
-      stateKnowledge: "source",
-      fileName,
-      mimeType,
-      sizeBytes: binding.sizeBytes,
-      checksumSha256: binding.checksumSha256,
-      storageKey: documentStorageKey(objectBinding),
-      uploadedAt: now,
-      verifiedAt: binding.verifiedAt,
-      availability: "verified",
-      storageKeyKnowledge: "source",
-    };
-    return { document, binding: objectBinding };
+    return prepareVerifiedDocument(this.requireDocumentUploadStorage(), this.now, input, refs, sourceBinaryBinding);
   }
 
   /** Store, verify, and bind an applicant's raw bearer-scoped upload. */

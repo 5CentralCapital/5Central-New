@@ -1,8 +1,10 @@
+import type { ManagedStorageReadiness } from "./managed-storage-readiness";
 import { configuredSupplementVerifier, type SupplementVerifierConfig } from "./supplement-receipt-verifier";
 import { pathToFileURL } from "node:url";
 import type { RentOpsQueryExecutor } from "../repositories/postgres";
 import {
   APPLY_RENT_OPS_STAGING_PHRASE,
+  APPLY_RENT_OPS_PRODUCTION_PHRASE,
   PersistenceImportPreconditionError,
   PersistenceImportTransactionError,
   type AffirmativeApplyGate,
@@ -53,6 +55,7 @@ export interface RestrictedMigrationCliRuntime {
   restrictedVerifiedDocumentTransfer?: RestrictedVerifiedDocumentTransfer;
   restrictedDocumentOrphanSink?: (evidence: RestrictedDocumentTransferOrphanEvidence) => Promise<void> | void;
   storagePrivilegeProbe?: PrivateObjectStorePrivilegeProbe;
+  managedStorageReadiness?: ManagedStorageReadiness;
 }
 
 export interface RedactedMigrationArtifactReport {
@@ -245,7 +248,7 @@ export function parseRestrictedMigrationCliArgs(argv: readonly string[]): Restri
     ? { verified: true as const, ...(backupAttestationId ? { attestationId: backupAttestationId } : {}), ...(backupReference ? { reference: backupReference } : {}), targetFingerprint: backupTargetFingerprint, verifiedAt: backupVerifiedAt }
     : undefined;
   const affirmativeGate: AffirmativeApplyGate | undefined = gatePhrase !== undefined && gateNonce !== undefined
-    ? { phrase: gatePhrase as typeof APPLY_RENT_OPS_STAGING_PHRASE, nonce: gateNonce }
+    ? { phrase: gatePhrase as AffirmativeApplyGate["phrase"], nonce: gateNonce }
     : undefined;
   return {
     archiveRoot,
@@ -263,7 +266,7 @@ export function parseRestrictedMigrationCliArgs(argv: readonly string[]): Restri
       backupAttestation,
       affirmativeGate,
     },
-    ...(secondGateNonce !== undefined ? { secondApplyGate: { phrase: APPLY_RENT_OPS_STAGING_PHRASE, nonce: secondGateNonce } } : {}),
+    ...(secondGateNonce !== undefined ? { secondApplyGate: { phrase: targetClassification === "production" ? APPLY_RENT_OPS_PRODUCTION_PHRASE : APPLY_RENT_OPS_STAGING_PHRASE, nonce: secondGateNonce } } : {}),
   };
 }
 
@@ -298,6 +301,7 @@ export async function runRestrictedMigrationCli(args: RestrictedMigrationCliArgs
           ...(runtime.restrictedVerifiedDocumentTransfer ? { restrictedVerifiedDocumentTransfer: runtime.restrictedVerifiedDocumentTransfer } : {}),
           ...(runtime.restrictedDocumentOrphanSink ? { restrictedDocumentOrphanSink: runtime.restrictedDocumentOrphanSink } : {}),
           ...(runtime.storagePrivilegeProbe ? { storagePrivilegeProbe: runtime.storagePrivilegeProbe } : {}),
+          ...(runtime.managedStorageReadiness ? { managedStorageReadiness: runtime.managedStorageReadiness } : {}),
         });
       }
       : undefined;
@@ -324,6 +328,7 @@ export async function runRestrictedMigrationCli(args: RestrictedMigrationCliArgs
       ...(runtime.restrictedVerifiedDocumentTransfer ? { restrictedVerifiedDocumentTransfer: runtime.restrictedVerifiedDocumentTransfer } : {}),
       ...(runtime.restrictedDocumentOrphanSink ? { restrictedDocumentOrphanSink: runtime.restrictedDocumentOrphanSink } : {}),
       ...(runtime.storagePrivilegeProbe ? { storagePrivilegeProbe: runtime.storagePrivilegeProbe } : {}),
+      ...(runtime.managedStorageReadiness ? { managedStorageReadiness: runtime.managedStorageReadiness } : {}),
       ...(auditOverride ? { audit: auditOverride } : {}),
     });
     return formatRestrictedMigrationOutput(orchestration.secondApply);
