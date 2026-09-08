@@ -13,6 +13,7 @@ async function hashPassword(password: string): Promise<string> {
 }
 
 async function seed() {
+  if (process.env.NODE_ENV === "production") throw new Error("Test seeding is forbidden in production");
   console.log('Seeding database with test users...');
 
   try {

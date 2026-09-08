@@ -1,0 +1,50 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { PGlite } from '@electric-sql/pglite';
+import { ensureRentOpsSchema } from '../persistence';
+import { PostgresRentOpsRepository, type RentOpsQueryExecutor } from '../repositories/postgres';
+import { deriveSharedPaymentApplications, deriveTenantLedger } from '../domain/reports';
+import type { RentOpsLedgerTransaction } from '../../../shared/rent-ops-contracts';
+
+test('source credit scope and future charge dates survive PostgreSQL readback without cash creation',async()=>{
+ const db=new PGlite();try{
+  await ensureRentOpsSchema({apply:true,executor:async sql=>{await db.exec(sql);}});
+  const executor:RentOpsQueryExecutor={async query<T>(sql,args){if(sql.includes('has_table_privilege'))return{rows:(args![0] as string[]).map(table_name=>({table_name,can_select:false,can_insert:false,can_update:false,can_delete:false})) as T[]};return db.query<T>(sql,args?.map(v=>v===undefined?null:v));}};
+  const repo=new PostgresRentOpsRepository(executor);
+  await db.exec(`INSERT INTO rent_ops_properties(id,slug) VALUES('p1','p1'),('p2','p2');INSERT INTO rent_ops_units(id,property_id,property_link_knowledge)VALUES('u1','p1','manual'),('u2','p2','manual');INSERT INTO rent_ops_people(id)VALUES('person');INSERT INTO rent_ops_tenancies(id,property_id,unit_id,primary_person_id,status,created_at,property_link_knowledge,unit_link_knowledge,primary_person_link_knowledge,status_knowledge)VALUES('t1','p1','u1','person','current',NOW(),'manual','manual','manual','manual'),('t2','p2','u2','person','current',NOW(),'manual','manual','manual','manual');`);
+  await db.exec("INSERT INTO rent_ops_properties(id,slug)VALUES('p3','p3');");
+  await db.exec('CREATE ROLE rent_ops_staging_importer; GRANT SELECT,INSERT ON ALL TABLES IN SCHEMA public TO rent_ops_staging_importer; SET ROLE rent_ops_staging_importer');
+  const base:RentOpsLedgerTransaction={id:'charge1',reversalOfId:null,adjustmentDirection:null,allocationMode:null,propertyId:'p1',unitId:'u1',personId:'person',tenancyId:'t1',kind:'charge',category:'base_rent',categoryKnowledge:'source',status:'posted',amountCents:6000,postedOn:'2026-08-05',dueOn:null,dueOnKnowledge:'unknown',description:'Rent',payer:'tenant',payerKnowledge:'source',propertyLinkKnowledge:'exact',unitLinkKnowledge:'exact',personLinkKnowledge:'exact',tenancyLinkKnowledge:'exact',amountKnowledge:'known',postedOnKnowledge:'source',statusKnowledge:'source',descriptionKnowledge:'source',chargeDefinitionId:null,chargeDefinitionLinkKnowledge:'unknown',paymentMethod:null,paymentMethodKnowledge:'unknown',sourceArtifactSha256:'a'.repeat(64),artifactObservationOn:'2026-08-06',source:{system:'rent_manager',entityType:'ledger_transaction',sourceId:'charge1',sourceUpdatedAt:'2026-08-01T10:00:00.000Z'}};
+  await repo.saveLedgerTransaction(base);
+  await repo.saveLedgerTransaction({...base,id:'credit',kind:'credit',propertyId:'p2',unitId:'u2',tenancyId:null,tenancyLinkKnowledge:'unknown',postedOn:'2026-08-01',source:{...base.source!,sourceId:'credit'}});
+  const allocation={sourcePropertyId:'p1',id:'credit-a',kind:'credit_allocation' as const,creditTransactionId:'credit',creditLinkKnowledge:'exact' as const,paymentTransactionId:null,paymentLinkKnowledge:'unknown' as const,chargeTransactionId:'charge1',chargeLinkKnowledge:'exact' as const,amountCents:6000,amountKnowledge:'known' as const,allocatedOn:'2026-08-02',allocatedOnKnowledge:'source' as const,source:{system:'rent_manager',entityType:'payment_allocation' as const,sourceId:'credit-a'},sourceArtifactSha256:'a'.repeat(64),artifactObservationOn:'2026-08-06'};
+  await repo.savePaymentAllocation(allocation);
+  await ensureRentOpsSchema({apply:true,query:sql=>db.query(sql),executor:async sql=>{await db.exec(sql);}});
+  const snapshot=await repo.getSnapshot();
+  assert.equal(snapshot.paymentAllocations[0].creditTransactionId,'credit');
+  assert.equal(snapshot.ledgerTransactions.find(r=>r.id==='charge1')?.source?.sourceUpdatedAt,'2026-08-01T10:00:00.000Z');
+  assert.equal(snapshot.paymentAllocations[0].sourcePropertyId,'p1');
+  assert.equal(snapshot.paymentAllocations[0].allocatedOn,'2026-08-02');
+  assert.equal(snapshot.ledgerTransactions.find(r=>r.id==='charge1')?.postedOn,'2026-08-05');
+  assert.equal(snapshot.paymentAllocations[0].paymentTransactionId,null);
+  assert.equal(snapshot.ledgerTransactions.filter(row=>row.kind==='payment').length,0);
+  const {validateSnapshot}=await import('../domain/invariants');
+  assert.deepEqual(validateSnapshot(snapshot).filter(v=>v.code.startsWith('allocation')||v.code.startsWith('credit_allocation')),[]);
+  for(const sourceUpdatedAt of [undefined,'invalid','2026-08-03T10:00:00.000Z']) assert.ok(validateSnapshot({...snapshot,ledgerTransactions:snapshot.ledgerTransactions.map(r=>r.id==='charge1'?{...r,source:{...r.source!,sourceUpdatedAt}}:r)}).some(v=>v.code==='allocation_predates_charge'));
+  for(const change of [{sourcePropertyId:'p3'},{sourceArtifactSha256:null}]) assert.ok(validateSnapshot({...snapshot,paymentAllocations:[{...snapshot.paymentAllocations[0],...change}]}).some(v=>v.code.startsWith('credit_allocation')||v.code==='allocation_property_mismatch'));
+  assert.ok(validateSnapshot({...snapshot,ledgerTransactions:snapshot.ledgerTransactions.map(r=>r.id==='credit'?{...r,personId:'other'}:r)}).some(v=>v.code==='credit_allocation_person_mismatch'));
+  const {DATABASE_AUDIT_SQL}=await import('../import/database-audit');
+  assert.equal(Number((await db.query<Record<string,unknown>>(DATABASE_AUDIT_SQL.allocationInvariants)).rows[0].credit_allocation_parent_invalid),0);
+  assert.equal(Number((await db.query<Record<string,unknown>>(DATABASE_AUDIT_SQL.orphans)).rows[0].allocations_payment),0);
+  assert.equal(Number((await db.query<Record<string,unknown>>(DATABASE_AUDIT_SQL.dates)).rows[0].allocation_before_charge),0);
+  const controls=(await db.query<Record<string,unknown>>(DATABASE_AUDIT_SQL.propertyControls,['2026-08-06'])).rows;
+  assert.equal(Number(controls.find(r=>r.property_id==='p1')?.allocations_cents),6000);
+  assert.equal(Number(controls.find(r=>r.property_id==='p2')?.allocations_cents),0);
+  assert.equal(validateSnapshot({...snapshot,paymentAllocations:[...snapshot.paymentAllocations,{...allocation,id:'excess',amountCents:1}]}).some(v=>v.code==='allocations_exceed_payment'),true);
+  assert.equal(validateSnapshot({...snapshot,paymentAllocations:[...snapshot.paymentAllocations,{...allocation,id:'excess',amountCents:1}]}).some(v=>v.code==='allocations_exceed_charge'),true);
+  assert.equal(deriveTenantLedger(snapshot,'t1',{asOfDate:'2026-08-06'}).find(row=>row.transaction.id==='charge1')?.openCents,0);
+  await assert.rejects(repo.savePaymentAllocation({...allocation,id:'native',source:undefined,sourceArtifactSha256:null}));
+  await assert.rejects(repo.savePaymentAllocation({...allocation,id:'negative',source:{...allocation.source,sourceId:'negative'},amountCents:-1}));
+  await assert.rejects(repo.savePaymentAllocation({...allocation,id:'unbound',source:{...allocation.source,sourceId:'unbound'},creditLinkKnowledge:'unknown'}));
+ }finally{await db.close();}
+});
