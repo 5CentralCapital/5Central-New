@@ -6,6 +6,8 @@ import { Menu, LogOut } from "lucide-react";
 import { useAuth } from "@/contexts/auth-context";
 import LoginModal from "@/components/login-modal";
 
+const MANAGER_DASHBOARD_URL = "https://5-central-new.replit.app/ops";
+
 export default function Navigation() {
   const [location, setLocation] = useLocation();
   const [isScrolled, setIsScrolled] = useState(false);
@@ -56,7 +58,7 @@ export default function Navigation() {
     return (
       <Link
         href={href}
-        className={`nav-link text-sm uppercase tracking-wider font-medium ${isActive ? 'active text-primary' : ''}`}
+        className={`nav-link whitespace-nowrap text-sm uppercase tracking-wider font-medium ${isActive ? 'active text-primary' : ''}`}
         data-testid={`nav-link-${label.toLowerCase()}`}
       >
         {label}
@@ -84,21 +86,28 @@ export default function Navigation() {
           </Link>
 
           {/* Desktop Navigation */}
-          <div className="hidden lg:flex items-center gap-10">
+          <div className="hidden xl:flex items-center gap-6">
             {navItems.map((item) => (
               <NavLink key={item.href} {...item} />
             ))}
+            <a
+              href={MANAGER_DASHBOARD_URL}
+              className="nav-link whitespace-nowrap text-sm uppercase tracking-wider font-medium"
+              data-testid="nav-link-manager-dashboard"
+            >
+              Manager Dashboard
+            </a>
             {user ? (
-              <div className="flex items-center gap-4 ml-4">
-                <Link href="/data-room" className="text-sm text-muted-foreground hover:text-warm-brass font-medium">
+              <div className="flex shrink-0 items-center gap-4 ml-4">
+                <Link href="/data-room" className="whitespace-nowrap text-sm text-muted-foreground hover:text-warm-brass font-medium">
                   Data Room
                 </Link>
                 {user.role === "admin" ? (
-                  <Link href="/admin" className="text-sm text-warm-brass hover:underline font-medium cursor-pointer">
+                  <Link href="/admin" className="whitespace-nowrap text-sm text-warm-brass hover:underline font-medium cursor-pointer">
                     {user.firstName}
                   </Link>
                 ) : (
-                  <Link href="/investor-dashboard" className="text-sm text-muted-foreground hover:underline cursor-pointer">
+                  <Link href="/investor-dashboard" className="whitespace-nowrap text-sm text-muted-foreground hover:underline cursor-pointer">
                     {user.firstName}
                   </Link>
                 )}
@@ -125,7 +134,7 @@ export default function Navigation() {
 
           {/* Mobile Navigation */}
           <Sheet open={isOpen} onOpenChange={setIsOpen}>
-            <SheetTrigger asChild className="lg:hidden">
+            <SheetTrigger asChild className="xl:hidden">
               <Button
                 variant="ghost"
                 size="icon"
@@ -152,11 +161,18 @@ export default function Navigation() {
                 </div>
 
                 {/* Mobile Links */}
-                <div className="flex-1 px-6 py-8">
+                <div className="min-h-0 flex-1 overflow-y-auto px-6 py-8">
                   <div className="space-y-1">
                     {navItems.map((item) => (
                       <NavLink key={item.href} {...item} mobile />
                     ))}
+                    <a
+                      href={MANAGER_DASHBOARD_URL}
+                      className="block whitespace-nowrap py-3 text-lg font-medium tracking-wide transition-colors duration-300 text-foreground hover:text-warm-brass"
+                      data-testid="nav-link-manager-dashboard-mobile"
+                    >
+                      Manager Dashboard
+                    </a>
                   </div>
 
                   <div className="mt-10 pt-8 border-t border-border">

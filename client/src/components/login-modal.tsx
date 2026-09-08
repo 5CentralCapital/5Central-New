@@ -17,6 +17,9 @@ interface LoginModalProps {
   onOpenChange: (open: boolean) => void;
 }
 
+const MANAGER_PORTAL_URL = "https://5-central-new.replit.app/ops";
+const RESIDENT_PORTAL_URL = "https://5-central-new.replit.app/tenant";
+
 export default function LoginModal({ open, onOpenChange }: LoginModalProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -56,67 +59,100 @@ export default function LoginModal({ open, onOpenChange }: LoginModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="font-serif text-2xl">
             Welcome Back
           </DialogTitle>
           <DialogDescription>
-            Sign in to access your account
+            Choose the portal that matches your account
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-4 mt-4">
-          {error && (
-            <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md">
-              {error}
-            </div>
-          )}
-
-          <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              type="email"
-              placeholder="you@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              autoComplete="email"
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              type="password"
-              placeholder="Enter your password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="current-password"
-            />
-          </div>
-
-          <Button
-            type="submit"
-            className="w-full btn-accent"
-            disabled={isLoading}
-          >
-            {isLoading ? "Signing in..." : "Log In"}
-          </Button>
-
-          <p className="text-sm text-center text-muted-foreground mt-4">
-            Need an account?{" "}
-            <a
-              href="mailto:michael@5central.capital"
-              className="text-warm-brass hover:underline"
+        <div className="space-y-3 mt-4" aria-label="Portal selection">
+          <p className="text-sm font-medium text-foreground">Manager or Resident</p>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Button
+              asChild
+              variant="outline"
+              className="h-auto justify-start px-4 py-3 text-left"
             >
-              Contact us
-            </a>
-          </p>
-        </form>
+              <a href={MANAGER_PORTAL_URL}>
+                <span className="flex flex-col items-start">
+                  <span className="font-medium">Manager</span>
+                  <span className="text-xs text-muted-foreground">Open Manager Dashboard</span>
+                </span>
+              </a>
+            </Button>
+            <Button
+              asChild
+              variant="outline"
+              className="h-auto justify-start px-4 py-3 text-left"
+            >
+              <a href={RESIDENT_PORTAL_URL}>
+                <span className="flex flex-col items-start">
+                  <span className="font-medium">Resident</span>
+                  <span className="text-xs text-muted-foreground">Open Resident Portal</span>
+                </span>
+              </a>
+            </Button>
+          </div>
+        </div>
+
+        <div className="border-t border-border mt-6 pt-6">
+          <p className="text-sm font-medium text-foreground mb-3">Investor</p>
+          <form onSubmit={handleSubmit} className="space-y-4 mt-4">
+            {error && (
+              <div className="p-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md">
+                {error}
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoComplete="email"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                placeholder="Enter your password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="current-password"
+              />
+            </div>
+
+            <Button
+              type="submit"
+              className="w-full btn-accent"
+              disabled={isLoading}
+            >
+              {isLoading ? "Signing in..." : "Log In"}
+            </Button>
+
+            <p className="text-sm text-center text-muted-foreground mt-4">
+              Need an account?{" "}
+              <a
+                href="mailto:michael@5central.capital"
+                className="text-warm-brass hover:underline"
+              >
+                Contact us
+              </a>
+            </p>
+          </form>
+        </div>
       </DialogContent>
     </Dialog>
   );
