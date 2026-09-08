@@ -1582,33 +1582,44 @@ async function assertExistingImmutableRows(executor: RentOpsQueryExecutor, descr
   if (!descriptor.immutable) return;
   const sourceSystemIndex = descriptor.columns.indexOf("source_system");
   const sourceIdIndex = descriptor.columns.indexOf("source_id");
-  for (const record of descriptor.records) {
-    const expected = descriptor.values(record);
-    const id = expected[0];
+  for (const records of chunks(descriptor.records)) {
+    const expectedRows = records.map((record) => descriptor.values(record));
     const existing = await executor.query<Record<string, unknown>>(
-      `SELECT ${descriptor.columns.join(", ")} FROM ${descriptor.table} WHERE id = $1`,
-      [id],
+      `SELECT ${descriptor.columns.join(", ")} FROM ${descriptor.table} WHERE id = ANY($1::varchar[])`,
+      [expectedRows.map((expected) => expected[0])],
     );
-    const row = existing.rows[0];
-    if (row) {
-      const conflict = descriptor.columns.some((column, index) => !sameImmutableValue(row[column], nullable(expected[index])));
-      if (conflict) throw new PersistenceImportPreconditionError([`immutable_${safeCode(descriptor.name)}_conflict`]);
-    }
-    if (sourceSystemIndex >= 0 && sourceIdIndex >= 0 && expected[sourceSystemIndex] !== null && expected[sourceSystemIndex] !== undefined && expected[sourceIdIndex] !== null && expected[sourceIdIndex] !== undefined) {
-      const sourceRows = await executor.query<Record<string, unknown>>(
-        `SELECT ${descriptor.columns.join(", ")} FROM ${descriptor.table} WHERE source_system = $1 AND source_id = $2`,
-        [expected[sourceSystemIndex], expected[sourceIdIndex]],
+    const byId = new Map(existing.rows.map((row) => [row.id, row]));
+    const sourced = sourceSystemIndex < 0 || sourceIdIndex < 0 ? [] : expectedRows.filter((expected) => expected[sourceSystemIndex] != null && expected[sourceIdIndex] != null);
+    const bySource = new Map<string, Record<string, unknown>[]>();
+    if (sourced.length) {
+      const result = await executor.query<Record<string, unknown>>(
+        `SELECT ${descriptor.columns.join(", ")} FROM ${descriptor.table} WHERE (source_system, source_id) IN (${rowPlaceholders(sourced.length, 2)})`,
+        sourced.flatMap((expected) => [expected[sourceSystemIndex], expected[sourceIdIndex]]),
       );
-      for (const sourceRow of sourceRows.rows) {
-        if (!sameImmutableValue(sourceRow.id, id)) throw new PersistenceImportPreconditionError([`immutable_${safeCode(descriptor.name)}_source_conflict`]);
-        const conflict = descriptor.columns.some((column, index) => !sameImmutableValue(sourceRow[column], nullable(expected[index])));
-        if (conflict) throw new PersistenceImportPreconditionError([`immutable_${safeCode(descriptor.name)}_conflict`]);
+      for (const row of result.rows) {
+        const key = canonicalJson([row.source_system, row.source_id]);
+        const rows = bySource.get(key) ?? []; rows.push(row); bySource.set(key, rows);
+      }
+    }
+    for (const expected of expectedRows) {
+      const id = expected[0];
+      const row = byId.get(id);
+      if (row && descriptor.columns.some((column, index) => !sameImmutableValue(row[column], nullable(expected[index])))) {
+        throw new PersistenceImportPreconditionError([`immutable_${safeCode(descriptor.name)}_conflict`]);
+      }
+      if (sourceSystemIndex >= 0 && sourceIdIndex >= 0 && expected[sourceSystemIndex] != null && expected[sourceIdIndex] != null) {
+        for (const sourceRow of bySource.get(canonicalJson([expected[sourceSystemIndex], expected[sourceIdIndex]])) ?? []) {
+          if (!sameImmutableValue(sourceRow.id, id)) throw new PersistenceImportPreconditionError([`immutable_${safeCode(descriptor.name)}_source_conflict`]);
+          if (descriptor.columns.some((column, index) => !sameImmutableValue(sourceRow[column], nullable(expected[index])))) {
+            throw new PersistenceImportPreconditionError([`immutable_${safeCode(descriptor.name)}_conflict`]);
+          }
+        }
       }
     }
   }
 }
 
-async function upsertCollection(executor: RentOpsQueryExecutor, descriptor: CollectionDescriptor): Promise<void> {
+export async function upsertCollection(executor: RentOpsQueryExecutor, descriptor: CollectionDescriptor): Promise<void> {
   const rows = descriptor.records.map((record) => descriptor.values(record));
   await assertExistingImmutableRows(executor, descriptor);
   await bulkUpsert(executor, descriptor.table, descriptor.columns, rows, descriptor.appendOnly, ["id"], descriptor.columns.slice(1), descriptor.immutable === true);

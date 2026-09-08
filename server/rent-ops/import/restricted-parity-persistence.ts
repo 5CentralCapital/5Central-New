@@ -614,6 +614,36 @@ async function insertAndVerify<T extends object>(
   if (existing.length !== 1 || !compareFields(expected, existing[0] ?? {}, fields)) throw new RestrictedParityPersistenceError(["restricted_parity_persistence_insert_conflict"]);
 }
 
+// Keep bind counts and returned controls bounded (at most 5,500 row binds).
+const OCCURRENCE_INSERT_BATCH_SIZE = 500;
+async function insertOccurrenceBatches<T extends { id: string }>(
+  executor: RentOpsQueryExecutor, table: string, rows: readonly T[], fields: readonly string[],
+): Promise<void> {
+  if (new Set(rows.map(row => row.id)).size !== rows.length) throw new RestrictedParityPersistenceError(["restricted_parity_persistence_insert_conflict"]);
+  for (let offset = 0; offset < rows.length; offset += OCCURRENCE_INSERT_BATCH_SIZE) {
+    const batch = rows.slice(offset, offset + OCCURRENCE_INSERT_BATCH_SIZE);
+    const expected = new Map(batch.map(row => [row.id, row]));
+    const values = batch.flatMap(row => fields.map(field => (row as Record<string, unknown>)[field]));
+    const placeholders = batch.map((_, index) => `(${fields.map((__, column) => `$${index * fields.length + column + 1}`).join(",")})`).join(",");
+    const inserted = await query<T>(executor, `INSERT INTO ${table} (${fields.join(", ")}) VALUES ${placeholders} ON CONFLICT (id) DO NOTHING RETURNING ${fields.join(", ")}`, values);
+    const verified = new Set<string>();
+    const verify = (actual: T) => {
+      const wanted = expected.get(actual.id);
+      if (!wanted || verified.has(actual.id) || !compareFields(wanted, actual, fields)) throw new RestrictedParityPersistenceError(["restricted_parity_persistence_insert_conflict"]);
+      verified.add(actual.id);
+    };
+    inserted.forEach(verify);
+    const conflicts = batch.filter(row => !verified.has(row.id)).map(row => row.id);
+    if (conflicts.length) {
+      // A separate statement sees a competing committed INSERT at READ COMMITTED.
+      // A same-statement CTE could miss it in that statement's older snapshot.
+      const existing = await query<T>(executor, `SELECT ${fields.join(", ")} FROM ${table} WHERE id = ANY($1::text[])`, [conflicts]);
+      existing.forEach(verify);
+    }
+    if (verified.size !== batch.length) throw new RestrictedParityPersistenceError(["restricted_parity_persistence_insert_conflict"]);
+  }
+}
+
 const OBSERVATION_FIELDS = [
   "id", "version", "source", "source_run_id", "import_run_id", "observed_at", "source_envelope_sha256", "source_manifest_sha256", "source_rows_sha256", "collections_sha256", "collection_occurrence_count", "collection_occurrence_order_sha256", "collection_occurrence_set_sha256", "row_occurrence_count", "row_occurrence_order_sha256", "row_occurrence_set_sha256", "source_identity_order_sha256", "source_schema_version", "source_registry_sha256", "source_checkpoint_sha256", "source_coverage_sha256", "source_control_sha256",
 ] as const;
@@ -629,24 +659,8 @@ async function persistObservationRows(executor: RentOpsQueryExecutor, controls: 
     `SELECT id, version, source, source_run_id, import_run_id, observed_at, source_envelope_sha256, source_manifest_sha256, source_rows_sha256, collections_sha256, collection_occurrence_count, collection_occurrence_order_sha256, collection_occurrence_set_sha256, row_occurrence_count, row_occurrence_order_sha256, row_occurrence_set_sha256, source_identity_order_sha256, source_schema_version, source_registry_sha256, source_checkpoint_sha256, source_coverage_sha256, source_control_sha256 FROM ${RESTRICTED_PARITY_OBSERVATION_TABLE} WHERE id = $1`,
     [h.id], h, OBSERVATION_FIELDS,
   );
-  for (const row of controls.collectionRows) {
-    await insertAndVerify(
-      executor,
-      `INSERT INTO ${RESTRICTED_PARITY_COLLECTION_TABLE} (id, observation_id, occurrence_ordinal, path, present, row_count, ordered_rows_sha256, source_identity_rows_sha256) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING RETURNING id, observation_id, occurrence_ordinal, path, present, row_count, ordered_rows_sha256, source_identity_rows_sha256`,
-      [row.id, row.observation_id, row.occurrence_ordinal, row.path, row.present, row.row_count, row.ordered_rows_sha256, row.source_identity_rows_sha256],
-      `SELECT id, observation_id, occurrence_ordinal, path, present, row_count, ordered_rows_sha256, source_identity_rows_sha256 FROM ${RESTRICTED_PARITY_COLLECTION_TABLE} WHERE id = $1`,
-      [row.id], row, COLLECTION_FIELDS,
-    );
-  }
-  for (const row of controls.rowRows) {
-    await insertAndVerify(
-      executor,
-      `INSERT INTO ${RESTRICTED_PARITY_ROW_TABLE} (id, observation_id, occurrence_ordinal, collection_occurrence_ordinal, collection_path, row_ordinal, system, source_collection, source_id, checksum_sha256, row_digest_sha256) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (id) DO NOTHING RETURNING id, observation_id, occurrence_ordinal, collection_occurrence_ordinal, collection_path, row_ordinal, system, source_collection, source_id, checksum_sha256, row_digest_sha256`,
-      [row.id, row.observation_id, row.occurrence_ordinal, row.collection_occurrence_ordinal, row.collection_path, row.row_ordinal, row.system, row.source_collection, row.source_id, row.checksum_sha256, row.row_digest_sha256],
-      `SELECT id, observation_id, occurrence_ordinal, collection_occurrence_ordinal, collection_path, row_ordinal, system, source_collection, source_id, checksum_sha256, row_digest_sha256 FROM ${RESTRICTED_PARITY_ROW_TABLE} WHERE id = $1`,
-      [row.id], row, ROW_FIELDS,
-    );
-  }
+  await insertOccurrenceBatches(executor, RESTRICTED_PARITY_COLLECTION_TABLE, controls.collectionRows, COLLECTION_FIELDS);
+  await insertOccurrenceBatches(executor, RESTRICTED_PARITY_ROW_TABLE, controls.rowRows, ROW_FIELDS);
 }
 
 /**

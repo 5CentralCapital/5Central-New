@@ -157,6 +157,10 @@ class MemoryExecutor implements RentOpsQueryExecutor {
     }
     const selectAll = text.match(/SELECT \* FROM (rent_ops_[a-z_]+)/i);
     if (selectAll) return { rows: Array.from(this.tableRows(selectAll[1]).values()) as T[] };
+    const immutableIds = text.match(/FROM (rent_ops_[a-z_]+) WHERE id = ANY\(\$1::varchar\[\]\)/i);
+    if (immutableIds) return { rows: Array.from(this.tableRows(immutableIds[1]).values()).filter(row => (values[0] as unknown[]).includes(row.id)) as T[] };
+    const immutableSources = text.match(/FROM (rent_ops_[a-z_]+) WHERE \(source_system, source_id\) IN/i);
+    if (immutableSources) return { rows: Array.from(this.tableRows(immutableSources[1]).values()).filter(row => values.some((_, index) => index % 2 === 0 && row.source_system === values[index] && row.source_id === values[index + 1])) as T[] };
     const selectById = text.match(/SELECT [\s\S]+ FROM (rent_ops_[a-z_]+) WHERE id = \$1/i);
     if (selectById) {
       const row = this.tableRows(selectById[1]).get(String(values[0]));
@@ -169,16 +173,17 @@ class MemoryExecutor implements RentOpsQueryExecutor {
       const columns = insert[2].split(",").map((column) => column.trim());
       const tupleCount = (text.match(/\([^)]+\)/g) ?? []).filter((tuple) => tuple.includes("$")).length;
       const rows = this.tableRows(tableName);
+      const insertedRows: Record<string, unknown>[] = [];
       for (let rowIndex = 0; rowIndex < Math.max(tupleCount, 1); rowIndex += 1) {
         const row: Record<string, unknown> = {};
         columns.forEach((column, columnIndex) => { row[column] = values[rowIndex * columns.length + columnIndex]; });
         rows.set(String(tableName === "rent_ops_document_objects" ? row.document_id : row.id), row);
+        insertedRows.push(row);
       }
       const returning = text.match(/\bRETURNING\s+(.+)$/i);
       if (returning) {
         const fields = returning[1].split(",").map((field) => field.trim());
-        const row = rows.get(String(values[0]));
-        return { rows: row ? [Object.fromEntries(fields.map((field) => [field, row[field]])) as T] : [] };
+        return { rows: insertedRows.map(row => Object.fromEntries(fields.map(field => [field,row[field]]))) as T[] };
       }
       return { rows: [] as T[] };
     }
