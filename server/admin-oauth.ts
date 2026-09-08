@@ -72,7 +72,7 @@ export function registerManagerOAuthRoutes(app: Express, options: Options) {
       const pending = consumeOAuthPending(req.session, req.query.state, now());
       await save(req); // Persist one-use consumption before contacting the token endpoint.
       const retry = options.limit(req.ip || req.socket.remoteAddress || "unknown");
-      if (!configured() || !pending || retry || typeof req.query.code !== "string" || req.query.code.length > 2048 || req.query.error) throw new Error("login rejected");
+      if (!configured() || !pending || retry || req.query.iss !== ADMIN_OAUTH_ISSUER || typeof req.query.code !== "string" || req.query.code.length > 2048 || req.query.error) throw new Error("login rejected");
       await ready();
       const response = await fetcher(new URL("oauth/token", ADMIN_OAUTH_ISSUER), { method: "POST", redirect: "error", signal: AbortSignal.timeout(10000),
         headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", client_id: env.RENT_OPS_ADMIN_OAUTH_CLIENT_ID!, code: req.query.code, code_verifier: pending.verifier, redirect_uri: ADMIN_OAUTH_CALLBACK }) });

@@ -20,8 +20,16 @@ async function fixture(options: { scopes?: string[]; subject?: string; admin?: b
 }
 test("PKCE callback rotates session, pins redirect and refuses callback replay",async()=>{const f=await fixture();try{
  const start=await fetch(`${f.base}/api/rent-ops/auth/oauth/start?returnTo=https://evil.test`,{redirect:"manual"});const cookie=start.headers.get("set-cookie")!.split(";")[0];const url=new URL(start.headers.get("location")!);assert.equal(url.searchParams.get("code_challenge_method"),"S256");assert.equal(url.searchParams.get("redirect_uri"),ADMIN_OAUTH_CALLBACK);assert.equal(url.searchParams.has("code_verifier"),false);
- const callback=`${f.base}/api/rent-ops/auth/oauth/callback?state=${url.searchParams.get("state")}&code=synthetic`;
+ const callback=`${f.base}/api/rent-ops/auth/oauth/callback?state=${url.searchParams.get("state")}&iss=${encodeURIComponent(ADMIN_OAUTH_ISSUER)}&code=synthetic`;
  const done=await fetch(callback,{headers:{cookie},redirect:"manual"});assert.equal(done.headers.get("location"),"https://5-central-new.replit.app/ops");const rotated=done.headers.get("set-cookie")!.split(";")[0];assert.notEqual(rotated,cookie);const state=await (await fetch(`${f.base}/test-session`,{headers:{cookie:rotated}})).json();assert.equal(state.admin,"admin");assert.equal(state.subject,ADMIN_OAUTH_SUBJECT);assert.equal(state.pending,false);
  const replay=await fetch(callback,{headers:{cookie:rotated},redirect:"manual"});assert.match(replay.headers.get("location")!,/login=failed/);assert.equal(f.exchanges(),1);
  }finally{await f.close();}});
-for(const value of [{scopes:[]},{subject:"google-oauth2|wrong"},{admin:false}])test(`rejects missing scope, wrong subject or nonadmin ${JSON.stringify(value)}`,async()=>{const f=await fixture(value);try{const start=await fetch(`${f.base}/api/rent-ops/auth/oauth/start`,{redirect:"manual"});const cookie=start.headers.get("set-cookie")!.split(";")[0];const state=new URL(start.headers.get("location")!).searchParams.get("state");const result=await fetch(`${f.base}/api/rent-ops/auth/oauth/callback?state=${state}&code=x`,{headers:{cookie},redirect:"manual"});assert.match(result.headers.get("location")!,/login=failed/);}finally{await f.close();}});
+for(const value of [{scopes:[]},{subject:"google-oauth2|wrong"},{admin:false}])test(`rejects missing scope, wrong subject or nonadmin ${JSON.stringify(value)}`,async()=>{const f=await fixture(value);try{const start=await fetch(`${f.base}/api/rent-ops/auth/oauth/start`,{redirect:"manual"});const cookie=start.headers.get("set-cookie")!.split(";")[0];const state=new URL(start.headers.get("location")!).searchParams.get("state");const result=await fetch(`${f.base}/api/rent-ops/auth/oauth/callback?state=${state}&iss=${encodeURIComponent(ADMIN_OAUTH_ISSUER)}&code=x`,{headers:{cookie},redirect:"manual"});assert.match(result.headers.get("location")!,/login=failed/);}finally{await f.close();}});
+
+for (const issuer of [undefined, "https://wrong-issuer.example/"]) test(`callback rejects missing or wrong issuer ${issuer}`, async () => {
+ const f=await fixture();try {
+  const start=await fetch(`${f.base}/api/rent-ops/auth/oauth/start`,{redirect:"manual"}); const cookie=start.headers.get("set-cookie")!.split(";")[0];const state=new URL(start.headers.get("location")!).searchParams.get("state");
+  const callback=`${f.base}/api/rent-ops/auth/oauth/callback?state=${state}&code=synthetic${issuer ? `&iss=${encodeURIComponent(issuer)}` : ""}`;
+  const result=await fetch(callback,{headers:{cookie},redirect:"manual"});assert.match(result.headers.get("location")!,/login=failed/);assert.equal(f.exchanges(),0);
+ }finally{await f.close();}
+});
