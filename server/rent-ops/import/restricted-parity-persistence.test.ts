@@ -32,27 +32,20 @@ class InMemoryRestrictedExecutor implements RentOpsQueryExecutor {
       }
       return { rows: [this.observations.get(String(values[0]))].filter(Boolean) as T[] };
     }
-    if (text.includes("rent_ops_restricted_parity_collection_occurrences")) {
+    for (const [table, stored] of [["rent_ops_restricted_parity_collection_occurrences",this.collections],["rent_ops_restricted_parity_row_occurrences",this.rows]] as const) {
+      if (!text.includes(table)) continue;
       if (text.startsWith("INSERT")) {
-        const row: TableRow = { id: values[0], observation_id: values[1], occurrence_ordinal: values[2], path: values[3], present: values[4], row_count: values[5], ordered_rows_sha256: values[6], source_identity_rows_sha256: values[7] };
-        if (this.collections.has(String(row.id))) return { rows: [] as T[] };
-        this.collections.set(String(row.id), row);
-        return { rows: [row as T] };
+        const fields=text.slice(text.indexOf("(")+1,text.indexOf(")")).split(",").map(x=>x.trim());
+        const inserted:TableRow[]=[];
+        for(let offset=0;offset<values.length;offset+=fields.length){
+          const row=Object.fromEntries(fields.map((field,index)=>[field,values[offset+index]]));
+          if(!stored.has(String(row.id))){stored.set(String(row.id),row);inserted.push(row);}
+        }
+        return {rows:inserted as T[]};
       }
-      if (text.includes("WHERE id = $1")) return { rows: [this.collections.get(String(values[0]))].filter(Boolean) as T[] };
-      const result = Array.from(this.collections.values()).filter((row) => row.observation_id === values[0]).sort((left, right) => Number(left.occurrence_ordinal) - Number(right.occurrence_ordinal));
-      return { rows: result.slice(0, Number(values[1] ?? result.length)) as T[] };
-    }
-    if (text.includes("rent_ops_restricted_parity_row_occurrences")) {
-      if (text.startsWith("INSERT")) {
-        const row: TableRow = { id: values[0], observation_id: values[1], occurrence_ordinal: values[2], collection_occurrence_ordinal: values[3], collection_path: values[4], row_ordinal: values[5], system: values[6], source_collection: values[7], source_id: values[8], checksum_sha256: values[9], row_digest_sha256: values[10] };
-        if (this.rows.has(String(row.id))) return { rows: [] as T[] };
-        this.rows.set(String(row.id), row);
-        return { rows: [row as T] };
-      }
-      if (text.includes("WHERE id = $1")) return { rows: [this.rows.get(String(values[0]))].filter(Boolean) as T[] };
-      const result = Array.from(this.rows.values()).filter((row) => row.observation_id === values[0]).sort((left, right) => Number(left.occurrence_ordinal) - Number(right.occurrence_ordinal));
-      return { rows: result.slice(0, Number(values[1] ?? result.length)) as T[] };
+      if(text.includes("WHERE id = ANY"))return {rows:(values[0] as string[]).map(id=>stored.get(id)).filter(Boolean) as T[]};
+      const result=Array.from(stored.values()).filter(row=>row.observation_id===values[0]).sort((left,right)=>Number(left.occurrence_ordinal)-Number(right.occurrence_ordinal));
+      return {rows:result.slice(0,Number(values[1]??result.length)) as T[]};
     }
     throw new Error("unexpected_query");
   }
@@ -174,4 +167,68 @@ test("postcommit restricted audit checks payload checksum/canonical binding with
   assert.equal(tampered.passed, false);
   assert.ok(tampered.blockingReasons.includes("restricted_parity_payload_binding_mismatch"));
   assert.equal(controls.observationId.length > 0, true);
+});
+
+test('PGlite bounded occurrence INSERT and exact replay preserve full fields across batch boundary',async()=>{
+ const {PGlite}=await import('@electric-sql/pglite');
+ const {readFile}=await import('node:fs/promises');
+ const db=new PGlite();
+ try{
+  // Use the actual occurrence-table DDL, with only its import-run FK parent stubbed.
+  const migration=await readFile(new URL('../migrations/005_rent_ops_restricted_occurrences.sql',import.meta.url),'utf8');
+  await db.exec("CREATE TABLE rent_ops_source_payloads(system text,source_collection text,source_id text,checksum_sha256 varchar(64),PRIMARY KEY(system,source_collection,source_id,checksum_sha256)); CREATE TABLE rent_ops_import_runs(id varchar(160) PRIMARY KEY); INSERT INTO rent_ops_import_runs VALUES ('import-run-1');");
+  await db.exec(migration.slice(migration.indexOf('CREATE TABLE IF NOT EXISTS rent_ops_restricted_parity_observations'),migration.indexOf('-- The parity tables')));
+  await db.exec('ALTER TABLE rent_ops_restricted_parity_collection_occurrences ALTER COLUMN id TYPE varchar(192)'); // schema 22 identity width
+  const chunks:RestrictedParitySourceChunk[]=[{path:'payload.contacts',present:true,rows:Array.from({length:501},(_,index)=>row('rent_manager','contacts',`qa-${index}`,'synthetic'))}];
+  await db.query(`INSERT INTO rent_ops_source_payloads SELECT x.system,x."sourceCollection",x."sourceId",x."checksumSha256" FROM jsonb_to_recordset($1::jsonb) AS x(system text,"sourceCollection" text,"sourceId" text,"checksumSha256" text)`,[JSON.stringify(Array.from(chunks[0].rows))]);
+  const observation=createRestrictedImportObservationFromChunks({sourceEnvelopeSha256:'a'.repeat(64),sourceRunId:'source-run-1',importRunId:'import-run-1',observedAt:'2026-08-17T12:00:00.000Z',sourceManifestSha256:'b'.repeat(64),sourceChunks:chunks});
+  const value={observation,sourceManifestSha256:'b'.repeat(64),sourceChunks:chunks};
+  const statements:Array<{sql:string;count:number}>=[];
+  const executor:RentOpsQueryExecutor={query:async<T>(sql:string,values:unknown[]=[])=>{statements.push({sql,count:values.length});return db.query<T>(sql,values);}};
+  await db.exec('BEGIN');
+  const first=await persistRestrictedParityObservation(executor,value);
+  await db.exec('COMMIT');
+  assert.equal(statements.length,4,'header + collection + two row batches replaces 503 inserts');
+  assert.ok(statements.every(x=>x.count<=5500));
+  statements.length=0;
+  await db.exec('BEGIN');
+  assert.deepEqual(await persistRestrictedParityObservation(executor,value),first);
+  await db.exec('COMMIT');
+  assert.equal(statements.length,8,'exact replay needs two statements per batch, not 1006 per-row queries');
+  const controls=await readRestrictedParityAggregateControls(executor,first.observationId);
+  assert.deepEqual(controls,first);
+  // Each corruption retains the same primary ID and count. Full-field readback
+  // must detect it even though all other occurrence hashes are unchanged.
+  for(const [table,field,changed]of [
+   ['rent_ops_restricted_parity_row_occurrences','source_id','different-source'],
+   ['rent_ops_restricted_parity_row_occurrences','system','different-system'],
+   ['rent_ops_restricted_parity_row_occurrences','source_collection','different-collection'],
+   ['rent_ops_restricted_parity_row_occurrences','collection_path','different-path'],
+   ['rent_ops_restricted_parity_row_occurrences','row_digest_sha256','d'.repeat(64)],
+   ['rent_ops_restricted_parity_row_occurrences','checksum_sha256','e'.repeat(64)],
+   ['rent_ops_restricted_parity_collection_occurrences','path','different-path'],
+   ['rent_ops_restricted_parity_observations','source','different-source'],
+  ]as const){
+   await db.exec('BEGIN');
+   if(table==='rent_ops_restricted_parity_row_occurrences'&&['source_id','system','source_collection','checksum_sha256'].includes(field)){
+    const original=(await db.query<Record<string,unknown>>(`SELECT system,source_collection,source_id,checksum_sha256 FROM ${table} ORDER BY id LIMIT 1`)).rows[0];
+    original[field]=changed;await db.query('INSERT INTO rent_ops_source_payloads VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',[original.system,original.source_collection,original.source_id,original.checksum_sha256]);
+   }
+   await db.query(`UPDATE ${table} SET ${field}=$1 WHERE id=(SELECT id FROM ${table} ORDER BY id LIMIT 1)`,[changed]);
+   await assert.rejects(persistRestrictedParityObservation(executor,value),/restricted_parity_persistence_insert_conflict/);
+   await db.exec('ROLLBACK');
+  }
+  // Mixed pre-existing and new rows are verified without relying on RETURNING order.
+  await db.exec('BEGIN');await db.exec('DELETE FROM rent_ops_restricted_parity_row_occurrences WHERE occurrence_ordinal=500');
+  statements.length=0;await persistRestrictedParityObservation(executor,value);
+  assert.equal(statements.length,7);
+  await db.exec('ROLLBACK');
+ }finally{await db.close();}
+});
+
+test('duplicate explicit occurrence ordinals are rejected before any SQL',async()=>{
+ const fixture=input();const repeated={occurrenceOrdinal:0,collectionOccurrenceOrdinal:0,collectionPath:'payload.contacts',rowOrdinal:0,system:'rent_manager',sourceCollection:'contacts',sourceId:'qa',checksumSha256:'a'.repeat(64),rowDigestSha256:'b'.repeat(64)};
+ let calls=0;const executor:RentOpsQueryExecutor={query:async()=>{calls++;return {rows:[]};}};
+ await assert.rejects(persistRestrictedParityObservation(executor,{...fixture.value,sourceChunks:undefined,rowOccurrences:[repeated,repeated]}),/restricted_parity_row_order_invalid/);
+ assert.equal(calls,0);
 });

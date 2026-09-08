@@ -172,109 +172,93 @@ function sourceBinaryRows(context: RestrictedSourcePayloadPersistenceContext): S
   return Array.from(rows.values()).sort((left, right) => left.id.localeCompare(right.id));
 }
 
-type RestrictedPayloadConflictRow = {
-  id?: unknown;
-  system?: unknown;
-  source_collection?: unknown;
-  source_id?: unknown;
-  source_updated_at?: unknown;
-  checksum_sha256?: unknown;
-};
+// Both limits bound parameters and outbound JSON per query. An individual
+// oversized source record still travels alone; no source value is truncated.
+const MAX_BATCH_ROWS = 250;
+const MAX_BATCH_BYTES = 1024 * 1024;
 
-type RestrictedBinaryConflictRow = {
-  id?: unknown;
-  system?: unknown;
-  source_collection?: unknown;
-  source_id?: unknown;
-  storage_key?: unknown;
-  checksum_sha256?: unknown;
-  size_bytes?: unknown;
-  content_type?: unknown;
-};
+type StoredRow = Record<string, unknown>;
+type PreparedRow = { values: unknown[]; expected: StoredRow };
 
 function sameValue(left: unknown, right: unknown): boolean {
   const normalize = (value: unknown): string => value instanceof Date ? value.toISOString() : String(value ?? "");
   return normalize(left) === normalize(right);
 }
 
-async function insertPayloadAndVerify(executor: RentOpsQueryExecutor, row: SourcePayloadRow): Promise<void> {
-  const values = [row.id, row.system, row.sourceCollection, row.sourceId, row.sourceUpdatedAt ?? null, row.canonicalPayload, row.checksumSha256, row.importRunId];
-  let inserted: { rows: RestrictedPayloadConflictRow[] };
-  try {
-    inserted = await executor.query<RestrictedPayloadConflictRow>(
-      "INSERT INTO rent_ops_source_payloads (id, system, source_collection, source_id, source_updated_at, payload, checksum_sha256, import_run_id) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8) ON CONFLICT (system, source_collection, source_id, checksum_sha256) DO NOTHING RETURNING id, system, source_collection, source_id, source_updated_at, checksum_sha256",
-      values,
-    );
-  } catch {
-    throw new Error("restricted_source_payload_persistence_failed");
-  }
-  const expected = {
-    id: row.id,
-    system: row.system,
-    source_collection: row.sourceCollection,
-    source_id: row.sourceId,
-    source_updated_at: row.sourceUpdatedAt ?? null,
-    checksum_sha256: row.checksumSha256,
+function versionKey(row: StoredRow): string {
+  return JSON.stringify([row.system, row.source_collection, row.source_id, row.checksum_sha256]);
+}
+
+async function insertBatchesAndVerify(executor: RentOpsQueryExecutor, rows: PreparedRow[], kind: "payload" | "binary"): Promise<void> {
+  const table = kind === "payload" ? "rent_ops_source_payloads" : "rent_ops_source_binaries";
+  const columns = kind === "payload"
+    ? "id, system, source_collection, source_id, source_updated_at, payload, checksum_sha256, import_run_id"
+    : "id, system, source_collection, source_id, import_run_id, storage_key, checksum_sha256, size_bytes, content_type, verification_status";
+  // import_run_id is first-writer provenance, not version identity: an exact
+  // immutable version can legitimately be encountered by a subsequent run.
+  const returned = kind === "payload"
+    ? "id, system, source_collection, source_id, source_updated_at, checksum_sha256"
+    : "id, system, source_collection, source_id, storage_key, checksum_sha256, size_bytes, content_type";
+  const fail = () => new Error(`restricted_source_${kind}_conflict`);
+  const query = async (sql: string, values: unknown[]) => {
+    try { return await executor.query<StoredRow>(sql, values); }
+    catch { throw new Error(`restricted_source_${kind}_persistence_failed`); }
   };
-  if (inserted.rows.length > 0) {
-    const actual = inserted.rows[0]!;
-    if (Object.keys(expected).some((field) => !sameValue(expected[field as keyof typeof expected], actual[field as keyof RestrictedPayloadConflictRow])) ) {
-      throw new Error("restricted_source_payload_conflict");
+  for (let offset = 0; offset < rows.length;) {
+    const batch: PreparedRow[] = [];
+    let bytes = 0;
+    while (offset < rows.length && batch.length < MAX_BATCH_ROWS) {
+      const candidate = rows[offset];
+      const candidateBytes = Buffer.byteLength(JSON.stringify(candidate.values), "utf8");
+      if (batch.length && bytes + candidateBytes > MAX_BATCH_BYTES) break;
+      batch.push(candidate); bytes += candidateBytes; offset += 1;
     }
-    return;
-  }
-  let existing: { rows: RestrictedPayloadConflictRow[] };
-  try {
-    existing = await executor.query<RestrictedPayloadConflictRow>(
-      "SELECT id, system, source_collection, source_id, source_updated_at, checksum_sha256 FROM rent_ops_source_payloads WHERE system = $1 AND source_collection = $2 AND source_id = $3 AND checksum_sha256 = $4",
-      [row.system, row.sourceCollection, row.sourceId, row.checksumSha256],
-    );
-  } catch {
-    throw new Error("restricted_source_payload_persistence_failed");
-  }
-  const actual = existing.rows[0];
-  if (existing.rows.length !== 1 || !actual || Object.keys(expected).some((field) => !sameValue(expected[field as keyof typeof expected], actual[field as keyof RestrictedPayloadConflictRow]))) {
-    throw new Error("restricted_source_payload_conflict");
+    const pending = new Map(batch.map(row => [versionKey(row.expected), row]));
+    if (pending.size !== batch.length) throw fail();
+    const verify = (actualRows: StoredRow[]) => {
+      for (const actual of actualRows) {
+        const key = versionKey(actual);
+        const expected = pending.get(key)?.expected;
+        if (!expected) throw fail(); // duplicate or unexpected returned identity
+        if (Object.keys(expected).some(field => !sameValue(expected[field], actual[field]))) throw fail();
+        pending.delete(key);
+      }
+    };
+    const values: unknown[] = [];
+    const tuples = batch.map(row => {
+      const start = values.length;
+      values.push(...row.values);
+      return `(${row.values.map((_, index) => `$${start + index + 1}${kind === "payload" && index === 5 ? "::jsonb" : ""}`).join(",")})`;
+    });
+    verify((await query(`INSERT INTO ${table} (${columns}) VALUES ${tuples.join(",")} ON CONFLICT (system, source_collection, source_id, checksum_sha256) DO NOTHING RETURNING ${returned}`, values)).rows);
+    if (pending.size) {
+      const keys: unknown[] = [];
+      const predicates = Array.from(pending.values()).map(({ expected }) => {
+        const start = keys.length;
+        keys.push(expected.system, expected.source_collection, expected.source_id, expected.checksum_sha256);
+        return `($${start + 1},$${start + 2},$${start + 3},$${start + 4})`;
+      });
+      verify((await query(`SELECT ${returned} FROM ${table} WHERE (system, source_collection, source_id, checksum_sha256) IN (${predicates.join(",")})`, keys)).rows);
+      if (pending.size) throw fail();
+    }
   }
 }
 
-async function insertBinaryAndVerify(executor: RentOpsQueryExecutor, row: SourceBinaryRow): Promise<void> {
-  const values = [row.id, row.system, row.sourceCollection, row.sourceId, row.importRunId, row.storageKey, row.checksumSha256, row.sizeBytes, row.contentType ?? null];
-  let inserted: { rows: RestrictedBinaryConflictRow[] };
-  try {
-    inserted = await executor.query<RestrictedBinaryConflictRow>(
-      "INSERT INTO rent_ops_source_binaries (id, system, source_collection, source_id, import_run_id, storage_key, checksum_sha256, size_bytes, content_type, verification_status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'verified') ON CONFLICT (system, source_collection, source_id, checksum_sha256) DO NOTHING RETURNING id, system, source_collection, source_id, storage_key, checksum_sha256, size_bytes, content_type",
-      values,
-    );
-  } catch {
-    throw new Error("restricted_source_binary_persistence_failed");
-  }
-  const expected = {
-    id: row.id,
-    system: row.system,
-    source_collection: row.sourceCollection,
-    source_id: row.sourceId,
-    storage_key: row.storageKey,
-    checksum_sha256: row.checksumSha256,
-    size_bytes: row.sizeBytes,
-    content_type: row.contentType ?? null,
+function preparedPayload(row: SourcePayloadRow): PreparedRow {
+  return {
+    values: [row.id, row.system, row.sourceCollection, row.sourceId, row.sourceUpdatedAt ?? null, row.canonicalPayload, row.checksumSha256, row.importRunId],
+    expected: { id: row.id, system: row.system, source_collection: row.sourceCollection, source_id: row.sourceId,
+      source_updated_at: row.sourceUpdatedAt ?? null, checksum_sha256: row.checksumSha256 },
   };
-  if (inserted.rows.length > 0) {
-    const actual = inserted.rows[0]!;
-    if (Object.keys(expected).some((field) => !sameValue(expected[field as keyof typeof expected], actual[field as keyof RestrictedBinaryConflictRow]))) throw new Error("restricted_source_binary_conflict");
-    return;
-  }
-  let existing: { rows: RestrictedBinaryConflictRow[] };
-  try {
-    existing = await executor.query<RestrictedBinaryConflictRow>(
-      "SELECT id, system, source_collection, source_id, storage_key, checksum_sha256, size_bytes, content_type FROM rent_ops_source_binaries WHERE system = $1 AND source_collection = $2 AND source_id = $3 AND checksum_sha256 = $4",
-      [row.system, row.sourceCollection, row.sourceId, row.checksumSha256],
-    );
-  } catch {
-    throw new Error("restricted_source_binary_persistence_failed");
-  }
-  const actual = existing.rows[0];
-  if (existing.rows.length !== 1 || !actual || Object.keys(expected).some((field) => !sameValue(expected[field as keyof typeof expected], actual[field as keyof RestrictedBinaryConflictRow]))) throw new Error("restricted_source_binary_conflict");
+}
+
+function preparedBinary(row: SourceBinaryRow): PreparedRow {
+  return {
+    values: [row.id, row.system, row.sourceCollection, row.sourceId, row.importRunId, row.storageKey, row.checksumSha256, row.sizeBytes, row.contentType ?? null, "verified"],
+    expected: { id: row.id, system: row.system, source_collection: row.sourceCollection, source_id: row.sourceId,
+      storage_key: row.storageKey, checksum_sha256: row.checksumSha256, size_bytes: row.sizeBytes,
+      content_type: row.contentType ?? null },
+  };
 }
 
 /**
@@ -283,12 +267,10 @@ async function insertBinaryAndVerify(executor: RentOpsQueryExecutor, row: Source
  */
 export function createRestrictedSourcePayloadWriter(): RestrictedSourcePayloadWriter {
   return async (executor: RentOpsQueryExecutor, context: RestrictedSourcePayloadPersistenceContext): Promise<void> => {
-    for (const row of sourcePayloadRows(context)) {
-      await insertPayloadAndVerify(executor, row);
-    }
-    for (const row of sourceBinaryRows(context)) {
-      await insertBinaryAndVerify(executor, row);
-    }
+    const payloads = sourcePayloadRows(context);
+    const binaries = sourceBinaryRows(context);
+    await insertBatchesAndVerify(executor, payloads.map(preparedPayload), "payload");
+    await insertBatchesAndVerify(executor, binaries.map(preparedBinary), "binary");
   };
 }
 

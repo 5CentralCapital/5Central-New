@@ -12,10 +12,10 @@ class CaptureExecutor implements RentOpsQueryExecutor {
   async query<T = Record<string, unknown>>(text: string, values: unknown[] = []): Promise<{ rows: T[] }> {
     this.calls.push({ text, values });
     if (text.includes("INSERT INTO rent_ops_source_payloads")) {
-      return { rows: [{ id: values[0], system: values[1], source_collection: values[2], source_id: values[3], source_updated_at: values[4], checksum_sha256: values[6] } as T] };
+      return { rows: Array.from({ length: values.length / 8 }, (_, i) => { const v = values.slice(i * 8); return { id: v[0], system: v[1], source_collection: v[2], source_id: v[3], source_updated_at: v[4], checksum_sha256: v[6] } as T; }) };
     }
     if (text.includes("INSERT INTO rent_ops_source_binaries")) {
-      return { rows: [{ id: values[0], system: values[1], source_collection: values[2], source_id: values[3], storage_key: values[5], checksum_sha256: values[6], size_bytes: values[7], content_type: values[8] } as T] };
+      return { rows: Array.from({ length: values.length / 10 }, (_, i) => { const v = values.slice(i * 10); return { id: v[0], system: v[1], source_collection: v[2], source_id: v[3], storage_key: v[5], checksum_sha256: v[6], size_bytes: v[7], content_type: v[8] } as T; }) };
     }
     return { rows: [] };
   }
@@ -60,7 +60,7 @@ function context(): RestrictedSourcePayloadPersistenceContext {
 test("restricted writer stores canonical payloads and verified binary bindings only in restricted tables", async () => {
   const executor = new CaptureExecutor();
   await createRestrictedSourcePayloadWriter()(executor, context());
-  assert.equal(executor.calls.filter((call) => call.text.includes("rent_ops_source_payloads")).length, 3);
+  assert.equal(executor.calls.filter((call) => call.text.includes("rent_ops_source_payloads")).length, 1);
   assert.equal(executor.calls.filter((call) => call.text.includes("rent_ops_source_binaries")).length, 1);
   assert.ok(executor.calls.every((call) => !call.text.includes("rent_ops_source_records")));
   assert.ok(executor.calls.every((call) => !call.text.includes("rent_ops_people")));
@@ -75,7 +75,9 @@ test("CreateDate-only rows retain creation evidence without fabricating sourceUp
   property.CreateDate = "2026-08-01T12:00:00.000Z";
   const executor = new CaptureExecutor();
   await createRestrictedSourcePayloadWriter()(executor, input);
-  const propertyInsert = executor.calls.find((call) => call.text.includes("INSERT INTO rent_ops_source_payloads") && call.values[2] === "properties");
+  const payloadCall = executor.calls.find(call => call.text.includes("INSERT INTO rent_ops_source_payloads"))!;
+  const propertyOffset = payloadCall.values.findIndex((value, index) => index % 8 === 2 && value === "properties") - 2;
+  const propertyInsert = { values: payloadCall.values.slice(propertyOffset, propertyOffset + 8) };
   assert.ok(propertyInsert);
   assert.equal(propertyInsert.values[4], null);
   assert.match(String(propertyInsert.values[5]), /CreateDate/u);
@@ -112,7 +114,7 @@ test("verified application status crosswalk is metadata, not a source payload co
 
   const executor = new CaptureExecutor();
   await createRestrictedSourcePayloadWriter()(executor, input);
-  assert.equal(executor.calls.filter((call) => call.text.includes("rent_ops_source_payloads")).length, 3);
+  assert.equal(executor.calls.filter((call) => call.text.includes("rent_ops_source_payloads")).length, 1);
   assert.ok(executor.calls.every((call) => !call.values.includes("Submitted")));
 });
 
@@ -122,7 +124,7 @@ test("conflicting versions retain both restricted payload versions and expose an
   payload.properties.push({ sourceCollection: "properties", sourceId: "property:1", PropertyID: 1, Name: "Different" });
   const executor = new CaptureExecutor();
   await createRestrictedSourcePayloadWriter()(executor, input);
-  assert.equal(executor.calls.filter((call) => call.text.includes("rent_ops_source_payloads")).length, 4);
+  assert.equal(executor.calls.filter((call) => call.text.includes("rent_ops_source_payloads")).length, 1);
   const summary = restrictedSourcePayloadControlSummary(input);
   assert.equal(summary.ambiguousIdentityCount, 1);
   assert.equal(summary.ambiguousVersionCount, 2);
