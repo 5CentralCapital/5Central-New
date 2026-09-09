@@ -482,6 +482,46 @@ test("recurring replacements and ends are immutable, revisioned, retry-safe, and
   );
 });
 
+test("a new base-rent root can follow an ended lineage without hiding historical overlap", async () => {
+  const repository = createSyntheticRentOpsRepository();
+  const service = new RentOpsService(repository, () => new Date("2026-08-16T12:00:00.000Z"));
+  const context = { actorSubject: "admin-subject-1", occurredAt: "2026-08-16T12:30:00.000Z" };
+  await service.saveRecurringScheduleSuccessor("demo-schedule-1", { id: "demo-schedule-1-end-for-root-test", expectedRevision: 1, action: "end", effectiveFrom: "2026-09-01" }, context);
+
+  const predecessor = (await repository.getSnapshot()).recurringSchedules.find((schedule) => schedule.id === "demo-schedule-1")!;
+  const rootInput = {
+    ...predecessor,
+    id: "demo-schedule-1-after-end-root",
+    chargeDefinitionKey: null,
+    source: undefined,
+    sourceArtifactSha256: null,
+    artifactObservationOn: null,
+    description: "Replacement root after ended rent",
+    personId: "demo-person-1",
+    amountCents: 1000,
+    effectiveFrom: "2026-10-01",
+    effectiveFromKnowledge: "manual" as const,
+    effectiveTo: "2027-12-31",
+    active: true,
+    activeKnowledge: "manual" as const,
+    lineageRootId: "demo-schedule-1-after-end-root",
+    lineageRootOrigin: "manual" as const,
+    versionOrigin: "manual" as const,
+    versionAction: "root" as const,
+    supersedesId: null,
+    billingFrequency: "monthly" as const,
+  };
+  const saved = await service.saveRecurringSchedule(rootInput, context);
+  assert.equal(saved.id, rootInput.id);
+
+  await assert.rejects(
+    () => service.saveRecurringSchedule({ ...rootInput, id: "demo-schedule-1-historical-root", lineageRootId: "demo-schedule-1-historical-root", description: "Historical overlap", effectiveFrom: "2026-08-01", effectiveTo: "2026-08-31" }, context),
+    (error: unknown) => error instanceof RentOpsInvariantError
+      && /overlap an effective base-rent schedule/i.test(error.message)
+      && error.violations.some((violation) => violation.entityId === "demo-schedule-1-historical-root"),
+  );
+});
+
 test("an imported open-start recurring root accepts a manual successor without forging source identity", async () => {
   const snapshot = structuredClone(syntheticRentOpsSnapshot());
   const imported = snapshot.recurringSchedules.find((schedule) => schedule.id === "demo-schedule-2")!;

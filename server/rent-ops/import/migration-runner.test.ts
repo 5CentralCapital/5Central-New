@@ -9,7 +9,7 @@ import { createSyntheticRentManagerTransport, SYNTHETIC_HAP_ARTIFACT_SHA256, syn
 import { sha256 } from "../export/hash";
 import { RM_EXPORT_COLLECTIONS } from "../export/registry";
 import type { ExportEnvelope, RedactedExportManifest } from "../export/types";
-import { restrictedDocumentTransferMetadata, partitionRestrictedSourceRows, assertRequiredFinancialReportControls, buildFinancialReportExpected, readRestrictedMigrationArchive, RestrictedMigrationArchiveError, runRestrictedMigrationArchive } from "./migration-runner";
+import { restrictedDocumentTransferMetadata, partitionRestrictedSourceRows, assertRequiredFinancialReportControls, buildFinancialReportExpected, readRestrictedMigrationArchive, reportParityForSnapshot, RestrictedMigrationArchiveError, runRestrictedMigrationArchive } from "./migration-runner";
 import { buildRentManagerMigrationArtifact } from "./migration-artifact";
 import { createKeyedTargetIdFactory } from "./rm-mapper";
 import { syntheticRentOpsSnapshot } from "../fixtures/synthetic";
@@ -190,6 +190,77 @@ test("financial expected controls keep emitted uncertainty disjoint from unassig
       + expected.suppressedCount + expected.endedCount + expected.inactiveCount + expected.futureCount + expected.invalidCount,
     expected.sourceRowCount,
   );
+});
+
+test("report parity follows replacement intervals and terminal end boundaries", () => {
+  const snapshot = syntheticRentOpsSnapshot();
+  const root = {
+    ...snapshot.recurringSchedules[0],
+    id: "parity-root",
+    amountCents: 100_000,
+    amountKnowledge: "known" as const,
+    effectiveFrom: "2025-01-01",
+    effectiveFromKnowledge: "manual" as const,
+    effectiveTo: null,
+    active: true,
+    activeKnowledge: "manual" as const,
+    lineageRootId: "parity-root",
+    lineageRootOrigin: "manual" as const,
+    versionOrigin: "manual" as const,
+    versionAction: "root" as const,
+    supersedesId: null,
+    recordRevision: 1,
+  };
+  const replacement = {
+    ...root,
+    id: "parity-replacement",
+    amountCents: 120_000,
+    effectiveFrom: "2025-06-01",
+    versionAction: "replace" as const,
+    supersedesId: root.id,
+    recordRevision: 2,
+  };
+  const end = {
+    ...replacement,
+    id: "parity-end",
+    amountCents: null,
+    amountKnowledge: "unknown" as const,
+    effectiveFrom: "2025-09-01",
+    effectiveTo: "2025-09-01",
+    active: false,
+    activeKnowledge: "manual" as const,
+    versionAction: "end" as const,
+    supersedesId: replacement.id,
+    recordRevision: 3,
+  };
+  snapshot.recurringSchedules = [root, replacement, end];
+
+  assert.equal(reportParityForSnapshot(snapshot, "2025-05-31").effectiveBaseRentCents, 100_000);
+  assert.equal(reportParityForSnapshot(snapshot, "2025-06-01").effectiveBaseRentCents, 120_000);
+  assert.equal(reportParityForSnapshot(snapshot, "2025-08-31").effectiveBaseRentCents, 120_000);
+  assert.equal(reportParityForSnapshot(snapshot, "2025-09-01").effectiveBaseRentCents, 0);
+  assert.equal(reportParityForSnapshot(snapshot, "2025-10-01").effectiveBaseRentCents, 0);
+});
+
+test("report parity remains unchanged for the complete synthetic source fixture", () => {
+  assert.deepEqual(reportParityForSnapshot(syntheticRentOpsSnapshot(), "2026-08-01"), {
+    rentRollRows: 7,
+    currentOccupiedUnits: 2,
+    futurePreleasedUnits: 0,
+    vacantUnits: 4,
+    activeHapContracts: 1,
+    hapAgencyCents: 40_000,
+    hapTenantCents: 80_000,
+    hapReceiptCount: 0,
+    hapKnownReceiptCount: 0,
+    hapUnknownReceiptCount: 0,
+    hapReceiptCents: 0,
+    hapExpectedAgencyCents: 40_000,
+    hapReceivedAgencyCents: 0,
+    hapVarianceCents: -40_000,
+    effectiveBaseRentCents: 230_000,
+    effectiveRecurringFeesCents: 5_000,
+  });
 });
 
 test("restricted migration runner rejects permissive files before parsing", async () => {

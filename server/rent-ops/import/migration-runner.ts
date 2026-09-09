@@ -11,7 +11,7 @@ import { auditRestrictedExportArchive, type RestrictedExportArchiveAuditReport }
 import type { CollectionCheckpoint, CollectionCoverage, DocumentBinaryDescriptor, ExportCheckpoint, ExportEnvelope, RedactedExportManifest } from "../export/types";
 import type { IsoMonth, RentManagerRawRecord, RentOpsDocument, RentOpsSnapshot, RentOpsSourceRecord, RentOpsSubsidyContract, RentOpsSubsidyPayment, RentOpsSubsidyTenant } from "../../../shared/rent-ops-contracts";
 import type { RentOpsQueryExecutor } from "../repositories/postgres";
-import { ledgerBalanceSign } from "../domain/invariants";
+import { effectiveScheduleIntervals, ledgerBalanceSign } from "../domain/invariants";
 import { projectFinancialSchedules, type FinancialScheduleProjection } from "../domain/financial-projection";
 import { assertMigrationArtifactIntegrity, buildRentManagerMigrationArtifact, type MigrationArtifactReport } from "./migration-artifact";
 import { approvedArchiveEnvelopeSha256, PersistenceImporter, type PersistenceImporterOptions, type PersistenceImportSummary, type RestrictedDocumentTransferOrphanEvidence, type RestrictedVerifiedDocumentTransfer, type VerifiedSupplementReceiptBinding } from "./persistence-importer";
@@ -825,15 +825,23 @@ function activeHapReceiptControls(snapshot: RentOpsSnapshot, asOfDate: string, c
   };
 }
 
-function reportParityForSnapshot(snapshot: RentOpsSnapshot, asOfDate: string): DatabaseAuditExpected["reportParity"] {
+export function reportParityForSnapshot(snapshot: RentOpsSnapshot, asOfDate: string): DatabaseAuditExpected["reportParity"] {
   const current = currentUnitIds(snapshot, asOfDate);
   const future = futureUnitIds(snapshot, asOfDate);
   const vacant = snapshot.units.filter((unit) => !current.has(unit.id) && !future.has(unit.id) && !hasUnresolvedTenancyForUnit(snapshot, unit)).length;
   const contracts = effectiveHapContracts(snapshot, asOfDate);
   const receipt = activeHapReceiptControls(snapshot, asOfDate, contracts);
-  const activeSchedules = snapshot.recurringSchedules.filter((schedule) => schedule.active !== false
-    && (!schedule.effectiveFrom || schedule.effectiveFrom <= asOfDate)
-    && (!schedule.effectiveTo || schedule.effectiveTo >= asOfDate));
+  // Schedule versions are append-only.  A predecessor keeps its original
+  // stored open end, so filter through the derived lineage interval rather
+  // than the row's raw effectiveTo; otherwise replacement chains double-count
+  // and terminal end rows resurrect the predecessor in parity controls.
+  const intervals = effectiveScheduleIntervals(snapshot.recurringSchedules);
+  const activeSchedules = snapshot.recurringSchedules.filter((schedule) => {
+    if (schedule.active === false) return false;
+    const interval = intervals.get(schedule);
+    return (!interval?.effectiveFrom || interval.effectiveFrom <= asOfDate)
+      && (!interval?.effectiveTo || interval.effectiveTo >= asOfDate);
+  });
   return {
     rentRollRows: snapshot.units.length,
     currentOccupiedUnits: current.size,

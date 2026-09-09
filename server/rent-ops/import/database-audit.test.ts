@@ -399,6 +399,13 @@ test("fidelity SQL covers scope/date knowledge, source exact-once, deposit types
   ]) assert.match(sql, new RegExp(fragment));
 });
 
+test("fidelity controls retain the legacy definition-key fallback outside strict lineage validation", () => {
+  const sql = DATABASE_AUDIT_SQL.fidelityControls;
+  const fidelityScheduleRows = sql.slice(sql.lastIndexOf("schedule_rows AS ("), sql.indexOf("schedule_sources AS ("));
+  assert.match(fidelityScheduleRows, /COALESCE\(s\.charge_definition_id, s\.charge_definition_key, 'unknown:' \|\| s\.id\)/);
+  assert.match(sql, /lineage_schedule_rows AS \(/);
+});
+
 test("independent v8 financial report SQL contains month, lease, lineage, scope, assignment, precedence, and disjoint buckets", () => {
   const sql = DATABASE_AUDIT_SQL.financialReportV8;
   assert.match(sql, /^\s*SELECT\s+\*\s+FROM\s+\(/i);

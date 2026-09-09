@@ -105,6 +105,107 @@ test("rent roll preserves one row per physical unit, half baths, future rent, re
   assert.equal(rows.find((row) => row.unitId === "demo-unit-a-5")?.listing, "off_market");
 });
 
+test("legacy rent roll and dashboard use effective recurring lineage intervals", () => {
+  const replacementSnapshot = snapshot();
+  const replacementRoot = replacementSnapshot.recurringSchedules.find((schedule) => schedule.id === "demo-schedule-1")!;
+  replacementSnapshot.recurringSchedules.push({
+    ...replacementRoot,
+    id: "demo-schedule-1-legacy-v2",
+    source: undefined,
+    recordRevision: 2,
+    amountCents: 125000,
+    amountKnowledge: "known",
+    effectiveFrom: "2026-08-20",
+    effectiveFromKnowledge: "manual",
+    versionOrigin: "manual",
+    supersedesId: replacementRoot.id,
+    versionAction: "replace",
+  });
+  const replacedRow = deriveRentRoll(replacementSnapshot, { asOfDate: "2026-08-21" }).find((row) => row.unitId === "demo-unit-a-1");
+  assert.equal(replacedRow?.baseRentCents, 125000);
+
+  const endedSnapshot = snapshot();
+  const endedRoot = endedSnapshot.recurringSchedules.find((schedule) => schedule.id === "demo-schedule-1")!;
+  endedSnapshot.recurringSchedules.push({
+    ...endedRoot,
+    id: "demo-schedule-1-legacy-end",
+    source: undefined,
+    recordRevision: 2,
+    amountCents: null,
+    amountKnowledge: "unknown",
+    effectiveFrom: "2026-09-01",
+    effectiveFromKnowledge: "manual",
+    effectiveTo: "2026-09-01",
+    active: false,
+    activeKnowledge: "manual",
+    versionOrigin: "manual",
+    supersedesId: endedRoot.id,
+    versionAction: "end",
+  });
+  // Keep the report fixture focused on the ended lineage boundary rather than
+  // the separate future-tenancy boundary in the shared synthetic snapshot.
+  endedSnapshot.tenancies = endedSnapshot.tenancies.filter((tenancy) => tenancy.id !== "demo-tenancy-2");
+  const beforeEnd = deriveRentRoll(endedSnapshot, { asOfDate: "2026-08-31" }).find((row) => row.unitId === "demo-unit-a-1");
+  const afterEnd = deriveRentRoll(endedSnapshot, { asOfDate: "2026-09-01" }).find((row) => row.unitId === "demo-unit-a-1");
+  assert.equal(beforeEnd?.baseRentCents, 120000);
+  assert.equal(afterEnd?.baseRentCents, undefined);
+  assert.equal(deriveDashboardSummary(endedSnapshot, { asOfDate: "2026-09-01" }).scheduledRentCents, 115000);
+});
+
+test("legacy scheduled income property scope honors a terminal lineage boundary", () => {
+  const current = snapshot();
+  current.tenancies = current.tenancies.filter((tenancy) => tenancy.id !== "demo-tenancy-2");
+  const root = current.recurringSchedules.find((schedule) => schedule.id === "demo-schedule-1")!;
+  const propertyRoot: RentOpsRecurringChargeSchedule = {
+    ...root,
+    id: "property-base-rent-root",
+    scopeType: "property",
+    scopeId: "demo-property-a",
+    scopeTypeKnowledge: "manual",
+    scopeLinkKnowledge: "manual",
+    tenancyId: null,
+    personId: null,
+    propertyId: "demo-property-a",
+    unitId: null,
+    chargeDefinitionId: "property-base-rent-definition",
+    chargeDefinitionKey: null,
+    category: "base_rent",
+    categoryKnowledge: "manual",
+    description: "Property base rent",
+    amountCents: 50000,
+    amountKnowledge: "known",
+    effectiveFrom: "2026-01-01",
+    effectiveFromKnowledge: "manual",
+    active: true,
+    activeKnowledge: "manual",
+    lineageRootId: "property-base-rent-root",
+    lineageRootOrigin: "manual",
+    versionOrigin: "manual",
+    versionAction: "root",
+    supersedesId: null,
+  };
+  const end: RentOpsRecurringChargeSchedule = {
+    ...propertyRoot,
+    id: "property-base-rent-end",
+    recordRevision: 2,
+    amountCents: null,
+    amountKnowledge: "unknown",
+    effectiveFrom: "2026-09-01",
+    effectiveFromKnowledge: "manual",
+    effectiveTo: "2026-09-01",
+    active: false,
+    activeKnowledge: "manual",
+    versionOrigin: "manual",
+    supersedesId: propertyRoot.id,
+    versionAction: "end",
+  };
+  current.recurringSchedules.push(propertyRoot, end);
+  const before = deriveScheduledIncome(current, { month: "2026-08", asOfDate: "2026-08-31" });
+  const after = deriveScheduledIncome(current, { month: "2026-09", asOfDate: "2026-09-01" });
+  assert.equal(before.find((row) => row.scheduleId === propertyRoot.id)?.amountCents, 50000);
+  assert.equal(after.some((row) => row.scheduleId === propertyRoot.id || row.scheduleId === end.id), false);
+});
+
 test("dashboard counts physical vacancy and not-ready units without charging stale occupied readiness", () => {
   const summary = deriveDashboardSummary(snapshot(), { asOfDate });
   assert.equal(summary.occupiedUnits, 2);

@@ -726,6 +726,58 @@ ORDER BY property_id NULLS FIRST
 ) AS financial_report_v8
 `;
 
+/**
+ * Keep the audit's schedule-lineage gate identical to the independent v8
+ * financial report.  The block is intentionally derived from the source
+ * query rather than copied: both audits must agree on strict lineage
+ * validation, including inherited facts, artifact boundaries, and forked
+ * chains.  It ends immediately before the month-specific winner selection,
+ * so point-in-time audit controls can apply full-date intervals instead.
+ */
+const STRICT_SCHEDULE_LINEAGE_CTES = FINANCIAL_REPORT_V8_SQL.slice(
+  FINANCIAL_REPORT_V8_SQL.indexOf("schedule_rows AS ("),
+  FINANCIAL_REPORT_V8_SQL.indexOf("lineage_eligible AS ("),
+).replace(/\bschedule_rows\b/g, "lineage_schedule_rows");
+
+/**
+ * Immutable successor rows retain their predecessor's stored effective_to.
+ * For a valid single-successor lineage, the predecessor's report interval
+ * ends the day before that successor starts.  Quarantined/forked lineages
+ * deliberately retain their stored ranges so independent fidelity controls
+ * expose the conflict instead of hiding it.
+ */
+const EFFECTIVE_SCHEDULE_INTERVAL_CTE = `
+schedule_lineage_intervals AS (
+  WITH successor_candidates AS (
+    SELECT
+      predecessor.id,
+      COUNT(successor.id)::bigint AS successor_count,
+      MIN(successor.effective_from) AS successor_effective_from,
+      COALESCE(BOOL_AND(successor.lineage_invalid_quarantined IS FALSE), false) AS successor_valid,
+      COALESCE(BOOL_AND(successor.lineage_root_id IS NOT DISTINCT FROM predecessor.lineage_root_id), false) AS successor_same_root
+    FROM lineage_rows predecessor
+    LEFT JOIN lineage_rows successor ON successor.supersedes_id = predecessor.id
+    GROUP BY predecessor.id
+  )
+  SELECT
+    l.*,
+    CASE
+      WHEN l.lineage_invalid_quarantined THEN l.effective_to
+      WHEN successor.successor_count = 1
+        AND successor.successor_valid
+        AND successor.successor_same_root
+        AND successor.successor_effective_from IS NOT NULL
+      THEN CASE
+        WHEN l.effective_to IS NULL THEN (successor.successor_effective_from - INTERVAL '1 day')::date
+        ELSE LEAST(l.effective_to, (successor.successor_effective_from - INTERVAL '1 day')::date)
+      END
+      ELSE l.effective_to
+    END AS lineage_effective_to
+  FROM lineage_rows l
+  JOIN successor_candidates successor ON successor.id = l.id
+)
+`;
+
 export const DATABASE_AUDIT_SQL = Object.freeze({
   targetIdentity: "SELECT current_database() AS database_name, current_user AS database_user, current_setting('server_version_num', true) AS server_version_num",
   // Ordered migration evidence lives in the v2 ledger. The legacy v1
@@ -1129,6 +1181,10 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
   financialReportV8: FINANCIAL_REPORT_V8_SQL,
   financialReport: FINANCIAL_REPORT_V8_SQL,
   reportParity: `
+    SELECT * FROM (
+    WITH RECURSIVE
+    ${STRICT_SCHEDULE_LINEAGE_CTES}
+    ${EFFECTIVE_SCHEDULE_INTERVAL_CTE}
     SELECT
       (SELECT COUNT(*) FROM rent_ops_units) AS rent_roll_rows,
       (SELECT COUNT(DISTINCT t.unit_id) FROM rent_ops_tenancies t WHERE t.status IN ('current', 'notice') AND t.actual_move_in_on <= $1::date AND (t.actual_move_out_on IS NULL OR t.actual_move_out_on > $1::date)) AS current_occupied_units,
@@ -1144,8 +1200,19 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
       (SELECT COALESCE(SUM(p.amount_cents), 0)::bigint FROM rent_ops_subsidy_payments p JOIN rent_ops_subsidy_contracts s ON s.id = p.subsidy_contract_id WHERE s.status <> 'pending' AND NOT (s.status = 'ended' AND s.effective_to IS NULL) AND s.effective_from <= DATE_TRUNC('month', $1::date)::date AND (s.effective_to IS NULL OR s.effective_to >= DATE_TRUNC('month', $1::date)::date) AND p.status = 'received' AND p.status_knowledge = 'source' AND p.amount_knowledge = 'known' AND p.amount_cents IS NOT NULL AND p.payment_on_knowledge = 'source' AND p.payment_on IS NOT NULL AND p.payment_on <= $1::date AND p.payment_on >= DATE_TRUNC('month', $1::date)::date AND p.payment_on < (DATE_TRUNC('month', $1::date) + INTERVAL '1 month')::date) AS hap_received_agency_cents,
       (SELECT COALESCE(SUM(s.agency_obligation_cents), 0)::bigint FROM rent_ops_subsidy_contracts s WHERE s.status <> 'pending' AND NOT (s.status = 'ended' AND s.effective_to IS NULL) AND s.effective_from <= DATE_TRUNC('month', $1::date)::date AND (s.effective_to IS NULL OR s.effective_to >= DATE_TRUNC('month', $1::date)::date)) AS hap_expected_agency_cents,
       ((SELECT COALESCE(SUM(p.amount_cents), 0)::bigint FROM rent_ops_subsidy_payments p JOIN rent_ops_subsidy_contracts s ON s.id = p.subsidy_contract_id WHERE s.status <> 'pending' AND NOT (s.status = 'ended' AND s.effective_to IS NULL) AND s.effective_from <= DATE_TRUNC('month', $1::date)::date AND (s.effective_to IS NULL OR s.effective_to >= DATE_TRUNC('month', $1::date)::date) AND p.status = 'received' AND p.status_knowledge = 'source' AND p.amount_knowledge = 'known' AND p.amount_cents IS NOT NULL AND p.payment_on_knowledge = 'source' AND p.payment_on IS NOT NULL AND p.payment_on <= $1::date AND p.payment_on >= DATE_TRUNC('month', $1::date)::date AND p.payment_on < (DATE_TRUNC('month', $1::date) + INTERVAL '1 month')::date) - (SELECT COALESCE(SUM(s.agency_obligation_cents), 0)::bigint FROM rent_ops_subsidy_contracts s WHERE s.status <> 'pending' AND NOT (s.status = 'ended' AND s.effective_to IS NULL) AND s.effective_from <= DATE_TRUNC('month', $1::date)::date AND (s.effective_to IS NULL OR s.effective_to >= DATE_TRUNC('month', $1::date)::date))) AS hap_variance_cents,
-      (SELECT COALESCE(SUM(s.amount_cents), 0)::bigint FROM rent_ops_recurring_charge_schedules s WHERE s.category = 'base_rent' AND s.active IS DISTINCT FROM FALSE AND (s.effective_from IS NULL OR s.effective_from <= $1::date) AND (s.effective_to IS NULL OR s.effective_to >= $1::date)) AS effective_base_rent_cents,
-      (SELECT COALESCE(SUM(s.amount_cents), 0)::bigint FROM rent_ops_recurring_charge_schedules s WHERE s.category = 'recurring_fee' AND s.active IS DISTINCT FROM FALSE AND (s.effective_from IS NULL OR s.effective_from <= $1::date) AND (s.effective_to IS NULL OR s.effective_to >= $1::date)) AS effective_recurring_fees_cents
+      (SELECT COALESCE(SUM(s.amount_cents), 0)::bigint
+         FROM schedule_lineage_intervals s
+        WHERE s.category = 'base_rent'
+          AND s.active IS DISTINCT FROM FALSE
+          AND (s.effective_from IS NULL OR s.effective_from <= $1::date)
+          AND (s.lineage_effective_to IS NULL OR s.lineage_effective_to >= $1::date)) AS effective_base_rent_cents,
+      (SELECT COALESCE(SUM(s.amount_cents), 0)::bigint
+         FROM schedule_lineage_intervals s
+        WHERE s.category = 'recurring_fee'
+          AND s.active IS DISTINCT FROM FALSE
+          AND (s.effective_from IS NULL OR s.effective_from <= $1::date)
+          AND (s.lineage_effective_to IS NULL OR s.lineage_effective_to >= $1::date)) AS effective_recurring_fees_cents
+    ) AS report_parity
   `,
   /**
    * Independent v2 fidelity controls. This query deliberately recomputes
@@ -1156,12 +1223,15 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
    */
   fidelityControls: `
     SELECT * FROM (
-    WITH schedule_rows AS (
+    WITH RECURSIVE
+    ${STRICT_SCHEDULE_LINEAGE_CTES}
+    schedule_rows AS (
       SELECT s.*,
         COALESCE(s.charge_definition_id, s.charge_definition_key, 'unknown:' || s.id) AS definition_key,
         CASE s.scope_type WHEN 'tenant' THEN 3 WHEN 'unit' THEN 2 WHEN 'property' THEN 1 ELSE 0 END AS scope_rank
       FROM rent_ops_recurring_charge_schedules s
     ),
+    ${EFFECTIVE_SCHEDULE_INTERVAL_CTE},
     schedule_sources AS (
       SELECT system AS source_system, source_id
       FROM rent_ops_source_records
@@ -1186,11 +1256,12 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
           ORDER BY s.scope_rank DESC, s.effective_from DESC NULLS LAST, s.id
         ) AS precedence_rank
       FROM schedule_rows s
+      JOIN schedule_lineage_intervals intervals ON intervals.id = s.id
       JOIN current_tenancies t ON t.property_id = s.property_id
       WHERE s.active IS DISTINCT FROM FALSE
         AND s.scope_type IN ('tenant', 'unit')
-        AND (s.effective_from IS NULL OR s.effective_from <= $1::date)
-        AND (s.effective_to IS NULL OR s.effective_to >= $1::date)
+        AND (intervals.effective_from IS NULL OR intervals.effective_from <= $1::date)
+        AND (intervals.lineage_effective_to IS NULL OR intervals.lineage_effective_to >= $1::date)
         AND (
           (s.scope_type = 'tenant' AND (
             (s.tenancy_id IS NOT NULL AND s.tenancy_id = t.id
@@ -1220,9 +1291,10 @@ export const DATABASE_AUDIT_SQL = Object.freeze({
           ORDER BY s.effective_from DESC NULLS LAST, s.id
         ) AS property_rank
       FROM schedule_rows s
+      JOIN schedule_lineage_intervals intervals ON intervals.id = s.id
       WHERE s.active IS DISTINCT FROM FALSE AND s.scope_type = 'property'
-        AND (s.effective_from IS NULL OR s.effective_from <= $1::date)
-        AND (s.effective_to IS NULL OR s.effective_to >= $1::date)
+        AND (intervals.effective_from IS NULL OR intervals.effective_from <= $1::date)
+        AND (intervals.lineage_effective_to IS NULL OR intervals.lineage_effective_to >= $1::date)
     ),
     effective_report_schedules AS (
       SELECT a.property_id, a.category, a.amount_cents

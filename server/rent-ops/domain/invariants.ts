@@ -1,6 +1,7 @@
 import type {
   Cents,
   IsoDate,
+  IsoMonth,
   RentOpsLedgerTransaction,
   RentOpsPaymentAllocation,
   RentOpsDocument,
@@ -9,7 +10,8 @@ import type {
   ApplicationStatus,
 } from "../../../shared/rent-ops-contracts";
 import { isoDateSchema, POSTGRES_INTEGER_MAX, POSTGRES_INTEGER_MIN } from "../../../shared/rent-ops-contracts";
-import { rangesOverlap } from "./dates";
+import { addDays, rangesOverlap } from "./dates";
+import { resolveEffectiveScheduleVersions } from "./financial-projection";
 
 export interface InvariantViolation {
   code: string;
@@ -106,8 +108,100 @@ function knownScheduleScope(schedule: RentOpsRecurringChargeSchedule): KnownSche
   return { type: schedule.scopeType, id: schedule.scopeId };
 }
 
+export interface EffectiveScheduleInterval {
+  schedule: RentOpsRecurringChargeSchedule;
+  effectiveFrom: IsoDate | null | undefined;
+  effectiveTo: IsoDate | null | undefined;
+}
+
+function scheduleLineageKey(schedule: RentOpsRecurringChargeSchedule): string {
+  return schedule.lineageRootId ? `lineage:${schedule.lineageRootId}` : `legacy:${schedule.id}`;
+}
+
+/**
+ * Return the full-date obligation interval for each row.  Immutable schedule
+ * versions retain the predecessor's original end date, so comparing their
+ * stored ranges directly makes every valid replacement look like an overlap.
+ * The projection resolver is used only as a structural lineage gate here;
+ * interval selection remains date based and is never reduced to one month.
+ *
+ * An invalid or forked lineage deliberately falls back to each row's stored
+ * range.  That is conservative: bad lineage metadata can report a conflict,
+ * but cannot hide one by suppressing a predecessor.
+ */
+export function effectiveScheduleIntervals(schedules: RentOpsRecurringChargeSchedule[]): Map<RentOpsRecurringChargeSchedule, EffectiveScheduleInterval> {
+  if (schedules.length === 0) return new Map();
+
+  // The month is intentionally only a validation anchor. The resolver's
+  // invalid-lineage result is independent of its selected month; the complete
+  // interval calculation below handles every effective date in the rows.
+  const lineageValidation = resolveEffectiveScheduleVersions(schedules, "9999-12" as IsoMonth, { strictLineage: true });
+  const invalidIds = new Set(lineageValidation.invalidSchedules.map((schedule) => schedule.id));
+  const rowsByLineage = new Map<string, RentOpsRecurringChargeSchedule[]>();
+  const rowsById = new Map<string, RentOpsRecurringChargeSchedule[]>();
+  for (const schedule of schedules) {
+    const lineageKey = scheduleLineageKey(schedule);
+    const lineageRows = rowsByLineage.get(lineageKey) ?? [];
+    lineageRows.push(schedule);
+    rowsByLineage.set(lineageKey, lineageRows);
+    const idRows = rowsById.get(schedule.id) ?? [];
+    idRows.push(schedule);
+    rowsById.set(schedule.id, idRows);
+  }
+
+  const successorsByPredecessor = new Map<string, RentOpsRecurringChargeSchedule[]>();
+  for (const schedule of schedules) {
+    if (!schedule.supersedesId) continue;
+    const successors = successorsByPredecessor.get(schedule.supersedesId) ?? [];
+    successors.push(schedule);
+    successorsByPredecessor.set(schedule.supersedesId, successors);
+  }
+
+  // Keep an explicit unsafe set for malformed edges even if a future change
+  // to the projection resolver classifies a malformed row differently.
+  const unsafeLineages = new Set<string>();
+  for (const schedule of schedules) {
+    if (!schedule.supersedesId) continue;
+    const predecessorRows = rowsById.get(schedule.supersedesId) ?? [];
+    if (predecessorRows.length !== 1) {
+      unsafeLineages.add(scheduleLineageKey(schedule));
+      for (const predecessor of predecessorRows) unsafeLineages.add(scheduleLineageKey(predecessor));
+      continue;
+    }
+    const predecessor = predecessorRows[0];
+    if (scheduleLineageKey(predecessor) !== scheduleLineageKey(schedule)) {
+      unsafeLineages.add(scheduleLineageKey(predecessor));
+      unsafeLineages.add(scheduleLineageKey(schedule));
+    }
+  }
+  for (const [predecessorId, successors] of Array.from(successorsByPredecessor.entries())) {
+    if (successors.length <= 1) continue;
+    for (const successor of successors) unsafeLineages.add(scheduleLineageKey(successor));
+    for (const predecessor of rowsById.get(predecessorId) ?? []) unsafeLineages.add(scheduleLineageKey(predecessor));
+  }
+
+  const intervals = new Map<RentOpsRecurringChargeSchedule, EffectiveScheduleInterval>();
+  for (const schedule of schedules) {
+    const lineageKey = scheduleLineageKey(schedule);
+    const lineageRows = rowsByLineage.get(lineageKey) ?? [schedule];
+    const lineageInvalid = unsafeLineages.has(lineageKey) || lineageRows.some((row) => invalidIds.has(row.id));
+    let effectiveTo = schedule.effectiveTo;
+    if (!lineageInvalid) {
+      const successors = successorsByPredecessor.get(schedule.id) ?? [];
+      const successor = successors.length === 1 && scheduleLineageKey(successors[0]) === lineageKey ? successors[0] : undefined;
+      if (successor?.effectiveFrom) {
+        const predecessorBoundary = addDays(successor.effectiveFrom, -1);
+        if (effectiveTo === null || effectiveTo === undefined || predecessorBoundary < effectiveTo) effectiveTo = predecessorBoundary;
+      }
+    }
+    intervals.set(schedule, { schedule, effectiveFrom: schedule.effectiveFrom, effectiveTo });
+  }
+  return intervals;
+}
+
 export function baseRentScheduleViolations(schedules: RentOpsRecurringChargeSchedule[]): InvariantViolation[] {
   const violations: InvariantViolation[] = [];
+  const intervals = effectiveScheduleIntervals(schedules);
   const grouped = new Map<string, RentOpsRecurringChargeSchedule[]>();
   for (const schedule of schedules) {
     if (schedule.active !== true || !knownScheduleFact(schedule.activeKnowledge) || schedule.category !== "base_rent" || !knownScheduleFact(schedule.categoryKnowledge)) continue;
@@ -127,10 +221,16 @@ export function baseRentScheduleViolations(schedules: RentOpsRecurringChargeSche
   }
 
   for (const [scopeKey, tenancySchedules] of Array.from(grouped.entries())) {
-    const ordered = [...tenancySchedules].sort((left, right) => compareOptionalDate(left.effectiveFrom, right.effectiveFrom) || left.id.localeCompare(right.id));
+    const ordered = [...tenancySchedules].sort((left, right) => {
+      const leftInterval = intervals.get(left)!;
+      const rightInterval = intervals.get(right)!;
+      return compareOptionalDate(leftInterval.effectiveFrom, rightInterval.effectiveFrom) || left.id.localeCompare(right.id);
+    });
     for (let index = 0; index < ordered.length; index += 1) {
       for (let next = index + 1; next < ordered.length; next += 1) {
-        if (!optionalRangesOverlap(ordered[index].effectiveFrom, ordered[index].effectiveTo, ordered[next].effectiveFrom, ordered[next].effectiveTo)) continue;
+        const left = intervals.get(ordered[index])!;
+        const right = intervals.get(ordered[next])!;
+        if (!optionalRangesOverlap(left.effectiveFrom, left.effectiveTo, right.effectiveFrom, right.effectiveTo)) continue;
         violations.push({
           code: "overlapping_base_rent_schedule",
           entityId: ordered[next].id,
@@ -155,12 +255,14 @@ export function effectiveSchedules(
   asOf: string,
   scope: { personId?: string; unitId?: string; propertyId?: string; allowPersonScopedTenant?: boolean } = {},
 ): RentOpsRecurringChargeSchedule[] {
+  const intervals = effectiveScheduleIntervals(schedules);
   const candidateRows = schedules.filter((schedule) => {
     // Explicit inactive is excluded.  An omitted active flag is retained as
     // an uncertain schedule and must not disappear from reconciliation.
     if (schedule.active === false) return false;
-    if (schedule.effectiveFrom && schedule.effectiveFrom > asOf) return false;
-    if (schedule.effectiveTo && schedule.effectiveTo < asOf) return false;
+    const interval = intervals.get(schedule);
+    if (interval?.effectiveFrom && interval.effectiveFrom > asOf) return false;
+    if (interval?.effectiveTo && interval.effectiveTo < asOf) return false;
     const canonicalScope = knownScheduleScope(schedule);
     if (canonicalScope?.type === "tenant") {
       // A tenancy-scoped row is never widened to the resident's other

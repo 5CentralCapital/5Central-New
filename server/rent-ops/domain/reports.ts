@@ -31,7 +31,7 @@ import type {
   CollectedIncomeRow,
   TenantProfile,
 } from "../../../shared/rent-ops-contracts";
-import { activeTenancyViolations, assertNoOverlappingBaseRentSchedules, effectiveLedgerKind, effectiveSchedules, ledgerBalanceSign, RentOpsInvariantError } from "./invariants";
+import { activeTenancyViolations, assertNoOverlappingBaseRentSchedules, effectiveLedgerKind, effectiveScheduleIntervals, effectiveSchedules, ledgerBalanceSign, RentOpsInvariantError } from "./invariants";
 import { financialProjectionControls, projectFinancialSchedules, type FinancialProjectionControls } from "./financial-projection";
 import { addDays, compareIsoDate, daysBetween, isDateOnOrBefore, isEffectiveOn, monthFromDate, monthStart, nowIsoDate } from "./dates";
 
@@ -836,6 +836,7 @@ export function deriveScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOp
   const units = unitMap(snapshot);
   const people = personMap(snapshot);
   const propertyIds = new Set(scopedProperties(snapshot, filters).map((property) => property.id));
+  const scheduleIntervals = effectiveScheduleIntervals(snapshot.recurringSchedules);
   const rows: ScheduledIncomeRow[] = [];
   for (const tenancy of snapshot.tenancies) {
     if (!propertyIds.has(tenancy.propertyId) || (tenancy.status !== "current" && tenancy.status !== "future" && tenancy.status !== "notice")) continue;
@@ -880,11 +881,13 @@ export function deriveScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOp
   // Property schedules are not allocated to units. Emit each applicable
   // property definition once, regardless of the number of units/tenancies.
   for (const propertyId of Array.from(propertyIds)) {
-    const propertySchedules = snapshot.recurringSchedules.filter((schedule) =>
-      schedule.active !== false && schedule.scopeType === "property" && schedule.propertyId === propertyId &&
-      (schedule.category === "base_rent" || schedule.category === "recurring_fee") &&
-      (!schedule.effectiveFrom || schedule.effectiveFrom <= start) && (!schedule.effectiveTo || schedule.effectiveTo >= start),
-    );
+    const propertySchedules = snapshot.recurringSchedules.filter((schedule) => {
+      if (schedule.active === false || schedule.scopeType !== "property" || schedule.propertyId !== propertyId
+        || (schedule.category !== "base_rent" && schedule.category !== "recurring_fee")) return false;
+      const interval = scheduleIntervals.get(schedule);
+      return (!interval?.effectiveFrom || interval.effectiveFrom <= start)
+        && (!interval?.effectiveTo || interval.effectiveTo >= start);
+    });
     const groups = new Map<string, RentOpsRecurringChargeSchedule[]>();
     for (const schedule of propertySchedules) {
       const key = `${schedule.category}:${schedule.chargeDefinitionId ?? `unknown:${schedule.id}`}`;

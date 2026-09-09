@@ -47,6 +47,50 @@ function knownSchedule(id: string, overrides: Partial<RentOpsRecurringChargeSche
   };
 }
 
+function manualBaseSchedule(id: string, overrides: Partial<RentOpsRecurringChargeSchedule> = {}): RentOpsRecurringChargeSchedule {
+  return knownSchedule(id, {
+    lineageRootOrigin: "manual",
+    versionOrigin: "manual",
+    sourceArtifactSha256: null,
+    artifactObservationOn: null,
+    effectiveFromKnowledge: "manual",
+    ...overrides,
+  });
+}
+
+function replacementSchedule(predecessor: RentOpsRecurringChargeSchedule, id: string, effectiveFrom: string, amountCents = 120_000): RentOpsRecurringChargeSchedule {
+  return {
+    ...predecessor,
+    id,
+    source: undefined,
+    versionOrigin: "manual",
+    versionAction: "replace",
+    supersedesId: predecessor.id,
+    effectiveFrom,
+    effectiveFromKnowledge: "manual",
+    amountCents,
+    amountKnowledge: "known",
+  };
+}
+
+function endSchedule(predecessor: RentOpsRecurringChargeSchedule, id: string, effectiveFrom: string): RentOpsRecurringChargeSchedule {
+  return {
+    ...predecessor,
+    id,
+    source: undefined,
+    versionOrigin: "manual",
+    versionAction: "end",
+    supersedesId: predecessor.id,
+    effectiveFrom,
+    effectiveFromKnowledge: "manual",
+    effectiveTo: effectiveFrom,
+    amountCents: null,
+    amountKnowledge: "unknown",
+    active: false,
+    activeKnowledge: "manual",
+  };
+}
+
 function scheduleSnapshot(...schedules: RentOpsRecurringChargeSchedule[]): RentOpsSnapshot {
   const snapshot = emptyRentOpsSnapshot();
   snapshot.modelVersion = 3;
@@ -132,6 +176,48 @@ test("canonical schedule scope requires source/manual type and exact/manual link
   const scopeIdOnlyUnit = knownSchedule("scope-id-only", { unitId: null });
   assert.deepEqual(validateSnapshot(scheduleSnapshot(scopeIdOnlyUnit)), []);
   assert.deepEqual(effectiveSchedules([scopeIdOnlyUnit], "t1", "2025-07-01", { unitId: "u1", propertyId: "p1" }).map((row) => row.id), ["scope-id-only"]);
+});
+
+test("base-rent overlap uses effective lineage intervals after a terminal end", () => {
+  const root = manualBaseSchedule("ended-root", { effectiveFrom: "2025-01-01", effectiveTo: "2025-12-31" });
+  const end = endSchedule(root, "ended-root-end", "2025-06-01");
+  const futureRoot = manualBaseSchedule("future-root", { effectiveFrom: "2025-07-01", effectiveTo: "2025-12-31" });
+  assert.deepEqual(baseRentScheduleViolations([root, end, futureRoot]), []);
+
+  assert.deepEqual(effectiveSchedules([root, end], "t1", "2025-05-31", { unitId: "u1", propertyId: "p1" }).map((schedule) => schedule.id), [root.id]);
+  assert.deepEqual(effectiveSchedules([root, end], "t1", "2025-06-01", { unitId: "u1", propertyId: "p1" }), []);
+
+  const historicalOverlap = manualBaseSchedule("historical-overlap", { effectiveFrom: "2025-05-01", effectiveTo: "2025-05-31" });
+  const violations = baseRentScheduleViolations([root, end, historicalOverlap]);
+  assert.ok(violations.some((violation) => violation.entityId === historicalOverlap.id));
+});
+
+test("base-rent overlap accepts a valid replacement chain but rejects an external overlap", () => {
+  const root = manualBaseSchedule("replacement-root", { effectiveFrom: "2025-01-01", effectiveTo: "2025-12-31" });
+  const first = replacementSchedule(root, "replacement-v2", "2025-06-01");
+  const second = replacementSchedule(first, "replacement-v3", "2025-09-01", 130_000);
+  assert.deepEqual(baseRentScheduleViolations([root, first, second]), []);
+  assert.deepEqual(effectiveSchedules([root, first, second], "t1", "2025-05-31", { unitId: "u1", propertyId: "p1" }).map((schedule) => schedule.id), [root.id]);
+  assert.deepEqual(effectiveSchedules([root, first, second], "t1", "2025-06-01", { unitId: "u1", propertyId: "p1" }).map((schedule) => schedule.id), [first.id]);
+  assert.deepEqual(effectiveSchedules([root, first, second], "t1", "2025-09-01", { unitId: "u1", propertyId: "p1" }).map((schedule) => schedule.id), [second.id]);
+
+  const external = manualBaseSchedule("replacement-external", { effectiveFrom: "2025-08-15", effectiveTo: "2025-08-20" });
+  const violations = baseRentScheduleViolations([root, first, second, external]);
+  assert.ok(violations.some((violation) => violation.entityId === external.id));
+});
+
+test("malformed or forked schedule lineage falls back conservatively and cannot hide overlap", () => {
+  const root = manualBaseSchedule("fork-root", { effectiveFrom: "2025-01-01", effectiveTo: "2025-12-31" });
+  const branchOne = replacementSchedule(root, "fork-v2-a", "2025-06-01");
+  const branchTwo = replacementSchedule(root, "fork-v2-b", "2025-07-01");
+  const external = manualBaseSchedule("fork-external", { effectiveFrom: "2025-08-01", effectiveTo: "2025-08-31" });
+  const violations = baseRentScheduleViolations([root, branchOne, branchTwo, external]);
+  assert.ok(violations.some((violation) => violation.entityId === external.id));
+
+  const orphan = replacementSchedule(root, "orphan-successor", "2025-06-01");
+  orphan.supersedesId = "missing-predecessor";
+  const orphanOverlap = manualBaseSchedule("orphan-external", { effectiveFrom: "2025-08-01", effectiveTo: "2025-08-31" });
+  assert.ok(baseRentScheduleViolations([root, orphan, orphanOverlap]).some((violation) => violation.entityId === orphanOverlap.id));
 });
 
 test("null dates do not become sentinel dates or manufacture an overlap", () => {
