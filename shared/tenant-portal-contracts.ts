@@ -15,6 +15,8 @@ export interface TenantAccountSummary {
   personId: string;
   tenancyId: string;
   status: TenantAccountStatus;
+  /** Administrator-only compare-and-set token for credential mutations. */
+  credentialRevision: number;
   createdAt: string;
   activatedAt: string | null;
   invitationExpiresAt: string | null;

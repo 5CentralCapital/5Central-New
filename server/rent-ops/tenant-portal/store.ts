@@ -91,20 +91,70 @@ export class PostgresTenantAccountStore implements TenantAccountStore {
 
   async auditedMutation(input: AuditedAccountMutation): Promise<TenantAccountRecord | undefined> {
     const values: unknown[] = [input.id,input.actorSubject,input.now];
+    let binding = "";
     let mutation: string;
     if(input.action === "grant") {
+      if (!input.email || !input.personId || !input.tenancyId || !input.tokenHash || !input.expiresAt) return undefined;
       values.push(input.email,input.personId,input.tenancyId,input.tokenHash,input.expiresAt);
+      binding = `binding AS MATERIALIZED (
+        SELECT t.id AS tenancy_id, t.primary_person_id AS person_id
+        FROM rent_ops_tenancies t
+        JOIN rent_ops_people p ON p.id=t.primary_person_id
+        JOIN rent_ops_properties pr ON pr.id=t.property_id
+        JOIN rent_ops_units u ON u.id=t.unit_id AND u.property_id=t.property_id
+        WHERE t.id=$6 AND t.primary_person_id=$5
+          AND t.status IN ('current','notice','future')
+          AND p.archived IS NOT TRUE
+          AND (t.status_knowledge IN ('source','manual','confirmed') OR (t.source_system IS NULL AND t.status_knowledge IS NULL))
+          AND (t.primary_person_link_knowledge IN ('exact','manual') OR (t.source_system IS NULL AND t.primary_person_link_knowledge IS NULL))
+          AND (t.property_link_knowledge IN ('exact','manual') OR (t.source_system IS NULL AND t.property_link_knowledge IS NULL))
+          AND (t.unit_link_knowledge IN ('exact','manual') OR (t.source_system IS NULL AND t.unit_link_knowledge IS NULL))
+          AND (u.property_link_knowledge IN ('exact','manual') OR (u.source_system IS NULL AND u.property_link_knowledge IS NULL))
+        FOR UPDATE OF t,p,pr,u
+      )`;
       mutation = `INSERT INTO rent_ops_tenant_accounts (id,email,person_id,tenancy_id,status,activation_token_hash,invitation_expires_at,created_at,updated_at)
-        VALUES ($1,$4,$5,$6,'pending',$7,$8,$3,$3) ON CONFLICT DO NOTHING RETURNING ${columns}`;
+        SELECT $1,$4,binding.person_id,binding.tenancy_id,'pending',$7,$8,$3,$3 FROM binding
+        ON CONFLICT DO NOTHING RETURNING ${columns}`;
     } else {
+      if (input.action === "reissue" && (!input.personId || !input.tenancyId)) return undefined;
       values.push(input.expectedCredentialRevision,input.tokenHash??null,input.expiresAt??null);
-      mutation = `UPDATE rent_ops_tenant_accounts SET password_hash=NULL,status='${input.action === "revoke" ? "revoked" : "pending"}',
-        activation_token_hash=$5,invitation_expires_at=$6,session_version=session_version+1,updated_at=$3
-        WHERE id=$1 AND session_version=$4 RETURNING ${columns}`;
+      if (input.personId && input.tenancyId) {
+        values.push(input.personId,input.tenancyId);
+        binding = input.action === "reissue" ? `binding AS MATERIALIZED (
+          SELECT a.id AS account_id
+          FROM rent_ops_tenant_accounts a
+          JOIN rent_ops_tenancies t ON t.id=a.tenancy_id AND t.id=$8 AND t.primary_person_id=$7
+          JOIN rent_ops_people p ON p.id=t.primary_person_id
+          JOIN rent_ops_properties pr ON pr.id=t.property_id
+          JOIN rent_ops_units u ON u.id=t.unit_id AND u.property_id=t.property_id
+          WHERE a.id=$1 AND a.person_id=$7 AND a.tenancy_id=$8
+            AND t.status IS DISTINCT FROM 'cancelled'
+            AND p.archived IS NOT TRUE
+            AND (t.primary_person_link_knowledge IN ('exact','manual') OR (t.source_system IS NULL AND t.primary_person_link_knowledge IS NULL))
+            AND (t.property_link_knowledge IN ('exact','manual') OR (t.source_system IS NULL AND t.property_link_knowledge IS NULL))
+            AND (t.unit_link_knowledge IN ('exact','manual') OR (t.source_system IS NULL AND t.unit_link_knowledge IS NULL))
+            AND (u.property_link_knowledge IN ('exact','manual') OR (u.source_system IS NULL AND u.property_link_knowledge IS NULL))
+          FOR UPDATE OF a,t,p,pr,u
+        )` : `binding AS MATERIALIZED (
+          SELECT a.id AS account_id
+          FROM rent_ops_tenant_accounts a
+          JOIN rent_ops_tenancies t ON t.id=a.tenancy_id
+          JOIN rent_ops_people p ON p.id=a.person_id
+          WHERE a.id=$1 AND a.person_id=$7 AND a.tenancy_id=$8
+          FOR UPDATE OF a,t,p
+        )`;
+        mutation = `UPDATE rent_ops_tenant_accounts a SET password_hash=NULL,status='${input.action === "revoke" ? "revoked" : "pending"}',
+          activation_token_hash=$5,invitation_expires_at=$6,session_version=session_version+1,updated_at=$3
+          FROM binding WHERE a.id=binding.account_id AND a.session_version=$4 RETURNING ${columns}`;
+      } else {
+        mutation = `UPDATE rent_ops_tenant_accounts SET password_hash=NULL,status='${input.action === "revoke" ? "revoked" : "pending"}',
+          activation_token_hash=$5,invitation_expires_at=$6,session_version=session_version+1,updated_at=$3
+          WHERE id=$1 AND session_version=$4 RETURNING ${columns}`;
+      }
     }
     // One statement is atomic even for pooled executors: audit errors roll back
     // the credential mutation, and stale revisions produce neither mutation nor audit.
-    return this.one(`WITH changed AS (${mutation}), audit AS (
+    return this.one(`WITH ${binding ? `${binding},` : ""} changed AS (${mutation}), audit AS (
       INSERT INTO rent_ops_activity_events (id,person_id,tenancy_id,type,occurred_at,actor,summary,metadata,
         person_link_knowledge,tenancy_link_knowledge,type_knowledge,occurred_at_knowledge,actor_knowledge,summary_knowledge)
       SELECT 'account-audit-' || md5(id || ':' || "sessionVersion"::text || ':${input.action}'), "personId", "tenancyId", 'system',$3,$2,

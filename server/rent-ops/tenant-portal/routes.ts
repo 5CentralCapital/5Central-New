@@ -45,6 +45,7 @@ const emailSchema = z.string().trim().email().max(240).transform((value) => valu
 const passwordSchema = z.string().refine(validTenantPassword, "Use 12 to 128 characters for your password.");
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
 const idSchema = z.string().min(1).max(160);
+const credentialMutationSchema = z.object({ expectedCredentialRevision: z.number().int().positive().max(2147483646) }).strict();
 const AUTH_WINDOW_MS = 15 * 60 * 1000;
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -166,6 +167,11 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
   }));
 
   const accountAdmin = new TenantAccountAdminService({ repository: options.repository, store, notifier, now });
+  const adminContext = (req: Request) => {
+    const actorSubject = req.rentOpsAdminUser?.id;
+    if (typeof actorSubject !== "string" || !actorSubject.trim()) throw new TenantPortalError(401, "Administrator authentication required.");
+    return { actorSubject };
+  };
   const deliverAccess = (record: TenantAccountRecord, _purpose: "invitation" | "password_reset") => accountAdmin.sendLink(record.id);
 
   router.post("/auth/recovery", safeHandler(async (req, res) => {
@@ -271,17 +277,19 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
     res.json(await accountAdmin.list());
   }));
   admin.post("/", safeHandler(async (req, res) => {
-    res.status(201).json(await accountAdmin.grant(req.body));
+    res.status(201).json(await accountAdmin.grant(req.body, adminContext(req)));
   }));
   admin.post("/:id/reissue", safeHandler(async (req, res) => {
-    res.json(await accountAdmin.reissue(idSchema.parse(req.params.id)));
+    const input = credentialMutationSchema.parse(req.body);
+    res.json(await accountAdmin.reissue(idSchema.parse(req.params.id), input.expectedCredentialRevision, adminContext(req)));
   }));
   admin.post("/:id/send-link", safeHandler(async (req, res) => {
     await limit(req, "admin-delivery", 20);
     res.json(await accountAdmin.sendLink(idSchema.parse(req.params.id)));
   }));
   admin.post("/:id/revoke", safeHandler(async (req, res) => {
-    res.json(await accountAdmin.revoke(idSchema.parse(req.params.id)));
+    const input = credentialMutationSchema.parse(req.body);
+    res.json(await accountAdmin.revoke(idSchema.parse(req.params.id), input.expectedCredentialRevision, adminContext(req)));
   }));
   app.use("/api/rent-ops/tenant-accounts", admin);
   return { requireTenant, getTenantIdentity, getTenantHome, accountAdmin };

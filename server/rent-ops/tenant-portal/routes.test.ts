@@ -28,7 +28,7 @@ function assertNoPrivateFields(value: unknown): void {
   }
 }
 
-async function fixture(t: TestContext, source: RentOpsSnapshot = structuredClone(syntheticRentOpsSnapshot()), accessNotifier?: TenantAccessNotifier) {
+async function fixture(t: TestContext, source: RentOpsSnapshot = structuredClone(syntheticRentOpsSnapshot()), accessNotifier?: TenantAccessNotifier, adminActor: string | null = "route-test-admin") {
   const repository = new SyntheticRentOpsRepository(source);
   const store = new InMemoryTenantAccountStore();
   let timestamp = new Date("2026-09-07T16:00:00.000Z");
@@ -47,7 +47,7 @@ async function fixture(t: TestContext, source: RentOpsSnapshot = structuredClone
       rentOpsCsrfToken: data.rentOpsCsrfToken ?? null, hasReqUser: !!req.user, tenantAccountId: data.tenantAccountId ?? null });
   });
   registerTenantPortalRoutes(app, { accessNotifier, repository, accountStore: store, now: () => new Date(timestamp), publicAppUrl: "https://tenant.example.test",
-    requireAdmin: (req, res, next) => { if (req.get("x-test-admin") === "authorized-test-admin") next(); else res.status(403).json({ message: "Administrator required." }); } });
+    requireAdmin: (req, res, next) => { if (req.get("x-test-admin") !== "authorized-test-admin") { res.status(403).json({ message: "Administrator required." }); return; } if (adminActor) req.rentOpsAdminUser = { id: adminActor } as never; next(); } });
   const server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
   t.after(() => new Promise<void>((resolve, reject) => { server.closeAllConnections(); server.close((error) => error ? reject(error) : resolve()); }));
@@ -105,6 +105,10 @@ test("admin account creation requires an exact primary tenant grant and does not
   assert.equal(stored.passwordHash, null);
   assert.equal(stored.activationTokenHash, createHash("sha256").update(invite.token).digest("hex"));
   assert.notEqual(stored.activationTokenHash, invite.token);
+  assert.deepEqual(f.store.audits.map(({ action, actorSubject, credentialRevision }) => ({ action, actorSubject, credentialRevision })), [
+    { action: "grant", actorSubject: "route-test-admin", credentialRevision: 1 },
+  ]);
+  assert.doesNotMatch(JSON.stringify(f.store.audits), /token|password|secret/);
   const list = await f.admin.request(adminPath);
   assert.equal(list.status, 200);
   assertNoPrivateFields(list.body);
@@ -119,6 +123,15 @@ test("ambiguous imported tenancy links cannot receive tenant access", async (t) 
   const f = await fixture(t, source);
   assert.equal((await f.admin.request(adminPath, { method: "POST", body: binding })).status, 400);
   assert.equal((await f.store.list()).length, 0);
+  assert.equal(f.store.audits.length, 0);
+});
+
+test("manager account writes require an authenticated administrator actor before mutating", async (t) => {
+  const f = await fixture(t, undefined, undefined, null);
+  const result = await f.admin.request(adminPath, { method: "POST", body: binding });
+  assert.equal(result.status, 401);
+  assert.equal((await f.store.list()).length, 0);
+  assert.equal(f.store.audits.length, 0);
 });
 
 test("activation is one use, requires a long password, and rotates an existing generic/admin session", async (t) => {
@@ -152,7 +165,7 @@ test("activation expires exactly at its deadline and concurrent requests cannot 
   const expired = await f.create();
   f.advance(24 * 60 * 60 * 1000);
   assert.equal((await f.client().request(`${tenantPath}/auth/activate`, { method: "POST", body: { token: expired.token, password: initialPassword } })).status, 400);
-  const reissued = await f.admin.request<TenantActivationResponse>(`${adminPath}/${expired.account.id}/reissue`, { method: "POST", body: {} });
+  const reissued = await f.admin.request<TenantActivationResponse>(`${adminPath}/${expired.account.id}/reissue`, { method: "POST", body: { expectedCredentialRevision: expired.account.credentialRevision } });
   assert.equal(reissued.status, 200);
   const token = reissued.body.activationPath.split("#activate=")[1];
   const results = await Promise.all([f.client(), f.client()].map((target) => target.request(`${tenantPath}/auth/activate`, { method: "POST", body: { token, password: initialPassword } })));
@@ -210,29 +223,68 @@ test("revoke immediately invalidates all tenant sessions and credentials", async
   const { target, invite } = await f.activate();
   const second = f.client();
   assert.equal((await second.request(`${tenantPath}/auth/login`, { method: "POST", body: { email: binding.email, password: initialPassword } })).status, 200);
-  const revoked = await f.admin.request(`${adminPath}/${invite.account.id}/revoke`, { method: "POST", body: {} });
+  const revoked = await f.admin.request(`${adminPath}/${invite.account.id}/revoke`, { method: "POST", body: { expectedCredentialRevision: invite.account.credentialRevision + 1 } });
   assert.equal(revoked.status, 200);
   assertNoPrivateFields(revoked.body);
   assert.equal((await target.request(`${tenantPath}/home`)).status, 401);
   assert.equal((await second.request(`${tenantPath}/auth/session`)).status, 401);
   assert.equal((await f.client().request(`${tenantPath}/auth/login`, { method: "POST", body: { email: binding.email, password: initialPassword } })).status, 401);
   assert.equal((await f.store.getById(invite.account.id))?.passwordHash, null);
+  assert.deepEqual(f.store.audits.map(({ action, actorSubject, credentialRevision }) => ({ action, actorSubject, credentialRevision })), [
+    { action: "grant", actorSubject: "route-test-admin", credentialRevision: 1 },
+    { action: "revoke", actorSubject: "route-test-admin", credentialRevision: 3 },
+  ]);
 });
 
 test("reissued links invalidate prior pending links and existing sessions", async (t) => {
   const f = await fixture(t);
   const original = await f.create();
-  const reissued = await f.admin.request<TenantActivationResponse>(`${adminPath}/${original.account.id}/reissue`, { method: "POST", body: {} });
+  const reissued = await f.admin.request<TenantActivationResponse>(`${adminPath}/${original.account.id}/reissue`, { method: "POST", body: { expectedCredentialRevision: original.account.credentialRevision } });
   assert.equal(reissued.status, 200);
   assert.equal((await f.client().request(`${tenantPath}/auth/activate`, { method: "POST", body: { token: original.token, password: initialPassword } })).status, 400);
   const token = reissued.body.activationPath.split("#activate=")[1];
   const { target } = await f.activate(f.client(), { ...reissued.body, token });
-  const secondIssue = await f.admin.request<TenantActivationResponse>(`${adminPath}/${original.account.id}/reissue`, { method: "POST", body: {} });
+  const secondIssue = await f.admin.request<TenantActivationResponse>(`${adminPath}/${original.account.id}/reissue`, { method: "POST", body: { expectedCredentialRevision: reissued.body.account.credentialRevision + 1 } });
   assert.equal(secondIssue.status, 200);
   assert.equal((await target.request(`${tenantPath}/auth/session`)).status, 401);
   assert.equal((await f.client().request(`${tenantPath}/auth/activate`, { method: "POST", body: { token, password: initialPassword } })).status, 400);
   assert.equal((await f.client().request(`${tenantPath}/auth/activate`, { method: "POST", body: { token: secondIssue.body.activationPath.split("#activate=")[1], password: changedPassword } })).status, 200);
   assert.equal((await f.client().request(`${tenantPath}/auth/login`, { method: "POST", body: { email: binding.email, password: initialPassword } })).status, 401);
+  assert.deepEqual(f.store.audits.map(({ action, actorSubject, credentialRevision }) => ({ action, actorSubject, credentialRevision })), [
+    { action: "grant", actorSubject: "route-test-admin", credentialRevision: 1 },
+    { action: "reissue", actorSubject: "route-test-admin", credentialRevision: 2 },
+    { action: "reissue", actorSubject: "route-test-admin", credentialRevision: 4 },
+  ]);
+});
+
+test("manager account grant, reissue, and revoke never dispatch email", async (t) => {
+  let deliveries = 0;
+  const f = await fixture(t, undefined, async () => { deliveries++; });
+  const invite = await f.create();
+  const reissued = await f.admin.request<TenantActivationResponse>(`${adminPath}/${invite.account.id}/reissue`, { method: "POST", body: { expectedCredentialRevision: invite.account.credentialRevision } });
+  assert.equal(reissued.status, 200);
+  const revoked = await f.admin.request(`${adminPath}/${invite.account.id}/revoke`, { method: "POST", body: { expectedCredentialRevision: reissued.body.account.credentialRevision } });
+  assert.equal(revoked.status, 200);
+  assert.equal(deliveries, 0);
+  assert.equal(f.store.audits.length, 3);
+});
+
+test("HTTP credential mutations require the current revision and grant retries use a stable request ID", async (t) => {
+  const f = await fixture(t);
+  const requestId = "http-grant-retry-1";
+  const invite = await f.create({ ...binding, requestId });
+  const replay = await f.admin.request(`${adminPath}`, { method: "POST", body: { ...binding, requestId } });
+  assert.equal(replay.status, 409);
+  assert.equal(f.store.audits.length, 1);
+  assert.equal((await f.admin.request(`${adminPath}/${invite.account.id}/reissue`, { method: "POST", body: {} })).status, 400);
+  const reissued = await f.admin.request<TenantActivationResponse>(`${adminPath}/${invite.account.id}/reissue`, { method: "POST", body: { expectedCredentialRevision: invite.account.credentialRevision } });
+  assert.equal(reissued.status, 200);
+  const staleReissue = await f.admin.request(`${adminPath}/${invite.account.id}/reissue`, { method: "POST", body: { expectedCredentialRevision: invite.account.credentialRevision } });
+  assert.equal(staleReissue.status, 409);
+  assert.equal(f.store.audits.length, 2);
+  const staleRevoke = await f.admin.request(`${adminPath}/${invite.account.id}/revoke`, { method: "POST", body: { expectedCredentialRevision: invite.account.credentialRevision } });
+  assert.equal(staleRevoke.status, 409);
+  assert.equal(f.store.audits.length, 2);
 });
 
 test("password change rotates the current session and invalidates other sessions and old credentials", async (t) => {

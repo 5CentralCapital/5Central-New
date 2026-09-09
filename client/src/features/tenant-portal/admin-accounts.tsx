@@ -10,7 +10,7 @@ const endpoint = "/api/rent-ops/tenant-accounts";
 async function adminRequest<T>(path: string, body?: unknown): Promise<T> {
   const response = await rentOpsAuthClient.request(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!response.ok) {
-    const fallback = response.status === 409 ? "An account already exists for this email or tenancy. Refresh and review the existing account." : response.status === 503 && path.endsWith("/send-link") ? "Email acceptance was not confirmed. Try again or check the email delivery configuration." : response.status === 400 ? "The account details could not be verified. Check the resident, tenancy, and email." : "Tenant accounts are unavailable right now. Try again.";
+    const fallback = response.status === 409 ? "Account access changed elsewhere. Refresh and review the current account before trying again." : response.status === 503 && path.endsWith("/send-link") ? "Email acceptance was not confirmed. Try again or check the email delivery configuration." : response.status === 400 ? "The account details could not be verified. Check the resident, tenancy, and email." : "Tenant accounts are unavailable right now. Try again.";
     throw new Error(fallback);
   }
   return response.json();
@@ -25,6 +25,7 @@ export function TenantPortalAccountsPanel({ personId, personName, email }: { per
   const [notice, setNotice] = useState("");
   const [link, setLink] = useState<{ url: string; expiresAt: string; email: string }>();
   const [pendingAction, setPendingAction] = useState<{ account: TenantAccountSummary; action: "revoke" | "reissue" | "send-link" }>();
+  const grantRequest = useRef<{ key: string; requestId: string }>();
   const mounted = useRef(true);
   const currentPerson = useRef(personId);
   currentPerson.current = personId;
@@ -45,6 +46,7 @@ export function TenantPortalAccountsPanel({ personId, personName, email }: { per
   useEffect(() => {
     mounted.current = true;
     setData(null); setLink(undefined); setPendingAction(undefined); setNotice(""); setAccountEmail(email ?? ""); setTenancyId("");
+    grantRequest.current = undefined;
     void refresh();
     return () => { mounted.current = false; };
   }, [personId]);
@@ -54,8 +56,12 @@ export function TenantPortalAccountsPanel({ personId, personName, email }: { per
     setBusy(true); setError(""); setNotice(""); setLink(undefined);
     const person = personId;
     try {
-      const result = await adminRequest<TenantActivationResponse>(endpoint, { personId, tenancyId, email: accountEmail.trim() });
+      const normalizedEmail = accountEmail.trim().toLowerCase();
+      const key = `${personId}:${tenancyId}:${normalizedEmail}`;
+      if (!grantRequest.current || grantRequest.current.key !== key) grantRequest.current = { key, requestId: crypto.randomUUID() };
+      const result = await adminRequest<TenantActivationResponse>(endpoint, { personId, tenancyId, email: normalizedEmail, requestId: grantRequest.current.requestId });
       if (!mounted.current || currentPerson.current !== person) return;
+      grantRequest.current = undefined;
       setLink({ url: activationUrl(result.activationPath, window.location.origin), expiresAt: result.expiresAt, email: result.account.email });
       await refresh();
     } catch (caught) { if (mounted.current && currentPerson.current === person) setError(caught instanceof Error ? caught.message : "Could not create account."); }
@@ -68,7 +74,8 @@ export function TenantPortalAccountsPanel({ personId, personName, email }: { per
     const person = personId;
     setBusy(true); setError(""); setNotice(""); setLink(undefined);
     try {
-      const result = await adminRequest<TenantActivationResponse & { delivery?: "accepted" }>(`${endpoint}/${encodeURIComponent(account.id)}/${action}`, {});
+      const body = action === "send-link" ? {} : { expectedCredentialRevision: account.credentialRevision };
+      const result = await adminRequest<TenantActivationResponse & { delivery?: "accepted" }>(`${endpoint}/${encodeURIComponent(account.id)}/${action}`, body);
       if (!mounted.current || currentPerson.current !== person) return;
       if (action === "reissue") setLink({ url: activationUrl(result.activationPath, window.location.origin), expiresAt: result.expiresAt, email: account.email });
       else if (action === "send-link") {

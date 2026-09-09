@@ -1,14 +1,46 @@
-import type { TenantAccountRecord, TenantAccountStore } from "./store";
+import type { AuditedAccountMutation, TenantAccountRecord, TenantAccountStore } from "./store";
 
 /** Test dependency only. Production account routes require PostgreSQL. */
 export class InMemoryTenantAccountStore implements TenantAccountStore {
   private readonly accounts = new Map<string, TenantAccountRecord>();
   readonly limits = new Map<string, { startedAt: number; attempts: number }>();
+  readonly audits: Array<{ action: AuditedAccountMutation["action"]; accountId: string; actorSubject: string; credentialRevision: number }> = [];
 
   private copy(record: TenantAccountRecord | undefined) { return record ? structuredClone(record) : undefined; }
   async list() { return Array.from(this.accounts.values(), (record) => structuredClone(record)); }
   async getById(id: string) { return this.copy(this.accounts.get(id)); }
   async getByEmail(email: string) { return this.copy(Array.from(this.accounts.values()).find((row) => row.email === email)); }
+
+  async auditedMutation(input: AuditedAccountMutation) {
+    if (!input.actorSubject.trim()) throw new Error("actor required");
+    if (input.action === "grant") {
+      if (!input.email || !input.personId || !input.tenancyId || !input.tokenHash || !input.expiresAt) return undefined;
+      if (this.accounts.has(input.id) || Array.from(this.accounts.values()).some((row) => row.email === input.email || row.tenancyId === input.tenancyId)) return undefined;
+      const record: TenantAccountRecord = {
+        id: input.id, email: input.email, personId: input.personId, tenancyId: input.tenancyId,
+        status: "pending", passwordHash: null, sessionVersion: 1, activationTokenHash: input.tokenHash,
+        invitationExpiresAt: input.expiresAt, createdAt: input.now, activatedAt: null,
+      };
+      this.accounts.set(record.id, record);
+      this.audits.push({ action: input.action, accountId: record.id, actorSubject: input.actorSubject, credentialRevision: record.sessionVersion });
+      return this.copy(record);
+    }
+    const current = this.accounts.get(input.id);
+    if (!current || current.sessionVersion !== input.expectedCredentialRevision) return undefined;
+    if (input.personId && current.personId !== input.personId) return undefined;
+    if (input.tenancyId && current.tenancyId !== input.tenancyId) return undefined;
+    const record: TenantAccountRecord = {
+      ...current,
+      passwordHash: null,
+      status: input.action === "revoke" ? "revoked" : "pending",
+      activationTokenHash: input.tokenHash ?? null,
+      invitationExpiresAt: input.expiresAt ?? null,
+      sessionVersion: current.sessionVersion + 1,
+    };
+    this.accounts.set(record.id, record);
+    this.audits.push({ action: input.action, accountId: record.id, actorSubject: input.actorSubject, credentialRevision: record.sessionVersion });
+    return this.copy(record);
+  }
 
   async create(input: Parameters<TenantAccountStore["create"]>[0]) {
     if (this.accounts.has(input.id) || Array.from(this.accounts.values()).some((row) => row.email === input.email || row.tenancyId === input.tenancyId)) return undefined;
