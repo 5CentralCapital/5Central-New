@@ -1846,9 +1846,11 @@ export interface RentOpsRepository {
 
 /**
  * Optional row locks requested by a business operation. The SQL adapter turns
- * these into SELECT ... FOR UPDATE statements inside the same transaction;
- * the synthetic adapter intentionally ignores them because it commits a
- * staged copy synchronously.
+ * these into mutable parent tuple locks (and SELECT ... FOR UPDATE for
+ * mutable row sets) inside the same transaction; append-only financial rows
+ * are never locked directly because the runtime role cannot UPDATE them. The
+ * synthetic adapter intentionally ignores them because it commits a staged
+ * copy synchronously.
  */
 export interface RentOpsTransactionOptions {
   lockApplicationId?: string;

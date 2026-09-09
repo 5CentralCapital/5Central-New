@@ -941,9 +941,55 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
 
   /** Serialize operations whose invariants span multiple append-only rows. */
   private async lockRowsForOperation(options: RentOpsTransactionOptions): Promise<void> {
+    // Ledger rows are append-only and the runtime role intentionally has no
+    // UPDATE privilege on them, so SELECT ... FOR UPDATE is not available.
+    // Lock mutable parent rows instead. Properties are acquired before people
+    // in stable order so property-scoped and person-scoped operations share a
+    // fence without taking inverse locks.
+    const propertyIds = new Set<string>();
+    const personIds = new Set<string>();
+    if (options.lockAccountPersonId !== undefined) {
+      if (typeof options.lockAccountPersonId !== "string" || !options.lockAccountPersonId.trim()) throw new RentOpsInvariantError("Financial account lock target is invalid");
+      personIds.add(options.lockAccountPersonId.trim());
+    }
+
+    const transactionIdSet = new Set<string>();
+    for (const id of options.lockTransactionIds ?? []) {
+      if (typeof id !== "string" || !id.trim()) throw new RentOpsInvariantError("Financial transaction lock target is invalid");
+      transactionIdSet.add(id.trim());
+    }
+    const transactionIds = Array.from(transactionIdSet).sort();
+    if (transactionIds.length > 0) {
+      const result = await this.client.query<{ id?: string; property_id?: string | null; person_id?: string | null }>(
+        "SELECT id, property_id, person_id FROM rent_ops_ledger_transactions WHERE id = ANY($1::varchar[]) ORDER BY id",
+        [transactionIds],
+      );
+      const rowsById = new Map(result.rows.map((row) => [String(row.id), row]));
+      const missingIds = transactionIds.filter((id) => !rowsById.has(id));
+      if (missingIds.length > 0) throw new RentOpsInvariantError(`Financial transaction lock target was not found: ${missingIds.join(", ")}`);
+      for (const id of transactionIds) {
+        const row = rowsById.get(id)!;
+        const propertyId = typeof row.property_id === "string" && row.property_id.trim() ? row.property_id.trim() : undefined;
+        const personId = typeof row.person_id === "string" && row.person_id.trim() ? row.person_id.trim() : undefined;
+        if (propertyId) propertyIds.add(propertyId);
+        if (personId) personIds.add(personId);
+        if (!propertyId && !personId) throw new RentOpsInvariantError(`Financial transaction ${id} has no mutable property or account lock scope`);
+      }
+    }
+
     // A tuple write (with unchanged business values) fences RR snapshots even
-    // when the competing operation only appends financial child rows.
-    if (options.lockAccountPersonId) await this.client.query("UPDATE rent_ops_people SET id = id WHERE id = $1 RETURNING id", [options.lockAccountPersonId]);
+    // when the competing operation only appends financial child rows. Verify
+    // every lock target exists; proceeding without a parent lock would accept
+    // a race for an imported row whose account or property identity is absent.
+    for (const propertyId of Array.from(propertyIds).sort()) {
+      const result = await this.client.query<{ id?: string }>("UPDATE rent_ops_properties SET id = id WHERE id = $1 RETURNING id", [propertyId]);
+      if (result.rows.length === 0) throw new RentOpsInvariantError(`Financial property lock target was not found: ${propertyId}`);
+    }
+    for (const personId of Array.from(personIds).sort()) {
+      const result = await this.client.query<{ id?: string }>("UPDATE rent_ops_people SET id = id WHERE id = $1 RETURNING id", [personId]);
+      if (result.rows.length === 0) throw new RentOpsInvariantError(`Financial account lock target was not found: ${personId}`);
+    }
+
     if (options.lockRecord) {
       const table = patchTables[options.lockRecord.entityType];
       if (!table) throw new RentOpsInvariantError("Unknown Rent Operations patch target");
@@ -978,8 +1024,6 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       const unitId = application.rows[0]?.unit_id;
       if (unitId) await this.client.query("SELECT id FROM rent_ops_units WHERE id = $1 FOR UPDATE", [unitId]);
     }
-    const transactionIds = Array.from(new Set(options.lockTransactionIds ?? [])).sort();
-    if (transactionIds.length > 0) await this.client.query("SELECT id FROM rent_ops_ledger_transactions WHERE id = ANY($1::varchar[]) FOR UPDATE", [transactionIds]);
   }
 
   async assertReady(): Promise<void> {
@@ -1415,8 +1459,14 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     if (!this.client.transaction) throw new RentOpsInvariantError("Recurring schedule successor requires an atomic transaction");
     await this.assertReady();
     return this.client.transaction(async (executor) => {
+      // Schedule versions are immutable append-only rows. The runtime role is
+      // intentionally denied UPDATE, so row locks cannot be used here. The
+      // partial unique index on supersedes_id is the database branch fence;
+      // under the runtime's repeatable-read transaction, a concurrent insert
+      // becomes the existing retryable-conflict signal instead of requiring a
+      // write lock on an immutable predecessor.
       const predecessorResult = await executor.query<Record<string, unknown>>(
-        `SELECT ${recurringScheduleColumns.join(", ")} FROM rent_ops_recurring_charge_schedules WHERE id = $1 FOR UPDATE`,
+        `SELECT ${recurringScheduleColumns.join(", ")} FROM rent_ops_recurring_charge_schedules WHERE id = $1`,
         [input.predecessorId],
       );
       const predecessorRow = predecessorResult.rows[0];
@@ -1428,7 +1478,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       let root = predecessor;
       if (predecessor.lineageRootId !== predecessor.id) {
         const rootResult = await executor.query<Record<string, unknown>>(
-          `SELECT ${recurringScheduleColumns.join(", ")} FROM rent_ops_recurring_charge_schedules WHERE id = $1 FOR UPDATE`,
+          `SELECT ${recurringScheduleColumns.join(", ")} FROM rent_ops_recurring_charge_schedules WHERE id = $1`,
           [predecessor.lineageRootId],
         );
         if (!rootResult.rows[0]) throw new RentOpsInvariantError("Recurring schedule lineage root was not found");
@@ -1437,7 +1487,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       if (root.lineageRootId !== root.id) throw new RentOpsInvariantError("Recurring schedule lineage root was not found");
       assertRecurringSuccessorShape(predecessor, root, input.successor, input.expectedRevision);
       const existingBranch = await executor.query<Record<string, unknown>>(
-        `SELECT ${recurringScheduleColumns.join(", ")} FROM rent_ops_recurring_charge_schedules WHERE supersedes_id = $1 FOR UPDATE`,
+        `SELECT ${recurringScheduleColumns.join(", ")} FROM rent_ops_recurring_charge_schedules WHERE supersedes_id = $1`,
         [input.predecessorId],
       );
       if (existingBranch.rows.length > 0) {
@@ -1450,7 +1500,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       }
       const values = recurringScheduleValues(input.successor);
       const inserted = await executor.query<Record<string, unknown>>(
-        `INSERT INTO rent_ops_recurring_charge_schedules (${recurringScheduleColumns.join(", ")}) VALUES (${recurringScheduleColumns.map((_column, index) => `$${index + 1}`).join(", ")}) ON CONFLICT (id) DO NOTHING RETURNING id`,
+        `INSERT INTO rent_ops_recurring_charge_schedules (${recurringScheduleColumns.join(", ")}) VALUES (${recurringScheduleColumns.map((_column, index) => `$${index + 1}`).join(", ")}) ON CONFLICT DO NOTHING RETURNING id`,
         values,
       );
       if (inserted.rows.length > 0) {
@@ -1462,7 +1512,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
         [input.successor.id],
       );
       const existing = existingById.rows[0];
-      if (!existing || !recurringScheduleColumns.every((column, index) => samePersistedValue(existing[column], values[index]))) throw new RentOpsInvariantError("Recurring schedule successor conflicts with an existing payload");
+      if (!existing || !recurringScheduleColumns.every((column, index) => samePersistedValue(existing[column], values[index]))) throw new RentOpsInvariantError("Recurring schedule successor conflicts with an existing payload; retry the request");
       await this.saveRecurringScheduleChange(executor, input.change, input.successor);
       return rowToSchedule(existing);
     }, { readOnly: false });

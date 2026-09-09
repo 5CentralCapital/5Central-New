@@ -19,6 +19,13 @@ class FakeExecutor implements RentOpsQueryExecutor {
       const forbidden = (values?.[0] as string[] | undefined) ?? [];
       return { rows: forbidden.map((table_name) => ({ table_name, can_select: this.forbiddenPrivilege, can_insert: false, can_update: false, can_delete: false })) as T[] };
     }
+    if (text.startsWith("SELECT id, property_id, person_id FROM rent_ops_ledger_transactions WHERE id = ANY")) {
+      const ids = (values?.[0] as string[] | undefined) ?? [];
+      return { rows: ids.map((id) => ({ id, property_id: `property-${id}`, person_id: `person-${id}` })) as T[] };
+    }
+    if (text.startsWith("UPDATE rent_ops_properties SET id = id WHERE id = $1 RETURNING id") || text.startsWith("UPDATE rent_ops_people SET id = id WHERE id = $1 RETURNING id")) {
+      return { rows: [{ id: values?.[0] }] as T[] };
+    }
     if (text.includes("FOR UPDATE")) return { rows: [{ id: values?.[0] }] as T[] };
     if (text.startsWith("UPDATE rent_ops_") && text.includes("record_revision") && text.includes("RETURNING id")) return { rows: [{ id: values?.at(-2) }] as T[] };
     const selectExisting = text.match(/^SELECT (.+) FROM (rent_ops_[a-z_]+) WHERE id = \$1/);
@@ -38,6 +45,48 @@ class FakeExecutor implements RentOpsQueryExecutor {
       if (text.includes("RETURNING id")) return { rows: [{ id: values?.[0] }] as T[] };
     }
     return { rows: [] };
+  }
+}
+
+class MissingLedgerRowExecutor extends FakeExecutor {
+  override async query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<{ rows: T[] }> {
+    if (text.startsWith("SELECT id, property_id, person_id FROM rent_ops_ledger_transactions WHERE id = ANY")) {
+      this.calls.push({ text, values });
+      return { rows: [] };
+    }
+    return super.query(text, values);
+  }
+}
+
+class UnscopedLedgerRowExecutor extends FakeExecutor {
+  override async query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<{ rows: T[] }> {
+    if (text.startsWith("SELECT id, property_id, person_id FROM rent_ops_ledger_transactions WHERE id = ANY")) {
+      this.calls.push({ text, values });
+      const ids = (values?.[0] as string[] | undefined) ?? [];
+      return { rows: ids.map((id) => ({ id, property_id: null, person_id: null })) as T[] };
+    }
+    return super.query(text, values);
+  }
+}
+
+class PropertyOnlyLedgerRowExecutor extends FakeExecutor {
+  override async query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<{ rows: T[] }> {
+    if (text.startsWith("SELECT id, property_id, person_id FROM rent_ops_ledger_transactions WHERE id = ANY")) {
+      this.calls.push({ text, values });
+      const ids = (values?.[0] as string[] | undefined) ?? [];
+      return { rows: ids.map((id) => ({ id, property_id: `property-${id}`, person_id: null })) as T[] };
+    }
+    return super.query(text, values);
+  }
+}
+
+class MissingPersonExecutor extends FakeExecutor {
+  override async query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<{ rows: T[] }> {
+    if (text.startsWith("UPDATE rent_ops_people SET id = id WHERE id = $1 RETURNING id")) {
+      this.calls.push({ text, values });
+      return { rows: [] };
+    }
+    return super.query(text, values);
   }
 }
 
@@ -405,7 +454,7 @@ test("Postgres manual recurring root writes its required change row atomically a
   assert.equal(failingExecutor.scheduleRows.some((row) => row.id === root.id), false);
 });
 
-test("Postgres recurring successor locks predecessor, appends one branch, retries identically, and rejects conflicts", async () => {
+test("Postgres recurring successor appends one branch, retries identically, and rejects conflicts", async () => {
   const root = recurringScheduleFixture();
   const executor = new RecurringScheduleExecutor(recurringRow(root));
   const repository = createPostgresRentOpsRepository(executor);
@@ -464,8 +513,8 @@ test("Postgres recurring successor locks predecessor, appends one branch, retrie
   const manualInsert = manualExecutor.calls.find((call) => call.text.startsWith("INSERT INTO rent_ops_recurring_charge_schedules") && call.values?.[0] === manualSuccessor.id);
   assert.equal(manualInsert?.values?.includes(null), true);
   const sql = manualExecutor.calls.map((call) => call.text).join("\n");
-  assert.match(sql, /FROM rent_ops_recurring_charge_schedules WHERE id = \$1 FOR UPDATE/);
-  assert.match(sql, /WHERE supersedes_id = \$1 FOR UPDATE/);
+  assert.doesNotMatch(sql, /rent_ops_recurring_charge_schedules[^\n]*FOR UPDATE/);
+  assert.match(sql, /INSERT INTO rent_ops_recurring_charge_schedules[\s\S]*ON CONFLICT DO NOTHING RETURNING id/);
   assert.doesNotMatch(sql, /UPDATE rent_ops_recurring_charge_schedules/);
 
   const failingExecutor = new RecurringScheduleExecutor(recurringRow(root));
@@ -493,13 +542,50 @@ test("Postgres successor guards inherited semantic fields, terminal shape, and p
   await assert.rejects(() => openRepository.saveRecurringScheduleSuccessor!({ predecessorId: openRoot.id, successor: forgedEnd, expectedRevision: 1, change: recurringChange(forgedEnd.id) }), /terminal/i);
 });
 
-test("Postgres business transactions lock application inventory and ledger rows before invariant checks", async () => {
+test("Postgres business transactions lock mutable parents before invariant checks", async () => {
   const executor = new FakeExecutor();
   const repository = createPostgresRentOpsRepository(executor);
   await repository.transaction(async () => "locked", { lockApplicationId: "application-1", lockTransactionIds: ["charge-1", "payment-1", "charge-1"] });
-  const lockSql = executor.calls.filter((call) => call.text.includes("FOR UPDATE")).map((call) => call.text).join("\n");
-  assert.match(lockSql, /FROM rent_ops_applications WHERE id = \$1 FOR UPDATE/);
-  assert.match(lockSql, /FROM rent_ops_ledger_transactions WHERE id = ANY\(\$1::varchar\[\]\) FOR UPDATE/);
+  const sql = executor.calls.map((call) => call.text).join("\n");
+  const propertyLocks = executor.calls.filter((call) => call.text.startsWith("UPDATE rent_ops_properties SET id = id"));
+  const personLocks = executor.calls.filter((call) => call.text.startsWith("UPDATE rent_ops_people SET id = id"));
+  assert.equal(propertyLocks.length, 2, "transaction properties are deduplicated before locking");
+  assert.equal(personLocks.length, 2, "transaction account identities are deduplicated before locking");
+  assert.deepEqual(propertyLocks.map((call) => call.values?.[0]), ["property-charge-1", "property-payment-1"]);
+  assert.deepEqual(personLocks.map((call) => call.values?.[0]), ["person-charge-1", "person-payment-1"]);
+  assert.ok(executor.calls.indexOf(propertyLocks[0]) < executor.calls.indexOf(personLocks[0]), "properties are locked before people");
+  assert.match(sql, /FROM rent_ops_applications WHERE id = \$1 FOR UPDATE/);
+  assert.match(sql, /SELECT id, property_id, person_id FROM rent_ops_ledger_transactions WHERE id = ANY\(\$1::varchar\[\]\) ORDER BY id/);
+  assert.doesNotMatch(sql, /FROM rent_ops_ledger_transactions[^\n]*FOR UPDATE/);
+});
+
+test("Postgres financial locks fail closed for missing or unscoped ledger targets", async () => {
+  const missing = createPostgresRentOpsRepository(new MissingLedgerRowExecutor());
+  await assert.rejects(
+    () => missing.transaction(async () => "unreachable", { lockTransactionIds: ["missing-charge"] }),
+    /Financial transaction lock target was not found: missing-charge/,
+  );
+
+  const unscoped = createPostgresRentOpsRepository(new UnscopedLedgerRowExecutor());
+  await assert.rejects(
+    () => unscoped.transaction(async () => "unreachable", { lockTransactionIds: ["unscoped-charge"] }),
+    /Financial transaction unscoped-charge has no mutable property or account lock scope/,
+  );
+
+  const propertyOnlyExecutor = new PropertyOnlyLedgerRowExecutor();
+  const propertyOnly = createPostgresRentOpsRepository(propertyOnlyExecutor);
+  await propertyOnly.transaction(async () => "locked", { lockTransactionIds: ["property-only"] });
+  assert.deepEqual(
+    propertyOnlyExecutor.calls.filter((call) => call.text.startsWith("UPDATE rent_ops_properties SET id = id")).map((call) => call.values?.[0]),
+    ["property-property-only"],
+  );
+  assert.equal(propertyOnlyExecutor.calls.some((call) => call.text.startsWith("UPDATE rent_ops_people SET id = id")), false);
+
+  const missingPerson = createPostgresRentOpsRepository(new MissingPersonExecutor());
+  await assert.rejects(
+    () => missingPerson.transaction(async () => "unreachable", { lockAccountPersonId: "missing-person" }),
+    /Financial account lock target was not found: missing-person/,
+  );
 });
 
 test("Postgres record patches lock the target, compare revision, and reject provenance columns", async () => {
