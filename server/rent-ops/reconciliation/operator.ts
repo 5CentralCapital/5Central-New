@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import type { RentOpsPerson, RentOpsRecurringChargeSchedule, RentOpsRepository, RentOpsSnapshot } from "../../../shared/rent-ops-contracts";
+import type { RentOpsPerson, RentOpsRecurringChargeSchedule, RentOpsRepository, RentOpsSnapshot, RentOpsSubsidyContract } from "../../../shared/rent-ops-contracts";
 import { RentOpsService } from "../services/service";
 
 export function reconciliationHash(value: unknown): string {
@@ -16,6 +16,7 @@ export type ReconciliationOperation = (Guard & (
   | { kind: "tenancy-future-departure"; observedOn: string; expectedMoveOutOn: string }
   | { kind: "schedule-replace"; successorId: string; effectiveFrom: string; amountCents: number; billingFrequency: "monthly" }
   | { kind: "schedule-end"; successorId: string; effectiveFrom: string }
+  | { kind: "subsidy-establish"; personSourceId: string; grossRentCents: number; contract: RentOpsSubsidyContract }
   | { kind: "schedule-establish"; replacement: RentOpsRecurringChargeSchedule }
   | { kind: "schedule-rebuild"; targetTenancy?: { id: string; expectedRevision: number; beforeSha256: string }; endId: string; effectiveFrom: string; replacement: RentOpsRecurringChargeSchedule }
   | { kind: "account-facts"; facts: NonNullable<RentOpsPerson["sourceAccountFacts"]> }
@@ -26,7 +27,7 @@ export interface ReconciliationPlan { token: string; manifestHash: string; chang
 export interface ReconciliationOptions { mode: "plan" | "apply"; approvedPlanToken?: string; archivedSnapshot?: RentOpsSnapshot }
 class PlannedRollback extends Error { constructor(readonly plan: ReconciliationPlan) { super("Reconciliation dry run rollback"); } }
 function target(snapshot: RentOpsSnapshot, operation: ReconciliationOperation) {
-  const rows = (operation.kind === "tenancy-status" || operation.kind === "tenancy-future-departure" || operation.kind === "schedule-establish") ? snapshot.tenancies : operation.kind === "account-facts" ? snapshot.people : operation.kind === "lease-term-correction" ? snapshot.leaseTerms : snapshot.recurringSchedules;
+  const rows = (operation.kind === "tenancy-status" || operation.kind === "tenancy-future-departure" || operation.kind === "schedule-establish" || operation.kind === "subsidy-establish") ? snapshot.tenancies : operation.kind === "account-facts" ? snapshot.people : operation.kind === "lease-term-correction" ? snapshot.leaseTerms : snapshot.recurringSchedules;
   return rows.find(row => row.id === operation.targetId);
 }
 function ledgerHash(snapshot: RentOpsSnapshot) {
@@ -53,7 +54,7 @@ export async function reconcileImportedRecords(repository: RentOpsRepository, ma
   if (new Set(ids).size !== ids.length) throw new Error("Each original target must occur once in a manifest");
   const statusTargets = new Set(manifest.operations.filter(operation => operation.kind === "tenancy-status").map(operation => operation.targetId));
   for (const operation of manifest.operations) {
-    const tenancyId = operation.kind === "schedule-establish" ? operation.targetId
+    const tenancyId = (operation.kind === "schedule-establish" || operation.kind === "subsidy-establish") ? operation.targetId
       : operation.kind === "schedule-rebuild" ? operation.targetTenancy?.id ?? operation.replacement.tenancyId : operation.kind === "manual-schedule-replace" ? operation.targetTenancy.id : undefined;
     if (tenancyId && statusTargets.has(tenancyId)) throw new Error("Status corrections and schedule creation for the same tenancy require separate verified plans");
   }
@@ -73,7 +74,7 @@ export async function reconcileImportedRecords(repository: RentOpsRepository, ma
         if ((row.recordRevision ?? 1) !== operation.expectedRevision || reconciliationHash(row) !== operation.beforeSha256) throw new Error(`Before-state changed: ${operation.targetId}`);
         return row;
       });
-      const token = reconciliationHash({ manifestHash, before, schedules: beforeSnapshot.recurringSchedules });
+      const token = reconciliationHash({ manifestHash, before, schedules: beforeSnapshot.recurringSchedules, ...(manifest.operations.some(operation => operation.kind === "subsidy-establish") ? { subsidyContracts: beforeSnapshot.subsidyContracts, people: beforeSnapshot.people, units: beforeSnapshot.units, properties: beforeSnapshot.properties } : {}) });
       if (options.mode === "apply" && options.approvedPlanToken !== token) throw new Error("Exact approved dry-run plan token required");
       const service = new RentOpsService(transaction, () => new Date(manifest.occurredAt));
       const context = { actorSubject: manifest.actorSubject, occurredAt: new Date(manifest.occurredAt).toISOString() };
@@ -125,6 +126,36 @@ export async function reconcileImportedRecords(repository: RentOpsRepository, ma
           after = { ...person, sourceAccountFacts: operation.facts, recordRevision: operation.expectedRevision + 1 };
         } else if (operation.kind === "schedule-replace" || operation.kind === "schedule-end") {
           after = await service.saveRecurringScheduleSuccessor(operation.targetId, { id: operation.successorId, expectedRevision: operation.expectedRevision, action: operation.kind === "schedule-end" ? "end" : "replace", effectiveFrom: operation.effectiveFrom, ...(operation.kind === "schedule-replace" ? { amountCents: operation.amountCents, billingFrequency: operation.billingFrequency } : {}) }, context);
+        } else if (operation.kind === "subsidy-establish") {
+          const tenancy = beforeSnapshot.tenancies.find(row => row.id === operation.targetId)!;
+          const contract = operation.contract;
+          const person = beforeSnapshot.people.find(row => row.id === tenancy.primaryPersonId);
+          const unit = beforeSnapshot.units.find(row => row.id === tenancy.unitId);
+          const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+          const observedOn = new Date(manifest.occurredAt).toISOString().slice(0, 10);
+          if (!contract.id?.trim() || contract.source || contract.recordRevision != null || !contract.agencyName?.trim()
+            || contract.status !== "active" || contract.statusKnowledge !== "manual"
+            || !validDate(contract.effectiveFrom) || contract.effectiveFrom > observedOn
+            || (contract.effectiveTo !== undefined && (!validDate(contract.effectiveTo) || contract.effectiveTo < contract.effectiveFrom || contract.effectiveTo < observedOn))
+            || !Number.isSafeInteger(operation.grossRentCents) || operation.grossRentCents <= 0
+            || !Number.isSafeInteger(contract.agencyObligationCents) || contract.agencyObligationCents <= 0
+            || !Number.isSafeInteger(contract.tenantObligationCents) || contract.tenantObligationCents < 0
+            || contract.agencyObligationCents + contract.tenantObligationCents !== operation.grossRentCents
+            || !["current", "notice"].includes(tenancy.status) || !["source", "manual", "confirmed"].includes(tenancy.statusKnowledge ?? "")
+            || !tenancy.actualMoveInOn || tenancy.actualMoveInOn > contract.effectiveFrom
+            || !["source", "manual"].includes(tenancy.actualMoveInKnowledge ?? "")
+            || (tenancy.actualMoveOutOn !== undefined && tenancy.actualMoveOutOn <= observedOn)
+            || !person || person.source?.system !== "rent_manager" || person.source.sourceId !== operation.personSourceId
+            || !unit || unit.propertyId !== tenancy.propertyId || !beforeSnapshot.properties.some(row => row.id === tenancy.propertyId)
+            || contract.tenancyId !== tenancy.id || contract.propertyId !== tenancy.propertyId || contract.unitId !== tenancy.unitId) {
+            throw new Error("Subsidy establishment requires exact current tenancy/person/property/unit, confirmed active dates and verified gross payer split");
+          }
+          // Pending and unknown existing contracts also block establishment: resolve them explicitly first.
+          if (beforeSnapshot.subsidyContracts.some(row => row.id === contract.id || row.tenancyId === tenancy.id
+            && row.effectiveFrom <= (contract.effectiveTo ?? "9999-12-31") && contract.effectiveFrom <= (row.effectiveTo ?? "9999-12-31"))) {
+            throw new Error("Subsidy establishment overlaps an existing contract");
+          }
+          after = await service.saveSubsidyContract(contract);
         } else if (operation.kind === "schedule-establish") {
           const tenancy = beforeSnapshot.tenancies.find(row => row.id === operation.targetId)!;
           const replacement = operation.replacement;

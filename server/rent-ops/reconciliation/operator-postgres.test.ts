@@ -95,5 +95,34 @@ test("imported account backfill is revision-guarded, rollback-safe and uses UPDA
     assert.deepEqual(supplementalAfter.leaseTerms[0].source, term.source);
     assert.equal(supplementalAfter.ledgerTransactions.length, 0);
 
+    const subsidyOperation = { kind: "subsidy-establish" as const, targetId: targetTenancy.id, sourceId: "lease:124", personSourceId: "tenant:124", expectedRevision: 1, beforeSha256: reconciliationHash(targetTenancy), evidence: manifest.operations[0].evidence, grossRentCents: 110000, contract: { id: "verified-hap", tenancyId: "t2", propertyId: "p", unitId: "u2", agencyName: "Verified Agency", effectiveFrom: "2026-02-01", agencyObligationCents: 90600, tenantObligationCents: 19400, status: "active" as const, statusKnowledge: "manual" as const } };
+    const subsidyManifest: ReconciliationManifest = { ...manifest, id: "subsidy", operations: [subsidyOperation] };
+    const subsidyBefore = await repository.getSnapshot();
+    const subsidyPlan = await reconcileImportedRecords(repository, subsidyManifest, { mode: "plan" });
+    assert.deepEqual((await repository.getSnapshot()).subsidyContracts, subsidyBefore.subsidyContracts, "dry run rolls subsidy creation back");
+    for (const invalid of [
+      { ...subsidyOperation, personSourceId: "tenant:other" },
+      { ...subsidyOperation, grossRentCents: 120000 },
+      { ...subsidyOperation, expectedRevision: 2 },
+      { ...subsidyOperation, contract: { ...subsidyOperation.contract, unitId: "u" } },
+      { ...subsidyOperation, contract: { ...subsidyOperation.contract, effectiveFrom: "2026-02-30" } },
+      { ...subsidyOperation, contract: { ...subsidyOperation.contract, effectiveTo: "2026-01-01" } },
+      { ...subsidyOperation, contract: { ...subsidyOperation.contract, statusKnowledge: "unknown" as const } },
+    ]) await assert.rejects(() => reconcileImportedRecords(repository, { ...subsidyManifest, operations: [invalid] }, { mode: "plan" }), /Subsidy establishment|Before-state/);
+    await assert.rejects(() => reconcileImportedRecords(repository, subsidyManifest, { mode: "apply", approvedPlanToken: "wrong" }), /Exact approved/);
+    // Any intervening contract change invalidates the approved plan, even on another tenancy.
+    await service.saveSubsidyContract({ ...subsidyOperation.contract, id: "other-hap", tenancyId: "t", unitId: "u" });
+    await assert.rejects(() => reconcileImportedRecords(repository, subsidyManifest, { mode: "apply", approvedPlanToken: subsidyPlan.token }), /Exact approved/);
+    const refreshedPlan = await reconcileImportedRecords(repository, subsidyManifest, { mode: "plan" });
+    await reconcileImportedRecords(repository, subsidyManifest, { mode: "apply", approvedPlanToken: refreshedPlan.token });
+    const subsidyAfter = await repository.getSnapshot();
+    assert.equal(subsidyAfter.subsidyContracts.find(row => row.id === "verified-hap")?.agencyObligationCents, 90600);
+    assert.equal(subsidyAfter.subsidyContracts.find(row => row.id === "verified-hap")?.tenantObligationCents, 19400);
+    assert.deepEqual(subsidyAfter.tenancies, subsidyBefore.tenancies);
+    assert.deepEqual(subsidyAfter.recurringSchedules, subsidyBefore.recurringSchedules);
+    assert.deepEqual(subsidyAfter.ledgerTransactions, subsidyBefore.ledgerTransactions);
+    assert.deepEqual(subsidyAfter.paymentAllocations, subsidyBefore.paymentAllocations);
+    await assert.rejects(() => reconcileImportedRecords(repository, { ...subsidyManifest, id: "overlap", operations: [{ ...subsidyOperation, contract: { ...subsidyOperation.contract, id: "duplicate-hap" } }] }, { mode: "plan" }), /overlaps/);
+
   } finally { await db.close(); await rm(directory, { recursive: true }); }
 });
