@@ -50,7 +50,11 @@ export const rentOpsRequestTiming: RequestHandler = (req, res, next) => {
   const state: TimingState = {started: performance.now(), durations: {}, counts: {}};
   const original = res.writeHead;
   res.writeHead = function (this: Response, ...args: any[]) {
-    if (!this.headersSent) this.setHeader("Server-Timing", timingHeader(state));
+    if (!this.headersSent) {
+      const header = timingHeader(state);
+      this.setHeader("Server-Timing", header);
+      this.setHeader("X-Rent-Ops-Timing", header);
+    }
     return original.apply(this, args as never);
   } as Response["writeHead"];
   timings.run(state, next);

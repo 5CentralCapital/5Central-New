@@ -49,15 +49,18 @@ test("protected request timings expose only isolated numeric phases and preserve
     const unauthorized = await fetch(`${origin}/workspace`);
     assert.equal(unauthorized.status, 401);
     assert.equal(unauthorized.headers.get("server-timing"), null);
+    assert.equal(unauthorized.headers.get("x-rent-ops-timing"), null);
     const preview = await fetch(`${origin}/preview-context`, {headers});
     assert.equal(preview.status, 200);
     assert.equal(preview.headers.get("server-timing"), null);
+    assert.equal(preview.headers.get("x-rent-ops-timing"), null);
     const [workspace, dashboard, report, tenant] = await Promise.all([
       fetch(`${origin}/workspace`, {headers}), fetch(`${origin}/dashboard`, {headers}),
       fetch(`${origin}/reports/rent-roll`, {headers}), fetch(`${origin}/tenants/not-a-real-person`, {headers}),
     ]);
     assert.equal(workspace.status, 200); assert.equal(dashboard.status, 200); assert.equal(report.status, 200); assert.equal(tenant.status, 404);
     for (const response of [workspace, dashboard, report, tenant]) {
+      assert.equal(response.headers.get("x-rent-ops-timing"), response.headers.get("server-timing"));
       const timing = metrics(response.headers.get("server-timing"));
       assert.equal(timing.get("db_calls"), 1);
       assert.equal(timing.get("batch_calls"), 1);
