@@ -1,5 +1,5 @@
-import { measureRentOps } from "../request-timing";
-import { RENT_OPS_BATCH_TABLES, type RentOpsTableRows } from "./read-table-batch";
+import { measureRentOps, countRentOpsTiming } from "../request-timing";
+import { RENT_OPS_BATCH_TABLES, RENT_OPS_REPORT_TABLES, buildRentOpsReportBatchSql, decodeRentOpsTableBatch, type RentOpsTableRows } from "./read-table-batch";
 import { createHash, randomUUID } from "node:crypto";
 import type {
   RentOpsActivityEvent,
@@ -1111,6 +1111,19 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       : this.client.transaction
         ? await this.client.transaction(executor => this.loadSnapshot(executor, false), { readOnly: true })
         : await this.loadSnapshot(this.client, false);
+    measureRentOps("validate", () => assertValidSnapshot(snapshot));
+    return snapshot;
+  }
+
+  async getReportSnapshot(): Promise<RentOpsSnapshot> {
+    await this.assertReady();
+    // One fixed SELECT shares a statement snapshot across every financial table.
+    countRentOpsTiming("batch_calls");
+    const result = await this.client.query(buildRentOpsReportBatchSql());
+    if (result.rows.length !== 1) throw new RentOpsInvariantError("Invalid report table batch envelope");
+    const batch = measureRentOps("decode", () => decodeRentOpsTableBatch(result.rows[0], RENT_OPS_REPORT_TABLES));
+    batch.rent_ops_documents = [];
+    const snapshot = await this.loadSnapshot(this.client, false, undefined, batch);
     measureRentOps("validate", () => assertValidSnapshot(snapshot));
     return snapshot;
   }

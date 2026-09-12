@@ -446,6 +446,9 @@ export class RentOpsService {
   async operationalSnapshot(): Promise<RentOpsSnapshot> {
     return this.repository.getOperationalSnapshot ? this.repository.getOperationalSnapshot() : this.snapshot();
   }
+  async reportSnapshot(): Promise<RentOpsSnapshot> {
+    return this.repository.getReportSnapshot ? this.repository.getReportSnapshot() : this.operationalSnapshot();
+  }
   async getOperationalScheduleRegister(filters: RentOpsFilters = {}) {
     // Tenancy, person source status and complete lineage must be read together.
     // The operational repository omits large document/activity histories.
@@ -483,18 +486,18 @@ export class RentOpsService {
 
   async dashboard(filters: RentOpsFilters = {}): Promise<DashboardSummary> {
     validateReportFilters("dashboard", filters);
-    const snapshot = await this.operationalSnapshot();
+    const snapshot = await this.reportSnapshot();
     return measureRentOps("derive", () => deriveDashboardSummary(snapshot, filters));
   }
 
   async workspaceDashboard(filters: RentOpsFilters = {}) {
     validateReportFilters("dashboard", filters);
-    const snapshot = await this.operationalSnapshot();
+    const snapshot = await this.reportSnapshot();
     return measureRentOps("derive", () => deriveDashboardWorkspace(snapshot, filters));
   }
 
   async report(name: Parameters<typeof deriveFixedReport>[1], filters: RentOpsFilters = {}): Promise<unknown[]> {
-    const snapshot = await this.operationalSnapshot();
+    const snapshot = await this.reportSnapshot();
     return measureRentOps("derive", () => deriveFixedReport(snapshot, name, filters));
   }
 

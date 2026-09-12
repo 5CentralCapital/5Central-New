@@ -231,3 +231,20 @@ test("recurring metadata endpoint reads one operational source and preserves rev
     assert.ok(!("items" in result));
   } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
+
+test("report projection stays isolated from full tenant profile and record collection reads",async()=>{
+  const repository=createSyntheticRentOpsRepository();
+  const full=await repository.getSnapshot();
+  let reportReads=0,operationalReads=0;
+  Object.assign(repository,{
+    getReportSnapshot:async()=>{reportReads++;return {...full,documents:[],activityEvents:full.activityEvents.filter(event=>event.type==='hold'||event.type==='promise_to_pay')};},
+    getOperationalSnapshot:async()=>{operationalReads++;return full;},
+  });
+  const service=new RentOpsService(repository);
+  const filters={asOfDate:'2026-08-15',month:'2026-08'};
+  await service.dashboard(filters);await service.workspaceDashboard(filters);await service.report('rent-roll',filters);
+  assert.equal(reportReads,3);assert.equal(operationalReads,0);
+  const profile=await service.tenantProfile(full.people[0].id,filters);
+  assert.deepEqual(profile,deriveTenantProfile(full,full.people[0].id,filters));
+  assert.equal(operationalReads,1);assert.equal(reportReads,3);
+});

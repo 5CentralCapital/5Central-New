@@ -1825,6 +1825,8 @@ export interface RentOpsRepository {
   getSnapshot(): Promise<RentOpsSnapshot>;
   /** Complete operational and financial inputs, excluding legacy application history. */
   getOperationalSnapshot?(): Promise<RentOpsSnapshot>;
+  /** Financial reports only: complete money inputs, no documents, promise/hold activity only. */
+  getReportSnapshot?(): Promise<RentOpsSnapshot>;
   /** Record navigation only; never use this partial projection for financial derivation. */
   getWorkspaceSnapshot?(): Promise<RentOpsSnapshot>;
   getWorkspaceCollection?<K extends RentOpsWorkspaceCollection>(name: K): Promise<RentOpsSnapshot[K]>;

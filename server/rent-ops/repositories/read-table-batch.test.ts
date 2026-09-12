@@ -7,6 +7,7 @@ import { createPostgresRentOpsRepository, type RentOpsQueryExecutor } from "./po
 import { buildRentOpsTableBatchSql, decodeRentOpsTableBatch, RENT_OPS_BATCH_TABLES } from "./read-table-batch";
 import { ensureRentOpsSchema, RENT_OPS_RUNTIME_REQUIRED_TABLES } from "../persistence";
 import { serializeWorkspaceBootstrap } from "../presentation/workspace-read";
+import { deriveDashboardWorkspace, deriveFixedReport, deriveDelinquency } from "../domain/reports";
 import { serializeAdminSnapshot } from "../presentation/entities";
 
 test("batch SQL rejects unknown, duplicate, empty and unsafe identifiers before querying", async () => {
@@ -38,6 +39,8 @@ test("PGlite batch preserves legacy mapped rows, dates, nulls, JSON and financia
       INSERT INTO rent_ops_applications(id,source_type,status,email,first_name,last_name,property_id,profile_answers,employment,created_at) VALUES('app','manual','draft','qa@example.test','QA','Applicant','p','{"nested":{"created_at":"leave-this-string","large":9007199254740991},"arr":[null,true,1.25]}','{"employed":false}', '2026-01-01 01:00:00-05');
       INSERT INTO rent_ops_activity_events(id,property_id,unit_id,person_id,tenancy_id,type,occurred_at,actor,summary,detail,metadata) VALUES('event','p','u','person','t','note','2026-08-15 12:34:56.987654+05:30','QA','Note',NULL,'{"source":"test","nested":[true,null]}');
       INSERT INTO rent_ops_ledger_transactions(id,property_id,unit_id,tenancy_id,person_id,kind,category,status,amount_cents,posted_on,description,payer,amount_knowledge,category_knowledge,status_knowledge,posted_on_knowledge,description_knowledge,payer_knowledge,charge_definition_link_knowledge,property_link_knowledge,unit_link_knowledge,person_link_knowledge,tenancy_link_knowledge,due_on_knowledge,payment_method_knowledge) VALUES('charge','p','u','t','person','charge','base_rent','posted',2147483647,'2026-08-01','Rent','tenant','known','manual','manual','manual','manual','manual','unknown','manual','manual','manual','manual','unknown','unknown');
+      INSERT INTO rent_ops_activity_events(id,tenancy_id,type,occurred_at,actor,summary) VALUES('promise','t','promise_to_pay','2026-08-14','QA','Promise'),('hold','t','hold','2026-08-14','QA','Hold');
+      INSERT INTO rent_ops_documents(id,file_name,mime_type,type,state,availability) VALUES('doc','lease.pdf','application/pdf','lease','requested','metadata');
       CREATE ROLE rent_ops_staging_importer; GRANT USAGE ON SCHEMA public TO rent_ops_staging_importer; GRANT SELECT,INSERT ON rent_ops_security_deposits TO rent_ops_staging_importer; SET ROLE rent_ops_staging_importer;
       INSERT INTO rent_ops_security_deposits(id,property_id,unit_id,tenancy_id,person_id,type,amount_held_cents,source_balance_cents,source_system,source_id,received_on_knowledge,unit_link_knowledge) VALUES('deposit','p','u','t','person','security',NULL,-500,'rent_manager','source-deposit','unknown','exact');
       RESET ROLE; CREATE ROLE batch_read_runtime;
@@ -80,6 +83,22 @@ test("PGlite batch preserves legacy mapped rows, dates, nulls, JSON and financia
     const oldDto = serializeWorkspaceBootstrap(oldWorkspace, {asOfDate: "2026-08-15"});
     const newDto = serializeWorkspaceBootstrap(newWorkspace, {asOfDate: "2026-08-15"});
     assert.deepEqual({...newDto, generatedAt: undefined}, {...oldDto, generatedAt: undefined});
+    calls.length = 0;
+    const reportSnapshot = await newRepository.getReportSnapshot();
+    assert.equal(calls.length, 1);
+    assert.ok(!calls[0].includes("FROM rent_ops_documents"));
+    assert.ok(calls[0].includes("WHERE type IN ('promise_to_pay', 'hold')"));
+    assert.equal(newOperational.documents.length, 1);
+    assert.equal(reportSnapshot.documents.length, 0);
+    assert.deepEqual(reportSnapshot.activityEvents.map(event => event.type).sort(), ["hold", "promise_to_pay"]);
+    assert.deepEqual(reportSnapshot.ledgerTransactions, newOperational.ledgerTransactions);
+    assert.deepEqual(reportSnapshot.paymentAllocations, newOperational.paymentAllocations);
+    const reportFilters = {asOfDate:"2026-08-15",month:"2026-08"};
+    assert.deepEqual(deriveDashboardWorkspace(reportSnapshot, reportFilters), deriveDashboardWorkspace(newOperational, reportFilters));
+    for (const report of ["rent-roll","occupancy","scheduled-income","collected-income","scheduled-vs-collected","delinquency","tenant-ledger","lease-expirations","deposits","hap","applicant-pipeline"] as const) {
+      assert.deepEqual(deriveFixedReport(reportSnapshot, report, reportFilters), deriveFixedReport(newOperational, report, reportFilters), report);
+    }
+    assert.equal(deriveDelinquency(reportSnapshot, reportFilters)[0].hasPromiseOrHold, true);
     // Complete row-level parity also checks JSON payloads intentionally omitted by presentation.
     const rawLegacy = await Promise.all(RENT_OPS_BATCH_TABLES.map(async table => (await query<Record<string, unknown>>(`SELECT * FROM ${table}`)).rows));
     const rawBatch = await batch.readTableBatch!(RENT_OPS_BATCH_TABLES);

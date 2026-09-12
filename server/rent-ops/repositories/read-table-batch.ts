@@ -52,3 +52,12 @@ export function decodeRentOpsTableBatch(value: unknown, tables: readonly string[
   }
   return result;
 }
+
+/** Fixed report projection. No caller filters or identifiers enter this SQL. */
+export const RENT_OPS_REPORT_TABLES = RENT_OPS_BATCH_TABLES.filter(table => table !== "rent_ops_documents");
+export function buildRentOpsReportBatchSql(): string {
+  return `SELECT ${RENT_OPS_REPORT_TABLES.map(table => {
+    const predicate = table === "rent_ops_activity_events" ? " WHERE type IN ('promise_to_pay', 'hold')" : "";
+    return `COALESCE((SELECT json_agg(row_to_json(r)) FROM ${table} AS r${predicate}), '[]'::json) AS ${table}`;
+  }).join(", ")}`;
+}
