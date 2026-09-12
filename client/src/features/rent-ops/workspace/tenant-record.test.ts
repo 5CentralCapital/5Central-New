@@ -209,9 +209,9 @@ test("profile tenancy is authoritative and inherited schedule actions name their
 });
 
 test("ledger entry labels never expose opaque identifiers and filters preserve account balances and order", () => {
-  assert.equal(ledgerEntryReference({ id: "billing:40064a2c", kind: "charge" }), "Monthly billing");
-  assert.equal(ledgerEntryReference({ id: "tp_random_ledger_1", kind: "payment" }), "Payment");
-  assert.equal(ledgerEntryReference({ id: "opaque" }), "—");
+  assert.equal(ledgerEntryReference({ id: "billing:40064a2c", kind: "charge" }), "");
+  assert.equal(ledgerEntryReference({ id: "tp_random_ledger_1", kind: "payment" }), "");
+  assert.equal(ledgerEntryReference({ id: "opaque" }), "");
   const snapshot = createDemoAdminSnapshot();
   const tenant = snapshot.tenants[0];
   const rows = buildLedgerRows({ ...tenant, ledger: [
@@ -275,4 +275,38 @@ test("issue labels deduplicate normalized text while retaining distinct uncertai
   assert.deepEqual(recurringChargeIssueLabels([
     "active_status_unknown", "Active Status Unknown", " active-status-unknown ", "active_status_uncertain", "frequency_unknown", "effective_start_unknown", "schedule_dates_unconfirmed",
   ]), ["Active status unknown", "Active status uncertain", "Frequency unknown", "Effective start unknown", "Schedule dates unconfirmed"]);
+});
+
+test("ambiguous tenant accounts never infer a current or first tenancy for charges", () => {
+  const snapshot = createDemoAdminSnapshot();
+  const original = snapshot.tenants[0];
+  const first = original.tenancy!;
+  const tenant = { ...original, tenancy: undefined, tenancies: [first, { ...first, id: "another-tenancy" }] };
+  const context = resolveTenantContext(tenant, snapshot);
+  assert.equal(context.currentTenancy, undefined);
+  assert.equal(context.property, undefined);
+  assert.equal(context.unit, undefined);
+  const charge = buildTenantEditActions(tenant, snapshot, "charges").find(action => action.action === "save-recurring-schedule")!;
+  assert.equal(charge.values.tenancyId, undefined);
+  assert.equal(charge.values.personId, original.person.id);
+  assert.equal(resolveTenantContext({ ...tenant, tenancy: first }, snapshot).currentTenancy?.id, first.id);
+});
+
+ test("missing transaction descriptions use readable kinds without inventing references", () => {
+  const snapshot = createDemoAdminSnapshot();
+  const tenant = snapshot.tenants[0];
+  const rows = buildLedgerRows({ ...tenant, ledger: ["charge", "payment", "credit"].map((kind, index) => ({ transaction: { id: `opaque-${index}`, kind, category: "base_rent" } })) }, snapshot);
+  assert.deepEqual(rows.map(row => row.description), ["Charge", "Payment", "Credit"]);
+  assert.ok(rows.every(row => row.reference === ""));
+});
+
+test("confirmed open-ended schedule stays distinct from unknown end date", () => {
+  const snapshot = createDemoAdminSnapshot();
+  const tenant = snapshot.tenants[0];
+  const schedule = tenant.schedules[0];
+  const confirmed = buildRecurringChargeRows({ ...tenant, schedules: [{ ...schedule, effectiveTo: null, resolvedEffectiveTo: null, lineageState: "valid" }] }, snapshot)[0];
+  const unknown = buildRecurringChargeRows({ ...tenant, schedules: [{ ...schedule, effectiveTo: null, resolvedEffectiveTo: undefined, lineageState: undefined }] }, snapshot)[0];
+  assert.equal(confirmed.effectiveTo, null);
+  assert.equal(unknown.effectiveTo, undefined);
+  assert.ok(unknown.uncertaintyCodes.includes("schedule_lineage_unconfirmed"));
 });

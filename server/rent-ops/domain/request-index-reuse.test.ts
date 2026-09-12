@@ -62,8 +62,18 @@ test("request indexes preserve reviewed financial outputs and ordered violations
   assert.deepEqual(confirmedRow.exceptionCodes, []);
   baseline.tenancies.push({...baseline.tenancies[0], primaryPersonId: "demo-person-2"});
   assert.throws(() => deriveRentRoll(baseline, {asOfDate: "2026-08-16"}), /Overlapping/);
+  const unverified = structuredClone(syntheticRentOpsSnapshot());
+  unverified.ledgerTransactions[0].amountCents = null;
+  const dueRows = deriveRentRoll(unverified, {asOfDate: "2026-08-16", balanceStatus: "due"});
+  const reviewRows = deriveRentRoll(unverified, {asOfDate: "2026-08-16", balanceStatus: "unverified"});
+  assert.ok(dueRows.every(row => row.balanceDueCents !== null && row.balanceDueCents > 0));
+  assert.ok(reviewRows.some(row => row.unitId === "demo-unit-a-1" && row.balanceDueCents === null));
+  assert.ok(!dueRows.some(row => row.unitId === "demo-unit-a-1"));
+  // Compared with the preceding golden: only 35 null-balance rent-roll rows
+  // leave the due filter; those accounts now belong to the unverified filter.
+  // Removing exactly those rows makes the complete result trees identical.
   const digest = createHash("sha256").update(JSON.stringify(indexReuseResults())).digest("hex");
-  assert.equal(digest, "aeca338a7e59c8363d579e541a894975b6f726b007b37e85d2c2d28bbf71faa4");
+  assert.equal(digest, "a7ecb97c63a0d5e8153b1535d685faeb521daff1bdc437213689a36688bee4d0");
 });
 
 test("separate calls observe changed reversal and allocation facts on the same snapshot", () => {

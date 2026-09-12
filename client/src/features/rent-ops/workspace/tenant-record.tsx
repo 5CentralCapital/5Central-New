@@ -31,6 +31,8 @@ import {
   type TenantLedgerRow,
 } from "./tenant-model";
 import "./tenant-record.css";
+import "./tenant-clean.css";
+import { EntityLink } from "./entity-link";
 
 export type EditAction = (action: QuickAction, values?: FormValues) => void;
 
@@ -60,7 +62,7 @@ const TAB_LABELS: Record<TenantTab, string> = {
   household: "Contacts & household",
   tenancy: "Tenancy & leases",
   charges: "Recurring charges",
-  ledger: "Ledger",
+  ledger: "Transactions",
   deposits: "Deposits",
   "housing-assistance": "HAP",
   documents: "Documents",
@@ -146,7 +148,7 @@ function SummaryTab({ tenant, snapshot, onChanged }: { tenant: TenantView; snaps
           <Field label="Property">{summary.propertyName}</Field>
           <Field label="Unit">{summary.unitLabel}</Field>
           <Field label="Status">{statusValue(summary.status, summary.status === "Needs review")}</Field>
-          <Field label="Balance" warning={balanceWarning}><span className={balanceWarning ? "rm-muted" : summary.balance.amountCents ? "rm-amount rm-amount-warning" : "rm-amount"}>{summary.balance.complete ? formatMoney(summary.balance.amountCents) : "Needs review"}</span>{balanceWarning && <small className="rm-warning-copy">{summary.balance.uncertaintyCodes.length > 0 ? summary.balance.uncertaintyCodes.map(label).join(" · ") : "A complete balance was not supplied."}</small>}</Field>
+          <Field label="Balance" warning={balanceWarning}><span className={balanceWarning ? "rm-muted" : summary.balance.amountCents ? "rm-amount rm-amount-warning" : "rm-amount"}>{summary.balance.complete ? formatMoney(summary.balance.amountCents) : "Needs review"}</span>{balanceWarning && summary.balance.uncertaintyCodes.length > 0 && <small className="rm-warning-copy">{summary.balance.uncertaintyCodes.map(label).join(" · ")}</small>}</Field>
           <Field label="As of date">{formatDate(summary.asOfDate)}</Field>
           <Field label="Planned move-in">{formatDate(tenancy?.plannedMoveInOn)}</Field>
           <Field label="Actual move-in">{formatDate(tenancy?.actualMoveInOn)}</Field>
@@ -185,7 +187,7 @@ function HouseholdTab({ tenant, snapshot, onEdit, editActions }: { tenant: Tenan
       {rows.length === 0 ? <Empty message="No household or contact records are linked to this tenant." /> : <div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Contacts and household members</caption><thead><tr><th>Name</th><th>Role</th><th>Relationship</th><th>Financially responsible</th><th>Tenancy</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{rows.map((row, index) => {
         const action = findAction(editActions, "save-household-membership", (candidate) => candidate.values.id === row.membership.id) ?? editActions.filter((candidate) => candidate.action === "save-household-membership")[index];
         const tenancy = row.membership.tenancyId ? snapshot.snapshot.tenancies.find((candidate) => candidate.id === row.membership.tenancyId) : undefined;
-        return <tr key={row.membership.id ?? `household-${index}`}><td><strong>{row.name}</strong>{row.person?.email && <small>{row.person.email}</small>}{row.person?.phone && <small>{row.person.phone}</small>}</td><td>{label(row.role)}</td><td>{row.relationship}</td><td>{row.responsibility}</td><td>{tenancy ? tenancyLocation(tenancy, snapshot) : valueOrDash(row.membership.tenancyId)}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
+        return <tr key={row.membership.id ?? `household-${index}`}><td><strong><EntityLink personId={row.person?.id ?? row.membership.personId}>{row.name}</EntityLink></strong>{row.person?.email && <small>{row.person.email}</small>}{row.person?.phone && <small>{row.person.phone}</small>}</td><td>{label(row.role)}</td><td>{row.relationship}</td><td>{row.responsibility}</td><td>{tenancy ? tenancyLocation(tenancy, snapshot) : "Needs review"}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
       })}</tbody></table></div>}
     </Panel>
     <Panel title="Primary contact">
@@ -231,7 +233,7 @@ function TenancyTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantV
   const history = context.tenancies.filter((tenancy) => !isCurrentTenancy(tenancy, context.asOfDate));
   return <div className="rm-tenant-tab-content">
     <Panel title="Current tenancy">
-      {current.length === 0 ? <Empty message="No current or future tenancy is linked." /> : current.map((tenancy, index) => <article className="rm-tenancy-card" key={tenancy.id ?? `current-${index}`}><div className="rm-card-heading"><div><strong>{tenancyLocation(tenancy, snapshot)}</strong><small>{tenancy.id ? `Reference ${tenancy.id}` : "Reference needs review"}</small></div>{statusValue(tenancy.status, !tenancy.status)}</div><TenancyDates tenancy={tenancy} /><div className="rm-panel-actions">{findAction(editActions, "save-tenancy", (candidate) => candidate.values.id === tenancy.id) && <ActionButton action={findAction(editActions, "save-tenancy", (candidate) => candidate.values.id === tenancy.id)!} onEdit={onEdit} />}</div></article>)}
+      {current.length === 0 ? <Empty message="No current or future tenancy is linked." /> : current.map((tenancy, index) => <article className="rm-tenancy-card" key={tenancy.id ?? `current-${index}`}><div className="rm-card-heading"><div><strong>{tenancyLocation(tenancy, snapshot)}</strong></div>{statusValue(tenancy.status, !tenancy.status)}</div><TenancyDates tenancy={tenancy} /><div className="rm-panel-actions">{findAction(editActions, "save-tenancy", (candidate) => candidate.values.id === tenancy.id) && <ActionButton action={findAction(editActions, "save-tenancy", (candidate) => candidate.values.id === tenancy.id)!} onEdit={onEdit} />}</div></article>)}
     </Panel>
     <Panel title="Tenancy history">
       {history.length === 0 ? <Empty message="No prior tenancy records are linked." /> : <div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Tenancy history</caption><thead><tr><th>Property / unit</th><th>Status</th><th>Planned move-in</th><th>Actual move-in</th><th>Notice</th><th>Expected move-out</th><th>Actual move-out</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{history.map((tenancy, index) => {
@@ -253,7 +255,7 @@ function ChargeTable({ rows, editActions, onEdit }: { rows: RecurringChargeRow[]
     const replace = chargeAction(editActions, "replace-recurring-schedule", row);
     const end = chargeAction(editActions, "end-recurring-schedule", row);
     const warning = row.uncertaintyCodes.length > 0 || row.state === "unknown";
-    return <tr key={row.id ?? `charge-${index}`}><td><strong>{row.description}</strong><small>{label(row.category)}{row.definitionName !== "Needs review" ? ` · ${row.definitionName}` : ""}</small>{warning && <small className="rm-warning-copy">Needs review: {recurringChargeIssueLabels(row.uncertaintyCodes).join(" · ") || "Schedule status unconfirmed"}</small>}</td><td><strong>{label(row.scope.type)}</strong><small>{row.scope.label}</small><small>{row.applicabilityLabel}</small><small className={row.scope.warning ? "rm-warning-copy" : "rm-muted"}>{row.scope.inheritedIdentity}</small>{(row.scope.type === "unit" || row.scope.type === "property") && <small className="rm-warning-copy">Shared schedule: replacing or ending changes charges for all applicable residents in this {row.scope.type}.</small>}</td><td>{row.billingFrequency ? label(row.billingFrequency) : "Needs review"}</td><td>{formatDate(row.effectiveFrom)}</td><td>{formatDate(row.effectiveTo)}</td><td className="rm-align-right rm-amount">{formatMoney(row.amountCents)}</td><td>{statusValue(row.state === "unknown" ? "Needs review" : row.state, warning || row.active == null)}{row.stateReason && <small>{row.stateReason}</small>}</td><td><div className="rm-row-actions">{replace && <ActionButton action={{...replace,label:"Schedule change"}} onEdit={onEdit} />}{end && <ActionButton action={{...end,label:"End"}} onEdit={onEdit} danger />}</div></td></tr>;
+    return <tr key={row.id ?? `charge-${index}`}><td><strong>{row.description}</strong>{warning && <small className="rm-warning-copy">Needs review: {recurringChargeIssueLabels(row.uncertaintyCodes).join(" · ") || "Schedule status unconfirmed"}</small>}</td><td><span>{row.applicabilityLabel}</span>{(row.scope.type === "unit" || row.scope.type === "property") && <small className="rm-warning-copy">Shared schedule: replacing or ending changes charges for all applicable residents in this {row.scope.type}.</small>}</td><td>{row.billingFrequency ? label(row.billingFrequency) : "Needs review"}</td><td>{formatDate(row.effectiveFrom)}</td><td>{row.effectiveTo === null ? "Ongoing" : formatDate(row.effectiveTo)}</td><td className="rm-align-right rm-amount">{formatMoney(row.amountCents)}</td><td>{statusValue(row.state === "unknown" ? "Needs review" : row.state, warning || row.active == null)}{row.stateReason && <small>{row.stateReason}</small>}</td><td><div className="rm-row-actions">{replace && <ActionButton action={{...replace,label:"Schedule change"}} onEdit={onEdit} />}{end && <ActionButton action={{...end,label:"End"}} onEdit={onEdit} danger />}</div></td></tr>;
   })}</tbody></table></div>;
 }
 
@@ -264,26 +266,25 @@ function ChargesTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantV
   const monthlyTotal = currentMonthlyTotal(rows, tenant.operationalSchedulesComplete === true && Array.isArray(tenant.operationalScheduleIds));
   return <div className="rm-tenant-tab-content"><Panel title="Recurring charges">
     <div className="rm-charge-toolbar"><div className="rm-segmented" role="group" aria-label="Recurring charge status">{(["current", "all", "history", "future", "review"] as RecurringChargeFilter[]).map((option) => <button type="button" key={option} className={filter === option ? "active" : ""} onClick={() => setFilter(option)}>{option === "review" ? "Needs review" : label(option)} <span>{option === "all" ? rows.length : filterRecurringCharges(rows, option).length}</span></button>)}</div><div className="rm-charge-total"><span>Current monthly total</span><strong>{formatMoney(monthlyTotal)}</strong></div></div>
-    {monthlyTotal === null && <p className="rm-warning" role="status">Current monthly total is unavailable until the current schedule selection and monthly amounts are confirmed.</p>}
-    {rows.some((row) => row.uncertaintyCodes.length > 0) && <p className="rm-warning" role="status">Some charge fields need review. Unknown scope, frequency, dates, amount, or active status remains visible in the table.</p>}
     <ChargeTable rows={filtered} editActions={editActions} onEdit={onEdit} />
   </Panel></div>;
 }
 
 function LedgerDetail({ row }: { row: TenantLedgerRow; snapshot: AdminSnapshot }) {
-  return <dl className="rm-ledger-detail rm-form-grid"><Field label="Status" warning={!row.statusKnown}>{statusValue(row.status, !row.statusKnown)}</Field><Field label="Category">{label(row.category)}</Field><Field label="Due date">{formatDate(row.dueOn)}</Field><Field label="Payer">{label(row.payer)}</Field><Field label="Payment method">{label(row.paymentMethod)}</Field><Field label="Allocated">{formatMoney(row.allocatedCents)}</Field><Field label="Open">{formatMoney(row.openCents)}</Field><Field label="Related allocations">Allocation details are not loaded</Field>{row.reversalOfId && <Field label="Reversal of">{row.reversalOfId}</Field>}{row.uncertaintyCodes.length > 0 && <div className="rm-ledger-warning"><strong>Needs review</strong><span>{row.uncertaintyCodes.map(label).join(" · ")}</span></div>}</dl>;
+  return <dl className="rm-ledger-detail rm-form-grid"><Field label="Status" warning={!row.statusKnown}>{statusValue(row.status, !row.statusKnown)}</Field><Field label="Category">{label(row.category)}</Field><Field label="Due date">{formatDate(row.dueOn)}</Field><Field label="Payer">{label(row.payer)}</Field><Field label="Payment method">{label(row.paymentMethod)}</Field><Field label="Allocated">{formatMoney(row.allocatedCents)}</Field><Field label="Open">{formatMoney(row.openCents)}</Field>{row.reversalOfId && <Field label="Reversal">Reverses an earlier transaction</Field>}{row.uncertaintyCodes.length > 0 && <div className="rm-ledger-warning"><strong>Needs review</strong><span>{row.uncertaintyCodes.map(label).join(" · ")}</span></div>}</dl>;
 }
 
 function LedgerTable({ rows, allRows, snapshot, onEdit, expanded, onToggle }: { rows: TenantLedgerRow[]; allRows: TenantLedgerRow[]; snapshot: AdminSnapshot; onEdit: EditAction; expanded?: string; onToggle: (key: string) => void }) {
-  if (!rows.length) return <Empty message="No ledger entries are linked to this tenant." />;
-  return <div className="rm-table-wrap"><table className="rm-table rm-ledger-table"><caption className="sr-only">Tenant ledger</caption><thead><tr><th>Date</th><th>Unit</th><th>Entry</th><th>Description</th><th className="rm-align-right">Charge</th><th className="rm-align-right">Payment</th><th className="rm-align-right">Running balance</th><th>Status</th><th><span className="sr-only">Details</span></th></tr></thead><tbody>{rows.map((row, index) => {
+  if (!rows.length) return <Empty message="No transactions match this view." />;
+  const showReference = allRows.some(row => Boolean(row.reference));
+  return <div className="rm-table-wrap"><table className="rm-table rm-ledger-table"><caption className="sr-only">Transactions</caption><thead><tr><th>Date</th><th>Property</th><th>Unit</th>{showReference && <th>Reference</th>}<th>Description</th><th className="rm-align-right">Charge</th><th className="rm-align-right">Payment or credit</th><th className="rm-align-right">Running balance</th><th>Status</th><th><span className="sr-only">Details</span></th></tr></thead><tbody>{rows.map((row, index) => {
     const isOpen = expanded === row.key;
     const eligible = ledgerActionEligibility(row, allRows);
     const reverse = eligible.reverse ? { label: "Reverse", action: "reverse-ledger-transaction" as QuickAction, values: { originalId: row.transaction.id, postedOn: "", status: "posted", description: "" } satisfies FormValues } : undefined;
     const allocate = eligible.allocate ? { label: "Allocate", action: "save-payment-allocation" as QuickAction, values: { paymentTransactionId: row.transaction.id, amountDollars: typeof row.transaction.amountCents === "number" ? String((row.openCents ?? 0) / 100) : "", allocatedOn: row.date ?? "" } satisfies FormValues } : undefined;
     return <Fragment key={`${row.key}-${index}`}>
-      <tr className={isOpen ? "rm-row-open" : ""}><td>{formatDate(row.date)}</td><td>{row.unitLabel}</td><td className="rm-reference">{row.reference}</td><td><strong>{row.description}</strong><small>{row.kind ? label(row.kind) : "Needs review"}</small></td><td className="rm-align-right rm-amount">{amountCell(row.chargeCents, row.chargeCents !== null || ["charge", "debit"].includes(row.kind?.toLowerCase() ?? ""))}</td><td className={`rm-align-right rm-amount${row.paymentLabel === "Credit" ? " rm-credit" : ""}`}>{row.paymentLabel ? <>{amountCell(row.paymentCents)}<small>{row.paymentLabel}</small></> : "—"}</td><td className="rm-align-right rm-amount">{formatMoney(row.runningBalanceCents)}</td><td>{statusValue(row.status, !row.statusKnown)}</td><td><div className="rm-row-actions"><button type="button" className="rm-button rm-button-icon" aria-expanded={isOpen} aria-label={`${isOpen ? "Hide" : "Show"} details for ${row.description}`} onClick={() => onToggle(row.key)}>{isOpen ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}</button>{allocate && <ActionButton action={allocate} onEdit={onEdit} />}{reverse && <ActionButton action={reverse} onEdit={onEdit} danger />}</div></td></tr>
-      {isOpen && <tr key={`${row.key}-${index}-detail`} className="rm-detail-row"><td colSpan={9}><LedgerDetail row={row} snapshot={snapshot} /></td></tr>}
+      <tr className={isOpen ? "rm-row-open" : ""}><td>{formatDate(row.date)}</td><td>{row.propertyName}</td><td>{row.unitLabel}</td>{showReference && <td className="rm-reference">{row.reference || "—"}</td>}<td><strong>{row.description}</strong></td><td className="rm-align-right rm-amount">{amountCell(row.chargeCents, row.chargeCents !== null || ["charge", "debit"].includes(row.kind?.toLowerCase() ?? ""))}</td><td className={`rm-align-right rm-amount${row.paymentLabel === "Credit" ? " rm-credit" : ""}`}>{row.paymentLabel ? <>{amountCell(row.paymentCents)}<small>{row.paymentLabel}</small></> : "—"}</td><td className="rm-align-right rm-amount">{formatMoney(row.runningBalanceCents)}</td><td>{statusValue(row.status, !row.statusKnown)}</td><td><div className="rm-row-actions"><button type="button" className="rm-button rm-button-icon" aria-expanded={isOpen} aria-label={`${isOpen ? "Hide" : "Show"} details for ${row.description}`} onClick={() => onToggle(row.key)}>{isOpen ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}</button>{allocate && <ActionButton action={allocate} onEdit={onEdit} />}{reverse && <ActionButton action={reverse} onEdit={onEdit} danger />}</div></td></tr>
+      {isOpen && <tr key={`${row.key}-${index}-detail`} className="rm-detail-row"><td colSpan={showReference ? 10 : 9}><LedgerDetail row={row} snapshot={snapshot} /></td></tr>}
     </Fragment>;
   })}</tbody></table></div>;
 }
@@ -299,13 +300,20 @@ function LedgerTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantVi
   const pages = Math.max(1, Math.ceil(filtered.length / 25));
   const currentPage = Math.min(page, pages - 1);
   const visible = filtered.slice(currentPage * 25, (currentPage + 1) * 25);
-  return <div className="rm-tenant-tab-content"><Panel title="Tenant ledger">
+  function exportTransactions() {
+    const escape = (value: unknown) => '"' + String(value ?? "").replace(/^[=+@-]/, "'$&").replaceAll('"', '""') + '"';
+    const showReference = rows.some(row => Boolean(row.reference));
+    const csv = [["Date", "Property", "Unit", ...(showReference ? ["Reference"] : []), "Description", "Charge", "Payment or credit", "Running balance", "Status"], ...rows.map(row => [row.date, row.propertyName, row.unitLabel, ...(showReference ? [row.reference] : []), row.description, row.chargeCents == null ? "" : row.chargeCents / 100, row.paymentCents == null ? "" : row.paymentCents / 100, row.runningBalanceCents == null ? "Needs review" : row.runningBalanceCents / 100, row.status])].map(row => row.map(escape).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a"); link.href = url; link.download = "tenant-transactions.csv"; link.click(); URL.revokeObjectURL(url);
+  }
+  return <div className="rm-tenant-tab-content"><Panel title="Transactions" action={<button type="button" className="rm-button" onClick={exportTransactions}>Export all</button>}>
     <div className="rm-ledger-filters">
-      <label>Search ledger<input type="search" value={search} placeholder="Description, payment method, status" onChange={event => { setSearch(event.target.value); setPage(0); }} /></label>
+      <label>Search transactions<input type="search" value={search} placeholder="Description, payment method, status" onChange={event => { setSearch(event.target.value); setPage(0); }} /></label>
       <label>From<input type="date" value={from} onChange={event => { setFrom(event.target.value); setPage(0); }} /></label>
       <label>Through<input type="date" value={to} onChange={event => { setTo(event.target.value); setPage(0); }} /></label>
     </div>
-    <div className="rm-ledger-toolbar"><span>{filtered.length} entr{filtered.length === 1 ? "y" : "ies"}</span>{(search || from || to) && <span>Balances include earlier account activity.</span>}</div>
+    <div className="rm-ledger-toolbar"><span>{filtered.length} entr{filtered.length === 1 ? "y" : "ies"}</span></div>
     <LedgerTable rows={visible} allRows={rows} snapshot={snapshot} onEdit={onEdit} expanded={expanded} onToggle={(key) => setExpanded((prior) => prior === key ? undefined : key)} />
     {pages > 1 && <div className="rm-ledger-toolbar"><span>Page {currentPage + 1} of {pages}</span><div className="rm-row-actions"><button type="button" className="rm-button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button type="button" className="rm-button" disabled={currentPage >= pages - 1} onClick={() => setPage(currentPage + 1)}>Next</button></div></div>}
   </Panel></div>;
@@ -332,7 +340,6 @@ function HapTab({ tenant, onEdit, editActions }: { tenant: TenantView; onEdit: E
       const warning = !contract.agencyName || contract.agencyObligationCents == null || contract.tenantObligationCents == null;
       return <tr key={contract.id ?? `hap-${index}`}><td>{text(contract.agencyName)}</td><td>{valueOrDash(contract.contractNumber)}</td><td>{formatDate(contract.effectiveFrom)}</td><td>{formatDate(contract.effectiveTo)}</td><td className="rm-align-right rm-amount">{formatMoney(contract.agencyObligationCents)}</td><td className="rm-align-right rm-amount">{formatMoney(contract.tenantObligationCents)}</td><td>{statusValue(contract.status, warning || !contract.status)}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
     })}</tbody></table></div>}
-    <p className="rm-muted rm-section-note">Housing-assistance obligations remain separate from tenant charges, payments, and security deposits.</p>
   </Panel></div>;
 }
 
@@ -345,7 +352,7 @@ function DocumentsTab({ tenant, snapshot, onChanged }: { tenant: TenantView; sna
   const context = resolveTenantContext(tenant, snapshot);
   const currentTenancyId = context.currentTenancy?.id;
   const documents = tenant.documents ?? [];
-  return <div className="rm-tenant-tab-content"><Panel title="Documents"><div className="rm-document-upload">{currentTenancyId && <ManagerLeaseUpload key={`lease-upload:${currentTenancyId}`} tenancyId={currentTenancyId} files={documents} onSaved={onChanged} />}</div>{documents.length === 0 ? <Empty message="No tenant documents are linked." /> : <div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Tenant documents</caption><thead><tr><th>Type</th><th>File</th><th>State</th><th>Uploaded</th><th>Verified</th><th>Availability</th><th>Open</th></tr></thead><tbody>{documents.map((document, index) => <tr key={document.id ?? `document-${index}`}><td>{document.type ? label(document.type) : "Needs review"}</td><td><strong>{text(document.fileName)}</strong><small>{document.mimeType ?? "Needs review"}</small></td><td>{statusValue(document.state, !document.state)}</td><td>{formatDate(document.uploadedAt)}</td><td>{formatDate(document.verifiedAt)}</td><td>{document.availability ? label(document.availability) : "Needs review"}</td><td>{documentLink(document)}</td></tr>)}</tbody></table></div>}</Panel><Panel title="Document context"><p className="rm-muted">Lease files are attached to the exact tenancy and remain separate from lease-term status. Uploading a lease does not verify signatures.</p></Panel></div>;
+  return <div className="rm-tenant-tab-content"><Panel title="Documents"><div className="rm-document-upload">{currentTenancyId && <ManagerLeaseUpload key={`lease-upload:${currentTenancyId}`} tenancyId={currentTenancyId} files={documents} onSaved={onChanged} />}</div>{documents.length === 0 ? <Empty message="No tenant documents are linked." /> : <div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Tenant documents</caption><thead><tr><th>Type</th><th>File</th><th>State</th><th>Uploaded</th><th>Verified</th><th>Availability</th><th>Open</th></tr></thead><tbody>{documents.map((document, index) => <tr key={document.id ?? `document-${index}`}><td>{document.type ? label(document.type) : "Needs review"}</td><td><strong>{text(document.fileName)}</strong><small>{document.mimeType ?? "Needs review"}</small></td><td>{statusValue(document.state, !document.state)}</td><td>{formatDate(document.uploadedAt)}</td><td>{formatDate(document.verifiedAt)}</td><td>{document.availability ? label(document.availability) : "Needs review"}</td><td>{documentLink(document)}</td></tr>)}</tbody></table></div>}</Panel></div>;
 }
 
 function ActivityTab({ tenant, onEdit, editActions }: { tenant: TenantView; onEdit: EditAction; editActions: TenantEditAction[] }) {
@@ -373,13 +380,14 @@ export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged }
   const summary = buildTenantSummary(tenant, snapshot);
   const editActions = useMemo(() => buildTenantEditActions(tenant, snapshot, tab), [tenant, snapshot, tab]);
   const headerActions = useMemo(() => {
-    const keep = tab === "summary" ? "save-person" : tab === "charges" ? "save-recurring-schedule" : tab === "ledger" ? "post-ledger-transaction" : tab === "deposits" ? "save-security-deposit" : tab === "activity" ? "save-activity" : undefined;
-    if (!keep) return [];
-    return editActions.filter((action) => action.action === keep && (tab !== "charges" && tab !== "deposits" || action.label.startsWith("Add ")));
-  }, [editActions, tab]);
+    const charges = buildTenantEditActions(tenant, snapshot, "charges").filter(action => action.action === "save-recurring-schedule");
+    const oneTime = buildTenantEditActions(tenant, snapshot, "ledger").filter(action => action.action === "post-ledger-transaction");
+    const contextual = editActions.filter(action => (tab === "summary" && action.action === "save-person") || (tab === "activity" && action.action === "save-activity") || (tab === "deposits" && action.label.startsWith("Add ")));
+    return [...charges, ...oneTime, ...contextual];
+  }, [tenant, snapshot, editActions, tab]);
   return <section className="rm-tenant-record" aria-label={`Tenant record for ${summary.displayName}`}>
     <header className="rm-record-summary">
-      <div className="rm-record-summary-main"><span className="rm-ribbon-label">Tenant record</span><h2>{summary.displayName}</h2><p>{summary.propertyName} · Unit {summary.unitLabel}</p></div>
+      <div className="rm-record-summary-main"><h2>{summary.displayName}</h2><p>{summary.propertyName} · Unit {summary.unitLabel}</p></div>
       <div className="rm-record-summary-meta"><span className={statusClass(summary.status, summary.status === "Needs review")}>{label(summary.status)}</span><span className={`rm-record-balance${summary.balance.complete && summary.balance.amountCents ? " rm-record-balance-warning" : ""}`}><small>Balance</small><strong>{summary.balance.complete ? formatMoney(summary.balance.amountCents) : "Needs review"}</strong></span><span className="rm-record-as-of"><small>As of</small><strong>{formatDate(summary.asOfDate)}</strong></span></div>
     </header>
     <nav className="rm-tabs rm-tenant-tabs" role="tablist" aria-label="Tenant record sections">{TENANT_RECORD_TABS.map((item) => <button type="button" role="tab" aria-selected={tab === item} aria-controls={`tenant-panel-${item}`} className={tab === item ? "active" : ""} key={item} onClick={() => onTab(item)}>{TAB_LABELS[item]}</button>)}</nav>

@@ -5,7 +5,7 @@ import { handleRentOpsMutationError } from "../ui";
 import { depositAmounts } from "../../tenant-portal/deposit-view";
 import { mutationPayload, type FormValues, type QuickAction } from "../form-payload";
 import type { AdminSnapshot } from "../types";
-import { relationshipErrors, actionFields, scopedFields, editorTitle, confirmedChargeDefinition, ACTION_LABELS } from "./editor-model";
+import { chargeAccountLabel, relationshipErrors, actionFields, scopedFields, editorTitle, confirmedChargeDefinition, ACTION_LABELS } from "./editor-model";
 import "./editor.css";
 
 export function WorkspaceEditor({ action, snapshot, initialValues = {}, onClose, onSaved, onConflict }: { action: QuickAction; snapshot: AdminSnapshot; initialValues?: FormValues; onClose: () => void; onSaved: (message: string) => void; onConflict?: () => void }) {
@@ -22,6 +22,22 @@ export function WorkspaceEditor({ action, snapshot, initialValues = {}, onClose,
   const submitting = useRef(false);
   const [discard, setDiscard] = useState(false);
   const dirty = baseFields.some(field => String(values[field.name] ?? "") !== String(initialValues[field.name] ?? ""));
+  function change(name: string, value: string) {
+    setChangedFields(current => new Set([...Array.from(current), name]));
+    setValues(current => {
+      const next = { ...current, [name]: value };
+      if (name === "chargeDefinitionId") {
+        const definition = snapshot.chargeDefinitions.find(d => d.id === value);
+        next.category = definition?.category ?? "";
+        if (!current.description) next.description = definition?.displayName ?? "";
+      }
+      if (name === "tenancyId") {
+        const tenancy = snapshot.snapshot.tenancies.find(t => t.id === value);
+        if (tenancy) { next.propertyId = tenancy.propertyId; next.unitId = tenancy.unitId; }
+      }
+      return next;
+    });
+  }
   function close() { if (submitting.current) return; if (dirty) setDiscard(true); else onClose(); }
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -73,8 +89,9 @@ export function WorkspaceEditor({ action, snapshot, initialValues = {}, onClose,
         <header><div><h2 id="rm-dialog-title">{editorTitle(action, initialValues)}</h2></div><button className="icon-button" onClick={close} aria-label="Close"><X /></button></header>
         <form onSubmit={submit}>
           {depositView && <p>Current amount held: {depositView.held}.{depositView.sourceBalance !== undefined && <> Source balance: {depositView.sourceBalance}.</>} Leave unknown held amounts blank until confirmed.</p>}
-          <fieldset disabled={saving} className="rm-dialog-fields"><legend>Record details</legend><div className="rm-dialog-grid">
-            {fields.map((field) => <label key={field.name} className={field.type === "textarea" ? "wide" : ""}>{field.label}{field.required && <sup> *</sup>}{field.type === "select" ? <select required={field.required} value={String(values[field.name] ?? "")} onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))}><option value="">Select…</option>{field.options?.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : field.type === "textarea" ? <textarea required={field.required} value={String(values[field.name] ?? "")} onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))} /> : field.type === "checkbox" ? <select required={field.required} value={typeof values[field.name] === "boolean" ? String(values[field.name]) : ""} onChange={(event) => { const selected = event.target.value; setChangedFields(current => new Set([...Array.from(current), field.name])); setValues(current => ({ ...current, [field.name]: selected === "" ? undefined : selected === "true" })); }}><option value="" disabled={typeof initialValues[field.name] === "boolean"}>Unknown / not specified</option><option value="true">Yes</option><option value="false">No</option></select> : <input required={field.required} type={field.type ?? "text"} step={field.type === "number" ? "0.01" : undefined} value={String(values[field.name] ?? "")} onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))} />}{fieldErrors[field.name] && <span className="rm-dialog-field-error" role="alert">{fieldErrors[field.name]}</span>}</label>)}
+          {fields.some(field => field.locked) && <div className="rm-charge-context" aria-label="Charge account">{chargeAccountLabel(snapshot, initialValues)}</div>}
+          <fieldset disabled={saving} className="rm-dialog-fields"><legend className="sr-only">Record details</legend><div className="rm-dialog-grid">
+            {fields.filter(field => !field.locked).map((field) => <label key={field.name} className={field.type === "textarea" ? "wide" : ""}>{field.label}{field.required && <sup> *</sup>}{field.locked ? <span className="rm-charge-context-value">{field.options?.find(([id]) => id === String(values[field.name] ?? ""))?.[1] ?? "Needs review"}</span> : field.type === "select" ? <select required={field.required} value={String(values[field.name] ?? "")} onChange={(event) => change(field.name, event.target.value)}><option value="">Select…</option>{field.options?.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select> : field.type === "textarea" ? <textarea required={field.required} value={String(values[field.name] ?? "")} onChange={(event) => change(field.name, event.target.value)} /> : field.type === "checkbox" ? <select required={field.required} value={typeof values[field.name] === "boolean" ? String(values[field.name]) : ""} onChange={(event) => { const selected = event.target.value; setChangedFields(current => new Set([...Array.from(current), field.name])); setValues(current => ({ ...current, [field.name]: selected === "" ? undefined : selected === "true" })); }}><option value="" disabled={typeof initialValues[field.name] === "boolean"}>Unknown / not specified</option><option value="true">Yes</option><option value="false">No</option></select> : <input required={field.required} type={field.type ?? "text"} step={field.type === "number" ? "0.01" : undefined} value={String(values[field.name] ?? "")} onChange={(event) => change(field.name, event.target.value)} />}{fieldErrors[field.name] && <span className="rm-dialog-field-error" role="alert">{fieldErrors[field.name]}</span>}</label>)}
           </div>
           </fieldset>
           {discard && <div role="alert" className="rm-dialog-discard"><p>Discard your unsaved changes?</p><button type="button" onClick={() => setDiscard(false)}>Keep editing</button><button type="button" disabled={saving} onClick={onClose}>Discard changes</button></div>}

@@ -1,5 +1,6 @@
-import {isExactNativeAccountEntry} from "../domain/account-ledger";
-import { tenantAccountLedgerRows } from "../domain/account-ledger";
+import { deriveManagerAccountLedger } from "../domain/reports";
+import { ledgerBalanceSign } from "../domain/invariants";
+import { getAccountHistoryCoverage } from "../import/account-history-coverage";
 export { tenantAccountLedgerRows } from "../domain/account-ledger";
 import { isTenantLeaseFile, tenantLeaseFile } from "./lease-files";
 import type { RentOpsSnapshot, RentOpsTenancy, RentOpsLedgerTransaction } from "../../../shared/rent-ops-contracts";
@@ -47,19 +48,6 @@ function knownAmount(row: RentOpsLedgerTransaction, strict: boolean): boolean {
     && (row.amountKnowledge === "known" || (!strict && row.amountKnowledge === undefined));
 }
 
-function sign(row: RentOpsLedgerTransaction, rows: Map<string, RentOpsLedgerTransaction>): number | null {
-  if (row.kind === "charge") return 1;
-  if (row.kind === "payment" || row.kind === "credit") return -1;
-  if (row.kind === "adjustment") return row.adjustmentDirection === "debit" ? 1 : row.adjustmentDirection === "credit" ? -1 : null;
-  if (row.kind === "reversal") {
-    const original = rows.get(row.reversalOfId ?? "");
-    if (!original || original.kind === "reversal" || original.status !== "posted" || original.amountCents !== row.amountCents) return null;
-    const originalSign = sign(original, rows);
-    return originalSign === null ? null : -originalSign;
-  }
-  return null;
-}
-
 /** Whitelisted tenant view: no household contacts, activities, source IDs,
  * imported payloads, storage keys, passwords, or other tenancies. */
 export function presentTenantHome(snapshot: RentOpsSnapshot, account: TenantIdentity, asOfDate: string): TenantHome | undefined {
@@ -68,45 +56,33 @@ export function presentTenantHome(snapshot: RentOpsSnapshot, account: TenantIden
   const person = snapshot.people.find((row) => row.id === account.personId)!;
   const property = snapshot.properties.find((row) => row.id === tenancy.propertyId)!;
   const unit = snapshot.units.find((row) => row.id === tenancy.unitId)!;
-  let complete = true;
-  const candidateRows = tenantAccountLedgerRows(snapshot, account);
-  const scopedIds = new Set(candidateRows.map(row => row.id));
-  // Preserve uncertainty when a person's imported account entries do not
-  // resolve to a specific tenancy; never silently declare those amounts zero.
-  if (snapshot.ledgerTransactions.some((row) => row.personId === person.id && !scopedIds.has(row.id))) complete = false;
-  const rows = candidateRows.filter((row) => {
-    const strict = sourceStrict(snapshot, row);
-    const importedAccountRow = person.source?.system === "rent_manager" && /^(?:tenant:)?[0-9]+$/.test(person.source.sourceId) && row.source?.system === "rent_manager" && row.source.entityType === "ledger_transaction" && /^[a-f0-9]{64}$/.test(row.sourceArtifactSha256 ?? "") && row.personId === person.id && row.personLinkKnowledge === "exact";
-    if ((!importedAccountRow && !isExactNativeAccountEntry(snapshot,row,person.id) && (!exactLink(row.tenancyLinkKnowledge, strict) || (row.propertyId && row.propertyId !== tenancy.propertyId) || (row.unitId && row.unitId !== tenancy.unitId))) || (row.personId && row.personId !== person.id)) {
-      complete = false;
-      return false;
-    }
-    return !row.postedOn || row.postedOn <= asOfDate;
-  }).sort((a, b) => (a.postedOn ?? "9999").localeCompare(b.postedOn ?? "9999") || a.id.localeCompare(b.id));
-  const rowMap = new Map(rows.map((row) => [row.id, row]));
-  const reversed = new Set<string>();
-  let balanceCents = 0;
-  const ledger = rows.map((row) => {
+  // Use precisely the manager account projection. Only the fixed verified grant
+  // and exact account entries may extend this history across former leases.
+  const statement = deriveManagerAccountLedger(snapshot, person.id, [tenancy.id], { asOfDate });
+  const historyCoverage = getAccountHistoryCoverage(snapshot, person.id);
+  const emptyHistoryKnown = person.source?.system !== "rent_manager" || historyCoverage.complete;
+  const complete = statement.every(row => row.balanceComplete !== false) && (statement.length > 0 || (emptyHistoryKnown &&
+    !snapshot.ledgerTransactions.some(row => row.personId === person.id && (!row.postedOn || row.postedOn <= asOfDate) && row.status !== "pending" && row.status !== "voided")));
+  const balanceCents = statement.at(-1)?.runningBalanceCents ?? 0;
+  const projectedTransactions = new Map(statement.map(row => [row.transaction.id, row.transaction]));
+  const ledger = statement.map(entry => {
+    const row = entry.transaction;
     const strict = sourceStrict(snapshot, row);
     const amountIsKnown = knownAmount(row, strict);
-    const dateIsKnown = !!row.postedOn && knownFact(row.postedOnKnowledge, strict);
-    const statusIsKnown = knownFact(row.statusKnowledge, strict) && ["posted", "pending", "voided"].includes(row.status ?? "");
-    const direction = sign(row, rowMap);
-    if (!amountIsKnown || !dateIsKnown || !statusIsKnown || direction === null) complete = false;
-    if (row.kind === "reversal" && row.status === "posted" && row.reversalOfId) {
-      if (reversed.has(row.reversalOfId)) complete = false;
-      reversed.add(row.reversalOfId);
-    }
-    if (row.status === "posted" && amountIsKnown && direction !== null) balanceCents += direction * row.amountCents!;
-    if (!Number.isSafeInteger(balanceCents)) complete = false;
-    return { id: row.id, date: dateIsKnown ? row.postedOn! : null,
-      description: knownFact(row.descriptionKnowledge, strict) && row.description ? row.description.slice(0, 240) : "Account entry",
-      kind: row.kind ?? "unknown", status: statusIsKnown ? row.status! : null, amountCents: amountIsKnown ? row.amountCents! : null,
-      balanceCents: complete ? balanceCents : null };
+    const direction = ledgerBalanceSign(row, projectedTransactions);
+    const linkedProperty = exactLink(row.propertyLinkKnowledge, strict) ? snapshot.properties.find(p => p.id === row.propertyId) : undefined;
+    const linkedUnit = linkedProperty && exactLink(row.unitLinkKnowledge, strict) ? snapshot.units.find(u => u.id === row.unitId && u.propertyId === linkedProperty.id) : undefined;
+    return { id: row.id, date: row.postedOn && knownFact(row.postedOnKnowledge, strict) ? row.postedOn : null,
+      description: knownFact(row.descriptionKnowledge, strict) && row.description ? row.description.slice(0, 240) : (row.kind ? row.kind.charAt(0).toUpperCase() + row.kind.slice(1) : "Account entry"),
+      kind: row.kind ?? "unknown", status: knownFact(row.statusKnowledge, strict) ? row.status : null,
+      amountCents: amountIsKnown ? row.amountCents : null, balanceCents: entry.runningBalanceCents,
+      reference: null, propertyName: linkedProperty?.name ?? null, unitNumber: linkedUnit?.unitNumber ?? null,
+      chargeCents: amountIsKnown && direction > 0 ? row.amountCents : null,
+      paymentCreditCents: amountIsKnown && direction < 0 ? row.amountCents : null,
+      allocatedCents: entry.allocatedCents, openCents: entry.openCents,
+      rowType: entry.rowType, openingBalanceCents: entry.openingBalanceCents,
+      balanceUncertaintyCodes: entry.balanceUncertaintyCodes ?? [] };
   });
-  // A missing or unknown entry invalidates every running total, including
-  // earlier rows, because its date may be before those visible transactions.
-  if (!complete) for (const entry of ledger) entry.balanceCents = null;
   const address = property.address;
   return {
     account: { id: account.id, email: account.email, personId: account.personId, tenancyId: account.tenancyId, status: "active" },
@@ -114,6 +90,7 @@ export function presentTenantHome(snapshot: RentOpsSnapshot, account: TenantIden
     tenancy: { id: tenancy.id, propertyId: tenancy.propertyId, unitId: tenancy.unitId, propertyName: property.name || "Property", unitNumber: unit.unitNumber || "Unit",
       address: address ? [address.line1, address.line2, address.city, address.state, address.postalCode].filter(Boolean).join(", ") : "", status: tenancy.status },
     balance: { amountCents: complete ? balanceCents : null, complete, asOfDate },
+    historyCoverage: { status: historyCoverage.status, complete: historyCoverage.complete, ...(historyCoverage.observedOn ? { asOfDate: historyCoverage.observedOn } : {}) },
     ledger,
     leaseFiles: snapshot.documents.filter(document => isTenantLeaseFile(document, account, tenancy)).map(tenantLeaseFile),
     leases: snapshot.leaseTerms.filter((row) => row.tenancyId === tenancy.id && exactLink(row.tenancyLinkKnowledge, sourceStrict(snapshot, row)) && row.status !== "draft" && row.status !== "cancelled").map((row) => {

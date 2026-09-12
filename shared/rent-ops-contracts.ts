@@ -1351,6 +1351,7 @@ export interface RentOpsFilters {
    */
   propertyScope?: "active" | "all";
   propertyId?: string;
+  propertyIds?: string[];
   unitId?: string;
   tenancyId?: string;
   personId?: string;
@@ -1362,7 +1363,8 @@ export interface RentOpsFilters {
   occupancy?: OccupancyState[];
   readiness?: ReadinessState[];
   listing?: ListingState[];
-  balanceStatus?: "all" | "due" | "credit" | "zero";
+  balanceStatus?: "all" | "due" | "credit" | "zero" | "unverified";
+  tenantStatus?: "all" | "current" | "former" | "future" | "unknown";
   status?: string[];
   search?: string;
 }
@@ -1370,6 +1372,7 @@ export interface RentOpsFilters {
 export const rentOpsFiltersSchema = z.object({
   propertyScope: z.enum(["active", "all"]).optional(),
   propertyId: idSchema.optional(),
+  propertyIds: z.array(idSchema).max(100).optional(),
   unitId: idSchema.optional(),
   tenancyId: idSchema.optional(),
   personId: idSchema.optional(),
@@ -1380,7 +1383,8 @@ export const rentOpsFiltersSchema = z.object({
   occupancy: z.array(z.enum(OCCUPANCY_STATES)).optional(),
   readiness: z.array(z.enum(READINESS_STATES)).optional(),
   listing: z.array(z.enum(LISTING_STATES)).optional(),
-  balanceStatus: z.enum(["all", "due", "credit", "zero"]).optional(),
+  balanceStatus: z.enum(["all", "due", "credit", "zero", "unverified"]).optional(),
+  tenantStatus: z.enum(["all", "current", "former", "future", "unknown"]).optional(),
   status: z.array(z.string().min(1)).optional(),
   search: z.string().max(120).optional(),
 }).strict();
@@ -1496,13 +1500,15 @@ export interface ScheduledVsCollectedRow {
 }
 
 export interface DelinquencyRow {
+  tenancyStatus?: "current" | "former" | "future" | "unknown";
+  creditBalanceCents?: Cents | null;
   balanceComplete?: boolean;
   balanceUncertaintyCodes?: string[];
-  propertyId: string;
+  propertyId: string | null;
   propertyName: string;
   unitId?: string;
   unitNumber?: string;
-  tenancyId: string;
+  tenancyId: string | null;
   personId: string;
   tenantName: string;
   rentOnlyBalanceCents: Cents | null;

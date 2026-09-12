@@ -3,6 +3,12 @@ import test from "node:test";
 import type { DelinquencyRow, RentRollRow, ScheduledIncomeRow } from "../types";
 import {
   buildPropertySubtotals,
+  defaultReportOccupancy,
+  formatReportCellValue,
+  getReportConfig,
+  filterReportLocalRows,
+  groupReportRows,
+  reportCellPersonId,
   filterRentRollRows,
   isOccupancyReport,
   occupancyReportStatusOptions,
@@ -31,7 +37,7 @@ test("curated report mappings keep drilldown IDs out of display columns", () => 
     balanceDueCents: 0,
   }];
   const view = createReportViewModel("rent-roll", rows);
-  assert.ok(view.curatedColumns.length >= 8);
+  assert.deepEqual(view.curatedColumns.map(column => column.label), ["Unit", "Tenant", "Recurring rent", "Other recurring", "Monthly total", "Balance due"]);
   assert.equal(view.curatedColumns.some((column) => /id$/i.test(column.key)), false);
   assert.equal(view.displayRows[0].unitNumber, "101");
   assert.equal(view.displayRows[0].__source.unitId, "unit:one");
@@ -195,4 +201,87 @@ test("occupancy status controls send the exact API field and filter report rows"
     }
   }
   assert.deepEqual(reportQueryFilters({ ...filters, status: "current" }, "lease-expiration", { asOfDate: filters.asOfDate }).status, ["current"]);
+});
+
+
+test("grouped rent roll uses natural unit order and full filtered subtotals", () => {
+  const rows: RentRollRow[] = [
+    { propertyId: "b", propertyName: "Second", unitNumber: "1", baseRentCents: 100, balanceDueCents: 0, balanceComplete: true },
+    ...["10", "2", "1"].map(unitNumber => ({ propertyId: "a", propertyName: "First", unitNumber, baseRentCents: 10000, recurringFeesCents: 1000, totalScheduledCents: 11000, subsidyCents: 5000, balanceDueCents: 0, balanceComplete: true })),
+  ];
+  const view = createReportViewModel("rent-roll", rows);
+  const groups = groupReportRows("rent-roll", view.displayRows);
+  assert.deepEqual(groups.map(group => group.label), ["First", "Second"]);
+  assert.deepEqual(groups[0].rows.map(row => row.unitNumber), ["1", "2", "10"]);
+  assert.equal(groups[0].amounts.totalScheduledCents, 33000, "subsidy is never added to monthly recurring total");
+  assert.equal(groups.flatMap(group => group.rows).length, rows.length);
+});
+
+test("balance filters separate known debt, zero, credit and unverified", () => {
+  const rows = [
+    { personId: "due", totalBalanceCents: 100, balanceComplete: true, tenancyStatus: "former" },
+    { personId: "zero", totalBalanceCents: 0, balanceComplete: true, tenancyStatus: "current" },
+    { personId: "credit", totalBalanceCents: -100, balanceComplete: true, tenancyStatus: "future" },
+    { personId: "unknown", totalBalanceCents: 100, balanceComplete: false, tenancyStatus: "unknown" },
+  ] as DelinquencyRow[];
+  for (const balance of ["due", "zero", "credit", "unverified"] as const) assert.deepEqual(filterReportLocalRows(rows, "delinquency", { balance }).map(row => row.personId), [balance === "unverified" ? "unknown" : balance]);
+  assert.deepEqual(filterReportLocalRows(rows, "delinquency", { tenancyStatus: "former" }).map(row => row.personId), ["due"]);
+});
+
+test("report cell navigation resolves current and future names independently", () => {
+  const row: RentRollRow = { currentPersonId: "current", currentTenantName: "Current tenant", futurePersonId: "future", futureTenantName: "Future tenant" };
+  assert.equal(reportCellPersonId(row, "currentTenantName"), "current");
+  assert.equal(reportCellPersonId(row, "futureTenantName"), "future");
+  assert.equal(reportCellPersonId(row, "baseRentCents"), "current");
+  assert.equal(createReportViewModel("rent-roll", [{ currentPersonId: "current", occupancy: "current", futureTenantName: "Future name", futurePersonId: "future" }]).displayRows[0].currentTenantName, undefined);
+  assert.equal(reportCellPersonId({ futurePersonId: "future", futureTenantName: "Future tenant" }, "currentTenantName"), "future");
+  assert.equal(reportCellPersonId({ currentTenantName: "Missing identity", futurePersonId: "future" }, "currentTenantName"), undefined);
+  assert.equal(reportCellPersonId({ currentTenantName: "Missing identity", futurePersonId: "future" }, "baseRentCents"), undefined);
+});
+
+test("multi property and account filters are part of the server query", () => {
+  const query = reportQueryFilters({ propertyScope: "active", propertyId: "ignored", propertyIds: ["b", "a"], asOfDate: "2026-09-12", status: "all", search: "", balanceStatus: "unverified", tenantStatus: "all" }, "delinquency", { asOfDate: "2026-09-12" });
+  assert.deepEqual(query.propertyIds, ["a", "b"]);
+  assert.equal(query.propertyId, undefined);
+  assert.equal(query.balanceStatus, "unverified");
+  assert.equal(query.tenantStatus, "all");
+});
+
+
+test("grouping retains accounts with blank or missing property identity", () => {
+  const view = createReportViewModel("delinquency", [{ propertyName: "", personId: "one" }, { personId: "two" }]);
+  const groups = groupReportRows("delinquency", view.displayRows);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].label, "Needs review");
+  assert.equal(groups[0].rows.length, 2);
+});
+
+
+test("rent roll defaults occupied while vacancies defaults vacant", () => {
+  assert.equal(defaultReportOccupancy("rent-roll"), "current");
+  assert.equal(defaultReportOccupancy("occupancy"), "vacant");
+  assert.equal(defaultReportOccupancy("rent-roll", "future_preleased"), "future_preleased");
+  assert.equal(getReportConfig("rent-roll").label, "Rent roll");
+});
+
+test("all units includes confirmed zero-obligation vacancy without contaminating rent subtotals", () => {
+  const rows: RentRollRow[] = [
+    { propertyId: "p", propertyName: "Property", unitNumber: "1", occupancy: "current", currentPersonId: "tenant", baseRentCents: 100000, recurringFeesCents: 1000, totalScheduledCents: 101000 },
+    { propertyId: "p", propertyName: "Property", unitNumber: "2", occupancy: "vacant", recurringFeesCents: 0, totalScheduledCents: 0 },
+  ];
+  const all = filterReportLocalRows(rows, "rent-roll", { occupancy: "all" });
+  const view = createReportViewModel("rent-roll", all);
+  const [group] = groupReportRows("rent-roll", view.displayRows);
+  assert.equal(group.rows.length, 2);
+  assert.equal(group.amounts.baseRentCents, 100000);
+  assert.equal(group.amounts.totalScheduledCents, 101000);
+  assert.equal(view.displayRows[1].baseRentCents, 0);
+  const rentColumn = view.columns.find(column => column.key === "baseRentCents")!;
+  assert.equal(formatReportCellValue(view.displayRows[1], rentColumn), "—");
+  assert.equal(buildReportCsv(group.rows, [rentColumn]).split("\n")[2], "—");
+  assert.equal(filterReportLocalRows(rows, "rent-roll", { occupancy: defaultReportOccupancy("rent-roll") }).length, 1);
+  const unknown = createReportViewModel("rent-roll", [{ ...rows[1], occupancy: "unknown" }]);
+  assert.equal(unknown.displayRows[0].baseRentCents, undefined);
+  assert.equal(unknown.displayRows[0].totalScheduledCents, null);
+  assert.equal(buildPropertySubtotals("rent-roll", [{ ...rows[1], occupancy: "unknown" }])[0].amounts.baseRentCents, null);
 });

@@ -1153,10 +1153,11 @@ function decodeSnapshotView(value: unknown): AdminSnapshotView {
 }
 
 function decodeApiFilters(value: unknown): ApiFilters {
-  const input = exactRecord(value, "report filters", ["propertyScope", "propertyId", "unitId", "tenancyId", "personId", "asOfDate", "month", "fromDate", "toDate", "occupancy", "readiness", "listing", "balanceStatus", "status", "search"]);
+  const input = exactRecord(value, "report filters", ["propertyScope", "propertyId", "propertyIds", "unitId", "tenancyId", "personId", "asOfDate", "month", "fromDate", "toDate", "occupancy", "readiness", "listing", "balanceStatus", "tenantStatus", "status", "search"]);
   return {
     propertyScope: optionalEnum(input, "propertyScope", ["active", "all"] as const),
     propertyId: optionalId(input, "propertyId"),
+    propertyIds: optionalStrings(input, "propertyIds"),
     unitId: optionalId(input, "unitId"),
     tenancyId: optionalId(input, "tenancyId"),
     personId: optionalId(input, "personId"),
@@ -1167,7 +1168,8 @@ function decodeApiFilters(value: unknown): ApiFilters {
     occupancy: optionalStrings(input, "occupancy"),
     readiness: optionalStrings(input, "readiness"),
     listing: optionalStrings(input, "listing"),
-    balanceStatus: optionalEnum(input, "balanceStatus", ["all", "due", "credit", "zero"] as const),
+    balanceStatus: optionalEnum(input, "balanceStatus", ["all", "due", "credit", "zero", "unverified"] as const),
+    tenantStatus: optionalEnum(input, "tenantStatus", ["all", "current", "former", "future", "unknown"] as const),
     status: optionalStrings(input, "status"),
     search: optionalText(input, "search"),
   };
@@ -1290,8 +1292,8 @@ function decodeScheduledVsCollectedRow(value: unknown): ScheduledVsCollectedRow 
 }
 
 function decodeDelinquencyRow(value: unknown): DelinquencyRow {
-  const input = exactRecord(value, "delinquency row", ["balanceComplete", "balanceUncertaintyCodes", "propertyId", "propertyName", "unitId", "unitNumber", "tenancyId", "personId", "tenantName", "rentOnlyBalanceCents", "nonRentBalanceCents", "grossBalanceCents", "totalBalanceCents", "netAccountBalanceCents", "unappliedCashCents", "prepaidCents", "oldestUnpaidRentOn", "lastPaymentOn", "hasPromiseOrHold", "noticeStatus"]);
-  return { balanceComplete: optionalBoolean(input, "balanceComplete"), balanceUncertaintyCodes: optionalStrings(input, "balanceUncertaintyCodes"), propertyId: optionalId(input, "propertyId"), propertyName: optionalText(input, "propertyName"), unitId: optionalId(input, "unitId"), unitNumber: optionalText(input, "unitNumber"), tenancyId: optionalId(input, "tenancyId"), personId: optionalId(input, "personId"), tenantName: optionalText(input, "tenantName"), rentOnlyBalanceCents: nullableMoney(input, "rentOnlyBalanceCents"), nonRentBalanceCents: nullableMoney(input, "nonRentBalanceCents"), grossBalanceCents: nullableMoney(input, "grossBalanceCents"), totalBalanceCents: nullableMoney(input, "totalBalanceCents"), netAccountBalanceCents: nullableMoney(input, "netAccountBalanceCents"), unappliedCashCents: nullableMoney(input, "unappliedCashCents"), prepaidCents: nullableMoney(input, "prepaidCents"), oldestUnpaidRentOn: optionalDate(input, "oldestUnpaidRentOn"), lastPaymentOn: optionalDate(input, "lastPaymentOn"), hasPromiseOrHold: optionalBoolean(input, "hasPromiseOrHold"), noticeStatus: optionalText(input, "noticeStatus") };
+  const input = exactRecord(value, "delinquency row", ["tenancyStatus", "creditBalanceCents", "balanceComplete", "balanceUncertaintyCodes", "propertyId", "propertyName", "unitId", "unitNumber", "tenancyId", "personId", "tenantName", "rentOnlyBalanceCents", "nonRentBalanceCents", "grossBalanceCents", "totalBalanceCents", "netAccountBalanceCents", "unappliedCashCents", "prepaidCents", "oldestUnpaidRentOn", "lastPaymentOn", "hasPromiseOrHold", "noticeStatus"]);
+  return { tenancyStatus: optionalAllowed(input, "tenancyStatus", ["current", "former", "future", "unknown"]) as DelinquencyRow["tenancyStatus"], creditBalanceCents: nullableMoney(input, "creditBalanceCents"), balanceComplete: optionalBoolean(input, "balanceComplete"), balanceUncertaintyCodes: optionalStrings(input, "balanceUncertaintyCodes"), propertyId: optionalId(input, "propertyId"), propertyName: optionalText(input, "propertyName"), unitId: optionalId(input, "unitId"), unitNumber: optionalText(input, "unitNumber"), tenancyId: optionalId(input, "tenancyId"), personId: optionalId(input, "personId"), tenantName: optionalText(input, "tenantName"), rentOnlyBalanceCents: nullableMoney(input, "rentOnlyBalanceCents"), nonRentBalanceCents: nullableMoney(input, "nonRentBalanceCents"), grossBalanceCents: nullableMoney(input, "grossBalanceCents"), totalBalanceCents: nullableMoney(input, "totalBalanceCents"), netAccountBalanceCents: nullableMoney(input, "netAccountBalanceCents"), unappliedCashCents: nullableMoney(input, "unappliedCashCents"), prepaidCents: nullableMoney(input, "prepaidCents"), oldestUnpaidRentOn: optionalDate(input, "oldestUnpaidRentOn"), lastPaymentOn: optionalDate(input, "lastPaymentOn"), hasPromiseOrHold: optionalBoolean(input, "hasPromiseOrHold"), noticeStatus: optionalText(input, "noticeStatus") };
 }
 
 function decodeLeaseExpirationRow(value: unknown): LeaseExpirationRow {
@@ -1355,6 +1357,7 @@ export function buildRentOpsQuery(filters: RentOpsQueryFilters = {}): string {
   const params = new URLSearchParams();
   addQueryParam(params, "propertyScope", filters.propertyScope);
   addQueryParam(params, "propertyId", filters.propertyId);
+  addQueryParam(params, "propertyIds", filters.propertyIds);
   addQueryParam(params, "unitId", filters.unitId);
   addQueryParam(params, "tenancyId", filters.tenancyId);
   addQueryParam(params, "personId", filters.personId);
@@ -1366,6 +1369,7 @@ export function buildRentOpsQuery(filters: RentOpsQueryFilters = {}): string {
   addQueryParam(params, "readiness", filters.readiness);
   addQueryParam(params, "listing", filters.listing);
   addQueryParam(params, "balanceStatus", filters.balanceStatus);
+  if (filters.tenantStatus) params.set("tenantStatus", filters.tenantStatus);
   addQueryParam(params, "status", filters.status);
   addQueryParam(params, "search", filters.search);
   const query = params.toString();

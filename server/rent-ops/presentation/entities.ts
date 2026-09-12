@@ -1098,6 +1098,7 @@ function serializeFilterValue(value: unknown): JsonObject {
   return presentationObject({
     propertyScope: ["active", "all"].includes(text(input, "propertyScope") ?? "") ? text(input, "propertyScope") : undefined,
     propertyId: text(input, "propertyId"),
+    propertyIds: stringArrayValue(input.propertyIds),
     unitId: text(input, "unitId"),
     tenancyId: text(input, "tenancyId"),
     personId: text(input, "personId"),
@@ -1108,7 +1109,8 @@ function serializeFilterValue(value: unknown): JsonObject {
     occupancy: allowedArray("occupancy", ["current", "future_preleased", "vacant", "unknown"]),
     readiness: allowedArray("readiness", ["ready", "not_ready", "off_market"]),
     listing: allowedArray("listing", ["listed", "unlisted", "off_market"]),
-    balanceStatus: ["all", "due", "credit", "zero"].includes(text(input, "balanceStatus") ?? "") ? text(input, "balanceStatus") : undefined,
+    balanceStatus: ["all", "due", "credit", "zero", "unverified"].includes(text(input, "balanceStatus") ?? "") ? text(input, "balanceStatus") : undefined,
+    tenantStatus: ["all", "current", "former", "future", "unknown"].includes(text(input, "tenantStatus") ?? "") ? text(input, "tenantStatus") : undefined,
     status: stringArrayValue(input.status),
     search: text(input, "search"),
   });

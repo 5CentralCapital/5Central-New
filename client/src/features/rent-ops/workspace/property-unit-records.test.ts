@@ -202,3 +202,10 @@ test("record recurring actions require verified context and authoritative succes
   assert.equal(recurringRecordSuccessorValues(snapshot, { ...schedule, lineageState: undefined }), undefined);
   assert.equal(recurringRecordSuccessorValues(snapshot, { ...schedule, scopeId: "missing" }), undefined);
 });
+
+test("multiple chosen properties retain only their unit inventories",()=>{
+ const snapshot=makeSnapshot({properties:[{id:'a',state:'active'},{id:'b',state:'active'},{id:'c',state:'active'}],units:[{id:'ua',propertyId:'a'},{id:'ub',propertyId:'b'},{id:'uc',propertyId:'c'}]});
+ const filters={propertyId:'all',propertyIds:['a','b'],propertyScope:'active' as const};
+ assert.deepEqual(propertyUnitListItems(snapshot,filters).map(row=>row.id),['a','ua','b','ub']);
+ assert.notEqual(resolvePropertyUnitSelection(snapshot,filters,'c')?.property?.id,'c');
+});

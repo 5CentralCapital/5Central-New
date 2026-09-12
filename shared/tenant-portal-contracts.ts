@@ -51,6 +51,16 @@ export interface TenantSessionResponse {
 }
 
 export interface TenantLedgerEntry {
+  reference?: string | null;
+  propertyName?: string | null;
+  unitNumber?: string | null;
+  chargeCents?: number | null;
+  paymentCreditCents?: number | null;
+  allocatedCents?: number | null;
+  openCents?: number | null;
+  rowType?: "transaction" | "opening_balance";
+  openingBalanceCents?: number | null;
+  balanceUncertaintyCodes?: string[];
   id: string;
   date: string | null;
   description: string;
@@ -63,6 +73,7 @@ export interface TenantLedgerEntry {
 export interface TenantLeaseFile { id: string; fileName: string; downloadPath: string; }
 
 export interface TenantHome {
+  historyCoverage?: { status: "verified" | "partial" | "unverified"; complete: boolean; asOfDate?: string };
   account: TenantIdentity;
   resident: { firstName: string; lastName: string };
   tenancy: {

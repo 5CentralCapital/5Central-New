@@ -8,8 +8,8 @@ import { seedWorkspaceDashboardReports } from './dashboard-cache';
 const queryRoot=['rent-ops-workspace'] as const;
 export function useWorkspaceData({enabled,identity,filters,collections,summaryNeeded,personId}:{enabled:boolean;identity:string;filters:ViewFilters;collections:WorkspaceCollection[];summaryNeeded:boolean;personId?:string}){
  const client=useQueryClient();
- const apiFilters=useMemo(()=>workspaceApiFilters(filters),[filters.propertyScope,filters.propertyId,filters.asOfDate]);
- const scope=[identity,filters.propertyScope,filters.propertyId,filters.asOfDate];
+ const apiFilters=useMemo(()=>workspaceApiFilters(filters),[filters.propertyScope,filters.propertyId,filters.propertyIds,filters.asOfDate]);
+ const scope=[identity,filters.propertyScope,filters.propertyId,[...(filters.propertyIds??[])].sort(),filters.asOfDate];
  const bootstrap=useQuery({queryKey:[...queryRoot,'bootstrap',...scope],queryFn:({signal})=>loadRentOpsWorkspaceBootstrap(apiFilters,signal),enabled:enabled&&!!filters.asOfDate,staleTime:60_000,gcTime:300_000,retry:false});
  const summary=useQuery({queryKey:[...queryRoot,'dashboard',...scope],queryFn:({signal})=>loadRentOpsWorkspaceDashboard(apiFilters,signal),enabled:enabled&&summaryNeeded&&!!filters.asOfDate,staleTime:30_000,gcTime:300_000,retry:false});
  useEffect(()=>{

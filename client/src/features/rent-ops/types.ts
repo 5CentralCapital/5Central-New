@@ -29,6 +29,7 @@ export type ReportKey =
 export interface ApiFilters {
   propertyScope?: "active" | "all";
   propertyId?: string;
+  propertyIds?: string[];
   unitId?: string;
   tenancyId?: string;
   personId?: string;
@@ -39,7 +40,8 @@ export interface ApiFilters {
   occupancy?: string[];
   readiness?: string[];
   listing?: string[];
-  balanceStatus?: "all" | "due" | "credit" | "zero";
+  balanceStatus?: "all" | "due" | "credit" | "zero" | "unverified";
+  tenantStatus?: "all" | "current" | "former" | "future" | "unknown";
   status?: string[];
   search?: string;
 }
@@ -92,9 +94,13 @@ export type TenantTab =
 export interface ViewFilters {
   propertyScope: "active" | "all";
   propertyId: string;
+  propertyIds?: string[];
   asOfDate: string;
   status: string;
   search: string;
+  balanceStatus?: "all" | "due" | "credit" | "zero" | "unverified";
+  tenantStatus?: "all" | "current" | "former" | "future" | "unknown";
+  readiness?: string[];
 }
 
 export interface ReportColumn {
@@ -722,6 +728,8 @@ export interface ScheduledVsCollectedRow {
 }
 
 export interface DelinquencyRow {
+  tenancyStatus?: "current" | "former" | "future" | "unknown";
+  creditBalanceCents?: number | null;
   balanceComplete?: boolean;
   balanceUncertaintyCodes?: string[];
   propertyId?: string;

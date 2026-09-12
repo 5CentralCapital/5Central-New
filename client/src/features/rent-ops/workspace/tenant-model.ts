@@ -92,6 +92,7 @@ export interface TenantLedgerRow {
   rowType: "transaction" | "opening_balance";
   date?: string;
   unitLabel: string;
+  propertyName: string;
   reference: string;
   description: string;
   chargeCents: number | null;
@@ -188,11 +189,9 @@ export function resolveTenantContext(tenant: TenantView, snapshot: AdminSnapshot
   const asOfDate = snapshot.summary.asOfDate;
   const tenancies = getTenantTenancies(tenant);
   // The profile selects the authoritative tenancy, including a historical selection.
-  const currentTenancy = tenant.tenancy
-    ?? tenancies.find((candidate) => isCurrentTenancy(candidate, asOfDate))
-    ?? tenancies[0];
-  const property = tenant.property ?? findProperty(snapshot, currentTenancy?.propertyId);
-  const unit = tenant.unit ?? findUnit(snapshot, currentTenancy?.unitId);
+  const currentTenancy = tenant.tenancy ?? (tenancies.length === 1 ? tenancies[0] : undefined);
+  const property = currentTenancy ? findProperty(snapshot, currentTenancy.propertyId) ?? tenant.property : tenancies.length > 1 ? undefined : tenant.property;
+  const unit = currentTenancy ? findUnit(snapshot, currentTenancy.unitId) ?? tenant.unit : tenancies.length > 1 ? undefined : tenant.unit;
   const tenancyIds = new Set(tenancies.map((candidate) => candidate.id).filter(Boolean));
   const leaseTerms = (tenant.leaseTerms ?? []).filter((term) => tenancyIds.size === 0 || !term.tenancyId || tenancyIds.has(term.tenancyId));
   return { asOfDate, property, unit, currentTenancy, tenancies, leaseTerms };
@@ -395,7 +394,7 @@ export function buildRecurringChargeRows(tenant: TenantView, snapshot: AdminSnap
       id: schedule.id,
       operationalSelected,
       operationalSelectionComplete: selectionComplete,
-      applicabilityLabel: [property ? propertyDisplayName(property) : "Property unconfirmed", unit ? `Unit ${unitDisplayName(unit)}` : scope.type === "property" ? "All applicable units" : "Unit unconfirmed", linkedTenancy ? `Tenancy ${linkedTenancy.id} · ${linkedTenancy.status ?? "status unconfirmed"}` : schedule.tenancyId ? `Tenancy ${schedule.tenancyId} · unconfirmed` : scope.type === "tenant" ? "Tenancy unconfirmed" : "Inherited schedule"].join(" · "),
+      applicabilityLabel: [property ? propertyDisplayName(property) : "Property unconfirmed", unit ? `Unit ${unitDisplayName(unit)}` : scope.type === "property" ? "All applicable units" : "Unit unconfirmed", linkedTenancy ? (linkedTenancy.status ? linkedTenancy.status.charAt(0).toUpperCase() + linkedTenancy.status.slice(1).replaceAll("_", " ") : "Status unconfirmed") : schedule.tenancyId ? "Tenancy unconfirmed" : scope.type === "tenant" ? "Tenancy unconfirmed" : "Inherited schedule"].join(" · "),
       stateReason,
       description,
       definitionName,
@@ -453,8 +452,9 @@ export function buildLedgerRows(tenant: TenantView, snapshot: AdminSnapshot): Te
       rowType: source.rowType ?? "transaction",
       date: transaction.postedOn || transaction.dueOn,
       unitLabel: ledgerUnitLabel(transaction, tenant, snapshot),
+      propertyName: propertyDisplayName(findProperty(snapshot, transaction.propertyId ?? snapshot.snapshot.tenancies.find(t => t.id === transaction.tenancyId)?.propertyId)),
       reference: ledgerEntryReference(transaction, source.rowType),
-      description: source.rowType === "opening_balance" ? "Opening balance" : nonEmpty(transaction.description) ?? nonEmpty(transaction.category) ?? "Needs review",
+      description: source.rowType === "opening_balance" ? "Opening balance" : ledgerEntryDescription(transaction),
       chargeCents: entryKind === "charge" ? amount : null,
       paymentCents: entryKind === "payment" || entryKind === "credit" ? amount : null,
       paymentLabel: entryKind === "payment" ? "Payment" : entryKind === "credit" ? "Credit" : null,
@@ -534,14 +534,15 @@ export function buildTenantEditActions(tenant: TenantView, snapshot: AdminSnapsh
     } }));
   }
   if (tab === "charges") {
-    if (context.currentTenancy?.id && isCurrentTenancy(context.currentTenancy, context.asOfDate) && context.unit?.id && context.property?.id && tenant.person.id) {
+    if (tenant.person.id && (!context.currentTenancy || isCurrentTenancy(context.currentTenancy, context.asOfDate))) {
       actions.push({ label: "Add recurring charge", action: "save-recurring-schedule", values: {
-        propertyId: context.property.id,
-        unitId: context.unit.id,
-        tenancyId: context.currentTenancy.id,
+        propertyId: context.property?.id,
+        unitId: context.unit?.id,
+        tenancyId: context.currentTenancy?.id,
         personId: tenant.person.id,
         scopeType: "tenant",
         scopeId: tenant.person.id,
+        billingFrequency: "monthly", active: "true",
       } });
     }
     (tenant.schedules ?? []).forEach((schedule, index) => {
@@ -556,7 +557,8 @@ export function buildTenantEditActions(tenant: TenantView, snapshot: AdminSnapsh
       actions.push({ label: `End ${scopeLabel} ${index + 1}`, action: "end-recurring-schedule", values: { ...values, effectiveFrom: "" } });
     });
   }
-  if (tab === "ledger") actions.push({ label: "Add transaction", action: "post-ledger-transaction", values: {
+  if (tab === "ledger") actions.push({ label: "Add one-time charge", action: "post-ledger-transaction", values: {
+    kind: "charge", status: "posted", payer: "tenant",
     propertyId: context.property?.id,
     unitId: context.unit?.id,
     tenancyId: context.currentTenancy?.id,
@@ -578,7 +580,7 @@ export function buildTenantEditActions(tenant: TenantView, snapshot: AdminSnapsh
       dispositionNotes: deposit.dispositionNotes ?? "",
     } }));
     if (context.property?.id && tenant.person.id) actions.push({ label: "Add deposit", action: "save-security-deposit", values: {
-      propertyId: context.property.id,
+      propertyId: context.property?.id,
       unitId: context.unit?.id ?? "",
       tenancyId: context.currentTenancy?.id ?? "",
       personId: tenant.person.id,
@@ -646,11 +648,15 @@ export function ledgerActionEligibility(row: TenantLedgerRow, rows: TenantLedger
   };
 }
 
-export function ledgerEntryReference(transaction: AdminLedgerTransactionView, rowType?: string): string {
-  if (rowType === "opening_balance") return "Opening balance";
-  if (transaction.id?.startsWith("shared-application:")) return "Shared payment";
-  if (transaction.id?.startsWith("billing:")) return "Monthly billing";
-  return ({ payment: "Payment", charge: "Charge", credit: "Credit", reversal: "Reversal", adjustment: "Adjustment" } as Record<string, string>)[transaction.kind ?? ""] ?? "—";
+export function ledgerEntryReference(_transaction: AdminLedgerTransactionView, _rowType?: string): string {
+  // No source reference is currently part of the persisted browser contract.
+  return "";
+}
+
+export function ledgerEntryDescription(transaction: AdminLedgerTransactionView): string {
+  const description = nonEmpty(transaction.description);
+  if (description) return description;
+  return ({ payment: "Payment", charge: "Charge", debit: "Charge", credit: "Credit", reversal: "Reversal", adjustment: "Adjustment" } as Record<string, string>)[transaction.kind ?? ""] ?? "Transaction";
 }
 
 export function filterTenantLedger(rows: TenantLedgerRow[], search: string, from: string, to: string): TenantLedgerRow[] {

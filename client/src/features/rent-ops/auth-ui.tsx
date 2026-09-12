@@ -11,7 +11,7 @@ export function useRentOpsAuth() {
 }
 
 export function RentOpsAuthLoading() {
-  return <main className="ro-auth-shell"><section className="ro-auth-card" aria-live="polite"><Loader2 className="spin" /><p>Checking your Rent Operations session…</p></section></main>;
+  return <main className="ro-auth-shell"><section className="ro-auth-card" aria-live="polite"><Loader2 className="spin" /><p>Signing in…</p></section></main>;
 }
 
 export function RentOpsAdminLogin({ message }: { message?: string }) {
@@ -49,9 +49,7 @@ export function RentOpsAdminLogin({ message }: { message?: string }) {
   return <main className="ro-auth-shell">
     <section className="ro-auth-card" aria-labelledby="rent-ops-login-title">
       <div className="ro-auth-icon"><LockKeyhole aria-hidden="true" /></div>
-      <span className="eyebrow">Private workspace</span>
-      <h1 id="rent-ops-login-title">Manager Sign In</h1>
-      <p className="ro-auth-intro">Sign in to open your manager dashboard.</p>
+      <h1 id="rent-ops-login-title">Manager sign in</h1>
       {error && <div className="ro-error" role="alert"><AlertCircle aria-hidden="true" /><span>{error}</span></div>}
       {googleEnabled && <a className="primary ro-auth-submit" href="/api/rent-ops/auth/oauth/start">Continue with Google</a>}
       <form onSubmit={submit}>

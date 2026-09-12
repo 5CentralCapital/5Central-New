@@ -15,16 +15,34 @@ export function parseWorkspaceRoute(search: string): WorkspaceRoute {
   const record = params.get('record');
   return { section: sections.includes(section) ? section : 'dashboard', tab: tabs.includes(tab) ? tab : 'summary', report: REPORT_KEYS.includes(report) ? report : 'rent-roll', recordId: record && /^[A-Za-z0-9:_-]{1,160}$/.test(record) ? record : undefined, kind: params.get('kind') === 'unit' ? 'unit' : 'property' };
 }
-export function workspaceRouteSearch(route: WorkspaceRoute): string {
-  const params = new URLSearchParams({section:route.section});
+export function workspaceRouteSearch(route: WorkspaceRoute, filters?: ViewFilters, baseSearch = ""): string {
+  const params = new URLSearchParams(baseSearch);
+  for (const key of ["section", "record", "kind", "tab", "report"]) params.delete(key);
+  params.set("section",route.section);
   if(route.recordId) params.set('record',route.recordId);
   if(route.section==='properties') params.set('kind',route.kind??'property');
   if(route.section==='tenants' && route.tab!=='summary') params.set('tab',route.tab);
   if(route.section==='reports') params.set('report',route.report);
+  if(filters) {
+    params.set("scope",filters.propertyScope); params.delete("property");
+    for(const id of selectedWorkspaceProperties(filters)) params.append("property",id);
+    params.set("asOf",filters.asOfDate); params.set("status",filters.status); params.set("search",filters.search);
+  }
   return `?${params.toString()}`;
 }
+export function selectedWorkspaceProperties(filters: Pick<ViewFilters,'propertyId'|'propertyIds'>): string[] {
+  return filters.propertyIds?.length ? Array.from(new Set(filters.propertyIds)).sort() : filters.propertyId && filters.propertyId !== 'all' ? [filters.propertyId] : [];
+}
+export function workspacePropertyMatches(filters: Pick<ViewFilters,'propertyId'|'propertyIds'>, id?:string):boolean {
+  const selected=selectedWorkspaceProperties(filters);return !selected.length || !!id&&selected.includes(id);
+}
+export function parseWorkspaceFilters(search:string):ViewFilters {
+  const params=new URLSearchParams(search); const propertyIds=Array.from(new Set(params.getAll('property').filter(id=>/^[A-Za-z0-9:_-]{1,160}$/.test(id))));
+  return {propertyScope:params.get('scope')==='all'?'all':'active',propertyId:propertyIds.length===1?propertyIds[0]:'all',propertyIds,asOfDate:params.get('asOf')??'',status:params.get('status')??'all',search:params.get('search')??''};
+}
 export function workspaceApiFilters(filters: ViewFilters): ApiFilters {
-  return {propertyScope:filters.propertyScope, ...(filters.propertyId==='all'?{}:{propertyId:filters.propertyId}), asOfDate:filters.asOfDate};
+  const propertyIds=selectedWorkspaceProperties(filters);
+  return {propertyScope:filters.propertyScope, ...(propertyIds.length===1?{propertyId:propertyIds[0]}:propertyIds.length?{propertyIds}:{}), asOfDate:filters.asOfDate};
 }
 export function indexTenantViews(bootstrap: RentOpsWorkspaceBootstrap): TenantView[] {
   const source=bootstrap.snapshot;
@@ -84,11 +102,11 @@ export function workspaceRecordInScope(route:WorkspaceRoute, bootstrap:RentOpsWo
   if(!propertyId) return false;
   const property=bootstrap.snapshot.properties.find(candidate=>candidate.id===propertyId);
   return !!property && (filters.propertyScope==='all' || property.state==='active')
-    && (filters.propertyId==='all' || property.id===filters.propertyId);
+    && workspacePropertyMatches(filters,property.id);
 }
 
 /** An explicit record activation can widen navigation scope without changing the reporting date. */
 export function workspaceFiltersForRecord(route:WorkspaceRoute, bootstrap:RentOpsWorkspaceBootstrap|undefined, filters:ViewFilters):ViewFilters {
-  if(workspaceRecordInScope(route,bootstrap,filters) || filters.propertyScope==='all' && filters.propertyId==='all') return filters;
-  return {...filters,propertyScope:'all',propertyId:'all'};
+  if(workspaceRecordInScope(route,bootstrap,filters) || filters.propertyScope==='all' && !selectedWorkspaceProperties(filters).length) return filters;
+  return {...filters,propertyScope:'all',propertyId:'all',...(filters.propertyIds?{propertyIds:[]}: {})};
 }

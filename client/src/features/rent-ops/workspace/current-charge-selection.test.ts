@@ -40,7 +40,12 @@ test("transfer retains old rent history and shows exact tenancy and unit identit
   snapshot.snapshot.units.push({ ...tenant.unit!, id: "old-unit", unitNumber: "Old 7" });
   const rows = buildRecurringChargeRows({ ...tenant, tenancies: [old, tenant.tenancy!], schedules: [{ ...schedule, id: "old-rent", tenancyId: old.id, amountCents: 100000 }, schedule] }, snapshot);
   assert.deepEqual(rows.map(row => row.state), ["ended", "current"]);
-  assert.match(rows[0].applicabilityLabel, /Old 7.*old-tenancy/);
+  assert.match(rows[0].applicabilityLabel, /Old 7.*Past/);
+  assert.equal(rows[0].schedule.tenancyId, old.id);
+  assert.equal(rows[0].operationalSelected, false);
+  assert.equal(rows[1].schedule.tenancyId, tenant.tenancy!.id);
+  assert.equal(rows[1].operationalSelected, true);
+  assert.ok(!rows[0].applicabilityLabel.includes(old.id));
   assert.equal(currentMonthlyTotal(rows), 150000);
 });
 

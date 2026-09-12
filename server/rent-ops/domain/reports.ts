@@ -1,5 +1,6 @@
+import { deriveAccountBalances } from "./account-balances";
 import { hasConfirmedTenancyLinks, confirmedTenancyFact, isOccupiedTenancyOn, isKnownPastAccountOn } from "./tenancy-occupancy";
-import { tenantAccountLedgerRows } from "./account-ledger";
+import { tenantAccountLedgerRows, createTenantAccountLedgerRowsReader } from "./account-ledger";
 import { isSourceAllocationReversal } from "./invariants";
 import type {
   ApplicantPublicView,
@@ -65,12 +66,12 @@ function receiptInPeriod(date: IsoDate, filters: RentOpsFilters): boolean {
 }
 
 function scopedProperties(snapshot: RentOpsSnapshot, filters: RentOpsFilters): RentOpsProperty[] {
-  const selected = snapshot.properties.filter((property) => !filters.propertyId || property.id === filters.propertyId);
+  const selected = snapshot.properties.filter((property) => (!filters.propertyId || property.id === filters.propertyId) && (!filters.propertyIds?.length || filters.propertyIds.includes(property.id)));
   // An explicit property selection is already a deliberate scope choice. The
   // active portfolio scope only narrows the unselected operational default;
   // omitted scope remains the complete imported snapshot for migration/audit
   // callers that need source totals.
-  if (filters.propertyId || filters.propertyScope !== "active") return selected;
+  if (filters.propertyId || filters.propertyIds?.length || filters.propertyScope !== "active") return selected;
   return selected.filter((property) => property.state === "active");
 }
 
@@ -79,7 +80,7 @@ function scopedPropertyIds(snapshot: RentOpsSnapshot, filters: RentOpsFilters): 
 }
 
 function matchesPropertyScope(propertyId: string | null | undefined, filters: RentOpsFilters, propertyIds: ReadonlySet<string>, includeUnassigned = false): boolean {
-  if (filters.propertyId) return propertyId === filters.propertyId;
+  if (filters.propertyId || filters.propertyIds?.length) return !!propertyId && propertyIds.has(propertyId);
   // The full source view must retain unresolved property links and amounts.
   if (filters.propertyScope !== "active") return true;
   return propertyId ? propertyIds.has(propertyId) : includeUnassigned;
@@ -747,7 +748,8 @@ function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFi
     return filters.occupancy.includes(row.occupancy);
   }).filter((row) => {
     if (!filters.balanceStatus || filters.balanceStatus === "all") return true;
-    if (filters.balanceStatus === "due") return row.balanceDueCents === null || row.balanceDueCents > 0;
+    if (filters.balanceStatus === "unverified") return row.balanceDueCents === null || row.balanceComplete === false;
+    if (filters.balanceStatus === "due") return row.balanceDueCents !== null && row.balanceDueCents > 0;
     if (filters.balanceStatus === "credit") return row.balanceDueCents !== null && row.balanceDueCents < 0;
     return row.balanceDueCents === 0;
   });
@@ -1245,7 +1247,21 @@ export function deriveScheduledVsCollected(snapshot: RentOpsSnapshot, filters: R
   return Array.from(grouped.values()).map((row) => ({ ...row, varianceCents: row.collectedCents - row.scheduledCents }));
 }
 
+/** Validated, effective applications for property-attributed account balances. */
+export function readAccountBalanceAllocations(snapshot: RentOpsSnapshot, cutoff: IsoDate) {
+  const context = createBalanceContext(snapshot, cutoff);
+  return [
+    ...effectiveAllocations(snapshot, cutoff, undefined, context).map(({ allocation, payment, charge }) => ({ parentTransactionId: payment.id, chargeTransactionId: charge.id, amountCents: allocation.amountCents })),
+    ...effectiveCreditAllocations(snapshot, cutoff, context).map(({ allocation, credit, charge }) => ({ parentTransactionId: credit.id, chargeTransactionId: charge.id, amountCents: allocation.amountCents })),
+  ];
+}
+
 export function deriveDelinquency(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): DelinquencyRow[] {
+  if (filters.tenantStatus) {
+    // Attribute a complete account ledger before filtering its property groups.
+    const readAccountLedger = createAccountLedgerReader(snapshot, { asOfDate: asOfDate(filters) });
+    return deriveAccountBalances(snapshot, filters, (_snapshot, personId, tenancyIds) => readAccountLedger(personId, tenancyIds), readAccountBalanceAllocations);
+  }
   return deriveDelinquencyWithBalance(snapshot, filters, createBalanceReader(snapshot, asOfDate(filters)));
 }
 
@@ -1300,50 +1316,122 @@ function deriveDelinquencyWithBalance(snapshot: RentOpsSnapshot, filters: RentOp
   return rows.filter((row) => searchMatches(`${row.propertyName} ${row.unitNumber ?? ""} ${row.tenantName}`, filters.search));
 }
 
-export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string, filters: RentOpsFilters = {}, accountTransactionIds?: ReadonlySet<string>, inheritedBalanceCodes: string[] = []): LedgerRow[] {
+/** One immutable request view; callers rebuild it after any snapshot mutation. */
+function createAccountLedgerContext(snapshot: RentOpsSnapshot, filters: RentOpsFilters) {
+  const cutoff = filters.asOfDate ?? "9999-12-31";
+  const transactions = new Map(snapshot.ledgerTransactions.map(row => [row.id, row]));
+  const bucket = <T,>(rows: readonly T[], keys: (row: T) => (string | null | undefined)[]) => {
+    const map = new Map<string, T[]>();
+    for (const row of rows) for (const key of Array.from(new Set(keys(row)))) if (key) { const list = map.get(key) ?? []; list.push(row); map.set(key, list); }
+    return map;
+  };
+  const select = <T,>(map: Map<string, T[]>, ids: ReadonlySet<string>): T[] => Array.from(new Set(Array.from(ids).flatMap(id => map.get(id) ?? [])));
+  const noReversals = { ...snapshot, ledgerTransactions: snapshot.ledgerTransactions.filter(row => row.kind !== "reversal") };
+  const payments = bucket(effectiveAllocations(noReversals, cutoff), row => [row.charge.id]);
+  const credits = bucket(effectiveCreditAllocations(snapshot, cutoff), row => [row.credit.id, row.charge.id]);
+  const allocations = bucket(snapshot.paymentAllocations, row => [row.paymentTransactionId ?? row.creditTransactionId, row.chargeTransactionId]);
+  const returns = bucket(snapshot.ledgerTransactions.filter(row => row.kind === "reversal" && row.status === "posted" && (!row.postedOn || row.postedOn <= cutoff)), row => [row.reversalOfId]);
+  return { transactions, transactionIds: new Set(transactions.keys()),
+    tenancies: new Map(snapshot.tenancies.map(row => [row.id, row])), people: new Map(snapshot.people.map(row => [row.id, row])),
+    byPerson: bucket(snapshot.ledgerTransactions, row => [row.personId]),
+    byTenancy: bucket(snapshot.ledgerTransactions, row => [row.tenancyId]),
+    householdByPerson: bucket(snapshot.householdMemberships, row => [row.personId]),
+    accountRows: createTenantAccountLedgerRowsReader(snapshot), propertyIds: scopedPropertyIds(snapshot, filters),
+    reversed: reversalSets(snapshot, cutoff),
+    allocations: (ids: ReadonlySet<string>) => select(allocations, ids),
+    payments: (ids: ReadonlySet<string>) => select(payments, ids),
+    credits: (ids: ReadonlySet<string>) => select(credits, ids),
+    returns: (ids: ReadonlySet<string>) => select(returns, ids) };
+}
+type AccountLedgerContext = ReturnType<typeof createAccountLedgerContext>;
+
+/** Reuse within one report only. Separate calls always observe fresh facts. */
+export function createAccountLedgerReader(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}) {
+  const context = createAccountLedgerContext(snapshot, filters);
+  return (personId: string, tenancyIds: readonly string[]) => deriveManagerAccountLedger(snapshot, personId, tenancyIds, filters, context);
+}
+
+export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string, filters: RentOpsFilters = {}, accountTransactionIds?: ReadonlySet<string>, inheritedBalanceCodes: string[] = [], context?: AccountLedgerContext): LedgerRow[] {
   validateReportFilters("tenant-ledger", filters);
   const allocationCutoff = filters.asOfDate ?? ("9999-12-31" as IsoDate);
-  const transactions = snapshot.ledgerTransactions
+  const transactions = (context ? accountTransactionIds ? Array.from(accountTransactionIds).flatMap(id => context.transactions.get(id) ? [context.transactions.get(id)!] : []) : context.byTenancy.get(tenancyId) ?? [] : snapshot.ledgerTransactions)
     .filter((transaction) => (accountTransactionIds ? accountTransactionIds.has(transaction.id) : transaction.tenancyId === tenancyId) && (!transaction.postedOn || !filters.asOfDate || transaction.postedOn <= filters.asOfDate))
     .sort((left, right) => compareOptionalTimestamp(left.postedOn, right.postedOn) || left.id.localeCompare(right.id));
     const ledgerCodes = new Set([...inheritedBalanceCodes, ...(!transactions.length && tenancyId ? tenancyBalanceUncertainty(snapshot, tenancyId, allocationCutoff) : []), ...transactions.flatMap(row => ledgerFactUncertainty(row, false))]);
   const ledgerIds = new Set(transactions.map(row => row.id));
-  const transactionIds = new Set(snapshot.ledgerTransactions.map(row => row.id));
-  for (const allocation of snapshot.paymentAllocations) {
+  const transactionIds = context?.transactionIds ?? new Set(snapshot.ledgerTransactions.map(row => row.id));
+  for (const allocation of context ? context.allocations(ledgerIds) : snapshot.paymentAllocations) {
     if (allocation.allocatedOn && allocation.allocatedOn > allocationCutoff) continue;
     if (!ledgerIds.has(allocation.paymentTransactionId ?? allocation.creditTransactionId ?? "") && !ledgerIds.has(allocation.chargeTransactionId ?? "")) continue;
     if (allocationEvidenceUnknown(transactionIds, allocation)) ledgerCodes.add("allocation_evidence_unknown");
   }
-  const balanceUncertaintyCodes = Array.from(ledgerCodes).sort();
-  const balanceComplete = balanceUncertaintyCodes.length === 0;
+  const scopedTransactions = new Map(transactions.map(row => [row.id, row]));
+  const reversalTargets = new Set<string>();
+  for (const row of transactions) {
+    if (row.kind !== "reversal" || row.status !== "posted") continue;
+    const original = scopedTransactions.get(row.reversalOfId ?? "");
+    if (!original || original.kind === "reversal" || original.status !== "posted" || original.amountCents !== row.amountCents
+      || !original.postedOn || !row.postedOn || original.postedOn > row.postedOn || reversalTargets.has(original.id)) ledgerCodes.add("ledger_reversal_evidence_unknown");
+    if (original) reversalTargets.add(original.id);
+  }
   const transactionMap = new Map(transactions.map((transaction) => [transaction.id, transaction]));
-  const reversed = reversalSets(snapshot, allocationCutoff);
+  const reversed = context ? { paymentIds: new Set(context.reversed.paymentIds), chargeIds: context.reversed.chargeIds, creditIds: context.reversed.creditIds } : reversalSets(snapshot, allocationCutoff);
   const allocationByCharge = new Map<string, number>();
   const allocationByPayment = new Map<string, number>();
-  for (const { allocation, payment, charge } of effectiveAllocations(snapshot, allocationCutoff, accountTransactionIds ? undefined : tenancyId)) {
+  // Build dated application events before reversals are applied. Otherwise a
+  // later returned receipt would erase its earlier application from history.
+  const beforeReversals = context ? snapshot : { ...snapshot, ledgerTransactions: snapshot.ledgerTransactions.filter(row => row.kind !== "reversal") };
+  for (const { allocation, payment, charge } of context ? context.payments(ledgerIds) : effectiveAllocations(beforeReversals, allocationCutoff, accountTransactionIds ? undefined : tenancyId)) {
+    if (!accountTransactionIds && payment.tenancyId !== tenancyId && charge.tenancyId !== tenancyId) continue;
     if (!transactionMap.has(charge.id)) continue;
     if (!transactionMap.has(payment.id)) {
       if (payment.allocationMode !== "multi_property") continue;
       // Read-only application event: never persist a second receipt or give
       // the scoped account any of the shared root's unapplied cash.
-      transactions.push({ ...payment, id: `shared-application:${allocation.id}`,
-        source: undefined, propertyId: charge.propertyId, unitId: charge.unitId,
-        tenancyId: charge.tenancyId, personId: charge.personId ?? payment.personId,
-        postedOn: allocation.allocatedOn, amountCents: allocation.amountCents,
-        allocationMode: null, description: `Application of shared receipt ${payment.id}` });
-      allocationByPayment.set(`shared-application:${allocation.id}`, allocation.amountCents);
+      const application: RentOpsSnapshot["ledgerTransactions"][number] = { id: `shared-application:${allocation.id}`,
+        propertyId: charge.propertyId, unitId: charge.unitId,
+        tenancyId: charge.tenancyId, personId: charge.personId,
+        kind: allocation.amountCents < 0 ? "adjustment" : "payment", adjustmentDirection: allocation.amountCents < 0 ? "debit" : null, status: "posted", category: null,
+        postedOn: [allocation.allocatedOn, payment.postedOn, charge.postedOn].sort().at(-1)!, amountCents: Math.abs(allocation.amountCents),
+        propertyLinkKnowledge: charge.propertyLinkKnowledge, unitLinkKnowledge: charge.unitLinkKnowledge,
+        amountKnowledge: "known", postedOnKnowledge: "manual", statusKnowledge: "manual", descriptionKnowledge: "manual",
+        description: allocation.amountCents < 0 ? "Shared receipt application reversed" : "Shared receipt application" };
+      transactions.push(application);
+      transactionMap.set(application.id, application);
+      allocationByPayment.set(application.id, allocation.amountCents);
+      const returns = context ? context.returns(new Set([payment.id, charge.id])) : snapshot.ledgerTransactions.filter(row => row.kind === "reversal" && row.status === "posted"
+        && (row.reversalOfId === payment.id || row.reversalOfId === charge.id)
+        && (!row.postedOn || row.postedOn <= allocationCutoff));
+      const validReturns = returns.filter(row => {
+        const original = row.reversalOfId === payment.id ? payment : charge;
+        const valid = row.amountCents === original.amountCents && !!row.postedOn && row.postedOn >= application.postedOn!
+          && ledgerFactUncertainty(row, false).length === 0;
+        if (!valid) ledgerCodes.add("shared_application_reversal_unknown");
+        return valid;
+      }).sort((left, right) => left.postedOn!.localeCompare(right.postedOn!) || left.id.localeCompare(right.id));
+      if (validReturns.length) {
+        transactions.push({ ...application, id: `shared-return:${allocation.id}`, kind: "reversal",
+          reversalOfId: application.id, postedOn: validReturns[0].postedOn, description: "Shared receipt application reversed" });
+        reversed.paymentIds.add(application.id);
+      }
+      ledgerFactUncertainty(payment, false).forEach(code => ledgerCodes.add(code));
+      if (allocationEvidenceUnknown(transactionIds, allocation)) ledgerCodes.add("allocation_evidence_unknown");
     }
+    if (reversed.paymentIds.has(payment.id) || reversed.chargeIds.has(charge.id)) continue;
     allocationByCharge.set(charge.id, (allocationByCharge.get(charge.id) ?? 0) + allocation.amountCents);
     allocationByPayment.set(payment.id, (allocationByPayment.get(payment.id) ?? 0) + allocation.amountCents);
   }
   const allocationByCredit = new Map<string, number>();
-  for (const { allocation, credit, charge } of effectiveCreditAllocations(snapshot, allocationCutoff)) {
+  for (const { allocation, credit, charge } of context ? context.credits(ledgerIds) : effectiveCreditAllocations(snapshot, allocationCutoff)) {
     if (transactionMap.has(credit.id)) allocationByCredit.set(credit.id, (allocationByCredit.get(credit.id) ?? 0) + allocation.amountCents);
     if (!transactionMap.has(charge.id)) continue;
     allocationByCharge.set(charge.id, (allocationByCharge.get(charge.id) ?? 0) + allocation.amountCents);
 
   }
   transactions.sort((left, right) => compareOptionalTimestamp(left.postedOn, right.postedOn) || left.id.localeCompare(right.id));
+  const balanceUncertaintyCodes = Array.from(ledgerCodes).sort();
+  let balanceComplete = balanceUncertaintyCodes.length === 0;
+  let unsafeRunningBalance = false;
   let running = 0;
   const ledgerRows: LedgerRow[] = transactions.map((transaction) => {
     const amountCents = transaction.amountCents;
@@ -1357,8 +1445,14 @@ export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string,
           ? (reversed.creditIds.has(transaction.id) ? 0 : -(amountCents - allocatedCents))
           : transaction.kind === "reversal" ? 0 : 0;
     if (transaction.status === "posted") running += ledgerBalanceSign(transaction, transactionMap) * amountCents;
+    if (!Number.isSafeInteger(running)) unsafeRunningBalance = true;
     return { transaction, allocatedCents: balanceComplete ? allocatedCents : null, openCents: balanceComplete ? openCents : null, runningBalanceCents: balanceComplete ? running : null, balanceComplete, balanceUncertaintyCodes };
   });
+  if (unsafeRunningBalance) {
+    balanceComplete = false;
+    for (const row of ledgerRows) { row.balanceComplete = false; row.runningBalanceCents = null; row.allocatedCents = null; row.openCents = null; }
+    balanceUncertaintyCodes.push("ledger_balance_out_of_range");
+  }
   if (!filters.fromDate && !filters.toDate) return ledgerRows;
   const openingBalanceCents = !balanceComplete ? null : filters.fromDate
     ? ledgerRows.filter(row => row.transaction.postedOn! < filters.fromDate!).at(-1)?.runningBalanceCents ?? 0
@@ -1377,28 +1471,37 @@ export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string,
 
 /** Account entries remain account-scoped; never assign them to one of the
  * account's leases merely to make them visible in a manager report. */
-export function deriveManagerAccountLedger(snapshot: RentOpsSnapshot, personId: string, tenancyIds: readonly string[], filters: RentOpsFilters = {}): LedgerRow[] {
-  const propertyIds = scopedPropertyIds(snapshot, filters);
+export function deriveManagerAccountLedger(snapshot: RentOpsSnapshot, personId: string, tenancyIds: readonly string[], filters: RentOpsFilters = {}, context?: AccountLedgerContext): LedgerRow[] {
+  const propertyIds = context?.propertyIds ?? scopedPropertyIds(snapshot, filters);
+  const readAccountRows = context?.accountRows ?? ((account: { personId: string; tenancyId?: string }) => tenantAccountLedgerRows(snapshot, account));
   const selectedTenancyIds = new Set(tenancyIds);
-  const candidateIds = new Set(tenantAccountLedgerRows(snapshot, { personId }).map(row => row.id));
-  for (const row of snapshot.ledgerTransactions) if (row.tenancyId && selectedTenancyIds.has(row.tenancyId)) candidateIds.add(row.id);
-  const scopedIds = new Set(snapshot.ledgerTransactions.filter(row => {
+  const candidateIds = new Set(readAccountRows({ personId }).map(row => row.id));
+  for (const tenancyId of Array.from(selectedTenancyIds)) {
+    for (const row of readAccountRows({ personId, tenancyId })) candidateIds.add(row.id);
+    // Manager household profiles deliberately include their linked lease. A
+    // resident grant can only resolve to the primary person, never this path.
+    const tenancy = context ? context.tenancies.get(tenancyId) : snapshot.tenancies.find(row => row.id === tenancyId);
+    if (tenancy && tenancy.primaryPersonId !== personId && (context ? context.householdByPerson.get(personId) ?? [] : snapshot.householdMemberships).some(row => row.tenancyId === tenancyId && row.personId === personId)) {
+      for (const row of readAccountRows({ personId: tenancy.primaryPersonId, tenancyId })) if (row.tenancyId === tenancyId) candidateIds.add(row.id);
+    }
+  }
+  const scopedIds = new Set((context ? Array.from(candidateIds).flatMap(id => context.transactions.get(id) ? [context.transactions.get(id)!] : []) : snapshot.ledgerTransactions).filter(row => {
     if (!candidateIds.has(row.id)) return false;
-    const tenancy = row.tenancyId ? snapshot.tenancies.find(candidate => candidate.id === row.tenancyId) : undefined;
+    const tenancy = row.tenancyId ? context ? context.tenancies.get(row.tenancyId) : snapshot.tenancies.find(candidate => candidate.id === row.tenancyId) : undefined;
     const propertyId = row.propertyId ?? tenancy?.propertyId;
     return matchesPropertyScope(propertyId, filters, propertyIds) && (!filters.unitId || (row.unitId ?? tenancy?.unitId) === filters.unitId);
   }).map(row => row.id));
   if (scopedIds.size === 0 && tenancyIds.length === 0) return [];
   const accountCodes: string[] = [];
-  const person = snapshot.people.find(row => row.id === personId);
+  const person = context ? context.people.get(personId) : snapshot.people.find(row => row.id === personId);
   if (!scopedIds.size && person?.source?.system === "rent_manager") accountCodes.push("imported_account_history_unverified");
-  const uncertainAccountLink = snapshot.ledgerTransactions.some(row => !candidateIds.has(row.id)
+  const uncertainAccountLink = (context ? context.byPerson.get(personId) ?? [] : snapshot.ledgerTransactions).some(row => !candidateIds.has(row.id)
     && row.personId === personId && (!row.postedOn || row.postedOn <= asOfDate(filters))
     && row.status !== "pending" && row.status !== "voided"
     && (!linkCanExclude(row.propertyId, row.propertyLinkKnowledge) || matchesPropertyScope(row.propertyId, filters, propertyIds))
     && (!filters.unitId || !linkCanExclude(row.unitId, row.unitLinkKnowledge) || row.unitId === filters.unitId));
   if (uncertainAccountLink) accountCodes.push("account_ledger_link_unknown");
-  return deriveTenantLedger(snapshot, "", filters, scopedIds, accountCodes).map(row => row.rowType === "opening_balance" ? { ...row, transaction: { ...row.transaction, id: `report-opening:${personId}`, personId } } : row);
+  return deriveTenantLedger(snapshot, "", filters, scopedIds, accountCodes, context).map(row => row.rowType === "opening_balance" ? { ...row, transaction: { ...row.transaction, id: `report-opening:${personId}`, personId } } : row);
 }
 
 export function deriveLeaseExpirations(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): LeaseExpirationRow[] {

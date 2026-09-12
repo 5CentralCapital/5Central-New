@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { actionFields, baseOptions, scopedFields, editorTitle, relationshipErrors } from "./editor-model";
+import { chargeAccountLabel, actionFields, baseOptions, scopedFields, editorTitle, relationshipErrors } from "./editor-model";
 import type { AdminSnapshot } from "../types";
 const snapshot = { chargeDefinitions: [], snapshot: {
   properties: [{ id: "p1", name: "Oak" }, { id: "p2", name: "Pine" }],
@@ -59,4 +59,29 @@ test("tenant context includes known tenancy-level entries but excludes unrelated
   ];
   const field = scopedFields("reverse-ledger-transaction", source, {}, { propertyId: "p1", personId: "person1" }).find(f => f.name === "originalId")!;
   assert.deepEqual(field.options?.map(o => o[0]), ["known"]);
+});
+
+test("tenant charge forms lock known context and require an explicit missing tenancy", () => {
+  const initial = { personId: "person1", propertyId: "p1", unitId: "u1", tenancyId: "t1", scopeType: "tenant", scopeId: "person1" };
+  const fields = scopedFields("save-recurring-schedule", snapshot, initial, initial);
+  assert.ok(fields.filter(field => ["personId", "propertyId", "unitId", "tenancyId"].includes(field.name)).every(field => field.locked));
+  assert.ok(!fields.some(field => ["scopeType", "scopeId", "category", "active"].includes(field.name)));
+  const ambiguous = scopedFields("save-recurring-schedule", snapshot, { personId: "person1" }, { personId: "person1" });
+  assert.equal(ambiguous.find(field => field.name === "tenancyId")?.required, true);
+  assert.equal(ambiguous.find(field => field.name === "tenancyId")?.locked, false);
+  assert.ok(relationshipErrors(snapshot, { tenancyId: "missing", personId: "person1" }, {}).tenancyId);
+});
+
+test("one-time tenant charges hide posting internals and keep billable amount and category", () => {
+  const initial = { personId: "person1", kind: "charge", status: "posted", payer: "tenant" };
+  const fields = scopedFields("post-ledger-transaction", snapshot, initial, initial);
+  assert.ok(!fields.some(field => ["kind", "status", "payer", "paymentMethod"].includes(field.name)));
+  assert.ok(fields.some(field => field.name === "amountDollars"));
+  assert.ok(fields.some(field => field.name === "category"));
+  assert.equal(editorTitle("post-ledger-transaction", initial), "Add one-time charge");
+});
+
+test("charge account label contains each identity once", () => {
+  assert.equal(chargeAccountLabel(snapshot, { propertyId: "p1", unitId: "u1", personId: "person1", tenancyId: "t1" }), "Oak · Unit 1 · Jane Smith");
+  assert.equal(chargeAccountLabel(snapshot, { personId: "person1" }), "Jane Smith");
 });

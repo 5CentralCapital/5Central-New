@@ -1,3 +1,4 @@
+import {EntityLink,RecordLink} from "./entity-link";
 import { useReportSearch } from "./use-report-search";
 import { useRentOpsAuth } from "../auth-ui";
 import { useQueries } from "@tanstack/react-query";
@@ -6,13 +7,15 @@ import { useMemo } from "react";
 import { AlertCircle, ArrowRight, Loader2, RefreshCw } from "lucide-react";
 import type { GridColumn } from "./grid";
 import { DataGrid } from "./grid";
-import type { AdminSnapshot, DashboardSummary, ReportKey, ReportRow, ViewFilters } from "../types";
+import type { AdminSnapshot, DashboardSummary, ReportKey, ReportRow, TenantTab, ViewFilters } from "../types";
 import {
   createReportViewModel,
   formatReportValue,
   reportQueryKey,
   reportQueryFilters,
   reportRowKey,
+  reportCellPersonId,
+  readReportValue,
   type DisplayReportRow,
   type ReportColumnDefinition,
 } from "./report-model";
@@ -22,8 +25,9 @@ export interface DashboardWorkspaceProps {
   snapshot: AdminSnapshot;
   filters: ViewFilters;
   onReport: (report: ReportKey) => void;
-  onOpenTenant?: (personId: string) => void;
+  onOpenTenant?: (personId: string,tab?:TenantTab) => void;
   onOpenUnit?: (unitId: string) => void;
+  onOpenProperty?: (propertyId:string)=>void;
   previews?: RentOpsWorkspaceDashboard["reports"];
   refreshing?: boolean;
 }
@@ -88,38 +92,22 @@ export function dashboardMetrics(summary: DashboardSummary, onReport: (report: R
   ];
 }
 
-function rowPersonId(row: ReportRow): string | undefined {
-  if ("personId" in row && typeof row.personId === "string") return row.personId;
-  if ("currentPersonId" in row && typeof row.currentPersonId === "string") return row.currentPersonId;
-  if ("futurePersonId" in row && typeof row.futurePersonId === "string") return row.futurePersonId;
-  if ("transaction" in row && row.transaction && typeof row.transaction.personId === "string") return row.transaction.personId;
-  return undefined;
-}
-
-function rowUnitId(row: ReportRow): string | undefined {
-  if ("unitId" in row && typeof row.unitId === "string") return row.unitId;
-  if ("transaction" in row && row.transaction && typeof row.transaction.unitId === "string") return row.transaction.unitId;
-  return undefined;
-}
-
-function openRow(row: DisplayReportRow, onOpenTenant?: (personId: string) => void, onOpenUnit?: (unitId: string) => void): void {
-  const source = row.__source;
-  const personId = rowPersonId(source);
-  if (personId && onOpenTenant) {
-    onOpenTenant(personId);
-    return;
-  }
-  const unitId = rowUnitId(source);
-  if (unitId && onOpenUnit) onOpenUnit(unitId);
-}
-
 function gridColumns(columns: readonly ReportColumnDefinition[]): GridColumn<DisplayReportRow>[] {
   return columns.map((column) => ({
     key: column.key,
     label: column.label,
     align: column.align,
     width: column.format === "currency" ? 132 : column.key === "description" ? 220 : undefined,
-    render: (row) => formatReportValue(row[column.key], column.format),
+    render: (row) => {
+      const label=formatReportValue(row[column.key], column.format);
+      const id=(key:string)=>{const value=readReportValue(row.__source,key);return typeof value==='string'?value:undefined;};
+      if(column.key==='unitNumber')return <RecordLink kind="unit" recordId={id('unitId')}>{label}</RecordLink>;
+      if(column.key==='propertyName')return <RecordLink kind="property" recordId={id('propertyId')}>{label}</RecordLink>;
+      const tenant=['tenantName','currentTenantName','futureTenantName'].includes(column.key);
+      const recurring=['baseRentCents','recurringFeesCents','totalScheduledCents','subsidyCents'].includes(column.key);
+      const balance=['balanceDueCents','totalBalanceCents','rentOnlyBalanceCents','nonRentBalanceCents','unappliedCashCents'].includes(column.key);
+      return tenant||recurring||balance?<EntityLink personId={reportCellPersonId(row.__source,column.key)} tab={recurring?'charges':balance?'ledger':'summary'}>{label}</EntityLink>:label;
+    },
     sortValue: (row) => row[column.key] == null ? undefined : typeof row[column.key] === "number" ? row[column.key] as number : String(row[column.key]),
   }));
 }
@@ -147,23 +135,23 @@ function Widget({
   error?: string;
   snapshot: AdminSnapshot;
   onReport: (report: ReportKey) => void;
-  onOpenTenant?: (personId: string) => void;
+  onOpenTenant?: (personId: string,tab?:TenantTab) => void;
   onOpenUnit?: (unitId: string) => void;
+  onOpenProperty?: (propertyId:string)=>void;
 }) {
   const view = useMemo(() => createReportViewModel(report, rows ?? [], snapshot), [report, rows, snapshot]);
   const columns = useMemo(() => view.curatedColumns.slice(0, 8), [view.curatedColumns]);
   const displayRows = view.displayRows;
-  const handler = onOpenTenant || onOpenUnit ? (row: DisplayReportRow) => openRow(row, onOpenTenant, onOpenUnit) : undefined;
-  const title = report === "rent-roll" ? "Rent roll preview" : "Delinquency preview";
+  const title = report === "rent-roll" ? "Rent roll" : "Balances due";
   return (
     <section className="rm-panel rm-dashboard-widget">
       <header className="rm-panel-title">
-        <div><span className="rm-muted">{rows ? `${rows.length.toLocaleString("en-US")} rows` : "Selected report"}</span><h2>{title}</h2></div>
+        <h2>{title}</h2>
         <button type="button" className="rm-button" onClick={() => onReport(report)}>Open report <ArrowRight aria-hidden="true" /></button>
       </header>
       {error && <p className="rm-error" role="alert"><AlertCircle aria-hidden="true" /> {error}</p>}
       {loading && !rows && <div className="rm-empty"><Loader2 className="rm-spin" aria-hidden="true" /><p>Loading selected report…</p></div>}
-      {rows && <DataGrid rows={displayRows} columns={gridColumns(columns)} getRowKey={(row) => reportRowKey(row)} onRow={handler} pageSize={6} emptyMessage="No records returned for this view." caption={title} storageKey={`rent-ops-dashboard-${report}`} />}
+      {rows && <DataGrid rows={displayRows} columns={gridColumns(columns)} getRowKey={(row) => reportRowKey(row)} pageSize={6} emptyMessage="No records returned for this view." caption={title} storageKey={`rent-ops-dashboard-${report}`} />}
     </section>
   );
 }

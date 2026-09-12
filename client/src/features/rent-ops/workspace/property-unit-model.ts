@@ -174,11 +174,11 @@ function compareUnits(left: AdminUnitView, right: AdminUnitView): number {
   return compareRecordLabels(left.unitNumber, right.unitNumber, left.id, right.id);
 }
 
-function propertyInFilters(property: AdminPropertyView, filters: Pick<ViewFilters, "propertyId" | "propertyScope">): boolean {
+function propertyInFilters(property: AdminPropertyView, filters: Pick<ViewFilters, "propertyId" | "propertyIds" | "propertyScope">): boolean {
   const propertyId = filters.propertyId || "all";
   const propertyScope = filters.propertyScope || "active";
-  if (propertyId !== "all" && property.id !== propertyId) return false;
-  if (propertyId === "all" && propertyScope === "active" && property.state !== "active") return false;
+  if(filters.propertyIds?.length ? !filters.propertyIds.includes(property.id??"") : propertyId !== "all" && property.id !== propertyId) return false;
+  if (propertyScope === "active" && property.state !== "active") return false;
   return true;
 }
 
@@ -189,7 +189,7 @@ function propertyInFilters(property: AdminPropertyView, filters: Pick<ViewFilter
  */
 export function propertyUnitListItems(
   snapshot: AdminSnapshot,
-  filters: Pick<ViewFilters, "propertyId" | "propertyScope">,
+  filters: Pick<ViewFilters, "propertyId" | "propertyIds" | "propertyScope">,
   search = "",
 ): PropertyUnitListItem[] {
   const query = lower(search);
@@ -248,7 +248,7 @@ function selectedPropertyForUnit(snapshot: AdminSnapshot, unit?: AdminUnitView):
 /** Resolve the current record while retaining an explicit URL selection when a search query changes. */
 export function resolvePropertyUnitSelection(
   snapshot: AdminSnapshot,
-  filters: Pick<ViewFilters, "propertyId" | "propertyScope">,
+  filters: Pick<ViewFilters, "propertyId" | "propertyIds" | "propertyScope">,
   selectedPropertyId?: string,
   selectedUnitId?: string,
   search = "",

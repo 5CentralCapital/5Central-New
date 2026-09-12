@@ -34,7 +34,7 @@ export function serializeWorkspaceBootstrap(source: RentOpsSnapshot, filters: Re
     tenantIndex: snapshot.people.filter(person => primary.has(person.id ?? "") || memberships.has(person.id ?? "") || accounts.has(person.id ?? "")).map(person => {
       const accountOnly = accounts.has(person.id ?? "") && !primary.has(person.id ?? "") && !memberships.has(person.id ?? "");
       const scopedNavigation = deriveTenantNavigation(projection, person.id ?? "", filters);
-      if ((filters.propertyId || filters.propertyScope === "active") && !scopedNavigation?.tenancies.length) return undefined;
+      if ((filters.propertyId || filters.propertyIds?.length || filters.propertyScope === "active") && !scopedNavigation?.tenancies.length) return undefined;
       const navigation = accountOnly ? undefined : scopedNavigation;
       return {
         person,

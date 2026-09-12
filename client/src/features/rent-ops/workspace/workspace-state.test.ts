@@ -130,3 +130,26 @@ test('scope reconciliation preserves all-scope and non-record navigation and han
     assert.equal(workspaceFiltersForRecord(nonRecord,undefined,narrow),narrow);
   }
 });
+
+test('shared filter URL round trip retains property selection, reporting date, search, and status',async()=>{
+  const {parseWorkspaceFilters,selectedWorkspaceProperties}=await import('./workspace-state');
+  const selected={...filters,propertyScope:'active' as const,propertyIds:['property:b','property:a'],search:'Ann Smith',status:'vacant'};
+  const report=parseWorkspaceRoute('?section=reports&report=occupancy');
+  const url=workspaceRouteSearch(report,selected,'?ui=clean&propertyTab=occupancy');
+  const restored=parseWorkspaceFilters(url);
+  assert.deepEqual(selectedWorkspaceProperties(restored),['property:a','property:b']);
+  assert.equal(restored.search,'Ann Smith');assert.equal(restored.status,'vacant');assert.equal(restored.asOfDate,filters.asOfDate);
+  assert.equal(new URLSearchParams(url).get('ui'),'clean');
+  const tenantUrl=workspaceRouteSearch({...report,section:'tenants',recordId:'person:exact',tab:'charges'},undefined,url);
+  assert.deepEqual(parseWorkspaceFilters(tenantUrl),restored);
+  assert.equal(parseWorkspaceRoute(tenantUrl).tab,'charges');
+  assert.deepEqual(workspaceApiFilters(restored),{propertyScope:'active',propertyIds:['property:a','property:b'],asOfDate:filters.asOfDate});
+});
+
+test('multi-property membership does not silently widen to all properties',async()=>{
+  const {workspacePropertyMatches}=await import('./workspace-state');
+  const scoped={...filters,propertyIds:['property:a','property:b']};
+  assert.equal(workspacePropertyMatches(scoped,'property:a'),true);
+  assert.equal(workspacePropertyMatches(scoped,'property:c'),false);
+  assert.equal(workspacePropertyMatches({...scoped,propertyIds:[]},'property:c'),true);
+});

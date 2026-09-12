@@ -1,0 +1,7 @@
+.rm-charge-context-value { display: block; padding: .6rem 0; font-size: .9rem; color: var(--rm-text, #29292c); }
+.rm-tenant-record .rm-tenant-toolbar { gap: .5rem; flex-wrap: wrap; }
+.rm-tenant-record .rm-ledger-table { min-width: 1080px; }
+.rm-tenant-record .rm-charge-table { min-width: 980px; }
+.rm-tenant-record .rm-reference { white-space: nowrap; }
+
+.rm-charge-context { display: flex; flex-wrap: wrap; gap: .4rem 1rem; margin: 0 0 1rem; padding: .8rem 1rem; border-radius: 10px; background: #f6f6f7; color: #3a3a3c; font-size: .9rem; }

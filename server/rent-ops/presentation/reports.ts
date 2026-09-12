@@ -205,6 +205,8 @@ export function serializeScheduledVsCollectedRow(value: unknown): JsonObject {
 export function serializeDelinquencyRow(value: unknown): JsonObject {
   const input = inputOf(value);
   return row(input, {
+    tenancyStatus: text(input, "tenancyStatus"),
+    creditBalanceCents: nullableNumberValue(input.creditBalanceCents),
     balanceComplete: bool(input, "balanceComplete"),
     balanceUncertaintyCodes: strings(input, "balanceUncertaintyCodes"),
     propertyId: text(input, "propertyId"),

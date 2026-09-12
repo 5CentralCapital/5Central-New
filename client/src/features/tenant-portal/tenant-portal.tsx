@@ -5,6 +5,8 @@ import { TenantApiError, TenantPortalClient, trustedCheckoutUrl, type TenantPaym
 import { centsFromAmount, consumeActivationLink, type ActivationLink } from "./link";
 import { noPaymentDueMessage, paymentReviewMessage } from "./payment-view";
 import { depositAmounts } from "./deposit-view";
+import { ResidentTransactions, TransactionTable } from "./transactions";
+import { filterTransactions, emptyTransactionFilters } from "./transactions-view";
 import "./tenant-portal.css";
 const LeaseViewer=lazy(()=>import("./lease-viewer").then(module=>({default:module.LeaseViewer})));
 
@@ -49,21 +51,19 @@ function SignIn({ client, link, onSignIn, onDiscardLink }: { client: TenantPorta
   }
 
   return <div className="tp-welcome">
-    <div className="tp-welcome-copy"><Building2 aria-hidden="true" /><h1>Your home,<br />in one place.</h1><p>View your balance, payments, and lease.</p></div>
+    <div className="tp-welcome-copy"><Building2 aria-hidden="true" /><h1>Your home,<br />in one place.</h1></div>
     <section className="tp-card tp-login" aria-labelledby="tp-login-title">
       <LockKeyhole aria-hidden="true" className="tp-lock" />
       <h2 id="tp-login-title">{link.token ? "Set your password" : mode === "recovery" ? "Reset your password" : "Welcome home"}</h2>
-      <p>{link.token ? "Choose a password to activate or restore your account." : mode === "recovery" ? "Enter your sign-in email to request a secure password reset link." : "Sign in with the email registered to your tenancy."}</p>
       <form onSubmit={submit}>
         {!link.token && <label>Email<input type="email" name="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required maxLength={240} disabled={busy} /></label>}
-        {(link.token || mode === "login") && <label>{link.token ? "New password" : "Password"}<input type="password" name="password" autoComplete={link.token ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={link.token ? 12 : undefined} maxLength={128} required disabled={busy} />{link.token && <small>Use at least 12 characters.</small>}</label>}
+        {(link.token || mode === "login") && <label>{link.token ? "New password" : "Password"}<input type="password" name="password" autoComplete={link.token ? "new-password" : "current-password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={link.token ? "At least 12 characters" : undefined} minLength={link.token ? 12 : undefined} maxLength={128} required disabled={busy} /></label>}
         {link.token && <label>Confirm password<input type="password" name="confirm-password" autoComplete="new-password" value={confirm} onChange={(event) => setConfirm(event.target.value)} minLength={12} maxLength={128} required disabled={busy} /></label>}
         {error && <p className="tp-error" role="alert">{error}</p>}
         {message && <p className="tp-notice" role="status">{message}</p>}
         <button className="tp-primary" disabled={busy}>{busy ? <Loader2 className="tp-spin" /> : <ArrowRight />}{link.token ? "Save password and sign in" : mode === "recovery" ? "Send reset link" : "Sign in"}</button>
       </form>
       <button className="tp-text-button" disabled={busy} onClick={() => { onDiscardLink(); setMode(mode === "login" && !link.token ? "recovery" : "login"); setPassword(""); setConfirm(""); setMessage(""); setError(""); }}>{mode === "recovery" || link.token ? "Back to sign in" : "Forgot your password?"}</button>
-      {!link.token && mode === "login" && <p className="tp-account-help">New to the portal? Ask management for your account activation link.</p>}
     </section>
   </div>;
 }
@@ -91,8 +91,8 @@ function PaymentPanel({ client, payments, tenancyId, onError }: { client: Tenant
   const reviewMessage = paymentReviewMessage(account);
   const enabled = payments?.available && account?.available && account.payableCents >= 50;
   return <section className="tp-card" aria-labelledby="tp-pay-title"><div className="tp-section-heading"><CreditCard aria-hidden="true" /><h2 id="tp-pay-title">Make a payment</h2></div>
-    {!payments ? <p>Payment availability could not be loaded. Refresh to try again.</p> : reviewMessage ? <p>{reviewMessage}</p> : !payments.available ? <p>Online payments are not available yet. Continue using your current payment arrangement.</p> : noPaymentMessage ? <p>{noPaymentMessage}</p> : !account?.available ? <p>Online payment is unavailable for this account. Contact management for assistance.</p> : account.payableCents < 50 ? <p>{account.pendingCents > 0 ? "Your outstanding balance is covered by payments in progress." : account.payableCents > 0 ? "Online payments require at least $0.50. Contact management about this remaining balance." : "There is no balance available to pay."}</p> : <form onSubmit={checkout}><label>Payment amount<input type="number" inputMode="decimal" min="0.50" max={(Math.min(account.payableCents, 99_999_999) / 100).toFixed(2)} step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required disabled={busy} /></label><button className="tp-primary" disabled={!enabled || busy}>{busy ? <Loader2 className="tp-spin" /> : <CreditCard />}Continue to payment</button></form>}
-    {!!account?.pendingCents && <p className="tp-notice">{money(account.pendingCents)} in progress. Processing payments are not yet posted to your ledger.</p>}
+    {!payments ? <p>Payment availability could not be loaded.</p> : reviewMessage ? <p>Payable balance: Unverified</p> : !payments.available ? <p>Online payments unavailable.</p> : noPaymentMessage ? <p>{noPaymentMessage}</p> : !account?.available ? <p>Online payments unavailable.</p> : account.payableCents < 50 ? <p>{account.pendingCents > 0 ? "Payment in progress." : account.payableCents > 0 ? "Minimum online payment: $0.50." : "No payment due."}</p> : <form onSubmit={checkout}><label>Payment amount<input type="number" inputMode="decimal" min="0.50" max={(Math.min(account.payableCents, 99_999_999) / 100).toFixed(2)} step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required disabled={busy} /></label><button className="tp-primary" disabled={!enabled || busy}>{busy ? <Loader2 className="tp-spin" /> : <CreditCard />}Continue to payment</button></form>}
+    {!!account?.pendingCents && <p className="tp-notice">{money(account.pendingCents)} in progress</p>}
     {!!payments?.payments.length && <div className="tp-payment-history"><h3>Recent online payments</h3>{payments.payments.slice(0, 8).map((payment) => <div key={payment.id}><span>{date(payment.createdAt)}<small>{label(payment.status)}</small></span><strong>{money(payment.amountCents)}</strong></div>)}</div>}
   </section>;
 }
@@ -111,7 +111,7 @@ function PasswordPanel({ client, onError, onChanged }: { client: TenantPortalCli
       form.reset(); setOpen(false); onChanged();
     } catch (error) { onError(error); } finally { setBusy(false); }
   }
-  return <section className="tp-card"><div className="tp-section-heading"><LockKeyhole aria-hidden="true" /><h2>Account security</h2></div>{!open ? <button className="tp-secondary" onClick={() => setOpen(true)}>Change password</button> : <form onSubmit={submit}><label>Current password<input type="password" name="currentPassword" autoComplete="current-password" required maxLength={128} disabled={busy} /></label><label>New password<input type="password" name="newPassword" autoComplete="new-password" minLength={12} maxLength={128} required disabled={busy} /><small>Use at least 12 characters.</small></label><label>Confirm new password<input type="password" name="confirmPassword" autoComplete="new-password" minLength={12} maxLength={128} required disabled={busy} /></label><div className="tp-actions"><button className="tp-primary" disabled={busy}>{busy ? <Loader2 className="tp-spin" /> : <Check />}Save password</button><button type="button" className="tp-secondary" disabled={busy} onClick={() => setOpen(false)}>Cancel</button></div></form>}</section>;
+  return <section className="tp-card"><div className="tp-section-heading"><LockKeyhole aria-hidden="true" /><h2>Account security</h2></div>{!open ? <button className="tp-secondary" onClick={() => setOpen(true)}>Change password</button> : <form onSubmit={submit}><label>Current password<input type="password" name="currentPassword" autoComplete="current-password" required maxLength={128} disabled={busy} /></label><label>New password<input type="password" name="newPassword" placeholder="At least 12 characters" autoComplete="new-password" minLength={12} maxLength={128} required disabled={busy} /></label><label>Confirm new password<input type="password" name="confirmPassword" autoComplete="new-password" minLength={12} maxLength={128} required disabled={busy} /></label><div className="tp-actions"><button className="tp-primary" disabled={busy}>{busy ? <Loader2 className="tp-spin" /> : <Check />}Save password</button><button type="button" className="tp-secondary" disabled={busy} onClick={() => setOpen(false)}>Cancel</button></div></form>}</section>;
 }
 
 export default function TenantPortal() {
@@ -120,6 +120,7 @@ export default function TenantPortal() {
   const [client] = useState(() => new TenantPortalClient());
   const [account, setAccount] = useState<TenantSessionAccount | null>(null);
   const [viewLease,setViewLease]=useState<{id:string;fileName:string}>();
+  const [page, setPage] = useState<"home" | "transactions">("home");
   const [home, setHome] = useState<TenantHome | null>(null);
   const [payments, setPayments] = useState<TenantPayments | null>(null);
   const [loading, setLoading] = useState(!link.token);
@@ -151,8 +152,8 @@ export default function TenantPortal() {
     const oldTitle = document.title;
     document.title = "Tenant Portal | 5Central Capital";
     const paymentReturn = new URLSearchParams(window.location.search).get("payment");
-    if (paymentReturn === "return" || paymentReturn === "returned") setMessage("Your payment status will update after confirmation. Returning here does not confirm payment.");
-    if (paymentReturn === "cancelled") setMessage("Payment checkout was closed. Check recent payments before trying again.");
+    if (paymentReturn === "return" || paymentReturn === "returned") setMessage("Payment confirmation pending.");
+    if (paymentReturn === "cancelled") setMessage("Checkout closed.");
     const restoreGeneration = generation.current;
     if (!link.token) client.restore().then((restored) => { if (mounted.current && generation.current === restoreGeneration) setAccount(restored); }).catch((caught) => { if (mounted.current && generation.current === restoreGeneration) handleError(caught); }).finally(() => { if (mounted.current) setLoading(false); });
     return () => { mounted.current = false; generation.current++; client.clear(); document.title = oldTitle; };
@@ -170,18 +171,22 @@ export default function TenantPortal() {
   useEffect(() => { if (account) void refresh(); }, [account?.id]);
   async function logout() {
     setError("");
-    try { await client.logout(); generation.current++; setHome(null); setPayments(null); setViewLease(undefined); setAccount(null); setMessage(""); }
+    try { await client.logout(); generation.current++; setHome(null); setPayments(null); setViewLease(undefined); setAccount(null); setPage("home"); setMessage(""); }
     catch (caught) { handleError(caught); }
   }
   return <div className="tp-root"><header className="tp-header"><a href="/tenant" aria-label="5Central tenant portal" className="tp-brand"><span>5C</span><strong>5Central Capital</strong><em>Tenant portal</em></a>{account && <button className="tp-secondary" onClick={logout}><LogOut />Sign out</button>}</header><main className="tp-main">
     {error && <p className="tp-error" role="alert">{error}</p>}
     {message && <p className="tp-notice" role="status">{message}</p>}
     {loading ? <div className="tp-loading" role="status"><Loader2 className="tp-spin" />Opening your account…</div> : !account ? <SignIn key={link.token ?? (link.invalid ? "invalid" : "login")} client={client} link={link} onDiscardLink={() => setLink({ invalid: false })} onSignIn={(next) => { setLink({ invalid: false }); setError(""); setAccount(next); }} /> : !home ? <div className="tp-loading">{refreshing ? <><Loader2 className="tp-spin" />Loading your home…</> : <button className="tp-secondary" onClick={refresh}><RefreshCw />Try again</button>}</div> : <>
-      <div className="tp-greeting"><div><p>{home.tenancy.propertyName} · Unit {home.tenancy.unitNumber}</p><h1>Hello, {home.resident.firstName || "resident"}.</h1><p>{home.tenancy.address}</p></div><button className="tp-secondary" onClick={refresh} disabled={refreshing}><RefreshCw className={refreshing ? "tp-spin" : ""} />Refresh</button></div>
-      <div className="tp-overview"><section className="tp-balance"><span>Account balance</span><strong>{home.balance.complete ? money(home.balance.amountCents) : "Unavailable"}</strong><p>{home.balance.complete ? `As of ${date(home.balance.asOfDate)}${(home.balance.amountCents ?? 0) < 0 ? " · Account credit" : ""}` : "Your balance needs confirmation. Contact management before making a payment."}</p></section><PaymentPanel client={client} payments={payments} tenancyId={home.tenancy.id} onError={handleError} /></div>
-      <section className="tp-card tp-ledger"><h2>Account activity</h2>{!home.ledger.length ? <p>No transactions are available.</p> : <div className="tp-table-wrap"><table><thead><tr><th>Date</th><th>Activity</th><th>Type</th><th className="tp-money">Amount</th><th className="tp-money">Balance</th></tr></thead><tbody>{home.ledger.map((entry) => <tr key={entry.id}><td>{date(entry.date)}</td><td>{entry.description}<small>{entry.status && label(entry.status)}</small></td><td>{label(entry.kind)}</td><td className="tp-money">{money(entry.amountCents)}</td><td className="tp-money">{money(entry.balanceCents)}</td></tr>)}</tbody></table></div>}</section>
+      <nav className="tp-nav" aria-label="Resident navigation"><button aria-current={page === "home" ? "page" : undefined} onClick={() => setPage("home")}>Home</button><button aria-current={page === "transactions" ? "page" : undefined} onClick={() => setPage("transactions")}>Transactions</button></nav>
+      {page === "transactions" ? <ResidentTransactions home={home} /> : <>
+      <div className="tp-greeting"><h1>Hello, {home.resident.firstName || "resident"}.</h1><button className="tp-secondary" onClick={refresh} disabled={refreshing}><RefreshCw className={refreshing ? "tp-spin" : ""} />Refresh</button></div>
+      <div className="tp-property">{home.tenancy.propertyName} · Unit {home.tenancy.unitNumber}</div>
+      <div className="tp-overview"><section className="tp-balance"><span>Account balance</span><strong>{home.balance.complete ? money(home.balance.amountCents) : "Unverified"}</strong><span>{date(home.balance.asOfDate)}{home.balance.complete && (home.balance.amountCents ?? 0) < 0 ? " · Account credit" : ""}</span></section><PaymentPanel client={client} payments={payments} tenancyId={home.tenancy.id} onError={handleError} /></div>
+      <section className="tp-card tp-ledger"><div className="tp-page-heading"><h2>Recent activity</h2><button className="tp-text-button" onClick={() => setPage("transactions")}>All transactions<ArrowRight /></button></div>{!home.ledger.length ? <p>No transactions available.</p> : <TransactionTable rows={filterTransactions(home.ledger, emptyTransactionFilters).slice(0, 5)} compact />}</section>
       {viewLease && <Suspense fallback={<p role="status">Opening lease viewer…</p>}><LeaseViewer key={viewLease.id} {...viewLease} onClose={()=>setViewLease(undefined)} onError={handleError} /></Suspense>}
-      <div className="tp-detail-grid"><section className="tp-card"><h2>Your lease</h2>{home.leases.length ? home.leases.map((lease) => <div className="tp-lease" key={lease.id}><strong>{label(lease.status)}</strong><dl><div><dt>Starts</dt><dd>{date(lease.startDate)}</dd></div><div><dt>Ends</dt><dd>{lease.monthToMonth === true ? "Month to month" : date(lease.endDate)}</dd></div></dl></div>) : <p>Your lease details are not available yet.</p>}{home.leaseFiles.length ? <div className="tp-lease-files"><h3>Lease documents</h3>{home.leaseFiles.map((file) => <button type="button" className="tp-secondary" key={file.id} onClick={()=>setViewLease(file)}><FileDown aria-hidden="true" />View {file.fileName}</button>)}</div> : <p>No verified lease PDF is available yet. Contact management for a copy.</p>}{!!home.deposits.length && <><h3>Deposits</h3>{home.deposits.map((deposit) => { const amounts = depositAmounts(deposit); return <div className="tp-deposit" key={deposit.id}><span>{label(deposit.type)}<small>{label(deposit.status)}</small></span><span className="tp-money"><strong>{amounts.held}</strong><small>Amount held</small>{amounts.sourceBalance !== undefined && <small>Source balance {amounts.sourceBalance}</small>}</span></div>; })}</>}</section><PasswordPanel client={client} onError={handleError} onChanged={() => { setMessage("Your password was updated. Other sessions have been signed out."); }} /></div>
+      <div className="tp-detail-grid"><section className="tp-card"><h2>Your lease</h2>{home.leases.length ? home.leases.map((lease) => <div className="tp-lease" key={lease.id}><strong>{label(lease.status)}</strong><dl><div><dt>Starts</dt><dd>{date(lease.startDate)}</dd></div><div><dt>Ends</dt><dd>{lease.monthToMonth === true ? "Month to month" : date(lease.endDate)}</dd></div></dl></div>) : <p>Lease unavailable.</p>}{home.leaseFiles.length ? <div className="tp-lease-files"><h3>Lease documents</h3>{home.leaseFiles.map((file) => <button type="button" className="tp-secondary" key={file.id} onClick={()=>setViewLease(file)}><FileDown aria-hidden="true" />View {file.fileName}</button>)}</div> : <p>Lease document unavailable.</p>}{!!home.deposits.length && <><h3>Deposits</h3>{home.deposits.map((deposit) => { const amounts = depositAmounts(deposit); return <div className="tp-deposit" key={deposit.id}><span>{label(deposit.type)}<small>{label(deposit.status)}</small></span><span className="tp-money"><strong>{amounts.held}</strong><small>Amount held</small>{amounts.sourceBalance !== undefined && <small>Source balance {amounts.sourceBalance}</small>}</span></div>; })}</>}</section><PasswordPanel client={client} onError={handleError} onChanged={() => { setMessage("Password updated. Other sessions signed out."); }} /></div>
+      </>}
     </>}
   </main></div>;
 }

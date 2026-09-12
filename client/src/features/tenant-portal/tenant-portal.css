@@ -86,3 +86,21 @@
 .tp-lease-files a { justify-content: flex-start; text-decoration: none; overflow-wrap: anywhere; }
 
 .tp-pdf-viewer{background:#F5F0E8;border:1px solid #d5d0c8;border-radius:12px;padding:20px;margin:24px 0}.tp-pdf-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}.tp-pdf-toolbar h3{margin:0;overflow-wrap:anywhere}.tp-pdf-toolbar select{padding:8px;background:white;border:1px solid #aaa;border-radius:5px}.tp-pdf-page{overflow:auto;max-height:75vh;background:#ddd;padding:12px;text-align:center}.tp-pdf-page canvas{background:white;box-shadow:0 1px 6px #999}.tp-pdf-text{white-space:pre-wrap;line-height:1.7}.tp-pdf-viewer details{margin-top:12px}
+
+.tp-root { background: #faf9f6; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.tp-card { background: #fff; border-color: #e8e6e1; border-radius: 16px; }
+.tp-nav { display: flex; gap: 24px; border-bottom: 1px solid #e4e2dd; margin: 0 0 36px; }
+.tp-root .tp-nav button { background: transparent; border-radius: 0; padding: 14px 0; color: #727272; border-bottom: 2px solid transparent; }
+.tp-root .tp-nav button[aria-current="page"] { color: #3a3a3c; border-bottom-color: #d4a843; }
+.tp-page-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 26px; }
+.tp-property { font-size: 15px; margin: -12px 0 28px; color: #575759; }
+.tp-transaction-filters { display: grid; grid-template-columns: minmax(160px, 2fr) minmax(120px, 1fr) minmax(145px, 1fr) minmax(145px, 1fr) auto; align-items: end; gap: 14px; margin-bottom: 24px; }
+.tp-root select { min-height: 44px; padding: 10px 12px; border: 1px solid #cecac3; border-radius: 6px; color: #222225; background: white; font: inherit; font-weight: 400; }
+.tp-transaction-list { padding: 12px 20px 20px; }
+.tp-pagination { display: flex; gap: 12px; align-items: center; padding-top: 24px; border-top: 1px solid #e8e6e1; font-size: 13px; }
+.tp-pagination > span { margin-right: auto; }
+.tp-pagination label { flex-direction: row; align-items: center; }
+.tp-transactions th, .tp-transactions td { white-space: nowrap; }
+.tp-transactions td:nth-child(2) { white-space: normal; min-width: 160px; max-width: 300px; overflow-wrap: anywhere; }
+@media (max-width: 900px) { .tp-transaction-filters { grid-template-columns: 1fr 1fr; } .tp-transaction-filters > label:first-child { grid-column: 1 / -1; } }
+@media (max-width: 560px) { .tp-pagination { flex-wrap: wrap; } .tp-pagination > span { flex-basis: 50%; } .tp-page-heading h1 { font-size: 32px; } .tp-transaction-list { padding: 8px 12px 16px; } }

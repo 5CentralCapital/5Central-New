@@ -173,19 +173,21 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
   switch (key) {
     case "rent-roll":
       return [
-        text("propertyName", "Property", propertyName),
         text("unitNumber", "Unit", unitNumber),
-        status("occupancy", "Occupancy"),
-        status("readiness", "Readiness"),
-        status("listing", "Listing"),
-        text("currentTenantName", "Current resident"),
-        text("futureTenantName", "Future resident"),
-        currency("marketRentCents", "Market rent"),
-        currency("baseRentCents", "Base rent"),
-        currency("recurringFeesCents", "Recurring fees"),
-        currency("subsidyCents", "Subsidy"),
-        currency("totalScheduledCents", "Scheduled total"),
-        currency("balanceDueCents", "Account balance due"),
+        text("currentTenantName", "Tenant", (row) => readRaw(row, "currentTenantName") ?? (readRaw(row, "currentPersonId") || readRaw(row, "occupancy") === "current" ? undefined : readRaw(row, "futureTenantName") ?? (readRaw(row, "occupancy") === "vacant" ? "Vacant" : undefined))),
+        currency("baseRentCents", "Recurring rent"),
+        currency("recurringFeesCents", "Other recurring"),
+        currency("totalScheduledCents", "Monthly total"),
+        currency("balanceDueCents", "Balance due"),
+        ...[
+          text("propertyName", "Property", propertyName),
+          status("occupancy", "Occupancy"),
+          status("readiness", "Readiness"),
+          status("listing", "Listing"),
+          text("futureTenantName", "Future tenant"),
+          currency("marketRentCents", "Market rent"),
+          currency("subsidyCents", "Subsidy"),
+        ].map(column => ({ ...column, curated: false })),
       ];
     case "occupancy":
       return [
@@ -232,14 +234,17 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
       return [
         text("propertyName", "Property", propertyName),
         text("unitNumber", "Unit", unitNumber),
-        text("tenantName", "Resident", tenantName),
+        text("tenantName", "Tenant", tenantName),
+        status("tenancyStatus", "Tenant status"),
         currency("rentOnlyBalanceCents", "Rent balance"),
         currency("nonRentBalanceCents", "Non-rent balance"),
         currency("totalBalanceCents", "Total balance"),
-        currency("unappliedCashCents", "Unapplied cash"),
-        date("oldestUnpaidRentOn", "Oldest unpaid rent"),
-        date("lastPaymentOn", "Last payment"),
-        status("noticeStatus", "Notice status"),
+        ...[
+          currency("unappliedCashCents", "Unapplied cash"),
+          date("oldestUnpaidRentOn", "Oldest unpaid rent"),
+          date("lastPaymentOn", "Last payment"),
+          status("noticeStatus", "Notice status"),
+        ].map(column => ({ ...column, curated: false })),
       ];
     case "tenant-ledger":
       return [
@@ -434,7 +439,7 @@ export function getReportConfig(key: ReportKey): ReportConfig {
   const columns = reportColumns(key);
   return {
     key,
-    label: REPORT_LABELS[key],
+    label: key === "rent-roll" ? "Rent roll" : key === "occupancy" ? "Vacancies" : key === "delinquency" ? "Balances due" : REPORT_LABELS[key],
     description: REPORT_DESCRIPTIONS[key],
     sourceNote: REPORT_SOURCE_NOTES[key],
     period: REPORT_PERIODS[key],
@@ -511,10 +516,19 @@ const BALANCE_TOTAL_KEYS = new Set([
   "openCents",
 ]);
 
+/** Only a server-confirmed vacancy with zero scheduled obligation has no contractual rent. */
+export function isVacantWithoutObligation(row: ReportRow): boolean {
+  return readRaw(row, "occupancy") === "vacant"
+    && !readRaw(row, "tenancyId") && !readRaw(row, "currentPersonId") && !readRaw(row, "futurePersonId")
+    && readRaw(row, "totalScheduledCents") === 0 && readRaw(row, "recurringFeesCents") === 0
+    && (readRaw(row, "baseRentCents") == null || readRaw(row, "baseRentCents") === 0);
+}
+
 function guardedMoney(row: ReportRow, key: string): unknown {
   const value = readRaw(row, key);
+  if (key === "baseRentCents" && isVacantWithoutObligation(row)) return 0;
   if (BALANCE_TOTAL_KEYS.has(key) && readRaw(row, "balanceComplete") === false) return null;
-  if (key === "totalScheduledCents" && readRaw(row, "baseRentCents") == null) return null;
+  if (key === "totalScheduledCents" && readRaw(row, "baseRentCents") == null && !isVacantWithoutObligation(row)) return null;
   if (/HeldCents$/.test(key) && (Number(readRaw(row, "unknownHeldCount")) > 0 || readRaw(row, "temporalUncertainty") === true)) return null;
   if (["agencyObligationCents", "tenantObligationCents", "expectedTotalCents", "varianceCents"].includes(key) && readRaw(row, "exception") === true) return null;
   return value;
@@ -583,10 +597,15 @@ export function formatReportValue(value: unknown, format?: ReportColumn["format"
   return String(value);
 }
 
+export function formatReportCellValue(row: DisplayReportRow, column: ReportColumnDefinition): string {
+  if (column.key === "baseRentCents" && isVacantWithoutObligation(row.__source)) return "—";
+  return formatReportValue(row[column.key], column.format);
+}
+
 export function buildReportCsv(rows: readonly DisplayReportRow[], columns: readonly ReportColumnDefinition[]): string {
   return [
     columns.map((column) => csvCell(column.label)).join(","),
-    ...rows.map((row) => columns.map((column) => csvCell(formatReportValue(row[column.key], column.format))).join(",")),
+    ...rows.map((row) => columns.map((column) => csvCell(formatReportCellValue(row, column))).join(",")),
   ].join("\n");
 }
 
@@ -631,7 +650,10 @@ export function reportQueryFilters(
   const mode = REPORT_PERIODS[key];
   return {
     propertyScope: filters.propertyScope,
-    ...(filters.propertyId !== "all" ? { propertyId: filters.propertyId } : {}),
+    ...(filters.propertyIds?.length ? { propertyIds: [...filters.propertyIds].sort() } : filters.propertyId !== "all" ? { propertyId: filters.propertyId } : {}),
+    ...(filters.balanceStatus ? { balanceStatus: filters.balanceStatus } : {}),
+    ...(filters.tenantStatus ? { tenantStatus: filters.tenantStatus } : {}),
+    ...(filters.readiness?.length ? { readiness: filters.readiness } : {}),
     asOfDate: period.asOfDate,
     ...(mode === "month" && period.month ? { month: period.month } : {}),
     ...(mode === "range" && period.fromDate && period.toDate ? { fromDate: period.fromDate, toDate: period.toDate } : {}),
@@ -687,4 +709,69 @@ export function reportKeys(): readonly ReportKey[] {
 export function projectReportGridView(rows: DisplayReportRow[], columnKeys: string[]) {
   const signature = JSON.stringify([columnKeys, rows.map(row => [reportRowKey(row), ...columnKeys.map(key => row[key])])]);
   return { rows, columnKeys, signature };
+}
+
+
+export type ReportBalanceFilter = "all" | "due" | "zero" | "credit" | "unverified";
+export interface ReportLocalFilters {
+  propertyIds?: readonly string[];
+  occupancy?: string;
+  readiness?: string;
+  listing?: string;
+  balance?: ReportBalanceFilter;
+  tenancyStatus?: string;
+}
+
+/** Narrow server rows without converting unknown balances to zero or a debt. */
+export function filterReportLocalRows(rows: readonly ReportRow[], key: ReportKey, filters: ReportLocalFilters): ReportRow[] {
+  return rows.filter(row => {
+    if (filters.propertyIds?.length && !filters.propertyIds.includes(propertyId(row) ?? "")) return false;
+    for (const field of ["occupancy", "readiness", "listing", "tenancyStatus"] as const) {
+      const selected = filters[field];
+      if (selected && selected !== "all" && readRaw(row, field) !== selected) return false;
+    }
+    const balance = filters.balance ?? "all";
+    if (balance === "all") return true;
+    const amount = guardedMoney(row, key === "rent-roll" ? "balanceDueCents" : "totalBalanceCents");
+    const known = readRaw(row, "balanceComplete") === true && typeof amount === "number" && Number.isSafeInteger(amount);
+    if (balance === "unverified") return !known;
+    if (!known) return false;
+    return balance === "due" ? amount > 0 : balance === "credit" ? amount < 0 : amount === 0;
+  });
+}
+
+export interface ReportPropertyGroup extends PropertySubtotal { rows: DisplayReportRow[] }
+
+/** Property sections, unit-natural order, and their complete filtered subtotals. */
+export function groupReportRows(key: ReportKey, rows: readonly DisplayReportRow[], snapshot?: AdminSnapshot, sort?: { key: string; direction: "asc" | "desc" }): ReportPropertyGroup[] {
+  const collator = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+  return buildPropertySubtotals(key, rows.map(row => row.__source), snapshot).map(subtotal => ({
+    ...subtotal,
+    rows: rows.filter(row => {
+      if (subtotal.propertyId) return propertyId(row.__source) === subtotal.propertyId;
+      const name = propertyName(row.__source, snapshot);
+      const label = typeof name === "string" && name.trim() ? name : "Needs review";
+      return !propertyId(row.__source) && label === subtotal.label;
+    }).sort((left, right) => {
+      const column = sort?.key ?? "unitNumber";
+      const a = left[column]; const b = right[column];
+      const comparison = a == null ? b == null ? 0 : 1 : b == null ? -1 : typeof a === "number" && typeof b === "number" ? a - b : collator.compare(String(a), String(b));
+      return (sort?.direction === "desc" ? -comparison : comparison) || collator.compare(String(left.unitNumber ?? ""), String(right.unitNumber ?? "")) || left.__index - right.__index;
+    }),
+  }));
+}
+
+/** Match the displayed identity, including a future-only row, never a neighboring name. */
+export function reportCellPersonId(row: ReportRow, columnKey: string): string | undefined {
+  const id = columnKey === "futureTenantName" ? readRaw(row, "futurePersonId")
+    : columnKey === "currentTenantName" ? readRaw(row, "currentPersonId") ?? (!readRaw(row, "currentTenantName") && readRaw(row, "occupancy") !== "current" ? readRaw(row, "futurePersonId") : undefined)
+    : readRaw(row, "personId") ?? readRaw(row, "currentPersonId") ?? (readRaw(row, "currentTenantName") || readRaw(row, "occupancy") === "current" ? undefined : readRaw(row, "futurePersonId"));
+  return typeof id === "string" && id.length > 0 ? id : undefined;
+}
+
+
+/** Explicit URL preferences override this fallback in the report workspace. */
+export function defaultReportOccupancy(key: ReportKey, status = "all"): string {
+  if (["current", "vacant", "future_preleased", "unknown"].includes(status)) return status;
+  return key === "rent-roll" ? "current" : key === "occupancy" ? "vacant" : "all";
 }

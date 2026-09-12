@@ -400,6 +400,7 @@ function parseFilters(query: Request["query"], defaultAsOfDate?: string): RentOp
     // domain/migration callers omit this field when they need source totals.
     propertyScope: asString(query.propertyScope) ?? "active",
     propertyId: asString(query.propertyId),
+    propertyIds: asList(query.propertyIds),
     unitId: asString(query.unitId),
     tenancyId: asString(query.tenancyId),
     personId: asString(query.personId),
@@ -411,6 +412,7 @@ function parseFilters(query: Request["query"], defaultAsOfDate?: string): RentOp
     readiness: asList(query.readiness),
     listing: asList(query.listing),
     balanceStatus: asString(query.balanceStatus),
+    tenantStatus: asString(query.tenantStatus),
     status: asList(query.status),
     search: asString(query.search),
   };
@@ -613,7 +615,7 @@ function buildClientSnapshot(snapshot: Awaited<ReturnType<RentOpsService["snapsh
     // derivation already applies the exact property scope to `tenancies`; an
     // explicit all-history request keeps the complete imported contact set.
     .filter((profile) =>
-      (!filters.propertyId && filters.propertyScope !== "active") || (profile.tenancies?.length ?? 0) > 0,
+      (!filters.propertyId && !filters.propertyIds?.length && filters.propertyScope !== "active") || (profile.tenancies?.length ?? 0) > 0,
     )
     .map((profile) => {
       const personId = profile.person.id;
