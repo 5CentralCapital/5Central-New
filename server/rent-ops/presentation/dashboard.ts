@@ -81,7 +81,8 @@ export function serializeAdminDashboard(input: AdminDashboardInput): AdminDashbo
   const applicants = (input.applicants ?? []).map((application) => serializeAdminApplication(application));
   const documents = (input.documents ?? []).map((document) => serializeAdminDocument(document));
   const activities = (input.activities ?? []).map((activity) => serializeAdminActivity(activity));
-  const tenants = (input.tenants ?? []).map((tenant) => serializeAdminTenantProfile(tenant));
+  const preparedSchedules = serializedSnapshot ? new Map(serializedSnapshot.recurringSchedules.flatMap(row => row.id ? [[row.id, row] as const] : [])) : undefined;
+  const tenants = (input.tenants ?? []).map((tenant) => serializeAdminTenantProfile(tenant, input.snapshot?.recurringSchedules, preparedSchedules));
   return presentationObject({
     generatedAt: stringValue(input.generatedAt),
     summary: serializeAdminDashboardSummary(input.summary),

@@ -437,7 +437,7 @@ test("admin tenant profile canaries are removed below every nested collection", 
   });
   exactKeys(profile.person, ["id", "firstName", "lastName"]);
   exactKeys(profile.household[0], ["id", "personId", "role", "isFinanciallyResponsible"]);
-  exactKeys(profile.schedules[0], ["id", "propertyId", "category", "description", "amountCents", "active", "chargeDefinitionId"]);
+  exactKeys(profile.schedules[0], ["id", "propertyId", "category", "description", "amountCents", "active", "chargeDefinitionId", "resolvedEffectiveTo", "lineageState", "canScheduleSuccessor"]);
   exactKeys(profile.ledger[0], ["transaction", "allocatedCents", "openCents", "runningBalanceCents"]);
   exactKeys(profile.ledger[0].transaction, ["id"]);
   assertNoForbiddenKeys(profile);

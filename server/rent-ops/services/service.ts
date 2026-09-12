@@ -483,6 +483,11 @@ export class RentOpsService {
     return deriveFixedReport(await this.operationalSnapshot(), name, filters);
   }
 
+  async tenantProfileContext(personId: string, filters: RentOpsFilters = {}) {
+    const snapshot = await this.operationalSnapshot();
+    return { profile: deriveTenantProfile(snapshot, personId, filters), completeSchedules: snapshot.recurringSchedules };
+  }
+
   async tenantProfile(personId: string, filters: RentOpsFilters = {}) {
     return deriveTenantProfile(await this.operationalSnapshot(), personId, filters);
   }

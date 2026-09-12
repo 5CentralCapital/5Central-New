@@ -1,3 +1,5 @@
+import { effectiveScheduleIntervals } from "../domain/invariants";
+import { resolveEffectiveScheduleVersions } from "../domain/financial-projection";
 import type {
   DashboardSummary,
   RentOpsChargeDefinition,
@@ -360,6 +362,9 @@ export function serializeAdminLeaseTerm(value: RentOpsLeaseTerm): AdminLeaseTerm
 }
 
 export interface AdminRecurringScheduleView {
+  resolvedEffectiveTo?: string | null;
+  lineageState?: "valid" | "unknown";
+  canScheduleSuccessor?: boolean;
   /** Opaque target definition ID; never the provider source ID or key. */
   chargeDefinitionId?: string | null;
   billingFrequency?: string | null;
@@ -408,6 +413,29 @@ export function serializeAdminRecurringSchedule(value: RentOpsRecurringChargeSch
     sourceConfidence: nullableStringValue(input.sourceConfidence),
     chargeDefinitionKnowledge: nullableStringValue(input.chargeDefinitionKnowledge),
     recordRevision: revision(input),
+  });
+}
+
+/** Derive display boundaries from the complete lineage before filtering rows. */
+export function serializeAdminRecurringSchedules(rows: RentOpsRecurringChargeSchedule[], completeSchedules = rows): AdminRecurringScheduleView[] {
+  const intervals = effectiveScheduleIntervals(completeSchedules);
+  const invalidIds = new Set(resolveEffectiveScheduleVersions(completeSchedules, "9999-12", { strictLineage: true }).invalidSchedules.map(row => row.id));
+  const byId = new Map(completeSchedules.map(row => [row.id, row]));
+  const successors = new Set(completeSchedules.flatMap(row => row.supersedesId ? [row.supersedesId] : []));
+  return rows.map(row => {
+    const source = byId.get(row.id);
+    const interval = source ? intervals.get(source) : undefined;
+    const valid = Boolean(source && interval && !invalidIds.has(row.id));
+    const trustedLinks = source && (source.scopeTypeKnowledge === "source" || source.scopeTypeKnowledge === "manual")
+      && (source.scopeLinkKnowledge === "exact" || source.scopeLinkKnowledge === "manual")
+      && (source.chargeDefinitionLinkKnowledge === "exact" || source.chargeDefinitionLinkKnowledge === "manual");
+    return presentationObject({
+      ...serializeAdminRecurringSchedule(row),
+      resolvedEffectiveTo: valid ? interval!.effectiveTo ?? null : null,
+      lineageState: valid ? "valid" as const : "unknown" as const,
+      canScheduleSuccessor: Boolean(valid && source && !successors.has(source.id) && source.versionAction !== "end"
+        && source.scopeType && source.scopeId && source.propertyId && source.chargeDefinitionId && source.category != null && trustedLinks),
+    });
   });
 }
 
@@ -1167,7 +1195,7 @@ export function serializeAdminSnapshot(value: RentOpsSnapshot): AdminSnapshotVie
     householdMemberships: (recordArrayValue(input.householdMemberships) ?? []).map((item) => serializeAdminHouseholdMembership(item as unknown as RentOpsHouseholdMembership)),
     tenancies: (recordArrayValue(input.tenancies) ?? []).map((item) => serializeAdminTenancy(item as unknown as RentOpsTenancy)),
     leaseTerms: (recordArrayValue(input.leaseTerms) ?? []).map((item) => serializeAdminLeaseTerm(item as unknown as RentOpsLeaseTerm)),
-    recurringSchedules: (recordArrayValue(input.recurringSchedules) ?? []).map((item) => serializeAdminRecurringSchedule(item as unknown as RentOpsRecurringChargeSchedule)),
+    recurringSchedules: serializeAdminRecurringSchedules((recordArrayValue(input.recurringSchedules) ?? []) as unknown as RentOpsRecurringChargeSchedule[]),
     ledgerTransactions: (recordArrayValue(input.ledgerTransactions) ?? []).map((item) => serializeAdminLedgerTransaction(item as unknown as RentOpsLedgerTransaction)),
     paymentAllocations: (recordArrayValue(input.paymentAllocations) ?? []).map((item) => serializeAdminPaymentAllocation(item as unknown as RentOpsPaymentAllocation)),
     securityDeposits: (recordArrayValue(input.securityDeposits) ?? []).map((item) => serializeAdminSecurityDeposit(item as unknown as RentOpsSecurityDeposit)),
@@ -1230,7 +1258,7 @@ function serializeLedgerRows(value: unknown): AdminTenantProfileView["ledger"] {
   }));
 }
 
-export function serializeAdminTenantProfile(value: TenantProfile | unknown): AdminTenantProfileView {
+export function serializeAdminTenantProfile(value: TenantProfile | unknown, completeSchedules?: RentOpsRecurringChargeSchedule[], preparedSchedules?: ReadonlyMap<string, AdminRecurringScheduleView>): AdminTenantProfileView {
   const input = inputOf(value);
   return presentationObject({
     person: nested(input, "person", (item) => serializeAdminPerson(item as RentOpsPerson)),
@@ -1238,7 +1266,9 @@ export function serializeAdminTenantProfile(value: TenantProfile | unknown): Adm
     tenancy: nested(input, "tenancy", (item) => serializeAdminTenancy(item as RentOpsTenancy)),
     tenancies: nestedList(input, "tenancies", (item) => serializeAdminTenancy(item as RentOpsTenancy)),
     leaseTerms: nestedList(input, "leaseTerms", (item) => serializeAdminLeaseTerm(item as RentOpsLeaseTerm)),
-    schedules: nestedList(input, "schedules", (item) => serializeAdminRecurringSchedule(item as RentOpsRecurringChargeSchedule)),
+    schedules: preparedSchedules
+      ? (recordArrayValue(input.schedules) ?? []).map(item => preparedSchedules.get(String(item.id)) ?? serializeAdminRecurringSchedules([item as unknown as RentOpsRecurringChargeSchedule], [])[0])
+      : serializeAdminRecurringSchedules((recordArrayValue(input.schedules) ?? []) as unknown as RentOpsRecurringChargeSchedule[], completeSchedules),
     ledger: serializeLedgerRows(input.ledger),
     deposits: nestedList(input, "deposits", (item) => serializeAdminSecurityDeposit(item as RentOpsSecurityDeposit)),
     subsidyContracts: nestedList(input, "subsidyContracts", (item) => serializeAdminSubsidyContract(item as RentOpsSubsidyContract)),
