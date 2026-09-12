@@ -219,7 +219,7 @@ export function DocumentsWorkspace({ snapshot, filters, onEdit, onChanged: _onCh
   const activityColumns = useMemo<GridColumn<ActivityGridRow>[]>(() => [
     { key: "date", label: "Date", render: (row) => knownDate(row.date, row.activity.occurredAt ? row.activity.occurredAtKnowledge : "unknown"), sortValue: (row) => row.date ?? "" },
     { key: "type", label: "Type", render: (row) => <span className={statusClass(row.type)}>{leasingFact(row.type, row.activity.type ? row.activity.typeKnowledge : "unknown")}</span>, sortValue: (row) => row.type ?? "" },
-    { key: "summary", label: "Activity", width: "22rem", render: (row) => <span className="rm-leasing-activity-summary"><Activity aria-hidden="true" />{row.summary}</span>, sortValue: (row) => row.summary },
+    { key: "summary", label: "Activity", width: "22rem", render: (row) => <div><span className="rm-leasing-activity-summary"><Activity aria-hidden="true" />{row.summary}</span>{row.activity.detail && <details><summary>View details</summary><p style={{ whiteSpace: "pre-wrap" }}>{row.activity.detail}</p></details>}</div>, sortValue: (row) => row.summary },
     { key: "actor", label: "Actor", render: (row) => row.actor, sortValue: (row) => row.actor },
     { key: "linked", label: "Linked record", render: (row) => <span className="rm-leasing-linked">{row.linked}</span>, sortValue: (row) => row.linked },
   ], []);
