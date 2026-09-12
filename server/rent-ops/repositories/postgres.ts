@@ -1,6 +1,6 @@
 import { measureRentOps } from "../request-timing";
 import { RENT_OPS_BATCH_TABLES, type RentOpsTableRows } from "./read-table-batch";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   RentOpsActivityEvent,
   RentOpsChargeDefinition,
@@ -934,6 +934,23 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
   constructor(private readonly client: RentOpsQueryExecutor, private readonly inTransaction = false) {}
 
   async transaction<T>(work: (repository: RentOpsRepository) => Promise<T>, options: RentOpsTransactionOptions = {}): Promise<T> {
+    if (this.inTransaction) {
+      // Transaction children may intentionally expose only query(). Keep ownership
+      // with the outer executor, while isolating a caught inner failure (including
+      // PostgreSQL's failed-statement state) and acquiring this operation's locks.
+      const savepoint = `rent_ops_nested_${randomUUID().replaceAll("-", "")}`;
+      await this.client.query(`SAVEPOINT ${savepoint}`);
+      try {
+        await this.lockRowsForOperation(options);
+        const result = await work(this);
+        await this.client.query(`RELEASE SAVEPOINT ${savepoint}`);
+        return result;
+      } catch (error) {
+        await this.client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+        await this.client.query(`RELEASE SAVEPOINT ${savepoint}`);
+        throw error;
+      }
+    }
     if (!this.client.transaction) throw new RentOpsInvariantError("Rent Operations database executor does not support atomic transactions");
     await this.assertReady();
     return this.client.transaction(async (executor) => {
@@ -1509,7 +1526,6 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
   }
 
   async saveRecurringScheduleRoot(input: { schedule: RentOpsRecurringChargeSchedule; change: RentOpsRecordChange }): Promise<RentOpsRecurringChargeSchedule> {
-    if (!this.client.transaction) throw new RentOpsInvariantError("Manual recurring schedule root requires an atomic transaction");
     const schedule = { ...input.schedule, recordRevision: input.schedule.recordRevision ?? 1 };
     if (schedule.versionOrigin !== "manual" || schedule.source || schedule.sourceArtifactSha256 !== undefined && schedule.sourceArtifactSha256 !== null || schedule.artifactObservationOn !== undefined && schedule.artifactObservationOn !== null) {
       throw new RentOpsInvariantError("Manual recurring schedule root cannot carry artifact provenance");
@@ -1517,20 +1533,21 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     assertRecurringRootProvenance(schedule);
     assertRecurringChange(input.change, schedule);
     await this.assertReady();
-    return this.client.transaction(async (executor) => {
-      const repository = new PostgresRentOpsRepository(executor);
+    return this.transaction(async (transaction) => {
+      const executor = (transaction as PostgresRentOpsRepository).client;
+      const repository = new PostgresRentOpsRepository(executor, true);
       repository.ready = true;
       await repository.saveRecurringSchedule(schedule);
       await repository.saveRecurringScheduleChange(executor, input.change, schedule);
       return schedule;
-    }, { readOnly: false });
+    });
   }
 
   async saveRecurringScheduleSuccessor(input: { predecessorId: string; successor: RentOpsRecurringChargeSchedule; expectedRevision: number; change: RentOpsRecordChange }): Promise<RentOpsRecurringChargeSchedule> {
     if (!input.change) throw new RentOpsInvariantError("Recurring schedule successor requires an authenticated change record");
-    if (!this.client.transaction) throw new RentOpsInvariantError("Recurring schedule successor requires an atomic transaction");
     await this.assertReady();
-    return this.client.transaction(async (executor) => {
+    return this.transaction(async (transaction) => {
+      const executor = (transaction as PostgresRentOpsRepository).client;
       // Schedule versions are immutable append-only rows. The runtime role is
       // intentionally denied UPDATE, so row locks cannot be used here. The
       // partial unique index on supersedes_id is the database branch fence;
@@ -1587,7 +1604,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       if (!existing || !recurringScheduleColumns.every((column, index) => samePersistedValue(existing[column], values[index]))) throw new RentOpsInvariantError("Recurring schedule successor conflicts with an existing payload; retry the request");
       await this.saveRecurringScheduleChange(executor, input.change, input.successor);
       return rowToSchedule(existing);
-    }, { readOnly: false });
+    });
   }
   async saveLedgerTransaction(value: RentOpsLedgerTransaction): Promise<RentOpsLedgerTransaction> {
     assertImportedLedger(value);

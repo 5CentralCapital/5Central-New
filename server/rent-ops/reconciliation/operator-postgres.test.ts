@@ -20,7 +20,7 @@ test("imported account backfill is revision-guarded, rollback-safe and uses UPDA
     for (const table of RENT_OPS_RUNTIME_REQUIRED_TABLES) await db.exec(`GRANT ${table === "rent_ops_schema_migrations" ? "SELECT" : "SELECT,INSERT,UPDATE"} ON ${table} TO qa_reconcile`);
     await db.exec("SET ROLE qa_reconcile");
     let snapshots = 0;
-    const adapt = (connection: any): RentOpsQueryExecutor => ({ query: async (sql, values) => { if (sql.includes("FROM rent_ops_people")) snapshots++; return connection.query(sql, values?.map(value => value === undefined ? null : value)); }, transaction: async work => connection.transaction ? connection.transaction((tx: any) => work(adapt(tx))) : work(adapt(connection)) });
+    const adapt = (connection: any, nested = false): RentOpsQueryExecutor => ({ query: async (sql, values) => { if (sql.includes("FROM rent_ops_people")) snapshots++; return connection.query(sql, values?.map(value => value === undefined ? null : value)); }, ...(!nested ? { transaction: async (work: (executor: RentOpsQueryExecutor) => Promise<any>) => connection.transaction((tx: any) => work(adapt(tx, true))) } : {}) });
     const repository = new PostgresRentOpsRepository(adapt(db));
     const before = await repository.getSnapshot();
     const person = before.people[0];
