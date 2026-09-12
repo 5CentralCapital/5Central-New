@@ -971,6 +971,22 @@
   flex: 1 1 150px;
 }
 
+/* Compact desktop navigation keeps only actionable icon destinations. */
+@media (min-width: 769px) {
+  .rm-workspace.is-sidebar-collapsed .rm-sidebar-heading,
+  .rm-workspace.is-sidebar-collapsed .rm-sidebar-link:not(:has(svg)),
+  .rm-workspace .rm-sidebar.is-collapsed .rm-sidebar-heading,
+  .rm-workspace .rm-sidebar.is-collapsed .rm-sidebar-link:not(:has(svg)) {
+    display: none;
+  }
+
+  .rm-workspace.is-sidebar-collapsed .rm-sidebar-link,
+  .rm-workspace .rm-sidebar.is-collapsed .rm-sidebar-link {
+    justify-content: center;
+    padding-inline: 0;
+  }
+}
+
 /* Panels and forms */
 
 .rm-panel {
