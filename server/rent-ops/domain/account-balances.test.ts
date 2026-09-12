@@ -3,7 +3,7 @@ import test from "node:test";
 import { emptyRentOpsSnapshot, type RentOpsLedgerTransaction, type RentOpsFilters } from "../../../shared/rent-ops-contracts";
 import { createBalanceReviewEvent, balanceReviewLedgerFingerprint } from "./balance-review";
 import { deriveAccountBalances } from "./account-balances";
-import { deriveManagerAccountLedger, readAccountBalanceAllocations } from "./reports";
+import { deriveManagerAccountLedger, readAccountBalanceAllocations, deriveRentRoll } from "./reports";
 
 function fixture() {
   const s = emptyRentOpsSnapshot();
@@ -228,4 +228,49 @@ test("conflicting simultaneous reviews on the same tenancy cannot be resolved by
   const row = report(s, { personId: "alice", balanceStatus: "unverified" }).find(r => r.propertyId === "a")!;
   assert.equal(row.totalBalanceCents, 10000); assert.equal(row.operationalBalanceCents, null);
   assert.ok(row.balanceUncertaintyCodes?.includes("balance_review_scope_ambiguous"));
+});
+
+test("current exact occupancy outranks another tenancy's later end and displays the unique current unit", () => {
+  const s = fixture();
+  s.units.push({ ...s.units[0], id: "current-a", unitNumber: "2" });
+  s.tenancies[0].actualMoveOutOn = "2026-08-01";
+  s.tenancies[1] = { ...s.tenancies[1], propertyId: "a", unitId: "current-a", actualMoveInOn: "2026-01-01" };
+  s.people[0].sourceAccountFacts = { status: "current", rawStatus: "Current", statusKnowledge: "source", observedOn: "2026-08-10", artifactSha256: "a".repeat(64), postingStartOn: null, postingEndOn: null, postingStartKnowledge: "unknown", postingEndKnowledge: "unknown" };
+  s.ledgerTransactions.push(tx("history-debt", "old", "a", "alice", 10000), tx("current-debt", "new", "a", "alice", 20000));
+  const row = report(s, { personId: "alice", tenantStatus: "current" })[0];
+  assert.equal(row.tenancyStatus, "current"); assert.equal(row.unitNumber, "2");
+  assert.equal(row.totalBalanceCents, 30000); assert.equal(row.tenancyId, null);
+  assert.equal(deriveRentRoll(s, { asOfDate: "2026-08-16" }).find(r => r.unitId === "current-a")!.occupancy, "current");
+});
+
+test("manual former correction beats stale Current account facts without inventing a departure date", () => {
+  const s = fixture();
+  s.people[0].sourceAccountFacts = { status: "current", rawStatus: "Current", statusKnowledge: "source", observedOn: "2026-08-10", artifactSha256: "a".repeat(64), postingStartOn: null, postingEndOn: null, postingStartKnowledge: "unknown", postingEndKnowledge: "unknown" };
+  s.tenancies[1] = { ...s.tenancies[1], status: "past", statusKnowledge: "manual", actualMoveOutOn: undefined };
+  s.ledgerTransactions.push(tx("former-debt", "new", "b", "alice", 22000));
+  assert.equal(report(s, { personId: "alice", tenantStatus: "current" }).length, 0);
+  const former = report(s, { personId: "alice", tenantStatus: "former" }).find(r => r.propertyId === "b")!;
+  assert.equal(former.totalBalanceCents, 22000);
+  assert.notEqual(deriveRentRoll(s, { asOfDate: "2026-08-16" }).find(r => r.unitId === "u-b")!.occupancy, "current");
+  assert.equal(s.tenancies[1].actualMoveOutOn, undefined);
+});
+
+test("source Current alone and expired contract dates never prove current account-property occupancy", () => {
+  const s = fixture();
+  s.people[0].sourceAccountFacts = { status: "current", rawStatus: "Current", statusKnowledge: "source", observedOn: "2026-08-10", artifactSha256: "a".repeat(64), postingStartOn: null, postingEndOn: null, postingStartKnowledge: "unknown", postingEndKnowledge: "unknown" };
+  s.tenancies[1].actualMoveInOn = undefined;
+  assert.equal(report(s, { personId: "alice", tenantStatus: "current" }).length, 0);
+  assert.equal(report(s, { personId: "alice", tenantStatus: "unknown" })[0].propertyId, "b");
+  s.tenancies[1].actualMoveInOn = "2026-01-01";
+  s.leaseTerms.push({ id: "expired-contract", tenancyId: "new", status: "executed", contractStartOn: "2026-01-01", contractEndOn: "2026-02-01", monthToMonth: false, createdAt: "2026-01-01T00:00:00Z" });
+  assert.equal(report(s, { personId: "alice", tenantStatus: "current" })[0].propertyId, "b");
+});
+
+test("multiple current units remain unlabeled instead of choosing an arbitrary unit", () => {
+  const s = fixture();
+  s.tenancies[0] = { ...s.tenancies[0], status: "current", actualMoveOutOn: undefined };
+  s.tenancies[1].propertyId = "a";
+  s.units[1].propertyId = "a";
+  const row = report(s, { personId: "alice", tenantStatus: "current" })[0];
+  assert.equal(row.unitId, undefined); assert.equal(row.unitNumber, undefined);
 });

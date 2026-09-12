@@ -1,7 +1,7 @@
 import type { DelinquencyRow, LedgerRow, RentOpsFilters, RentOpsPerson, RentOpsSnapshot, RentOpsTenancy } from "../../../shared/rent-ops-contracts";
 import { nowIsoDate } from "./dates";
 import { ledgerBalanceSign } from "./invariants";
-import { confirmedTenancyFact, isOccupiedTenancyOn, hasOccupancyConfirmationOn, hasOperationalEndOn } from "./tenancy-occupancy";
+import { confirmedTenancyFact, isOccupiedTenancyOn, hasOperationalEndOn, isKnownPastAccountOn, hasConfirmedTenancyLinks } from "./tenancy-occupancy";
 
 import { selectBalanceReview, operationalBalanceCents } from "./balance-review";
 
@@ -12,33 +12,24 @@ type LedgerReader = (snapshot: RentOpsSnapshot, personId: string, tenancyIds: st
 const exact = (value: string | null | undefined, legacy: boolean) => value === "exact" || value === "manual" || (legacy && value === undefined);
 const amountKnown = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value);
 
-function statusOn(person: RentOpsPerson, tenancies: RentOpsTenancy[], asOf: string): Status {
-  const facts = person.sourceAccountFacts;
-  const observed = facts?.statusKnowledge === "source" && facts.observedOn <= asOf ? facts : undefined;
-  const events: { on: string; status: Status }[] = [];
-  for (const tenancy of tenancies) {
-    if (isOccupiedTenancyOn(tenancy, asOf)) {
-      const on = tenancy.actualMoveInOn ?? (hasOccupancyConfirmationOn(tenancy, asOf) ? tenancy.occupancyConfirmedOn : undefined);
-      if (on) events.push({ on, status: "current" });
-    }
-    if (hasOperationalEndOn(tenancy, asOf)) events.push({ on: tenancy.operationalEndConfirmedOn!, status: "former" });
-    if (confirmedTenancyFact(tenancy.actualMoveOutKnowledge) && tenancy.actualMoveOutOn && tenancy.actualMoveOutOn <= asOf)
-      events.push({ on: tenancy.actualMoveOutOn, status: "former" });
-  }
-  events.sort((a, b) => b.on.localeCompare(a.on) || (a.status === "former" ? -1 : 1));
-  const latest = events[0];
-  // A completed historical property interval remains former even when the same
-  // account is currently resident elsewhere. New actual events supersede an
-  // older account observation (including a previously future account).
-  if (latest && (latest.status === "former" || !observed || latest.on >= observed.observedOn)) return latest.status;
-  if (observed) {
-    if (observed.status === "past" || observed.status === "cancelled") return "former";
-    if (observed.status === "current" || observed.status === "notice") return "current";
-    if (observed.status === "future") return "future";
-  }
-  if (latest) return latest.status;
-  if (tenancies.some(t => confirmedTenancyFact(t.statusKnowledge) && confirmedTenancyFact(t.plannedMoveInKnowledge)
+function statusOn(snapshot: RentOpsSnapshot, person: RentOpsPerson, tenancies: RentOpsTenancy[], occupied: RentOpsTenancy[], asOf: string): Status {
+  // Match Rent Roll's exact, dated occupancy predicate. A still-occupied
+  // tenancy is not ended by a different historical tenancy in this property.
+  if (occupied.length) return "current";
+  if (tenancies.some(t => hasConfirmedTenancyLinks(t) && !isKnownPastAccountOn(snapshot, person.id, asOf, t)
+    && confirmedTenancyFact(t.statusKnowledge) && confirmedTenancyFact(t.plannedMoveInKnowledge)
     && t.status === "future" && !!t.plannedMoveInOn && t.plannedMoveInOn > asOf)) return "future";
+  if (tenancies.some(t => hasConfirmedTenancyLinks(t) && (
+    (["manual", "confirmed"].includes(t.statusKnowledge ?? "") && (t.status === "past" || t.status === "cancelled"))
+    || hasOperationalEndOn(t, asOf)
+    || (confirmedTenancyFact(t.actualMoveOutKnowledge) && !!t.actualMoveOutOn && t.actualMoveOutOn <= asOf)))) return "former";
+  const facts = person.sourceAccountFacts;
+  if (facts?.statusKnowledge === "source" && facts.observedOn <= asOf) {
+    if (facts.status === "past" || facts.status === "cancelled") return "former";
+    if (facts.status === "future") return "future";
+  }
+  // A historical account-level Current flag proves neither a current property
+  // nor an occupied unit, and cannot override a manual departure correction.
   return "unknown";
 }
 
@@ -72,6 +63,7 @@ export function deriveAccountBalances(snapshot: RentOpsSnapshot, filters: RentOp
     if (!accountIds.has(person.id)) continue;
     if (filters.personId && filters.personId !== person.id) continue;
     const tenancies = tenanciesByPerson.get(person.id) ?? [];
+    const personSnapshot = { ...snapshot, people: [person] };
     const accountLedger = readAccountLedger(snapshot, person.id, tenancies.map(t => t.id), { asOfDate: asOf });
     const ledger = accountLedger.filter(r => r.rowType !== "opening_balance");
     const missingImportedHistory = ledger.length === 0 && person.source?.system === "rent_manager";
@@ -124,7 +116,8 @@ export function deriveAccountBalances(snapshot: RentOpsSnapshot, filters: RentOp
     for (const [propertyId, value] of Array.from(groups.entries())) {
       if (selected.size && (!propertyId || !selected.has(propertyId))) continue;
       if (!selected.size && filters.propertyScope === "active" && (!propertyId || properties.get(propertyId)?.state !== "active")) continue;
-      const tenancyStatus = statusOn(person, value.tenancies, asOf);
+      const occupied = value.tenancies.filter(t => isOccupiedTenancyOn(t, asOf) && !isKnownPastAccountOn(personSnapshot, person.id, asOf, t));
+      const tenancyStatus = statusOn(personSnapshot, person, value.tenancies, occupied, asOf);
       if (filters.tenantStatus && filters.tenantStatus !== "all" && filters.tenantStatus !== tenancyStatus) continue;
       let total = 0, rent = 0, nonRent = 0, unapplied = 0;
       let complete = !accountIncomplete, detailComplete = true;
@@ -184,7 +177,8 @@ export function deriveAccountBalances(snapshot: RentOpsSnapshot, filters: RentOp
       if (filters.balanceStatus === "credit" && (operational === null || operational >= 0)) continue;
       if (filters.balanceStatus === "unverified" && operational !== null) continue;
       const onlyTenancy = value.tenancies.length === 1 ? value.tenancies[0] : undefined;
-      const unitIds = new Set(value.tenancies.filter(t => exact(t.unitLinkKnowledge, legacy)).map(t => t.unitId));
+      const displayedTenancies = occupied.length ? occupied : value.tenancies;
+      const unitIds = new Set(displayedTenancies.filter(t => exact(t.unitLinkKnowledge, legacy)).map(t => t.unitId));
       const unit = unitIds.size === 1 ? units.get(Array.from(unitIds)[0]) : undefined;
       const propertyName = propertyId ? properties.get(propertyId)?.name ?? "Unknown property" : "Unassigned account";
       const tenantName = `${person.firstName} ${person.lastName}`.trim();
