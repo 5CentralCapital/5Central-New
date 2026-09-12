@@ -326,6 +326,7 @@ function DepositsTab({ tenant, snapshot, onEdit, editActions }: { tenant: Tenant
 function HapTab({ tenant, onEdit, editActions }: { tenant: TenantView; onEdit: EditAction; editActions: TenantEditAction[] }) {
   const rows = tenant.subsidyContracts ?? [];
   return <div className="rm-tenant-tab-content"><Panel title="Housing assistance (HAP)">
+    {tenant.payerResponsibilityUnverified && <p role="status" className="rm-section-note">Needs review: agency and tenant responsibility are not yet verified. Gross rent remains separate from the payer split.</p>}
     {rows.length === 0 ? <Empty message="No housing-assistance contract is linked to this tenant." /> : <div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Housing assistance contracts</caption><thead><tr><th>Agency</th><th>Contract</th><th>Effective from</th><th>Effective to</th><th className="rm-align-right">Agency portion</th><th className="rm-align-right">Tenant portion</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{rows.map((contract, index) => {
       const action = findAction(editActions, "save-subsidy-contract", (candidate) => candidate.values.id === contract.id);
       const warning = !contract.agencyName || contract.agencyObligationCents == null || contract.tenantObligationCents == null;

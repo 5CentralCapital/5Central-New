@@ -1238,6 +1238,7 @@ export interface AdminTenantProfileView {
   operationalStatus?: "current" | "future" | "former" | "contact" | "unknown";
   operationalScheduleIds?: string[];
   operationalSchedulesComplete?: boolean;
+  payerResponsibilityUnverified?: boolean;
   ledger: Array<{ transaction: AdminLedgerTransactionView; allocatedCents?: number | null; openCents?: number | null; runningBalanceCents?: number | null; rowType?: string; openingBalanceCents?: number | null; balanceComplete?: boolean; balanceUncertaintyCodes?: string[] }>;
   deposits: AdminSecurityDepositView[];
   subsidyContracts: AdminSubsidyContractView[];
@@ -1267,6 +1268,7 @@ export function serializeAdminTenantProfile(value: TenantProfile | unknown, comp
     operationalStatus: (["current", "future", "former", "contact", "unknown"] as const).find(status => status === input.operationalStatus),
     operationalScheduleIds: stringArrayValue(input.operationalScheduleIds),
     operationalSchedulesComplete: bool(input, "operationalSchedulesComplete"),
+    payerResponsibilityUnverified: bool(input, "payerResponsibilityUnverified"),
     person: nested(input, "person", (item) => serializeAdminPerson(item as RentOpsPerson)),
     household: nestedList(input, "household", (item) => serializeAdminHouseholdMembership(item as RentOpsHouseholdMembership)),
     tenancy: nested(input, "tenancy", (item) => serializeAdminTenancy(item as RentOpsTenancy)),

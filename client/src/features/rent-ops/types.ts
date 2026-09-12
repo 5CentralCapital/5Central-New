@@ -602,6 +602,7 @@ export interface TenantView {
   operationalStatus?: "current" | "future" | "former" | "contact" | "unknown";
   operationalScheduleIds?: string[];
   operationalSchedulesComplete?: boolean;
+  payerResponsibilityUnverified?: boolean;
   ledger: AdminLedgerRowView[];
   deposits: AdminSecurityDepositView[];
   subsidyContracts: AdminSubsidyContractView[];

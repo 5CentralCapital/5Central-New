@@ -564,3 +564,15 @@ test("financial completeness contract preserves unknown balances across dashboar
     }
   } finally { restore(); }
 });
+
+test("tenant payer review uncertainty survives serializer and strict browser decoder", async () => {
+  const { serializeAdminTenantProfile } = await import("../../../../server/rent-ops/presentation/entities");
+  for (const unverified of [true, false]) {
+    const legacy = serializedServerDocumentBundle();
+    legacy.tenants = [serializeAdminTenantProfile({ person: { id: "payer-review" }, payerResponsibilityUnverified: unverified, household: [], tenancies: [], leaseTerms: [], schedules: [], ledger: [], deposits: [], subsidyContracts: [], documents: [], activity: [] })];
+    const restore = stubJsonResponse(compactSnapshotWire(legacy));
+    try {
+      assert.equal((await loadRentOpsAdminSnapshot()).snapshot.tenants[0].payerResponsibilityUnverified, unverified);
+    } finally { restore(); }
+  }
+});

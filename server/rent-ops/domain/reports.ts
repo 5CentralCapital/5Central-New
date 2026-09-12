@@ -653,6 +653,25 @@ function createBalanceReader(snapshot: RentOpsSnapshot, asOf: IsoDate): BalanceR
   };
 }
 
+function resolvePayerSplit(snapshot: RentOpsSnapshot, tenancy: RentOpsSnapshot["tenancies"][number] | undefined, person: RentOpsSnapshot["people"][number] | undefined, date: IsoDate, grossRentCents: Cents | undefined) {
+  const tenancyContracts = tenancy ? snapshot.subsidyContracts.filter(contract => contract.tenancyId === tenancy.id) : [];
+  const validSubsidyDate = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(Date.parse(date)) && new Date(date).toISOString().slice(0, 10) === date;
+  const datedContracts = tenancyContracts.filter(contract => validSubsidyDate(contract.effectiveFrom)
+    && (contract.effectiveTo === undefined || validSubsidyDate(contract.effectiveTo) && contract.effectiveTo >= contract.effectiveFrom));
+  const effectiveContracts = datedContracts.filter(contract => isEffectiveOn(contract.effectiveFrom, contract.effectiveTo, date));
+  const candidateContract = effectiveContracts.length === 1 && datedContracts.length === tenancyContracts.length ? effectiveContracts[0] : undefined;
+  const subsidyContract = candidateContract && candidateContract.status === "active" && ["source", "manual"].includes(candidateContract.statusKnowledge ?? "")
+    && candidateContract.propertyId === tenancy?.propertyId && candidateContract.unitId === tenancy?.unitId
+    && Number.isSafeInteger(candidateContract.agencyObligationCents) && candidateContract.agencyObligationCents > 0
+    && Number.isSafeInteger(candidateContract.tenantObligationCents) && candidateContract.tenantObligationCents >= 0
+    && candidateContract.agencyObligationCents + candidateContract.tenantObligationCents === grossRentCents
+    ? candidateContract : undefined;
+  const assistanceUnverified = person?.paymentReviewReason === "assistance_responsibility_unverified" && !subsidyContract;
+  const subsidyException = assistanceUnverified ? "assistance_responsibility_unverified" : tenancyContracts.length && !subsidyContract
+    ? effectiveContracts.length > 1 ? "subsidy_contract_ambiguous" : "subsidy_contract_unconfirmed" : undefined;
+  return { subsidyContract, subsidyException, assistanceUnverified };
+}
+
 export function deriveRentRoll(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): RentRollRow[] {
   return deriveRentRollWithBalance(snapshot, filters, createBalanceReader(snapshot, asOfDate(filters)));
 }
@@ -674,20 +693,7 @@ function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFi
     const term = selected ? (current ? activeLeaseTerm(snapshot, selected.id, asOf) : upcomingLeaseTerm(snapshot, selected.id, asOf)) : undefined;
     const scheduleAsOf = current ? asOf : (term?.contractStartOn ?? (selected ? occupancyMoveInOn(selected) : undefined) ?? asOf);
     const amounts = selected ? scheduledAmounts(snapshot, selected.id, scheduleAsOf, selectSchedules) : { baseRentCents: undefined, recurringFeesCents: 0, subsidyCents: 0, exceptionCodes: [] };
-    const tenancyContracts = selected ? snapshot.subsidyContracts.filter(contract => contract.tenancyId === selected.id) : [];
-    const validSubsidyDate = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(Date.parse(date)) && new Date(date).toISOString().slice(0, 10) === date;
-    const datedContracts = tenancyContracts.filter(contract => validSubsidyDate(contract.effectiveFrom)
-      && (contract.effectiveTo === undefined || validSubsidyDate(contract.effectiveTo) && contract.effectiveTo >= contract.effectiveFrom));
-    const effectiveContracts = datedContracts.filter(contract => isEffectiveOn(contract.effectiveFrom, contract.effectiveTo, scheduleAsOf));
-    const candidateContract = effectiveContracts.length === 1 && datedContracts.length === tenancyContracts.length ? effectiveContracts[0] : undefined;
-    const subsidyContract = candidateContract && candidateContract.status === "active" && ["source", "manual"].includes(candidateContract.statusKnowledge ?? "")
-      && candidateContract.propertyId === unit.propertyId && candidateContract.unitId === unit.id
-      && Number.isSafeInteger(candidateContract.agencyObligationCents) && candidateContract.agencyObligationCents > 0
-      && Number.isSafeInteger(candidateContract.tenantObligationCents) && candidateContract.tenantObligationCents >= 0
-      && candidateContract.agencyObligationCents + candidateContract.tenantObligationCents === amounts.baseRentCents
-      ? candidateContract : undefined;
-    const subsidyException = tenancyContracts.length && !subsidyContract
-      ? effectiveContracts.length > 1 ? "subsidy_contract_ambiguous" : "subsidy_contract_unconfirmed" : undefined;
+    const { subsidyContract, subsidyException } = resolvePayerSplit(snapshot, selected, selected ? people.get(selected.primaryPersonId) : undefined, scheduleAsOf, amounts.baseRentCents);
     const unresolvedCodes = unresolvedTenancyForUnit(snapshot, unit, asOf);
     const balance = selected ? readBalance(snapshot, selected.id, asOf) : { balanceComplete: unresolvedCodes.length === 0, balanceUncertaintyCodes: unresolvedCodes.length ? ["tenancy_balance_scope_unknown"] : [], rentOnlyBalanceCents: 0, nonRentBalanceCents: 0, totalBalanceCents: 0, unappliedCashCents: 0, prepaidCents: 0, oldestUnpaidRentOn: undefined };
     const occupancy: OccupancyState = current ? "current" : future ? "future_preleased" : unresolvedCodes.length > 0 ? "unknown" : "vacant";
@@ -1808,6 +1814,7 @@ export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string,
   return {
     person,
     operationalStatus: navigation.category,
+    payerResponsibilityUnverified: resolvePayerSplit(snapshot, tenancy, person, asOf, tenancy ? scheduledAmounts(snapshot, tenancy.id, asOf, createEffectiveScheduleSelector(snapshot.recurringSchedules)).baseRentCents : undefined).assistanceUnverified,
     primaryLease: tenancy ? navigation.category === "current" ? activeLeaseTerm(snapshot, tenancy.id, asOf) : navigation.category === "future" ? upcomingLeaseTerm(snapshot, tenancy.id, asOf) : undefined : undefined,
     operationalScheduleIds: operational.filter(schedule => approvedIds.has(schedule.id)).map(schedule => schedule.id),
     operationalSchedulesComplete: navigation.category === "current" && operational.some(schedule => schedule.category === "base_rent") && operational.every(schedule => approvedIds.has(schedule.id)),

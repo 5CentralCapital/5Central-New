@@ -582,3 +582,52 @@ test("rent roll marks uncertain, outdated, mismatched and overlapping subsidy co
   assert.equal(row.subsidyCents, 121500, "expired predecessor does not override the current active award");
   assert.equal(row.tenantPortionCents, 18500);
 });
+
+test("assistance review holds keep missing Janiya and Delaney payer splits unknown without erasing gross", async () => {
+  const { serializeAdminTenantProfile } = await import("../presentation/entities");
+  for (const [label, gross] of [["Janiya", 147000], ["Delaney", 150000]] as const) {
+    const value = truthSnapshot();
+    const person = value.people[0];
+    person.paymentReviewReason = "assistance_responsibility_unverified";
+    person.paymentReviewArtifactSha256 = "a".repeat(64);
+    person.paymentReviewSourceReference = "verified-source-review";
+    value.recurringSchedules.push(truthSchedule({ id: "gross", billingFrequency: "monthly", amountCents: gross }));
+    const row = deriveRentRoll(value, { asOfDate })[0];
+    assert.equal(row.subsidyCents, null, label);
+    assert.equal(row.tenantPortionCents, undefined);
+    assert.equal(row.baseRentCents, gross);
+    assert.equal(row.recurringFeesCents, 0);
+    assert.equal(row.totalScheduledCents, gross);
+    assert.ok(row.exceptionCodes.includes("assistance_responsibility_unverified"));
+    const profile = deriveTenantProfile(value, person.id, { asOfDate })!;
+    assert.equal(profile.payerResponsibilityUnverified, true);
+    assert.equal(serializeAdminTenantProfile(profile).payerResponsibilityUnverified, true);
+    assert.deepEqual(profile.subsidyContracts, []);
+    assert.deepEqual(deriveHap(value, { asOfDate, month: "2026-08" }), [], "a review hold must not invent an agency award");
+    assert.equal(deriveDashboardSummary(value, { asOfDate }).scheduledRentCents, gross);
+  }
+});
+
+test("a unique verified Kenneth or Herbert award resolves an old review hold in rent roll and profile", () => {
+  for (const [gross, tenant, agency] of [[140000, 18500, 121500], [110000, 19400, 90600]]) {
+    const value = truthSnapshot();
+    value.people[0].paymentReviewReason = "assistance_responsibility_unverified";
+    value.recurringSchedules.push(truthSchedule({ id: "gross", billingFrequency: "monthly", amountCents: gross }));
+    const award = { id: "award", tenancyId: "truth-tenancy-1", propertyId: "truth-property", unitId: "truth-unit-1", agencyName: "Verified Agency", effectiveFrom: "2026-02-01", status: "active" as const, statusKnowledge: "manual" as const, agencyObligationCents: agency, tenantObligationCents: tenant };
+    value.subsidyContracts.push(award);
+    const row = deriveRentRoll(value, { asOfDate })[0];
+    assert.equal(row.subsidyCents, agency);
+    assert.equal(row.tenantPortionCents, tenant);
+    assert.equal(row.totalScheduledCents, gross);
+    assert.equal(row.exceptionCodes.includes("assistance_responsibility_unverified"), false);
+    assert.equal(deriveTenantProfile(value, value.people[0].id, { asOfDate })?.payerResponsibilityUnverified, false);
+    for (const patch of [{ status: "pending" as const }, { effectiveTo: "2026-07-31" }, { statusKnowledge: "unknown" as const }]) {
+      value.subsidyContracts = [{ ...award, ...patch }];
+      assert.equal(deriveRentRoll(value, { asOfDate })[0].subsidyCents, null);
+      assert.equal(deriveTenantProfile(value, value.people[0].id, { asOfDate })?.payerResponsibilityUnverified, true);
+    }
+    value.subsidyContracts = [award, { ...award, id: "overlap" }];
+    assert.equal(deriveRentRoll(value, { asOfDate })[0].tenantPortionCents, undefined);
+    assert.equal(deriveTenantProfile(value, value.people[0].id, { asOfDate })?.payerResponsibilityUnverified, true);
+  }
+});

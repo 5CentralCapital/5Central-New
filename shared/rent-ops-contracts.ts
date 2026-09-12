@@ -1648,6 +1648,7 @@ export interface TenantProfile {
   primaryLease?: RentOpsLeaseTerm;
   operationalScheduleIds?: string[];
   operationalSchedulesComplete?: boolean;
+  payerResponsibilityUnverified?: boolean;
   ledger: LedgerRow[];
   deposits: RentOpsSecurityDeposit[];
   subsidyContracts: RentOpsSubsidyContract[];

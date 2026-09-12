@@ -1107,11 +1107,12 @@ function decodeLedgerRow(value: unknown): LedgerRow {
 }
 
 function decodeAdminTenant(value: unknown): TenantView {
-  const input = exactRecord(value, "tenant profile", ["person", "household", "tenancy", "tenancies", "leaseTerms", "schedules", "operationalStatus", "operationalScheduleIds", "operationalSchedulesComplete", "ledger", "deposits", "subsidyContracts", "documents", "activity", "property", "unit", "primaryLease"]);
+  const input = exactRecord(value, "tenant profile", ["person", "household", "tenancy", "tenancies", "leaseTerms", "schedules", "operationalStatus", "operationalScheduleIds", "operationalSchedulesComplete", "payerResponsibilityUnverified", "ledger", "deposits", "subsidyContracts", "documents", "activity", "property", "unit", "primaryLease"]);
   return {
     operationalStatus: optionalEnum(input, "operationalStatus", ["current", "future", "former", "contact", "unknown"] as const),
     operationalScheduleIds: optionalStrings(input, "operationalScheduleIds"),
     operationalSchedulesComplete: optionalBoolean(input, "operationalSchedulesComplete"),
+    payerResponsibilityUnverified: optionalBoolean(input, "payerResponsibilityUnverified"),
     person: decodePerson(input.person),
     household: requiredArrayOf(input, "household", decodeHouseholdMembership),
     tenancy: optionalObject(input, "tenancy", decodeTenancy),
