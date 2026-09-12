@@ -1644,6 +1644,8 @@ export interface TenantProfile {
   tenancies?: RentOpsTenancy[];
   leaseTerms: RentOpsLeaseTerm[];
   schedules: RentOpsRecurringChargeSchedule[];
+  operationalStatus?: "current" | "future" | "former" | "contact" | "unknown";
+  primaryLease?: RentOpsLeaseTerm;
   operationalScheduleIds?: string[];
   operationalSchedulesComplete?: boolean;
   ledger: LedgerRow[];

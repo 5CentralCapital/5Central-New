@@ -315,15 +315,17 @@ function scheduledAmounts(snapshot: RentOpsSnapshot, tenancyId: string, date: Is
   // Retain uncertain candidates for review, but never publish their amounts as
   // confirmed rent. Scope precedence and immutable history remain unchanged.
   const schedules = effectiveSchedulesFor(snapshot, tenancyId, date, selectSchedules).filter((schedule) => schedule.scopeType !== "property");
-  const base = schedules.find((schedule) => schedule.category === "base_rent");
+  const base = schedules.filter((schedule) => schedule.category === "base_rent");
+  const baseTotal = base.reduce((total, schedule) => total + (schedule.amountCents ?? 0), 0);
+  const baseConfirmed = base.length > 0 && base.every(scheduleAmountConfirmed);
   const exceptionCodes = schedules.some(schedule => !scheduleAmountConfirmed(schedule)) ? ["scheduled_amount_unconfirmed"] : [];
-  if (!base || !scheduleAmountConfirmed(base)) exceptionCodes.push("base_rent_unconfirmed");
+  if (!baseConfirmed) exceptionCodes.push("base_rent_unconfirmed");
   const sum = (category: string): Cents | null => {
     const rows = schedules.filter(schedule => schedule.category === category);
     return rows.some(schedule => !scheduleAmountConfirmed(schedule)) ? null : rows.reduce((total, schedule) => total + schedule.amountCents!, 0);
   };
   return {
-    baseRentCents: base && scheduleAmountConfirmed(base) ? base.amountCents! : undefined,
+    baseRentCents: baseConfirmed ? baseTotal : undefined,
     recurringFeesCents: sum("recurring_fee"),
     subsidyCents: sum("subsidy"),
     exceptionCodes,
@@ -1789,7 +1791,7 @@ export function deriveTenantNavigation(snapshot: RentOpsSnapshot, personId: stri
   );
   // Account status establishes the directory category without inventing a
   // departure date or asserting a status for each historical lease.
-  const category = knownPastAccount && tenancies.length ? "former" : ambiguous ? "unknown" : effective.length ? "current" : future.length ? "future" : knownFutureAccount && tenancies.length ? "future" : unresolvedSelected ? "unknown" : tenancies.length ? "former" : "contact";
+  const category: NonNullable<TenantProfile["operationalStatus"]> = knownPastAccount && tenancies.length ? "former" : ambiguous ? "unknown" : effective.length ? "current" : future.length ? "future" : knownFutureAccount && tenancies.length ? "future" : unresolvedSelected ? "unknown" : tenancies.length ? "former" : "contact";
   return { person, tenancies, tenancy, category };
 }
 
@@ -1805,6 +1807,8 @@ export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string,
   const asOfEnd = `${asOf}T23:59:59.999Z`;
   return {
     person,
+    operationalStatus: navigation.category,
+    primaryLease: tenancy ? navigation.category === "current" ? activeLeaseTerm(snapshot, tenancy.id, asOf) : navigation.category === "future" ? upcomingLeaseTerm(snapshot, tenancy.id, asOf) : undefined : undefined,
     operationalScheduleIds: operational.filter(schedule => approvedIds.has(schedule.id)).map(schedule => schedule.id),
     operationalSchedulesComplete: navigation.category === "current" && operational.some(schedule => schedule.category === "base_rent") && operational.every(schedule => approvedIds.has(schedule.id)),
     household: snapshot.householdMemberships.filter((membership) => membership.personId === personId || membership.accountPersonId === personId || (membership.tenancyId && tenancyIds.has(membership.tenancyId))),

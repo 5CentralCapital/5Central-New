@@ -259,14 +259,13 @@ export function resolveTenantBalance(tenant: TenantView, snapshot: AdminSnapshot
 export function buildTenantSummary(tenant: TenantView, snapshot: AdminSnapshot): TenantSummaryModel {
   const context = resolveTenantContext(tenant, snapshot);
   const balance = resolveTenantBalance(tenant, snapshot);
-  const primaryLease = tenant.primaryLease
-    ?? context.leaseTerms.find((term) => term.tenancyId === context.currentTenancy?.id)
-    ?? context.leaseTerms[0];
+  // The server selects the lease using the same dated tenancy context as rent roll.
+  const primaryLease = tenant.primaryLease;
   return {
     displayName: personDisplayName(tenant.person),
     propertyName: propertyDisplayName(context.property),
     unitLabel: unitDisplayName(context.unit),
-    status: nonEmpty(context.currentTenancy?.status) ?? "Needs review",
+    status: tenant.operationalStatus === "unknown" ? "Needs review" : tenant.operationalStatus ?? nonEmpty(context.currentTenancy?.status) ?? "Needs review",
     asOfDate: context.asOfDate,
     balance,
     currentTenancy: context.currentTenancy,

@@ -1235,6 +1235,7 @@ export interface AdminTenantProfileView {
   tenancies?: AdminTenancyView[];
   leaseTerms: AdminLeaseTermView[];
   schedules: AdminRecurringScheduleView[];
+  operationalStatus?: "current" | "future" | "former" | "contact" | "unknown";
   operationalScheduleIds?: string[];
   operationalSchedulesComplete?: boolean;
   ledger: Array<{ transaction: AdminLedgerTransactionView; allocatedCents?: number | null; openCents?: number | null; runningBalanceCents?: number | null; rowType?: string; openingBalanceCents?: number | null; balanceComplete?: boolean; balanceUncertaintyCodes?: string[] }>;
@@ -1263,6 +1264,7 @@ function serializeLedgerRows(value: unknown): AdminTenantProfileView["ledger"] {
 export function serializeAdminTenantProfile(value: TenantProfile | unknown, completeSchedules?: RentOpsRecurringChargeSchedule[], preparedSchedules?: ReadonlyMap<string, AdminRecurringScheduleView>): AdminTenantProfileView {
   const input = inputOf(value);
   return presentationObject({
+    operationalStatus: (["current", "future", "former", "contact", "unknown"] as const).find(status => status === input.operationalStatus),
     operationalScheduleIds: stringArrayValue(input.operationalScheduleIds),
     operationalSchedulesComplete: bool(input, "operationalSchedulesComplete"),
     person: nested(input, "person", (item) => serializeAdminPerson(item as RentOpsPerson)),

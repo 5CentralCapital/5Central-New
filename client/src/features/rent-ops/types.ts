@@ -599,6 +599,7 @@ export interface TenantView {
   tenancies?: AdminTenancyView[];
   leaseTerms: AdminLeaseTermView[];
   schedules: AdminRecurringScheduleView[];
+  operationalStatus?: "current" | "future" | "former" | "contact" | "unknown";
   operationalScheduleIds?: string[];
   operationalSchedulesComplete?: boolean;
   ledger: AdminLedgerRowView[];
