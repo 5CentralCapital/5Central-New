@@ -35,8 +35,12 @@ interface DashboardMetric {
   onClick?: () => void;
 }
 
+function isValidCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
 function countValue(value: unknown): string {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString("en-US") : "Needs review";
+  return isValidCount(value) ? value.toLocaleString("en-US") : "Needs review";
 }
 
 function ratioValue(value: unknown): string {
@@ -53,18 +57,26 @@ function occupiedValue(summary: DashboardSummary): string {
   return `${summary.occupiedUnits.toLocaleString("en-US")} / ${summary.unitCount.toLocaleString("en-US")}`;
 }
 
+function unknownOccupancyCount(summary: DashboardSummary): number | undefined {
+  const { unitCount, occupiedUnits, futurePreleasedUnits, genuineVacantUnits } = summary;
+  if (![unitCount, occupiedUnits, futurePreleasedUnits, genuineVacantUnits].every(isValidCount)) return undefined;
+  const unknown = unitCount - occupiedUnits - futurePreleasedUnits - genuineVacantUnits;
+  return isValidCount(unknown) ? unknown : undefined;
+}
+
 export function dashboardMetrics(summary: DashboardSummary, onReport: (report: ReportKey) => void): DashboardMetric[] {
   const scheduledKnown = summary.scheduledRentCadenceComplete === true && summary.scheduledRentComplete !== false
     && (typeof summary.scheduledRentConfirmedCents === "number" || summary.scheduledRentComplete === true);
   const scheduled = summary.scheduledRentConfirmedCents ?? (summary.scheduledRentComplete === true ? summary.scheduledRentCents : undefined);
   const delinquencyKnown = summary.balanceComplete !== false && summary.rentOnlyDelinquencyCents !== null && summary.rentOnlyDelinquencyCents !== undefined;
-  const vacancies = typeof summary.genuineVacantUnits === "number" && typeof summary.readyVacantUnits === "number"
-    ? `${countValue(summary.genuineVacantUnits)} total · ${countValue(summary.readyVacantUnits)} ready`
+  const unknownOccupancy = unknownOccupancyCount(summary);
+  const vacancies = isValidCount(summary.genuineVacantUnits) && isValidCount(summary.readyVacantUnits)
+    ? `${countValue(summary.genuineVacantUnits)} confirmed · ${countValue(summary.readyVacantUnits)} ready`
     : "Needs review";
   return [
     { label: "Occupied units", value: occupiedValue(summary), detail: "Current / total", onClick: () => onReport("occupancy") },
     { label: "Physical occupancy", value: ratioValue(summary.physicalOccupancyPercent), onClick: () => onReport("occupancy") },
-    { label: "Vacant units", value: vacancies, detail: summary.notReadyUnits !== undefined ? `${countValue(summary.notReadyUnits)} not ready` : undefined, tone: summary.readyVacantUnits ? "warn" : "good", onClick: () => onReport("occupancy") },
+    { label: "Vacant units", value: vacancies, detail: unknownOccupancy === undefined ? "Occupancy needs review" : unknownOccupancy > 0 ? `${countValue(unknownOccupancy)} occupancy unknown` : `${countValue(summary.notReadyUnits)} not ready`, tone: unknownOccupancy === undefined || unknownOccupancy > 0 || !isValidCount(summary.readyVacantUnits) || summary.readyVacantUnits > 0 ? "warn" : "good", onClick: () => onReport("occupancy") },
     { label: "Scheduled rent", value: moneyValue(scheduled, scheduledKnown), detail: scheduledKnown ? "Confirmed configuration" : "Configuration needs review", tone: scheduledKnown ? "normal" : "warn", onClick: () => onReport("scheduled-income") },
     { label: "Collected rent", value: moneyValue(summary.collectedRentCents), detail: "Posted receipts", onClick: () => onReport("collected-income") },
     { label: "Rent delinquency", value: moneyValue(summary.rentOnlyDelinquencyCents, delinquencyKnown), detail: delinquencyKnown ? "Rent-only balance" : "Balance needs review", tone: delinquencyKnown && summary.rentOnlyDelinquencyCents ? "warn" : delinquencyKnown ? "good" : "warn", onClick: () => onReport("delinquency") },
@@ -167,7 +179,8 @@ export function DashboardWorkspace({ snapshot, filters, onReport, onOpenTenant, 
   const metrics = useMemo(() => dashboardMetrics(snapshot.summary, onReport), [snapshot.summary, onReport]);
   const vacancyDetail = [
     ["Future preleased", countValue(snapshot.summary.futurePreleasedUnits)],
-    ["Genuine vacant", countValue(snapshot.summary.genuineVacantUnits)],
+    ["Occupancy unknown", countValue(unknownOccupancyCount(snapshot.summary))],
+    ["Confirmed vacant", countValue(snapshot.summary.genuineVacantUnits)],
     ["Ready vacant", countValue(snapshot.summary.readyVacantUnits)],
     ["Not ready", countValue(snapshot.summary.notReadyUnits)],
     ["Off market", countValue(snapshot.summary.offMarketUnits)],
