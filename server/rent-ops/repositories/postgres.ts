@@ -1082,7 +1082,36 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     return snapshot;
   }
 
-  private async loadSnapshot(executor: RentOpsQueryExecutor): Promise<RentOpsSnapshot> {
+  async getOperationalSnapshot(): Promise<RentOpsSnapshot> {
+    await this.assertReady();
+    const snapshot = this.client.transaction
+      ? await this.client.transaction(executor => this.loadSnapshot(executor, false), { readOnly: true })
+      : await this.loadSnapshot(this.client, false);
+    assertValidSnapshot(snapshot);
+    return snapshot;
+  }
+
+  async getWorkspaceSnapshot(): Promise<RentOpsSnapshot> {
+    await this.assertReady();
+    const load = async (executor: RentOpsQueryExecutor) => {
+      const snapshot = emptyRentOpsSnapshot();
+      const rows = await Promise.all([
+        "rent_ops_properties", "rent_ops_units", "rent_ops_people", "rent_ops_tenancies",
+        "rent_ops_household_memberships", "rent_ops_lease_terms", "rent_ops_charge_definitions",
+      ].map(table => this.rows(table, executor)));
+      snapshot.properties = rows[0].map(rowToProperty);
+      snapshot.units = rows[1].map(rowToUnit);
+      snapshot.people = rows[2].map(rowToPerson);
+      snapshot.tenancies = rows[3].map(rowToTenancy);
+      snapshot.householdMemberships = rows[4].map(rowToHouseholdMembership);
+      snapshot.leaseTerms = rows[5].map(rowToLeaseTerm);
+      snapshot.chargeDefinitions = rows[6].map(rowToChargeDefinition);
+      return snapshot;
+    };
+    return this.client.transaction ? this.client.transaction(load, { readOnly: true }) : load(this.client);
+  }
+
+  private async loadSnapshot(executor: RentOpsQueryExecutor, includeHistory = true): Promise<RentOpsSnapshot> {
     const snapshot = emptyRentOpsSnapshot();
     const [propertyRows, unitRows, peopleRows, tenancyRows, householdRows, leaseRows, chargeDefinitionRows, scheduleRows, ledgerRows, allocationRows, depositRows, subsidyRows, subsidyTenantRows, subsidyPaymentRows, applicationRows, applicationMemberRows, requirementRows, documentRows, activityRows, historyProspectRows, historyApplicationRows, historyInterestRows, historyParticipantRows, historyRequirementRows, historyTemplateRows, historySectionRows, historyFieldRows, historyAnswerRows, historyDocumentRows, historyActivityRows, historyBlockerRows, historyAggregateRows] = await Promise.all([
       this.rows("rent_ops_properties", executor),
@@ -1104,19 +1133,19 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       this.rows("rent_ops_application_requirements", executor),
       this.rows("rent_ops_documents", executor),
       this.rows("rent_ops_activity_events", executor),
-      this.rows("rent_ops_prospects", executor),
-      this.rows("rent_ops_application_history", executor),
-      this.rows("rent_ops_application_interests", executor),
-      this.rows("rent_ops_application_participants", executor),
-      this.rows("rent_ops_application_requirement_occurrences", executor),
-      this.rows("rent_ops_application_template_definitions", executor),
-      this.rows("rent_ops_application_template_sections", executor),
-      this.rows("rent_ops_application_template_fields", executor),
-      this.rows("rent_ops_application_answer_occurrences", executor),
-      this.rows("rent_ops_application_history_documents", executor),
-      this.rows("rent_ops_application_history_activities", executor),
-      this.rows("rent_ops_application_history_blockers", executor),
-      this.rows("rent_ops_application_history_aggregates", executor),
+      includeHistory ? this.rows("rent_ops_prospects", executor) : Promise.resolve([]),
+      includeHistory ? this.rows("rent_ops_application_history", executor) : Promise.resolve([]),
+      includeHistory ? this.rows("rent_ops_application_interests", executor) : Promise.resolve([]),
+      includeHistory ? this.rows("rent_ops_application_participants", executor) : Promise.resolve([]),
+      includeHistory ? this.rows("rent_ops_application_requirement_occurrences", executor) : Promise.resolve([]),
+      includeHistory ? this.rows("rent_ops_application_template_definitions", executor) : Promise.resolve([]),
+      includeHistory ? this.rows("rent_ops_application_template_sections", executor) : Promise.resolve([]),
+      includeHistory ? this.rows("rent_ops_application_template_fields", executor) : Promise.resolve([]),
+      includeHistory ? this.rows("rent_ops_application_answer_occurrences", executor) : Promise.resolve([]),
+      includeHistory ? this.rows("rent_ops_application_history_documents", executor) : Promise.resolve([]),
+      includeHistory ? this.rows("rent_ops_application_history_activities", executor) : Promise.resolve([]),
+      includeHistory ? this.rows("rent_ops_application_history_blockers", executor) : Promise.resolve([]),
+      includeHistory ? this.rows("rent_ops_application_history_aggregates", executor) : Promise.resolve([]),
     ]);
     snapshot.properties = propertyRows.map(rowToProperty);
     snapshot.units = unitRows.map(rowToUnit);

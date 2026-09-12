@@ -1595,7 +1595,7 @@ export function deriveDashboardSummary(snapshot: RentOpsSnapshot, filters: RentO
   };
 }
 
-export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string, filters: RentOpsFilters = {}): TenantProfile | undefined {
+export function deriveTenantNavigation(snapshot: RentOpsSnapshot, personId: string, filters: RentOpsFilters = {}) {
   const person = snapshot.people.find((candidate) => candidate.id === personId);
   if (!person) return undefined;
   const asOf = asOfDate(filters);
@@ -1608,6 +1608,14 @@ export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string,
   const effective = tenancies.filter((candidate) => candidate.status !== "cancelled" && occupancyMoveInOn(candidate) && occupancyMoveInOn(candidate)! <= asOf && (!candidate.actualMoveOutOn || candidate.actualMoveOutOn > asOf));
   const future = tenancies.filter((candidate) => candidate.status === "future" && occupancyMoveInOn(candidate) && occupancyMoveInOn(candidate)! > asOf);
   const tenancy = chooseLatestTenancy(effective) ?? chooseUpcomingTenancy(future) ?? tenancies[0];
+  return { person, tenancies, tenancy, category: effective.length ? "current" : future.length ? "future" : tenancies.some(row => row.status !== "cancelled" && !row.actualMoveOutOn) ? "unknown" : tenancies.length ? "former" : "contact" };
+}
+
+export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string, filters: RentOpsFilters = {}): TenantProfile | undefined {
+  const navigation = deriveTenantNavigation(snapshot, personId, filters);
+  if (!navigation) return undefined;
+  const { person, tenancies, tenancy } = navigation;
+  const asOf = asOfDate(filters);
   const tenancyIds = new Set(tenancies.map((candidate) => candidate.id));
   const asOfEnd = `${asOf}T23:59:59.999Z`;
   return {

@@ -1804,6 +1804,10 @@ export interface RentOpsRepository {
   /** Runs a multi-record business operation atomically. */
   transaction<T>(work: (repository: RentOpsRepository) => Promise<T>, options?: RentOpsTransactionOptions): Promise<T>;
   getSnapshot(): Promise<RentOpsSnapshot>;
+  /** Complete operational and financial inputs, excluding legacy application history. */
+  getOperationalSnapshot?(): Promise<RentOpsSnapshot>;
+  /** Record navigation only; never use this partial projection for financial derivation. */
+  getWorkspaceSnapshot?(): Promise<RentOpsSnapshot>;
   /** Dedicated catalog read avoids loading unrelated financial and history rows. */
   getChargeDefinitions?(): Promise<RentOpsChargeDefinition[]>;
   /** Public inventory needs complete tenancy evidence, but no financial/history rows. */

@@ -441,6 +441,12 @@ export class RentOpsService {
   }
 
   async snapshot(): Promise<RentOpsSnapshot> { return this.repository.getSnapshot(); }
+  async operationalSnapshot(): Promise<RentOpsSnapshot> {
+    return this.repository.getOperationalSnapshot ? this.repository.getOperationalSnapshot() : this.snapshot();
+  }
+  async workspaceSnapshot(): Promise<RentOpsSnapshot> {
+    return this.repository.getWorkspaceSnapshot ? this.repository.getWorkspaceSnapshot() : this.snapshot();
+  }
 
   async chargeDefinitions(): Promise<RentOpsChargeDefinition[]> {
     return this.repository.getChargeDefinitions
@@ -464,15 +470,15 @@ export class RentOpsService {
 
   async dashboard(filters: RentOpsFilters = {}): Promise<DashboardSummary> {
     validateReportFilters("dashboard", filters);
-    return deriveDashboardSummary(await this.snapshot(), filters);
+    return deriveDashboardSummary(await this.operationalSnapshot(), filters);
   }
 
   async report(name: Parameters<typeof deriveFixedReport>[1], filters: RentOpsFilters = {}): Promise<unknown[]> {
-    return deriveFixedReport(await this.snapshot(), name, filters);
+    return deriveFixedReport(await this.operationalSnapshot(), name, filters);
   }
 
   async tenantProfile(personId: string, filters: RentOpsFilters = {}) {
-    return deriveTenantProfile(await this.snapshot(), personId, filters);
+    return deriveTenantProfile(await this.operationalSnapshot(), personId, filters);
   }
 
   private async recordAdminChange(summary: string, refs: { propertyId?: string; unitId?: string; personId?: string; tenancyId?: string; applicationId?: string } = {}): Promise<void> {

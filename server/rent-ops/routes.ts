@@ -1,3 +1,4 @@
+import { serializeWorkspaceBootstrap, serializeWorkspaceCollection, sendWorkspaceJson, workspaceCollections, type WorkspaceCollection } from "./presentation/workspace-read";
 import {sendAdminSnapshot} from "./presentation/snapshot-transport";
 import { phoneMethodsSchema } from "./domain/phone-methods";
 import { RentOpsRetryableConflict } from "./runtime-database";
@@ -796,6 +797,18 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   };
   adminRouter.get("/preview-context", (_req, res) => { res.json({ asOfDate: nowIsoDate(configuredNow()), dataMode: options.previewSource ?? "live" }); });
   adminRouter.get("/dashboard", async (req, res) => { try { res.json(serializeAdminDashboardSummary(await service.dashboard(parseAdminFilters(req.query)))); } catch (error) { adminError(res, error); } });
+  adminRouter.get("/workspace", async (req, res) => {
+    try { await sendWorkspaceJson(req, res, serializeWorkspaceBootstrap(await service.workspaceSnapshot(), parseAdminFilters(req.query))); }
+    catch (error) { adminError(res, error); }
+  });
+  adminRouter.get("/workspace/collections/:name", async (req, res) => {
+    try {
+      if (!workspaceCollections.includes(req.params.name as WorkspaceCollection)) {
+        res.status(404).json(errorBody("not_found")); return;
+      }
+      await sendWorkspaceJson(req, res, serializeWorkspaceCollection(await service.operationalSnapshot(), req.params.name as WorkspaceCollection));
+    } catch (error) { adminError(res, error); }
+  });
   adminRouter.get("/snapshot", async (req, res) => { try { const filters = parseAdminFilters(req.query); validateReportFilters("overview", filters); await sendAdminSnapshot(req, res, buildClientSnapshot(await service.snapshot(), filters)); } catch (error) { adminError(res, error); } });
   /** Positive catalog used by manual recurring roots and application conversion. */
   adminRouter.get("/charge-definitions", async (_req, res) => {
