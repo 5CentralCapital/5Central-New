@@ -255,7 +255,28 @@ export function effectiveSchedules(
   asOf: string,
   scope: { personId?: string; unitId?: string; propertyId?: string; allowPersonScopedTenant?: boolean } = {},
 ): RentOpsRecurringChargeSchedule[] {
+  return createEffectiveScheduleSelector(schedules)(tenancyId, asOf, scope);
+}
+
+export type EffectiveScheduleSelector = (
+  tenancyId: string,
+  asOf: string,
+  scope?: { personId?: string; unitId?: string; propertyId?: string; allowPersonScopedTenant?: boolean },
+) => RentOpsRecurringChargeSchedule[];
+
+/** Reuse only within a synchronous derivation over this unchanged complete array. */
+export function createEffectiveScheduleSelector(schedules: RentOpsRecurringChargeSchedule[]): EffectiveScheduleSelector {
   const intervals = effectiveScheduleIntervals(schedules);
+  return (tenancyId, asOf, scope = {}) => selectEffectiveSchedules(schedules, intervals, tenancyId, asOf, scope);
+}
+
+function selectEffectiveSchedules(
+  schedules: RentOpsRecurringChargeSchedule[],
+  intervals: ReadonlyMap<RentOpsRecurringChargeSchedule, EffectiveScheduleInterval>,
+  tenancyId: string,
+  asOf: string,
+  scope: { personId?: string; unitId?: string; propertyId?: string; allowPersonScopedTenant?: boolean },
+): RentOpsRecurringChargeSchedule[] {
   const candidateRows = schedules.filter((schedule) => {
     // Explicit inactive is excluded.  An omitted active flag is retained as
     // an uncertain schedule and must not disappear from reconciliation.

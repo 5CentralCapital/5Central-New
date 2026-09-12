@@ -22,6 +22,7 @@ import {
   buildTenantEditActions,
   buildTenantSummary,
   filterRecurringCharges,
+  recurringChargeIssueLabels,
   isCurrentTenancy,
   resolveTenantContext,
   type RecurringChargeFilter,
@@ -252,7 +253,7 @@ function ChargeTable({ rows, editActions, onEdit }: { rows: RecurringChargeRow[]
     const replace = chargeAction(editActions, "replace-recurring-schedule", row);
     const end = chargeAction(editActions, "end-recurring-schedule", row);
     const warning = row.uncertaintyCodes.length > 0 || row.state === "unknown";
-    return <tr key={row.id ?? `charge-${index}`}><td><strong>{row.description}</strong><small>{label(row.category)}{row.definitionName !== "Needs review" ? ` · ${row.definitionName}` : ""}</small>{warning && <small className="rm-warning-copy">Needs review: {row.uncertaintyCodes.map(label).join(" · ") || "temporal status"}</small>}</td><td><strong>{label(row.scope.type)}</strong><small>{row.scope.label}</small><small className={row.scope.warning ? "rm-warning-copy" : "rm-muted"}>{row.scope.inheritedIdentity}</small>{(row.scope.type === "unit" || row.scope.type === "property") && <small className="rm-warning-copy">Shared schedule: replacing or ending changes charges for all applicable residents in this {row.scope.type}.</small>}</td><td>{row.billingFrequency ? label(row.billingFrequency) : "Needs review"}</td><td>{formatDate(row.effectiveFrom)}</td><td>{formatDate(row.effectiveTo)}</td><td className="rm-align-right rm-amount">{formatMoney(row.amountCents)}</td><td>{statusValue(row.state, warning || row.active == null)}</td><td><div className="rm-row-actions">{replace && <ActionButton action={{...replace,label:"Schedule change"}} onEdit={onEdit} />}{end && <ActionButton action={{...end,label:"End"}} onEdit={onEdit} danger />}</div></td></tr>;
+    return <tr key={row.id ?? `charge-${index}`}><td><strong>{row.description}</strong><small>{label(row.category)}{row.definitionName !== "Needs review" ? ` · ${row.definitionName}` : ""}</small>{warning && <small className="rm-warning-copy">Needs review: {recurringChargeIssueLabels(row.uncertaintyCodes).join(" · ") || "Schedule status unconfirmed"}</small>}</td><td><strong>{label(row.scope.type)}</strong><small>{row.scope.label}</small><small className={row.scope.warning ? "rm-warning-copy" : "rm-muted"}>{row.scope.inheritedIdentity}</small>{(row.scope.type === "unit" || row.scope.type === "property") && <small className="rm-warning-copy">Shared schedule: replacing or ending changes charges for all applicable residents in this {row.scope.type}.</small>}</td><td>{row.billingFrequency ? label(row.billingFrequency) : "Needs review"}</td><td>{formatDate(row.effectiveFrom)}</td><td>{formatDate(row.effectiveTo)}</td><td className="rm-align-right rm-amount">{formatMoney(row.amountCents)}</td><td>{statusValue(row.state === "unknown" ? "Needs review" : row.state, warning || row.active == null)}</td><td><div className="rm-row-actions">{replace && <ActionButton action={{...replace,label:"Schedule change"}} onEdit={onEdit} />}{end && <ActionButton action={{...end,label:"End"}} onEdit={onEdit} danger />}</div></td></tr>;
   })}</tbody></table></div>;
 }
 
@@ -262,7 +263,7 @@ function ChargesTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantV
   const filtered = useMemo(() => filterRecurringCharges(rows, filter), [rows, filter]);
   const monthlyTotal = currentMonthlyTotal(rows, Array.isArray(tenant.schedules));
   return <div className="rm-tenant-tab-content"><Panel title="Recurring charges">
-    <div className="rm-charge-toolbar"><div className="rm-segmented" role="group" aria-label="Recurring charge status">{(["all", "current", "future", "ended"] as RecurringChargeFilter[]).map((option) => <button type="button" key={option} className={filter === option ? "active" : ""} onClick={() => setFilter(option)}>{label(option)} <span>{option === "all" ? rows.length : filterRecurringCharges(rows, option).length}</span></button>)}</div><div className="rm-charge-total"><span>Current monthly total</span><strong>{formatMoney(monthlyTotal)}</strong></div></div>
+    <div className="rm-charge-toolbar"><div className="rm-segmented" role="group" aria-label="Recurring charge status">{(["all", "current", "future", "ended", "review"] as RecurringChargeFilter[]).map((option) => <button type="button" key={option} className={filter === option ? "active" : ""} onClick={() => setFilter(option)}>{option === "review" ? "Needs review" : label(option)} <span>{option === "all" ? rows.length : filterRecurringCharges(rows, option).length}</span></button>)}</div><div className="rm-charge-total"><span>Current monthly total</span><strong>{formatMoney(monthlyTotal)}</strong></div></div>
     {rows.some((row) => row.uncertaintyCodes.length > 0) && <p className="rm-warning" role="status">Some charge fields need review. Unknown scope, frequency, dates, amount, or active status remains visible in the table.</p>}
     <ChargeTable rows={filtered} editActions={editActions} onEdit={onEdit} />
   </Panel></div>;

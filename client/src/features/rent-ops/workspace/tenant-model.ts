@@ -16,7 +16,7 @@ import type {
 } from "../types";
 import type { FormValues, QuickAction } from "../form-payload";
 
-export type RecurringChargeFilter = "all" | "current" | "future" | "ended";
+export type RecurringChargeFilter = "all" | "current" | "future" | "ended" | "review";
 export type RecurringChargeState = "current" | "future" | "ended" | "unknown";
 
 export interface TenantContext {
@@ -378,7 +378,7 @@ export function buildRecurringChargeRows(tenant: TenantView, snapshot: AdminSnap
       active: schedule.active,
       state: display.state,
       scope,
-      uncertaintyCodes: [...chargeUncertainty(schedule, definition, scope), ...display.uncertaintyCodes],
+      uncertaintyCodes: Array.from(new Set([...chargeUncertainty(schedule, definition, scope), ...display.uncertaintyCodes])),
     };
   });
 }
@@ -387,7 +387,7 @@ export const getRecurringChargeRows = buildRecurringChargeRows;
 
 export function filterRecurringCharges(rows: RecurringChargeRow[], filter: RecurringChargeFilter): RecurringChargeRow[] {
   if (filter === "all") return rows;
-  if (filter === "current") return rows.filter((row) => row.state === "current" || row.state === "unknown");
+  if (filter === "review") return rows.filter((row) => row.state === "unknown");
   return rows.filter((row) => row.state === filter);
 }
 
@@ -627,5 +627,16 @@ export function filterTenantLedger(rows: TenantLedgerRow[], search: string, from
     if ((from || to) && !date) return false;
     if (from && date! < from || to && date! > to) return false;
     return !query || [row.description, row.reference, row.unitLabel, row.status, row.payer, row.paymentMethod].some(value => value?.toLowerCase().includes(query));
+  });
+}
+
+/** Collapse identical displayed issues only; unknown and uncertain remain distinct evidence. */
+export function recurringChargeIssueLabels(codes: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return codes.flatMap(code => {
+    const normalized = code.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    if (!normalized || seen.has(normalized)) return [];
+    seen.add(normalized);
+    return [normalized.charAt(0).toUpperCase() + normalized.slice(1)];
   });
 }

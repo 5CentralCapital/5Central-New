@@ -31,7 +31,7 @@ import type {
   CollectedIncomeRow,
   TenantProfile,
 } from "../../../shared/rent-ops-contracts";
-import { activeTenancyViolations, assertNoOverlappingBaseRentSchedules, effectiveLedgerKind, effectiveScheduleIntervals, effectiveSchedules, ledgerBalanceSign, RentOpsInvariantError } from "./invariants";
+import { activeTenancyViolations, assertNoOverlappingBaseRentSchedules, effectiveLedgerKind, effectiveScheduleIntervals, createEffectiveScheduleSelector, type EffectiveScheduleSelector, ledgerBalanceSign, RentOpsInvariantError } from "./invariants";
 import { financialProjectionControls, projectFinancialSchedules, type FinancialProjectionControls } from "./financial-projection";
 import { addDays, compareIsoDate, daysBetween, isDateOnOrBefore, isEffectiveOn, monthFromDate, monthStart, nowIsoDate } from "./dates";
 
@@ -214,6 +214,7 @@ function effectiveSchedulesFor(
   snapshot: RentOpsSnapshot,
   tenancyId: string,
   date: IsoDate,
+  selectSchedules: EffectiveScheduleSelector,
 ): RentOpsRecurringChargeSchedule[] {
   const tenancy = snapshot.tenancies.find((candidate) => candidate.id === tenancyId);
   const allowPersonScopedTenant = tenancy
@@ -224,7 +225,7 @@ function effectiveSchedulesFor(
       candidate.unitId === tenancy.unitId,
     ).length === 0
     : false;
-  return effectiveSchedules(snapshot.recurringSchedules, tenancyId, date, tenancy ? {
+  return selectSchedules(tenancyId, date, tenancy ? {
     personId: tenancy.primaryPersonId,
     unitId: tenancy.unitId,
     propertyId: tenancy.propertyId,
@@ -232,10 +233,10 @@ function effectiveSchedulesFor(
   } : {});
 }
 
-function scheduledAmounts(snapshot: RentOpsSnapshot, tenancyId: string, date: IsoDate): { baseRentCents?: Cents; recurringFeesCents: Cents; subsidyCents: Cents } {
+function scheduledAmounts(snapshot: RentOpsSnapshot, tenancyId: string, date: IsoDate, selectSchedules: EffectiveScheduleSelector): { baseRentCents?: Cents; recurringFeesCents: Cents; subsidyCents: Cents } {
   // Property-scoped schedules are reported once at property level and are
   // intentionally excluded from a unit rent-roll amount.
-  const schedules = effectiveSchedulesFor(snapshot, tenancyId, date).filter((schedule) => schedule.scopeType !== "property");
+  const schedules = effectiveSchedulesFor(snapshot, tenancyId, date, selectSchedules).filter((schedule) => schedule.scopeType !== "property");
   const base = schedules.find((schedule) => schedule.category === "base_rent");
   return {
     baseRentCents: base && knownAmount(base.amountCents) ? base.amountCents : undefined,
@@ -550,6 +551,7 @@ function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFi
   assertNoOverlappingBaseRentSchedules(snapshot.recurringSchedules);
   const properties = propertyMap(snapshot);
   const people = personMap(snapshot);
+  const selectSchedules = createEffectiveScheduleSelector(snapshot.recurringSchedules);
   return scopedUnits(snapshot, filters).map((unit) => {
     const property = properties.get(unit.propertyId);
     const currentCandidates = currentTenanciesForUnit(snapshot, unit.id, asOf);
@@ -559,7 +561,7 @@ function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFi
     const selected = current ?? future;
     const term = selected ? (current ? activeLeaseTerm(snapshot, selected.id, asOf) : upcomingLeaseTerm(snapshot, selected.id, asOf)) : undefined;
     const scheduleAsOf = current ? asOf : (term?.contractStartOn ?? (selected ? occupancyMoveInOn(selected) : undefined) ?? asOf);
-    const amounts = selected ? scheduledAmounts(snapshot, selected.id, scheduleAsOf) : { baseRentCents: undefined, recurringFeesCents: 0, subsidyCents: 0 };
+    const amounts = selected ? scheduledAmounts(snapshot, selected.id, scheduleAsOf, selectSchedules) : { baseRentCents: undefined, recurringFeesCents: 0, subsidyCents: 0 };
     const subsidyContract = selected ? snapshot.subsidyContracts.find((contract) => contract.tenancyId === selected.id && isEffectiveOn(contract.effectiveFrom, contract.effectiveTo, scheduleAsOf)) : undefined;
     const unresolvedCodes = unresolvedTenancyForUnit(snapshot, unit, asOf);
     const balance = selected ? readBalance(snapshot, selected.id, asOf) : { balanceComplete: unresolvedCodes.length === 0, balanceUncertaintyCodes: unresolvedCodes.length ? ["tenancy_balance_scope_unknown"] : [], rentOnlyBalanceCents: 0, nonRentBalanceCents: 0, totalBalanceCents: 0, unappliedCashCents: 0, prepaidCents: 0, oldestUnpaidRentOn: undefined };
@@ -843,6 +845,7 @@ export function deriveScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOp
   const people = personMap(snapshot);
   const propertyIds = new Set(scopedProperties(snapshot, filters).map((property) => property.id));
   const scheduleIntervals = effectiveScheduleIntervals(snapshot.recurringSchedules);
+  const selectSchedules = createEffectiveScheduleSelector(snapshot.recurringSchedules);
   const rows: ScheduledIncomeRow[] = [];
   for (const tenancy of snapshot.tenancies) {
     if (!propertyIds.has(tenancy.propertyId) || (tenancy.status !== "current" && tenancy.status !== "future" && tenancy.status !== "notice")) continue;
@@ -850,7 +853,7 @@ export function deriveScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOp
     const person = people.get(tenancy.primaryPersonId);
     if (!unit || !person) continue;
     if (filters.unitId && tenancy.unitId !== filters.unitId) continue;
-    const schedules = effectiveSchedulesFor(snapshot, tenancy.id, start);
+    const schedules = effectiveSchedulesFor(snapshot, tenancy.id, start, selectSchedules);
     for (const schedule of schedules) {
       if (schedule.scopeType === "property") continue;
       if (schedule.category !== "base_rent" && schedule.category !== "recurring_fee") continue;
@@ -1272,6 +1275,7 @@ export function deriveLeaseExpirations(snapshot: RentOpsSnapshot, filters: RentO
   const people = personMap(snapshot);
   const propertyIds = scopedPropertyIds(snapshot, filters);
   const rows: LeaseExpirationRow[] = [];
+  const selectSchedules = createEffectiveScheduleSelector(snapshot.recurringSchedules);
   for (const tenancy of snapshot.tenancies) {
     if (tenancy.status !== "current" && tenancy.status !== "notice") continue;
     if (!matchesPropertyScope(tenancy.propertyId, filters, propertyIds)) continue;
@@ -1282,7 +1286,7 @@ export function deriveLeaseExpirations(snapshot: RentOpsSnapshot, filters: RentO
     const monthToMonth = term.monthToMonth || term.status === "month_to_month";
     const expiring = !!term.contractEndOn && term.contractEndOn >= asOf && term.contractEndOn <= cutoff;
     if (filters.status?.length && !filters.status.includes(monthToMonth ? "month_to_month" : expiring ? "expiring" : "not_due")) continue;
-    const amounts = scheduledAmounts(snapshot, tenancy.id, asOf);
+    const amounts = scheduledAmounts(snapshot, tenancy.id, asOf, selectSchedules);
     rows.push({
       propertyId: tenancy.propertyId,
       propertyName: properties.get(tenancy.propertyId)?.name ?? "Unknown property",

@@ -20,6 +20,7 @@ import {
   buildTenantEditActions,
   classifyRecurringSchedule,
   filterRecurringCharges,
+  recurringChargeIssueLabels,
   recurringChargeScope,
   resolveTenantBalance,
 } from "./tenant-model";
@@ -51,7 +52,8 @@ test("recurring charges retain scope identity and classify date boundaries", () 
   assert.equal(mapped.find((row) => row.id === "ended")?.state, "ended");
   assert.equal(mapped.find((row) => row.id === "inactive")?.state, "future", "future inactive versions do not take effect before their start date");
   assert.equal(mapped.find((row) => row.id === "unknown")?.state, "unknown");
-  assert.equal(filterRecurringCharges(mapped, "current").some((row) => row.id === "unknown"), true, "uncertain rows stay visible in the current review");
+  assert.equal(filterRecurringCharges(mapped, "current").some((row) => row.id === "unknown"), false, "unknown states are not confirmed current charges");
+  assert.equal(filterRecurringCharges(mapped, "review").some((row) => row.id === "unknown"), true);
   assert.equal(filterRecurringCharges(mapped, "future").some((row) => row.id === "property-scope"), true);
   assert.equal(filterRecurringCharges(mapped, "ended").some((row) => row.id === "ended"), true);
   assert.equal(classifyRecurringSchedule({ effectiveFrom: "2026-08-16", effectiveTo: "2026-08-16", active: true }, "2026-08-16"), "current");
@@ -253,4 +255,24 @@ test("end markers and unknown or omitted lineage metadata cannot resurrect curre
     assert.equal(row.effectiveTo, undefined);
   }
   assert.equal(scheduleDisplayInterval({ ...base, active: true, resolvedEffectiveTo: null }, "2027-01-01").state, "current");
+});
+
+test("unknown recurring states are counted in review only and remain visible in all", () => {
+  const snapshot = createDemoAdminSnapshot();
+  const tenant = snapshot.tenants[0];
+  const rows = buildRecurringChargeRows({ ...tenant, schedules: [
+    { ...tenant.schedules[0], id: "unknown-1", active: null, activeKnowledge: "unknown", effectiveFrom: null, billingFrequency: null },
+    { ...tenant.schedules[0], id: "unknown-2", active: null, effectiveFrom: null, billingFrequency: null },
+  ] }, snapshot);
+  assert.equal(filterRecurringCharges(rows, "all").length, 2);
+  assert.equal(filterRecurringCharges(rows, "review").length, 2);
+  for (const filter of ["current", "future", "ended"] as const) assert.equal(filterRecurringCharges(rows, filter).length, 0);
+  assert.equal(currentMonthlyTotal(rows), null);
+  assert.equal(rows[0].uncertaintyCodes.filter(code => code === "active_status_unknown").length, 1);
+});
+
+test("issue labels deduplicate normalized text while retaining distinct uncertainty", () => {
+  assert.deepEqual(recurringChargeIssueLabels([
+    "active_status_unknown", "Active Status Unknown", " active-status-unknown ", "active_status_uncertain", "frequency_unknown", "effective_start_unknown", "schedule_dates_unconfirmed",
+  ]), ["Active status unknown", "Active status uncertain", "Frequency unknown", "Effective start unknown", "Schedule dates unconfirmed"]);
 });
