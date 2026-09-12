@@ -7,6 +7,9 @@ import {
   buildUnitEditValues,
   occupancyHistoryForUnit,
   propertyUnitListItems,
+  propertyUnitRecurringDisplay,
+  recurringRecordCreateValues,
+  recurringRecordSuccessorValues,
   propertyUnits,
   recurringSchedulesForUnit,
   recurringSchedulesForProperty,
@@ -169,4 +172,33 @@ test("directories retain natural property and unit ordering after an updated row
 test("equal and missing directory labels use stable identity ties", () => {
   const snapshot = makeSnapshot({ properties: [{ id: "p", name: "Court", state: "active" }], units: [{ id: "z", propertyId: "p" }, { id: "b", propertyId: "p", unitNumber: "A" }, { id: "a", propertyId: "p", unitNumber: "a" }] });
   assert.deepEqual(propertyUnits(snapshot, "p").map((unit) => unit.id), ["a", "b", "z"]);
+});
+
+test("property unit recurring display uses resolved replacement ends and fails closed without metadata", () => {
+  const schedule = { id: "charge", scopeType: "property", scopeId: "p", active: true, effectiveFrom: "2026-01-01", effectiveTo: null, resolvedEffectiveTo: "2026-08-31", lineageState: "valid" as const, canScheduleSuccessor: false };
+  const snapshot = makeSnapshot({ recurringSchedules: [schedule] });
+  const [record] = recurringSchedulesForProperty(snapshot, "p");
+  const display = propertyUnitRecurringDisplay(record!, "2026-09-12");
+  assert.equal(display.effectiveTo, "2026-08-31");
+  assert.equal(display.state, "ended");
+  assert.equal(schedule.effectiveTo, null, "Immutable source end is unchanged");
+  const unconfirmed = propertyUnitRecurringDisplay({ ...record!, schedule: { ...schedule, lineageState: undefined, resolvedEffectiveTo: undefined } }, "2026-09-12");
+  assert.equal(unconfirmed.state, "unknown");
+  assert.equal(unconfirmed.effectiveTo, undefined);
+  assert.ok(unconfirmed.uncertaintyCodes.includes("schedule_lineage_unconfirmed"));
+  const future = propertyUnitRecurringDisplay({ ...record!, schedule: { ...schedule, effectiveFrom: "2026-10-01", resolvedEffectiveTo: null } }, "2026-09-12");
+  assert.equal(future.state, "future");
+  assert.equal(future.effectiveTo, null);
+});
+
+test("record recurring actions require verified context and authoritative successor permission", () => {
+  const unit = { id: "u", propertyId: "p" };
+  const snapshot = makeSnapshot({ properties: [{ id: "p" }], units: [unit] });
+  assert.deepEqual(recurringRecordCreateValues(snapshot, "p", unit), { propertyId: "p", unitId: "u", scopeType: "unit", scopeId: "u" });
+  assert.equal(recurringRecordCreateValues(snapshot, "p", { ...unit, propertyLinkKnowledge: "unknown" }), undefined);
+  const schedule = { id: "s", recordRevision: 3, propertyId: "p", scopeType: "unit", scopeId: "u", lineageState: "valid" as const, canScheduleSuccessor: true };
+  assert.equal(recurringRecordSuccessorValues(snapshot, schedule)?.expectedRevision, 3);
+  assert.equal(recurringRecordSuccessorValues(snapshot, { ...schedule, canScheduleSuccessor: false }), undefined);
+  assert.equal(recurringRecordSuccessorValues(snapshot, { ...schedule, lineageState: undefined }), undefined);
+  assert.equal(recurringRecordSuccessorValues(snapshot, { ...schedule, scopeId: "missing" }), undefined);
 });

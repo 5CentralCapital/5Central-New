@@ -9,6 +9,7 @@ import type {
   ViewFilters,
 } from "../types";
 import type { FormValues } from "../form-payload";
+import { scheduleDisplayInterval } from "./schedule-display";
 
 export type PropertyUnitRecordKind = "property" | "unit";
 
@@ -509,7 +510,7 @@ export function availablePropertyTabs(snapshot: AdminSnapshot, property: AdminPr
     "general",
     "units",
     ...(units.length || occupancyHistoryForProperty(snapshot, property.id).length ? ["occupancy" as const] : []),
-    ...(schedules.length ? ["recurring" as const] : []),
+    "recurring",
     ...(units.length ? ["marketing" as const] : []),
   ];
 }
@@ -520,7 +521,37 @@ export function availableUnitTabs(snapshot: AdminSnapshot, unit: AdminUnitView):
   return [
     "general",
     ...(occupancyHistoryForUnit(snapshot, unit).length ? ["occupancy" as const] : []),
-    ...(recurring.length ? ["recurring" as const] : []),
+    "recurring",
     ...(hasMarketing ? ["marketing" as const] : []),
   ];
+}
+
+/** Preserve source records while displaying the server-validated replacement interval. */
+export function propertyUnitRecurringDisplay(record: UnitRecurringRecord, asOfDate: string) {
+  const interval = scheduleDisplayInterval(record.schedule, asOfDate);
+  return {
+    ...interval,
+    effectiveFrom: interval.uncertaintyCodes.includes("schedule_dates_unconfirmed") ? undefined : interval.effectiveFrom,
+    effectiveTo: interval.uncertaintyCodes.includes("schedule_dates_unconfirmed") ? undefined : interval.effectiveTo,
+  };
+}
+
+export function recurringRecordCreateValues(snapshot: AdminSnapshot, propertyId?: string, unit?: AdminUnitView): FormValues | undefined {
+  if (!propertyId || !snapshot.snapshot.properties.some(property => property.id === propertyId)) return undefined;
+  if (unit && (!unit.id || unit.propertyId !== propertyId || !knownLink(unit.propertyId, unit.propertyLinkKnowledge))) return undefined;
+  return { propertyId, scopeType: unit ? "unit" : "property", scopeId: unit?.id ?? propertyId, ...(unit ? { unitId: unit.id } : {}) };
+}
+
+export function recurringRecordSuccessorValues(snapshot: AdminSnapshot, schedule: AdminRecurringScheduleView): FormValues | undefined {
+  if (!schedule.id || schedule.lineageState !== "valid" || schedule.canScheduleSuccessor !== true || !Number.isInteger(schedule.recordRevision) || schedule.recordRevision! < 1) return undefined;
+  if (!schedule.propertyId || !snapshot.snapshot.properties.some(property => property.id === schedule.propertyId)) return undefined;
+  if (schedule.scopeType === "property") {
+    if (schedule.scopeId !== schedule.propertyId) return undefined;
+  } else if (schedule.scopeType === "unit") {
+    if (!snapshot.snapshot.units.some(unit => unit.id === schedule.scopeId && unit.propertyId === schedule.propertyId && knownLink(unit.propertyId, unit.propertyLinkKnowledge))) return undefined;
+  } else if (schedule.scopeType === "tenant") {
+    if (!schedule.scopeId || !snapshot.snapshot.people.some(person => person.id === schedule.scopeId)) return undefined;
+    if (!snapshot.snapshot.tenancies.some(tenancy => tenancy.propertyId === schedule.propertyId && tenancy.primaryPersonId === schedule.scopeId && knownLink(tenancy.propertyId, tenancy.propertyLinkKnowledge) && knownLink(tenancy.primaryPersonId, tenancy.primaryPersonLinkKnowledge))) return undefined;
+  } else return undefined;
+  return { predecessorId: schedule.id, expectedRevision: schedule.recordRevision, effectiveFrom: "", amountDollars: "" };
 }
