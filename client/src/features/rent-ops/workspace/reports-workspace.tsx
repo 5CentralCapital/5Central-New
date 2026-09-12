@@ -1,3 +1,4 @@
+import { useRentOpsAuth } from "../auth-ui";
 import { useQuery } from "@tanstack/react-query";
 import { loadRentOpsReport } from "../api";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -183,6 +184,7 @@ function ReportControls({
 }
 
 export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpenTenant, onOpenUnit }: ReportsWorkspaceProps) {
+  const auth = useRentOpsAuth();
   const [asOfDate, setAsOfDate] = useState(filters.asOfDate);
   const [month, setMonth] = useState(filters.asOfDate.slice(0, 7));
   const [fromDate, setFromDate] = useState(firstDayOfMonth(filters.asOfDate));
@@ -209,9 +211,9 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
     [filters.propertyId, filters.propertyScope, filters.search, filters.status, selected, asOfDate, month, fromDate, toDate],
   );
   const reportQuery = useQuery({
-    queryKey: reportQueryKey(selected, queryFilters),
-    queryFn: () => loadRentOpsReport(selected, queryFilters),
-    enabled: !periodError,
+    queryKey: reportQueryKey(selected, queryFilters, auth.user?.id ?? ""),
+    queryFn: ({ signal }) => loadRentOpsReport(selected, queryFilters, signal),
+    enabled: auth.status === "authenticated" && Boolean(auth.user?.id) && !periodError,
   });
   const loadedRows = periodError ? undefined : reportQuery.data;
   const loading = !periodError && reportQuery.isFetching;

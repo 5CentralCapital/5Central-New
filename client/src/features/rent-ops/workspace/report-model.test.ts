@@ -111,7 +111,7 @@ test("all eleven reports have explicit columns and ledger running balance is not
 });
 
 test("report queries participate in workspace mutation invalidation", () => {
-  assert.deepEqual(reportQueryKey("rent-roll", {asOfDate: "2026-09-12"}), ["rent-ops-workspace", "report", "rent-roll", {asOfDate: "2026-09-12"}]);
+  assert.deepEqual(reportQueryKey("rent-roll", {asOfDate: "2026-09-12"}, "manager-a"), ["rent-ops-workspace", "report", "manager-a", "rent-roll", {asOfDate: "2026-09-12"}]);
 });
 
 test("export projection preserves every filtered row, current sort and visible column order", () => {
@@ -125,4 +125,12 @@ test("export projection preserves every filtered row, current sort and visible c
   assert.equal(csv.split("\n")[1], "$29.00,29");
   assert.equal(projection.signature, projectReportGridView([...sorted], [...projection.columnKeys]).signature);
   assert.notEqual(projection.signature, projectReportGridView([...sorted].reverse(), projection.columnKeys).signature);
+});
+
+test("direct authenticated user changes cannot reuse another user's report cache", () => {
+  const filters = {asOfDate: "2026-09-12"};
+  const cache = new Map<string, unknown>();
+  cache.set(JSON.stringify(reportQueryKey("rent-roll", filters, "manager-a")), [{tenantName: "Private A resident"}]);
+  assert.equal(cache.get(JSON.stringify(reportQueryKey("rent-roll", filters, "manager-b"))), undefined);
+  assert.notDeepEqual(reportQueryKey("delinquency", filters, "manager-a"), reportQueryKey("delinquency", filters, "manager-b"));
 });

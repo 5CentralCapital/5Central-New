@@ -1,3 +1,4 @@
+import { useRentOpsAuth } from "../auth-ui";
 import { useQueries } from "@tanstack/react-query";
 import { loadRentOpsReport } from "../api";
 import { useMemo } from "react";
@@ -153,10 +154,11 @@ function Widget({
 }
 
 export function DashboardWorkspace({ snapshot, filters, onReport, onOpenTenant, onOpenUnit }: DashboardWorkspaceProps) {
+  const auth = useRentOpsAuth();
   const widgetReports = ["rent-roll", "delinquency"] as const;
   const queries = useQueries({ queries: widgetReports.map((report) => {
     const query = reportQueryFilters(filters, report, { asOfDate: filters.asOfDate });
-    return { queryKey: reportQueryKey(report, query), queryFn: () => loadRentOpsReport(report, query) };
+    return { queryKey: reportQueryKey(report, query, auth.user?.id ?? ""), enabled: auth.status === "authenticated" && Boolean(auth.user?.id), queryFn: ({ signal }: { signal: AbortSignal }) => loadRentOpsReport(report, query, signal) };
   }) });
   const widgetRows = { "rent-roll": queries[0].data, delinquency: queries[1].data };
   const widgetErrors = { "rent-roll": queries[0].error?.message, delinquency: queries[1].error?.message };

@@ -607,8 +607,8 @@ export function reportRequestKey(report: ReportKey, filters: ApiFilters): string
   return `${report}:${JSON.stringify(stableObject(filters))}`;
 }
 
-export function reportQueryKey(report: ReportKey, filters: ApiFilters) {
-  return ["rent-ops-workspace", "report", report, filters] as const;
+export function reportQueryKey(report: ReportKey, filters: ApiFilters, authenticatedUserId: string) {
+  return ["rent-ops-workspace", "report", authenticatedUserId, report, filters] as const;
 }
 
 export function reportQueryFilters(
