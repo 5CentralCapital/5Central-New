@@ -536,3 +536,49 @@ test("dashboard cadence accepts confirmed manual monthly schedules and blocks mi
   value.recurringSchedules[1].active = false;
   assert.equal(deriveDashboardSummary(value, { asOfDate, month: "2026-08" }).scheduledRentCadenceComplete, true);
 });
+
+test("rent roll separates verified agency and tenant portions without adding assistance to gross rent", () => {
+  for (const [gross, tenant, agency] of [[140000, 18500, 121500], [110000, 19400, 90600]]) {
+    const value = truthSnapshot();
+    value.recurringSchedules.push(truthSchedule({ id: "gross", billingFrequency: "monthly", amountCents: gross }));
+    value.subsidyContracts.push({ id: "award", tenancyId: "truth-tenancy-1", propertyId: "truth-property", unitId: "truth-unit-1", agencyName: "Verified Agency", effectiveFrom: "2026-02-01", status: "active", statusKnowledge: "manual", agencyObligationCents: agency, tenantObligationCents: tenant });
+    const row = deriveRentRoll(value, { asOfDate })[0];
+    assert.equal(row.baseRentCents, gross);
+    assert.equal(row.tenantPortionCents, tenant);
+    assert.equal(row.subsidyCents, agency);
+    assert.equal(row.totalScheduledCents, gross);
+    assert.equal(row.exceptionCodes.some(code => code.startsWith("subsidy_")), false);
+    value.recurringSchedules.push(truthSchedule({ id: "fee", billingFrequency: "monthly", category: "recurring_fee", amountCents: 3500 }));
+    assert.equal(deriveRentRoll(value, { asOfDate })[0].totalScheduledCents, gross + 3500);
+    assert.equal(deriveRentRoll(value, { asOfDate: "2026-01-20" })[0].subsidyCents, null, "future award does not establish a historical split");
+  }
+});
+
+test("rent roll marks uncertain, outdated, mismatched and overlapping subsidy contracts for review", () => {
+  const value = truthSnapshot();
+  value.recurringSchedules.push(truthSchedule({ id: "gross", billingFrequency: "monthly", amountCents: 140000 }));
+  const award = { id: "award", tenancyId: "truth-tenancy-1", propertyId: "truth-property", unitId: "truth-unit-1", agencyName: "Verified Agency", effectiveFrom: "2026-02-01", status: "active" as const, statusKnowledge: "source" as const, agencyObligationCents: 121500, tenantObligationCents: 18500 };
+  for (const patch of [
+    { status: "pending" as const }, { status: "ended" as const }, { status: undefined },
+    { statusKnowledge: "unknown" as const }, { statusKnowledge: undefined },
+    { effectiveTo: "2026-07-31" }, { effectiveFrom: "2026-09-01" }, { effectiveFrom: "2026-02-30" },
+    { unitId: "truth-unit-2" }, { propertyId: "wrong-property" },
+    { agencyObligationCents: 131500 }, { tenantObligationCents: -1 },
+  ]) {
+    value.subsidyContracts = [{ ...award, ...patch }];
+    const row = deriveRentRoll(value, { asOfDate })[0];
+    assert.equal(row.subsidyCents, null, JSON.stringify(patch));
+    assert.equal(row.tenantPortionCents, undefined);
+    assert.equal(row.totalScheduledCents, 140000, "uncertain payer split does not erase independently verified gross rent");
+    assert.ok(row.exceptionCodes.includes("subsidy_contract_unconfirmed"));
+  }
+  value.subsidyContracts = [award, { ...award, id: "second-award", status: "pending" }];
+  let row = deriveRentRoll(value, { asOfDate })[0];
+  assert.equal(row.subsidyCents, null);
+  assert.equal(row.tenantPortionCents, undefined);
+  assert.ok(row.exceptionCodes.includes("subsidy_contract_ambiguous"));
+  value.subsidyContracts = [{ ...award, id: "older-award", effectiveFrom: "2025-01-01", effectiveTo: "2026-01-31", status: "ended", agencyObligationCents: 120000, tenantObligationCents: 20000 }, award];
+  row = deriveRentRoll(value, { asOfDate })[0];
+  assert.equal(row.subsidyCents, 121500, "expired predecessor does not override the current active award");
+  assert.equal(row.tenantPortionCents, 18500);
+});

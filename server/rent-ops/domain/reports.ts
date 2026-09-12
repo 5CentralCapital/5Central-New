@@ -651,7 +651,20 @@ function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFi
     const term = selected ? (current ? activeLeaseTerm(snapshot, selected.id, asOf) : upcomingLeaseTerm(snapshot, selected.id, asOf)) : undefined;
     const scheduleAsOf = current ? asOf : (term?.contractStartOn ?? (selected ? occupancyMoveInOn(selected) : undefined) ?? asOf);
     const amounts = selected ? scheduledAmounts(snapshot, selected.id, scheduleAsOf, selectSchedules) : { baseRentCents: undefined, recurringFeesCents: 0, subsidyCents: 0, exceptionCodes: [] };
-    const subsidyContract = selected ? snapshot.subsidyContracts.find((contract) => contract.tenancyId === selected.id && isEffectiveOn(contract.effectiveFrom, contract.effectiveTo, scheduleAsOf)) : undefined;
+    const tenancyContracts = selected ? snapshot.subsidyContracts.filter(contract => contract.tenancyId === selected.id) : [];
+    const validSubsidyDate = (date: string) => /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(Date.parse(date)) && new Date(date).toISOString().slice(0, 10) === date;
+    const datedContracts = tenancyContracts.filter(contract => validSubsidyDate(contract.effectiveFrom)
+      && (contract.effectiveTo === undefined || validSubsidyDate(contract.effectiveTo) && contract.effectiveTo >= contract.effectiveFrom));
+    const effectiveContracts = datedContracts.filter(contract => isEffectiveOn(contract.effectiveFrom, contract.effectiveTo, scheduleAsOf));
+    const candidateContract = effectiveContracts.length === 1 && datedContracts.length === tenancyContracts.length ? effectiveContracts[0] : undefined;
+    const subsidyContract = candidateContract && candidateContract.status === "active" && ["source", "manual"].includes(candidateContract.statusKnowledge ?? "")
+      && candidateContract.propertyId === unit.propertyId && candidateContract.unitId === unit.id
+      && Number.isSafeInteger(candidateContract.agencyObligationCents) && candidateContract.agencyObligationCents > 0
+      && Number.isSafeInteger(candidateContract.tenantObligationCents) && candidateContract.tenantObligationCents >= 0
+      && candidateContract.agencyObligationCents + candidateContract.tenantObligationCents === amounts.baseRentCents
+      ? candidateContract : undefined;
+    const subsidyException = tenancyContracts.length && !subsidyContract
+      ? effectiveContracts.length > 1 ? "subsidy_contract_ambiguous" : "subsidy_contract_unconfirmed" : undefined;
     const unresolvedCodes = unresolvedTenancyForUnit(snapshot, unit, asOf);
     const balance = selected ? readBalance(snapshot, selected.id, asOf) : { balanceComplete: unresolvedCodes.length === 0, balanceUncertaintyCodes: unresolvedCodes.length ? ["tenancy_balance_scope_unknown"] : [], rentOnlyBalanceCents: 0, nonRentBalanceCents: 0, totalBalanceCents: 0, unappliedCashCents: 0, prepaidCents: 0, oldestUnpaidRentOn: undefined };
     const occupancy: OccupancyState = current ? "current" : future ? "future_preleased" : unresolvedCodes.length > 0 ? "unknown" : "vacant";
@@ -661,6 +674,7 @@ function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFi
     if (unit.marketRentCents === undefined || unit.marketRentCents === null) exceptionCodes.push("market_rent_unknown");
     if (selected && !term) exceptionCodes.push("lease_term_missing");
     exceptionCodes.push(...unresolvedCodes, ...amounts.exceptionCodes);
+    if (subsidyException) exceptionCodes.push(subsidyException);
     const tenant = current ? people.get(current.primaryPersonId) : undefined;
     const futureTenant = future ? people.get(future.primaryPersonId) : undefined;
     const searchText = `${property?.name ?? ""} ${unit.unitNumber} ${displayName(tenant)} ${displayName(futureTenant)}`;
@@ -690,7 +704,7 @@ function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFi
       monthToMonth: term?.monthToMonth,
       baseRentCents: amounts.baseRentCents,
       recurringFeesCents: amounts.recurringFeesCents,
-      subsidyCents: amounts.subsidyCents,
+      subsidyCents: subsidyContract?.agencyObligationCents ?? (subsidyException ? null : amounts.subsidyCents),
       tenantPortionCents: subsidyContract?.tenantObligationCents,
       totalScheduledCents: selected && (amounts.baseRentCents === undefined || amounts.recurringFeesCents === null || amounts.exceptionCodes.includes("scheduled_amount_unconfirmed")) ? null : (amounts.baseRentCents ?? 0) + (amounts.recurringFeesCents ?? 0),
       balanceDueCents: balance.balanceComplete === false ? null : balance.totalBalanceCents,
