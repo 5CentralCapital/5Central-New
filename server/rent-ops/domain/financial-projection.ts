@@ -86,7 +86,7 @@ function tenancyOccupiesMonth(
 ): { state: "current" | "future_preleased" | "past" | "excluded" | "unknown"; partialMonth: boolean; exceptionCodes: string[] } {
   const exceptionCodes: string[] = [];
   const strictKnowledge = snapshot.modelVersion === 3;
-  if (isKnownPastAccountOn(snapshot, tenancy.primaryPersonId, asOf)) {
+  if (isKnownPastAccountOn(snapshot, tenancy.primaryPersonId, asOf, tenancy)) {
     return ["current", "notice", "future"].includes(tenancy.status)
       ? { state: "unknown", partialMonth: false, exceptionCodes: ["tenancy_account_status_conflict"] }
       : { state: "excluded", partialMonth: false, exceptionCodes: [] };

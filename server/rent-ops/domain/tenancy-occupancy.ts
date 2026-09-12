@@ -22,7 +22,10 @@ export function isOccupiedTenancyOn(tenancy: RentOpsTenancy, asOf: IsoDate): boo
   return tenancy.status === "past" && !!tenancy.actualMoveOutOn && confirmed(tenancy.actualMoveOutKnowledge);
 }
 
-export function isKnownPastAccountOn(snapshot: RentOpsSnapshot, personId: string, asOf: IsoDate): boolean {
+export function isKnownPastAccountOn(snapshot: RentOpsSnapshot, personId: string, asOf: IsoDate, tenancy?: RentOpsTenancy): boolean {
+  // An explicit canonical operator status overrides this account observation
+  // only for the exact tenancy; date and occupancy guards still apply.
+  if (tenancy?.primaryPersonId === personId && ["manual", "confirmed"].includes(tenancy.statusKnowledge ?? "")) return false;
   const facts = snapshot.people.find(person => person.id === personId)?.sourceAccountFacts;
   return !!facts && facts.statusKnowledge === "source" && (facts.status === "past" || facts.status === "cancelled") && !!facts.observedOn && facts.observedOn <= asOf;
 }

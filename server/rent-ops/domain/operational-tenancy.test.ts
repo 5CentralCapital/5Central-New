@@ -144,3 +144,49 @@ test("copied unit IDs with unknown tenancy links cannot establish current charge
   assert.equal(roll.baseRentCents, undefined);
   assert.ok(roll.exceptionCodes.includes("tenancy_link_unknown"));
 });
+
+test("observed former account classifies unknown historical leases without rewriting occupancy dates", async () => {
+  const { serializeWorkspaceBootstrap } = await import("../presentation/workspace-read");
+  for (const status of ["past", "cancelled"] as const) {
+    const { snapshot, tenancy } = fixture();
+    const person = snapshot.people.find(row => row.id === tenancy.primaryPersonId)!;
+    person.sourceAccountFacts = { status, rawStatus: status, statusKnowledge: "source", postingStartOn: null, postingEndOn: null, postingStartKnowledge: "unknown", postingEndKnowledge: "unknown", observedOn: "2026-09-07", artifactSha256: "a".repeat(64) };
+    Object.assign(tenancy, { status: null, statusKnowledge: "unknown" });
+    const before = structuredClone(snapshot);
+    assert.equal(deriveTenantNavigation(snapshot, person.id, filters)?.category, "former");
+    assert.equal(serializeWorkspaceBootstrap(snapshot, filters).tenantIndex.find(row => row.person.id === person.id)?.category, "former");
+    assert.deepEqual(deriveTenantProfile(snapshot, person.id, filters)?.operationalScheduleIds, []);
+    assert.equal(deriveTenantNavigation(snapshot, person.id, { asOfDate: "2026-09-06" })?.category, "unknown");
+    assert.deepEqual(snapshot, before, "classification preserves all imported facts and dates");
+    Object.assign(tenancy, { status: "future", statusKnowledge: "source", actualMoveInOn: undefined, plannedMoveInOn: "2026-10-01", plannedMoveInKnowledge: "source" });
+    assert.equal(deriveTenantNavigation(snapshot, person.id, filters)?.category, "former", "past account is not promoted by an old future lease");
+    person.sourceAccountFacts.statusKnowledge = "unknown";
+    person.sourceAccountFacts.status = null;
+    assert.equal(deriveTenantNavigation(snapshot, person.id, filters)?.category, "future", "unconfirmed account status cannot force former classification");
+  }
+});
+
+test("manual exact-tenancy status overrides account observation without bypassing occupancy evidence", async () => {
+  const { deriveOperationalScheduleRegister } = await import("./reports");
+  const { snapshot, tenancy } = fixture();
+  const person = snapshot.people.find(row => row.id === tenancy.primaryPersonId)!;
+  person.sourceAccountFacts = { status: "past", rawStatus: "Past", statusKnowledge: "source", postingStartOn: null, postingEndOn: null, postingStartKnowledge: "unknown", postingEndKnowledge: "unknown", observedOn: "2026-09-07", artifactSha256: "a".repeat(64) };
+  tenancy.statusKnowledge = "manual";
+  assert.equal(deriveTenantNavigation(snapshot, person.id, filters)?.category, "current");
+  assert.equal(deriveRentRoll(snapshot, filters).find(row => row.unitId === tenancy.unitId)?.occupancy, "current");
+  assert.ok(deriveOperationalScheduleRegister(snapshot, filters).currentScheduleIds.length > 0);
+  tenancy.actualMoveInOn = undefined;
+  assert.equal(deriveTenantNavigation(snapshot, person.id, filters)?.category, "unknown");
+  assert.equal(deriveOperationalScheduleRegister(snapshot, filters).currentScheduleIds.length, 0);
+  Object.assign(tenancy, { status: "future", plannedMoveInOn: "2026-10-01", plannedMoveInKnowledge: "manual" });
+  assert.equal(deriveTenantNavigation(snapshot, person.id, filters)?.category, "future");
+  Object.assign(person.sourceAccountFacts, { status: "future", rawStatus: "Future" });
+  Object.assign(tenancy, { status: "cancelled", statusKnowledge: "manual" });
+  assert.equal(deriveTenantNavigation(snapshot, person.id, filters)?.category, "former");
+  Object.assign(tenancy, { status: "past", statusKnowledge: "source" });
+  assert.equal(deriveTenantNavigation(snapshot, person.id, filters)?.category, "future");
+  Object.assign(tenancy, { status: null, statusKnowledge: "unknown" });
+  assert.equal(deriveTenantNavigation(snapshot, person.id, filters)?.category, "future");
+  assert.equal(deriveTenantNavigation(snapshot, person.id, { asOfDate: "2026-09-06" })?.category, "unknown");
+  assert.equal(deriveOperationalScheduleRegister(snapshot, filters).currentScheduleIds.length, 0);
+});
