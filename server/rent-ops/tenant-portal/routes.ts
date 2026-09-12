@@ -3,7 +3,7 @@ export { tenantAccountSummary } from "./admin-service";
 import { Readable } from "node:stream";
 import { RentOpsService } from "../services/service";
 import type { StorageReadAdapter } from "../storage";
-import { isTenantLeaseFile } from "./lease-files";
+import { authorizedTenantLeaseFile } from "./lease-files";
 import { createTenantAccessNotifier, type TenantAccessNotifier } from "./delivery";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { Router, type Express, type Request, type RequestHandler, type Response } from "express";
@@ -210,7 +210,8 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
 
   const getTenantHome = async (identity: TenantIdentity) => {
     const snapshot = await options.repository.getSnapshot();
-    const home = presentTenantHome(snapshot, identity, now().toISOString().slice(0, 10));
+    const transfers = await options.repository.readPortalTransferHistory?.(identity.id) ?? [];
+    const home = presentTenantHome(snapshot, identity, now().toISOString().slice(0, 10), transfers);
     if (!home) return home;
     // A positive metadata label alone must not advertise a downloadable file.
     const available = await Promise.all(home.leaseFiles.map(async file => {
@@ -236,11 +237,12 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
     const snapshot = await options.repository.getSnapshot();
     const tenancy = resolveTenantBinding(snapshot, identity.personId, identity.tenancyId);
     const document = snapshot.documents.find(row => row.id === req.params.id);
-    if (!tenancy || !document || !isTenantLeaseFile(document, identity, tenancy)) throw unavailable();
+    const transfers = await options.repository.readPortalTransferHistory?.(identity.id) ?? [];
+    if (!tenancy || !document || !authorizedTenantLeaseFile(document, identity, tenancy, snapshot, transfers)) throw unavailable();
     const opened = await documentService.openVerifiedDocument(document.id);
     // The storage service rereads metadata. Recheck its actual returned row,
     // so a reassignment between authorization and opening cannot expose it.
-    if (!isTenantLeaseFile(opened.document, identity, tenancy)) { opened.stream.destroy(); throw unavailable(); }
+    if (!authorizedTenantLeaseFile(opened.document, identity, tenancy, snapshot, transfers)) { opened.stream.destroy(); throw unavailable(); }
     const iterator = opened.stream[Symbol.asyncIterator]();
     const prefix: Buffer[] = [];
     let prefixLength = 0;

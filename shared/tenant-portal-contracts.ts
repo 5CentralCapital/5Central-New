@@ -70,7 +70,7 @@ export interface TenantLedgerEntry {
   balanceCents: number | null;
 }
 
-export interface TenantLeaseFile { id: string; fileName: string; downloadPath: string; }
+export interface TenantLeaseFile { id: string; fileName: string; downloadPath: string; priorUnitLabel?: string; }
 
 export interface TenantHome {
   historyCoverage?: { status: "verified" | "partial" | "unverified"; complete: boolean; asOfDate?: string };
