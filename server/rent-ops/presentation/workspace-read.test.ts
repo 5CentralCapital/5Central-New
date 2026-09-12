@@ -47,6 +47,8 @@ test("operational reads preserve full financial derivations and avoid legacy rep
 test("synthetic bootstrap stays within response budget at 1000 navigation contacts", () => {
   const source = structuredClone(syntheticRentOpsSnapshot());
   source.people = Array.from({length: 1000}, (_, index) => ({ ...source.people[0], id: `person-${index}`, firstName: `Contact ${index}` }));
+  source.tenancies = source.people.map((person, index) => ({ ...source.tenancies[0], id: `tenancy-${index}`, primaryPersonId: person.id }));
+  source.householdMemberships = [];
   const start = performance.now();
   const bytes = Buffer.from(JSON.stringify(serializeWorkspaceBootstrap(source)));
   const compressed = gzipSync(bytes);
