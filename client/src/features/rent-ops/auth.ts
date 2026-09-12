@@ -98,6 +98,7 @@ function isMutation(method: string): boolean {
 export class RentOpsAuthClient {
   private readonly fetchImpl?: FetchImplementation;
   private snapshot: RentOpsAuthSnapshot = { status: "unknown" };
+  private generation = 0;
   private csrfToken: string | undefined;
   private csrfRequest: Promise<string> | undefined;
   private readonly listeners = new Set<Listener>();
@@ -127,9 +128,18 @@ export class RentOpsAuthClient {
     for (const listener of Array.from(this.listeners)) listener();
   }
 
-  private clearSession(message?: string): void {
+  private assertCurrent(generation: number): void {
+    if (generation !== this.generation) throw new RentOpsAuthError(0, "This request belongs to an earlier Rent Operations session.");
+  }
+
+  private beginSessionChange(): number {
     this.csrfToken = undefined;
     this.csrfRequest = undefined;
+    return ++this.generation;
+  }
+
+  private clearSession(message?: string): void {
+    this.beginSessionChange();
     this.publish({ status: "unauthenticated", ...(message ? { message } : {}) });
   }
 
@@ -139,12 +149,14 @@ export class RentOpsAuthClient {
   }
 
   async restore(): Promise<boolean> {
+    const generation = this.beginSessionChange();
     try {
       const response = await this.fetch(RENT_OPS_AUTH_ROUTES.session, {
         credentials: "include",
         headers: { Accept: "application/json" },
       });
       const payload = await jsonPayload(response);
+      this.assertCurrent(generation);
       if (response.status === 401 || response.status === 403) {
         this.clearSession();
         return false;
@@ -159,9 +171,11 @@ export class RentOpsAuthClient {
       parseCsrfToken(payload);
       this.csrfToken = undefined;
       await this.ensureCsrfToken();
+      this.assertCurrent(generation);
       this.publish({ status: "authenticated", user });
       return true;
     } catch (error) {
+      if (generation !== this.generation) throw error;
       if (error instanceof RentOpsAuthError) {
         if (this.snapshot.status !== "unauthenticated") this.clearSession(error.message);
         throw error;
@@ -172,6 +186,7 @@ export class RentOpsAuthClient {
   }
 
   async login(email: string, password: string): Promise<RentOpsAdminUser> {
+    const generation = this.beginSessionChange();
     try {
       const response = await this.fetch(RENT_OPS_AUTH_ROUTES.login, {
         method: "POST",
@@ -180,6 +195,7 @@ export class RentOpsAuthClient {
         body: JSON.stringify({ email, password }),
       });
       const payload = await jsonPayload(response);
+      this.assertCurrent(generation);
       if (!response.ok) {
         this.clearSession(response.status === 401 || response.status === 403
           ? "The dedicated administrator sign-in was not accepted."
@@ -190,9 +206,11 @@ export class RentOpsAuthClient {
       parseCsrfToken(payload);
       this.csrfToken = undefined;
       await this.ensureCsrfToken();
+      this.assertCurrent(generation);
       this.publish({ status: "authenticated", user });
       return user;
     } catch (error) {
+      if (generation !== this.generation) throw error;
       if (error instanceof RentOpsAuthError) {
         if (this.snapshot.status !== "unauthenticated") this.clearSession(error.message);
         throw error;
@@ -205,12 +223,14 @@ export class RentOpsAuthClient {
   private async ensureCsrfToken(): Promise<string> {
     if (this.csrfToken) return this.csrfToken;
     if (this.csrfRequest) return this.csrfRequest;
-    this.csrfRequest = (async () => {
+    const generation = this.generation;
+    const pending = (async () => {
       const response = await this.fetch(RENT_OPS_AUTH_ROUTES.csrf, {
         credentials: "include",
         headers: { Accept: "application/json" },
       });
       const payload = await jsonPayload(response);
+      this.assertCurrent(generation);
       if (response.status === 401 || response.status === 403) {
         this.expireSession();
         throw new RentOpsAuthError(response.status, "Your Rent Operations session has ended. Sign in again.");
@@ -220,20 +240,24 @@ export class RentOpsAuthClient {
       this.csrfToken = token;
       return token;
     })();
+    this.csrfRequest = pending;
     try {
-      return await this.csrfRequest;
+      return await pending;
     } finally {
-      this.csrfRequest = undefined;
+      if (this.csrfRequest === pending) this.csrfRequest = undefined;
     }
   }
 
   /** Same-origin Rent Ops request with an in-memory CSRF header on mutations. */
   async request(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+    const generation = this.generation;
     const method = (init.method ?? "GET").toString().toUpperCase();
     const headers = new Headers(init.headers ?? {});
     headers.set("Accept", headers.get("Accept") ?? "application/json");
     if (isMutation(method)) headers.set("x-rent-ops-csrf", await this.ensureCsrfToken());
+    this.assertCurrent(generation);
     const response = await this.fetch(input, { ...init, method, credentials: "include", headers });
+    this.assertCurrent(generation);
     if (response.status === 401 || response.status === 403) {
       this.expireSession();
       throw new RentOpsAuthError(response.status, "Your Rent Operations session has ended. Sign in again.");
@@ -242,13 +266,14 @@ export class RentOpsAuthClient {
   }
 
   async logout(): Promise<void> {
+    const generation = this.beginSessionChange();
     try {
       if (this.snapshot.status === "authenticated") await this.request(RENT_OPS_AUTH_ROUTES.logout, { method: "POST" });
     } catch {
       // Local memory state is cleared even if the session endpoint is already
       // unavailable. No generic logout or API-key fallback is attempted.
     } finally {
-      this.clearSession();
+      if (generation === this.generation) this.clearSession();
     }
   }
 }

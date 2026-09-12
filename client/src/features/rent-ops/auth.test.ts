@@ -88,3 +88,82 @@ test("client auth has no generic host-auth or browser credential persistence fal
   assert.match(source, /credentials:\s*["']include["']/);
   assert.match(source, /x-rent-ops-csrf/);
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+for (const status of [200, 401, 403]) {
+  test(`a previous session's delayed ${status} response cannot affect the new session`, async () => {
+    const old = deferred<Response>();
+    let nextUser = user;
+    const client = new RentOpsAuthClient({ fetchImpl: async (input) => {
+      if (String(input).endsWith('/old-profile')) return old.promise;
+      return response({ user: nextUser, csrfToken });
+    } });
+    await client.login(user.email, 'synthetic');
+    const pending = client.request('/api/rent-ops/old-profile');
+    const rejected = assert.rejects(pending, /earlier Rent Operations session/);
+    await client.logout();
+    nextUser = { ...user, id: 'user:second' };
+    await client.login(nextUser.email, 'synthetic');
+    old.resolve(response({ privateRecord: 'first session' }, status));
+    await rejected;
+    assert.equal(client.getSnapshot().status, 'authenticated');
+    assert.equal(client.getSnapshot().user?.id, 'user:second');
+  });
+}
+
+test('a delayed logout response cannot clear a later login', async () => {
+  const old = deferred<Response>();
+  const entered = deferred<void>();
+  const client = new RentOpsAuthClient({ fetchImpl: async (input) => {
+    if (String(input) === RENT_OPS_AUTH_ROUTES.logout) { entered.resolve(); return old.promise; }
+    return response({ user, csrfToken });
+  } });
+  await client.login(user.email, 'synthetic');
+  const logout = client.logout();
+  await entered.promise;
+  await client.login(user.email, 'synthetic');
+  old.resolve(response({ ok: true }));
+  await logout;
+  assert.equal(client.getSnapshot().status, 'authenticated');
+});
+
+test('a delayed restore response cannot restore a session after logout', async () => {
+  const old = deferred<Response>();
+  const client = new RentOpsAuthClient({ fetchImpl: async () => old.promise });
+  const restore = client.restore();
+  const rejected = assert.rejects(restore, /earlier Rent Operations session/);
+  await client.logout();
+  old.resolve(response({ user, csrfToken }));
+  await rejected;
+  assert.equal(client.getSnapshot().status, 'unauthenticated');
+});
+
+test('a superseded CSRF fetch cannot replace the later login token', async () => {
+  const old = deferred<Response>();
+  const entered = deferred<void>();
+  let csrfCalls = 0;
+  let mutationToken: string | null = null;
+  const newToken = 'new-session-csrf-token-'.repeat(3);
+  const client = new RentOpsAuthClient({ fetchImpl: async (input, init) => {
+    if (String(input) === RENT_OPS_AUTH_ROUTES.csrf) {
+      if (++csrfCalls === 1) { entered.resolve(); return old.promise; }
+      return response({ csrfToken: newToken });
+    }
+    if (String(input).endsWith('/properties')) mutationToken = new Headers(init?.headers).get('x-rent-ops-csrf');
+    return response({ user, csrfToken });
+  } });
+  const first = client.login(user.email, 'synthetic');
+  const rejected = assert.rejects(first, /earlier Rent Operations session/);
+  await entered.promise;
+  await client.login(user.email, 'synthetic');
+  old.resolve(response({ csrfToken }));
+  await rejected;
+  await client.request('/api/rent-ops/properties', { method: 'POST' });
+  assert.equal(mutationToken, newToken);
+  assert.equal(client.getSnapshot().status, 'authenticated');
+});

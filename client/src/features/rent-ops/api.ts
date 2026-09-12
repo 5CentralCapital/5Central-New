@@ -1550,10 +1550,10 @@ export async function loadRentOpsChargeDefinitions(): Promise<AdminChargeDefinit
   return payload.map(decodeChargeDefinition);
 }
 
-export async function loadRentOpsReport(report: ReportKey, filters: ApiFilters = {}): Promise<ReportRow[]> {
+export async function loadRentOpsReport(report: ReportKey, filters: ApiFilters = {}, signal?: AbortSignal): Promise<ReportRow[]> {
   if (DEMO_ALLOWED) return createDemoAdminSnapshot().reports[report].rows;
   const serverName = report === "lease-expiration" ? "lease-expirations" : report === "security-deposit" ? "security-deposit" : report;
-  const payload = await requestJson(`/api/rent-ops/reports/${encodeURIComponent(serverName)}${buildRentOpsQuery(filters)}`);
+  const payload = await requestJson(`/api/rent-ops/reports/${encodeURIComponent(serverName)}${buildRentOpsQuery(filters)}`, { signal });
   assertNoForbiddenResponseFields(payload);
   const root = exactRecord(unwrapData(payload), "report response", ["report", "filters", "rows"]);
   const responseName = requiredText(root, "report");
@@ -1562,13 +1562,13 @@ export async function loadRentOpsReport(report: ReportKey, filters: ApiFilters =
   return decodeReportRows(report, root.rows);
 }
 
-export async function loadRentOpsTenantProfile(personId: string, filters: ApiFilters = {}): Promise<TenantView> {
+export async function loadRentOpsTenantProfile(personId: string, filters: ApiFilters = {}, signal?: AbortSignal): Promise<TenantView> {
   if (DEMO_ALLOWED) {
     const tenant = createDemoAdminSnapshot().tenants.find((candidate) => candidate.person.id === personId);
     if (!tenant) throw new Error("Tenant record was not found.");
     return tenant;
   }
-  const payload = await requestJson(`/api/rent-ops/tenants/${encodeURIComponent(personId)}${buildRentOpsQuery(filters)}`);
+  const payload = await requestJson(`/api/rent-ops/tenants/${encodeURIComponent(personId)}${buildRentOpsQuery(filters)}`, { signal });
   assertNoForbiddenResponseFields(payload);
   const root = unwrapData(payload);
   if (isRecord(root) && ("profile" in root || "tenant" in root)) {
