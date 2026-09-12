@@ -13,6 +13,7 @@ import { DEFAULT_TENANT_DIRECTORY_STATUS, tenantDirectoryFilters } from './tenan
 import { scheduleDisplayInterval } from './schedule-display';
 import { PropertyUnitRecords } from './property-unit-records';
 import { ReportsWorkspace } from './reports-workspace';
+import { isOccupancyReport, occupancyReportStatusOptions } from './report-model';
 import { DashboardWorkspace } from './dashboard-workspace';
 import { ApplicationsWorkspace } from './applications-workspace';
 import { DocumentsWorkspace } from './documents-workspace';
@@ -155,7 +156,9 @@ function AuthenticatedWorkspace(){
  const refresh=useCallback(async()=>{await data.refresh();},[data.refresh]);
  const selectedReport=route.section==='rent-roll'?'rent-roll':route.section==='leases'?'lease-expiration':route.report;
  const fullTenant=data.tenant.data&&snapshot?{...data.tenant.data,property:data.tenant.data.property??snapshot.snapshot.properties.find(p=>p.id===data.tenant.data?.tenancy?.propertyId),unit:data.tenant.data.unit??snapshot.snapshot.units.find(u=>u.id===data.tenant.data?.tenancy?.unitId)}:undefined;
- const statusOptions=route.section==='tenants'?tenantStatuses:route.section==='applicants'?applicationStatuses:generalStatuses;
+ const occupancyStatus=['reports','rent-roll'].includes(route.section)&&isOccupancyReport(selectedReport);
+ const statusOptions=route.section==='tenants'?tenantStatuses:route.section==='applicants'?applicationStatuses:occupancyStatus?occupancyReportStatusOptions:generalStatuses;
+ const selectedStatus=route.section==='tenants'?tenantStatus:occupancyStatus&&!statusOptions.some(([value])=>value===filters.status)?'all':filters.status;
  return <main className={`rm-workspace${sidebarCollapsed?' is-sidebar-collapsed':''}`}>
   <header className="rm-ribbon"><div className="rm-nav-group"><button type="button" aria-label={sidebarCollapsed?'Show navigation':'Collapse navigation'} onClick={()=>setSidebarCollapsed(v=>!v)}><Menu size={17}/><strong>5CENTRAL</strong></button></div>
   {['Home','Rental Info','Receivables','Reports','Records'].map(group=><nav key={group} className="rm-nav-group" aria-label={group}>{destinations.filter(d=>d.group===group).map(({section,label,icon:Icon,kind})=><button type="button" key={`${section}:${kind??''}`} aria-current={route.section===section&&(section!=='properties'||route.kind===kind)?'page':undefined} onClick={()=>navigate(section,kind)}><Icon size={15}/>{label}</button>)}</nav>)}
@@ -167,7 +170,7 @@ function AuthenticatedWorkspace(){
     <label>Portfolio<select aria-label="Portfolio scope" value={filters.propertyScope} onChange={e=>changeScope({propertyScope:e.target.value as 'active'|'all',propertyId:'all'})}><option value="active">Active portfolio</option><option value="all">All imported properties</option></select></label>
     <label>Property<select value={filters.propertyId} onChange={e=>changeScope({propertyId:e.target.value})}><option value="all">All properties</option>{snapshot&&scopeProperties(snapshot,filters).map(p=><option value={p.id} key={p.id}>{p.name??'Unnamed property'}</option>)}</select></label>
     <label>As of<input type="date" value={filters.asOfDate} onChange={e=>{if(e.target.value)setFilters(f=>({...f,asOfDate:e.target.value}));}}/></label>
-    {['tenants','applicants','reports','rent-roll','leases'].includes(route.section)&&<label>Status<select value={route.section==='tenants'?tenantStatus:filters.status} onChange={e=>{if(route.section==='tenants'){setTenantStatus(e.target.value);go({...route,recordId:undefined},true);}else setFilters(f=>({...f,status:e.target.value}));}}>{statusOptions.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>}
+    {['tenants','applicants','reports','rent-roll','leases'].includes(route.section)&&<label>Status<select value={selectedStatus} onChange={e=>{if(route.section==='tenants'){setTenantStatus(e.target.value);go({...route,recordId:undefined},true);}else setFilters(f=>({...f,status:e.target.value}));}}>{statusOptions.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>}
     <label className="rm-search"><Search size={14}/><input aria-label="Search records" placeholder={route.section==='tenants'?'Name, property, unit, email or phone':'Search records'} value={filters.search} onChange={e=>setFilters(f=>({...f,search:e.target.value}))}/></label>
     <button className="rm-button rm-button--icon" aria-label="Refresh workspace" title="Refresh" onClick={()=>void refresh()} disabled={data.isRefreshing}><RefreshCw size={15} className={data.isRefreshing?'spin':''}/></button>
     {route.section==='properties'&&snapshot&&<button className="rm-button rm-button-primary" onClick={()=>openEditor('save-property')}><Plus size={14}/>Add property</button>}

@@ -4,6 +4,8 @@ import type { DelinquencyRow, RentRollRow, ScheduledIncomeRow } from "../types";
 import {
   buildPropertySubtotals,
   filterRentRollRows,
+  isOccupancyReport,
+  occupancyReportStatusOptions,
   buildReportCsv,
   projectReportGridView,
   createReportViewModel,
@@ -144,7 +146,7 @@ test("rent roll text search leaves the scoped dated server query and cache key u
     const query = reportQueryFilters({ ...filters, search }, "rent-roll", period);
     assert.deepEqual(reportQueryKey("rent-roll", query, "operator"), reportQueryKey("rent-roll", original, "operator"));
     assert.equal(query.search, undefined);
-    assert.equal(query.propertyId, "property:one"); assert.deepEqual(query.status, ["current"]); assert.equal(query.asOfDate, period.asOfDate);
+    assert.equal(query.propertyId, "property:one"); assert.deepEqual(query.occupancy, ["current"]); assert.equal(query.status, undefined); assert.equal(query.asOfDate, period.asOfDate);
   }
   assert.equal(reportQueryFilters({ ...filters, search: " alex " }, "delinquency", period).search, "alex");
   assert.notDeepEqual(reportQueryFilters({ ...filters, propertyId: "property:two" }, "rent-roll", period), original);
@@ -167,4 +169,30 @@ test("local rent roll search matches property unit current and future names and 
     assert.equal(csv.split(/\r?\n/).length, filtered.length + 1);
   }
   assert.equal(filterRentRollRows(rows, ""), rows);
+});
+
+test("occupancy status controls send the exact API field and filter report rows", async () => {
+  const { syntheticRentOpsSnapshot } = await import("../../../../../server/rent-ops/fixtures/synthetic");
+  const { deriveRentRoll, deriveOccupancy } = await import("../../../../../server/rent-ops/domain/reports");
+  const { OCCUPANCY_STATES, rentOpsFiltersSchema } = await import("../../../../../shared/rent-ops-contracts");
+  assert.deepEqual(occupancyReportStatusOptions.map(([value]) => value), ["all", ...OCCUPANCY_STATES]);
+  const snapshot = syntheticRentOpsSnapshot();
+  const filters = { propertyScope: "all" as const, propertyId: "all", asOfDate: "2026-08-15", status: "all", search: "" };
+  for (const key of ["rent-roll", "occupancy"] as const) {
+    assert.equal(isOccupancyReport(key), true);
+    const derive = key === "rent-roll" ? deriveRentRoll : deriveOccupancy;
+    const all = derive(snapshot, { asOfDate: filters.asOfDate, propertyScope: "all" });
+    assert.ok(all.some(row => row.occupancy === "current") && all.some(row => row.occupancy !== "current"));
+    for (const status of OCCUPANCY_STATES) {
+      const query = reportQueryFilters({ ...filters, status }, key, { asOfDate: filters.asOfDate });
+      assert.equal(query.status, undefined); assert.deepEqual(query.occupancy, [status]);
+      const result = derive(snapshot, rentOpsFiltersSchema.parse(query));
+      assert.deepEqual(result.map(row => row.unitId), all.filter(row => row.occupancy === status).map(row => row.unitId));
+    }
+    for (const status of ["all", "not_ready", "off_market"]) {
+      const query = reportQueryFilters({ ...filters, status }, key, { asOfDate: filters.asOfDate });
+      assert.equal(query.status, undefined); assert.equal(query.occupancy, undefined);
+    }
+  }
+  assert.deepEqual(reportQueryFilters({ ...filters, status: "current" }, "lease-expiration", { asOfDate: filters.asOfDate }).status, ["current"]);
 });

@@ -618,6 +618,11 @@ export function reportQueryKey(report: ReportKey, filters: ApiFilters, authentic
   return ["rent-ops-workspace", "report", authenticatedUserId, report, filters] as const;
 }
 
+export const occupancyReportStatusOptions = [["all", "All"], ["current", "Current"], ["future_preleased", "Future preleased"], ["vacant", "Vacant"], ["unknown", "Needs review"]] as const;
+export function isOccupancyReport(key: ReportKey): boolean {
+  return key === "rent-roll" || key === "occupancy";
+}
+
 export function reportQueryFilters(
   filters: ViewFilters,
   key: ReportKey,
@@ -630,7 +635,9 @@ export function reportQueryFilters(
     asOfDate: period.asOfDate,
     ...(mode === "month" && period.month ? { month: period.month } : {}),
     ...(mode === "range" && period.fromDate && period.toDate ? { fromDate: period.fromDate, toDate: period.toDate } : {}),
-    ...(filters.status !== "all" && filters.status ? { status: [filters.status] } : {}),
+    ...(isOccupancyReport(key)
+      ? occupancyReportStatusOptions.some(([value]) => value !== "all" && value === filters.status) ? { occupancy: [filters.status] } : {}
+      : filters.status !== "all" && filters.status ? { status: [filters.status] } : {}),
     ...(key !== "rent-roll" && filters.search.trim() ? { search: filters.search.trim() } : {}),
   };
 }
