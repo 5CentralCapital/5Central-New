@@ -1148,3 +1148,17 @@ test("exact CreditAllocation retains its AppliedCreditID parent without requirin
  assert.ok(result.exceptions.some(e=>e.detail==='allocation_parent_credit_not_resolved'));
  assert.ok(result.exceptions.some(e=>e.detail==='allocation_parent_payment_not_resolved'));
 });
+
+test("future generic RM move-out remains expected at the sealed observation on every replay",()=>{
+ const payload=syntheticExportPayload();
+ payload.leases=[{entityType:"tenancy",sourceId:"scheduled",LeaseID:"scheduled",TenantID:"t1",PropertyID:"p1",UnitID:"u1",MoveInDate:"2026-08-01",MoveOutDate:"2027-07-31",DepartureDate:"2027-07-31"},
+ {entityType:"tenancy",sourceId:"historical",LeaseID:"historical",TenantID:"t1",PropertyID:"p1",UnitID:"u1",MoveInDate:"2025-01-01",MoveOutDate:"2026-06-30"}];
+ for(const asOfDate of ["2026-09-07","2028-01-01"]){
+  const result=normalizeRentManagerExport(payload,{artifactObservationOn:"2026-09-07",asOfDate});
+  const [scheduled,historical]=result.input.leases as Array<Record<string,unknown>>;
+  assert.equal(scheduled.actualMoveOutOn,undefined);
+  assert.equal(scheduled.expectedMoveOutOn,"2027-07-31");
+  assert.equal(scheduled.MoveOutDate,"2027-07-31");
+  assert.equal(historical.actualMoveOutOn,"2026-06-30");
+ }
+});

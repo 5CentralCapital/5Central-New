@@ -41,7 +41,7 @@ test("recurring charges retain scope identity and classify date boundaries", () 
   const ended = { id: "ended", propertyId, unitId, tenancyId: tenant.tenancy?.id, amountCents: 1000, effectiveFrom: "2026-07-01", effectiveTo: "2026-08-15", active: true };
   const inactive = { id: "inactive", propertyId, unitId, tenancyId: tenant.tenancy?.id, amountCents: 1000, effectiveFrom: "2026-09-01", active: false };
   const unknown = { id: "unknown", propertyId, unitId, tenancyId: tenant.tenancy?.id, amountCents: null, effectiveFrom: null, active: null };
-  const withExtra = { ...tenant, schedules: [...tenant.schedules, explicitUnit, explicitProperty, ended, inactive, unknown] } as TenantView;
+  const withExtra = { ...tenant, operationalScheduleIds: ["unit-scope"], operationalSchedulesComplete: true, schedules: [...tenant.schedules, explicitUnit, explicitProperty, ended, inactive, unknown] } as TenantView;
   withExtra.schedules.forEach(schedule => Object.assign(schedule, { lineageState: "valid", resolvedEffectiveTo: schedule.effectiveTo ?? null, canScheduleSuccessor: true }));
   const mapped = buildRecurringChargeRows(withExtra, snapshot, "2026-08-16");
   const unitRow = mapped.find((row) => row.id === "unit-scope");
@@ -173,7 +173,7 @@ test("monthly totals require known candidate facts and exclude nonmonthly schedu
   const snapshot = createDemoAdminSnapshot();
   const tenant = snapshot.tenants[0];
   const schedule = { ...tenant.schedules[0], active: true, billingFrequency: "monthly", amountCents: 12000, effectiveFrom: "2026-08-01", effectiveTo: null };
-  const rows = buildRecurringChargeRows({ ...tenant, schedules: [schedule] }, snapshot, "2026-08-16");
+  const rows = buildRecurringChargeRows({ ...tenant, schedules: [schedule], operationalScheduleIds: [schedule.id!], operationalSchedulesComplete: true }, snapshot, "2026-08-16");
   assert.equal(currentMonthlyTotal(rows), 12000);
   assert.equal(currentMonthlyTotal(rows, false), null);
   assert.equal(currentMonthlyTotal([...rows, { ...rows[0], billingFrequency: "annual", amountCents: 90000 }]), 12000);
@@ -230,13 +230,13 @@ test("server-resolved replacement intervals prevent duplicate current totals and
   const tenant = snapshot.tenants[0];
   const root = { ...tenant.schedules[0], amountCents: 125000, billingFrequency: "monthly" as const, effectiveFrom: "2026-01-01", effectiveTo: "2027-09-30", resolvedEffectiveTo: "2026-10-31", lineageState: "valid" as const, canScheduleSuccessor: false, active: true };
   const replacement = { ...root, id: "replacement", effectiveFrom: "2026-11-01", resolvedEffectiveTo: "2027-09-30", amountCents: 130000, canScheduleSuccessor: true };
-  const profile = { ...tenant, schedules: [root, replacement] };
+  const profile = { ...tenant, schedules: [root, replacement], operationalScheduleIds: [root.id!], operationalSchedulesComplete: true };
   const before = buildRecurringChargeRows(profile, snapshot, "2026-10-01");
   assert.deepEqual(before.map(row => row.state), ["current", "future"]);
   assert.equal(before[0].effectiveTo, "2026-10-31");
   assert.equal(root.effectiveTo, "2027-09-30");
   assert.equal(currentMonthlyTotal(before), 125000);
-  const after = buildRecurringChargeRows(profile, snapshot, "2026-11-01");
+  const after = buildRecurringChargeRows({ ...profile, operationalScheduleIds: [replacement.id] }, snapshot, "2026-11-01");
   assert.deepEqual(after.map(row => row.state), ["ended", "current"]);
   assert.equal(currentMonthlyTotal(after), 130000);
   const actions = buildTenantEditActions(profile, snapshot, "charges");

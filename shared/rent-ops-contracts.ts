@@ -424,7 +424,21 @@ export interface RentOpsUnit {
   listingKnowledge?: FactKnowledge;
 }
 
+/** Observed RM account facts; posting bounds are not occupancy or lease dates. */
+export interface RentOpsSourceAccountFacts {
+  status: "current" | "future" | "past" | "notice" | "cancelled" | null;
+  rawStatus: string | null;
+  statusKnowledge: "source" | "unknown";
+  postingStartOn: IsoDate | null;
+  postingEndOn: IsoDate | null;
+  postingStartKnowledge: "source" | "unknown";
+  postingEndKnowledge: "source" | "unknown";
+  observedOn: IsoDate;
+  artifactSha256: string;
+}
+
 export interface RentOpsPerson {
+  sourceAccountFacts?: RentOpsSourceAccountFacts | null;
   id: string;
   /** Source-backed review uncertainty, never a subsidy amount or contract. */
   paymentReviewReason?: "assistance_responsibility_unverified" | null;
@@ -1397,10 +1411,10 @@ export interface RentRollRow {
   contractEndOn?: IsoDate;
   monthToMonth?: boolean;
   baseRentCents?: Cents;
-  recurringFeesCents: Cents;
-  subsidyCents: Cents;
+  recurringFeesCents: Cents | null;
+  subsidyCents: Cents | null;
   tenantPortionCents?: Cents;
-  totalScheduledCents: Cents;
+  totalScheduledCents: Cents | null;
   balanceDueCents: Cents | null;
   oldestUnpaidRentOn?: IsoDate;
   exceptionCodes: string[];
@@ -1630,6 +1644,8 @@ export interface TenantProfile {
   tenancies?: RentOpsTenancy[];
   leaseTerms: RentOpsLeaseTerm[];
   schedules: RentOpsRecurringChargeSchedule[];
+  operationalScheduleIds?: string[];
+  operationalSchedulesComplete?: boolean;
   ledger: LedgerRow[];
   deposits: RentOpsSecurityDeposit[];
   subsidyContracts: RentOpsSubsidyContract[];

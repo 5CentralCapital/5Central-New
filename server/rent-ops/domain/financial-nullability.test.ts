@@ -70,6 +70,7 @@ function scheduleFixture(
 ): RentOpsRecurringChargeSchedule {
   return {
     id,
+    billingFrequency: "monthly",
     scopeType: "unit",
     scopeId: "unit-1",
     scopeTypeKnowledge: "source",

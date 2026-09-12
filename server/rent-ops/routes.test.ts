@@ -426,7 +426,11 @@ test("manager preview context and omitted reports follow the injected business c
     assert.equal(dashboard.body.asOfDate, "2026-10-01");
 
     const earlierDashboard = await request(baseUrl, "/dashboard?asOfDate=2026-09-07");
-    assert.equal(earlierDashboard.status, 400);
+    // A report before a later actual move-in is valid historical occupancy.
+    assert.equal(earlierDashboard.status, 200);
+    assert.equal(earlierDashboard.body.asOfDate, "2026-09-07");
+    assert.equal(earlierDashboard.body.occupiedUnits, 2);
+    assert.equal(dashboard.body.occupiedUnits, 3);
 
     const snapshot = await request(baseUrl, "/snapshot");
     assert.equal(snapshot.status, 200);

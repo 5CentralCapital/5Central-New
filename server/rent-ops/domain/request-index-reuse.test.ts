@@ -37,11 +37,16 @@ function indexReuseResults(reports = {deriveDashboardSummary, deriveRentRoll, de
   return indexReuseCases().map(snapshot => ({violations: validate(snapshot), reports: indexReuseFilters.map(filters => Object.values(reports).map(derive => captureResult(() => derive(snapshot, filters))))}));
 }
 
-test("request indexes preserve exact pre-optimization financial outputs and ordered violations", () => {
-  // Captured from the uncached implementation for every case above, including
-  // invalid parent chains, unknown links, out-of-scope evidence and date edges.
+test("request indexes preserve reviewed financial outputs and ordered violations", () => {
+  // Reviewed baseline after explicit monthly fixture cadence and dated occupancy
+  // corrections. The cases retain invalid parent chains, unknown links, scope
+  // and date edges; the old digest encoded the superseded occupancy errors.
+  const baseline = structuredClone(syntheticRentOpsSnapshot());
+  assert.equal(deriveDashboardSummary(baseline, {asOfDate: "2026-08-16"}).scheduledRentCadenceComplete, true);
+  baseline.tenancies.push({...baseline.tenancies[0], primaryPersonId: "demo-person-2"});
+  assert.throws(() => deriveRentRoll(baseline, {asOfDate: "2026-08-16"}), /Overlapping/);
   const digest = createHash("sha256").update(JSON.stringify(indexReuseResults())).digest("hex");
-  assert.equal(digest, "1174d220c71ec4fb9077208fbdefbd38becb7816d8d1722429eb77d0321fe7e6");
+  assert.equal(digest, "098a5977539e9abfe1d1e13ce6a109296b0afd96e5b1c18290803d47db774124");
 });
 
 test("separate calls observe changed reversal and allocation facts on the same snapshot", () => {

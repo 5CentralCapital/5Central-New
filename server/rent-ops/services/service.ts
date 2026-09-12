@@ -40,7 +40,7 @@ import type {
   ApplicantPublicView,
   DashboardSummary,
 } from "../../../shared/rent-ops-contracts";
-import { validateReportFilters, deriveApplicantPipeline, deriveCollectedIncome, deriveDashboardSummary, deriveDashboardWorkspace, deriveDepositLiability, deriveDelinquency, deriveFixedReport, deriveHap, deriveLeaseExpirations, deriveRentRoll, deriveScheduledIncome, deriveScheduledVsCollected, deriveTenantLedger, deriveTenantProfile, toApplicantPublicView } from "../domain/reports";
+import { deriveOperationalScheduleRegister, validateReportFilters, deriveApplicantPipeline, deriveCollectedIncome, deriveDashboardSummary, deriveDashboardWorkspace, deriveDepositLiability, deriveDelinquency, deriveFixedReport, deriveHap, deriveLeaseExpirations, deriveRentRoll, deriveScheduledIncome, deriveScheduledVsCollected, deriveTenantLedger, deriveTenantProfile, toApplicantPublicView } from "../domain/reports";
 import { assertApplicationStatusTransition, assertCents, assertPositiveCents, assertPrivateStorageKey, buildReversal, documentReferenceViolations, effectiveSchedules, RentOpsInvariantError, validateAllocation, validateSnapshot } from "../domain/invariants";
 import { addDays, addMonths, nowIsoDate, nowIsoTimestamp } from "../domain/dates";
 import { isPublicApplicationInventory, serializePublicListings } from "../presentation/public";
@@ -445,6 +445,12 @@ export class RentOpsService {
   async snapshot(): Promise<RentOpsSnapshot> { return this.repository.getSnapshot(); }
   async operationalSnapshot(): Promise<RentOpsSnapshot> {
     return this.repository.getOperationalSnapshot ? this.repository.getOperationalSnapshot() : this.snapshot();
+  }
+  async getOperationalScheduleRegister(filters: RentOpsFilters = {}) {
+    // Tenancy, person source status and complete lineage must be read together.
+    // The operational repository omits large document/activity histories.
+    const snapshot = await this.operationalSnapshot();
+    return measureRentOps("derive", () => deriveOperationalScheduleRegister(snapshot, filters));
   }
   async workspaceCollection<K extends RentOpsWorkspaceCollection>(name: K): Promise<RentOpsSnapshot[K]> {
     return this.repository.getWorkspaceCollection
@@ -1011,7 +1017,10 @@ export class RentOpsService {
       if (!PATCH_FIELDS[entityType]?.has(field) || /source|provenance|knowledge|storage|checksum|hash|token|version|revision/i.test(field)) throw new RentOpsInvariantError("Patch contains a field outside the positive allowlist");
       assertPatchValueSafe(incoming);
       const merged = mergePatchValue(existing[field], incoming);
-      if (jsonEqual(existing[field], merged)) continue;
+      const confirmationKnowledge = PATCH_KNOWLEDGE[entityType][field];
+      const confirmsUnknownFact = entityType === "tenancy" && field === "status" && incoming !== null
+        && confirmationKnowledge && !["source", "manual", "confirmed"].includes(String(existing[confirmationKnowledge] ?? ""));
+      if (jsonEqual(existing[field], merged) && !confirmsUnknownFact) continue;
       next[field] = merged;
       changedFields.push(field);
       const knowledgeField = PATCH_KNOWLEDGE[entityType][field];
@@ -1221,7 +1230,9 @@ export class RentOpsService {
       sourceConfidence: "confirmed",
     };
     const candidate = { ...snapshot, recurringSchedules: [...snapshot.recurringSchedules.filter((existing) => existing.id !== schedule.id), normalized] };
-    const violations = validateSnapshot(candidate).filter((violation) => violation.code === "overlapping_base_rent_schedule");
+    const overlapKey = (violation: { code: string; entityId?: string; message: string }) => `${violation.code}|${violation.entityId ?? ""}|${violation.message}`;
+    const existingOverlaps = new Set(validateSnapshot(snapshot).filter(violation => violation.code === "overlapping_base_rent_schedule").map(overlapKey));
+    const violations = validateSnapshot(candidate).filter(violation => violation.code === "overlapping_base_rent_schedule" && !existingOverlaps.has(overlapKey(violation)));
     if (violations.length > 0) throw new RentOpsInvariantError("Recurring schedule change would overlap an effective base-rent schedule", violations);
     const saved = await this.repository.saveRecurringSchedule(normalized);
     const changedFields = [

@@ -46,3 +46,31 @@ test("new report calls and uncached public selection observe appended successors
   assert.equal(after.scheduledRentCents, before.scheduledRentCents + 12345);
   assert.deepEqual(createEffectiveScheduleSelector(snapshot.recurringSchedules)(root.tenancyId!, filters.asOfDate), effectiveSchedules(snapshot.recurringSchedules, root.tenancyId!, filters.asOfDate));
 });
+
+test("exact tenancy outranks a later person-only fallback without summing rent", async () => {
+  const { projectFinancialSchedules } = await import("./financial-projection");
+  const source = structuredClone(syntheticRentOpsSnapshot());
+  const current = { ...source.recurringSchedules[0], effectiveFrom: "2026-09-12", amountCents: 125000 };
+  const wildcard: RentOpsRecurringChargeSchedule = { ...current, id: "october-person-fallback", lineageRootId: "october-person-fallback", tenancyId: undefined, personId: current.scopeId, effectiveFrom: "2026-10-01", amountCents: 999999, active: null, activeKnowledge: "unknown" };
+  source.recurringSchedules = [current, wildcard];
+  // Keep this fixture's selected unit occupied for both report months.
+  source.tenancies = source.tenancies.filter(row => row.id === current.tenancyId);
+  source.leaseTerms = source.leaseTerms.filter(row => row.tenancyId === current.tenancyId);
+  const scope = { personId: current.scopeId!, propertyId: current.propertyId!, unitId: current.unitId!, allowPersonScopedTenant: true };
+  const select = createEffectiveScheduleSelector(source.recurringSchedules);
+  assert.deepEqual(select(current.tenancyId!, "2026-10-01", scope).map(row => row.id), [current.id]);
+  const projection = projectFinancialSchedules(source, "2026-10");
+  assert.deepEqual(projection.rows.filter(row => row.unitId === current.unitId).map(row => [row.scheduleId, row.amountCents]), [[current.id, 125000]]);
+  assert.equal(source.recurringSchedules[1].active, null);
+  assert.equal(source.recurringSchedules.length, 2);
+});
+
+test("exact tenancy successors remain date-effective and unknown scope cannot win", () => {
+  const current = { ...structuredClone(syntheticRentOpsSnapshot().recurringSchedules[0]), effectiveFrom: "2026-09-12" };
+  const successor: RentOpsRecurringChargeSchedule = { ...current, id: "november-exact", supersedesId: current.id, versionAction: "replace", effectiveFrom: "2026-11-01", amountCents: 135000 };
+  const unknown: RentOpsRecurringChargeSchedule = { ...current, id: "unknown-scope", lineageRootId: "unknown-scope", scopeTypeKnowledge: "unknown", scopeLinkKnowledge: "unknown", effectiveFrom: "2026-10-01", amountCents: 999999 };
+  const scope = { personId: current.scopeId!, propertyId: current.propertyId!, unitId: current.unitId!, allowPersonScopedTenant: true };
+  const select = createEffectiveScheduleSelector([current, successor, unknown]);
+  assert.deepEqual(select(current.tenancyId!, "2026-10-15", scope).map(row => row.id), [current.id]);
+  assert.deepEqual(select(current.tenancyId!, "2026-11-01", scope).map(row => row.id), [successor.id]);
+});

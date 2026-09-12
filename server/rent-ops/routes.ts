@@ -26,7 +26,7 @@ import {
 } from "../../shared/rent-ops-contracts";
 import { RentOpsInvariantError } from "./domain/invariants";
 import { nowIsoDate } from "./domain/dates";
-import { validateReportFilters, deriveApplicantPipeline, deriveDashboardSummary, deriveFixedReport, deriveRentRoll, deriveTenantProfile } from "./domain/reports";
+import { deriveOperationalScheduleRegister, validateReportFilters, deriveApplicantPipeline, deriveDashboardSummary, deriveFixedReport, deriveRentRoll, deriveTenantProfile } from "./domain/reports";
 import { toCsv } from "./services/csv";
 import { RentOpsService } from "./services/service";
 import { MagicLinkDeliveryError } from "./services/notifier";
@@ -61,6 +61,7 @@ import {
   serializePublicApplicationResult,
   serializeReportEnvelope,
   serializeReportRows,
+  serializeOperationalScheduleRegister,
 } from "./presentation";
 
 const reportAliases: Record<string, FixedReportName> = {
@@ -602,9 +603,10 @@ function buildClientSnapshot(snapshot: Awaited<ReturnType<RentOpsService["snapsh
     ...snapshot.tenancies.map((tenancy) => tenancy.primaryPersonId),
     ...snapshot.householdMemberships.flatMap((membership) => [membership.personId, membership.accountPersonId]),
   ].filter((personId): personId is string => typeof personId === "string" && personId.length > 0));
+  const operationalRegister = deriveOperationalScheduleRegister(snapshot, filters);
   const tenantProfiles = snapshot.people
     .filter((person) => profilePersonIds.has(person.id))
-    .map((person) => deriveTenantProfile(snapshot, person.id, filters))
+    .map((person) => deriveTenantProfile(snapshot, person.id, filters, operationalRegister))
     .filter((profile): profile is NonNullable<ReturnType<typeof deriveTenantProfile>> => Boolean(profile))
     // A scoped operational bundle must not turn a person whose only tenancy
     // is outside the selected portfolio into a resident card. The profile
@@ -820,6 +822,13 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
         res.status(404).json(errorBody("not_found")); return;
       }
       await sendWorkspaceJson(req, res, serializeWorkspaceCollectionItems(await service.workspaceCollection(req.params.name as WorkspaceCollection), req.params.name as WorkspaceCollection));
+    } catch (error) { adminError(res, error); }
+  });
+  adminRouter.get("/workspace/recurring", async (req, res) => {
+    try {
+      const filters = parseAdminFilters(req.query);
+      const register = await service.getOperationalScheduleRegister(filters);
+      await sendWorkspaceJson(req, res, serializeOperationalScheduleRegister(register));
     } catch (error) { adminError(res, error); }
   });
   adminRouter.get("/snapshot", async (req, res) => { try { const filters = parseAdminFilters(req.query); validateReportFilters("overview", filters); await sendAdminSnapshot(req, res, buildClientSnapshot(await service.snapshot(), filters)); } catch (error) { adminError(res, error); } });

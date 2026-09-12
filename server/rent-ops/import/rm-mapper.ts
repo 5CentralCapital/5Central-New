@@ -1437,6 +1437,19 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
     if (!claimSource("person", record)) continue;
     const person = mapPerson(context, record, exceptions);
     if (!person) continue;
+    // Only tenant-account rows receive account facts; household contacts do not.
+    if (isV3(context) && context.artifactSha256 && context.artifactObservationOn && isValidCalendarDate(context.artifactObservationOn)) {
+      const accountStatus = strictFinancialValue(context, { sourceCollection: "tenants", sourceField: "Status", semanticKind: "tenancy_status", rawValue: value(record, "Status") });
+      const status = accountStatus === "current" || accountStatus === "future" || accountStatus === "past" || accountStatus === "notice" || accountStatus === "cancelled" ? accountStatus : null;
+      const postingStartOn = optionalDate(record, ["PostingStartDate"], exceptions, "person", "PostingStartDate");
+      const postingEndOn = optionalDate(record, ["PostingEndDate"], exceptions, "person", "PostingEndDate");
+      person.sourceAccountFacts = {
+        status, rawStatus: stringValue(record, "Status") ?? null, statusKnowledge: status ? "source" : "unknown",
+        postingStartOn: postingStartOn ?? null, postingEndOn: postingEndOn ?? null,
+        postingStartKnowledge: postingStartOn ? "source" : "unknown", postingEndKnowledge: postingEndOn ? "source" : "unknown",
+        observedOn: context.artifactObservationOn, artifactSha256: context.artifactSha256,
+      };
+    }
     const reviews = (input.financialReviewHolds ?? []).filter(hold => hold.tenantSourceId === sourceId(record));
     if (reviews.length > 1) exception(exceptions, "person_financial_review_ambiguous", "Financial review evidence is ambiguous", "person", record, undefined, "error");
     else if (reviews.length === 1) {

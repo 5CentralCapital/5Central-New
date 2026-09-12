@@ -558,6 +558,7 @@ function normalizeLease(
   exceptions: NormalizationException[],
   financialCrosswalk?: RentManagerFinancialSemanticCrosswalk,
   artifactSha256?: string,
+  artifactObservationOn?: string,
 ): Raw {
   const normalized = augment(record, ["LeaseID"], {
     tenantId: ["TenantID"],
@@ -573,6 +574,15 @@ function normalizeLease(
     createdAt: ["CreatedAt", "CreatedDate", "CreateDate"],
     updatedAt: ["UpdatedAt", "UpdateDate", "ModifiedDate"],
   }, undefined, "tenancy");
+  // A generic source MoveOutDate after the sealed observation is scheduled,
+  // not a completed departure. Bind this decision to that observation forever;
+  // replaying the archive after the date passes must not manufacture an event.
+  const observedOn = dateKey(artifactObservationOn);
+  const genericMoveOut = dateKey(text(record, "MoveOutDate", "MoveOut"));
+  if (observedOn && genericMoveOut && genericMoveOut > observedOn && record.actualMoveOutOn === undefined) {
+    delete normalized.actualMoveOutOn;
+    normalized.expectedMoveOutOn ??= value(record, "MoveOutDate", "MoveOut");
+  }
   // RM embeds can carry explicit relationship objects instead of scalar IDs.
   // Reading their documented IDs is deterministic; selecting by name or array
   // position is intentionally not supported.
@@ -1415,7 +1425,7 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
     if (methods.length > 0) contact.phoneMethods = methods;
     return contact;
   });
-  const leases = (payload.leases ?? []).map((record) => normalizeLease(record as Raw, propertiesIndex, unitsIndex, tenantsIndex, exceptions, financialCrosswalkValid ? financialCrosswalk : undefined, hapArtifactSha256));
+  const leases = (payload.leases ?? []).map((record) => normalizeLease(record as Raw, propertiesIndex, unitsIndex, tenantsIndex, exceptions, financialCrosswalkValid ? financialCrosswalk : undefined, hapArtifactSha256, options.artifactObservationOn ?? payload.artifactObservationOn));
   const leasesIndex = new Map(Array.from(indexBy(leases, ["LeaseID", "sourceId"]).entries()).map(([key, rows]) => [key, rows[0]]));
   const renewals = (payload.leaseRenewals ?? []).map((record) => normalizeRenewal(record as Raw, leasesIndex, exceptions));
   // Actual occupancy dates live on Lease. Contract dates live on renewal/term

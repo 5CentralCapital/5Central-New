@@ -588,3 +588,39 @@ test("scope values are canonical only with source/manual type and exact/manual l
   assert.equal(portfolio.accountedRowCount, portfolio.sourceRowCount);
   assert.equal(projectFinancialSchedules(snapshot, "2025-05", { unitId: "u1" }).sourceRowCount, 0);
 });
+
+test("confirmed holdover occupancy and rent agree across monthly projection and rent roll", async () => {
+  const { deriveRentRoll, deriveScheduledIncome, deriveTenantProfile } = await import("./reports");
+  const snapshot = snapshotWithUnit();
+  addLeaseBackedTenancy(snapshot, { tenancyId: "holdover", personId: "resident" });
+  snapshot.leaseTerms[0].contractEndOn = "2026-09-15";
+  const rent = schedule({ id: "holdover-rent", scopeType: "tenant", scopeId: "resident", tenancyId: "holdover", personId: "resident", unitId: "u1", chargeDefinitionId: "rent", amountCents: 145000 });
+  rent.billingFrequency = "monthly";
+  snapshot.recurringSchedules.push(rent);
+  const filters = { asOfDate: "2026-10-01", month: "2026-10" };
+  const occupancy = projectFinancialOccupancy(snapshot, snapshot.units[0], "2026-10", filters.asOfDate);
+  assert.equal(occupancy.occupancy, "current");
+  assert.equal(occupancy.tenancyId, "holdover");
+  assert.ok(occupancy.exceptionCodes.includes("lease_unknown"));
+  const roll = deriveRentRoll(snapshot, filters)[0];
+  assert.equal(roll.tenancyId, "holdover");
+  assert.equal(roll.baseRentCents, 145000);
+  const income = deriveScheduledIncome(snapshot, filters);
+  assert.deepEqual(income.map(row => [row.tenancyId, row.scheduleId, row.amountCents, row.known]), [["holdover", "holdover-rent", 145000, true]]);
+  assert.deepEqual(deriveTenantProfile(snapshot, "resident", filters)?.operationalScheduleIds, ["holdover-rent"]);
+  snapshot.tenancies[0].status = "past";
+  snapshot.tenancies[0].actualMoveOutOn = "2026-09-20";
+  snapshot.tenancies[0].actualMoveOutKnowledge = "source";
+  assert.equal(projectFinancialOccupancy(snapshot, snapshot.units[0], "2026-10").occupancy, "vacant");
+  assert.equal(deriveRentRoll(snapshot, filters)[0].occupancy, "vacant");
+  assert.equal(deriveScheduledIncome(snapshot, filters).length, 0);
+});
+
+test("monthly occupancy respects dated Past account evidence without rewriting earlier observations", () => {
+  const snapshot = snapshotWithUnit();
+  addLeaseBackedTenancy(snapshot, { tenancyId: "ended", personId: "resident", status: "past" });
+  snapshot.people[0].sourceAccountFacts = { status: "past", rawStatus: "Past", statusKnowledge: "source", postingStartOn: null, postingEndOn: null, postingStartKnowledge: "unknown", postingEndKnowledge: "unknown", observedOn: "2026-09-07", artifactSha256: "a".repeat(64) };
+  assert.equal(projectFinancialOccupancy(snapshot, snapshot.units[0], "2026-09", "2026-09-06").occupancy, "unknown");
+  assert.equal(projectFinancialOccupancy(snapshot, snapshot.units[0], "2026-09", "2026-09-07").occupancy, "vacant");
+  assert.equal(snapshot.tenancies[0].actualMoveOutOn, undefined);
+});

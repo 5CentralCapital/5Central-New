@@ -93,13 +93,27 @@ export function serializeRentRollRow(value: unknown): JsonObject {
     contractEndOn: dateText(input, "contractEndOn"),
     monthToMonth: bool(input, "monthToMonth"),
     baseRentCents: number(input, "baseRentCents"),
-    recurringFeesCents: number(input, "recurringFeesCents"),
-    subsidyCents: number(input, "subsidyCents"),
+    recurringFeesCents: nullableNumberValue(input.recurringFeesCents),
+    subsidyCents: nullableNumberValue(input.subsidyCents),
     tenantPortionCents: number(input, "tenantPortionCents"),
-    totalScheduledCents: number(input, "totalScheduledCents"),
+    totalScheduledCents: nullableNumberValue(input.totalScheduledCents),
     balanceDueCents: nullableNumberValue(input.balanceDueCents),
     oldestUnpaidRentOn: dateText(input, "oldestUnpaidRentOn"),
     exceptionCodes: strings(input, "exceptionCodes"),
+  });
+}
+
+export function serializeOperationalScheduleRegister(value: unknown): JsonObject {
+  const input = inputOf(value);
+  return presentationObject({
+    asOfDate: dateText(input, "asOfDate"),
+    currentScheduleIds: strings(input, "currentScheduleIds"),
+    historicalScheduleIds: strings(input, "historicalScheduleIds"),
+    futureScheduleIds: strings(input, "futureScheduleIds"),
+    unitDefaultScheduleIds: strings(input, "unitDefaultScheduleIds"),
+    propertyDefaultScheduleIds: strings(input, "propertyDefaultScheduleIds"),
+    reviewScheduleIds: strings(input, "reviewScheduleIds"),
+    complete: bool(input, "complete"),
   });
 }
 

@@ -196,6 +196,38 @@ test("navigation preserves selection but does not confirm unresolved tenancy occ
     Object.assign(source.tenancies[0], patch);
     const entry = serializeWorkspaceBootstrap(source, {asOfDate: "2026-08-15"}).tenantIndex.find(row => row.person.id === source.people[0].id)!;
     assert.equal(entry.selectedTenancyId, source.tenancies[0].id);
-    assert.equal(entry.category, "unknown");
+    assert.equal(entry.category, patch.status === "past" ? "former" : "unknown");
   }
+});
+
+test("recurring metadata endpoint reads one operational source and preserves review instead of confirming unknown cadence", async () => {
+  const express = (await import("express")).default;
+  const { registerRentOpsRoutes } = await import("../routes");
+  const source = structuredClone(syntheticRentOpsSnapshot());
+  const rent = source.recurringSchedules[0];
+  rent.billingFrequency = null;
+  Object.assign(rent, { rawPayload: "SENSITIVE_SENTINEL" });
+  const repository = createSyntheticRentOpsRepository();
+  let operationalReads = 0;
+  Object.assign(repository, {
+    getSnapshot: async () => { throw new Error("Full history read forbidden"); },
+    getOperationalSnapshot: async () => { operationalReads++; return source; },
+  });
+  const app = express();
+  registerRentOpsRoutes(app, { repository, requireAdmin: (_req, _res, next) => next() });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  try {
+    const address = server.address() as import("node:net").AddressInfo;
+    const response = await fetch(`http://127.0.0.1:${address.port}/api/rent-ops/workspace/recurring?asOfDate=2026-08-15`);
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.equal(result.asOfDate, "2026-08-15");
+    assert.equal(result.complete, false);
+    assert.ok(result.reviewScheduleIds.includes(rent.id));
+    assert.ok(!result.currentScheduleIds.includes(rent.id));
+    assert.equal(operationalReads, 1);
+    assert.ok(!JSON.stringify(result).includes("SENSITIVE_SENTINEL"));
+    assert.ok(!("items" in result));
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });

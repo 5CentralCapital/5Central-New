@@ -99,6 +99,7 @@ export const rentOpsUnits = pgTable("rent_ops_units", {
 }));
 
 export const rentOpsPeople = pgTable("rent_ops_people", {
+  sourceAccountFacts: jsonb("source_account_facts").$type<Record<string, unknown>>(),
   id: id("id").primaryKey(),
   paymentReviewReason: text("payment_review_reason"),
   paymentReviewArtifactSha256: varchar("payment_review_artifact_sha256", { length: 64 }),

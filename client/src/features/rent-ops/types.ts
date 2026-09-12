@@ -599,6 +599,8 @@ export interface TenantView {
   tenancies?: AdminTenancyView[];
   leaseTerms: AdminLeaseTermView[];
   schedules: AdminRecurringScheduleView[];
+  operationalScheduleIds?: string[];
+  operationalSchedulesComplete?: boolean;
   ledger: AdminLedgerRowView[];
   deposits: AdminSecurityDepositView[];
   subsidyContracts: AdminSubsidyContractView[];
@@ -638,10 +640,10 @@ export interface RentRollRow {
   contractEndOn?: string;
   monthToMonth?: boolean;
   baseRentCents?: number;
-  recurringFeesCents?: number;
-  subsidyCents?: number;
+  recurringFeesCents?: number | null;
+  subsidyCents?: number | null;
   tenantPortionCents?: number;
-  totalScheduledCents?: number;
+  totalScheduledCents?: number | null;
   balanceDueCents?: number | null;
   oldestUnpaidRentOn?: string;
   exceptionCodes?: string[];
@@ -924,3 +926,14 @@ export const REPORT_LABELS: Record<ReportKey, string> = {
   "applicant-pipeline": "Applicant Pipeline",
   hap: "HAP Expected vs. Received",
 };
+
+export interface OperationalScheduleRegister {
+  asOfDate: string;
+  currentScheduleIds: string[];
+  historicalScheduleIds: string[];
+  futureScheduleIds: string[];
+  unitDefaultScheduleIds: string[];
+  propertyDefaultScheduleIds: string[];
+  reviewScheduleIds: string[];
+  complete: boolean;
+}

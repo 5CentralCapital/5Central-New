@@ -1,3 +1,4 @@
+import { isKnownPastAccountOn, isOccupiedTenancyOn } from "./tenancy-occupancy";
 import type {
   Cents,
   IsoDate,
@@ -81,9 +82,15 @@ function tenancyOccupiesMonth(
   snapshot: RentOpsSnapshot,
   tenancy: RentOpsTenancy,
   interval: FinancialMonthInterval,
+  asOf: IsoDate,
 ): { state: "current" | "future_preleased" | "past" | "excluded" | "unknown"; partialMonth: boolean; exceptionCodes: string[] } {
   const exceptionCodes: string[] = [];
   const strictKnowledge = snapshot.modelVersion === 3;
+  if (isKnownPastAccountOn(snapshot, tenancy.primaryPersonId, asOf)) {
+    return ["current", "notice", "future"].includes(tenancy.status)
+      ? { state: "unknown", partialMonth: false, exceptionCodes: ["tenancy_account_status_conflict"] }
+      : { state: "excluded", partialMonth: false, exceptionCodes: [] };
+  }
   if (linkIsUnknown(tenancy.propertyId, tenancy.propertyLinkKnowledge, strictKnowledge)) exceptionCodes.push("property_link_unknown");
   if (linkIsUnknown(tenancy.unitId, tenancy.unitLinkKnowledge, strictKnowledge)) exceptionCodes.push("unit_link_unknown");
   if (linkIsUnknown(tenancy.primaryPersonId, tenancy.primaryPersonLinkKnowledge, strictKnowledge)) exceptionCodes.push("person_link_unknown");
@@ -117,6 +124,12 @@ function tenancyOccupiesMonth(
   if (actualMoveOut && actualMoveOut < interval.start) return { state: "excluded", partialMonth: false, exceptionCodes: [] };
 
   const lease = exactLeaseForMonth(snapshot, tenancy.id, interval);
+  // A fixed-term lease ending is not an actual move-out. Confirmed continuing
+  // occupancy and an effective charge still support scheduled income; retain
+  // the lease coverage issue separately instead of removing the resident.
+  if (!lease.unknown && !actualMoveOut && isOccupiedTenancyOn(tenancy, interval.end)) {
+    return { state: "current", partialMonth: moveIn > interval.start, exceptionCodes: lease.unknown || !lease.term ? ["lease_unknown"] : [] };
+  }
   if (lease.unknown || !lease.term) return { state: "unknown", partialMonth: false, exceptionCodes: ["lease_unknown"] };
   return {
     state: tenancy.status === "past" ? "past" : "current",
@@ -132,6 +145,7 @@ export function projectFinancialOccupancy(
   snapshot: RentOpsSnapshot,
   unit: RentOpsUnit,
   month: IsoMonth,
+  asOf?: IsoDate,
 ): FinancialOccupancyProjection {
   const interval = financialMonthInterval(month);
   const strictKnowledge = snapshot.modelVersion === 3;
@@ -149,7 +163,7 @@ export function projectFinancialOccupancy(
       && linkIsUnknown(tenancy.unitId, tenancy.unitLinkKnowledge, strictKnowledge);
   });
   const observed = candidates
-    .map((tenancy) => ({ tenancy, projection: tenancyOccupiesMonth(snapshot, tenancy, interval) }))
+    .map((tenancy) => ({ tenancy, projection: tenancyOccupiesMonth(snapshot, tenancy, interval, asOf ?? interval.end) }))
     .filter(({ projection }) => projection.state !== "excluded");
   const unknown = observed.filter(({ projection }) => projection.state === "unknown");
   if (unknown.length > 0) {
@@ -601,7 +615,7 @@ function definitionKey(schedule: RentOpsRecurringChargeSchedule): string {
 
 function scopeRank(schedule: RentOpsRecurringChargeSchedule): number {
   if (!scheduleScopeIsKnown(schedule)) return 0;
-  return schedule.scopeType === "tenant" ? 3 : schedule.scopeType === "unit" ? 2 : schedule.scopeType === "property" ? 1 : 0;
+  return schedule.scopeType === "tenant" ? (schedule.tenancyId ? 4 : 3) : schedule.scopeType === "unit" ? 2 : schedule.scopeType === "property" ? 1 : 0;
 }
 
 /**
@@ -612,12 +626,12 @@ function scopeRank(schedule: RentOpsRecurringChargeSchedule): number {
 export function projectFinancialSchedules(
   snapshot: RentOpsSnapshot,
   month: IsoMonth,
-  options: { observationMonth?: IsoMonth; propertyId?: string; unitId?: string } = {},
+  options: { observationMonth?: IsoMonth; propertyId?: string; unitId?: string; asOfDate?: IsoDate } = {},
 ): FinancialScheduleProjection {
   const interval = financialMonthInterval(month);
   const strictKnowledge = snapshot.modelVersion === 3;
   const units = snapshot.units.filter((unit) => (!options.propertyId || unit.propertyId === options.propertyId) && (!options.unitId || unit.id === options.unitId));
-  const allOccupancy = new Map(snapshot.units.map((unit) => [unit.id, projectFinancialOccupancy(snapshot, unit, month)]));
+  const allOccupancy = new Map(snapshot.units.map((unit) => [unit.id, projectFinancialOccupancy(snapshot, unit, month, options.asOfDate)]));
   const occupancy = new Map(units.map((unit) => [unit.id, allOccupancy.get(unit.id)!]));
   const amountPresent = (schedule: RentOpsRecurringChargeSchedule): schedule is RentOpsRecurringChargeSchedule & { amountCents: Cents } => typeof schedule.amountCents === "number" && Number.isSafeInteger(schedule.amountCents);
 
@@ -708,11 +722,13 @@ export function projectFinancialSchedules(
     const definitionKnownByEvidence = !strictKnowledge || Boolean(schedule.chargeDefinitionId && isKnownLink(schedule.chargeDefinitionLinkKnowledge));
     const scopeKnownByEvidence = scopeEvidenceKnown(schedule) && !canonicalScope(schedule).code;
     const temporalKnownByEvidence = !strictKnowledge || isKnownDateKnowledge(schedule.effectiveFromKnowledge);
-    const uncertain = !knownMoney || !amountKnownByEvidence || !categoryKnownByEvidence || !activeKnownByEvidence || !definitionKnownByEvidence || !scopeKnownByEvidence || !temporalKnownByEvidence || occupancyUnknown || Boolean(input.unassigned);
+    const cadenceKnown = schedule.billingFrequency === "monthly";
+    const uncertain = !cadenceKnown || !knownMoney || !amountKnownByEvidence || !categoryKnownByEvidence || !activeKnownByEvidence || !definitionKnownByEvidence || !scopeKnownByEvidence || !temporalKnownByEvidence || occupancyUnknown || Boolean(input.unassigned);
     const codes = [
       ...(input.occupancy?.exceptionCodes ?? []),
       ...(input.extraCodes ?? []),
       ...(knownMoney ? [] : ["amount_unknown"]),
+      ...(cadenceKnown ? [] : ["schedule_cadence_unknown"]),
       ...(schedule.category === null || schedule.category === undefined ? ["charge_category_unknown"] : []),
       ...(schedule.active === true ? [] : ["active_unknown"]),
       ...(!scopeKnownByEvidence ? ["schedule_scope_unknown"] : []),
@@ -736,7 +752,7 @@ export function projectFinancialSchedules(
       chargeDefinitionId: schedule.chargeDefinitionId,
       // Never copy chargeDefinitionKey: it may be a raw RM key.
       effectiveFromKnowledge: schedule.effectiveFromKnowledge,
-      temporalUncertainty: Boolean(schedule.effectiveFromKnowledge === "unknown_open_start" || occupancyUnknown || schedule.active !== true),
+      temporalUncertainty: Boolean(!cadenceKnown || schedule.effectiveFromKnowledge === "unknown_open_start" || occupancyUnknown || schedule.active !== true),
       // Preserve an explicit null knowledge fact. Legacy rows that omitted
       // the marker are normalized only at this report boundary.
       amountKnowledge: schedule.amountKnowledge === undefined ? (amountKnownByEvidence ? "known" : "unknown") : schedule.amountKnowledge,

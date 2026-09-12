@@ -1,3 +1,4 @@
+import { hasConfirmedTenancyLinks, confirmedTenancyFact, isOccupiedTenancyOn, isKnownPastAccountOn } from "./tenancy-occupancy";
 import { tenantAccountLedgerRows } from "./account-ledger";
 import { isSourceAllocationReversal } from "./invariants";
 import type {
@@ -32,7 +33,7 @@ import type {
   TenantProfile,
 } from "../../../shared/rent-ops-contracts";
 import { activeTenancyViolations, assertNoOverlappingBaseRentSchedules, effectiveLedgerKind, effectiveScheduleIntervals, createEffectiveScheduleSelector, type EffectiveScheduleSelector, ledgerBalanceSign, RentOpsInvariantError } from "./invariants";
-import { financialProjectionControls, projectFinancialSchedules, type FinancialProjectionControls } from "./financial-projection";
+import { financialProjectionControls, projectFinancialSchedules, resolveEffectiveScheduleVersions, type FinancialProjectionControls } from "./financial-projection";
 import { addDays, compareIsoDate, daysBetween, isDateOnOrBefore, isEffectiveOn, monthFromDate, monthStart, nowIsoDate } from "./dates";
 
 // Subsidy/HAP is reported separately from tenant collected income. A base
@@ -149,9 +150,12 @@ function unresolvedTenancyForUnit(snapshot: RentOpsSnapshot, unit: RentOpsUnit, 
     const sameProperty = tenancy.propertyId === unit.propertyId || !tenancy.propertyId || tenancy.propertyLinkKnowledge === "unknown" || tenancy.propertyLinkKnowledge === "ambiguous";
     if (!sameUnit && !(unknownUnit && sameProperty)) continue;
     if (unknownUnit) codes.push("unit_link_unknown");
+    if (activeOrFuture && !hasConfirmedTenancyLinks(tenancy)) codes.push("tenancy_link_unknown");
+    if (activeOrFuture && !confirmedTenancyFact(tenancy.statusKnowledge)) codes.push("tenancy_status_unknown");
+    if (activeOrFuture && isKnownPastAccountOn(snapshot, tenancy.primaryPersonId, asOf)) codes.push("tenancy_account_status_conflict");
     if (!status || !["current", "notice", "future", "past", "cancelled"].includes(status)) codes.push("tenancy_status_unknown");
-    if ((status === "current" || status === "notice") && !occupancyMoveInOn(tenancy)) codes.push("actual_move_in_unknown");
-    if (status === "future" && (!occupancyMoveInOn(tenancy) || occupancyMoveInOn(tenancy)! <= asOf)) codes.push("planned_move_in_unknown");
+    if ((status === "current" || status === "notice") && (!occupancyMoveInOn(tenancy) || !confirmedTenancyFact(tenancy.actualMoveInKnowledge))) codes.push("actual_move_in_unknown");
+    if (status === "future" && (!occupancyMoveInOn(tenancy) || !confirmedTenancyFact(tenancy.plannedMoveInKnowledge) || occupancyMoveInOn(tenancy)! <= asOf)) codes.push("planned_move_in_unknown");
   }
   return Array.from(new Set(codes)).sort();
 }
@@ -161,19 +165,15 @@ function displayName(person: RentOpsPerson | undefined): string {
   return `${person.firstName} ${person.lastName}`.trim();
 }
 
+
 function currentTenanciesForUnit(snapshot: RentOpsSnapshot, unitId: string, asOf: IsoDate): RentOpsTenancy[] {
-  return snapshot.tenancies.filter((tenancy) =>
-    tenancy.unitId === unitId &&
-    (tenancy.status === "current" || tenancy.status === "notice") &&
-    isDateOnOrBefore(occupancyMoveInOn(tenancy), asOf) &&
-    (!tenancy.actualMoveOutOn || tenancy.actualMoveOutOn > asOf),
-  );
+  return snapshot.tenancies.filter((tenancy) => tenancy.unitId === unitId && !isKnownPastAccountOn(snapshot, tenancy.primaryPersonId, asOf) && isOccupiedTenancyOn(tenancy, asOf));
 }
 
 function futureTenanciesForUnit(snapshot: RentOpsSnapshot, unitId: string, asOf: IsoDate): RentOpsTenancy[] {
   return snapshot.tenancies.filter((tenancy) =>
     tenancy.unitId === unitId &&
-    tenancy.status === "future" &&
+    tenancy.status === "future" && hasConfirmedTenancyLinks(tenancy) && confirmedTenancyFact(tenancy.statusKnowledge) && confirmedTenancyFact(tenancy.plannedMoveInKnowledge) &&
     !!occupancyMoveInOn(tenancy) && occupancyMoveInOn(tenancy)! > asOf,
   );
 }
@@ -233,15 +233,79 @@ function effectiveSchedulesFor(
   } : {});
 }
 
-function scheduledAmounts(snapshot: RentOpsSnapshot, tenancyId: string, date: IsoDate, selectSchedules: EffectiveScheduleSelector): { baseRentCents?: Cents; recurringFeesCents: Cents; subsidyCents: Cents } {
-  // Property-scoped schedules are reported once at property level and are
-  // intentionally excluded from a unit rent-roll amount.
+function scheduleAmountConfirmed(schedule: RentOpsRecurringChargeSchedule): boolean {
+  const uncertain = (value: string | null | undefined) => value === null || ["unknown", "ambiguous", "inferred", "unknown_open_start"].includes(value ?? "");
+  return schedule.active === true && !uncertain(schedule.activeKnowledge)
+    && !!schedule.effectiveFrom && !uncertain(schedule.effectiveFromKnowledge)
+    && knownAmount(schedule.amountCents) && !uncertain(schedule.amountKnowledge)
+    && !uncertain(schedule.categoryKnowledge)
+    && schedule.billingFrequency === "monthly";
+}
+
+/** Complete source snapshot required: a one-table schedule read cannot prove
+ * current tenancy or safely classify historical obligations. */
+export function deriveOperationalScheduleRegister(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}) {
+  const asOf = asOfDate(filters);
+  const select = createEffectiveScheduleSelector(snapshot.recurringSchedules);
+  const intervals = effectiveScheduleIntervals(snapshot.recurringSchedules);
+  const invalid = new Set(resolveEffectiveScheduleVersions(snapshot.recurringSchedules, monthFromDate(asOf), { strictLineage: true }).invalidSchedules.map(row => row.id));
+  const current = new Set<string>();
+  const future = new Set<string>();
+  const properties = scopedPropertyIds(snapshot, filters);
+  const scopedTenancies = snapshot.tenancies.filter(row => matchesPropertyScope(row.propertyId, filters, properties) && (!filters.unitId || row.unitId === filters.unitId));
+  for (const tenancy of scopedTenancies) {
+    if (isKnownPastAccountOn(snapshot, tenancy.primaryPersonId, asOf)) continue;
+    const occupied = isOccupiedTenancyOn(tenancy, asOf) && currentTenanciesForUnit(snapshot, tenancy.unitId, asOf).length === 1;
+    const upcoming = futureTenanciesForUnit(snapshot, tenancy.unitId, asOf);
+    const occupants = currentTenanciesForUnit(snapshot, tenancy.unitId, asOf);
+    const prospective = upcoming.length === 1 && upcoming[0].id === tenancy.id && occupants.length <= 1
+      && occupants.every(current => !!current.expectedMoveOutOn && current.expectedMoveOutOn < occupancyMoveInOn(tenancy)!);
+    if (!occupied && !prospective) continue;
+    const selectedOn = occupied ? asOf : occupancyMoveInOn(tenancy)!;
+    for (const row of effectiveSchedulesFor(snapshot, tenancy.id, selectedOn, select)) {
+      if (row.scopeType === "property" || invalid.has(row.id) || !scheduleAmountConfirmed(row)) continue;
+      (occupied ? current : future).add(row.id);
+    }
+  }
+  // An inherited default can also apply to a future resident. Its global
+  // state remains current while it applies now; partitions must be disjoint.
+  for (const id of Array.from(current)) future.delete(id);
+  const historical: string[] = [];
+  const review: string[] = [];
+  const unitDefaults: string[] = [];
+  const propertyDefaults: string[] = [];
+  for (const row of snapshot.recurringSchedules) {
+    if (!matchesPropertyScope(row.propertyId, filters, properties) || filters.unitId && row.unitId && row.unitId !== filters.unitId) continue;
+    if (row.scopeType === "unit") unitDefaults.push(row.id);
+    if (row.scopeType === "property") propertyDefaults.push(row.id);
+    if (current.has(row.id) || future.has(row.id)) continue;
+    const interval = intervals.get(row);
+    const tenancy = snapshot.tenancies.find(candidate => candidate.id === row.tenancyId);
+    const formerAccount = isKnownPastAccountOn(snapshot, row.personId ?? tenancy?.primaryPersonId ?? (row.scopeType === "tenant" ? row.scopeId : "") ?? "", asOf);
+    const former = formerAccount || tenancy && confirmedTenancyFact(tenancy.statusKnowledge) && (tenancy.status === "past" || tenancy.status === "cancelled") && !isOccupiedTenancyOn(tenancy, asOf);
+    if (!invalid.has(row.id) && (row.active === false || !!interval?.effectiveTo && interval.effectiveTo < asOf || former)) historical.push(row.id);
+    else if (!invalid.has(row.id) && scheduleAmountConfirmed(row) && row.scopeType === "property") continue;
+    else review.push(row.id);
+  }
+  return { asOfDate: asOf, currentScheduleIds: Array.from(current).sort(), historicalScheduleIds: historical.sort(), futureScheduleIds: Array.from(future).sort(), unitDefaultScheduleIds: unitDefaults.sort(), propertyDefaultScheduleIds: propertyDefaults.sort(), reviewScheduleIds: review.sort(), complete: review.length === 0 };
+}
+
+function scheduledAmounts(snapshot: RentOpsSnapshot, tenancyId: string, date: IsoDate, selectSchedules: EffectiveScheduleSelector): { baseRentCents?: Cents; recurringFeesCents: Cents | null; subsidyCents: Cents | null; exceptionCodes: string[] } {
+  // Retain uncertain candidates for review, but never publish their amounts as
+  // confirmed rent. Scope precedence and immutable history remain unchanged.
   const schedules = effectiveSchedulesFor(snapshot, tenancyId, date, selectSchedules).filter((schedule) => schedule.scopeType !== "property");
   const base = schedules.find((schedule) => schedule.category === "base_rent");
+  const exceptionCodes = schedules.some(schedule => !scheduleAmountConfirmed(schedule)) ? ["scheduled_amount_unconfirmed"] : [];
+  if (!base || !scheduleAmountConfirmed(base)) exceptionCodes.push("base_rent_unconfirmed");
+  const sum = (category: string): Cents | null => {
+    const rows = schedules.filter(schedule => schedule.category === category);
+    return rows.some(schedule => !scheduleAmountConfirmed(schedule)) ? null : rows.reduce((total, schedule) => total + schedule.amountCents!, 0);
+  };
   return {
-    baseRentCents: base && knownAmount(base.amountCents) ? base.amountCents : undefined,
-    recurringFeesCents: schedules.filter((schedule) => schedule.category === "recurring_fee").reduce((sum, schedule) => sum + (knownAmount(schedule.amountCents) ? schedule.amountCents : 0), 0),
-    subsidyCents: schedules.filter((schedule) => schedule.category === "subsidy").reduce((sum, schedule) => sum + (knownAmount(schedule.amountCents) ? schedule.amountCents : 0), 0),
+    baseRentCents: base && scheduleAmountConfirmed(base) ? base.amountCents! : undefined,
+    recurringFeesCents: sum("recurring_fee"),
+    subsidyCents: sum("subsidy"),
+    exceptionCodes,
   };
 }
 
@@ -261,12 +325,15 @@ interface AccountBalance {
 }
 
 function assertNoAmbiguousOccupancy(snapshot: RentOpsSnapshot, asOf = nowIsoDate()): void {
-  const violations = activeTenancyViolations(snapshot);
+  const violations = activeTenancyViolations(snapshot).filter(row => row.code !== "overlapping_current_tenancies");
+  for (const unit of snapshot.units) {
+    const occupied = currentTenanciesForUnit(snapshot, unit.id, asOf);
+    if (occupied.length > 1) violations.push({ code: "overlapping_current_tenancies", entityId: unit.id, message: `Unit ${unit.id} has ${occupied.length} occupants on ${asOf}` });
+  }
   const futureByUnit = new Map<string, RentOpsTenancy[]>();
   for (const tenancy of snapshot.tenancies) {
     const moveInOn = occupancyMoveInOn(tenancy);
     if ((tenancy.status === "current" || tenancy.status === "notice") && !moveInOn) violations.push({ code: "current_move_in_missing", entityId: tenancy.id, message: `Current tenancy ${tenancy.id} has no actual move-in date` });
-    if ((tenancy.status === "current" || tenancy.status === "notice") && moveInOn && moveInOn > asOf) violations.push({ code: "current_move_in_future", entityId: tenancy.id, message: `Current tenancy ${tenancy.id} starts after the report as-of date` });
     if ((tenancy.status === "current" || tenancy.status === "notice") && tenancy.actualMoveOutOn && tenancy.actualMoveOutOn <= asOf) violations.push({ code: "current_move_out_stale", entityId: tenancy.id, message: `Current tenancy ${tenancy.id} has already moved out as of the report date` });
     if (tenancy.status === "future" && !moveInOn) violations.push({ code: "future_move_in_missing", entityId: tenancy.id, message: `Future tenancy ${tenancy.id} has no scheduled move-in date` });
     if (tenancy.status === "future" && moveInOn && moveInOn <= asOf) violations.push({ code: "future_move_in_elapsed", entityId: tenancy.id, message: `Future tenancy ${tenancy.id} has reached its move-in date but is still marked future` });
@@ -583,7 +650,7 @@ function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFi
     const selected = current ?? future;
     const term = selected ? (current ? activeLeaseTerm(snapshot, selected.id, asOf) : upcomingLeaseTerm(snapshot, selected.id, asOf)) : undefined;
     const scheduleAsOf = current ? asOf : (term?.contractStartOn ?? (selected ? occupancyMoveInOn(selected) : undefined) ?? asOf);
-    const amounts = selected ? scheduledAmounts(snapshot, selected.id, scheduleAsOf, selectSchedules) : { baseRentCents: undefined, recurringFeesCents: 0, subsidyCents: 0 };
+    const amounts = selected ? scheduledAmounts(snapshot, selected.id, scheduleAsOf, selectSchedules) : { baseRentCents: undefined, recurringFeesCents: 0, subsidyCents: 0, exceptionCodes: [] };
     const subsidyContract = selected ? snapshot.subsidyContracts.find((contract) => contract.tenancyId === selected.id && isEffectiveOn(contract.effectiveFrom, contract.effectiveTo, scheduleAsOf)) : undefined;
     const unresolvedCodes = unresolvedTenancyForUnit(snapshot, unit, asOf);
     const balance = selected ? readBalance(snapshot, selected.id, asOf) : { balanceComplete: unresolvedCodes.length === 0, balanceUncertaintyCodes: unresolvedCodes.length ? ["tenancy_balance_scope_unknown"] : [], rentOnlyBalanceCents: 0, nonRentBalanceCents: 0, totalBalanceCents: 0, unappliedCashCents: 0, prepaidCents: 0, oldestUnpaidRentOn: undefined };
@@ -593,7 +660,7 @@ function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFi
     if (futureCandidates.length > 1) exceptionCodes.push("multiple_future_tenancies");
     if (unit.marketRentCents === undefined || unit.marketRentCents === null) exceptionCodes.push("market_rent_unknown");
     if (selected && !term) exceptionCodes.push("lease_term_missing");
-    exceptionCodes.push(...unresolvedCodes);
+    exceptionCodes.push(...unresolvedCodes, ...amounts.exceptionCodes);
     const tenant = current ? people.get(current.primaryPersonId) : undefined;
     const futureTenant = future ? people.get(future.primaryPersonId) : undefined;
     const searchText = `${property?.name ?? ""} ${unit.unitNumber} ${displayName(tenant)} ${displayName(futureTenant)}`;
@@ -625,7 +692,7 @@ function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFi
       recurringFeesCents: amounts.recurringFeesCents,
       subsidyCents: amounts.subsidyCents,
       tenantPortionCents: subsidyContract?.tenantObligationCents,
-      totalScheduledCents: (amounts.baseRentCents ?? 0) + amounts.recurringFeesCents,
+      totalScheduledCents: selected && (amounts.baseRentCents === undefined || amounts.recurringFeesCents === null || amounts.exceptionCodes.includes("scheduled_amount_unconfirmed")) ? null : (amounts.baseRentCents ?? 0) + (amounts.recurringFeesCents ?? 0),
       balanceDueCents: balance.balanceComplete === false ? null : balance.totalBalanceCents,
       balanceComplete: balance.balanceComplete !== false,
       balanceUncertaintyCodes: balance.balanceUncertaintyCodes ?? [],
@@ -725,6 +792,7 @@ function deriveTruthScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
     propertyId: filters.propertyId,
     unitId: filters.unitId,
     observationMonth: truthObservationMonth(snapshot, filters),
+    asOfDate: asOfDate(filters),
   });
   const rows = projection.rows
     // Subsidy/deposit schedules are controlled by their dedicated reports.
@@ -883,6 +951,7 @@ export function deriveScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOp
       const description = schedule.description ?? "";
       const uncertaintyCodes = [
         schedule.active !== true ? "active_state_unknown" : undefined,
+        schedule.billingFrequency !== "monthly" ? "schedule_cadence_unknown" : undefined,
         !schedule.description ? "description_unknown" : undefined,
         !schedule.effectiveFrom && !currentConfiguration ? "unknown_open_start_historical" : undefined,
         schedule.effectiveFromKnowledge === "unknown_open_start" && currentConfiguration ? "unknown_open_start_current_configuration" : undefined,
@@ -939,6 +1008,7 @@ export function deriveScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOp
       const description = schedule.description ?? "";
       const uncertaintyCodes = [
         schedule.active !== true ? "active_state_unknown" : undefined,
+        schedule.billingFrequency !== "monthly" ? "schedule_cadence_unknown" : undefined,
         !schedule.description ? "description_unknown" : undefined,
         !schedule.effectiveFrom && !currentConfiguration ? "unknown_open_start_historical" : undefined,
         schedule.effectiveFromKnowledge === "unknown_open_start" && currentConfiguration ? "unknown_open_start_current_configuration" : undefined,
@@ -1665,28 +1735,36 @@ export function deriveTenantNavigation(snapshot: RentOpsSnapshot, personId: stri
   const tenancies = [...snapshot.tenancies]
     .filter((candidate) => (candidate.primaryPersonId === personId || membershipTenancyIds.has(candidate.id)) && matchesPropertyScope(candidate.propertyId, filters, propertyIds))
     .sort((left, right) => compareOptionalTimestamp(right.createdAt, left.createdAt) || right.id.localeCompare(left.id));
-  const effective = tenancies.filter((candidate) => candidate.status !== "cancelled" && occupancyMoveInOn(candidate) && occupancyMoveInOn(candidate)! <= asOf && (!candidate.actualMoveOutOn || candidate.actualMoveOutOn > asOf));
-  const future = tenancies.filter((candidate) => candidate.status === "future" && occupancyMoveInOn(candidate) && occupancyMoveInOn(candidate)! > asOf);
-  const tenancy = chooseLatestTenancy(effective) ?? chooseUpcomingTenancy(future) ?? tenancies[0];
+  const effective = tenancies.filter((candidate) => !isKnownPastAccountOn(snapshot, candidate.primaryPersonId, asOf) && isOccupiedTenancyOn(candidate, asOf));
+  const future = tenancies.filter((candidate) => candidate.status === "future" && hasConfirmedTenancyLinks(candidate) && confirmedTenancyFact(candidate.statusKnowledge) && confirmedTenancyFact(candidate.plannedMoveInKnowledge) && occupancyMoveInOn(candidate) && occupancyMoveInOn(candidate)! > asOf);
+  // Multiple occupants of the selected unit remain a conflict even when the
+  // competing tenancy belongs to another person outside this profile.
+  const ambiguous = effective.length > 1 || future.length > 1 || effective.some(candidate => currentTenanciesForUnit(snapshot, candidate.unitId, asOf).length > 1);
+  const tenancy = ambiguous ? undefined : effective[0] ?? future[0] ?? tenancies[0];
   const unresolvedSelected = !!tenancy && (
+    !hasConfirmedTenancyLinks(tenancy) || !confirmedTenancyFact(tenancy.statusKnowledge) ||
     !["current", "notice", "future", "past", "cancelled"].includes(tenancy.status ?? "") ||
-    ((tenancy.status === "current" || tenancy.status === "notice") && !occupancyMoveInOn(tenancy)) ||
-    (tenancy.status === "future" && (!occupancyMoveInOn(tenancy) || occupancyMoveInOn(tenancy)! <= asOf)) ||
-    (tenancy.status === "past" && !tenancy.actualMoveOutOn)
+    ((tenancy.status === "current" || tenancy.status === "notice") && (!isOccupiedTenancyOn(tenancy, asOf) || isKnownPastAccountOn(snapshot, tenancy.primaryPersonId, asOf))) ||
+    (tenancy.status === "future" && (!occupancyMoveInOn(tenancy) || occupancyMoveInOn(tenancy)! <= asOf))
   );
-  const category = unresolvedSelected ? "unknown" : effective.length ? "current" : future.length ? "future" : tenancies.some(row => row.status !== "cancelled" && !row.actualMoveOutOn) ? "unknown" : tenancies.length ? "former" : "contact";
+  const category = ambiguous || unresolvedSelected ? "unknown" : effective.length ? "current" : future.length ? "future" : tenancies.length ? "former" : "contact";
   return { person, tenancies, tenancy, category };
 }
 
-export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string, filters: RentOpsFilters = {}): TenantProfile | undefined {
+export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string, filters: RentOpsFilters = {}, preparedRegister?: ReturnType<typeof deriveOperationalScheduleRegister>): TenantProfile | undefined {
   const navigation = deriveTenantNavigation(snapshot, personId, filters);
   if (!navigation) return undefined;
   const { person, tenancies, tenancy } = navigation;
   const asOf = asOfDate(filters);
   const tenancyIds = new Set(tenancies.map((candidate) => candidate.id));
+  const register = preparedRegister ?? deriveOperationalScheduleRegister(snapshot, filters);
+  const approvedIds = new Set(register.currentScheduleIds);
+  const operational = navigation.category === "current" && tenancy ? effectiveSchedulesFor(snapshot, tenancy.id, asOf, createEffectiveScheduleSelector(snapshot.recurringSchedules)).filter(schedule => schedule.scopeType !== "property") : [];
   const asOfEnd = `${asOf}T23:59:59.999Z`;
   return {
     person,
+    operationalScheduleIds: operational.filter(schedule => approvedIds.has(schedule.id)).map(schedule => schedule.id),
+    operationalSchedulesComplete: navigation.category === "current" && operational.some(schedule => schedule.category === "base_rent") && operational.every(schedule => approvedIds.has(schedule.id)),
     household: snapshot.householdMemberships.filter((membership) => membership.personId === personId || membership.accountPersonId === personId || (membership.tenancyId && tenancyIds.has(membership.tenancyId))),
     tenancy,
     tenancies,

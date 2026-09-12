@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Building2, CalendarDays, ChevronLeft, FileText, Home, List, LogOut, Menu, Plus, RefreshCw, Search, Users, WalletCards, X } from 'lucide-react';
-import { loadRentOpsPreviewContext } from '../api';
+import { loadOperationalScheduleRegister, loadRentOpsPreviewContext } from '../api';
 import { rentOpsAuthClient } from '../auth';
 import { RentOpsAdminLogin, RentOpsAuthLoading, useRentOpsAuth } from '../auth-ui';
 import { ManagerIncomeActions } from '../manager-income-actions';
@@ -18,7 +18,8 @@ import { DocumentsWorkspace } from './documents-workspace';
 import { WorkspaceEditor } from './editor';
 import { DataGrid } from './grid';
 import { formatMoney, formatLabel } from './display';
-import { filterTenantDirectory, parseWorkspaceRoute, workspaceCollectionsFor, workspaceFiltersForRecord, workspaceRecordInScope, workspaceRouteSearch, type WorkspaceRoute, type WorkspaceSection } from './workspace-state';
+import { filterTenantDirectory, parseWorkspaceRoute, workspaceApiFilters, workspaceCollectionsFor, workspaceFiltersForRecord, workspaceRecordInScope, workspaceRouteSearch, type WorkspaceRoute, type WorkspaceSection } from './workspace-state';
+import { recurringRegisterQueryKey, recurringRegisterViews, selectRecurringRegisterRows, type RecurringRegisterView } from './recurring-register-model';
 import { useWorkspaceData } from './use-workspace-data';
 import '../rent-ops.css';
 import './workspace.css';
@@ -45,24 +46,29 @@ function routeKey(route:WorkspaceRoute){return [route.section,route.kind??'',rou
 function scopeProperties(snapshot:AdminSnapshot,filters:ViewFilters){return snapshot.snapshot.properties.filter(p=>filters.propertyScope==='all'||p.state==='active');}
 
 function RecurringRegister({snapshot,filters,onEdit}:{snapshot:AdminSnapshot;filters:ViewFilters;onEdit:(action:QuickAction,values?:FormValues)=>void}){
- const [state,setState]=useState('all');
+ const [state,setState]=useState<RecurringRegisterView>('current');
+ const auth=useRentOpsAuth();
+ const metadata=useQuery({queryKey:recurringRegisterQueryKey(auth.user?.id??'',filters.propertyScope,filters.propertyId,filters.asOfDate),queryFn:({signal})=>loadOperationalScheduleRegister(workspaceApiFilters(filters),signal),enabled:auth.status==='authenticated'&&!!filters.asOfDate,staleTime:60_000,gcTime:300_000,retry:false});
+ if(metadata.error)return <ErrorNotice error={metadata.error} retry={()=>void metadata.refetch()}/>;
+ if(!metadata.data||metadata.data.asOfDate!==filters.asOfDate)return <Busy label="Loading current charge classifications…"/>;
  const properties=new Map(snapshot.snapshot.properties.map(p=>[p.id,p]));
  const units=new Map(snapshot.snapshot.units.map(u=>[u.id,u]));
  const people=new Map(snapshot.snapshot.people.map(p=>[p.id,p]));
  const definitions=new Map(snapshot.chargeDefinitions.map(d=>[d.id,d]));
- const rows=snapshot.snapshot.recurringSchedules.filter(row=>filters.propertyId==='all'||row.propertyId===filters.propertyId).filter(row=>filters.propertyScope==='all'||properties.get(row.propertyId??undefined)?.state==='active').map(row=>{
+ const scoped=snapshot.snapshot.recurringSchedules.filter(row=>filters.propertyId==='all'||row.propertyId===filters.propertyId).filter(row=>filters.propertyScope==='all'||properties.get(row.propertyId??undefined)?.state==='active');
+ const rows=selectRecurringRegisterRows(scoped,metadata.data,state).map(row=>{
   const person=people.get(row.personId??undefined);const definition=definitions.get(row.chargeDefinitionId??undefined);
   const display=scheduleDisplayInterval(row,filters.asOfDate);
-  const status=display.state==='unknown'?'Needs review':formatLabel(display.state);
-  return {...row,displayEnd:display.effectiveTo,propertyName:properties.get(row.propertyId??undefined)?.name??'Property needs review',unitName:units.get(row.unitId??undefined)?.unitNumber??'—',tenantName:person?`${person.firstName??''} ${person.lastName??''}`.trim():'—',chargeName:definition?.displayName??row.description??'Charge type needs review',displayStatus:status};
- }).filter(row=>state==='all'||row.displayStatus===state);
- return <section className="rm-panel"><div className="rm-toolbar"><label>Show<select value={state} onChange={e=>setState(e.target.value)}>{['all','Current','Future','Ended','Needs review'].map(s=><option key={s} value={s}>{s==='all'?'All schedules':s}</option>)}</select></label><button className="rm-button rm-button-primary" onClick={()=>onEdit('save-recurring-schedule',{...(filters.propertyId!=='all'?{propertyId:filters.propertyId}:{})})}><Plus size={14}/>Add recurring charge</button></div>
+  return {...row,displayEnd:display.effectiveTo,propertyName:properties.get(row.propertyId??undefined)?.name??'Property needs review',unitName:units.get(row.unitId??undefined)?.unitNumber??'—',tenantName:person?`${person.firstName??''} ${person.lastName??''}`.trim():'—',chargeName:definition?.displayName??row.description??'Charge type needs review'};
+ });
+ return <section className="rm-panel"><div className="rm-toolbar"><label>Show<select value={state} onChange={e=>setState(e.target.value as RecurringRegisterView)}>{recurringRegisterViews.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><button className="rm-button rm-button-primary" onClick={()=>onEdit('save-recurring-schedule',{...(filters.propertyId!=='all'?{propertyId:filters.propertyId}:{})})}><Plus size={14}/>Add recurring charge</button></div>
+ {!metadata.data.complete&&<p role="status">Some schedules need review. Current charges include only confirmed schedules.</p>}
  <DataGrid rows={rows} search={filters.search} getRowKey={(row,index)=>row.id??String(index)} pageSize={25} emptyMessage="No recurring charges match these filters." columns={[
  {key:'propertyName',label:'Property'},{key:'unitName',label:'Unit'},{key:'tenantName',label:'Tenant'},{key:'chargeName',label:'Charge'},
  {key:'scopeType',label:'Applies to',render:r=>formatLabel(r.scopeType)},{key:'billingFrequency',label:'Frequency',render:r=>r.billingFrequency?formatLabel(r.billingFrequency):'Unverified'},
  {key:'effectiveFrom',label:'From',render:r=>r.effectiveFrom??'Unverified'},{key:'displayEnd',label:'Through',render:r=>r.displayEnd===null?'Open-ended':r.displayEnd??'Needs review'},
  {key:'amountCents',label:'Amount',align:'right',render:r=>formatMoney(r.amountCents)},{key:'displayStatus',label:'Status'},
- {key:'actions',label:'Actions',render:r=><div className="rm-actions"><button className="rm-button rm-button--small" disabled={!r.id||r.lineageState!=='valid'||r.canScheduleSuccessor!==true} onClick={()=>onEdit('replace-recurring-schedule',{predecessorId:r.id,expectedRevision:r.recordRevision??1,amountDollars:'',effectiveFrom:''})}>Schedule change</button><button className="rm-button rm-button--small" disabled={!r.id||r.lineageState!=='valid'||r.canScheduleSuccessor!==true} onClick={()=>onEdit('end-recurring-schedule',{predecessorId:r.id,expectedRevision:r.recordRevision??1,effectiveFrom:''})}>End</button></div>},
+ {key:'actions',label:'Actions',render:r=>r.canChange?<div className="rm-actions"><button className="rm-button rm-button--small" onClick={()=>onEdit('replace-recurring-schedule',{predecessorId:r.id,expectedRevision:r.recordRevision??1,amountDollars:'',effectiveFrom:''})}>Schedule change</button><button className="rm-button rm-button--small" onClick={()=>onEdit('end-recurring-schedule',{predecessorId:r.id,expectedRevision:r.recordRevision??1,effectiveFrom:''})}>End</button></div>:'—'},
  ]}/></section>;
 }
 

@@ -507,7 +507,7 @@ test("voided and pending ledger facts remain visible but have zero running-balan
 
 test("dashboard confirmed recurring total excludes unknown active state and raw uncertain amounts", () => {
   const value = truthSnapshot();
-  value.recurringSchedules.push(truthSchedule({ id: "confirmed", category: "recurring_fee", amountCents: 12345 }), truthSchedule({ id: "unknown-active", category: "recurring_fee", amountCents: 98765, active: null, activeKnowledge: "unknown" }));
+  value.recurringSchedules.push(truthSchedule({ id: "confirmed", billingFrequency: "monthly", category: "recurring_fee", amountCents: 12345 }), truthSchedule({ id: "unknown-active", category: "recurring_fee", amountCents: 98765, active: null, activeKnowledge: "unknown" }));
   const summary = deriveDashboardSummary(value, { asOfDate, month: "2026-08" });
   assert.equal(summary.scheduledRentConfirmedCents, 12345);
   assert.equal(summary.scheduledRentCents, 12345);
@@ -529,8 +529,8 @@ test("dashboard cadence accepts confirmed manual monthly schedules and blocks mi
   assert.equal(confirmed.scheduledRentCadenceComplete, true);
   value.recurringSchedules.push(truthSchedule({ id: "imported-unknown-cadence", category: "recurring_fee", amountCents: 5001, billingFrequency: null }));
   const mixed = deriveDashboardSummary(value, { asOfDate, month: "2026-08" });
-  assert.equal(mixed.scheduledRentConfirmedCents, 17346);
-  assert.equal(mixed.scheduledRentComplete, true);
+  assert.equal(mixed.scheduledRentConfirmedCents, 12345);
+  assert.equal(mixed.scheduledRentComplete, false);
   assert.equal(mixed.scheduledRentCadenceComplete, false);
   // An inactive imported row is outside the applicable schedule set.
   value.recurringSchedules[1].active = false;

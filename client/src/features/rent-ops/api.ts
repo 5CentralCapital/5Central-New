@@ -53,6 +53,7 @@ import type {
   RentOpsMutation,
   RentOpsMutationResult,
   TenantView,
+  OperationalScheduleRegister,
 } from "./types";
 import { createDemoAdminSnapshot, DEMO_AS_OF_DATE } from "./demo";
 import { REPORT_KEYS, REPORT_LABELS } from "./types";
@@ -1106,8 +1107,10 @@ function decodeLedgerRow(value: unknown): LedgerRow {
 }
 
 function decodeAdminTenant(value: unknown): TenantView {
-  const input = exactRecord(value, "tenant profile", ["person", "household", "tenancy", "tenancies", "leaseTerms", "schedules", "ledger", "deposits", "subsidyContracts", "documents", "activity", "property", "unit", "primaryLease"]);
+  const input = exactRecord(value, "tenant profile", ["person", "household", "tenancy", "tenancies", "leaseTerms", "schedules", "operationalScheduleIds", "operationalSchedulesComplete", "ledger", "deposits", "subsidyContracts", "documents", "activity", "property", "unit", "primaryLease"]);
   return {
+    operationalScheduleIds: optionalStrings(input, "operationalScheduleIds"),
+    operationalSchedulesComplete: optionalBoolean(input, "operationalSchedulesComplete"),
     person: decodePerson(input.person),
     household: requiredArrayOf(input, "household", decodeHouseholdMembership),
     tenancy: optionalObject(input, "tenancy", decodeTenancy),
@@ -1222,7 +1225,7 @@ function decodeRentRollRow(value: unknown): RentRollRow {
     readiness: optionalAllowed(input, "readiness", READINESS_STATES), listing: optionalAllowed(input, "listing", LISTING_STATES), occupancy: optionalText(input, "occupancy"),
     currentPersonId: optionalId(input, "currentPersonId"), currentTenantName: optionalText(input, "currentTenantName"), futurePersonId: optionalId(input, "futurePersonId"), futureTenantName: optionalText(input, "futureTenantName"), tenancyId: optionalId(input, "tenancyId"),
     actualMoveInOn: optionalDate(input, "actualMoveInOn"), noticeOn: optionalDate(input, "noticeOn"), expectedMoveOutOn: optionalDate(input, "expectedMoveOutOn"), actualMoveOutOn: optionalDate(input, "actualMoveOutOn"), contractStartOn: optionalDate(input, "contractStartOn"), contractEndOn: optionalDate(input, "contractEndOn"), monthToMonth: optionalBoolean(input, "monthToMonth"),
-    baseRentCents: optionalMoney(input, "baseRentCents"), recurringFeesCents: optionalMoney(input, "recurringFeesCents"), subsidyCents: optionalMoney(input, "subsidyCents"), tenantPortionCents: optionalMoney(input, "tenantPortionCents"), totalScheduledCents: optionalMoney(input, "totalScheduledCents"), balanceDueCents: nullableMoney(input, "balanceDueCents"), oldestUnpaidRentOn: optionalDate(input, "oldestUnpaidRentOn"), exceptionCodes: optionalStrings(input, "exceptionCodes"),
+    baseRentCents: optionalMoney(input, "baseRentCents"), recurringFeesCents: nullableMoney(input, "recurringFeesCents"), subsidyCents: nullableMoney(input, "subsidyCents"), tenantPortionCents: optionalMoney(input, "tenantPortionCents"), totalScheduledCents: nullableMoney(input, "totalScheduledCents"), balanceDueCents: nullableMoney(input, "balanceDueCents"), oldestUnpaidRentOn: optionalDate(input, "oldestUnpaidRentOn"), exceptionCodes: optionalStrings(input, "exceptionCodes"),
   };
 }
 
@@ -1931,4 +1934,24 @@ export async function loadRentOpsWorkspaceCollection<K extends WorkspaceCollecti
 
 export function createWorkspaceReportDefinition(key: ReportKey, rows: ReportRow[] = []): ReportDefinition {
   return normalizeReport(key, rows);
+}
+
+export function decodeOperationalScheduleRegister(payload: unknown): OperationalScheduleRegister {
+  assertNoForbiddenResponseFields(payload);
+  const keys = ["currentScheduleIds", "historicalScheduleIds", "futureScheduleIds", "unitDefaultScheduleIds", "propertyDefaultScheduleIds", "reviewScheduleIds"] as const;
+  const root = exactRecord(unwrapData(payload), "operational schedule register", ["asOfDate", ...keys, "complete"]);
+  const arrays = Object.fromEntries(keys.map(key => {
+    const ids = requiredArray(root, key).map(value => requiredId({ id: value }, "id"));
+    if (new Set(ids).size !== ids.length) invalidResponse();
+    return [key, ids];
+  })) as Pick<OperationalScheduleRegister, typeof keys[number]>;
+  const partition = [...arrays.currentScheduleIds, ...arrays.historicalScheduleIds, ...arrays.futureScheduleIds, ...arrays.reviewScheduleIds];
+  if (new Set(partition).size !== partition.length) invalidResponse();
+  const complete = requiredBoolean(root, "complete");
+  if (complete && arrays.reviewScheduleIds.length) invalidResponse();
+  return { asOfDate: requiredDate(root, "asOfDate"), ...arrays, complete };
+}
+
+export async function loadOperationalScheduleRegister(filters: ApiFilters = {}, signal?: AbortSignal): Promise<OperationalScheduleRegister> {
+  return decodeOperationalScheduleRegister(await requestJson(`/api/rent-ops/workspace/recurring${buildRentOpsQuery(filters)}`, { signal }));
 }

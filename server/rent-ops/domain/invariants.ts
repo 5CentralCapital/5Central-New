@@ -326,14 +326,14 @@ function selectEffectiveSchedules(
   for (const candidates of Array.from(grouped.values())) {
     const rank = (schedule: RentOpsRecurringChargeSchedule): number => {
       const canonicalScope = knownScheduleScope(schedule);
-      if (canonicalScope?.type === "tenant") return 3;
+      if (canonicalScope?.type === "tenant") return schedule.tenancyId === tenancyId ? 4 : 3;
       if (canonicalScope?.type === "unit") return 2;
       if (canonicalScope?.type === "property") return 1;
-      return schedule.tenancyId === tenancyId ? 3 : 0;
+      return schedule.tenancyId === tenancyId ? 4 : 0;
     };
     const highest = Math.max(...candidates.map(rank));
-    // One active definition resolves to one schedule at a time. A tenant
-    // definition therefore overrides a unit/property definition instead of
+    // One active definition resolves to one schedule at a time. An exact
+    // tenancy binding overrides a person-only fallback, then unit/property, instead of
     // summing with it; equal-rank overlaps are deterministic and remain
     // visible to the base-rent overlap invariant for correction.
     const highestRows = candidates.filter((schedule) => rank(schedule) === highest).sort((left, right) => compareOptionalDate(right.effectiveFrom, left.effectiveFrom) || left.id.localeCompare(right.id));

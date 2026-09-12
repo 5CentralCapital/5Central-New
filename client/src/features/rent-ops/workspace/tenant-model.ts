@@ -16,7 +16,7 @@ import type {
 } from "../types";
 import type { FormValues, QuickAction } from "../form-payload";
 
-export type RecurringChargeFilter = "all" | "current" | "future" | "ended" | "review";
+export type RecurringChargeFilter = "all" | "current" | "future" | "ended" | "history" | "review";
 export type RecurringChargeState = "current" | "future" | "ended" | "unknown";
 
 export interface TenantContext {
@@ -79,6 +79,10 @@ export interface RecurringChargeRow {
   state: RecurringChargeState;
   scope: RecurringChargeScope;
   uncertaintyCodes: string[];
+  operationalSelected: boolean;
+  operationalSelectionComplete: boolean;
+  applicabilityLabel: string;
+  stateReason?: string;
 }
 
 export interface TenantLedgerRow {
@@ -358,6 +362,10 @@ function chargeUncertainty(schedule: AdminRecurringScheduleView, definition?: Ad
 }
 
 export function buildRecurringChargeRows(tenant: TenantView, snapshot: AdminSnapshot, asOfDate = snapshot.summary.asOfDate): RecurringChargeRow[] {
+  const selectedIds = new Set(tenant.operationalScheduleIds ?? []);
+  const selectionComplete = tenant.operationalSchedulesComplete === true && Array.isArray(tenant.operationalScheduleIds)
+    && Array.from(selectedIds).every(id => tenant.schedules?.some(schedule => schedule.id === id));
+  const tenancies = getTenantTenancies(tenant);
   return (tenant.schedules ?? []).map((schedule) => {
     const display = scheduleDisplayInterval(schedule, asOfDate);
     const definition = schedule.chargeDefinitionId ? snapshot.chargeDefinitions.find((candidate) => candidate.id === schedule.chargeDefinitionId) : undefined;
@@ -365,9 +373,31 @@ export function buildRecurringChargeRows(tenant: TenantView, snapshot: AdminSnap
     const description = nonEmpty(schedule.description) ?? nonEmpty(definition?.displayName) ?? "Needs review";
     const definitionName = nonEmpty(definition?.displayName) ?? "Needs review";
     const category = nonEmpty(schedule.category) ?? nonEmpty(definition?.category) ?? "Needs review";
+    const linkedTenancy = schedule.tenancyId
+      ? tenancies.find(candidate => candidate.id === schedule.tenancyId) ?? snapshot.snapshot.tenancies.find(candidate => candidate.id === schedule.tenancyId)
+      : undefined;
+    const moveOut = dateKey(linkedTenancy?.actualMoveOutOn ?? linkedTenancy?.endedAt);
+    const tenancyEnded = Boolean(linkedTenancy && ((moveOut && moveOut <= asOfDate)
+      || ["past", "former", "moved_out", "moved-out", "ended", "terminated", "cancelled", "canceled"].includes(linkedTenancy.status?.toLowerCase() ?? "")));
+    const unit = findUnit(snapshot, linkedTenancy?.unitId ?? schedule.unitId ?? (scope.type === "unit" ? scope.id : undefined));
+    const property = findProperty(snapshot, linkedTenancy?.propertyId ?? schedule.propertyId ?? unit?.propertyId ?? (scope.type === "property" ? scope.id : undefined));
+    const operationalSelected = Boolean(schedule.id && selectedIds.has(schedule.id));
+    let state = tenancyEnded ? "ended" as const : display.state;
+    let stateReason = tenancyEnded ? `Tenancy ended${moveOut ? ` ${moveOut}` : " (move-out date unavailable)"}` : undefined;
+    if (state === "current" && (!selectionComplete || scope.warning || (schedule.tenancyId && (!linkedTenancy || !linkedTenancy.status)))) {
+      state = "unknown";
+      stateReason = "Current applicability needs review";
+    } else if (state === "current" && !operationalSelected) {
+      state = "ended";
+      stateReason = "Not selected for this tenancy's current charges";
+    }
     return {
       schedule,
       id: schedule.id,
+      operationalSelected,
+      operationalSelectionComplete: selectionComplete,
+      applicabilityLabel: [property ? propertyDisplayName(property) : "Property unconfirmed", unit ? `Unit ${unitDisplayName(unit)}` : scope.type === "property" ? "All applicable units" : "Unit unconfirmed", linkedTenancy ? `Tenancy ${linkedTenancy.id} · ${linkedTenancy.status ?? "status unconfirmed"}` : schedule.tenancyId ? `Tenancy ${schedule.tenancyId} · unconfirmed` : scope.type === "tenant" ? "Tenancy unconfirmed" : "Inherited schedule"].join(" · "),
+      stateReason,
       description,
       definitionName,
       category,
@@ -376,7 +406,7 @@ export function buildRecurringChargeRows(tenant: TenantView, snapshot: AdminSnap
       effectiveFrom: schedule.effectiveFrom,
       effectiveTo: display.effectiveTo,
       active: schedule.active,
-      state: display.state,
+      state,
       scope,
       uncertaintyCodes: Array.from(new Set([...chargeUncertainty(schedule, definition, scope), ...display.uncertaintyCodes])),
     };
@@ -387,7 +417,8 @@ export const getRecurringChargeRows = buildRecurringChargeRows;
 
 export function filterRecurringCharges(rows: RecurringChargeRow[], filter: RecurringChargeFilter): RecurringChargeRow[] {
   if (filter === "all") return rows;
-  if (filter === "review") return rows.filter((row) => row.state === "unknown");
+  if (filter === "review") return rows.filter((row) => row.state === "unknown" || row.uncertaintyCodes.length > 0);
+  if (filter === "history") return rows.filter((row) => row.state === "ended");
   return rows.filter((row) => row.state === filter);
 }
 
@@ -504,7 +535,7 @@ export function buildTenantEditActions(tenant: TenantView, snapshot: AdminSnapsh
     } }));
   }
   if (tab === "charges") {
-    if (context.currentTenancy?.id && context.unit?.id && context.property?.id && tenant.person.id) {
+    if (context.currentTenancy?.id && isCurrentTenancy(context.currentTenancy, context.asOfDate) && context.unit?.id && context.property?.id && tenant.person.id) {
       actions.push({ label: "Add recurring charge", action: "save-recurring-schedule", values: {
         propertyId: context.property.id,
         unitId: context.unit.id,
@@ -517,7 +548,9 @@ export function buildTenantEditActions(tenant: TenantView, snapshot: AdminSnapsh
     (tenant.schedules ?? []).forEach((schedule, index) => {
       if (!schedule.id || schedule.lineageState !== "valid" || schedule.canScheduleSuccessor !== true) return;
       const scope = recurringChargeScope(schedule, tenant, snapshot);
-      if (scope.warning) return;
+      const linkedTenancy = schedule.tenancyId ? context.tenancies.find(record => record.id === schedule.tenancyId)
+        ?? snapshot.snapshot.tenancies.find(record => record.id === schedule.tenancyId) : undefined;
+      if (scope.warning || (scope.type === "tenant" && (!linkedTenancy || !linkedTenancy.status || !isCurrentTenancy(linkedTenancy, context.asOfDate)))) return;
       const scopeLabel = scope.type === "tenant" ? "charge" : `shared ${scope.type} charge`;
       const values = { predecessorId: schedule.id, expectedRevision: revision(schedule.recordRevision) };
       actions.push({ label: `Replace ${scopeLabel} ${index + 1}`, action: "replace-recurring-schedule", values: { ...values, amountDollars: "", effectiveFrom: "" } });
@@ -590,12 +623,13 @@ export function tenancyDates(tenancy: AdminTenancyView): Array<{ label: string; 
   ];
 }
 
-/** A total is only meaningful when every potentially current schedule has known cadence and activation. */
-export function currentMonthlyTotal(rows: RecurringChargeRow[], candidatesComplete = true): number | null {
-  if (!candidatesComplete || rows.some(row => row.state === "unknown")) return null;
-  const current = rows.filter(row => row.state === "current");
-  if (current.some(row => !row.billingFrequency || row.scope.warning)) return null;
-  const monthly = current.filter(row => row.billingFrequency === "monthly");
+/** Only the authoritative server selection contributes; history never fills gaps. */
+export function currentMonthlyTotal(rows: RecurringChargeRow[], candidatesComplete?: boolean): number | null {
+  if (candidatesComplete === false || (candidatesComplete !== true && !rows.length)
+    || rows.some(row => !row.operationalSelectionComplete)) return null;
+  const selected = rows.filter(row => row.operationalSelected);
+  if (selected.some(row => row.state !== "current" || !["monthly", "annual", "quarterly", "weekly", "daily", "one_time"].includes(row.billingFrequency ?? "") || row.scope.warning)) return null;
+  const monthly = selected.filter(row => row.billingFrequency === "monthly" && ["base_rent", "recurring_fee"].includes(row.category) && row.scope.type !== "property");
   if (monthly.some(row => row.amountCents == null || !Number.isFinite(row.amountCents))) return null;
   return monthly.reduce((sum, row) => sum + row.amountCents!, 0);
 }

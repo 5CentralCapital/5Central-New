@@ -620,3 +620,21 @@ test("exact active property boolean marks active without treating false as archi
  const run=(IsActive:unknown)=>mapRentManagerExport({...input(),properties:[{...input().properties[0],IsActive}]},{fidelityVersion:3,targetIdFactory:deterministicTestTargetIdFactory}).snapshot.properties[0];
  assert.equal(run(true).state,"active");for(const raw of [false,undefined,"true",1])assert.equal(run(raw).state,null);
 });
+
+test("raw RM account status and posting bounds survive separately from lease occupancy", () => {
+ const digest="a".repeat(64);
+ const crosswalk:RentManagerFinancialSemanticCrosswalk={artifactSha256:digest,normalization:"exact_v1",entries:[
+  createFinancialSemanticCrosswalkEntry({artifactSha256:digest,sourceCollection:"tenants",sourceField:"Status",semanticKind:"tenancy_status",normalization:"exact_v1",rawValue:"Past",targetValue:"past"})!,
+ ]};
+ const data={...input(), tenants:[{...input().tenants[0],Status:"Past",PostingStartDate:"2025-01-01T00:00:00",PostingEndDate:"2026-06-30T00:00:00"}], leases:[{entityType:"lease",sourceId:"ended",tenantId:"t1",propertyId:"p1",unitId:"u1",actualMoveInOn:"2025-01-01",actualMoveOutOn:"2026-05-15"}]};
+ const options={fidelityVersion:3 as const,artifactSha256:digest,artifactObservationOn:"2026-09-07",financialSemanticCrosswalk:crosswalk,targetIdFactory:deterministicTestTargetIdFactory};
+ const result=mapRentManagerExport(data,options);
+ const facts=result.snapshot.people.find(p=>p.source?.sourceId==="t1")!.sourceAccountFacts!;
+ assert.deepEqual(facts,{status:"past",rawStatus:"Past",statusKnowledge:"source",postingStartOn:"2025-01-01",postingEndOn:"2026-06-30",postingStartKnowledge:"source",postingEndKnowledge:"source",observedOn:"2026-09-07",artifactSha256:digest});
+ assert.equal(result.snapshot.tenancies[0].actualMoveOutOn,"2026-05-15");
+ assert.equal(result.snapshot.tenancies[0].status,null);
+ assert.equal(result.snapshot.people.find(p=>p.source?.sourceId==="contact-secondary")?.sourceAccountFacts,undefined);
+ const unknown=mapRentManagerExport({...data,tenants:[{...data.tenants[0],Status:"Unmapped",PostingEndDate:"bad-date"}]},options).snapshot.people[0].sourceAccountFacts!;
+ assert.equal(unknown.rawStatus,"Unmapped"); assert.equal(unknown.status,null); assert.equal(unknown.postingEndOn,null); assert.equal(unknown.postingEndKnowledge,"unknown");
+ assert.equal(mapRentManagerExport(data,{...options,artifactSha256:"b".repeat(64)}).snapshot.people[0].sourceAccountFacts?.status,null);
+});
