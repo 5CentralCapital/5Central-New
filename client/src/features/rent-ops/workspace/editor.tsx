@@ -28,6 +28,12 @@ export function WorkspaceEditor({ action, snapshot, initialValues = {}, onClose,
     dialog.current?.querySelector<HTMLElement>("input, select, textarea, button")?.focus();
     return () => previous?.focus();
   }, []);
+  useEffect(() => {
+    if (!dirty && !saving) return;
+    const protect = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", protect);
+    return () => window.removeEventListener("beforeunload", protect);
+  }, [dirty, saving]);
   async function submit(event: FormEvent) {
     event.preventDefault(); if (submitting.current) return; submitting.current = true; setSaving(true); setError(undefined);
     try {

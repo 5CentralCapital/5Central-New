@@ -1,4 +1,4 @@
-import type { AdminSnapshot } from "../types";
+import type { AdminSnapshot, AdminLedgerTransactionView } from "../types";
 import type { FormValues, QuickAction } from "../form-payload";
 function title(value: unknown): string {
   if (value === "amountHeldCents") return "Amount held";
@@ -111,6 +111,28 @@ export function confirmedChargeDefinition(snapshot: AdminSnapshot, id: unknown, 
 }
 
 
+/** Resolve only known parent links; an unknown relationship never matches by default. */
+export function transactionMatchesContext(snapshot: AdminSnapshot, transaction: AdminLedgerTransactionView, values: FormValues): boolean {
+  const data = snapshot.snapshot;
+  const tenancy = data.tenancies.find(t => t.id === transaction.tenancyId);
+  const unitId = transaction.unitId || tenancy?.unitId;
+  const propertyId = transaction.propertyId || tenancy?.propertyId || data.units.find(u => u.id === unitId)?.propertyId;
+  if (values.propertyId && propertyId !== values.propertyId) return false;
+  if (values.unitId && unitId !== values.unitId) return false;
+  if (values.tenancyId && transaction.tenancyId !== values.tenancyId) return false;
+  if (values.personId) {
+    if (transaction.personId) return transaction.personId === values.personId;
+    if (!tenancy || (tenancy.primaryPersonId !== values.personId && !data.householdMemberships.some(m => m.tenancyId === tenancy.id && m.personId === values.personId))) return false;
+  }
+  return true;
+}
+
+function transactionChoices(snapshot: AdminSnapshot, field: string, values: FormValues) {
+  const payment = field === "chargeTransactionId" ? snapshot.snapshot.ledgerTransactions.find(t => t.id === values.paymentTransactionId) : undefined;
+  const paymentContext: FormValues = payment ? { propertyId: payment.propertyId, unitId: payment.unitId, tenancyId: payment.tenancyId, personId: payment.personId } : {};
+  return snapshot.snapshot.ledgerTransactions.filter(t => transactionMatchesContext(snapshot, t, values) && transactionMatchesContext(snapshot, t, paymentContext));
+}
+
 /** Narrow available choices without changing any selected relationship. */
 export function scopedFields(action: QuickAction, snapshot: AdminSnapshot, initial: FormValues, values: FormValues) {
   const data = snapshot.snapshot;
@@ -124,11 +146,13 @@ export function scopedFields(action: QuickAction, snapshot: AdminSnapshot, initi
     // Choosing a new household member or primary tenant must include unattached people.
     if (field.name === "personId" && action !== "save-household-membership") allowed = new Set(people.map(p => p.id));
     if (field.name === "scopeId") allowed = new Set(values.scopeType === "property" ? [String(values.propertyId || "")] : values.scopeType === "unit" ? units.map(u => u.id) : values.scopeType === "tenant" ? people.map(p => p.id) : []);
+    const transactionField = ["paymentTransactionId", "chargeTransactionId", "originalId"].includes(field.name);
+    if (transactionField) allowed = new Set(transactionChoices(snapshot, field.name, values).map(t => t.id));
     if (!field.options) return field;
     const current = String(values[field.name] ?? "");
     const options = field.options.filter(([id]) => !allowed || allowed.has(id) || id === current);
     if (current && !options.some(([id]) => id === current)) options.push([current, "Existing selection · needs review"]);
-    return { ...field, options };
+    return { ...field, options: transactionField ? options.map(([id, label]): [string, string] => [id, allowed?.has(id) ? label : `${label} · outside selected context`]) : options };
   });
 }
 
@@ -140,6 +164,11 @@ export function editorTitle(action: QuickAction, initial: FormValues) {
 export function relationshipErrors(snapshot: AdminSnapshot, values: FormValues, initial: FormValues): Record<string, string> {
   const errors: Record<string, string> = {};
   const changed = ["propertyId", "unitId", "tenancyId", "personId"].some(key => String(values[key] ?? "") !== String(initial[key] ?? ""));
+  for (const field of ["paymentTransactionId", "chargeTransactionId", "originalId"]) {
+    if (!values[field]) continue;
+    const transactionChanged = values[field] !== initial[field] || values.paymentTransactionId !== initial.paymentTransactionId;
+    if ((changed || transactionChanged || !initial.revision) && !transactionChoices(snapshot, field, values).some(t => t.id === values[field])) errors[field] = "Choose an entry for the selected property and tenant context.";
+  }
   if (!changed && initial.revision) return errors;
   const unit = snapshot.snapshot.units.find(u => u.id === values.unitId);
   const tenancy = snapshot.snapshot.tenancies.find(t => t.id === values.tenancyId);
