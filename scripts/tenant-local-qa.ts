@@ -8,6 +8,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { ensureRentOpsSchema, rentOpsMigrationDefinitions } from "../server/rent-ops/persistence";
 import { createRentOpsSecurityManifest, renderRentOpsSecuritySql } from "../server/rent-ops/security/deployment-security";
 import { createPostgresRentOpsRepository, type RentOpsQueryExecutor } from "../server/rent-ops/repositories/postgres";
+import { createRentOpsPoolExecutor } from "../server/rent-ops/runtime-database";
 import { registerRentOpsRoutes } from "../server/rent-ops/routes";
 import { registerRentOpsBillingRoutes } from "../server/rent-ops/billing/routes";
 import { registerTenantPortalRoutes } from "../server/rent-ops/tenant-portal/routes";
@@ -47,6 +48,7 @@ export async function createTenantQa(options: { provider?: PaymentProvider } = {
   console.log('QA schema ready');
   const executor: RentOpsQueryExecutor = {
     query: async (text, values) => db.query(text, values),
+    readTableBatch: createRentOpsPoolExecutor({query: async (text, values) => db.query(text, values),connect: async () => {throw new Error("QA batch reads must use one statement");}}).readTableBatch,
     transaction: async work => db.transaction(async tx => work({ query: async (text, values) => tx.query(text, values) })).catch(error => { console.error('QA transaction:', error.message); throw error; }),
   };
   const repository = createPostgresRentOpsRepository(executor);

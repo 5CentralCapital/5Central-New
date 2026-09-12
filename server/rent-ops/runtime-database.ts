@@ -1,3 +1,4 @@
+import { buildRentOpsTableBatchSql, decodeRentOpsTableBatch } from "./repositories/read-table-batch";
 import type { RentOpsQueryExecutor } from "./repositories/postgres";
 
 /**
@@ -98,6 +99,16 @@ export function createRentOpsPoolExecutor(pool: RentOpsRuntimePool): RentOpsRunt
     async query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<{ rows: T[] }> {
       const result = await safeQuery<Record<string, unknown>>(pool.query.bind(pool), text, values);
       return { rows: result.rows as T[] };
+    },
+
+    async readTableBatch(tables) {
+      // Validation happens before issuing SQL; identifiers come only from the fixed catalog.
+      const sql = buildRentOpsTableBatchSql(tables);
+      const result = await safeQuery<Record<string, unknown>>(pool.query.bind(pool), sql);
+      try {
+        if (result.rows.length !== 1) throw new Error("Invalid table batch envelope");
+        return decodeRentOpsTableBatch(result.rows[0], tables);
+      } catch { throw redactedOperationError(); }
     },
 
     async transaction<T>(

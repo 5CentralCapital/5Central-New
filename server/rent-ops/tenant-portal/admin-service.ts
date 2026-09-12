@@ -23,7 +23,12 @@ export class TenantAccountAdminService {
   constructor(private readonly options: {repository:RentOpsRepository;store:TenantAccountStore;notifier?:TenantAccessNotifier;now?:()=>Date}) { this.now=options.now??(()=>new Date()); }
   async list() {
     const accounts=await this.options.store.list();
-    return {deliveryAvailable:!!this.options.notifier,accounts:accounts.map(tenantAccountSummary),eligibleTenancies:eligibleTenantTenancies(await this.options.repository.getSnapshot())};
+    const repository=this.options.repository;
+    // Eligibility needs only directory records and the snapshot knowledge mode.
+    // Account mutations retain their independent complete-snapshot validation.
+    const directory=repository.getWorkspaceSnapshot ? await repository.getWorkspaceSnapshot() : undefined;
+    const snapshot=directory?.modelVersion===3 ? directory : await repository.getSnapshot();
+    return {deliveryAvailable:!!this.options.notifier,accounts:accounts.map(tenantAccountSummary),eligibleTenancies:eligibleTenantTenancies(snapshot)};
   }
   async listForMcp() {
     return (await this.options.store.list()).map(record => ({...tenantAccountSummary(record),credentialRevision:record.sessionVersion}));

@@ -1,3 +1,4 @@
+import { RENT_OPS_BATCH_TABLES, type RentOpsTableRows } from "./read-table-batch";
 import { createHash } from "node:crypto";
 import type {
   RentOpsActivityEvent,
@@ -54,6 +55,8 @@ import { applicationHistoryCase } from "../application-history/projection";
  */
 export interface RentOpsQueryExecutor {
   query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<{ rows: T[] }>;
+  /** Optional atomic single-statement read, available on the production pool adapter. */
+  readTableBatch?(tables: readonly string[]): Promise<RentOpsTableRows>;
   /** Optional repeatable-read boundary for coherent reads and atomic writes. */
   transaction?<T>(work: (executor: RentOpsQueryExecutor) => Promise<T>, options?: { readOnly?: boolean }): Promise<T>;
 }
@@ -1085,9 +1088,11 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
 
   async getOperationalSnapshot(): Promise<RentOpsSnapshot> {
     await this.assertReady();
-    const snapshot = this.client.transaction
-      ? await this.client.transaction(executor => this.loadSnapshot(executor, false), { readOnly: true })
-      : await this.loadSnapshot(this.client, false);
+    const snapshot = this.client.readTableBatch
+      ? await this.loadSnapshot(this.client, false, undefined, await this.client.readTableBatch(RENT_OPS_BATCH_TABLES))
+      : this.client.transaction
+        ? await this.client.transaction(executor => this.loadSnapshot(executor, false), { readOnly: true })
+        : await this.loadSnapshot(this.client, false);
     assertValidSnapshot(snapshot);
     return snapshot;
   }
@@ -1096,10 +1101,12 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     await this.assertReady();
     const load = async (executor: RentOpsQueryExecutor) => {
       const snapshot = emptyRentOpsSnapshot();
-      const rows = await Promise.all([
+      const tables = [
         "rent_ops_properties", "rent_ops_units", "rent_ops_people", "rent_ops_tenancies",
         "rent_ops_household_memberships", "rent_ops_lease_terms", "rent_ops_charge_definitions",
-      ].map(table => this.rows(table, executor)));
+      ];
+      const batch = executor.readTableBatch ? await executor.readTableBatch(tables) : undefined;
+      const rows = batch ? tables.map(table => batch[table]) : await Promise.all(tables.map(table => this.rows(table, executor)));
       snapshot.properties = rows[0].map(rowToProperty);
       snapshot.units = rows[1].map(rowToUnit);
       snapshot.people = rows[2].map(rowToPerson);
@@ -1107,9 +1114,10 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       snapshot.householdMemberships = rows[4].map(rowToHouseholdMembership);
       snapshot.leaseTerms = rows[5].map(rowToLeaseTerm);
       snapshot.chargeDefinitions = rows[6].map(rowToChargeDefinition);
+      if (rows[0].some(row => Object.prototype.hasOwnProperty.call(row, "name_knowledge")) || rows[6].length > 0) snapshot.modelVersion = 3;
       return snapshot;
     };
-    return this.client.transaction ? this.client.transaction(load, { readOnly: true }) : load(this.client);
+    return this.client.readTableBatch ? load(this.client) : this.client.transaction ? this.client.transaction(load, { readOnly: true }) : load(this.client);
   }
 
   async getWorkspaceCollection<K extends RentOpsWorkspaceCollection>(name: K): Promise<RentOpsSnapshot[K]> {
@@ -1133,8 +1141,15 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     return snapshot[name];
   }
 
-  private async loadSnapshot(executor: RentOpsQueryExecutor, includeHistory = true, selectedTable?: string): Promise<RentOpsSnapshot> {
-    const rows = (table: string) => !selectedTable || selectedTable === table ? this.rows(table, executor) : Promise.resolve([]);
+  private async loadSnapshot(executor: RentOpsQueryExecutor, includeHistory = true, selectedTable?: string, batch?: RentOpsTableRows): Promise<RentOpsSnapshot> {
+    const rows = (table: string) => {
+      if (selectedTable && selectedTable !== table) return Promise.resolve([]);
+      if (batch) {
+        if (!Object.prototype.hasOwnProperty.call(batch, table)) throw new RentOpsInvariantError("Incomplete Rent Operations table batch");
+        return Promise.resolve(batch[table]);
+      }
+      return this.rows(table, executor);
+    };
     const snapshot = emptyRentOpsSnapshot();
     const [propertyRows, unitRows, peopleRows, tenancyRows, householdRows, leaseRows, chargeDefinitionRows, scheduleRows, ledgerRows, allocationRows, depositRows, subsidyRows, subsidyTenantRows, subsidyPaymentRows, applicationRows, applicationMemberRows, requirementRows, documentRows, activityRows, historyProspectRows, historyApplicationRows, historyInterestRows, historyParticipantRows, historyRequirementRows, historyTemplateRows, historySectionRows, historyFieldRows, historyAnswerRows, historyDocumentRows, historyActivityRows, historyBlockerRows, historyAggregateRows] = await Promise.all([
       rows("rent_ops_properties"),
