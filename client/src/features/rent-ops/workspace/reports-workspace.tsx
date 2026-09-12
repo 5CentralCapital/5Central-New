@@ -65,7 +65,7 @@ function ReportCell({ row, column, onOpenTenant, onOpenUnit, onOpenProperty }: {
   if (column.key === "propertyName") return <RecordLink kind="property" recordId={rowId(source, "propertyId")} onOpen={onOpenProperty}>{label}</RecordLink>;
   const tenantField = ["tenantName", "currentTenantName", "futureTenantName"].includes(column.key);
   const recurringField = ["baseRentCents", "recurringFeesCents", "totalScheduledCents", "subsidyCents"].includes(column.key);
-  const balanceField = ["balanceDueCents", "totalBalanceCents", "rentOnlyBalanceCents", "nonRentBalanceCents", "unappliedCashCents"].includes(column.key);
+  const balanceField = ["operationalBalanceCents", "balanceDueCents", "totalBalanceCents", "rentOnlyBalanceCents", "nonRentBalanceCents", "unappliedCashCents"].includes(column.key);
   if (tenantField || recurringField || balanceField) {
     const personId = reportCellPersonId(source, column.key);
     return <EntityLink personId={personId} tab={recurringField ? "charges" : balanceField ? "ledger" : "summary"} onOpen={onOpenTenant}>{label}</EntityLink>;

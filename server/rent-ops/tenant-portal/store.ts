@@ -104,6 +104,7 @@ export class PostgresTenantAccountStore implements TenantAccountStore {
         JOIN rent_ops_units u ON u.id=t.unit_id AND u.property_id=t.property_id
         WHERE t.id=$6 AND t.primary_person_id=$5
           AND t.status IN ('current','notice','future')
+          AND (t.operational_end_confirmed_on IS NULL OR t.operational_end_confirmed_on > ($3::timestamptz AT TIME ZONE 'America/New_York')::date)
           AND p.archived IS NOT TRUE
           AND (t.status_knowledge IN ('source','manual','confirmed') OR (t.source_system IS NULL AND t.status_knowledge IS NULL))
           AND (t.primary_person_link_knowledge IN ('exact','manual') OR (t.source_system IS NULL AND t.primary_person_link_knowledge IS NULL))

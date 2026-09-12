@@ -31,8 +31,9 @@ export function resolveTenantBinding(snapshot: RentOpsSnapshot, personId: string
   return tenancy;
 }
 
-export function eligibleTenantTenancies(snapshot: RentOpsSnapshot): TenantEligibleTenancy[] {
+export function eligibleTenantTenancies(snapshot: RentOpsSnapshot, asOfDate = new Intl.DateTimeFormat("en-CA", {timeZone:"America/New_York",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date())): TenantEligibleTenancy[] {
   return snapshot.tenancies.flatMap((tenancy) => {
+    if (tenancy.operationalEndConfirmationKnowledge === "manual" && tenancy.operationalEndConfirmedOn && tenancy.operationalEndConfirmedOn <= asOfDate) return [];
     if (!["current", "notice", "future"].includes(tenancy.status) || !knownFact(tenancy.statusKnowledge, sourceStrict(snapshot, tenancy))) return [];
     if (!resolveTenantBinding(snapshot, tenancy.primaryPersonId, tenancy.id)) return [];
     const person = snapshot.people.find((row) => row.id === tenancy.primaryPersonId)!;

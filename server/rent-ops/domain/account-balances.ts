@@ -1,7 +1,9 @@
 import type { DelinquencyRow, LedgerRow, RentOpsFilters, RentOpsPerson, RentOpsSnapshot, RentOpsTenancy } from "../../../shared/rent-ops-contracts";
 import { nowIsoDate } from "./dates";
 import { ledgerBalanceSign } from "./invariants";
-import { confirmedTenancyFact, isOccupiedTenancyOn } from "./tenancy-occupancy";
+import { confirmedTenancyFact, isOccupiedTenancyOn, hasOccupancyConfirmationOn, hasOperationalEndOn } from "./tenancy-occupancy";
+
+import { selectBalanceReview, operationalBalanceCents } from "./balance-review";
 
 type Status = NonNullable<DelinquencyRow["tenancyStatus"]>;
 export interface AccountBalanceAllocation { parentTransactionId: string; chargeTransactionId: string; amountCents: number; }
@@ -15,7 +17,11 @@ function statusOn(person: RentOpsPerson, tenancies: RentOpsTenancy[], asOf: stri
   const observed = facts?.statusKnowledge === "source" && facts.observedOn <= asOf ? facts : undefined;
   const events: { on: string; status: Status }[] = [];
   for (const tenancy of tenancies) {
-    if (isOccupiedTenancyOn(tenancy, asOf)) events.push({ on: tenancy.actualMoveInOn!, status: "current" });
+    if (isOccupiedTenancyOn(tenancy, asOf)) {
+      const on = tenancy.actualMoveInOn ?? (hasOccupancyConfirmationOn(tenancy, asOf) ? tenancy.occupancyConfirmedOn : undefined);
+      if (on) events.push({ on, status: "current" });
+    }
+    if (hasOperationalEndOn(tenancy, asOf)) events.push({ on: tenancy.operationalEndConfirmedOn!, status: "former" });
     if (confirmedTenancyFact(tenancy.actualMoveOutKnowledge) && tenancy.actualMoveOutOn && tenancy.actualMoveOutOn <= asOf)
       events.push({ on: tenancy.actualMoveOutOn, status: "former" });
   }
@@ -54,6 +60,7 @@ export function deriveAccountBalances(snapshot: RentOpsSnapshot, filters: RentOp
   for (const person of snapshot.people) if (person.sourceAccountFacts || (person.source?.system === "rent_manager" && /^(?:tenant:)?[0-9]+$/.test(person.source.sourceId))) accountIds.add(person.id);
   for (const transaction of snapshot.ledgerTransactions) if (transaction.personId && exact(transaction.personLinkKnowledge, legacy)) accountIds.add(transaction.personId);
   const heldTenancies = new Set(snapshot.activityEvents.filter(e => e.type === "promise_to_pay" || e.type === "hold").map(e => e.tenancyId));
+  const reviewTenancyIds = new Set(snapshot.activityEvents.filter(e => e.type === "note" && !!e.detail).map(e => e.tenancyId));
   const selected = new Set([...(filters.propertyIds ?? []), ...(filters.propertyId ? [filters.propertyId] : [])]);
   const allocationsByParent = new Map<string, AccountBalanceAllocation[]>();
   for (const allocation of readAllocations?.(snapshot, asOf) ?? []) {
@@ -109,7 +116,7 @@ export function deriveAccountBalances(snapshot: RentOpsSnapshot, filters: RentOp
         if (!charge || !amountKnown(allocation.amountCents)) continue;
         applied += allocation.amountCents;
         add({ ...row, allocatedCents: allocation.amountCents, openCents: 0,
-          transaction: { ...tx, id: `balance-application:${tx.id}:${charge.id}`, amountCents: allocation.amountCents } }, location(charge));
+          transaction: { ...tx, id: `balance-application:${tx.id}:${charge.id}`, amountCents: allocation.amountCents, propertyId: charge.propertyId, unitId: charge.unitId, tenancyId: charge.tenancyId, propertyLinkKnowledge: charge.propertyLinkKnowledge, unitLinkKnowledge: charge.unitLinkKnowledge, tenancyLinkKnowledge: charge.tenancyLinkKnowledge } }, location(charge));
       }
       add(applied ? { ...row, transaction: { ...tx, amountCents: tx.amountCents! - applied } } : row);
     }
@@ -149,10 +156,33 @@ export function deriveAccountBalances(snapshot: RentOpsSnapshot, filters: RentOp
       }
       if (!Number.isSafeInteger(total)) { complete = false; codes.add("ledger_balance_out_of_range"); }
       if (!complete && !codes.size) codes.add("account_balance_unknown");
-      if (filters.balanceStatus === "due" && (!complete || total <= 0)) continue;
-      if (filters.balanceStatus === "zero" && (!complete || total !== 0)) continue;
-      if (filters.balanceStatus === "credit" && (!complete || total >= 0)) continue;
-      if (filters.balanceStatus === "unverified" && complete) continue;
+      const reviews = value.tenancies.filter(t => reviewTenancyIds.has(t.id) && exact(t.propertyLinkKnowledge, legacy) && exact(t.unitLinkKnowledge, legacy))
+        .flatMap(t => { const review = selectBalanceReview(snapshot, t.id, asOf); return review && review.personId === person.id && review.propertyId === propertyId ? [review] : []; })
+        .sort((a, b) => b.asOfDate.localeCompare(a.asOfDate) || b.reviewedAt.localeCompare(a.reviewedAt) || b.id.localeCompare(a.id));
+      const latestReview = reviews[0];
+      // Owner reviews cover this account's property history, including transfers.
+      // Apply the latest observation once; equally dated conflicting observations
+      // cannot be settled by an arbitrary event ID or by summing their amounts.
+      const tiedReviews = latestReview ? snapshot.activityEvents.flatMap(event => {
+        if (event.type !== "note" || event.occurredAt !== latestReview.reviewedAt || !event.tenancyId
+          || !value.tenancies.some(t => t.id === event.tenancyId)) return [];
+        const review = selectBalanceReview({ ...snapshot, activityEvents: [event] }, event.tenancyId, asOf);
+        return review && review.personId === person.id && review.propertyId === propertyId
+          && review.asOfDate === latestReview.asOfDate ? [review] : [];
+      }) : [];
+      const reviewScopeAmbiguous = !!latestReview && tiedReviews.some(review =>
+        review.reviewedBalanceCents !== latestReview.reviewedBalanceCents
+          || review.tenantBalanceCents !== latestReview.tenantBalanceCents
+          || review.agencyBalanceCents !== latestReview.agencyBalanceCents);
+      const balanceReview = reviewScopeAmbiguous ? undefined : latestReview;
+      const operational = reviewScopeAmbiguous ? null : operationalBalanceCents(balanceReview, complete ? total : null, complete);
+      if (reviewScopeAmbiguous) codes.add("balance_review_scope_ambiguous");
+      else if (balanceReview?.stale) codes.add("balance_review_stale");
+      else if (balanceReview && operational === null) codes.add("balance_review_unresolved");
+      if (filters.balanceStatus === "due" && (operational === null || operational <= 0)) continue;
+      if (filters.balanceStatus === "zero" && operational !== 0) continue;
+      if (filters.balanceStatus === "credit" && (operational === null || operational >= 0)) continue;
+      if (filters.balanceStatus === "unverified" && operational !== null) continue;
       const onlyTenancy = value.tenancies.length === 1 ? value.tenancies[0] : undefined;
       const unitIds = new Set(value.tenancies.filter(t => exact(t.unitLinkKnowledge, legacy)).map(t => t.unitId));
       const unit = unitIds.size === 1 ? units.get(Array.from(unitIds)[0]) : undefined;
@@ -160,7 +190,7 @@ export function deriveAccountBalances(snapshot: RentOpsSnapshot, filters: RentOp
       const tenantName = `${person.firstName} ${person.lastName}`.trim();
       if (filters.search && !`${propertyName} ${unit?.unitNumber ?? ""} ${tenantName}`.toLowerCase().includes(filters.search.toLowerCase())) continue;
       result.push({ propertyId, propertyName, tenancyId: onlyTenancy?.id ?? null, personId: person.id, tenantName,
-        unitId: unit?.id, unitNumber: unit?.unitNumber, tenancyStatus, balanceComplete: complete, balanceUncertaintyCodes: Array.from(codes).sort(),
+        unitId: unit?.id, unitNumber: unit?.unitNumber, tenancyStatus, operationalBalanceCents: operational, balanceReview, balanceComplete: complete, balanceUncertaintyCodes: Array.from(codes).sort(),
         rentOnlyBalanceCents: complete && detailComplete ? rent : null, nonRentBalanceCents: complete && detailComplete ? nonRent : null,
         grossBalanceCents: complete && detailComplete ? rent + nonRent : null,
         totalBalanceCents: complete ? total : null, netAccountBalanceCents: complete ? total : null,

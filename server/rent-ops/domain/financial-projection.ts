@@ -1,4 +1,4 @@
-import { isKnownPastAccountOn, isOccupiedTenancyOn } from "./tenancy-occupancy";
+import { hasVacancyConfirmationOn, hasOperationalEndOn, hasOccupancyConfirmationOn, isKnownPastAccountOn, isOccupiedTenancyOn } from "./tenancy-occupancy";
 import type {
   Cents,
   IsoDate,
@@ -85,6 +85,7 @@ function tenancyOccupiesMonth(
   asOf: IsoDate,
 ): { state: "current" | "future_preleased" | "past" | "excluded" | "unknown"; partialMonth: boolean; exceptionCodes: string[] } {
   const exceptionCodes: string[] = [];
+  if (hasOperationalEndOn(tenancy, asOf)) return { state: "excluded", partialMonth: false, exceptionCodes: [] };
   const strictKnowledge = snapshot.modelVersion === 3;
   if (isKnownPastAccountOn(snapshot, tenancy.primaryPersonId, asOf, tenancy)) {
     return ["current", "notice", "future"].includes(tenancy.status)
@@ -99,8 +100,11 @@ function tenancyOccupiesMonth(
   if (tenancy.status === "cancelled") return { state: "excluded", partialMonth: false, exceptionCodes: [] };
 
   const isFuture = tenancy.status === "future";
-  const moveIn = isFuture ? tenancy.plannedMoveInOn : tenancy.actualMoveInOn;
-  const moveInKnowledge = isFuture ? tenancy.plannedMoveInKnowledge : tenancy.actualMoveInKnowledge;
+  // Observation is a conservative lower bound for known occupancy, never a
+  // claimed actual move-in or authority to generate historical charges.
+  const observation = !isFuture && hasOccupancyConfirmationOn(tenancy, asOf) ? tenancy.occupancyConfirmedOn : undefined;
+  const moveIn = isFuture ? tenancy.plannedMoveInOn : tenancy.actualMoveInOn ?? observation;
+  const moveInKnowledge = isFuture ? tenancy.plannedMoveInKnowledge : observation ? "manual" : tenancy.actualMoveInKnowledge;
   if (!moveIn || !factIsKnown(moveInKnowledge, strictKnowledge)) return { state: "unknown", partialMonth: false, exceptionCodes: [isFuture ? "planned_move_in_unknown" : "actual_move_in_unknown"] };
   if (moveIn > interval.end) return { state: "excluded", partialMonth: false, exceptionCodes: [] };
 
@@ -164,7 +168,7 @@ export function projectFinancialOccupancy(
   });
   const observed = candidates
     .map((tenancy) => ({ tenancy, projection: tenancyOccupiesMonth(snapshot, tenancy, interval, asOf ?? interval.end) }))
-    .filter(({ projection }) => projection.state !== "excluded");
+    .filter(({ projection }) => projection.state !== "excluded" && !(projection.state === "unknown" && hasVacancyConfirmationOn(unit, asOf ?? interval.end)));
   const unknown = observed.filter(({ projection }) => projection.state === "unknown");
   if (unknown.length > 0) {
     return { unitId: unit.id, propertyId: unit.propertyId, month, occupancy: "unknown", partialMonth: false, exceptionCodes: Array.from(new Set(unknown.flatMap(({ projection }) => projection.exceptionCodes))).sort() };

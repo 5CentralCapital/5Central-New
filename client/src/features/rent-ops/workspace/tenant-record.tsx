@@ -1,3 +1,4 @@
+import { balanceReviewDisplay } from "./balance-review-display";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { ManagerLeaseUpload } from "../manager-lease-upload";
@@ -140,6 +141,7 @@ function SummaryTab({ tenant, snapshot, onChanged }: { tenant: TenantView; snaps
   const tenancy = summary.currentTenancy;
   const primaryPhone = tenant.person.phone || tenant.person.phoneMethods?.find((method) => method.isPrimary === true)?.value || tenant.person.phoneMethods?.[0]?.value;
   const balanceWarning = !summary.balance.complete;
+  const review = balanceReviewDisplay(tenant.balanceReview);
   return <div className="rm-tenant-tab-content">
     <div className="rm-summary-grid">
       <Panel title="General">
@@ -148,8 +150,10 @@ function SummaryTab({ tenant, snapshot, onChanged }: { tenant: TenantView; snaps
           <Field label="Property">{summary.propertyName}</Field>
           <Field label="Unit">{summary.unitLabel}</Field>
           <Field label="Status">{statusValue(summary.status, summary.status === "Needs review")}</Field>
-          <Field label="Balance" warning={balanceWarning}><span className={balanceWarning ? "rm-muted" : summary.balance.amountCents ? "rm-amount rm-amount-warning" : "rm-amount"}>{summary.balance.complete ? formatMoney(summary.balance.amountCents) : "Needs review"}</span>{balanceWarning && summary.balance.uncertaintyCodes.length > 0 && <small className="rm-warning-copy">{summary.balance.uncertaintyCodes.map(label).join(" · ")}</small>}</Field>
+          {review && <Field label={review.label} warning={Boolean(review.warning)}><strong className="rm-amount">{review.amount}</strong><small>{review.date}</small>{review.warning && <small className="rm-warning-copy" role="status">{review.warning}</small>}{review.qualification && <small>{review.qualification}</small>}<small>{review.payerSplit}</small></Field>}
+          <Field label="Posted ledger balance" warning={balanceWarning}><span className={balanceWarning ? "rm-muted" : summary.balance.amountCents ? "rm-amount rm-amount-warning" : "rm-amount"}>{summary.balance.complete ? formatMoney(summary.balance.amountCents) : "Needs review"}</span>{balanceWarning && summary.balance.uncertaintyCodes.length > 0 && <small className="rm-warning-copy">{summary.balance.uncertaintyCodes.map(label).join(" · ")}</small>}</Field>
           <Field label="As of date">{formatDate(summary.asOfDate)}</Field>
+          {(tenant.meteredUtilities ?? []).map(utility => <Field key={`${utility.utility}:${utility.effectiveFrom}`} label="Water — metered"><span>Starts {formatDate(utility.effectiveFrom)}</span><small>Amount unknown · billed from meter readings</small></Field>)}
           <Field label="Planned move-in">{formatDate(tenancy?.plannedMoveInOn)}</Field>
           <Field label="Actual move-in">{formatDate(tenancy?.actualMoveInOn)}</Field>
           <Field label="Lease end">{formatDate(summary.primaryLease?.contractEndOn)}</Field>
@@ -267,6 +271,7 @@ function ChargesTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantV
   return <div className="rm-tenant-tab-content"><Panel title="Recurring charges">
     <div className="rm-charge-toolbar"><div className="rm-segmented" role="group" aria-label="Recurring charge status">{(["current", "all", "history", "future", "review"] as RecurringChargeFilter[]).map((option) => <button type="button" key={option} className={filter === option ? "active" : ""} onClick={() => setFilter(option)}>{option === "review" ? "Needs review" : label(option)} <span>{option === "all" ? rows.length : filterRecurringCharges(rows, option).length}</span></button>)}</div><div className="rm-charge-total"><span>Current monthly total</span><strong>{formatMoney(monthlyTotal)}</strong></div></div>
     <ChargeTable rows={filtered} editActions={editActions} onEdit={onEdit} />
+    {(tenant.meteredUtilities ?? []).map(utility => <p key={`${utility.utility}:${utility.effectiveFrom}`} className="rm-warning" role="status">Water — metered · starts {formatDate(utility.effectiveFrom)} · amount unknown. Metered usage is excluded from the fixed monthly total.</p>)}
   </Panel></div>;
 }
 
@@ -377,6 +382,7 @@ function tabContent(tab: TenantTab, props: Omit<TenantRecordProps, "tab" | "onTa
 }
 
 export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged }: TenantRecordProps) {
+  const review = balanceReviewDisplay(tenant.balanceReview);
   const summary = buildTenantSummary(tenant, snapshot);
   const editActions = useMemo(() => buildTenantEditActions(tenant, snapshot, tab), [tenant, snapshot, tab]);
   const headerActions = useMemo(() => {
@@ -388,7 +394,7 @@ export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged }
   return <section className="rm-tenant-record" aria-label={`Tenant record for ${summary.displayName}`}>
     <header className="rm-record-summary">
       <div className="rm-record-summary-main"><h2>{summary.displayName}</h2><p>{summary.propertyName} · Unit {summary.unitLabel}</p></div>
-      <div className="rm-record-summary-meta"><span className={statusClass(summary.status, summary.status === "Needs review")}>{label(summary.status)}</span><span className={`rm-record-balance${summary.balance.complete && summary.balance.amountCents ? " rm-record-balance-warning" : ""}`}><small>Balance</small><strong>{summary.balance.complete ? formatMoney(summary.balance.amountCents) : "Needs review"}</strong></span><span className="rm-record-as-of"><small>As of</small><strong>{formatDate(summary.asOfDate)}</strong></span></div>
+      <div className="rm-record-summary-meta"><span className={statusClass(summary.status, summary.status === "Needs review")}>{label(summary.status)}</span><span className={`rm-record-balance${review ? tenant.balanceReview?.stale || tenant.balanceReview?.reviewedBalanceCents ? " rm-record-balance-warning" : "" : summary.balance.complete && summary.balance.amountCents ? " rm-record-balance-warning" : ""}`}><small>{review ? review.label : "Posted ledger balance"}</small><strong>{review ? review.amount : summary.balance.complete ? formatMoney(summary.balance.amountCents) : "Needs review"}</strong></span><span className="rm-record-as-of"><small>As of</small><strong>{formatDate(review ? tenant.balanceReview?.asOfDate : summary.asOfDate)}</strong></span></div>
     </header>
     <nav className="rm-tabs rm-tenant-tabs" role="tablist" aria-label="Tenant record sections">{TENANT_RECORD_TABS.map((item) => <button type="button" role="tab" aria-selected={tab === item} aria-controls={`tenant-panel-${item}`} className={tab === item ? "active" : ""} key={item} onClick={() => onTab(item)}>{TAB_LABELS[item]}</button>)}</nav>
     {headerActions.length > 0 && <div className="rm-toolbar rm-tenant-toolbar">{headerActions.map((action) => <ActionButton key={`${action.action}-${action.label}`} action={action} onEdit={onEdit} primary />)}</div>}

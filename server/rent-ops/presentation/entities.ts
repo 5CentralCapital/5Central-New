@@ -1,8 +1,11 @@
+import type { AdminBalanceReviewView } from "./balance-review";
+import { serializeBalanceReview } from "./balance-review";
 import { effectiveScheduleIntervals } from "../domain/invariants";
 import { resolveEffectiveScheduleVersions } from "../domain/financial-projection";
 import type {
   DashboardSummary,
   RentOpsChargeDefinition,
+  RentOpsMeteredUtilityView,
   RentOpsActivityEvent,
   RentOpsApplication,
   RentOpsApplicationHouseholdMember,
@@ -1028,6 +1031,8 @@ export function serializeAdminApplicationView(input: AdminApplicationContext): A
 }
 
 export interface AdminDashboardSummaryView {
+  operationalDelinquencyCents?: number | null;
+  operationalBalanceUnresolvedCount?: number;
   balanceComplete?: boolean;
   balanceUncertaintyCodes?: string[];
   balanceUnresolvedCount?: number;
@@ -1152,6 +1157,8 @@ export function serializeDashboardSummary(value: DashboardSummary): AdminDashboa
     balanceComplete: bool(input, "balanceComplete"),
     balanceUncertaintyCodes: stringArrayValue(input.balanceUncertaintyCodes),
     balanceUnresolvedCount: number(input, "balanceUnresolvedCount"),
+    operationalDelinquencyCents: nullableNumberValue(input.operationalDelinquencyCents),
+    operationalBalanceUnresolvedCount: number(input, "operationalBalanceUnresolvedCount"),
     rentOnlyDelinquencyCents: nullableNumberValue(input.rentOnlyDelinquencyCents),
     totalDelinquencyCents: nullableNumberValue(input.totalDelinquencyCents),
     unappliedCashCents: nullableNumberValue(input.unappliedCashCents),
@@ -1231,6 +1238,8 @@ export const serializeDocument = serializeAdminDocument;
 export const serializeActivity = serializeAdminActivity;
 
 export interface AdminTenantProfileView {
+  meteredUtilities?: RentOpsMeteredUtilityView[];
+  balanceReview?: AdminBalanceReviewView;
   person?: AdminPersonView;
   household: AdminHouseholdMembershipView[];
   tenancy?: AdminTenancyView;
@@ -1264,9 +1273,19 @@ function serializeLedgerRows(value: unknown): AdminTenantProfileView["ledger"] {
   }));
 }
 
+export function serializeMeteredUtilities(value: unknown): RentOpsMeteredUtilityView[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap(item => {
+    if (!isRecord(item) || item.utility !== "water" || item.billingMethod !== "metered" || typeof item.effectiveFrom !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(item.effectiveFrom) || item.amountCents !== null || item.amountKnowledge !== "unknown") return [];
+    return [{ utility: "water" as const, billingMethod: "metered" as const, effectiveFrom: item.effectiveFrom, amountCents: null, amountKnowledge: "unknown" as const }];
+  });
+}
+
 export function serializeAdminTenantProfile(value: TenantProfile | unknown, completeSchedules?: RentOpsRecurringChargeSchedule[], preparedSchedules?: ReadonlyMap<string, AdminRecurringScheduleView>): AdminTenantProfileView {
   const input = inputOf(value);
   return presentationObject({
+    meteredUtilities: serializeMeteredUtilities(input.meteredUtilities),
+    balanceReview: serializeBalanceReview(input.balanceReview),
     operationalStatus: (["current", "future", "former", "contact", "unknown"] as const).find(status => status === input.operationalStatus),
     operationalScheduleIds: stringArrayValue(input.operationalScheduleIds),
     operationalSchedulesComplete: bool(input, "operationalSchedulesComplete"),

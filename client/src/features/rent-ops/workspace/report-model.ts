@@ -1,3 +1,4 @@
+import { balanceReviewReportText } from "./balance-review-display";
 import type {
   AdminSnapshot,
   ApiFilters,
@@ -178,7 +179,7 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
         currency("baseRentCents", "Recurring rent"),
         currency("recurringFeesCents", "Other recurring"),
         currency("totalScheduledCents", "Monthly total"),
-        currency("balanceDueCents", "Balance due"),
+        currency("operationalBalanceCents", "Balance due"),
         ...[
           text("propertyName", "Property", propertyName),
           status("occupancy", "Occupancy"),
@@ -187,6 +188,8 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
           text("futureTenantName", "Future tenant"),
           currency("marketRentCents", "Market rent"),
           currency("subsidyCents", "Subsidy"),
+          currency("balanceDueCents", "Posted ledger balance"),
+          text("reviewedOperationalBalance", "Reviewed operational balance", (row) => balanceReviewReportText("balanceReview" in row ? row.balanceReview : undefined)),
         ].map(column => ({ ...column, curated: false })),
       ];
     case "occupancy":
@@ -236,10 +239,12 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
         text("unitNumber", "Unit", unitNumber),
         text("tenantName", "Tenant", tenantName),
         status("tenancyStatus", "Tenant status"),
-        currency("rentOnlyBalanceCents", "Rent balance"),
-        currency("nonRentBalanceCents", "Non-rent balance"),
-        currency("totalBalanceCents", "Total balance"),
+        currency("operationalBalanceCents", "Operational balance"),
+        currency("totalBalanceCents", "Posted ledger total"),
         ...[
+          currency("rentOnlyBalanceCents", "Posted rent balance"),
+          currency("nonRentBalanceCents", "Posted non-rent balance"),
+          text("reviewedOperationalBalance", "Reviewed operational balance", (row) => balanceReviewReportText("balanceReview" in row ? row.balanceReview : undefined)),
           currency("unappliedCashCents", "Unapplied cash"),
           date("oldestUnpaidRentOn", "Oldest unpaid rent"),
           date("lastPaymentOn", "Last payment"),
@@ -404,12 +409,12 @@ function discoverSourceKeys(rows: readonly ReportRow[]): string[] {
   for (const row of rows) {
     if (!isRecord(row)) continue;
     for (const key of Object.keys(row)) {
-      if (!isInternalIdKey(key)) keys.add(key);
+      if (!isInternalIdKey(key) && key !== "balanceReview") keys.add(key);
     }
     const transaction = row.transaction;
     if (isRecord(transaction)) {
       for (const key of Object.keys(transaction)) {
-        if (!isInternalIdKey(key)) keys.add(key);
+        if (!isInternalIdKey(key) && key !== "balanceReview") keys.add(key);
       }
     }
   }
@@ -526,6 +531,14 @@ export function isVacantWithoutObligation(row: ReportRow): boolean {
 
 function guardedMoney(row: ReportRow, key: string): unknown {
   const value = readRaw(row, key);
+  if (key === "operationalBalanceCents") {
+    const review = readRaw(row, "balanceReview");
+    if (isRecord(review) && review.stale === true) return null;
+    // Compatibility with older report responses; explicit null never falls back.
+    if (value !== undefined) return value;
+    if (readRaw(row, "balanceComplete") !== true) return null;
+    return readRaw(row, "balanceDueCents") ?? readRaw(row, "totalBalanceCents");
+  }
   if (key === "baseRentCents" && isVacantWithoutObligation(row)) return 0;
   if (BALANCE_TOTAL_KEYS.has(key) && readRaw(row, "balanceComplete") === false) return null;
   if (key === "totalScheduledCents" && readRaw(row, "baseRentCents") == null && !isVacantWithoutObligation(row)) return null;
@@ -732,8 +745,8 @@ export function filterReportLocalRows(rows: readonly ReportRow[], key: ReportKey
     }
     const balance = filters.balance ?? "all";
     if (balance === "all") return true;
-    const amount = guardedMoney(row, key === "rent-roll" ? "balanceDueCents" : "totalBalanceCents");
-    const known = readRaw(row, "balanceComplete") === true && typeof amount === "number" && Number.isSafeInteger(amount);
+    const amount = guardedMoney(row, "operationalBalanceCents");
+    const known = typeof amount === "number" && Number.isSafeInteger(amount);
     if (balance === "unverified") return !known;
     if (!known) return false;
     return balance === "due" ? amount > 0 : balance === "credit" ? amount < 0 : amount === 0;

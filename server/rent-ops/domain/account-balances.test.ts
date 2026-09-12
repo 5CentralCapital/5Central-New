@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyRentOpsSnapshot, type RentOpsLedgerTransaction, type RentOpsFilters } from "../../../shared/rent-ops-contracts";
+import { createBalanceReviewEvent, balanceReviewLedgerFingerprint } from "./balance-review";
 import { deriveAccountBalances } from "./account-balances";
 import { deriveManagerAccountLedger, readAccountBalanceAllocations } from "./reports";
 
@@ -155,4 +156,76 @@ test("partial application of an unassigned root moves only its applied cents to 
   assert.equal(rows.find(r => r.propertyId === null)!.totalBalanceCents, -9000);
   assert.equal(rows.find(r => r.propertyId === null)!.unappliedCashCents, 9000);
   assert.equal(rows.reduce((sum, r) => sum + r.totalBalanceCents!, 0), -5000);
+});
+
+function addReview(s: ReturnType<typeof fixture>, tenancyId: string, amount: number | null, id = "review", reviewedAt = "2026-08-16T12:00:00.000Z") {
+  const t = s.tenancies.find(t => t.id === tenancyId)!;
+  s.activityEvents.push(createBalanceReviewEvent({ schema: "balance_review_v1", id, tenancyId, personId: t.primaryPersonId, propertyId: t.propertyId, unitId: t.unitId, asOfDate: "2026-08-16", reviewedAt, reviewedBy: "owner", ledgerFingerprint: balanceReviewLedgerFingerprint(s, t.primaryPersonId), reviewedBalanceCents: amount, tenantBalanceCents: amount, agencyBalanceCents: 0, qualifications: ["Owner reviewed"], sourceRefs: ["owner-review:2026-08-16"] }));
+}
+
+test("account routing uses exact property review without changing posted ledger or another property", () => {
+  const s = fixture();
+  s.ledgerTransactions.push(tx("review-a", "old", "a", "alice", 10000), tx("review-b", "new", "b", "alice", 20000));
+  const before = deriveManagerAccountLedger(s, "alice", ["old", "new"], { asOfDate: "2026-08-16" });
+  addReview(s, "old", 0);
+  const zero = report(s, { personId: "alice", balanceStatus: "zero" });
+  assert.equal(zero.length, 1); assert.equal(zero[0].propertyId, "a");
+  assert.equal(zero[0].totalBalanceCents, 10000); assert.equal(zero[0].rentOnlyBalanceCents, 10000);
+  assert.equal(zero[0].operationalBalanceCents, 0);
+  assert.deepEqual(report(s, { personId: "alice", balanceStatus: "due" }).map(r => r.propertyId), ["b"]);
+  assert.deepEqual(deriveManagerAccountLedger(s, "alice", ["old", "new"], { asOfDate: "2026-08-16" }), before);
+  addReview(s, "old", -3000, "newer-review", "2026-08-16T13:00:00.000Z");
+  assert.equal(report(s, { personId: "alice", balanceStatus: "credit" })[0].operationalBalanceCents, -3000);
+  addReview(s, "old", null, "unresolved-review", "2026-08-16T14:00:00.000Z");
+  assert.equal(report(s, { personId: "alice", balanceStatus: "unverified" })[0].totalBalanceCents, 10000);
+});
+
+test("stale review fails operational routing closed while posted total remains visible", () => {
+  const s = fixture();
+  s.ledgerTransactions.push(tx("review-charge", "old", "a", "alice", 10000));
+  addReview(s, "old", 0);
+  s.ledgerTransactions.push(tx("later-charge", "old", "a", "alice", 5000));
+  const row = report(s, { personId: "alice", balanceStatus: "unverified" }).find(r => r.propertyId === "a")!;
+  assert.equal(row.operationalBalanceCents, null); assert.equal(row.totalBalanceCents, 15000);
+  assert.equal(row.balanceReview?.stale, true);
+  assert.ok(row.balanceUncertaintyCodes?.includes("balance_review_stale"));
+});
+
+test("same-property transfer uses latest account review once and equally dated conflicts fail closed", () => {
+  const s = fixture();
+  s.units.push({ ...s.units[0], id: "second-a", unitNumber: "2" });
+  s.tenancies[1] = { ...s.tenancies[1], propertyId: "a", unitId: "second-a" };
+  s.ledgerTransactions.push(tx("review-old", "old", "a", "alice", 10000), tx("review-new", "new", "a", "alice", 20000));
+  addReview(s, "old", 0, "old-review"); addReview(s, "new", 4000, "new-review", "2026-08-16T13:00:00.000Z");
+  const due = report(s, { personId: "alice", balanceStatus: "due" });
+  assert.equal(due.length, 1); assert.equal(due[0].totalBalanceCents, 30000);
+  assert.equal(due[0].operationalBalanceCents, 4000);
+  assert.equal(report(s, { personId: "alice", unitId: "u-a", balanceStatus: "zero" }).length, 1);
+  assert.equal(report(s, { personId: "alice", unitId: "second-a", balanceStatus: "due" })[0].operationalBalanceCents, 4000);
+  addReview(s, "old", 1000, "conflicting-review", "2026-08-16T13:00:00.000Z");
+  const rows = report(s, { personId: "alice", balanceStatus: "unverified" });
+  assert.equal(rows.length, 1); assert.equal(rows[0].totalBalanceCents, 30000);
+  assert.equal(rows[0].operationalBalanceCents, null);
+  assert.ok(rows[0].balanceUncertaintyCodes?.includes("balance_review_scope_ambiguous"));
+});
+
+test("manual occupancy confirmation without move-in date and operational end control dated status", () => {
+  const s = fixture();
+  s.tenancies[1] = { ...s.tenancies[1], actualMoveInOn: undefined, occupancyConfirmedOn: "2026-08-10", occupancyConfirmationKnowledge: "manual", statusKnowledge: "manual" };
+  assert.equal(report(s, { personId: "alice", asOfDate: "2026-08-09" }).find(r => r.propertyId === "b")!.tenancyStatus, "unknown");
+  assert.equal(report(s, { personId: "alice" }).find(r => r.propertyId === "b")!.tenancyStatus, "current");
+  s.tenancies[1].operationalEndConfirmedOn = "2026-08-15";
+  s.tenancies[1].operationalEndConfirmationKnowledge = "manual";
+  assert.equal(report(s, { personId: "alice", asOfDate: "2026-08-14" }).find(r => r.propertyId === "b")!.tenancyStatus, "current");
+  assert.equal(report(s, { personId: "alice" }).find(r => r.propertyId === "b")!.tenancyStatus, "former");
+});
+
+
+test("conflicting simultaneous reviews on the same tenancy cannot be resolved by event ID", () => {
+  const s = fixture();
+  s.ledgerTransactions.push(tx("review-charge", "old", "a", "alice", 10000));
+  addReview(s, "old", 0, "same-time-a"); addReview(s, "old", 5000, "same-time-z");
+  const row = report(s, { personId: "alice", balanceStatus: "unverified" }).find(r => r.propertyId === "a")!;
+  assert.equal(row.totalBalanceCents, 10000); assert.equal(row.operationalBalanceCents, null);
+  assert.ok(row.balanceUncertaintyCodes?.includes("balance_review_scope_ambiguous"));
 });

@@ -1,4 +1,6 @@
 import type {
+  AdminBalanceReviewView,
+  AdminMeteredUtilityView,
   ApiFilters,
   AdminSnapshot,
   AdminSnapshotView,
@@ -1106,9 +1108,32 @@ function decodeLedgerRow(value: unknown): LedgerRow {
   };
 }
 
-function decodeAdminTenant(value: unknown): TenantView {
-  const input = exactRecord(value, "tenant profile", ["person", "household", "tenancy", "tenancies", "leaseTerms", "schedules", "operationalStatus", "operationalScheduleIds", "operationalSchedulesComplete", "payerResponsibilityUnverified", "ledger", "deposits", "subsidyContracts", "documents", "activity", "property", "unit", "primaryLease"]);
+export function decodeBalanceReview(value: unknown): AdminBalanceReviewView {
+  const input = exactRecord(value, "balance review", ["schema", "id", "tenancyId", "personId", "propertyId", "unitId", "asOfDate", "reviewedAt", "reviewedBy", "reviewedBalanceCents", "tenantBalanceCents", "agencyBalanceCents", "qualifications", "stale"]);
+  const strings = (key: string) => requiredArrayOf(input, key, (item) => {
+    if (typeof item !== "string") throw new Error(`Invalid balance review ${key}`);
+    return item;
+  });
   return {
+    schema: requiredAllowed(input, "schema", ["balance_review_v1"]) as "balance_review_v1",
+    id: requiredId(input, "id"), tenancyId: requiredId(input, "tenancyId"), personId: requiredId(input, "personId"), propertyId: requiredId(input, "propertyId"), unitId: requiredId(input, "unitId"),
+    asOfDate: requiredDate(input, "asOfDate"), reviewedAt: requiredTimestamp(input, "reviewedAt"), reviewedBy: requiredText(input, "reviewedBy"),
+    reviewedBalanceCents: input.reviewedBalanceCents === null ? null : requiredMoney(input, "reviewedBalanceCents"),
+    tenantBalanceCents: input.tenantBalanceCents === null ? null : requiredMoney(input, "tenantBalanceCents"),
+    agencyBalanceCents: input.agencyBalanceCents === null ? null : requiredMoney(input, "agencyBalanceCents"),
+    qualifications: strings("qualifications"), stale: requiredBoolean(input, "stale"),
+  };
+}
+
+export function decodeMeteredUtility(value: unknown): AdminMeteredUtilityView {
+  const input = exactRecord(value, "metered utility", [ "utility", "billingMethod", "effectiveFrom", "amountCents", "amountKnowledge"]);
+  if (input.amountCents !== null) throw new Error("Metered utility amount must remain unknown");
+  return { utility: requiredAllowed(input, "utility", ["water"]) as "water", billingMethod: requiredAllowed(input, "billingMethod", ["metered"]) as "metered", effectiveFrom: requiredDate(input, "effectiveFrom"), amountCents: null, amountKnowledge: requiredAllowed(input, "amountKnowledge", ["unknown"]) as "unknown" };
+}
+
+function decodeAdminTenant(value: unknown): TenantView {
+  const input = exactRecord(value, "tenant profile", ["meteredUtilities", "balanceReview", "person", "household", "tenancy", "tenancies", "leaseTerms", "schedules", "operationalStatus", "operationalScheduleIds", "operationalSchedulesComplete", "payerResponsibilityUnverified", "ledger", "deposits", "subsidyContracts", "documents", "activity", "property", "unit", "primaryLease"]);
+  return { meteredUtilities: input.meteredUtilities === undefined ? undefined : requiredArrayOf(input, "meteredUtilities", decodeMeteredUtility), balanceReview: optionalObject(input, "balanceReview", decodeBalanceReview),
     operationalStatus: optionalEnum(input, "operationalStatus", ["current", "future", "former", "contact", "unknown"] as const),
     operationalScheduleIds: optionalStrings(input, "operationalScheduleIds"),
     operationalSchedulesComplete: optionalBoolean(input, "operationalSchedulesComplete"),
@@ -1178,7 +1203,7 @@ function decodeApiFilters(value: unknown): ApiFilters {
 const DASHBOARD_DRILLDOWN_KEYS = ["occupiedUnits", "futurePreleasedUnits", "genuineVacantUnits", "rentOnlyDelinquencyCents", "securityDepositLiabilityCents"] as const;
 
 function decodeDashboardSummary(value: unknown): DashboardSummary {
-  const input = exactRecord(value, "dashboard summary", ["balanceUnresolvedCount", "balanceComplete", "balanceUncertaintyCodes", "asOfDate", "propertyCount", "unitCount", "occupiedUnits", "futurePreleasedUnits", "genuineVacantUnits", "readyVacantUnits", "notReadyUnits", "offMarketUnits", "physicalOccupancyPercent", "scheduledRentConfirmedCents", "scheduledRentUnresolvedCount", "scheduledRentComplete", "scheduledRentCadenceComplete", "scheduledRentCents", "collectedRentCents", "rentOnlyDelinquencyCents", "totalDelinquencyCents", "unappliedCashCents", "expiringIn30Days", "expiringIn60Days", "expiringIn90Days", "monthToMonthCount", "applicationsSubmitted", "applicationsMissingInformation", "securityDepositLiabilityCents", "drilldowns"]);
+  const input = exactRecord(value, "dashboard summary", ["operationalDelinquencyCents", "operationalBalanceUnresolvedCount","balanceUnresolvedCount", "balanceComplete", "balanceUncertaintyCodes", "asOfDate", "propertyCount", "unitCount", "occupiedUnits", "futurePreleasedUnits", "genuineVacantUnits", "readyVacantUnits", "notReadyUnits", "offMarketUnits", "physicalOccupancyPercent", "scheduledRentConfirmedCents", "scheduledRentUnresolvedCount", "scheduledRentComplete", "scheduledRentCadenceComplete", "scheduledRentCents", "collectedRentCents", "rentOnlyDelinquencyCents", "totalDelinquencyCents", "unappliedCashCents", "expiringIn30Days", "expiringIn60Days", "expiringIn90Days", "monthToMonthCount", "applicationsSubmitted", "applicationsMissingInformation", "securityDepositLiabilityCents", "drilldowns"]);
   const drilldownInput = exactRecord(input.drilldowns, "dashboard drilldowns", DASHBOARD_DRILLDOWN_KEYS);
   const drilldowns: DashboardSummary["drilldowns"] = {};
   for (const key of DASHBOARD_DRILLDOWN_KEYS) {
@@ -1190,7 +1215,7 @@ function decodeDashboardSummary(value: unknown): DashboardSummary {
     if (!report) invalidResponse();
     drilldowns[key] = { report, filters: decodeApiFilters(item.filters) };
   }
-  return { balanceUnresolvedCount: optionalInteger(input, "balanceUnresolvedCount"), balanceComplete: optionalBoolean(input, "balanceComplete"), balanceUncertaintyCodes: optionalStrings(input, "balanceUncertaintyCodes"),
+  return { operationalDelinquencyCents: nullableMoney(input, "operationalDelinquencyCents"), operationalBalanceUnresolvedCount: optionalInteger(input, "operationalBalanceUnresolvedCount"), balanceUnresolvedCount: optionalInteger(input, "balanceUnresolvedCount"), balanceComplete: optionalBoolean(input, "balanceComplete"), balanceUncertaintyCodes: optionalStrings(input, "balanceUncertaintyCodes"),
     asOfDate: requiredDate(input, "asOfDate"),
     propertyCount: requiredInteger(input, "propertyCount"),
     unitCount: requiredInteger(input, "unitCount"),
@@ -1222,8 +1247,8 @@ function decodeDashboardSummary(value: unknown): DashboardSummary {
 }
 
 function decodeRentRollRow(value: unknown): RentRollRow {
-  const input = exactRecord(value, "rent-roll row", ["balanceComplete", "balanceUncertaintyCodes", "propertyId", "propertyName", "unitId", "unitNumber", "bedrooms", "bathrooms", "marketRentCents", "readiness", "listing", "occupancy", "currentPersonId", "currentTenantName", "futurePersonId", "futureTenantName", "tenancyId", "actualMoveInOn", "noticeOn", "expectedMoveOutOn", "actualMoveOutOn", "contractStartOn", "contractEndOn", "monthToMonth", "baseRentCents", "recurringFeesCents", "subsidyCents", "tenantPortionCents", "totalScheduledCents", "balanceDueCents", "oldestUnpaidRentOn", "exceptionCodes"]);
-  return { balanceComplete: optionalBoolean(input, "balanceComplete"), balanceUncertaintyCodes: optionalStrings(input, "balanceUncertaintyCodes"),
+  const input = exactRecord(value, "rent-roll row", ["operationalBalanceCents","balanceReview", "balanceComplete", "balanceUncertaintyCodes", "propertyId", "propertyName", "unitId", "unitNumber", "bedrooms", "bathrooms", "marketRentCents", "readiness", "listing", "occupancy", "currentPersonId", "currentTenantName", "futurePersonId", "futureTenantName", "tenancyId", "actualMoveInOn", "noticeOn", "expectedMoveOutOn", "actualMoveOutOn", "contractStartOn", "contractEndOn", "monthToMonth", "baseRentCents", "recurringFeesCents", "subsidyCents", "tenantPortionCents", "totalScheduledCents", "balanceDueCents", "oldestUnpaidRentOn", "exceptionCodes"]);
+  return { operationalBalanceCents: nullableMoney(input, "operationalBalanceCents"), balanceReview: optionalObject(input, "balanceReview", decodeBalanceReview), balanceComplete: optionalBoolean(input, "balanceComplete"), balanceUncertaintyCodes: optionalStrings(input, "balanceUncertaintyCodes"),
     propertyId: optionalId(input, "propertyId"), propertyName: optionalText(input, "propertyName"), unitId: optionalId(input, "unitId"), unitNumber: optionalText(input, "unitNumber"),
     bedrooms: optionalFinite(input, "bedrooms"), bathrooms: optionalFinite(input, "bathrooms"), marketRentCents: optionalMoney(input, "marketRentCents"),
     readiness: optionalAllowed(input, "readiness", READINESS_STATES), listing: optionalAllowed(input, "listing", LISTING_STATES), occupancy: optionalText(input, "occupancy"),
@@ -1292,8 +1317,8 @@ function decodeScheduledVsCollectedRow(value: unknown): ScheduledVsCollectedRow 
 }
 
 function decodeDelinquencyRow(value: unknown): DelinquencyRow {
-  const input = exactRecord(value, "delinquency row", ["tenancyStatus", "creditBalanceCents", "balanceComplete", "balanceUncertaintyCodes", "propertyId", "propertyName", "unitId", "unitNumber", "tenancyId", "personId", "tenantName", "rentOnlyBalanceCents", "nonRentBalanceCents", "grossBalanceCents", "totalBalanceCents", "netAccountBalanceCents", "unappliedCashCents", "prepaidCents", "oldestUnpaidRentOn", "lastPaymentOn", "hasPromiseOrHold", "noticeStatus"]);
-  return { tenancyStatus: optionalAllowed(input, "tenancyStatus", ["current", "former", "future", "unknown"]) as DelinquencyRow["tenancyStatus"], creditBalanceCents: nullableMoney(input, "creditBalanceCents"), balanceComplete: optionalBoolean(input, "balanceComplete"), balanceUncertaintyCodes: optionalStrings(input, "balanceUncertaintyCodes"), propertyId: optionalId(input, "propertyId"), propertyName: optionalText(input, "propertyName"), unitId: optionalId(input, "unitId"), unitNumber: optionalText(input, "unitNumber"), tenancyId: optionalId(input, "tenancyId"), personId: optionalId(input, "personId"), tenantName: optionalText(input, "tenantName"), rentOnlyBalanceCents: nullableMoney(input, "rentOnlyBalanceCents"), nonRentBalanceCents: nullableMoney(input, "nonRentBalanceCents"), grossBalanceCents: nullableMoney(input, "grossBalanceCents"), totalBalanceCents: nullableMoney(input, "totalBalanceCents"), netAccountBalanceCents: nullableMoney(input, "netAccountBalanceCents"), unappliedCashCents: nullableMoney(input, "unappliedCashCents"), prepaidCents: nullableMoney(input, "prepaidCents"), oldestUnpaidRentOn: optionalDate(input, "oldestUnpaidRentOn"), lastPaymentOn: optionalDate(input, "lastPaymentOn"), hasPromiseOrHold: optionalBoolean(input, "hasPromiseOrHold"), noticeStatus: optionalText(input, "noticeStatus") };
+  const input = exactRecord(value, "delinquency row", ["operationalBalanceCents", "balanceReview", "tenancyStatus", "creditBalanceCents", "balanceComplete", "balanceUncertaintyCodes", "propertyId", "propertyName", "unitId", "unitNumber", "tenancyId", "personId", "tenantName", "rentOnlyBalanceCents", "nonRentBalanceCents", "grossBalanceCents", "totalBalanceCents", "netAccountBalanceCents", "unappliedCashCents", "prepaidCents", "oldestUnpaidRentOn", "lastPaymentOn", "hasPromiseOrHold", "noticeStatus"]);
+  return { operationalBalanceCents: nullableMoney(input, "operationalBalanceCents"), balanceReview: optionalObject(input, "balanceReview", decodeBalanceReview), tenancyStatus: optionalAllowed(input, "tenancyStatus", ["current", "former", "future", "unknown"]) as DelinquencyRow["tenancyStatus"], creditBalanceCents: nullableMoney(input, "creditBalanceCents"), balanceComplete: optionalBoolean(input, "balanceComplete"), balanceUncertaintyCodes: optionalStrings(input, "balanceUncertaintyCodes"), propertyId: optionalId(input, "propertyId"), propertyName: optionalText(input, "propertyName"), unitId: optionalId(input, "unitId"), unitNumber: optionalText(input, "unitNumber"), tenancyId: optionalId(input, "tenancyId"), personId: optionalId(input, "personId"), tenantName: optionalText(input, "tenantName"), rentOnlyBalanceCents: nullableMoney(input, "rentOnlyBalanceCents"), nonRentBalanceCents: nullableMoney(input, "nonRentBalanceCents"), grossBalanceCents: nullableMoney(input, "grossBalanceCents"), totalBalanceCents: nullableMoney(input, "totalBalanceCents"), netAccountBalanceCents: nullableMoney(input, "netAccountBalanceCents"), unappliedCashCents: nullableMoney(input, "unappliedCashCents"), prepaidCents: nullableMoney(input, "prepaidCents"), oldestUnpaidRentOn: optionalDate(input, "oldestUnpaidRentOn"), lastPaymentOn: optionalDate(input, "lastPaymentOn"), hasPromiseOrHold: optionalBoolean(input, "hasPromiseOrHold"), noticeStatus: optionalText(input, "noticeStatus") };
 }
 
 function decodeLeaseExpirationRow(value: unknown): LeaseExpirationRow {

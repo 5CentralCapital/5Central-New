@@ -1,5 +1,7 @@
 import { deriveAccountBalances } from "./account-balances";
-import { hasConfirmedTenancyLinks, confirmedTenancyFact, isOccupiedTenancyOn, isKnownPastAccountOn } from "./tenancy-occupancy";
+import { meteredUtilitiesForTenancy } from "./metered-utility";
+import { selectBalanceReview, operationalBalanceCents } from "./balance-review";
+import { hasVacancyConfirmationOn, hasOperationalEndOn, hasOccupancyConfirmationOn, hasConfirmedTenancyLinks, confirmedTenancyFact, isOccupiedTenancyOn, isKnownPastAccountOn } from "./tenancy-occupancy";
 import { tenantAccountLedgerRows, createTenantAccountLedgerRowsReader } from "./account-ledger";
 import { isSourceAllocationReversal } from "./invariants";
 import type {
@@ -134,8 +136,10 @@ function compareOptionalTimestamp(left?: string | null, right?: string | null): 
 }
 
 function unresolvedTenancyForUnit(snapshot: RentOpsSnapshot, unit: RentOpsUnit, asOf: IsoDate): string[] {
+  if (hasVacancyConfirmationOn(unit, asOf)) return [];
   const codes: string[] = [];
   for (const tenancy of snapshot.tenancies) {
+    if (hasOperationalEndOn(tenancy, asOf)) continue;
     const status = tenancy.status as string | undefined;
     const knownStatus = ["current", "notice", "future", "past", "cancelled"].includes(status ?? "");
     const activeOrFuture = status === "current" || status === "notice" || status === "future";
@@ -155,7 +159,7 @@ function unresolvedTenancyForUnit(snapshot: RentOpsSnapshot, unit: RentOpsUnit, 
     if (activeOrFuture && !confirmedTenancyFact(tenancy.statusKnowledge)) codes.push("tenancy_status_unknown");
     if (activeOrFuture && isKnownPastAccountOn(snapshot, tenancy.primaryPersonId, asOf, tenancy)) codes.push("tenancy_account_status_conflict");
     if (!status || !["current", "notice", "future", "past", "cancelled"].includes(status)) codes.push("tenancy_status_unknown");
-    if ((status === "current" || status === "notice") && (!occupancyMoveInOn(tenancy) || !confirmedTenancyFact(tenancy.actualMoveInKnowledge))) codes.push("actual_move_in_unknown");
+    if ((status === "current" || status === "notice") && !hasOccupancyConfirmationOn(tenancy, asOf) && (!occupancyMoveInOn(tenancy) || !confirmedTenancyFact(tenancy.actualMoveInKnowledge))) codes.push("actual_move_in_unknown");
     if (status === "future" && (!occupancyMoveInOn(tenancy) || !confirmedTenancyFact(tenancy.plannedMoveInKnowledge) || occupancyMoveInOn(tenancy)! <= asOf)) codes.push("planned_move_in_unknown");
   }
   return Array.from(new Set(codes)).sort();
@@ -304,7 +308,7 @@ export function deriveOperationalScheduleRegister(snapshot: RentOpsSnapshot, fil
     const interval = intervals.get(row);
     const tenancy = snapshot.tenancies.find(candidate => candidate.id === row.tenancyId);
     const formerAccount = isKnownPastAccountOn(snapshot, row.personId ?? tenancy?.primaryPersonId ?? (row.scopeType === "tenant" ? row.scopeId : "") ?? "", asOf, tenancy);
-    const former = formerAccount || tenancy && confirmedTenancyFact(tenancy.statusKnowledge) && (tenancy.status === "past" || tenancy.status === "cancelled") && !isOccupiedTenancyOn(tenancy, asOf);
+    const former = formerAccount || tenancy && hasOperationalEndOn(tenancy, asOf) || tenancy && confirmedTenancyFact(tenancy.statusKnowledge) && (tenancy.status === "past" || tenancy.status === "cancelled") && !isOccupiedTenancyOn(tenancy, asOf);
     if (!invalid.has(row.id) && (row.active === false || !!interval?.effectiveTo && (interval.effectiveTo < asOf || !!interval.effectiveFrom && interval.effectiveTo < interval.effectiveFrom) || former)) historical.push(row.id);
     else if (!invalid.has(row.id) && scheduleAmountConfirmed(row) && row.scopeType === "property") continue;
     else review.push(row.id);
@@ -356,8 +360,9 @@ function assertNoAmbiguousOccupancy(snapshot: RentOpsSnapshot, asOf = nowIsoDate
   }
   const futureByUnit = new Map<string, RentOpsTenancy[]>();
   for (const tenancy of snapshot.tenancies) {
+    if (hasOperationalEndOn(tenancy, asOf)) continue;
     const moveInOn = occupancyMoveInOn(tenancy);
-    if ((tenancy.status === "current" || tenancy.status === "notice") && !moveInOn) violations.push({ code: "current_move_in_missing", entityId: tenancy.id, message: `Current tenancy ${tenancy.id} has no actual move-in date` });
+    if ((tenancy.status === "current" || tenancy.status === "notice") && !moveInOn && !hasOccupancyConfirmationOn(tenancy, "9999-12-31")) violations.push({ code: "current_move_in_missing", entityId: tenancy.id, message: `Current tenancy ${tenancy.id} has no actual move-in date` });
     if ((tenancy.status === "current" || tenancy.status === "notice") && tenancy.actualMoveOutOn && tenancy.actualMoveOutOn <= asOf) violations.push({ code: "current_move_out_stale", entityId: tenancy.id, message: `Current tenancy ${tenancy.id} has already moved out as of the report date` });
     if (tenancy.status === "future" && !moveInOn) violations.push({ code: "future_move_in_missing", entityId: tenancy.id, message: `Future tenancy ${tenancy.id} has no scheduled move-in date` });
     if (tenancy.status === "future" && moveInOn && moveInOn <= asOf) violations.push({ code: "future_move_in_elapsed", entityId: tenancy.id, message: `Future tenancy ${tenancy.id} has reached its move-in date but is still marked future` });
@@ -697,6 +702,7 @@ function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFi
     const { subsidyContract, subsidyException } = resolvePayerSplit(snapshot, selected, selected ? people.get(selected.primaryPersonId) : undefined, scheduleAsOf, amounts.baseRentCents);
     const unresolvedCodes = unresolvedTenancyForUnit(snapshot, unit, asOf);
     const balance = selected ? readBalance(snapshot, selected.id, asOf) : { balanceComplete: unresolvedCodes.length === 0, balanceUncertaintyCodes: unresolvedCodes.length ? ["tenancy_balance_scope_unknown"] : [], rentOnlyBalanceCents: 0, nonRentBalanceCents: 0, totalBalanceCents: 0, unappliedCashCents: 0, prepaidCents: 0, oldestUnpaidRentOn: undefined };
+    const balanceReview = selected ? selectBalanceReview(snapshot, selected.id, asOf) : undefined;
     const occupancy: OccupancyState = current ? "current" : future ? "future_preleased" : unresolvedCodes.length > 0 ? "unknown" : "vacant";
     const exceptionCodes: string[] = [];
     if (currentCandidates.length > 1) exceptionCodes.push("multiple_current_tenancies");
@@ -737,6 +743,8 @@ function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFi
       subsidyCents: subsidyContract?.agencyObligationCents ?? (subsidyException ? null : amounts.subsidyCents),
       tenantPortionCents: subsidyContract?.tenantObligationCents,
       totalScheduledCents: selected && (amounts.baseRentCents === undefined || amounts.recurringFeesCents === null || amounts.exceptionCodes.includes("scheduled_amount_unconfirmed")) ? null : (amounts.baseRentCents ?? 0) + (amounts.recurringFeesCents ?? 0),
+      balanceReview,
+      operationalBalanceCents: operationalBalanceCents(balanceReview, balance.totalBalanceCents, balance.balanceComplete !== false),
       balanceDueCents: balance.balanceComplete === false ? null : balance.totalBalanceCents,
       balanceComplete: balance.balanceComplete !== false,
       balanceUncertaintyCodes: balance.balanceUncertaintyCodes ?? [],
@@ -748,10 +756,10 @@ function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFi
     return filters.occupancy.includes(row.occupancy);
   }).filter((row) => {
     if (!filters.balanceStatus || filters.balanceStatus === "all") return true;
-    if (filters.balanceStatus === "unverified") return row.balanceDueCents === null || row.balanceComplete === false;
-    if (filters.balanceStatus === "due") return row.balanceDueCents !== null && row.balanceDueCents > 0;
-    if (filters.balanceStatus === "credit") return row.balanceDueCents !== null && row.balanceDueCents < 0;
-    return row.balanceDueCents === 0;
+    if (filters.balanceStatus === "unverified") return row.operationalBalanceCents == null;
+    if (filters.balanceStatus === "due") return row.operationalBalanceCents != null && row.operationalBalanceCents > 0;
+    if (filters.balanceStatus === "credit") return row.operationalBalanceCents != null && row.operationalBalanceCents < 0;
+    return row.operationalBalanceCents === 0;
   });
 }
 
@@ -767,6 +775,7 @@ export function deriveOccupancy(snapshot: RentOpsSnapshot, filters: RentOpsFilte
       .filter((tenancy) => tenancy.unitId === unit.id && tenancy.actualMoveOutOn && tenancy.actualMoveOutOn <= asOf)
       .sort((left, right) => compareIsoDate(right.actualMoveOutOn, left.actualMoveOutOn))[0];
     const exceptionCodes = unresolvedTenancyForUnit(snapshot, unit, asOf);
+    const balanceReview = selected ? selectBalanceReview(snapshot, selected.id, asOf) : undefined;
     const occupancy: OccupancyState = current ? "current" : future ? "future_preleased" : exceptionCodes.length > 0 ? "unknown" : "vacant";
     return {
       propertyId: unit.propertyId,
@@ -1279,9 +1288,13 @@ function deriveDelinquencyWithBalance(snapshot: RentOpsSnapshot, filters: RentOp
     if (!matchesPropertyScope(tenancy.propertyId, filters, propertyIds)) continue;
     if (filters.unitId && tenancy.unitId !== filters.unitId) continue;
     const balance = readBalance(snapshot, tenancy.id, asOf);
-    if (balance.balanceComplete !== false && filters.balanceStatus === "due" && balance.rentOnlyBalanceCents <= 0 && balance.nonRentBalanceCents <= 0) continue;
-    if (filters.balanceStatus === "credit" && (balance.balanceComplete === false || balance.totalBalanceCents >= 0)) continue;
-    if (filters.balanceStatus === "zero" && (balance.balanceComplete === false || balance.totalBalanceCents !== 0)) continue;
+    const balanceReview = selectBalanceReview(snapshot, tenancy.id, asOf);
+    const operationalBalance = operationalBalanceCents(balanceReview, balance.totalBalanceCents, balance.balanceComplete !== false);
+    if (filters.balanceStatus === "due" && (balanceReview
+      ? operationalBalance === null || operationalBalance <= 0
+      : balance.balanceComplete !== false && balance.rentOnlyBalanceCents <= 0 && balance.nonRentBalanceCents <= 0)) continue;
+    if (filters.balanceStatus === "credit" && (operationalBalance === null || operationalBalance >= 0)) continue;
+    if (filters.balanceStatus === "zero" && operationalBalance !== 0) continue;
     const unit = units.get(tenancy.unitId);
     const person = people.get(tenancy.primaryPersonId);
     const activity = snapshot.activityEvents.some((event) =>
@@ -1298,6 +1311,8 @@ function deriveDelinquencyWithBalance(snapshot: RentOpsSnapshot, filters: RentOp
       tenancyId: tenancy.id,
       personId: tenancy.primaryPersonId,
       tenantName: displayName(person),
+      balanceReview,
+      operationalBalanceCents: operationalBalance,
       rentOnlyBalanceCents: balance.balanceComplete === false ? null : balance.rentOnlyBalanceCents,
       nonRentBalanceCents: balance.balanceComplete === false ? null : balance.nonRentBalanceCents,
       balanceComplete: balance.balanceComplete !== false,
@@ -1826,6 +1841,7 @@ export function deriveDashboardWorkspace(snapshot: RentOpsSnapshot, filters: Ren
   const scheduledRentCents = scheduledRentConfirmedCents;
   const collectedRentCents = collected.filter((row) => row.category === "base_rent" || row.category === "recurring_fee").reduce((sum, row) => sum + (knownAmount(row.amountCents) ? row.amountCents : 0), 0);
   const unresolvedOccupancyBalances = rentRoll.filter(row => row.occupancy === "unknown");
+  const operationalBalanceUnresolvedCount = delinquency.filter(row => row.operationalBalanceCents == null).length + unresolvedOccupancyBalances.length;
   const balanceUnresolvedCount = delinquency.filter(row => row.balanceComplete === false).length + unresolvedOccupancyBalances.length;
   const balanceUncertaintyCodes = Array.from(new Set([...delinquency.flatMap(row => row.balanceUncertaintyCodes ?? []), ...unresolvedOccupancyBalances.flatMap(row => row.balanceUncertaintyCodes ?? ["tenancy_balance_scope_unknown"])])).sort();
   const expiringIn30Days = expirations.filter((row) => row.actionStatus === "expiring" && row.contractEndOn && row.contractEndOn <= addDays(asOf, 30)).length;
@@ -1848,6 +1864,8 @@ export function deriveDashboardWorkspace(snapshot: RentOpsSnapshot, filters: Ren
     scheduledRentComplete: scheduledRentUnresolvedCount === 0,
     scheduledRentCadenceComplete: scheduledCandidates.every(row => snapshot.recurringSchedules.find(schedule => schedule.id === row.scheduleId)?.billingFrequency === "monthly"),
     collectedRentCents,
+    operationalBalanceUnresolvedCount,
+    operationalDelinquencyCents: operationalBalanceUnresolvedCount > 0 ? null : delinquency.reduce((sum, row) => sum + Math.max(0, row.operationalBalanceCents!), 0),
     balanceComplete: balanceUnresolvedCount === 0,
     balanceUnresolvedCount,
     balanceUncertaintyCodes,
@@ -1916,6 +1934,8 @@ export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string,
   const asOfEnd = `${asOf}T23:59:59.999Z`;
   return {
     person,
+    meteredUtilities: tenancy ? meteredUtilitiesForTenancy(snapshot, tenancy.id, asOf) : [],
+    balanceReview: tenancy ? selectBalanceReview(snapshot, tenancy.id, asOf) : undefined,
     operationalStatus: navigation.category,
     payerResponsibilityUnverified: resolvePayerSplit(snapshot, tenancy, person, asOf, tenancy ? scheduledAmounts(snapshot, tenancy.id, asOf, createEffectiveScheduleSelector(snapshot.recurringSchedules)).baseRentCents : undefined).assistanceUnverified,
     primaryLease: tenancy ? navigation.category === "current" ? activeLeaseTerm(snapshot, tenancy.id, asOf) : navigation.category === "future" ? upcomingLeaseTerm(snapshot, tenancy.id, asOf) : undefined : undefined,

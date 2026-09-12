@@ -72,8 +72,11 @@ test("request indexes preserve reviewed financial outputs and ordered violations
   // Compared with the preceding golden: only 35 null-balance rent-roll rows
   // leave the due filter; those accounts now belong to the unverified filter.
   // Removing exactly those rows makes the complete result trees identical.
-  const digest = createHash("sha256").update(JSON.stringify(indexReuseResults())).digest("hex");
-  assert.equal(digest, "a7ecb97c63a0d5e8153b1535d685faeb521daff1bdc437213689a36688bee4d0");
+  const results = indexReuseResults();
+  // Source-backed reviews are additive and tested separately. Preserve every
+  // financial field and ordered violation after the due-filter correction.
+  const financialOnly = JSON.stringify(results, (key, value) => ["operationalBalanceCents", "operationalDelinquencyCents", "operationalBalanceUnresolvedCount", "balanceReview"].includes(key) ? undefined : value);
+  assert.equal(createHash("sha256").update(financialOnly).digest("hex"), "a7ecb97c63a0d5e8153b1535d685faeb521daff1bdc437213689a36688bee4d0");
 });
 
 test("separate calls observe changed reversal and allocation facts on the same snapshot", () => {

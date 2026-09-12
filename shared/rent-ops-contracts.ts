@@ -402,6 +402,8 @@ export interface RentOpsProperty {
 }
 
 export interface RentOpsUnit {
+  vacancyConfirmedOn?: IsoDate;
+  vacancyConfirmationKnowledge?: "manual";
   id: string;
   recordRevision?: number;
   propertyId: string;
@@ -498,6 +500,12 @@ export interface RentOpsTenancy {
   /** Prospective application intent; never treated as actual occupancy. */
   plannedMoveInOn?: IsoDate;
   actualMoveInOn?: IsoDate;
+  /** Confirmed occupied on this observation date; never an inferred move-in date. */
+  occupancyConfirmedOn?: IsoDate;
+  occupancyConfirmationKnowledge?: "manual";
+  /** Occupancy was confirmed ended by this date; actual departure date remains separate. */
+  operationalEndConfirmedOn?: IsoDate;
+  operationalEndConfirmationKnowledge?: "manual";
   noticeOn?: IsoDate;
   expectedMoveOutOn?: IsoDate;
   actualMoveOutOn?: IsoDate;
@@ -942,6 +950,29 @@ export interface RentOpsDocumentObjectBinding {
   immutableGeneration?: string;
   immutableVersion?: string;
   verifiedAt: string;
+}
+
+/** Operational observation only. Never a charge, receipt, credit, or payment instruction. */
+export interface RentOpsBalanceReview {
+  schema: "balance_review_v1";
+  ledgerFingerprint: string;
+  id: string;
+  tenancyId: string;
+  personId: string;
+  propertyId: string;
+  unitId: string;
+  asOfDate: IsoDate;
+  reviewedAt: string;
+  reviewedBy: string;
+  reviewedBalanceCents: Cents | null;
+  tenantBalanceCents: Cents | null;
+  agencyBalanceCents: Cents | null;
+  qualifications: string[];
+  sourceRefs: string[];
+}
+
+export interface RentOpsBalanceReviewView extends RentOpsBalanceReview {
+  stale: boolean;
 }
 
 export interface RentOpsActivityEvent {
@@ -1390,6 +1421,8 @@ export const rentOpsFiltersSchema = z.object({
 }).strict();
 
 export interface RentRollRow {
+  operationalBalanceCents?: Cents | null;
+  balanceReview?: RentOpsBalanceReviewView;
   balanceComplete?: boolean;
   balanceUncertaintyCodes?: string[];
   propertyId: string;
@@ -1502,6 +1535,8 @@ export interface ScheduledVsCollectedRow {
 export interface DelinquencyRow {
   tenancyStatus?: "current" | "former" | "future" | "unknown";
   creditBalanceCents?: Cents | null;
+  operationalBalanceCents?: Cents | null;
+  balanceReview?: RentOpsBalanceReviewView;
   balanceComplete?: boolean;
   balanceUncertaintyCodes?: string[];
   propertyId: string | null;
@@ -1608,6 +1643,8 @@ export interface ApplicantPipelineRow {
 }
 
 export interface DashboardSummary {
+  operationalDelinquencyCents?: Cents | null;
+  operationalBalanceUnresolvedCount?: number;
   balanceComplete?: boolean;
   balanceUncertaintyCodes?: string[];
   balanceUnresolvedCount?: number;
@@ -1641,7 +1678,18 @@ export interface DashboardSummary {
   drilldowns: Record<string, { report: string; filters: RentOpsFilters }>;
 }
 
+/** Informational metered service; never a fixed charge or zero-dollar schedule. */
+export interface RentOpsMeteredUtilityView {
+  utility: "water";
+  billingMethod: "metered";
+  effectiveFrom: IsoDate;
+  amountCents: null;
+  amountKnowledge: "unknown";
+}
+
 export interface TenantProfile {
+  meteredUtilities?: RentOpsMeteredUtilityView[];
+  balanceReview?: RentOpsBalanceReviewView;
   person: RentOpsPerson;
   household: RentOpsHouseholdMembership[];
   /** Current summary tenancy plus complete person-linked tenancy history. */
@@ -1828,7 +1876,17 @@ export interface RentOpsRecordPatchUpdate {
 /** Closed navigation collection names; these rows are not financial report inputs. */
 export type RentOpsWorkspaceCollection = "recurringSchedules" | "ledgerTransactions" | "paymentAllocations" | "securityDeposits" | "subsidyContracts" | "applications" | "applicationHouseholdMembers" | "applicationRequirements" | "documents" | "activityEvents";
 
+export interface RentOpsPortalAccountBinding {
+  id: string; personId: string; tenancyId: string; status: "pending" | "active" | "revoked"; sessionVersion: number;
+}
+export interface RentOpsPortalAccountTransfer {
+  accountId: string; personId: string; oldTenancyId: string; newTenancyId: string;
+  expectedSessionVersion: number; actorSubject: string; occurredAt: string; auditId: string;
+}
+
 export interface RentOpsRepository {
+  readPortalAccountBindings?(personId: string): Promise<RentOpsPortalAccountBinding[]>;
+  transferPortalAccountBinding?(input: RentOpsPortalAccountTransfer): Promise<RentOpsPortalAccountBinding>;
   /** Runs a multi-record business operation atomically. */
   transaction<T>(work: (repository: RentOpsRepository) => Promise<T>, options?: RentOpsTransactionOptions): Promise<T>;
   getSnapshot(): Promise<RentOpsSnapshot>;
