@@ -10,9 +10,11 @@ import { ApplicationCaseDetail } from "../application-case-detail";
 import { handleRentOpsMutationError, RENT_OPS_CONFLICT_NOTICE } from "../ui";
 import type { FormValues, QuickAction } from "../form-payload";
 import type { AdminApplicationView, AdminSnapshot, ViewFilters } from "../types";
+import {EntityLink} from "./entity-link";
 import { DataGrid, type GridColumn } from "./grid";
 import {
   applicationDateValue,
+  applicationTenantPersonId,
   applicationDisplayName,
   applicationRecordKey,
   applicationStatusLabel,
@@ -287,7 +289,7 @@ export function ApplicationsWorkspace({ snapshot, filters, onChanged, onEdit }: 
   }, [selectedApplicationId, selectedSummary]);
 
   const columns = useMemo<GridColumn<ApplicationGridRow>[]>(() => [
-    { key: "name", label: "Applicant", width: "18rem", render: (row) => <button type="button" className="rm-leasing-record-link" disabled={!row.application.id} onClick={() => row.application.id && setSelectedApplicationId(row.application.id)}><UserRound aria-hidden="true" />{row.name}</button>, sortValue: (row) => row.name },
+    { key: "name", label: "Applicant", width: "18rem", render: (row) => <div className="rm-leasing-record-link"><UserRound aria-hidden="true" />{applicationTenantPersonId(snapshot,row.application)?<><EntityLink personId={applicationTenantPersonId(snapshot,row.application)}>{row.name}</EntityLink><button type="button" className="rm-button" onClick={()=>row.application.id&&setSelectedApplicationId(row.application.id)}>Application</button></>:<button type="button" disabled={!row.application.id} onClick={()=>row.application.id&&setSelectedApplicationId(row.application.id)}>{row.name}</button>}</div>, sortValue: (row) => row.name },
     { key: "submittedOn", label: "Submitted / created", render: (row) => knownDate(row.submittedOn, row.application.submittedOn ? row.application.submittedOnKnowledge : "unknown"), sortValue: (row) => row.submittedOn ?? "" },
     { key: "status", label: "Status", render: (row) => <span className={statusClass(row.status)}>{displayStatus(row.application)}</span>, sortValue: (row) => row.status ?? "" },
     { key: "property", label: "Property", render: (row) => <span className="rm-leasing-linked"><MapPin aria-hidden="true" />{row.property}</span>, sortValue: (row) => row.property },
@@ -301,7 +303,7 @@ export function ApplicationsWorkspace({ snapshot, filters, onChanged, onEdit }: 
     {error && <div className="rm-error" role="alert"><AlertCircle aria-hidden="true" />{error}<button type="button" className="rm-button" onClick={() => setError(undefined)}>Dismiss</button></div>}
     <ApplicationFilterBar snapshot={snapshot} filters={filterState} applications={snapshot.applicants} onChange={setFilterState} />
     <DataGrid<ApplicationGridRow> rows={rows} columns={columns} getRowKey={(row, index) => row.recordKey || applicationRecordKey(row.application, index)} pageSize={25} emptyMessage="No applications match these filters." caption="Application register" initialSort={{ key: "submittedOn", direction: "desc" }} storageKey="rm-applications" />
-    {selectedApplicationId && selectedSummary && <ApplicationCaseDetail key={selectedApplicationId} applicationId={selectedApplicationId} summary={selectedSummary} onClose={() => { setSelectedApplicationId(undefined); onChanged(); }} />}
+    {selectedApplicationId && selectedSummary && <ApplicationCaseDetail key={selectedApplicationId} applicationId={selectedApplicationId} tenantPersonId={applicationTenantPersonId(snapshot,selectedSummary)} summary={selectedSummary} onClose={() => { setSelectedApplicationId(undefined); onChanged(); }} />}
   </section>;
 }
 

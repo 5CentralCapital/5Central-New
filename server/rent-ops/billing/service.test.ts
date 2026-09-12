@@ -239,3 +239,16 @@ test('unknown-active imported schedule can end and become a new confirmed monthl
  const result=await billing.post({month:'2025-05',previewToken:projected.previewToken,actorSubject:'qa-admin'});assert.equal(result.postedCount,1);
  const replay=await billing.post({month:'2025-05',previewToken:projected.previewToken,actorSubject:'qa-admin'});assert.equal(replay.postedCount,0);assert.equal(replay.alreadyPostedCount,1);
 });
+
+test('billing preview carries the exact displayed tenant identity even when another person has the same name',()=>{
+ const data=fixture();
+ const person=data.snapshot.people.find(row=>row.id==='person-u1')!;
+ data.snapshot.people.unshift({...person,id:'same-name-other-account'});
+ const preview=previewRecurringBilling(data,'2026-09');
+ const row=preview.rows.find(row=>row.scheduleId==='rent')!;
+ assert.equal(row.personId,'person-u1');
+ assert.equal(row.tenantName,`${person.firstName} ${person.lastName}`);
+ assert.equal(row.amountCents,125000);
+ assert.equal(data.snapshot.ledgerTransactions.length,0);
+ assert.equal(data.receipts.length,0);
+});

@@ -16,9 +16,22 @@ export function transactionPage(rows: ResidentTransaction[], page: number, size:
   const current = Math.min(Math.max(1, page), pages);
   return { rows: rows.slice((current - 1) * size, current * size), current, pages };
 }
+export function transactionSide(row: ResidentTransaction, side: 'chargeCents' | 'paymentCreditCents'): number | 'unverified' | 'not-applicable' {
+  if (row.rowType === 'opening_balance') return 'not-applicable';
+  const value = row[side];
+  if (typeof value === 'number' && Number.isSafeInteger(value)) return value;
+  const other = row[side === 'chargeCents' ? 'paymentCreditCents' : 'chargeCents'];
+  if (value == null && Number.isSafeInteger(other)) return 'not-applicable';
+  return 'unverified';
+}
+export function hasTransactionReferences(rows: ResidentTransaction[]): boolean { return rows.some(row => !!row.reference?.trim()); }
+function csvSide(row: ResidentTransaction, side: 'chargeCents' | 'paymentCreditCents'): string {
+  const value = transactionSide(row, side);
+  return value === 'not-applicable' ? '' : value === 'unverified' ? 'Unverified' : csvMoney(value);
+}
 function csvCell(value: string): string { return `"${(/^[=+@\-\t\r\n]/.test(value) ? "'" : '') + value.replaceAll('"', '""')}"`; }
 function csvMoney(value: number | null | undefined): string { return Number.isSafeInteger(value) ? (value! / 100).toFixed(2) : 'Unverified'; }
 export function transactionsCsv(rows: ResidentTransaction[]): string {
   return [['Date', 'Type', 'Status', 'Property', 'Unit', 'Reference', 'Description', 'Charge', 'Payment / credit', 'Balance'].map(csvCell).join(','),
-    ...rows.map(row => [row.date ?? 'Unverified', row.kind.replaceAll('_', ' '), row.status ?? 'Unverified', row.propertyName ?? 'Unverified', row.unitNumber ?? 'Unverified', row.reference ?? '', row.description, csvMoney(row.chargeCents), csvMoney(row.paymentCreditCents), csvMoney(row.balanceCents)].map(csvCell).join(','))].join('\r\n');
+    ...rows.map(row => [row.date ?? 'Unverified', row.kind.replaceAll('_', ' '), row.status ?? 'Unverified', row.propertyName ?? 'Unverified', row.unitNumber ?? 'Unverified', row.reference ?? '', row.description, csvSide(row, 'chargeCents'), csvSide(row, 'paymentCreditCents'), csvMoney(row.balanceCents)].map(csvCell).join(','))].join('\r\n');
 }

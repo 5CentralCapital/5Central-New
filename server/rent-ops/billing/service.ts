@@ -29,6 +29,7 @@ export interface BillingPreviewRow {
   propertyName: string;
   unitNumber: string;
   tenantName: string;
+  personId?: string;
   description: string;
   amountCents: number | null;
   billingOn: string;
@@ -113,6 +114,7 @@ function planBilling(data: BillingData, month: IsoMonth, scope?: BillingScope): 
       propertyName: snapshot.properties.find((entry) => entry.id === transaction?.propertyId)?.name ?? "Needs review",
       unitNumber: snapshot.units.find((entry) => entry.id === transaction?.unitId)?.unitNumber ?? "Needs review",
       tenantName: person ? `${person.firstName ?? ""} ${person.lastName ?? ""}`.trim() : "Needs review",
+      ...(person?.id?{personId:person.id}:{}),
       description: transaction?.description ?? "Monthly charge",
       amountCents: receipt.amountCents, billingOn: receipt.billingOn, status: "posted", reasons: [],
     } };
@@ -130,6 +132,7 @@ function planBilling(data: BillingData, month: IsoMonth, scope?: BillingScope): 
     const row: BillingPreviewRow = {
       scheduleId: schedule.id, propertyName: projected.propertyName ?? "Needs review",
       unitNumber: projected.unitNumber ?? "Needs review", tenantName: projected.tenantName ?? "Needs review",
+      ...(projected.personId?{personId:projected.personId}:{}),
       description: projected.description ?? "Needs review", amountCents: projected.amountCents,
       billingOn: interval.start, status: "ready", reasons: [],
     };

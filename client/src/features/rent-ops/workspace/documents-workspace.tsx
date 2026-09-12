@@ -4,6 +4,7 @@ import { Activity, AlertCircle, Download, FileClock, FileText, Search } from "lu
 import { downloadRentOpsDocument } from "../api";
 import type { FormValues, QuickAction } from "../form-payload";
 import type { AdminActivityView, AdminDocumentView, AdminSnapshot, ViewFilters } from "../types";
+import {EntityLink} from "./entity-link";
 import { DataGrid, type GridColumn } from "./grid";
 import {
   activityDateValue,
@@ -16,6 +17,7 @@ import {
   filterDocuments,
   leasingFact,
   linkedRecordLabel,
+  linkedRecordPerson,
   propertyDisplayName,
   sortActivitiesByDate,
   sortDocumentsByDate,
@@ -48,6 +50,7 @@ interface DocumentGridRow extends Record<string, unknown> {
   state?: string;
   availability: string;
   linked: string;
+  linkedPerson?:{id:string;name:string};
 }
 
 interface ActivityGridRow extends Record<string, unknown> {
@@ -58,6 +61,7 @@ interface ActivityGridRow extends Record<string, unknown> {
   summary: string;
   actor: string;
   linked: string;
+  linkedPerson?:{id:string;name:string};
 }
 
 function normalized(value: unknown): string {
@@ -196,6 +200,7 @@ export function DocumentsWorkspace({ snapshot, filters, onEdit, onChanged: _onCh
     state: document.state,
     availability: documentAvailabilityLabel(document),
     linked: linkedRecordLabel(snapshot, document),
+    linkedPerson:linkedRecordPerson(snapshot,document),
   })), [snapshot, visibleDocuments]);
   const activityRows = useMemo<ActivityGridRow[]>(() => visibleActivities.map((activity, index) => ({
     activity,
@@ -205,6 +210,7 @@ export function DocumentsWorkspace({ snapshot, filters, onEdit, onChanged: _onCh
     summary: activity.summary ?? "Unknown activity",
     actor: leasingFact(activity.actor, activity.actorKnowledge),
     linked: linkedRecordLabel(snapshot, activity),
+    linkedPerson:linkedRecordPerson(snapshot,activity),
   })), [snapshot, visibleActivities]);
 
   const documentColumns = useMemo<GridColumn<DocumentGridRow>[]>(() => [
@@ -212,7 +218,7 @@ export function DocumentsWorkspace({ snapshot, filters, onEdit, onChanged: _onCh
     { key: "date", label: "Record date", render: (row) => knownDate(row.date, row.document.uploadedAt || row.document.verifiedAt ? undefined : "unknown"), sortValue: (row) => row.date ?? "" },
     { key: "type", label: "Type", render: (row) => <span className={statusClass(row.type)}>{leasingFact(row.type, row.document.type ? undefined : "unknown")}</span>, sortValue: (row) => row.type ?? "" },
     { key: "state", label: "State", render: (row) => <span className={statusClass(row.state)}>{leasingFact(row.state, row.document.state ? undefined : "unknown")}</span>, sortValue: (row) => row.state ?? "" },
-    { key: "linked", label: "Linked record", render: (row) => <span className="rm-leasing-linked">{row.linked}</span>, sortValue: (row) => row.linked },
+    { key: "linked", label: "Linked record", render: (row) => <span className="rm-leasing-linked">{row.linkedPerson&&row.linked.startsWith(row.linkedPerson.name)?<><EntityLink personId={row.linkedPerson.id}>{row.linkedPerson.name}</EntityLink>{row.linked.slice(row.linkedPerson.name.length)}</>:row.linked}</span>, sortValue: (row) => row.linked },
     { key: "availability", label: "File status", render: (row) => <span className="rm-leasing-availability">{row.availability}</span>, sortValue: (row) => row.availability },
     { key: "action", label: "Action", render: (row) => <DownloadCell document={row.document} onError={setError} /> },
   ], []);
@@ -221,7 +227,7 @@ export function DocumentsWorkspace({ snapshot, filters, onEdit, onChanged: _onCh
     { key: "type", label: "Type", render: (row) => <span className={statusClass(row.type)}>{leasingFact(row.type, row.activity.type ? row.activity.typeKnowledge : "unknown")}</span>, sortValue: (row) => row.type ?? "" },
     { key: "summary", label: "Activity", width: "22rem", render: (row) => <div><span className="rm-leasing-activity-summary"><Activity aria-hidden="true" />{row.summary}</span>{row.activity.detail && <details><summary>View details</summary><p style={{ whiteSpace: "pre-wrap" }}>{row.activity.detail}</p></details>}</div>, sortValue: (row) => row.summary },
     { key: "actor", label: "Actor", render: (row) => row.actor, sortValue: (row) => row.actor },
-    { key: "linked", label: "Linked record", render: (row) => <span className="rm-leasing-linked">{row.linked}</span>, sortValue: (row) => row.linked },
+    { key: "linked", label: "Linked record", render: (row) => <span className="rm-leasing-linked">{row.linkedPerson&&row.linked.startsWith(row.linkedPerson.name)?<><EntityLink personId={row.linkedPerson.id}>{row.linkedPerson.name}</EntityLink>{row.linked.slice(row.linkedPerson.name.length)}</>:row.linked}</span>, sortValue: (row) => row.linked },
   ], []);
 
   function addActivity(): void {

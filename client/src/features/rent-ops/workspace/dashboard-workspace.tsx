@@ -4,13 +4,14 @@ import { useRentOpsAuth } from "../auth-ui";
 import { useQueries } from "@tanstack/react-query";
 import { loadRentOpsReport, type RentOpsWorkspaceDashboard } from "../api";
 import { useMemo } from "react";
-import { AlertCircle, ArrowRight, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, ArrowRight, Loader2 } from "lucide-react";
 import type { GridColumn } from "./grid";
 import { DataGrid } from "./grid";
 import type { AdminSnapshot, DashboardSummary, ReportKey, ReportRow, TenantTab, ViewFilters } from "../types";
 import {
   createReportViewModel,
   formatReportValue,
+  formatReportCellValue,
   reportQueryKey,
   reportQueryFilters,
   reportRowKey,
@@ -37,7 +38,6 @@ type MetricTone = "normal" | "good" | "warn";
 interface DashboardMetric {
   label: string;
   value: string;
-  detail?: string;
   tone?: MetricTone;
   onClick?: () => void;
 }
@@ -76,44 +76,47 @@ export function dashboardMetrics(summary: DashboardSummary, onReport: (report: R
     && (typeof summary.scheduledRentConfirmedCents === "number" || summary.scheduledRentComplete === true);
   const scheduled = summary.scheduledRentConfirmedCents ?? (summary.scheduledRentComplete === true ? summary.scheduledRentCents : undefined);
   const delinquencyKnown = summary.operationalBalanceUnresolvedCount === 0 && typeof summary.operationalDelinquencyCents === "number";
-  const unknownOccupancy = unknownOccupancyCount(summary);
-  const vacancies = isValidCount(summary.genuineVacantUnits) && isValidCount(summary.readyVacantUnits)
-    ? `${countValue(summary.genuineVacantUnits)} confirmed · ${countValue(summary.readyVacantUnits)} ready`
-    : "Needs review";
   return [
-    { label: "Occupied units", value: occupiedValue(summary), detail: "Current / total", onClick: () => onReport("occupancy") },
+    { label: "Occupied units", value: occupiedValue(summary), onClick: () => onReport("occupancy") },
     { label: "Physical occupancy", value: ratioValue(summary.physicalOccupancyPercent), onClick: () => onReport("occupancy") },
-    { label: "Vacant units", value: vacancies, detail: unknownOccupancy === undefined ? "Occupancy needs review" : unknownOccupancy > 0 ? `${countValue(unknownOccupancy)} occupancy unknown` : `${countValue(summary.notReadyUnits)} not ready`, tone: unknownOccupancy === undefined || unknownOccupancy > 0 || !isValidCount(summary.readyVacantUnits) || summary.readyVacantUnits > 0 ? "warn" : "good", onClick: () => onReport("occupancy") },
-    { label: "Scheduled rent", value: moneyValue(scheduled, scheduledKnown), detail: scheduledKnown ? "Confirmed configuration" : "Configuration needs review", tone: scheduledKnown ? "normal" : "warn", onClick: () => onReport("scheduled-income") },
-    { label: "Collected rent", value: moneyValue(summary.collectedRentCents), detail: "Posted receipts", onClick: () => onReport("collected-income") },
-    { label: "Current balances due", value: moneyValue(summary.operationalDelinquencyCents, delinquencyKnown), detail: delinquencyKnown ? "Operational account balances" : summary.operationalBalanceUnresolvedCount ? `${summary.operationalBalanceUnresolvedCount} balances need review` : "Balance needs review", tone: delinquencyKnown && summary.operationalDelinquencyCents ? "warn" : delinquencyKnown ? "good" : "warn", onClick: () => onReport("delinquency") },
-    { label: "Applications", value: countValue(summary.applicationsSubmitted), detail: summary.applicationsMissingInformation === undefined ? undefined : `${countValue(summary.applicationsMissingInformation)} missing information`, onClick: () => onReport("applicant-pipeline") },
-    { label: "Deposit liability", value: moneyValue(summary.securityDepositLiabilityCents), detail: "Held liability", onClick: () => onReport("security-deposit") },
+    { label: "Confirmed vacant", value: countValue(summary.genuineVacantUnits), onClick: () => onReport("occupancy") },
+    { label: "Scheduled rent", value: moneyValue(scheduled, scheduledKnown), tone: scheduledKnown ? "normal" : "warn", onClick: () => onReport("scheduled-income") },
+    { label: "Posted rent receipts", value: moneyValue(summary.collectedRentCents), onClick: () => onReport("collected-income") },
+    { label: "Current balances due", value: moneyValue(summary.operationalDelinquencyCents, delinquencyKnown), tone: delinquencyKnown && summary.operationalDelinquencyCents ? "warn" : delinquencyKnown ? "good" : "warn", onClick: () => onReport("delinquency") },
+    { label: "Applications", value: countValue(summary.applicationsSubmitted), onClick: () => onReport("applicant-pipeline") },
+    { label: "Deposit liability", value: moneyValue(summary.securityDepositLiabilityCents), onClick: () => onReport("security-deposit") },
   ];
 }
 
-function gridColumns(columns: readonly ReportColumnDefinition[]): GridColumn<DisplayReportRow>[] {
+export function dashboardColumns(report: ReportKey, columns: readonly ReportColumnDefinition[]): ReportColumnDefinition[] {
+  const keys = report === "rent-roll"
+    ? ["propertyName", "unitNumber", "currentTenantName", "baseRentCents", "totalScheduledCents", "operationalBalanceCents"]
+    : ["propertyName", "unitNumber", "tenantName", "operationalBalanceCents", "totalBalanceCents"];
+  return keys.map(key => columns.find(column => column.key === key)).filter((column): column is ReportColumnDefinition => Boolean(column));
+}
+
+export function gridColumns(columns: readonly ReportColumnDefinition[], navigation: Pick<DashboardWorkspaceProps, "onOpenTenant" | "onOpenUnit" | "onOpenProperty"> = {}): GridColumn<DisplayReportRow>[] {
   return columns.map((column) => ({
     key: column.key,
     label: column.label,
     align: column.align,
     width: column.format === "currency" ? 132 : column.key === "description" ? 220 : undefined,
     render: (row) => {
-      const label=formatReportValue(row[column.key], column.format);
+      const label=formatReportCellValue(row, column);
       const id=(key:string)=>{const value=readReportValue(row.__source,key);return typeof value==='string'?value:undefined;};
-      if(column.key==='unitNumber')return <RecordLink kind="unit" recordId={id('unitId')}>{label}</RecordLink>;
-      if(column.key==='propertyName')return <RecordLink kind="property" recordId={id('propertyId')}>{label}</RecordLink>;
+      if(column.key==='unitNumber')return <RecordLink kind="unit" recordId={id('unitId')} onOpen={navigation.onOpenUnit}>{label}</RecordLink>;
+      if(column.key==='propertyName')return <RecordLink kind="property" recordId={id('propertyId')} onOpen={navigation.onOpenProperty}>{label}</RecordLink>;
       const tenant=['tenantName','currentTenantName','futureTenantName'].includes(column.key);
       const recurring=['baseRentCents','recurringFeesCents','totalScheduledCents','subsidyCents'].includes(column.key);
-      const balance=['balanceDueCents','totalBalanceCents','rentOnlyBalanceCents','nonRentBalanceCents','unappliedCashCents'].includes(column.key);
-      return tenant||recurring||balance?<EntityLink personId={reportCellPersonId(row.__source,column.key)} tab={recurring?'charges':balance?'ledger':'summary'}>{label}</EntityLink>:label;
+      const balance=['operationalBalanceCents','balanceDueCents','totalBalanceCents','rentOnlyBalanceCents','nonRentBalanceCents','unappliedCashCents'].includes(column.key);
+      return tenant||recurring||balance?<EntityLink personId={reportCellPersonId(row.__source,column.key)} tab={recurring?'charges':balance?'ledger':'summary'} onOpen={navigation.onOpenTenant}>{label}</EntityLink>:label;
     },
     sortValue: (row) => row[column.key] == null ? undefined : typeof row[column.key] === "number" ? row[column.key] as number : String(row[column.key]),
   }));
 }
 
 function MetricCard({ metric }: { metric: DashboardMetric }) {
-  const content = <><span>{metric.label}</span><strong>{metric.value}</strong>{metric.detail && <small>{metric.detail}</small>}</>;
+  const content = <><span>{metric.label}</span><strong>{metric.value}</strong></>;
   return metric.onClick
     ? <button type="button" className={`rm-stat rm-stat-${metric.tone ?? "normal"}`} onClick={metric.onClick}>{content}</button>
     : <div className={`rm-stat rm-stat-${metric.tone ?? "normal"}`}>{content}</div>;
@@ -128,6 +131,7 @@ function Widget({
   onReport,
   onOpenTenant,
   onOpenUnit,
+  onOpenProperty,
 }: {
   report: ReportKey;
   rows?: ReportRow[];
@@ -140,23 +144,23 @@ function Widget({
   onOpenProperty?: (propertyId:string)=>void;
 }) {
   const view = useMemo(() => createReportViewModel(report, rows ?? [], snapshot), [report, rows, snapshot]);
-  const columns = useMemo(() => view.curatedColumns.slice(0, 8), [view.curatedColumns]);
+  const columns = useMemo(() => dashboardColumns(report, view.columns), [report, view.columns]);
   const displayRows = view.displayRows;
   const title = report === "rent-roll" ? "Rent roll" : "Balances due";
   return (
-    <section className="rm-panel rm-dashboard-widget">
+    <section className="rm-panel rm-dashboard-widget" aria-label={title}>
       <header className="rm-panel-title">
         <h2>{title}</h2>
         <button type="button" className="rm-button" onClick={() => onReport(report)}>Open report <ArrowRight aria-hidden="true" /></button>
       </header>
       {error && <p className="rm-error" role="alert"><AlertCircle aria-hidden="true" /> {error}</p>}
       {loading && !rows && <div className="rm-empty"><Loader2 className="rm-spin" aria-hidden="true" /><p>Loading selected report…</p></div>}
-      {rows && <DataGrid rows={displayRows} columns={gridColumns(columns)} getRowKey={(row) => reportRowKey(row)} pageSize={6} emptyMessage="No records returned for this view." caption={title} storageKey={`rent-ops-dashboard-${report}`} />}
+      {rows && <DataGrid rows={displayRows} columns={gridColumns(columns, { onOpenTenant, onOpenUnit, onOpenProperty })} getRowKey={(row) => reportRowKey(row)} pageSize={6} emptyMessage="No records returned for this view." storageKey={`rent-ops-dashboard-${report}`} />}
     </section>
   );
 }
 
-export function DashboardWorkspace({ snapshot, filters, onReport, onOpenTenant, onOpenUnit, previews, refreshing = false }: DashboardWorkspaceProps) {
+export function DashboardWorkspace({ snapshot, filters, onReport, onOpenTenant, onOpenUnit, onOpenProperty, previews, refreshing = false }: DashboardWorkspaceProps) {
   const auth = useRentOpsAuth();
   const { debouncedSearch, searchPending } = useReportSearch(filters.search);
   const bundledPreviews = Boolean(previews) && filters.status === "all" && !filters.search.trim();
@@ -181,20 +185,15 @@ export function DashboardWorkspace({ snapshot, filters, onReport, onOpenTenant, 
 
   return (
     <section className="rm-dashboard-workspace" aria-label="Rent Operations dashboard">
-      <header className="rm-dashboard-heading">
-        <div><span className="rm-muted">Operating summary · as of {snapshot.summary.asOfDate || "Needs review"}</span><h2>Dashboard</h2></div>
-        {loading && <span className="rm-status"><RefreshCw className="rm-spin" aria-hidden="true" /> Refreshing previews</span>}
-      </header>
       <div className="rm-dashboard-grid">{metrics.map((metric) => <MetricCard key={metric.label} metric={metric} />)}</div>
-      {((snapshot.summary.operationalBalanceUnresolvedCount ?? 0) > 0 || snapshot.summary.scheduledRentComplete === false) && <p className="rm-warning" role="status"><AlertCircle aria-hidden="true" /> {(snapshot.summary.operationalBalanceUnresolvedCount ?? 0) > 0 ? "Some current account balances need a fresh review before the total is confirmed." : "Some recurring income facts need review before the scheduled total is confirmed."}</p>}
       <section className="rm-panel rm-dashboard-vacancy">
-        <header className="rm-panel-title"><div><span className="rm-muted">Unit status</span><h2>Vacancy and pipeline</h2></div><button type="button" className="rm-button" onClick={() => onReport("occupancy")}>Open occupancy <ArrowRight aria-hidden="true" /></button></header>
+        <header className="rm-panel-title"><h2>Vacancies</h2><button type="button" className="rm-button" onClick={() => onReport("occupancy")}>Open report <ArrowRight aria-hidden="true" /></button></header>
         <div className="rm-dashboard-counts">{vacancyDetail.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>
         <div className="rm-dashboard-links"><button type="button" className="rm-button" onClick={() => onReport("applicant-pipeline")}>Review applications <ArrowRight aria-hidden="true" /></button><button type="button" className="rm-button" onClick={() => onReport("lease-expiration")}>Review lease dates <ArrowRight aria-hidden="true" /></button></div>
       </section>
       <div className="rm-dashboard-widget-grid">
-        <Widget report="rent-roll" rows={widgetRows["rent-roll"]} loading={loading} error={widgetErrors["rent-roll"]} snapshot={snapshot} onReport={onReport} onOpenTenant={onOpenTenant} onOpenUnit={onOpenUnit} />
-        <Widget report="delinquency" rows={widgetRows.delinquency} loading={loading} error={widgetErrors.delinquency} snapshot={snapshot} onReport={onReport} onOpenTenant={onOpenTenant} onOpenUnit={onOpenUnit} />
+        <Widget report="rent-roll" rows={widgetRows["rent-roll"]} loading={loading} error={widgetErrors["rent-roll"]} snapshot={snapshot} onReport={onReport} onOpenTenant={onOpenTenant} onOpenUnit={onOpenUnit} onOpenProperty={onOpenProperty} />
+        <Widget report="delinquency" rows={widgetRows.delinquency} loading={loading} error={widgetErrors.delinquency} snapshot={snapshot} onReport={onReport} onOpenTenant={onOpenTenant} onOpenUnit={onOpenUnit} onOpenProperty={onOpenProperty} />
       </div>
     </section>
   );

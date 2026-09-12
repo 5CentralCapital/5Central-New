@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import {EntityLink,EntityNavigationContext} from "./workspace/entity-link";
+import React, { useState, useContext } from "react";
 import { z } from "zod";
 import { rentOpsAuthClient } from "./auth";
 
@@ -7,7 +8,7 @@ const previewSchema = z.object({
   month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/), billingOn: z.string(), previewToken: z.string().regex(/^[a-f0-9]{64}$/),
   scope: z.object({ propertyId: z.string().optional(), tenancyId: z.string().optional() }).optional(),
   rows: z.array(z.object({
-    scheduleId: z.string(), propertyName: z.string(), unitNumber: z.string(), tenantName: z.string(), description: z.string(),
+    scheduleId: z.string(), propertyName: z.string(), unitNumber: z.string(), tenantName: z.string(), personId:z.string().optional(), description: z.string(),
     amountCents: z.number().int().safe().nullable(), billingOn: z.string(), status: z.enum(["ready", "blocked", "posted", "excluded"]), reasons: z.array(z.string()),
   }).strict()),
   readyCount: cents, readyCents: cents, blockedCount: cents, postedCount: cents, postedCents: cents,
@@ -38,6 +39,7 @@ async function requestBilling(path: string, body?: { month: string; previewToken
 }
 
 export function RecurringBillingPanel({ onPosted, businessDate, propertyId }: { propertyId?: string; onPosted?: () => void | Promise<void>; businessDate?: string }): JSX.Element {
+  const navigation=useContext(EntityNavigationContext);
   const [selectedMonth, setMonth] = useState<string>();
   const month = selectedMonth ?? businessDate?.slice(0, 7) ?? "";
   const [preview, setPreview] = useState<Preview>();
@@ -84,7 +86,7 @@ export function RecurringBillingPanel({ onPosted, businessDate, propertyId }: { 
       </div>
       <p style={{ padding: "0 20px" }}>Charges post and become due on {preview.billingOn}. Partial months need a confirmed manual charge. Subsidies, deposits, and one-time fees use their separate workflows.</p>
       <div className="ro-table-wrap"><table className="ro-table"><thead><tr><th>Property / unit</th><th>Tenant</th><th>Charge</th><th className="number">Amount</th><th>Status</th></tr></thead><tbody>
-        {preview.rows.map((row, index) => <tr key={`${row.scheduleId}:${index}`}><td>{row.propertyName} / {row.unitNumber}</td><td>{row.tenantName}</td><td>{row.description}</td><td className="number">{money(row.amountCents)}</td><td>{statusLabels[row.status]}{row.reasons.map((reason) => <div key={reason} style={{ fontSize: 12, marginTop: 4 }}>{reason}</div>)}</td></tr>)}
+        {preview.rows.map((row, index) => <tr key={`${row.scheduleId}:${index}`}><td>{row.propertyName} / {row.unitNumber}</td><td>{navigation.onTenant?<EntityLink personId={row.personId}>{row.tenantName}</EntityLink>:row.tenantName}</td><td>{navigation.onTenant?<EntityLink personId={row.personId} tab="charges">{row.description}</EntityLink>:row.description}</td><td className="number">{navigation.onTenant?<EntityLink personId={row.personId} tab="charges">{money(row.amountCents)}</EntityLink>:money(row.amountCents)}</td><td>{statusLabels[row.status]}{row.reasons.map((reason) => <div key={reason} style={{ fontSize: 12, marginTop: 4 }}>{reason}</div>)}</td></tr>)}
         {!preview.rows.length && <tr><td colSpan={5}>No applicable recurring charges for this month.</td></tr>}
       </tbody></table></div>
     </>}

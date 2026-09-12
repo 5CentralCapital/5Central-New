@@ -173,6 +173,16 @@ function AuthenticatedWorkspace(){
  function openProperty(id:string){activateRecord({section:'properties',kind:'property',recordId:id,tab:'summary',report:'rent-roll'});}
  const openEditor=(action:QuickAction,values:FormValues={})=>{setNotice('');setEditing({action,values});};
  const refresh=useCallback(async()=>{await data.refresh();},[data.refresh]);
+ function finishEdit(message:string){
+  const saved=editing;
+  setEditing(undefined);
+  setNotice(saved?.action==='post-ledger-transaction'&&saved.values.kind==='charge'?'Charge added.':message);
+  if(saved&&route.section==='tenants'&&saved.values.personId===route.recordId){
+   if(saved.action==='post-ledger-transaction')go({...route,tab:'ledger'},true);
+   if(['save-recurring-schedule','replace-recurring-schedule','end-recurring-schedule'].includes(saved.action))go({...route,tab:'charges'},true);
+  }
+  void refresh();
+ }
  const selectedReport=route.section==='rent-roll'?'rent-roll':route.section==='leases'?'lease-expiration':route.report;
  const fullTenant=data.tenant.data&&snapshot?{...data.tenant.data,property:data.tenant.data.property??snapshot.snapshot.properties.find(p=>p.id===data.tenant.data?.tenancy?.propertyId),unit:data.tenant.data.unit??snapshot.snapshot.units.find(u=>u.id===data.tenant.data?.tenancy?.unitId)}:undefined;
  const occupancyStatus=['reports','rent-roll'].includes(route.section)&&isOccupancyReport(selectedReport);
@@ -207,6 +217,6 @@ function AuthenticatedWorkspace(){
     {route.section==='documents'&&(data.collectionsReady?<DocumentsWorkspace snapshot={snapshot} filters={filters} onChanged={()=>void refresh()} onEdit={openEditor}/>:<Busy/>)}
    </>}
   </div></div>
-  {editing&&snapshot&&(data.collectionsReady?<WorkspaceEditor action={editing.action} snapshot={snapshot} initialValues={editing.values} onClose={()=>setEditing(undefined)} onSaved={message=>{setEditing(undefined);setNotice(message);void refresh();}} onConflict={()=>{setEditing(undefined);setNotice('This record changed. The latest values are being loaded; review them before saving again.');void refresh();}}/>:<div className="rm-dialog-backdrop"><section className="rm-dialog" role="dialog" aria-modal="true" aria-label="Loading editor"><Busy label="Loading related records…"/>{data.collectionError&&<ErrorNotice error={data.collectionError}/>}<button className="rm-button" onClick={()=>setEditing(undefined)}>Cancel</button></section></div>)}
+  {editing&&snapshot&&(data.collectionsReady?<WorkspaceEditor action={editing.action} snapshot={snapshot} initialValues={editing.values} onClose={()=>setEditing(undefined)} onSaved={finishEdit} onConflict={()=>{setEditing(undefined);setNotice('This record changed. The latest values are being loaded; review them before saving again.');void refresh();}}/>:<div className="rm-dialog-backdrop"><section className="rm-dialog" role="dialog" aria-modal="true" aria-label="Loading editor"><Busy label="Loading related records…"/>{data.collectionError&&<ErrorNotice error={data.collectionError}/>}<button className="rm-button" onClick={()=>setEditing(undefined)}>Cancel</button></section></div>)}
  </main></EntityNavigationContext.Provider>;
 }

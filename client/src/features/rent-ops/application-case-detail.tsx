@@ -1,3 +1,4 @@
+import {EntityLink} from "./workspace/entity-link";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { AlertCircle, Download, FileCheck2, FileText, Loader2, Users, X } from "lucide-react";
 
@@ -20,6 +21,7 @@ import "./application-case-detail.css";
 
 interface ApplicationCaseDetailProps {
   applicationId: string;
+  tenantPersonId?:string;
   summary?: AdminApplicationView;
   onClose: () => void;
 }
@@ -349,7 +351,7 @@ function HistoricalCaseSections({ history }: { history: AdminApplicationHistoryC
   </div>;
 }
 
-export function ApplicationCaseDetail({ applicationId, summary, onClose }: ApplicationCaseDetailProps) {
+export function ApplicationCaseDetail({ applicationId, summary, onClose, tenantPersonId }: ApplicationCaseDetailProps) {
   const [detail, setDetail] = useState<AdminApplicationDetailView>();
   const [loadState, setLoadState] = useState<DetailLoadState>("loading");
   const [loadError, setLoadError] = useState<string>();
@@ -411,7 +413,7 @@ export function ApplicationCaseDetail({ applicationId, summary, onClose }: Appli
   return <div className="ro-case-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <section className="ro-case-dialog" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="application-case-title" onKeyDown={handleDialogKeyDown}>
       <header className="ro-case-header">
-        <div><h2 id="application-case-title">{displayName}</h2></div>
+        <div><h2 id="application-case-title"><EntityLink personId={tenantPersonId}>{displayName}</EntityLink></h2></div>
         <div className="ro-case-header-actions"><span className={`ro-case-status ${status ?? "unknown"}`}>{title(applicationCaseFact(status, detail?.statusKnowledge ?? summary?.statusKnowledge))}</span><button type="button" className="ro-icon-button" ref={closeButtonRef} onClick={onClose} aria-label="Close application details"><X aria-hidden="true" /></button></div>
       </header>
 

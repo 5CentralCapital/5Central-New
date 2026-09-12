@@ -115,3 +115,18 @@ test("document and activity scope resolves unit and tenancy links", () => {
   assert.equal(filterActivities([{ tenancyId: "tenancy:one" }], snapshot, filters).length, 1);
   assert.deepEqual(filterDocuments([{ propertyId: archivedProperty.id }], snapshot, filters), []);
 });
+
+test('linked names follow exact person and conversion records without guessing from applicant names',async()=>{
+ const {applicationTenantPersonId,linkedRecordPerson}=await import('./leasing-model');
+ const snapshot={snapshot:{people:[{id:'tenant',firstName:'Same',lastName:'Name'},{id:'other',firstName:'Same',lastName:'Name'}],tenancies:[{id:'converted-tenancy',primaryPersonId:'tenant',primaryPersonLinkKnowledge:'exact'}]},applicants:[{id:'app',firstName:'Same',lastName:'Name'}]} as unknown as AdminSnapshot;
+ const document={downloadAvailable:false,personId:'tenant'};
+ assert.deepEqual(linkedRecordPerson(snapshot,document),{id:'tenant',name:'Same Name'});
+ assert.equal(linkedRecordPerson(snapshot,{...document,applicationId:'app'}),undefined,'Applicant label takes precedence and is not the tenant identity');
+ assert.equal(applicationTenantPersonId(snapshot,snapshot.applicants[0]),undefined,'An equal name is not conversion proof');
+ snapshot.applicants[0].convertedTenancyId='converted-tenancy';
+ assert.equal(applicationTenantPersonId(snapshot,snapshot.applicants[0]),'tenant');
+ assert.deepEqual(linkedRecordPerson(snapshot,{...document,applicationId:'app'}),{id:'tenant',name:'Same Name'});
+ snapshot.snapshot.tenancies[0].primaryPersonLinkKnowledge='ambiguous';
+ assert.equal(applicationTenantPersonId(snapshot,snapshot.applicants[0]),undefined);
+ assert.equal(linkedRecordPerson(snapshot,{personId:'tenant',personLinkKnowledge:'ambiguous'}),undefined);
+});

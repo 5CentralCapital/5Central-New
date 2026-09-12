@@ -298,3 +298,19 @@ export function sortActivitiesByDate(activities: readonly AdminActivityView[]): 
 
 /** The secure route gate is shared with application case detail. */
 export const canDownloadDocument = applicationDocumentDownloadable;
+
+/** Follow only a recorded conversion, never matching applicants by name or contact. */
+export function applicationTenantPersonId(snapshot:AdminSnapshot,application:AdminApplicationView):string|undefined {
+  const tenancy=application.convertedTenancyId?snapshot.snapshot.tenancies.find(row=>row.id===application.convertedTenancyId):undefined;
+  if(!tenancy?.primaryPersonId||REVIEW_KNOWLEDGE.has(tenancy.primaryPersonLinkKnowledge??''))return undefined;
+  return snapshot.snapshot.people.some(person=>person.id===tenancy.primaryPersonId)?tenancy.primaryPersonId:undefined;
+}
+export function linkedRecordPerson(snapshot:AdminSnapshot,record:AdminDocumentView|AdminActivityView):{id:string;name:string}|undefined {
+  const application=record.applicationId?snapshot.applicants.find(row=>row.id===record.applicationId):undefined;
+  if(application){const id=applicationTenantPersonId(snapshot,application);return id?{id,name:applicationDisplayName(application)}:undefined;}
+  if('personLinkKnowledge' in record&&REVIEW_KNOWLEDGE.has(record.personLinkKnowledge??''))return undefined;
+  const person=record.personId?snapshot.snapshot.people.find(row=>row.id===record.personId):undefined;
+  if(!person?.id)return undefined;
+  const name=[person.firstName,person.lastName].filter(value=>Boolean(value?.trim())).join(' ');
+  return name?{id:person.id,name}:undefined;
+}
