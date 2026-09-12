@@ -7,6 +7,7 @@ import {
   applicationStatusOptions,
   documentAvailabilityLabel,
   filterApplications,
+  filterActivities,
   filterDocuments,
   linkedRecordLabel,
   sortApplicationsByDate,
@@ -96,4 +97,21 @@ test("linked records use available human labels and retain unresolved links", ()
 test("application sorting is newest first without merging rows", () => {
   const rows = [application({ id: "application:old", submittedOn: "2026-09-01" }), application({ id: "application:new", submittedOn: "2026-09-11" })];
   assert.deepEqual(sortApplicationsByDate(rows).map((row) => row.id), ["application:new", "application:old"]);
+});
+
+
+test("active scope and selected property are both enforced on unscoped collections", () => {
+  const archivedApplication = application({ propertyId: archivedProperty.id });
+  const filters = { propertyScope: "active" as const, propertyId: archivedProperty.id };
+  assert.deepEqual(filterApplications([archivedApplication], snapshot, filters), []);
+  assert.deepEqual(filterDocuments([{ propertyId: archivedProperty.id }], snapshot, filters), []);
+  assert.deepEqual(filterActivities([{ propertyId: archivedProperty.id }], snapshot, filters), []);
+  assert.equal(filterApplications([archivedApplication], snapshot, { ...filters, propertyScope: "all" }).length, 1);
+});
+
+test("document and activity scope resolves unit and tenancy links", () => {
+  const filters = { propertyScope: "active" as const, propertyId: property.id, unitId: unit.id };
+  assert.equal(filterDocuments([{ unitId: unit.id }], snapshot, filters).length, 1);
+  assert.equal(filterActivities([{ tenancyId: "tenancy:one" }], snapshot, filters).length, 1);
+  assert.deepEqual(filterDocuments([{ propertyId: archivedProperty.id }], snapshot, filters), []);
 });

@@ -264,13 +264,13 @@ export function ApplicationsWorkspace({ snapshot, filters, onChanged, onEdit }: 
 
   const registerFilters: LeasingRegisterFilters = useMemo(() => ({
     propertyScope: filters.propertyScope,
-    propertyId: filterState.propertyId,
+    propertyId: filters.propertyId !== "all" ? filters.propertyId : filterState.propertyId,
     unitId: filterState.unitId,
     status: filterState.status,
     search: filterState.search,
     fromDate: filterState.fromDate,
     toDate: filterState.toDate,
-  }), [filterState, filters.propertyScope]);
+  }), [filterState, filters.propertyScope, filters.propertyId]);
   const visibleApplications = useMemo(() => sortApplicationsByDate(filterApplications(snapshot.applicants, snapshot, registerFilters)), [registerFilters, snapshot]);
   const rows = useMemo<ApplicationGridRow[]>(() => visibleApplications.map((application, index) => ({
     application,
@@ -281,7 +281,10 @@ export function ApplicationsWorkspace({ snapshot, filters, onChanged, onEdit }: 
     property: propertyDisplayName(snapshot, application.propertyId),
     unit: applicationUnitDisplayName(snapshot, application),
   })), [snapshot, visibleApplications]);
-  const selectedSummary = selectedApplicationId ? snapshot.applicants.find((application) => application.id === selectedApplicationId) : undefined;
+  const selectedSummary = selectedApplicationId ? visibleApplications.find((application) => application.id === selectedApplicationId) : undefined;
+  useEffect(() => {
+    if (selectedApplicationId && !selectedSummary) setSelectedApplicationId(undefined);
+  }, [selectedApplicationId, selectedSummary]);
 
   const columns = useMemo<GridColumn<ApplicationGridRow>[]>(() => [
     { key: "name", label: "Applicant", width: "18rem", render: (row) => <button type="button" className="rm-leasing-record-link" disabled={!row.application.id} onClick={() => row.application.id && setSelectedApplicationId(row.application.id)}><UserRound aria-hidden="true" />{row.name}</button>, sortValue: (row) => row.name },
@@ -298,7 +301,7 @@ export function ApplicationsWorkspace({ snapshot, filters, onChanged, onEdit }: 
     {error && <div className="rm-error" role="alert"><AlertCircle aria-hidden="true" />{error}<button type="button" className="rm-button" onClick={() => setError(undefined)}>Dismiss</button></div>}
     <ApplicationFilterBar snapshot={snapshot} filters={filterState} applications={snapshot.applicants} onChange={setFilterState} />
     <DataGrid<ApplicationGridRow> rows={rows} columns={columns} getRowKey={(row, index) => row.recordKey || applicationRecordKey(row.application, index)} pageSize={25} emptyMessage="No applications match these filters." caption="Application register" initialSort={{ key: "submittedOn", direction: "desc" }} storageKey="rm-applications" />
-    {selectedApplicationId && <ApplicationCaseDetail key={selectedApplicationId} applicationId={selectedApplicationId} summary={selectedSummary} onClose={() => setSelectedApplicationId(undefined)} />}
+    {selectedApplicationId && selectedSummary && <ApplicationCaseDetail key={selectedApplicationId} applicationId={selectedApplicationId} summary={selectedSummary} onClose={() => { setSelectedApplicationId(undefined); onChanged(); }} />}
   </section>;
 }
 

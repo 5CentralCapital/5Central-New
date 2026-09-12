@@ -175,14 +175,16 @@ export function DocumentsWorkspace({ snapshot, filters, onEdit, onChanged: _onCh
 
   const recordFilters: LeasingRegisterFilters = useMemo(() => ({
     propertyScope: filters.propertyScope,
-    propertyId: filterState.propertyId,
+    propertyId: filters.propertyId !== "all" ? filters.propertyId : filterState.propertyId,
     unitId: filterState.unitId,
     status: section === "documents" ? filterState.status : "all",
     type: filterState.type,
     search: filterState.search,
     fromDate: filterState.fromDate,
     toDate: filterState.toDate,
-  }), [filterState, filters.propertyScope, section]);
+  }), [filterState, filters.propertyScope, filters.propertyId, section]);
+  const scopedDocuments = useMemo(() => filterDocuments(snapshot.documents, snapshot, { propertyScope: filters.propertyScope, propertyId: filters.propertyId }), [snapshot, filters.propertyScope, filters.propertyId]);
+  const scopedActivities = useMemo(() => filterActivities(snapshot.activities, snapshot, { propertyScope: filters.propertyScope, propertyId: filters.propertyId }), [snapshot, filters.propertyScope, filters.propertyId]);
   const visibleDocuments = useMemo(() => sortDocumentsByDate(filterDocuments(snapshot.documents, snapshot, recordFilters)), [recordFilters, snapshot]);
   const visibleActivities = useMemo(() => sortActivitiesByDate(filterActivities(snapshot.activities, snapshot, recordFilters)), [recordFilters, snapshot]);
   const documentRows = useMemo<DocumentGridRow[]>(() => visibleDocuments.map((document, index) => ({
@@ -232,9 +234,9 @@ export function DocumentsWorkspace({ snapshot, filters, onEdit, onChanged: _onCh
   const rowCount = section === "documents" ? visibleDocuments.length : visibleActivities.length;
   return <section className="rm-panel rm-leasing-workspace" aria-labelledby="rm-documents-title">
     <header className="rm-panel-title rm-leasing-heading"><div><span className="rm-muted">Records register</span><h2 id="rm-documents-title">Documents &amp; activity</h2><p>Document metadata stays separate from file availability. Activity remains a dated record tied to its available links.</p></div><button type="button" className="rm-button rm-button-primary" onClick={addActivity}><FileClock aria-hidden="true" />Add activity</button></header>
-    <div className="rm-tabs rm-leasing-register-tabs" role="tablist" aria-label="Document and activity records"><button type="button" role="tab" aria-selected={section === "documents"} className={section === "documents" ? "active" : ""} onClick={() => { setSection("documents"); setFilterState((current) => ({ ...current, status: "all", type: "all" })); }}><FileText aria-hidden="true" />Documents <span>{snapshot.documents.length}</span></button><button type="button" role="tab" aria-selected={section === "activity"} className={section === "activity" ? "active" : ""} onClick={() => { setSection("activity"); setFilterState((current) => ({ ...current, status: "all", type: "all" })); }}><Activity aria-hidden="true" />Activity <span>{snapshot.activities.length}</span></button></div>
+    <div className="rm-tabs rm-leasing-register-tabs" role="tablist" aria-label="Document and activity records"><button type="button" role="tab" aria-selected={section === "documents"} className={section === "documents" ? "active" : ""} onClick={() => { setSection("documents"); setFilterState((current) => ({ ...current, status: "all", type: "all" })); }}><FileText aria-hidden="true" />Documents <span>{scopedDocuments.length}</span></button><button type="button" role="tab" aria-selected={section === "activity"} className={section === "activity" ? "active" : ""} onClick={() => { setSection("activity"); setFilterState((current) => ({ ...current, status: "all", type: "all" })); }}><Activity aria-hidden="true" />Activity <span>{scopedActivities.length}</span></button></div>
     {error && <div className="rm-error" role="alert"><AlertCircle aria-hidden="true" />{error}<button type="button" className="rm-button" onClick={() => setError(undefined)}>Dismiss</button></div>}
-    <DocumentsFilterBar snapshot={snapshot} filters={filterState} documents={snapshot.documents} activities={snapshot.activities} section={section} onChange={setFilterState} />
+    <DocumentsFilterBar snapshot={snapshot} filters={filterState} documents={scopedDocuments} activities={scopedActivities} section={section} onChange={setFilterState} />
     <div className="rm-leasing-register-meta"><span>{rowCount} matching {section === "documents" ? "documents" : "activities"}</span><span className="rm-muted">Showing a bounded page of loaded records</span></div>
     {section === "documents" ? <DataGrid<DocumentGridRow> rows={documentRows} columns={documentColumns} getRowKey={(row, index) => row.recordKey || documentRecordKey(row.document, index)} pageSize={25} emptyMessage="No documents match these filters." caption="Document register" initialSort={{ key: "date", direction: "desc" }} storageKey="rm-documents" /> : <DataGrid<ActivityGridRow> rows={activityRows} columns={activityColumns} getRowKey={(row, index) => row.recordKey || activityRecordKey(row.activity, index)} pageSize={25} emptyMessage="No activity matches these filters." caption="Activity register" initialSort={{ key: "date", direction: "desc" }} storageKey="rm-activity" />}
   </section>;

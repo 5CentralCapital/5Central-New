@@ -120,7 +120,7 @@ function dateInRange(value: string | undefined, filters: LeasingRegisterFilters)
 }
 
 function propertyMatches(snapshot: AdminSnapshot, propertyId: string | undefined, filters: LeasingRegisterFilters): boolean {
-  if (filters.propertyId !== "all" && filters.propertyId) return propertyId === filters.propertyId;
+  if (filters.propertyId !== "all" && filters.propertyId && propertyId !== filters.propertyId) return false;
   if ((filters.propertyScope ?? "active") !== "active" || !propertyId) return true;
   // Unknown links remain visible so an operator can resolve them. A known
   // archived property is excluded from the active portfolio view.
@@ -228,12 +228,19 @@ export function linkedRecordLabel(snapshot: AdminSnapshot, record: Pick<AdminDoc
   return "Unlinked record";
 }
 
-function recordPropertyId(record: Pick<AdminDocumentView | AdminActivityView, "propertyId">): string | undefined {
-  return record.propertyId;
+type RecordLinks = Pick<AdminDocumentView | AdminActivityView, "propertyId" | "unitId" | "tenancyId" | "applicationId">;
+
+function recordUnitId(record: RecordLinks, snapshot: AdminSnapshot): string | undefined {
+  return record.unitId
+    ?? snapshot.snapshot.tenancies.find((item) => item.id === record.tenancyId)?.unitId
+    ?? snapshot.applicants.find((item) => item.id === record.applicationId)?.unitId;
 }
 
-function recordUnitId(record: Pick<AdminDocumentView | AdminActivityView, "unitId">): string | undefined {
-  return record.unitId;
+function recordPropertyId(record: RecordLinks, snapshot: AdminSnapshot): string | undefined {
+  return record.propertyId
+    ?? snapshot.snapshot.units.find((item) => item.id === recordUnitId(record, snapshot))?.propertyId
+    ?? snapshot.snapshot.tenancies.find((item) => item.id === record.tenancyId)?.propertyId
+    ?? snapshot.applicants.find((item) => item.id === record.applicationId)?.propertyId;
 }
 
 function recordType(record: Pick<AdminDocumentView | AdminActivityView, "type">): string | undefined {
@@ -246,8 +253,8 @@ export function filterDocuments(
   filters: LeasingRegisterFilters,
 ): AdminDocumentView[] {
   return documents.filter((document) => {
-    if (!propertyMatches(snapshot, recordPropertyId(document), filters)) return false;
-    if (filters.unitId && filters.unitId !== "all" && recordUnitId(document) !== filters.unitId) return false;
+    if (!propertyMatches(snapshot, recordPropertyId(document, snapshot), filters)) return false;
+    if (filters.unitId && filters.unitId !== "all" && recordUnitId(document, snapshot) !== filters.unitId) return false;
     if (!statusMatches(document.state, filters)) return false;
     if (filters.type && filters.type !== "all" && (normalized(recordType(document)) || "unknown") !== normalized(filters.type)) return false;
     if (!dateInRange(documentDateValue(document), filters)) return false;
@@ -267,8 +274,8 @@ export function filterActivities(
   filters: LeasingRegisterFilters,
 ): AdminActivityView[] {
   return activities.filter((activity) => {
-    if (!propertyMatches(snapshot, recordPropertyId(activity), filters)) return false;
-    if (filters.unitId && filters.unitId !== "all" && recordUnitId(activity) !== filters.unitId) return false;
+    if (!propertyMatches(snapshot, recordPropertyId(activity, snapshot), filters)) return false;
+    if (filters.unitId && filters.unitId !== "all" && recordUnitId(activity, snapshot) !== filters.unitId) return false;
     if (filters.type && filters.type !== "all" && (normalized(recordType(activity)) || "unknown") !== normalized(filters.type)) return false;
     if (!dateInRange(activityDateValue(activity), filters)) return false;
     return textMatches([
