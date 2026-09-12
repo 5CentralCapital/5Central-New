@@ -60,7 +60,7 @@ export interface TenantLedgerEntry {
   balanceCents: number | null;
 }
 
-export interface TenantLeaseFile { id: string; fileName: string; downloadPath: string; }
+export interface TenantLeaseFile { id: string; fileName: string; downloadPath: string; priorUnitLabel?: string; }
 
 export interface TenantHome {
   account: TenantIdentity;

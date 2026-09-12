@@ -36,6 +36,8 @@ test("audited same-person portal transfer retains existing credentials and histo
       VALUES('existing-account','resident@example.test','resident','old-tenancy','active',$1,$2,'2026-10-01')`,[passwordHash,"a".repeat(64)]);
     const original=(await store.getById(context.accountId))!;
     assert.equal(await verifyTenantPassword("Existing-account-password-123!",original.passwordHash),true);
+    await db.query(`INSERT INTO rent_ops_documents(id,property_id,unit_id,person_id,tenancy_id,type,type_knowledge,state,state_knowledge,file_name,mime_type,storage_key,storage_key_knowledge,availability,size_bytes,checksum_sha256,verified_at)
+      VALUES('verified-old-lease','property','old-unit','resident','old-tenancy','lease','manual','verified','manual','Verified original lease.pdf','application/pdf',$1,'source','verified',100,$2,'2026-09-01T12:00:00Z')`,['documents/'+"a".repeat(64),"a".repeat(64)]);
     const before=await repository.getSnapshot();
     assert.deepEqual((await repository.readPortalAccountBindings("resident")).map(row=>row.tenancyId),["old-tenancy"]);
     assert.doesNotMatch(JSON.stringify(await repository.readPortalAccountBindings("resident")),/password|token|email/);
@@ -63,7 +65,15 @@ test("audited same-person portal transfer retains existing credentials and histo
     assert.equal(presentTenantHome(after,identity,"2026-09-12")?.tenancy.unitId,"new-unit");
     assert.equal(exactPaymentTenancy(after,identity).unit.id,"new-unit");
     assert.equal(presentTenantHome(after,identity,"2026-09-12")?.leases.length,0,"old lease remains attached to old tenancy, not presented as new-unit lease");
-    assert.equal(presentTenantHome(after,identity,"2026-09-12")?.leaseFiles.length,0);
+    assert.equal(presentTenantHome(after,identity,"2026-09-12")?.leaseFiles.length,0,"no history means no inherited file access");
+    const history=await repository.readPortalTransferHistory(identity.id);
+    assert.deepEqual(history,[{accountId:identity.id,personId:identity.personId,oldTenancyId:"old-tenancy",newTenancyId:"new-tenancy",occurredAt:context.occurredAt}]);
+    assert.deepEqual(await repository.readPortalTransferHistory("other-account"),[]);
+    const priorFiles=presentTenantHome(after,identity,"2026-09-12",history)!.leaseFiles;
+    assert.equal(priorFiles.length,1);
+    assert.equal(priorFiles[0].id,"verified-old-lease");
+    assert.ok(priorFiles[0].priorUnitLabel);
+    assert.equal(after.documents.find(row=>row.id==="verified-old-lease")?.tenancyId,"old-tenancy");
     assert.equal(after.tenancies.find(row=>row.id==="new-tenancy")?.actualMoveInOn,undefined,"no physical date is invented for portal access");
     await assert.rejects(()=>repository.transaction(tx=>tx.transferPortalAccountBinding!({...context,auditId:"replayed-transfer"})),/changed|ambiguous/);
     assert.equal((await db.query("SELECT id FROM rent_ops_activity_events WHERE id='replayed-transfer'")).rows.length,0);

@@ -1878,7 +1878,12 @@ export interface RentOpsPortalAccountTransfer {
   expectedSessionVersion: number; actorSubject: string; occurredAt: string; auditId: string;
 }
 
+export interface RentOpsPortalTransferHistory {
+  accountId: string; personId: string; oldTenancyId: string; newTenancyId: string; occurredAt: string;
+}
+
 export interface RentOpsRepository {
+  readPortalTransferHistory?(accountId: string): Promise<RentOpsPortalTransferHistory[]>;
   readPortalAccountBindings?(personId: string): Promise<RentOpsPortalAccountBinding[]>;
   transferPortalAccountBinding?(input: RentOpsPortalAccountTransfer): Promise<RentOpsPortalAccountBinding>;
   /** Runs a multi-record business operation atomically. */

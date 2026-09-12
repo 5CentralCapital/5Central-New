@@ -1,8 +1,8 @@
 import {isExactNativeAccountEntry} from "../domain/account-ledger";
 import { tenantAccountLedgerRows } from "../domain/account-ledger";
 export { tenantAccountLedgerRows } from "../domain/account-ledger";
-import { isTenantLeaseFile, tenantLeaseFile } from "./lease-files";
-import type { RentOpsSnapshot, RentOpsTenancy, RentOpsLedgerTransaction } from "../../../shared/rent-ops-contracts";
+import { authorizedTenantLeaseFile } from "./lease-files";
+import type { RentOpsSnapshot, RentOpsPortalTransferHistory, RentOpsTenancy, RentOpsLedgerTransaction } from "../../../shared/rent-ops-contracts";
 import type { TenantEligibleTenancy, TenantHome, TenantIdentity } from "../../../shared/tenant-portal-contracts";
 
 function exactLink(knowledge: string | null | undefined, imported: boolean): boolean {
@@ -63,7 +63,7 @@ function sign(row: RentOpsLedgerTransaction, rows: Map<string, RentOpsLedgerTran
 
 /** Whitelisted tenant view: no household contacts, activities, source IDs,
  * imported payloads, storage keys, passwords, or other tenancies. */
-export function presentTenantHome(snapshot: RentOpsSnapshot, account: TenantIdentity, asOfDate: string): TenantHome | undefined {
+export function presentTenantHome(snapshot: RentOpsSnapshot, account: TenantIdentity, asOfDate: string, transfers: RentOpsPortalTransferHistory[] = []): TenantHome | undefined {
   const tenancy = resolveTenantBinding(snapshot, account.personId, account.tenancyId);
   if (!tenancy) return undefined;
   const person = snapshot.people.find((row) => row.id === account.personId)!;
@@ -116,7 +116,7 @@ export function presentTenantHome(snapshot: RentOpsSnapshot, account: TenantIden
       address: address ? [address.line1, address.line2, address.city, address.state, address.postalCode].filter(Boolean).join(", ") : "", status: tenancy.status },
     balance: { amountCents: complete ? balanceCents : null, complete, asOfDate },
     ledger,
-    leaseFiles: snapshot.documents.filter(document => isTenantLeaseFile(document, account, tenancy)).map(tenantLeaseFile),
+    leaseFiles: snapshot.documents.flatMap(document => { const file = authorizedTenantLeaseFile(document, account, tenancy, snapshot, transfers); return file ? [file] : []; }),
     leases: snapshot.leaseTerms.filter((row) => row.tenancyId === tenancy.id && exactLink(row.tenancyLinkKnowledge, sourceStrict(snapshot, row)) && row.status !== "draft" && row.status !== "cancelled").map((row) => {
       const strict = sourceStrict(snapshot, row);
       return { id: row.id, status: knownFact(row.statusKnowledge, strict) ? row.status : "Unconfirmed",

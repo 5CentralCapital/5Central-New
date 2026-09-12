@@ -59,3 +59,73 @@ test("tenant lease PDF is proxied only for exact owner; unknown, cross-tenant, n
     assert.equal((await request(`/lease-files/${document.id}/download`)).status,401);
   } finally {server.closeAllConnections(); await new Promise<void>(resolve=>server.close(()=>resolve()));}
 });
+
+test("audited account transfer preserves only the previously verified prior-unit PDF in home and download", async () => {
+  const snapshot = structuredClone(syntheticRentOpsSnapshot());
+  const tenancy = snapshot.tenancies[0];
+  tenancy.operationalEndConfirmedOn="2026-09-12"; tenancy.operationalEndConfirmationKnowledge="manual";
+  Object.assign(tenancy,{propertyLinkKnowledge:"manual",unitLinkKnowledge:"manual",primaryPersonLinkKnowledge:"manual"});
+  const nextUnit={...snapshot.units.find(row=>row.id===tenancy.unitId)!,id:"next-unit",unitNumber:"Lot 2"}; snapshot.units.push(nextUnit);
+  const next={...tenancy,id:"next-tenancy",unitId:nextUnit.id,status:"current" as const,statusKnowledge:"manual" as const,occupancyConfirmedOn:"2026-09-12",occupancyConfirmationKnowledge:"manual" as const,operationalEndConfirmedOn:undefined,operationalEndConfirmationKnowledge:undefined}; snapshot.tenancies.push(next);
+  const identity = {id:"account",email:"tenant@example.test",personId:tenancy.primaryPersonId,tenancyId:next.id,status:"active" as const};
+  const storage = createInMemoryObjectStore();
+  const bytes = Buffer.from("%PDF-1.7\nSynthetic lease\n%%EOF");
+  const object = await storage.putIfAbsent({bytes});
+  const document: RentOpsDocument = {id:"private-lease",propertyId:tenancy.propertyId,unitId:tenancy.unitId,personId:tenancy.primaryPersonId,tenancyId:tenancy.id,type:"lease",typeKnowledge:"manual",state:"verified",stateKnowledge:"manual",availability:"verified",mimeType:"application/pdf",fileName:"lease.pdf",sizeBytes:object.sizeBytes,checksumSha256:object.checksumSha256,storageKey:`documents/${object.checksumSha256}`,storageKeyKnowledge:"source",verifiedAt:"2026-09-07T12:00:00Z"};
+  snapshot.documents.push(document);
+  const binding: RentOpsDocumentObjectBinding = {documentId:document.id,bindingKind:"import",sourceBinaryId:"b",importRunId:"run",sourceSystem:"rm",sourceCollection:"documents",backend:object.backend,logicalKey:object.logicalKey,checksumSha256:object.checksumSha256,sizeBytes:object.sizeBytes,immutableGeneration:object.immutableGeneration,verifiedAt:document.verifiedAt!};
+  const repository = new SyntheticRentOpsRepository(snapshot);
+  const audit={accountId:identity.id,personId:identity.personId,oldTenancyId:tenancy.id,newTenancyId:next.id,occurredAt:"2026-09-12T12:00:00.000Z"};
+  let history=[audit];
+  Object.assign(repository,{readPortalTransferHistory:async()=>history});
+  Object.assign(repository,{getDocumentObjectBinding:async (id:string) => id===document.id ? binding : undefined});
+  const accounts = new InMemoryTenantAccountStore();
+  await accounts.create({...identity,tokenHash:"token",expiresAt:"2026-09-08T00:00:00Z",now:"2026-09-07T00:00:00Z"});
+  const active = await accounts.consumeActivation("token","synthetic-hash","2026-09-07T00:00:00Z");
+  const app=express(); app.use(express.json()); app.use(session({secret:"synthetic-test-only-secret",resave:false,saveUninitialized:false}));
+  // Isolated test login seam; production route still performs actual store,
+  // session-version, and primary-tenancy authorization on every request.
+  app.use((req,_res,next) => {if(req.get("x-test-login")==="yes") {req.session.tenantAccountId=identity.id; req.session.tenantSessionVersion=active!.sessionVersion;} next();});
+  registerTenantPortalRoutes(app,{repository,accountStore:accounts,documentStorage:storage,requireAdmin:(_req,res)=>{res.sendStatus(403);}});
+  const server=app.listen(0,"127.0.0.1"); await new Promise<void>(resolve=>server.once("listening",resolve));
+  const base=`http://127.0.0.1:${(server.address() as {port:number}).port}/api/tenant`;
+  const request=(path:string,auth=true)=>fetch(base+path,{headers:auth?{"x-test-login":"yes"}:{}});
+  try {
+    assert.equal((await request(`/lease-files/${document.id}/download`,false)).status,401);
+    const home=await (await request("/home")).json();
+    assert.deepEqual(home.leaseFiles,[{id:document.id,fileName:"lease.pdf",downloadPath:`/api/tenant/lease-files/${document.id}/download`,priorUnitLabel:snapshot.units.find(row=>row.id===tenancy.unitId)!.unitNumber}]);
+    const response=await request(`/lease-files/${document.id}/download`);
+    assert.equal(response.headers.get("content-security-policy"),"sandbox allow-downloads");
+    assert.match(response.headers.get("content-disposition") ?? "", /^attachment;/);
+    assert.equal(response.status,200); assert.equal(response.headers.get("content-type"),"application/pdf"); assert.equal(response.headers.get("cache-control"),"no-store"); assert.equal(response.headers.get("location"),null); assert.equal(await response.text(),bytes.toString());
+    assert.equal((await request(`/lease-files/${document.id}/download?personId=other`)).status,404);
+    assert.equal((await request("/lease-files/other-tenant-document/download")).status,404);
+    for (const patch of [{personId:"other"},{tenancyId:"other"},{unitId:"other"},{propertyId:"other"},{type:"other"},{typeKnowledge:"unknown"},{applicationId:"internal"},{availability:"metadata"},{mimeType:"text/html"}]) {
+      assert.equal(isTenantLeaseFile({...document,...patch} as RentOpsDocument,identity,tenancy),false);
+    }
+    for (const invalid of [[],[{...audit,accountId:"other-account"}],[{...audit,personId:"other-person"}],[{...audit,oldTenancyId:"unrelated-tenancy"}],[audit,audit]]) {
+      history=invalid;
+      assert.equal((await request(`/lease-files/${document.id}/download`)).status,404);
+      assert.deepEqual((await (await request("/home")).json()).leaseFiles,[]);
+    }
+    history=[audit];
+    await repository.saveDocument({...document,verifiedAt:"2026-09-13T12:00:00Z"});
+    assert.equal((await request(`/lease-files/${document.id}/download`)).status,404,"new uploads to the old tenancy do not inherit access");
+    await repository.saveDocument(document);
+    const unrelated={...tenancy,id:"unrelated-tenancy",unitId:nextUnit.id};
+    await repository.saveTenancy(unrelated);
+    await repository.saveDocument({...document,tenancyId:unrelated.id,unitId:unrelated.unitId});
+    assert.equal((await request(`/lease-files/${document.id}/download`)).status,404,"same person and property alone grant no access");
+    const changed = {...document,typeKnowledge:"unknown" as const};
+    await repository.saveDocument(changed);
+    assert.equal((await request(`/lease-files/${document.id}/download`)).status,404);
+    await repository.saveDocument({...document,personId:snapshot.people.find(p=>p.id!==identity.personId)!.id,tenancyId:undefined});
+    assert.equal((await request(`/lease-files/${document.id}/download`)).status,404);
+    const disguised = await storage.putIfAbsent({bytes:Buffer.from("<html>not a lease PDF</html>")});
+    Object.assign(binding,{logicalKey:disguised.logicalKey,checksumSha256:disguised.checksumSha256,sizeBytes:disguised.sizeBytes,immutableGeneration:disguised.immutableGeneration});
+    await repository.saveDocument({...document,checksumSha256:disguised.checksumSha256,sizeBytes:disguised.sizeBytes,storageKey:`documents/${disguised.checksumSha256}`});
+    assert.equal((await request(`/lease-files/${document.id}/download`)).status,404);
+    await accounts.revoke(identity.id,"2026-09-07T13:00:00Z");
+    assert.equal((await request(`/lease-files/${document.id}/download`)).status,401);
+  } finally {server.closeAllConnections(); await new Promise<void>(resolve=>server.close(()=>resolve()));}
+});

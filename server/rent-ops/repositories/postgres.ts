@@ -1,5 +1,5 @@
 import { readPortalAccountBindings, transferPortalAccountBinding } from "../tenant-portal/transfer";
-import type { RentOpsPortalAccountTransfer } from "../../../shared/rent-ops-contracts";
+import type { RentOpsPortalAccountTransfer, RentOpsPortalTransferHistory } from "../../../shared/rent-ops-contracts";
 import { measureRentOps, countRentOpsTiming } from "../request-timing";
 import { RENT_OPS_BATCH_TABLES, RENT_OPS_REPORT_TABLES, buildRentOpsReportBatchSql, decodeRentOpsTableBatch, type RentOpsTableRows } from "./read-table-batch";
 import { createHash, randomUUID } from "node:crypto";
@@ -963,6 +963,21 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       await repository.lockRowsForOperation(options);
       return work(repository);
     }, { readOnly: false });
+  }
+
+  async readPortalTransferHistory(accountId: string): Promise<RentOpsPortalTransferHistory[]> {
+    const result = await this.client.query<RentOpsPortalTransferHistory>(`SELECT a.id AS "accountId", a.person_id AS "personId",
+      e.metadata->>'oldTenancyId' AS "oldTenancyId", e.tenancy_id AS "newTenancyId", e.occurred_at AS "occurredAt"
+      FROM rent_ops_tenant_accounts a JOIN rent_ops_activity_events e ON e.person_id=a.person_id
+      WHERE a.id=$1 AND e.metadata->>'action'='tenant_account_tenancy_transfer'
+        AND e.metadata->>'accountId'=a.id AND e.metadata->>'personId'=a.person_id
+        AND e.metadata->>'newTenancyId'=e.tenancy_id AND e.type='system'
+        AND e.person_link_knowledge='exact' AND e.tenancy_link_knowledge='exact'
+        AND e.type_knowledge='manual' AND e.occurred_at_knowledge='manual'
+        AND e.actor_knowledge='manual' AND length(trim(e.actor))>0
+        AND e.metadata->>'expectedSessionVersion' ~ '^[0-9]+$'
+        AND (e.metadata->>'expectedSessionVersion')::numeric < a.session_version`, [accountId]);
+    return result.rows.map(row => ({...row, occurredAt: new Date(row.occurredAt).toISOString()}));
   }
 
   async readPortalAccountBindings(personId: string) {
