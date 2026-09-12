@@ -72,3 +72,23 @@ export function workspaceCollectionsFor(section:WorkspaceSection,editing?:QuickA
   if(editing==='convert-application')names.push('applications','applicationHouseholdMembers','applicationRequirements');
   return Array.from(new Set(names));
 }
+
+/** Scope membership uses the server navigation index, never display search/status filters. */
+export function workspaceRecordInScope(route:WorkspaceRoute, bootstrap:RentOpsWorkspaceBootstrap|undefined, filters:ViewFilters):boolean {
+  if(!route.recordId || (route.section!=='tenants' && route.section!=='properties')) return true;
+  if(!bootstrap) return false;
+  if(route.section==='tenants') return bootstrap.tenantIndex.some(entry=>entry.person.id===route.recordId);
+  const propertyId=route.kind==='unit'
+    ? bootstrap.snapshot.units.find(unit=>unit.id===route.recordId)?.propertyId
+    : route.recordId;
+  if(!propertyId) return false;
+  const property=bootstrap.snapshot.properties.find(candidate=>candidate.id===propertyId);
+  return !!property && (filters.propertyScope==='all' || property.state==='active')
+    && (filters.propertyId==='all' || property.id===filters.propertyId);
+}
+
+/** An explicit record activation can widen navigation scope without changing the reporting date. */
+export function workspaceFiltersForRecord(route:WorkspaceRoute, bootstrap:RentOpsWorkspaceBootstrap|undefined, filters:ViewFilters):ViewFilters {
+  if(workspaceRecordInScope(route,bootstrap,filters) || filters.propertyScope==='all' && filters.propertyId==='all') return filters;
+  return {...filters,propertyScope:'all',propertyId:'all'};
+}

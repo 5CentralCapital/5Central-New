@@ -18,7 +18,7 @@ import { DocumentsWorkspace } from './documents-workspace';
 import { WorkspaceEditor } from './editor';
 import { DataGrid } from './grid';
 import { formatMoney, formatLabel } from './display';
-import { filterTenantDirectory, parseWorkspaceRoute, workspaceCollectionsFor, workspaceRouteSearch, type WorkspaceRoute, type WorkspaceSection } from './workspace-state';
+import { filterTenantDirectory, parseWorkspaceRoute, workspaceCollectionsFor, workspaceFiltersForRecord, workspaceRecordInScope, workspaceRouteSearch, type WorkspaceRoute, type WorkspaceSection } from './workspace-state';
 import { useWorkspaceData } from './use-workspace-data';
 import '../rent-ops.css';
 import './workspace.css';
@@ -94,6 +94,7 @@ function AuthenticatedWorkspace(){
  const needed=useMemo(()=>workspaceCollectionsFor(route.section,editing?.action),[route.section,editing?.action]);
  const data=useWorkspaceData({enabled:auth.status==='authenticated',identity:auth.user?.id??'',filters,collections:needed,summaryNeeded:route.section==='dashboard',personId:route.section==='tenants'?route.recordId:undefined});
  const snapshot=data.snapshot;
+ const reconcileRecordScope=useCallback((next:WorkspaceRoute)=>{setFilters(current=>workspaceFiltersForRecord(next,data.bootstrap.data,current));},[data.bootstrap.data]);
  const go=useCallback((next:WorkspaceRoute,replace=false)=>{
   const previous=navigationRef.current;
   if(window.matchMedia('(max-width: 768px)').matches)setSidebarCollapsed(true);
@@ -104,7 +105,9 @@ function AuthenticatedWorkspace(){
   setOpenRecords(current=>{const key=routeKey(next);const base=replace&&previous.section===next.section&&!previous.recordId?current.filter(r=>routeKey(r)!==routeKey(previous)):current;const existing=base.findIndex(r=>routeKey(r)===key);return existing<0?[...base,next]:base.map((r,i)=>i===existing?next:r);});
   setRecentRecords(current=>[next,...current.filter(r=>routeKey(r)!==routeKey(next))].slice(0,12));
  },[]);
- useEffect(()=>{const listener=()=>{scrollPositions.current.set(routeKey(navigationRef.current),window.scrollY);const next=parseWorkspaceRoute(window.location.search);if(navigationRef.current.section!==next.section)setFilters(current=>({...current,status:'all',search:''}));navigationRef.current=next;setRoute(next);setOpenRecords(current=>current.some(r=>routeKey(r)===routeKey(next))?current:[...current,next]);};window.addEventListener('popstate',listener);return()=>window.removeEventListener('popstate',listener);},[]);
+ const activateRecord=useCallback((next:WorkspaceRoute,replace=false)=>{reconcileRecordScope(next);if(next.recordId)setFilters(current=>({...current,status:'all',search:''}));go(next,replace);},[go,reconcileRecordScope]);
+ useEffect(()=>{if(data.bootstrap.data&&route.recordId)reconcileRecordScope(route);},[data.bootstrap.data,route,reconcileRecordScope]);
+ useEffect(()=>{const listener=()=>{scrollPositions.current.set(routeKey(navigationRef.current),window.scrollY);const next=parseWorkspaceRoute(window.location.search);reconcileRecordScope(next);if(navigationRef.current.section!==next.section||navigationRef.current.recordId!==next.recordId)setFilters(current=>({...current,status:'all',search:''}));navigationRef.current=next;setRoute(next);setOpenRecords(current=>current.some(r=>routeKey(r)===routeKey(next))?current:[...current,next]);};window.addEventListener('popstate',listener);return()=>window.removeEventListener('popstate',listener);},[reconcileRecordScope]);
  useEffect(()=>{window.scrollTo({top:scrollPositions.current.get(routeKey(route))??0,behavior:'instant'});},[route]);
  useEffect(()=>{
   if(auth.status!=='authenticated'){if(auth.status==='unauthenticated'){client.removeQueries({queryKey:['rent-ops-workspace']});setOpenRecords([]);setRecentRecords([]);}return;}
@@ -115,9 +118,19 @@ function AuthenticatedWorkspace(){
  },[auth.status,auth.user?.id,client]);
  const directory=useMemo(()=>data.bootstrap.data?filterTenantDirectory(data.bootstrap.data,filters):[],[data.bootstrap.data,filters]);
  useEffect(()=>{if(route.section==='tenants'&&!route.recordId&&directory[0]?.person.id)go({...route,recordId:directory[0].person.id},true);},[route,directory,go]);
+ function changeScope(changes:Partial<Pick<ViewFilters,'propertyScope'|'propertyId'>>){
+  const nextFilters={...filters,...changes};setFilters(nextFilters);
+  if(route.section==='tenants')go({...route,recordId:undefined},true);
+  if(route.section==='properties'){
+   const properties=snapshot?scopeProperties(snapshot,nextFilters).filter(property=>nextFilters.propertyId==='all'||property.id===nextFilters.propertyId):[];
+   const ids=new Set(properties.map(property=>property.id));
+   const recordId=route.kind==='unit'?snapshot?.snapshot.units.find(unit=>ids.has(unit.propertyId))?.id:properties[0]?.id;
+   go({...route,recordId},true);
+  }
+ }
  function navigate(section:WorkspaceSection,kind?:'property'|'unit'){
   setFilters(current=>({...current,status:'all',search:''}));
-  const existing=[...openRecords].reverse().find(r=>r.section===section&&(section!=='properties'||r.kind===kind));
+  const existing=[...openRecords].reverse().find(r=>r.section===section&&(section!=='properties'||r.kind===kind)&&workspaceRecordInScope(r,data.bootstrap.data,filters));
   const propertyIds=new Set(snapshot?scopeProperties(snapshot,filters).map(p=>p.id):[]);
   const firstId=section==='properties'?(kind==='unit'?snapshot?.snapshot.units.find(u=>propertyIds.has(u.propertyId)&&(filters.propertyId==='all'||u.propertyId===filters.propertyId))?.id:snapshot?.snapshot.properties.find(p=>propertyIds.has(p.id)&&(filters.propertyId==='all'||p.id===filters.propertyId))?.id):undefined;
   go(existing??{section,kind,recordId:firstId,tab:'summary',report:'rent-roll'});
@@ -128,8 +141,8 @@ function AuthenticatedWorkspace(){
   if(record.section==='reports')return REPORT_LABELS[record.report];
   return destinations.find(d=>d.section===record.section&&(record.section!=='properties'||d.kind===record.kind))?.label??'Workspace';
  }
- function openTenant(id:string){setFilters(current=>({...current,status:'all',search:''}));go({section:'tenants',recordId:id,tab:'summary',report:'rent-roll'});}
- function openUnit(id:string){setFilters(current=>({...current,status:'all',search:''}));go({section:'properties',kind:'unit',recordId:id,tab:'summary',report:'rent-roll'});}
+ function openTenant(id:string){setFilters(current=>({...current,status:'all',search:''}));activateRecord({section:'tenants',recordId:id,tab:'summary',report:'rent-roll'});}
+ function openUnit(id:string){setFilters(current=>({...current,status:'all',search:''}));activateRecord({section:'properties',kind:'unit',recordId:id,tab:'summary',report:'rent-roll'});}
  const openEditor=(action:QuickAction,values:FormValues={})=>{setNotice('');setEditing({action,values});};
  const refresh=useCallback(async()=>{await data.refresh();},[data.refresh]);
  const selectedReport=route.section==='rent-roll'?'rent-roll':route.section==='leases'?'lease-expiration':route.report;
@@ -139,12 +152,12 @@ function AuthenticatedWorkspace(){
   <header className="rm-ribbon"><div className="rm-nav-group"><button type="button" aria-label={sidebarCollapsed?'Show navigation':'Collapse navigation'} onClick={()=>setSidebarCollapsed(v=>!v)}><Menu size={17}/><strong>5CENTRAL</strong></button></div>
   {['Home','Rental Info','Receivables','Reports','Records'].map(group=><nav key={group} className="rm-nav-group" aria-label={group}>{destinations.filter(d=>d.group===group).map(({section,label,icon:Icon,kind})=><button type="button" key={`${section}:${kind??''}`} aria-current={route.section===section&&(section!=='properties'||route.kind===kind)?'page':undefined} onClick={()=>navigate(section,kind)}><Icon size={15}/>{label}</button>)}</nav>)}
   <div className="rm-ribbon-spacer"/><button className="rm-button" aria-label="Sign out" onClick={()=>void rentOpsAuthClient.logout()}><LogOut size={15}/></button></header>
-  <div className="rm-open-tabs" aria-label="Open records">{openRecords.map(record=><div className={`rm-open-tab${routeKey(route)===routeKey(record)?' active':''}`} key={routeKey(record)}><button className="rm-open-tab-label" title={labelFor(record)} onClick={()=>go(record)} aria-current={routeKey(route)===routeKey(record)?'page':undefined}>{labelFor(record)}</button>{openRecords.length>1&&<button className="rm-open-tab-close" aria-label={`Close ${labelFor(record)}`} onClick={()=>{const remaining=openRecords.filter(r=>routeKey(r)!==routeKey(record));setOpenRecords(remaining);if(routeKey(route)===routeKey(record))go(remaining[remaining.length-1]);}}><X size={12}/></button>}</div>)}</div>
-  <div className="rm-body"><aside className={`rm-sidebar${sidebarCollapsed?' is-collapsed':''}`}><div className="rm-sidebar-heading">Frequently used</div>{destinations.filter(d=>['tenants','properties','recurring','rent-roll','income'].includes(d.section)).map(d=><button key={`${d.section}:${d.kind}`} className="rm-sidebar-link" aria-label={d.label} title={d.label} onClick={()=>navigate(d.section,d.kind)}><d.icon size={14}/><span>{d.label}</span></button>)}<div className="rm-sidebar-heading">Recent records</div>{recentRecords.slice(0,8).map(record=><button className="rm-sidebar-link" key={routeKey(record)} onClick={()=>go(record)} title={labelFor(record)}>{labelFor(record)}</button>)}<div className="rm-sidebar-footer"><span>{source==='synthetic'?'Synthetic development data':'Live operational data'}</span><a href="/ops?ui=classic">Classic workspace</a><a href="/">5Central website</a></div></aside>
+  <div className="rm-open-tabs" aria-label="Open records">{openRecords.map(record=><div className={`rm-open-tab${routeKey(route)===routeKey(record)?' active':''}`} key={routeKey(record)}><button className="rm-open-tab-label" title={labelFor(record)} onClick={()=>activateRecord(record)} aria-current={routeKey(route)===routeKey(record)?'page':undefined}>{labelFor(record)}</button>{openRecords.length>1&&<button className="rm-open-tab-close" aria-label={`Close ${labelFor(record)}`} onClick={()=>{const remaining=openRecords.filter(r=>routeKey(r)!==routeKey(record));setOpenRecords(remaining);if(routeKey(route)===routeKey(record))activateRecord(remaining[remaining.length-1]);}}><X size={12}/></button>}</div>)}</div>
+  <div className="rm-body"><aside className={`rm-sidebar${sidebarCollapsed?' is-collapsed':''}`}><div className="rm-sidebar-heading">Frequently used</div>{destinations.filter(d=>['tenants','properties','recurring','rent-roll','income'].includes(d.section)).map(d=><button key={`${d.section}:${d.kind}`} className="rm-sidebar-link" aria-label={d.label} title={d.label} onClick={()=>navigate(d.section,d.kind)}><d.icon size={14}/><span>{d.label}</span></button>)}<div className="rm-sidebar-heading">Recent records</div>{recentRecords.slice(0,8).map(record=><button className="rm-sidebar-link" key={routeKey(record)} onClick={()=>activateRecord(record)} title={labelFor(record)}>{labelFor(record)}</button>)}<div className="rm-sidebar-footer"><span>{source==='synthetic'?'Synthetic development data':'Live operational data'}</span><a href="/ops?ui=classic">Classic workspace</a><a href="/">5Central website</a></div></aside>
   <div className="rm-main">
    <div className="rm-toolbar rm-workspace-toolbar"><h1>{route.section==='tenants'?'Tenants':labelFor({...route,recordId:undefined})}</h1>
-    <label>Portfolio<select aria-label="Portfolio scope" value={filters.propertyScope} onChange={e=>setFilters(f=>({...f,propertyScope:e.target.value as 'active'|'all',propertyId:'all'}))}><option value="active">Active portfolio</option><option value="all">All imported properties</option></select></label>
-    <label>Property<select value={filters.propertyId} onChange={e=>setFilters(f=>({...f,propertyId:e.target.value}))}><option value="all">All properties</option>{snapshot&&scopeProperties(snapshot,filters).map(p=><option value={p.id} key={p.id}>{p.name??'Unnamed property'}</option>)}</select></label>
+    <label>Portfolio<select aria-label="Portfolio scope" value={filters.propertyScope} onChange={e=>changeScope({propertyScope:e.target.value as 'active'|'all',propertyId:'all'})}><option value="active">Active portfolio</option><option value="all">All imported properties</option></select></label>
+    <label>Property<select value={filters.propertyId} onChange={e=>changeScope({propertyId:e.target.value})}><option value="all">All properties</option>{snapshot&&scopeProperties(snapshot,filters).map(p=><option value={p.id} key={p.id}>{p.name??'Unnamed property'}</option>)}</select></label>
     <label>As of<input type="date" value={filters.asOfDate} onChange={e=>{if(e.target.value)setFilters(f=>({...f,asOfDate:e.target.value}));}}/></label>
     {['tenants','applicants','reports','rent-roll','leases'].includes(route.section)&&<label>Status<select value={filters.status} onChange={e=>setFilters(f=>({...f,status:e.target.value}))}>{statusOptions.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>}
     <label className="rm-search"><Search size={14}/><input aria-label="Search records" placeholder={route.section==='tenants'?'Name, property, unit, email or phone':'Search records'} value={filters.search} onChange={e=>setFilters(f=>({...f,search:e.target.value}))}/></label>
