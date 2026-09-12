@@ -624,3 +624,33 @@ test("monthly occupancy respects dated Past account evidence without rewriting e
   assert.equal(projectFinancialOccupancy(snapshot, snapshot.units[0], "2026-09", "2026-09-07").occupancy, "vacant");
   assert.equal(snapshot.tenancies[0].actualMoveOutOn, undefined);
 });
+
+test("as-of selection excludes later manual roots while explicit month forecast retains them", async () => {
+  const { deriveScheduledIncome, deriveDashboardSummary } = await import("./reports");
+  const snapshot = snapshotWithUnit();
+  addLeaseBackedTenancy(snapshot, { tenancyId: "current", personId: "resident" });
+  const manual = schedule({ id: "correction", scopeType: "tenant", personId: "resident", tenancyId: "current", unitId: "u1", chargeDefinitionId: "rent", source: undefined });
+  Object.assign(manual, { source: undefined, sourceArtifactSha256: null, artifactObservationOn: null, effectiveFrom: "2026-09-12", effectiveFromKnowledge: "manual", lineageRootOrigin: "manual", versionOrigin: "manual", amountCents: 135000, billingFrequency: "monthly" });
+  snapshot.recurringSchedules = [manual];
+  const before = { asOfDate: "2026-09-07", month: "2026-09" };
+  assert.equal(deriveScheduledIncome(snapshot, before).length, 0);
+  assert.equal(deriveDashboardSummary(snapshot, before).scheduledRentConfirmedCents, 0);
+  assert.equal(deriveScheduledIncome(snapshot, { ...before, asOfDate: "2026-09-12" })[0].amountCents, 135000);
+  const forecast = projectFinancialSchedules(snapshot, "2026-09", { asOfDate: "2026-09-07", selection: "month_forecast" });
+  assert.equal(forecast.rows[0].amountCents, 135000);
+});
+
+test("as-of lineage resolves predecessor before a later same-month replacement and end", () => {
+  const snapshot = snapshotWithUnit();
+  addLeaseBackedTenancy(snapshot, {});
+  const root = schedule({ id: "root-asof", scopeType: "unit", unitId: "u1", chargeDefinitionId: "rent", amountCents: 100000 });
+  root.billingFrequency = "monthly";
+  const replacement = { ...root, source: undefined, id: "replace-asof", supersedesId: root.id, versionAction: "replace" as const, versionOrigin: "manual" as const, effectiveFrom: "2026-09-12", effectiveFromKnowledge: "manual" as const, amountCents: 135000 };
+  const end = { ...replacement, id: "end-asof", supersedesId: replacement.id, versionAction: "end" as const, effectiveFrom: "2026-09-20", effectiveTo: "2026-09-20", active: false, activeKnowledge: "manual" as const, amountCents: null, amountKnowledge: "unknown" as const };
+  snapshot.recurringSchedules = [root, replacement, end];
+  assert.equal(projectFinancialSchedules(snapshot, "2026-09", { asOfDate: "2026-09-07" }).rows[0].amountCents, 100000);
+  assert.equal(projectFinancialSchedules(snapshot, "2026-09", { asOfDate: "2026-09-12" }).rows[0].amountCents, 135000);
+  assert.equal(projectFinancialSchedules(snapshot, "2026-09", { asOfDate: "2026-09-20" }).rows.length, 0);
+  assert.equal(projectFinancialSchedules(snapshot, "2026-09", { asOfDate: "2026-09-07", selection: "month_forecast" }).rows.length, 0);
+  assert.equal(snapshot.recurringSchedules.length, 3);
+});

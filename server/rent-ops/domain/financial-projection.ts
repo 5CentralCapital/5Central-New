@@ -258,9 +258,10 @@ function lineageAction(schedule: RentOpsRecurringChargeSchedule, strictLineage: 
 export function resolveEffectiveScheduleVersions(
   schedules: readonly RentOpsRecurringChargeSchedule[],
   month: IsoMonth,
-  options: { observationMonth?: IsoMonth; strictLineage?: boolean } = {},
+  options: { observationMonth?: IsoMonth; strictLineage?: boolean; effectiveAsOf?: IsoDate } = {},
 ): EffectiveScheduleVersionResult {
   const interval = financialMonthInterval(month);
+  const selectionEnd = options.effectiveAsOf && options.effectiveAsOf < interval.end ? options.effectiveAsOf : interval.end;
   const exceptionCodes = new Set<string>();
   const strictLineage = options.strictLineage === true;
   const byRoot = new Map<string, RentOpsRecurringChargeSchedule[]>();
@@ -505,19 +506,20 @@ export function resolveEffectiveScheduleVersions(
         const observationBoundary = strictLineage && schedule.lineageRootOrigin === "artifact" && schedule.artifactObservationOn
           ? schedule.artifactObservationOn.slice(0, 7) as IsoMonth
           : options.observationMonth;
-        if (schedule.effectiveFromKnowledge === "unknown_open_start" && observationBoundary && month >= observationBoundary) return true;
+        if (schedule.effectiveFromKnowledge === "unknown_open_start" && observationBoundary && month >= observationBoundary
+          && (!options.effectiveAsOf || !schedule.artifactObservationOn || schedule.artifactObservationOn <= selectionEnd)) return true;
         return false;
       }
       // Choose the latest lineage version whose start has taken effect before
       // applying that winner's end/action state. Filtering each version by
       // effectiveTo here would discard an end tombstone in later months and
       // incorrectly resurrect its predecessor.
-      return schedule.effectiveFrom <= interval.end;
+      return schedule.effectiveFrom <= selectionEnd;
     }).sort((left, right) => compareNullableDateDescending(left.effectiveFrom, right.effectiveFrom) || (right.recordRevision ?? 0) - (left.recordRevision ?? 0) || right.id.localeCompare(left.id));
     const winner = applicable[0];
     if (!winner) {
       for (const schedule of rows) {
-        if (schedule.effectiveFrom && schedule.effectiveFrom > interval.end) putClassification(schedule, "future", "schedule_effective_in_future");
+        if (schedule.effectiveFrom && schedule.effectiveFrom > selectionEnd) putClassification(schedule, "future", "schedule_effective_in_future");
         else if (!schedule.effectiveFrom && schedule.effectiveFromKnowledge === "unknown_open_start") putClassification(schedule, "future", "schedule_open_start_not_observed");
         else if (schedule.active === false) putClassification(schedule, "inactive", "schedule_inactive");
         else putClassification(schedule, "ended", "schedule_ended");
@@ -526,12 +528,12 @@ export function resolveEffectiveScheduleVersions(
     }
     for (const schedule of rows) {
       if (schedule.id === winner.id) continue;
-      if (schedule.effectiveFrom && schedule.effectiveFrom > interval.end) putClassification(schedule, "future", "schedule_effective_in_future");
+      if (schedule.effectiveFrom && schedule.effectiveFrom > selectionEnd) putClassification(schedule, "future", "schedule_effective_in_future");
       else if (schedule.effectiveFrom && winner.effectiveFrom && schedule.effectiveFrom < winner.effectiveFrom) putClassification(schedule, "superseded", "schedule_superseded");
       else if (!schedule.effectiveFrom && winner.effectiveFrom) putClassification(schedule, "superseded", "schedule_superseded");
       else putClassification(schedule, "superseded", "schedule_superseded");
     }
-    if (lineageAction(winner, strictLineage) === "end" || (winner.effectiveTo !== null && winner.effectiveTo !== undefined && winner.effectiveTo < interval.start)) {
+    if (lineageAction(winner, strictLineage) === "end" || (winner.effectiveTo !== null && winner.effectiveTo !== undefined && winner.effectiveTo < (options.effectiveAsOf ? selectionEnd : interval.start))) {
       putClassification(winner, "ended", "schedule_ended");
       ended.push(winner);
     } else if (winner.active === false) {
@@ -626,7 +628,7 @@ function scopeRank(schedule: RentOpsRecurringChargeSchedule): number {
 export function projectFinancialSchedules(
   snapshot: RentOpsSnapshot,
   month: IsoMonth,
-  options: { observationMonth?: IsoMonth; propertyId?: string; unitId?: string; asOfDate?: IsoDate } = {},
+  options: { observationMonth?: IsoMonth; propertyId?: string; unitId?: string; asOfDate?: IsoDate; selection?: "as_of" | "month_forecast" } = {},
 ): FinancialScheduleProjection {
   const interval = financialMonthInterval(month);
   const strictKnowledge = snapshot.modelVersion === 3;
@@ -693,7 +695,10 @@ export function projectFinancialSchedules(
   };
 
   const filteredInput = snapshot.recurringSchedules.filter(scheduleInFilter);
-  const versioned = resolveEffectiveScheduleVersions(filteredInput, month, { ...options, strictLineage: strictKnowledge });
+  // An as-of dashboard must not see a later correction or termination in the
+  // same month. Explicit month forecasts retain whole-month version selection.
+  const versioned = resolveEffectiveScheduleVersions(filteredInput, month, { ...options, strictLineage: strictKnowledge,
+    effectiveAsOf: options.selection === "month_forecast" ? undefined : options.asOfDate });
   const classificationById = new Map(versioned.classifications.map((item) => [item.schedule.id, item]));
   type ProjectionBucket = "selected" | "emitted_known" | "emitted_uncertain" | "unassigned" | "invalid" | "superseded" | "ended" | "inactive" | "future" | "not_applicable" | "suppressed";
   const bucketById = new Map<string, ProjectionBucket>();

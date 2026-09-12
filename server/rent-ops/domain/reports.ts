@@ -793,6 +793,7 @@ function deriveTruthScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
     unitId: filters.unitId,
     observationMonth: truthObservationMonth(snapshot, filters),
     asOfDate: asOfDate(filters),
+    selection: month === monthFromDate(asOfDate(filters)) ? "as_of" : "month_forecast",
   });
   const rows = projection.rows
     // Subsidy/deposit schedules are controlled by their dedicated reports.
