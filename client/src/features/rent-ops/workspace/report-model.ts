@@ -607,6 +607,13 @@ export function reportRequestKey(report: ReportKey, filters: ApiFilters): string
   return `${report}:${JSON.stringify(stableObject(filters))}`;
 }
 
+/** Rent roll is already fully scoped and dated by the server; only its terminal text search is local. */
+export function filterRentRollRows(rows: ReportRow[], search: string): ReportRow[] {
+  const query = search.trim().toLowerCase();
+  if (!query) return rows;
+  return rows.filter(row => `${readRaw(row, "propertyName") ?? ""} ${readRaw(row, "unitNumber") ?? ""} ${readRaw(row, "currentTenantName") ?? "Unknown applicant/tenant"} ${readRaw(row, "futureTenantName") ?? "Unknown applicant/tenant"}`.toLowerCase().includes(query));
+}
+
 export function reportQueryKey(report: ReportKey, filters: ApiFilters, authenticatedUserId: string) {
   return ["rent-ops-workspace", "report", authenticatedUserId, report, filters] as const;
 }
@@ -624,7 +631,7 @@ export function reportQueryFilters(
     ...(mode === "month" && period.month ? { month: period.month } : {}),
     ...(mode === "range" && period.fromDate && period.toDate ? { fromDate: period.fromDate, toDate: period.toDate } : {}),
     ...(filters.status !== "all" && filters.status ? { status: [filters.status] } : {}),
-    ...(filters.search.trim() ? { search: filters.search.trim() } : {}),
+    ...(key !== "rent-roll" && filters.search.trim() ? { search: filters.search.trim() } : {}),
   };
 }
 

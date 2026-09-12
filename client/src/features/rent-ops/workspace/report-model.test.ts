@@ -3,6 +3,7 @@ import test from "node:test";
 import type { DelinquencyRow, RentRollRow, ScheduledIncomeRow } from "../types";
 import {
   buildPropertySubtotals,
+  filterRentRollRows,
   buildReportCsv,
   projectReportGridView,
   createReportViewModel,
@@ -133,4 +134,37 @@ test("direct authenticated user changes cannot reuse another user's report cache
   cache.set(JSON.stringify(reportQueryKey("rent-roll", filters, "manager-a")), [{tenantName: "Private A resident"}]);
   assert.equal(cache.get(JSON.stringify(reportQueryKey("rent-roll", filters, "manager-b"))), undefined);
   assert.notDeepEqual(reportQueryKey("delinquency", filters, "manager-a"), reportQueryKey("delinquency", filters, "manager-b"));
+});
+
+test("rent roll text search leaves the scoped dated server query and cache key unchanged", () => {
+  const filters = { propertyScope: "active" as const, propertyId: "property:one", asOfDate: "2026-09-12", status: "current", search: "" };
+  const period = { asOfDate: "2026-09-12" };
+  const original = reportQueryFilters(filters, "rent-roll", period);
+  for (const search of ["a", "alex", "  alex  ", ""]) {
+    const query = reportQueryFilters({ ...filters, search }, "rent-roll", period);
+    assert.deepEqual(reportQueryKey("rent-roll", query, "operator"), reportQueryKey("rent-roll", original, "operator"));
+    assert.equal(query.search, undefined);
+    assert.equal(query.propertyId, "property:one"); assert.deepEqual(query.status, ["current"]); assert.equal(query.asOfDate, period.asOfDate);
+  }
+  assert.equal(reportQueryFilters({ ...filters, search: " alex " }, "delinquency", period).search, "alex");
+  assert.notDeepEqual(reportQueryFilters({ ...filters, propertyId: "property:two" }, "rent-roll", period), original);
+});
+
+test("local rent roll search matches property unit current and future names and uses identical export rows", () => {
+  const rows: RentRollRow[] = [
+    { propertyId: "p", propertyName: "Sun Cove", unitId: "u1", unitNumber: "D4", currentTenantName: "Alex Jones", occupancy: "current", baseRentCents: 100000 },
+    { propertyId: "p", propertyName: "Sun Cove", unitId: "u2", unitNumber: "C7", futureTenantName: "Kim James", occupancy: "future", baseRentCents: 130000 },
+    { propertyId: "other", propertyName: "Summit", unitId: "u3", unitNumber: "A1", currentTenantName: "Other Resident", occupancy: "current", baseRentCents: 90000 },
+  ];
+  for (const [query, expected] of [["sun cove", ["u1", "u2"]], [" d4 ", ["u1"]], ["ALEX", ["u1"]], ["kim james", ["u2"]], ["cove d4", ["u1"]], ["no match", []]] as const) {
+    const filtered = filterRentRollRows(rows, query);
+    assert.deepEqual(filtered.map(row => row.unitId), expected);
+    const view = createReportViewModel("rent-roll", filtered);
+    const grid = projectReportGridView(view.displayRows, view.curatedColumns.map(column => column.key));
+    assert.deepEqual(grid.rows.map(row => row.__source), filtered);
+    assert.equal(buildPropertySubtotals("rent-roll", grid.rows.map(row => row.__source)).reduce((sum, subtotal) => sum + subtotal.count, 0), filtered.length);
+    const csv = buildReportCsv(grid.rows, view.curatedColumns);
+    assert.equal(csv.split(/\r?\n/).length, filtered.length + 1);
+  }
+  assert.equal(filterRentRollRows(rows, ""), rows);
 });

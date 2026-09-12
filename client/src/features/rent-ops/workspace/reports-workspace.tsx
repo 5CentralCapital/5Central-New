@@ -10,6 +10,7 @@ import type { AdminSnapshot, ReportKey, ReportRow, ViewFilters } from "../types"
 import {
   REPORT_PERIODS,
   buildPropertySubtotals,
+  filterRentRollRows,
   buildReportCsv,
   projectReportGridView,
   createReportViewModel,
@@ -186,7 +187,7 @@ function ReportControls({
 
 export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpenTenant, onOpenUnit }: ReportsWorkspaceProps) {
   const auth = useRentOpsAuth();
-  const { debouncedSearch, searchPending } = useReportSearch(filters.search);
+  const { debouncedSearch, searchPending } = useReportSearch(selected === "rent-roll" ? "" : filters.search);
   const [asOfDate, setAsOfDate] = useState(filters.asOfDate);
   const [month, setMonth] = useState(filters.asOfDate.slice(0, 7));
   const [fromDate, setFromDate] = useState(firstDayOfMonth(filters.asOfDate));
@@ -222,7 +223,7 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
   const loadedRows = periodError || searchPending ? undefined : reportQuery.data;
   const loading = !periodError && (searchPending || reportQuery.isFetching);
   const error = periodError ?? (searchPending ? undefined : reportQuery.error instanceof Error ? reportQuery.error.message : reportQuery.error ? "The selected report could not be loaded." : undefined);
-  const visibleSourceRows = loadedRows ?? [];
+  const visibleSourceRows = useMemo(() => selected === "rent-roll" ? filterRentRollRows(loadedRows ?? [], filters.search) : loadedRows ?? [], [loadedRows, selected, filters.search]);
   const view = useMemo(
     () => createReportViewModel(selected, visibleSourceRows, snapshot),
     [selected, visibleSourceRows, snapshot],
@@ -232,10 +233,10 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
   })), [view.columns]);
   const displayedRows = useMemo(() => toDisplayReportRows(selected, visibleSourceRows, snapshot), [selected, visibleSourceRows, snapshot]);
   const handleGridView = useCallback((rows: DisplayReportRow[], columns: GridColumn<DisplayReportRow>[]) => {
-    const next = { ...projectReportGridView(rows, columns.map(column => column.key)), sourceRows: loadedRows };
-    setGridView(current => current?.sourceRows === loadedRows && current?.signature === next.signature ? current : next);
-  }, [loadedRows]);
-  const exportRows = gridView?.sourceRows === loadedRows ? gridView?.rows ?? displayedRows : displayedRows;
+    const next = { ...projectReportGridView(rows, columns.map(column => column.key)), sourceRows: visibleSourceRows };
+    setGridView(current => current?.sourceRows === visibleSourceRows && current?.signature === next.signature ? current : next);
+  }, [visibleSourceRows]);
+  const exportRows = gridView?.sourceRows === visibleSourceRows ? gridView?.rows ?? displayedRows : displayedRows;
   const activeColumns = gridView
     ? gridView.columnKeys.map(key => view.columns.find(column => column.key === key)).filter((column): column is ReportColumnDefinition => Boolean(column))
     : view.curatedColumns;
@@ -277,7 +278,7 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
         {loading && !loadedRows && <div className="rm-empty"><Loader2 className="rm-spin" aria-hidden="true" /><p>{emptyReportMessage(false)}</p></div>}
         {loadedRows && (
           <>
-            <ReportSubtotals keyName={selected} rows={visibleSourceRows} columns={activeColumns} snapshot={snapshot} />
+            <ReportSubtotals keyName={selected} rows={selected === "rent-roll" ? exportRows.map(row => row.__source) : visibleSourceRows} columns={activeColumns} snapshot={snapshot} />
             <div className="rm-report-screen-grid"><DataGrid
               key={selected}
               rows={displayedRows}
