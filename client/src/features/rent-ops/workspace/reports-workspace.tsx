@@ -1,3 +1,4 @@
+import { useReportSearch } from "./use-report-search";
 import { useRentOpsAuth } from "../auth-ui";
 import { useQuery } from "@tanstack/react-query";
 import { loadRentOpsReport } from "../api";
@@ -185,11 +186,12 @@ function ReportControls({
 
 export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpenTenant, onOpenUnit }: ReportsWorkspaceProps) {
   const auth = useRentOpsAuth();
+  const { debouncedSearch, searchPending } = useReportSearch(filters.search);
   const [asOfDate, setAsOfDate] = useState(filters.asOfDate);
   const [month, setMonth] = useState(filters.asOfDate.slice(0, 7));
   const [fromDate, setFromDate] = useState(firstDayOfMonth(filters.asOfDate));
   const [toDate, setToDate] = useState(filters.asOfDate);
-  const [gridView, setGridView] = useState<ReturnType<typeof projectReportGridView>>();
+  const [gridView, setGridView] = useState<ReturnType<typeof projectReportGridView> & { sourceRows?: ReportRow[] }>();
 
   useEffect(() => {
     setAsOfDate(filters.asOfDate);
@@ -207,19 +209,19 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
 
   const periodError = validateReportPeriod(selected, asOfDate, month, fromDate, toDate);
   const queryFilters = useMemo(
-    () => reportQueryFilters(filters, selected, { asOfDate, month, fromDate, toDate }),
-    [filters.propertyId, filters.propertyScope, filters.search, filters.status, selected, asOfDate, month, fromDate, toDate],
+    () => reportQueryFilters({ ...filters, search: debouncedSearch }, selected, { asOfDate, month, fromDate, toDate }),
+    [filters.propertyId, filters.propertyScope, debouncedSearch, filters.status, selected, asOfDate, month, fromDate, toDate],
   );
   const reportQuery = useQuery({
     queryKey: reportQueryKey(selected, queryFilters, auth.user?.id ?? ""),
     staleTime: 30_000,
     gcTime: 300_000,
     queryFn: ({ signal }) => loadRentOpsReport(selected, queryFilters, signal),
-    enabled: auth.status === "authenticated" && Boolean(auth.user?.id) && !periodError,
+    enabled: auth.status === "authenticated" && Boolean(auth.user?.id) && !periodError && !searchPending,
   });
-  const loadedRows = periodError ? undefined : reportQuery.data;
-  const loading = !periodError && reportQuery.isFetching;
-  const error = periodError ?? (reportQuery.error instanceof Error ? reportQuery.error.message : reportQuery.error ? "The selected report could not be loaded." : undefined);
+  const loadedRows = periodError || searchPending ? undefined : reportQuery.data;
+  const loading = !periodError && (searchPending || reportQuery.isFetching);
+  const error = periodError ?? (searchPending ? undefined : reportQuery.error instanceof Error ? reportQuery.error.message : reportQuery.error ? "The selected report could not be loaded." : undefined);
   const visibleSourceRows = loadedRows ?? [];
   const view = useMemo(
     () => createReportViewModel(selected, visibleSourceRows, snapshot),
@@ -230,10 +232,10 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
   })), [view.columns]);
   const displayedRows = useMemo(() => toDisplayReportRows(selected, visibleSourceRows, snapshot), [selected, visibleSourceRows, snapshot]);
   const handleGridView = useCallback((rows: DisplayReportRow[], columns: GridColumn<DisplayReportRow>[]) => {
-    const next = projectReportGridView(rows, columns.map(column => column.key));
-    setGridView(current => current?.signature === next.signature ? current : next);
-  }, []);
-  const exportRows = gridView?.rows ?? displayedRows;
+    const next = { ...projectReportGridView(rows, columns.map(column => column.key)), sourceRows: loadedRows };
+    setGridView(current => current?.sourceRows === loadedRows && current?.signature === next.signature ? current : next);
+  }, [loadedRows]);
+  const exportRows = gridView?.sourceRows === loadedRows ? gridView?.rows ?? displayedRows : displayedRows;
   const activeColumns = gridView
     ? gridView.columnKeys.map(key => view.columns.find(column => column.key === key)).filter((column): column is ReportColumnDefinition => Boolean(column))
     : view.curatedColumns;

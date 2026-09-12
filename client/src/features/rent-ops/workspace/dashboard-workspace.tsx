@@ -1,3 +1,4 @@
+import { useReportSearch } from "./use-report-search";
 import { useRentOpsAuth } from "../auth-ui";
 import { useQueries } from "@tanstack/react-query";
 import { loadRentOpsReport, type RentOpsWorkspaceDashboard } from "../api";
@@ -169,15 +170,16 @@ function Widget({
 
 export function DashboardWorkspace({ snapshot, filters, onReport, onOpenTenant, onOpenUnit, previews, refreshing = false }: DashboardWorkspaceProps) {
   const auth = useRentOpsAuth();
+  const { debouncedSearch, searchPending } = useReportSearch(filters.search);
   const bundledPreviews = Boolean(previews) && filters.status === "all" && !filters.search.trim();
   const widgetReports = ["rent-roll", "delinquency"] as const;
   const queries = useQueries({ queries: widgetReports.map((report) => {
-    const query = reportQueryFilters(filters, report, { asOfDate: filters.asOfDate });
-    return { queryKey: reportQueryKey(report, query, auth.user?.id ?? ""), staleTime: 30_000, gcTime: 300_000, enabled: auth.status === "authenticated" && Boolean(auth.user?.id) && !bundledPreviews, queryFn: ({ signal }: { signal: AbortSignal }) => loadRentOpsReport(report, query, signal) };
+    const query = reportQueryFilters({ ...filters, search: debouncedSearch }, report, { asOfDate: filters.asOfDate });
+    return { queryKey: reportQueryKey(report, query, auth.user?.id ?? ""), staleTime: 30_000, gcTime: 300_000, enabled: auth.status === "authenticated" && Boolean(auth.user?.id) && !bundledPreviews && !searchPending, queryFn: ({ signal }: { signal: AbortSignal }) => loadRentOpsReport(report, query, signal) };
   }) });
-  const widgetRows = bundledPreviews ? previews! : { "rent-roll": queries[0].data, delinquency: queries[1].data };
-  const widgetErrors = bundledPreviews ? { "rent-roll": undefined, delinquency: undefined } : { "rent-roll": queries[0].error?.message, delinquency: queries[1].error?.message };
-  const loading = refreshing || queries.some((query) => query.isFetching);
+  const widgetRows = searchPending ? { "rent-roll": undefined, delinquency: undefined } : bundledPreviews ? previews! : { "rent-roll": queries[0].data, delinquency: queries[1].data };
+  const widgetErrors = searchPending || bundledPreviews ? { "rent-roll": undefined, delinquency: undefined } : { "rent-roll": queries[0].error?.message, delinquency: queries[1].error?.message };
+  const loading = searchPending || refreshing || queries.some((query) => query.isFetching);
 
   const metrics = useMemo(() => dashboardMetrics(snapshot.summary, onReport), [snapshot.summary, onReport]);
   const vacancyDetail = [
