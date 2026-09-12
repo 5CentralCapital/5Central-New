@@ -4,7 +4,7 @@ Goal: implement the approved RM workflow/design/performance overhaul while prese
 
 Baseline: clean upstream codex/rent-ops-tenant-portal fd4673585e26f9972cb65d44bc2b9a3f0b0d4ce5. Existing release credentials/live acceptance are separate, not assumed complete. No live tenant writes, sends, real payments, migrations, or credential changes for development.
 
-Models: root Astra Max orchestration and difficult architecture. Luna Max UI/domain implementation. Astra Low scoped backend/release/test support. Explicit user swarm authorization is present.
+Models: root Astra Max orchestration and difficult architecture. All active workers use Astra Medium per Michael's latest instruction. Earlier Luna Max and Astra Low workers are interrupted or idle. Explicit user swarm authorization is present.
 
 Approach: preserve original manager workspace as classic compatibility surface; build a compact RM workspace with disjoint components, original server mutation validation, and narrowed page-loading endpoints. Use staging synthetic browser QA, unit/domain/security regressions, typecheck, and production build. Current branch is isolated from original release checkout.
 

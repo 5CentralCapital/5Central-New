@@ -78,3 +78,18 @@ test("bootstrap rejects inconsistent selected tenancy", () => {
   const unrelated = bootstrap(); unrelated.tenantIndex[0].selectedTenancyId = "unrelated-tenancy";
   assert.throws(() => decodeRentOpsWorkspaceBootstrap(unrelated));
 });
+
+test("recurring history metadata cannot authorize changes with unknown lineage or omit a resolved boundary", () => {
+  const serialized = wire(serializeWorkspaceCollection(syntheticRentOpsSnapshot(), "recurringSchedules"));
+  assert.ok(serialized.items.length);
+  const original = serialized.items[0];
+  for (const metadata of [
+    { lineageState: "unknown", canScheduleSuccessor: true },
+    { lineageState: "valid", resolvedEffectiveTo: undefined },
+    { lineageState: "guessed" },
+    { resolvedEffectiveTo: "2026-02-31" },
+    { canScheduleSuccessor: "true" },
+  ]) {
+    assert.throws(() => decodeRentOpsWorkspaceCollection("recurringSchedules", wire({ ...serialized, items: [{ ...original, ...metadata }] })));
+  }
+});

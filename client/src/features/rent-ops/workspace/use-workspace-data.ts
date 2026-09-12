@@ -11,7 +11,7 @@ export function useWorkspaceData({enabled,identity,filters,collections,summaryNe
  const bootstrap=useQuery({queryKey:[...queryRoot,'bootstrap',...scope],queryFn:({signal})=>loadRentOpsWorkspaceBootstrap(apiFilters,signal),enabled:enabled&&!!filters.asOfDate,staleTime:60_000,gcTime:300_000,retry:false});
  const summary=useQuery({queryKey:[...queryRoot,'summary',...scope],queryFn:({signal})=>loadRentOpsWorkspaceSummary(apiFilters,signal),enabled:enabled&&summaryNeeded&&!!filters.asOfDate,staleTime:30_000,gcTime:300_000,retry:false});
  const fetched=useQueries({queries:collections.map(name=>({queryKey:[...queryRoot,'collection',name,...scope],queryFn:({signal}:{signal:AbortSignal})=>loadRentOpsWorkspaceCollection(name,apiFilters,signal),enabled:enabled&&!!bootstrap.data&&!bootstrap.data.loadedCollections.includes(name),staleTime:60_000,gcTime:300_000,retry:false}))});
- const tenant=useQuery({queryKey:[...queryRoot,'tenant',personId,...scope],queryFn:()=>loadRentOpsTenantProfile(personId!,apiFilters),enabled:enabled&&!!personId&&!!bootstrap.data,staleTime:60_000,gcTime:300_000,retry:false});
+ const tenant=useQuery({queryKey:[...queryRoot,'tenant',personId,...scope],queryFn:({signal})=>loadRentOpsTenantProfile(personId!,apiFilters,signal),enabled:enabled&&!!personId&&!!bootstrap.data,staleTime:60_000,gcTime:300_000,retry:false});
  const previousCollections=useRef<{names:WorkspaceCollection[];values:unknown[];merged:Partial<AdminSnapshotView>}>({names:[],values:[],merged:{}});
  const values=fetched.map(query=>query.data);
  if(collections.length!==previousCollections.current.names.length||collections.some((name,i)=>name!==previousCollections.current.names[i]||values[i]!==previousCollections.current.values[i])){

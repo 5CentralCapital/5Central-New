@@ -596,7 +596,11 @@ function decodeLeaseTerm(value: unknown): AdminLeaseTermView {
 }
 
 function decodeRecurringSchedule(value: unknown): AdminRecurringScheduleView {
-  const input = exactRecord(value, "recurring schedule", ["id", "chargeDefinitionId", "billingFrequency", "scopeType", "scopeId", "tenancyId", "personId", "propertyId", "unitId", "category", "description", "descriptionKnowledge", "amountCents", "effectiveFrom", "effectiveFromKnowledge", "effectiveTo", "active", "activeKnowledge", "sourceConfidence", "chargeDefinitionKnowledge", "recordRevision"]);
+  const input = exactRecord(value, "recurring schedule", ["id", "chargeDefinitionId", "billingFrequency", "scopeType", "scopeId", "tenancyId", "personId", "propertyId", "unitId", "category", "description", "descriptionKnowledge", "amountCents", "effectiveFrom", "effectiveFromKnowledge", "effectiveTo", "active", "activeKnowledge", "sourceConfidence", "chargeDefinitionKnowledge", "recordRevision", "resolvedEffectiveTo", "lineageState", "canScheduleSuccessor"]);
+  const lineageState = optionalEnum(input, "lineageState", ["valid", "unknown"] as const);
+  const resolvedEffectiveTo = nullableDate(input, "resolvedEffectiveTo");
+  const canScheduleSuccessor = optionalBoolean(input, "canScheduleSuccessor");
+  if (lineageState === "valid" && resolvedEffectiveTo === undefined || canScheduleSuccessor === true && lineageState !== "valid") throw new Error("Rent Operations returned inconsistent recurring schedule history.");
   return {
     id: optionalId(input, "id"),
     chargeDefinitionId: nullableId(input, "chargeDefinitionId"),
@@ -614,6 +618,9 @@ function decodeRecurringSchedule(value: unknown): AdminRecurringScheduleView {
     effectiveFrom: nullableDate(input, "effectiveFrom"),
     effectiveFromKnowledge: nullableAllowed(input, "effectiveFromKnowledge", RECURRING_DATE_KNOWLEDGE),
     effectiveTo: nullableDate(input, "effectiveTo"),
+    resolvedEffectiveTo,
+    lineageState,
+    canScheduleSuccessor,
     active: nullableBoolean(input, "active"),
     activeKnowledge: nullableAllowed(input, "activeKnowledge", FACT_KNOWLEDGE),
     sourceConfidence: nullableAllowed(input, "sourceConfidence", SOURCE_CONFIDENCE),

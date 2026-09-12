@@ -9,6 +9,7 @@ import { RecurringBillingPanel } from '../recurring-billing-panel';
 import type { QuickAction, FormValues } from '../form-payload';
 import { REPORT_LABELS, type AdminSnapshot, type ReportKey, type TenantTab, type ViewFilters } from '../types';
 import { TenantRecord } from './tenant-record';
+import { scheduleDisplayInterval } from './schedule-display';
 import { PropertyUnitRecords } from './property-unit-records';
 import { ReportsWorkspace } from './reports-workspace';
 import { DashboardWorkspace } from './dashboard-workspace';
@@ -51,20 +52,33 @@ function RecurringRegister({snapshot,filters,onEdit}:{snapshot:AdminSnapshot;fil
  const definitions=new Map(snapshot.chargeDefinitions.map(d=>[d.id,d]));
  const rows=snapshot.snapshot.recurringSchedules.filter(row=>filters.propertyId==='all'||row.propertyId===filters.propertyId).filter(row=>filters.propertyScope==='all'||properties.get(row.propertyId??undefined)?.state==='active').map(row=>{
   const person=people.get(row.personId??undefined);const definition=definitions.get(row.chargeDefinitionId??undefined);
-  const status=row.active==null?'Needs review':row.active===false?'Ended':row.effectiveFrom&&row.effectiveFrom>filters.asOfDate?'Future':row.effectiveTo&&row.effectiveTo<filters.asOfDate?'Ended':'Current';
-  return {...row,propertyName:properties.get(row.propertyId??undefined)?.name??'Property needs review',unitName:units.get(row.unitId??undefined)?.unitNumber??'—',tenantName:person?`${person.firstName??''} ${person.lastName??''}`.trim():'—',chargeName:definition?.displayName??row.description??'Charge type needs review',displayStatus:status};
+  const display=scheduleDisplayInterval(row,filters.asOfDate);
+  const status=display.state==='unknown'?'Needs review':formatLabel(display.state);
+  return {...row,displayEnd:display.effectiveTo,propertyName:properties.get(row.propertyId??undefined)?.name??'Property needs review',unitName:units.get(row.unitId??undefined)?.unitNumber??'—',tenantName:person?`${person.firstName??''} ${person.lastName??''}`.trim():'—',chargeName:definition?.displayName??row.description??'Charge type needs review',displayStatus:status};
  }).filter(row=>state==='all'||row.displayStatus===state);
  return <section className="rm-panel"><div className="rm-toolbar"><label>Show<select value={state} onChange={e=>setState(e.target.value)}>{['all','Current','Future','Ended','Needs review'].map(s=><option key={s} value={s}>{s==='all'?'All schedules':s}</option>)}</select></label><button className="rm-button rm-button-primary" onClick={()=>onEdit('save-recurring-schedule',{...(filters.propertyId!=='all'?{propertyId:filters.propertyId}:{})})}><Plus size={14}/>Add recurring charge</button></div>
  <DataGrid rows={rows} search={filters.search} getRowKey={(row,index)=>row.id??String(index)} pageSize={25} emptyMessage="No recurring charges match these filters." columns={[
  {key:'propertyName',label:'Property'},{key:'unitName',label:'Unit'},{key:'tenantName',label:'Tenant'},{key:'chargeName',label:'Charge'},
  {key:'scopeType',label:'Applies to',render:r=>formatLabel(r.scopeType)},{key:'billingFrequency',label:'Frequency',render:r=>r.billingFrequency?formatLabel(r.billingFrequency):'Unverified'},
- {key:'effectiveFrom',label:'From',render:r=>r.effectiveFrom??'Unverified'},{key:'effectiveTo',label:'Through',render:r=>r.effectiveTo??'Open / unverified'},
+ {key:'effectiveFrom',label:'From',render:r=>r.effectiveFrom??'Unverified'},{key:'displayEnd',label:'Through',render:r=>r.displayEnd===null?'Open-ended':r.displayEnd??'Needs review'},
  {key:'amountCents',label:'Amount',align:'right',render:r=>formatMoney(r.amountCents)},{key:'displayStatus',label:'Status'},
- {key:'actions',label:'Actions',render:r=><div className="rm-actions"><button className="rm-button rm-button--small" disabled={!r.id} onClick={()=>onEdit('replace-recurring-schedule',{predecessorId:r.id,expectedRevision:r.recordRevision??1,amountDollars:'',effectiveFrom:''})}>Schedule change</button><button className="rm-button rm-button--small" disabled={!r.id} onClick={()=>onEdit('end-recurring-schedule',{predecessorId:r.id,expectedRevision:r.recordRevision??1,effectiveFrom:''})}>End</button></div>},
+ {key:'actions',label:'Actions',render:r=><div className="rm-actions"><button className="rm-button rm-button--small" disabled={!r.id||r.lineageState!=='valid'||r.canScheduleSuccessor!==true} onClick={()=>onEdit('replace-recurring-schedule',{predecessorId:r.id,expectedRevision:r.recordRevision??1,amountDollars:'',effectiveFrom:''})}>Schedule change</button><button className="rm-button rm-button--small" disabled={!r.id||r.lineageState!=='valid'||r.canScheduleSuccessor!==true} onClick={()=>onEdit('end-recurring-schedule',{predecessorId:r.id,expectedRevision:r.recordRevision??1,effectiveFrom:''})}>End</button></div>},
  ]}/></section>;
 }
 
 export default function RmWorkspace(){
+ const auth=useRentOpsAuth();const client=useQueryClient();
+ useEffect(()=>{const previous=document.title;document.title='5Central | Rent Operations';return()=>{document.title=previous;};},[]);
+ useEffect(()=>{if(auth.status==='unknown')void rentOpsAuthClient.restore().catch(()=>undefined);},[auth.status]);
+ useEffect(()=>{
+  if(auth.status!=='authenticated')client.removeQueries({queryKey:['rent-ops-workspace']});
+ },[auth.status,client]);
+ if(auth.status==='unknown')return <RentOpsAuthLoading/>;
+ if(auth.status==='unauthenticated')return <RentOpsAdminLogin message={auth.message}/>;
+ return <AuthenticatedWorkspace key={auth.user?.id}/>;
+}
+
+function AuthenticatedWorkspace(){
  const auth=useRentOpsAuth();const client=useQueryClient();
  const [route,setRoute]=useState<WorkspaceRoute>(()=>parseWorkspaceRoute(window.location.search));
  const [filters,setFilters]=useState<ViewFilters>({propertyScope:'active',propertyId:'all',asOfDate:'',status:'all',search:''});
@@ -80,18 +94,20 @@ export default function RmWorkspace(){
  const data=useWorkspaceData({enabled:auth.status==='authenticated',identity:auth.user?.id??'',filters,collections:needed,summaryNeeded:route.section==='dashboard',personId:route.section==='tenants'?route.recordId:undefined});
  const snapshot=data.snapshot;
  const go=useCallback((next:WorkspaceRoute,replace=false)=>{
-  scrollPositions.current.set(routeKey(navigationRef.current),mainRef.current?.scrollTop??0);
+  const previous=navigationRef.current;
+  scrollPositions.current.set(routeKey(previous),mainRef.current?.scrollTop??0);
+  if(previous.section!==next.section)setFilters(current=>({...current,status:'all',search:''}));
   navigationRef.current=next;setRoute(next);
   window.history[replace?'replaceState':'pushState']({},'',`${window.location.pathname}${workspaceRouteSearch(next)}`);
-  setOpenRecords(current=>{const key=routeKey(next);const existing=current.findIndex(r=>routeKey(r)===key);return existing<0?[...current,next]:current.map((r,i)=>i===existing?next:r);});
+  setOpenRecords(current=>{const key=routeKey(next);const base=replace&&previous.section===next.section&&!previous.recordId?current.filter(r=>routeKey(r)!==routeKey(previous)):current;const existing=base.findIndex(r=>routeKey(r)===key);return existing<0?[...base,next]:base.map((r,i)=>i===existing?next:r);});
   setRecentRecords(current=>[next,...current.filter(r=>routeKey(r)!==routeKey(next))].slice(0,12));
  },[]);
- useEffect(()=>{const listener=()=>{const next=parseWorkspaceRoute(window.location.search);navigationRef.current=next;setRoute(next);setOpenRecords(current=>current.some(r=>routeKey(r)===routeKey(next))?current:[...current,next]);};window.addEventListener('popstate',listener);return()=>window.removeEventListener('popstate',listener);},[]);
+ useEffect(()=>{const listener=()=>{const next=parseWorkspaceRoute(window.location.search);if(navigationRef.current.section!==next.section)setFilters(current=>({...current,status:'all',search:''}));navigationRef.current=next;setRoute(next);setOpenRecords(current=>current.some(r=>routeKey(r)===routeKey(next))?current:[...current,next]);};window.addEventListener('popstate',listener);return()=>window.removeEventListener('popstate',listener);},[]);
  useEffect(()=>{if(mainRef.current)mainRef.current.scrollTop=scrollPositions.current.get(routeKey(route))??0;},[route]);
- useEffect(()=>{if(auth.status==='unknown')void rentOpsAuthClient.restore().catch(()=>undefined);},[auth.status]);
  useEffect(()=>{
   if(auth.status!=='authenticated'){if(auth.status==='unauthenticated'){client.removeQueries({queryKey:['rent-ops-workspace']});setOpenRecords([]);setRecentRecords([]);}return;}
   let active=true;setContextError(undefined);
+  setOpenRecords(current=>current.length?current:[navigationRef.current]);
   void loadRentOpsPreviewContext().then(context=>{if(!active)return;setSource(context.source);setBusinessDate(context.asOfDate);setFilters(current=>({...current,asOfDate:current.asOfDate||context.asOfDate}));}).catch(error=>{if(active)setContextError(error);});
   return()=>{active=false;};
  },[auth.status,auth.user?.id,client]);
@@ -100,7 +116,8 @@ export default function RmWorkspace(){
  function navigate(section:WorkspaceSection,kind?:'property'|'unit'){
   setFilters(current=>({...current,status:'all',search:''}));
   const existing=[...openRecords].reverse().find(r=>r.section===section&&(section!=='properties'||r.kind===kind));
-  const firstId=section==='properties'&&kind==='unit'?snapshot?.snapshot.units.find(u=>filters.propertyId==='all'||u.propertyId===filters.propertyId)?.id:undefined;
+  const propertyIds=new Set(snapshot?scopeProperties(snapshot,filters).map(p=>p.id):[]);
+  const firstId=section==='properties'?(kind==='unit'?snapshot?.snapshot.units.find(u=>propertyIds.has(u.propertyId)&&(filters.propertyId==='all'||u.propertyId===filters.propertyId))?.id:snapshot?.snapshot.properties.find(p=>propertyIds.has(p.id)&&(filters.propertyId==='all'||p.id===filters.propertyId))?.id):undefined;
   go(existing??{section,kind,recordId:firstId,tab:'summary',report:'rent-roll'});
  }
  function labelFor(record:WorkspaceRoute){
@@ -109,15 +126,13 @@ export default function RmWorkspace(){
   if(record.section==='reports')return REPORT_LABELS[record.report];
   return destinations.find(d=>d.section===record.section&&(record.section!=='properties'||d.kind===record.kind))?.label??'Workspace';
  }
- function openTenant(id:string){go({section:'tenants',recordId:id,tab:'summary',report:'rent-roll'});}
- function openUnit(id:string){go({section:'properties',kind:'unit',recordId:id,tab:'summary',report:'rent-roll'});}
+ function openTenant(id:string){setFilters(current=>({...current,status:'all',search:''}));go({section:'tenants',recordId:id,tab:'summary',report:'rent-roll'});}
+ function openUnit(id:string){setFilters(current=>({...current,status:'all',search:''}));go({section:'properties',kind:'unit',recordId:id,tab:'summary',report:'rent-roll'});}
  const openEditor=(action:QuickAction,values:FormValues={})=>{setNotice('');setEditing({action,values});};
  const refresh=useCallback(async()=>{await data.refresh();},[data.refresh]);
  const selectedReport=route.section==='rent-roll'?'rent-roll':route.section==='leases'?'lease-expiration':route.report;
  const fullTenant=data.tenant.data&&snapshot?{...data.tenant.data,property:data.tenant.data.property??snapshot.snapshot.properties.find(p=>p.id===data.tenant.data?.tenancy?.propertyId),unit:data.tenant.data.unit??snapshot.snapshot.units.find(u=>u.id===data.tenant.data?.tenancy?.unitId)}:undefined;
  const statusOptions=route.section==='tenants'?tenantStatuses:route.section==='applicants'?applicationStatuses:generalStatuses;
- if(auth.status==='unknown')return <RentOpsAuthLoading/>;
- if(auth.status==='unauthenticated')return <RentOpsAdminLogin message={auth.message}/>;
  return <main className={`rm-workspace${sidebarCollapsed?' is-sidebar-collapsed':''}`}>
   <header className="rm-ribbon"><div className="rm-nav-group"><button type="button" aria-label={sidebarCollapsed?'Show navigation':'Collapse navigation'} onClick={()=>setSidebarCollapsed(v=>!v)}><Menu size={17}/><strong>5CENTRAL</strong></button></div>
   {['Home','Rental Info','Receivables','Reports','Records'].map(group=><nav key={group} className="rm-nav-group" aria-label={group}>{destinations.filter(d=>d.group===group).map(({section,label,icon:Icon,kind})=><button type="button" key={`${section}:${kind??''}`} aria-current={route.section===section&&(section!=='properties'||route.kind===kind)?'page':undefined} onClick={()=>navigate(section,kind)}><Icon size={15}/>{label}</button>)}</nav>)}
@@ -132,6 +147,7 @@ export default function RmWorkspace(){
     {['tenants','applicants','reports','rent-roll','leases'].includes(route.section)&&<label>Status<select value={filters.status} onChange={e=>setFilters(f=>({...f,status:e.target.value}))}>{statusOptions.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>}
     <label className="rm-search"><Search size={14}/><input aria-label="Search records" placeholder={route.section==='tenants'?'Name, property, unit, email or phone':'Search records'} value={filters.search} onChange={e=>setFilters(f=>({...f,search:e.target.value}))}/></label>
     <button className="rm-button rm-button--icon" aria-label="Refresh workspace" title="Refresh" onClick={()=>void refresh()} disabled={data.isRefreshing}><RefreshCw size={15} className={data.isRefreshing?'spin':''}/></button>
+    {route.section==='properties'&&snapshot&&<button className="rm-button rm-button-primary" onClick={()=>openEditor('save-property')}><Plus size={14}/>Add property</button>}
    </div>
    {notice&&<div className="rm-notice" role="status">{notice}<button className="rm-button" aria-label="Dismiss notice" onClick={()=>setNotice('')}><X size={12}/></button></div>}
    {contextError?<ErrorNotice error={contextError}/>:data.bootstrap.error?<ErrorNotice error={data.bootstrap.error} retry={()=>void data.bootstrap.refetch()}/>:!snapshot?<Busy label="Loading the workspace directory…"/>:<>
