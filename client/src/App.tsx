@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -5,22 +6,22 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/auth-context";
 import { ACCOUNT_ENTRY_ROUTES } from "@/components/account-entry";
-import Navigation from "@/components/navigation";
 import ProtectedRoute from "@/components/protected-route";
-import Home from "@/pages/home";
-import Founder from "@/pages/founder";
-import Vision from "@/pages/vision";
-import Portfolio from "@/pages/portfolio";
-import Flips from "@/pages/flips";
-import PropertyStory from "@/pages/property-story";
-import Investor from "@/pages/investor";
-import DataRoom from "@/pages/data-room";
-import InvestorDashboard from "@/pages/investor-dashboard";
-import AdminDashboard from "@/pages/admin-dashboard";
-import NotFound from "@/pages/not-found";
-import RentOpsPage from "@/pages/rent-ops";
-import RentOpsApplyPage from "@/pages/rent-ops-apply";
-import TenantPortalPage from "@/pages/tenant-portal";
+const Navigation = lazy(() => import("@/components/navigation"));
+const Home = lazy(() => import("@/pages/home"));
+const Founder = lazy(() => import("@/pages/founder"));
+const Vision = lazy(() => import("@/pages/vision"));
+const Portfolio = lazy(() => import("@/pages/portfolio"));
+const Flips = lazy(() => import("@/pages/flips"));
+const PropertyStory = lazy(() => import("@/pages/property-story"));
+const Investor = lazy(() => import("@/pages/investor"));
+const DataRoom = lazy(() => import("@/pages/data-room"));
+const InvestorDashboard = lazy(() => import("@/pages/investor-dashboard"));
+const AdminDashboard = lazy(() => import("@/pages/admin-dashboard"));
+const NotFound = lazy(() => import("@/pages/not-found"));
+const RentOpsPage = lazy(() => import("@/pages/rent-ops"));
+const RentOpsApplyPage = lazy(() => import("@/pages/rent-ops-apply"));
+const TenantPortalPage = lazy(() => import("@/pages/tenant-portal"));
 
 function Router() {
   return (
@@ -63,9 +64,9 @@ function AppContent() {
   const isTenantRoute = location === "/tenant";
   return (
     <>
-      {!isApplicantRoute && !isRentOpsRoute && !isTenantRoute && <Navigation />}
+      {!isApplicantRoute && !isRentOpsRoute && !isTenantRoute && <Suspense fallback={null}><Navigation /></Suspense>}
       <Toaster />
-      <Router />
+      <Suspense fallback={<div role="status" className="p-6 text-sm">Loading…</div>}><Router /></Suspense>
     </>
   );
 }
@@ -75,7 +76,7 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        {location === "/tenant" ? <AppContent /> : <AuthProvider><AppContent /></AuthProvider>}
+        {location === "/tenant" || location === "/ops" || location.startsWith("/ops/") ? <AppContent /> : <AuthProvider><AppContent /></AuthProvider>}
       </TooltipProvider>
     </QueryClientProvider>
   );

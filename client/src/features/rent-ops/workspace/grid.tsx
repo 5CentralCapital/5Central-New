@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { formatDate, formatLabel, formatMoney } from "./display";
 import {
   clampGridPage,
@@ -28,6 +28,7 @@ export interface DataGridProps<T extends object> {
   caption?: string;
   initialSort?: GridSortState;
   storageKey?: string;
+  onViewChange?: (rows: T[], columns: GridColumn<T>[]) => void;
 }
 
 function preferenceStorageKey(storageKey: string | undefined): string | undefined {
@@ -178,6 +179,7 @@ export function DataGrid<T extends object>({
   caption,
   initialSort,
   storageKey,
+  onViewChange,
 }: DataGridProps<T>) {
   const normalizedStorageKey = preferenceStorageKey(storageKey);
   const normalizedPageSize = Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : DEFAULT_GRID_PAGE_SIZE;
@@ -209,6 +211,11 @@ export function DataGrid<T extends object>({
     () => sortGridRows(filteredRows, sort, columns),
     [filteredRows, sort, columns],
   );
+  const onViewChangeRef = useRef(onViewChange);
+  onViewChangeRef.current = onViewChange;
+  useEffect(() => {
+    onViewChangeRef.current?.(sortedRows, visibleColumns);
+  }, [sortedRows, visibleColumns]);
   const pageCount = getGridPageCount(sortedRows.length, normalizedPageSize);
   const currentPage = clampGridPage(page, pageCount);
   const pageData = useMemo(

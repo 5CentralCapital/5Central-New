@@ -1838,6 +1838,10 @@ export function decodeRentOpsWorkspaceBootstrap(payload: unknown): RentOpsWorksp
     return value as string;
   });
   if (!["properties", "units", "people", "tenancies", "householdMemberships", "leaseTerms", "chargeDefinitions"].every(key => loadedCollections.includes(key))) invalidResponse();
+  if (new Set(loadedCollections).size !== loadedCollections.length) invalidResponse();
+  for (const name of WORKSPACE_COLLECTIONS) {
+    if (!loadedCollections.includes(name) && (!Array.isArray(rawSnapshot[name]) || rawSnapshot[name].length !== 0)) invalidResponse();
+  }
   return {
     workspaceVersion: 1,
     generatedAt: requiredTimestamp(root, "generatedAt"),
@@ -1847,6 +1851,8 @@ export function decodeRentOpsWorkspaceBootstrap(payload: unknown): RentOpsWorksp
     tenantIndex: requiredArrayOf(root, "tenantIndex", value => {
       const row = exactRecord(value, "tenant index", ["person", "tenancyIds", "accountContact", "selectedTenancyId", "category"]);
       const tenancyIds = requiredArrayOf(row, "tenancyIds", id => { if (typeof id !== "string" || !validTargetId(id)) invalidResponse(); return id as string; });
+      const selectedTenancyId = optionalId(row, "selectedTenancyId");
+      if (selectedTenancyId && !tenancyIds.includes(selectedTenancyId)) invalidResponse();
       return { person: decodePerson(row.person), tenancyIds, accountContact: requiredBoolean(row, "accountContact"), selectedTenancyId: optionalId(row, "selectedTenancyId"), category: optionalAllowed(row, "category", ["current", "future", "former", "contact", "unknown"]) };
     }),
   };
