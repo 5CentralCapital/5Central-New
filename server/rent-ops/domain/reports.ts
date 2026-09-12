@@ -538,7 +538,13 @@ function searchMatches(text: string, search?: string): boolean {
   return text.toLowerCase().includes(search.toLowerCase());
 }
 
+type BalanceReader = (snapshot: RentOpsSnapshot, tenancyId: string, asOf: IsoDate) => AccountBalance;
+
 export function deriveRentRoll(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): RentRollRow[] {
+  return deriveRentRollWithBalance(snapshot, filters, accountBalance);
+}
+
+function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFilters, readBalance: BalanceReader): RentRollRow[] {
   const asOf = asOfDate(filters);
   assertNoAmbiguousOccupancy(snapshot, asOf);
   assertNoOverlappingBaseRentSchedules(snapshot.recurringSchedules);
@@ -556,7 +562,7 @@ export function deriveRentRoll(snapshot: RentOpsSnapshot, filters: RentOpsFilter
     const amounts = selected ? scheduledAmounts(snapshot, selected.id, scheduleAsOf) : { baseRentCents: undefined, recurringFeesCents: 0, subsidyCents: 0 };
     const subsidyContract = selected ? snapshot.subsidyContracts.find((contract) => contract.tenancyId === selected.id && isEffectiveOn(contract.effectiveFrom, contract.effectiveTo, scheduleAsOf)) : undefined;
     const unresolvedCodes = unresolvedTenancyForUnit(snapshot, unit, asOf);
-    const balance = selected ? accountBalance(snapshot, selected.id, asOf) : { balanceComplete: unresolvedCodes.length === 0, balanceUncertaintyCodes: unresolvedCodes.length ? ["tenancy_balance_scope_unknown"] : [], rentOnlyBalanceCents: 0, nonRentBalanceCents: 0, totalBalanceCents: 0, unappliedCashCents: 0, prepaidCents: 0, oldestUnpaidRentOn: undefined };
+    const balance = selected ? readBalance(snapshot, selected.id, asOf) : { balanceComplete: unresolvedCodes.length === 0, balanceUncertaintyCodes: unresolvedCodes.length ? ["tenancy_balance_scope_unknown"] : [], rentOnlyBalanceCents: 0, nonRentBalanceCents: 0, totalBalanceCents: 0, unappliedCashCents: 0, prepaidCents: 0, oldestUnpaidRentOn: undefined };
     const occupancy: OccupancyState = current ? "current" : future ? "future_preleased" : unresolvedCodes.length > 0 ? "unknown" : "vacant";
     const exceptionCodes: string[] = [];
     if (currentCandidates.length > 1) exceptionCodes.push("multiple_current_tenancies");
@@ -1101,6 +1107,10 @@ export function deriveScheduledVsCollected(snapshot: RentOpsSnapshot, filters: R
 }
 
 export function deriveDelinquency(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): DelinquencyRow[] {
+  return deriveDelinquencyWithBalance(snapshot, filters, accountBalance);
+}
+
+function deriveDelinquencyWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFilters, readBalance: BalanceReader): DelinquencyRow[] {
   const asOf = asOfDate(filters);
   assertNoAmbiguousOccupancy(snapshot, asOf);
   const properties = propertyMap(snapshot);
@@ -1113,7 +1123,7 @@ export function deriveDelinquency(snapshot: RentOpsSnapshot, filters: RentOpsFil
     if (tenancy.status !== "current" && tenancy.status !== "notice") continue;
     if (!matchesPropertyScope(tenancy.propertyId, filters, propertyIds)) continue;
     if (filters.unitId && tenancy.unitId !== filters.unitId) continue;
-    const balance = accountBalance(snapshot, tenancy.id, asOf);
+    const balance = readBalance(snapshot, tenancy.id, asOf);
     if (balance.balanceComplete !== false && filters.balanceStatus === "due" && balance.rentOnlyBalanceCents <= 0 && balance.nonRentBalanceCents <= 0) continue;
     if (filters.balanceStatus === "credit" && (balance.balanceComplete === false || balance.totalBalanceCents >= 0)) continue;
     if (filters.balanceStatus === "zero" && (balance.balanceComplete === false || balance.totalBalanceCents !== 0)) continue;
@@ -1527,11 +1537,22 @@ export function deriveApplicantPipeline(snapshot: RentOpsSnapshot, filters: Rent
 
 export function deriveDashboardSummary(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): DashboardSummary {
   const asOf = asOfDate(filters);
-  const rentRoll = deriveRentRoll(snapshot, filters);
+  // This cache exists only for this synchronous dashboard derivation. Keep the
+  // complete account calculation, including unknown/unlinked evidence, intact.
+  const balances = new Map<string, AccountBalance>();
+  const readBalance: BalanceReader = (source, tenancyId, date) => {
+    if (source !== snapshot || date !== asOf) return accountBalance(source, tenancyId, date);
+    const existing = balances.get(tenancyId);
+    if (existing) return existing;
+    const balance = accountBalance(snapshot, tenancyId, asOf);
+    balances.set(tenancyId, balance);
+    return balance;
+  };
+  const rentRoll = deriveRentRollWithBalance(snapshot, filters, readBalance);
   const occupancy = deriveOccupancy(snapshot, filters);
   const scheduled = deriveScheduledIncome(snapshot, filters);
   const collected = deriveCollectedIncome(snapshot, filters);
-  const delinquency = deriveDelinquency(snapshot, filters);
+  const delinquency = deriveDelinquencyWithBalance(snapshot, filters, readBalance);
   const expirations = deriveLeaseExpirations(snapshot, filters);
   const deposits = deriveDepositLiability(snapshot, filters);
   const propertyIds = new Set(scopedProperties(snapshot, filters).map((property) => property.id));
