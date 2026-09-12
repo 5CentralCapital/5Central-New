@@ -166,7 +166,7 @@ export function isCurrentTenancy(tenancy: AdminTenancyView, asOfDate?: string): 
   const asOf = dateKey(asOfDate);
   const moveOut = dateKey(tenancy.actualMoveOutOn ?? tenancy.endedAt);
   if (moveOut && asOf && moveOut <= asOf) return false;
-  if (status && TENANCY_CURRENT_STATUSES.has(status)) return true;
+  if (status) return TENANCY_CURRENT_STATUSES.has(status);
   const moveIn = dateKey(tenancy.actualMoveInOn ?? tenancy.plannedMoveInOn);
   return Boolean(moveIn && asOf && moveIn <= asOf && !moveOut);
 }
@@ -182,9 +182,9 @@ function findUnit(snapshot: AdminSnapshot, unitId?: string): AdminUnitView | und
 export function resolveTenantContext(tenant: TenantView, snapshot: AdminSnapshot): TenantContext {
   const asOfDate = snapshot.summary.asOfDate;
   const tenancies = getTenantTenancies(tenant);
-  const currentTenancy = (tenant.tenancy && isCurrentTenancy(tenant.tenancy, asOfDate) ? tenant.tenancy : undefined)
+  // The profile selects the authoritative tenancy, including a historical selection.
+  const currentTenancy = tenant.tenancy
     ?? tenancies.find((candidate) => isCurrentTenancy(candidate, asOfDate))
-    ?? tenant.tenancy
     ?? tenancies[0];
   const property = tenant.property ?? findProperty(snapshot, currentTenancy?.propertyId);
   const unit = tenant.unit ?? findUnit(snapshot, currentTenancy?.unitId);
@@ -196,6 +196,14 @@ export function resolveTenantContext(tenant: TenantView, snapshot: AdminSnapshot
 function balanceFromReport(tenant: TenantView, snapshot: AdminSnapshot): TenantBalance | undefined {
   const context = resolveTenantContext(tenant, snapshot);
   const candidates = snapshot.delinquency
+    .filter((row) => {
+      if (row.personId && row.personId !== tenant.person.id) return false;
+      if (row.tenancyId && row.tenancyId !== context.currentTenancy?.id) return false;
+      if (row.unitId && row.unitId !== context.unit?.id) return false;
+      if (row.propertyId && row.propertyId !== context.property?.id) return false;
+      return Boolean((row.personId && row.personId === tenant.person.id)
+        || (row.tenancyId && row.tenancyId === context.currentTenancy?.id));
+    })
     .map((row, index) => ({ row, index, score: (row.tenancyId && row.tenancyId === context.currentTenancy?.id ? 100 : 0)
       + (row.personId && row.personId === tenant.person.id ? 40 : 0)
       + (row.unitId && row.unitId === context.unit?.id ? 20 : 0)
@@ -321,10 +329,11 @@ export function recurringChargeScope(schedule: AdminRecurringScheduleView, tenan
 
 export function classifyRecurringSchedule(schedule: AdminRecurringScheduleView, asOfDate: string): RecurringChargeState {
   if (schedule.active === false) return "ended";
+  if (schedule.active !== true || ["unknown", "ambiguous", "inferred"].includes(schedule.activeKnowledge ?? "")) return "unknown";
   const asOf = dateKey(asOfDate);
   const effectiveFrom = dateKey(schedule.effectiveFrom);
   const effectiveTo = dateKey(schedule.effectiveTo);
-  if (!asOf || !effectiveFrom) return "unknown";
+  if (!asOf || !effectiveFrom || (schedule.effectiveTo && !effectiveTo)) return "unknown";
   if (effectiveFrom > asOf) return "future";
   if (effectiveTo && effectiveTo < asOf) return "ended";
   return "current";
@@ -417,9 +426,9 @@ export function buildLedgerRows(tenant: TenantView, snapshot: AdminSnapshot): Te
       chargeCents: entryKind === "charge" ? amount : null,
       paymentCents: entryKind === "payment" || entryKind === "credit" ? amount : null,
       paymentLabel: entryKind === "payment" ? "Payment" : entryKind === "credit" ? "Credit" : null,
-      runningBalanceCents: source.runningBalanceCents ?? (source.rowType === "opening_balance" ? source.openingBalanceCents ?? null : null),
-      allocatedCents: source.allocatedCents ?? null,
-      openCents: source.openCents ?? null,
+      runningBalanceCents: source.balanceComplete === false || (source.balanceUncertaintyCodes?.length ?? 0) > 0 ? null : source.runningBalanceCents ?? (source.rowType === "opening_balance" ? source.openingBalanceCents ?? null : null),
+      allocatedCents: source.balanceComplete === false || (source.balanceUncertaintyCodes?.length ?? 0) > 0 ? null : source.allocatedCents ?? null,
+      openCents: source.balanceComplete === false || (source.balanceUncertaintyCodes?.length ?? 0) > 0 ? null : source.openCents ?? null,
       status: transaction.status,
       statusKnown: nonEmpty(transaction.status) !== undefined,
       kind: transaction.kind,
@@ -505,9 +514,12 @@ export function buildTenantEditActions(tenant: TenantView, snapshot: AdminSnapsh
     }
     (tenant.schedules ?? []).forEach((schedule, index) => {
       if (!schedule.id) return;
+      const scope = recurringChargeScope(schedule, tenant, snapshot);
+      if (scope.warning) return;
+      const scopeLabel = scope.type === "tenant" ? "charge" : `shared ${scope.type} charge`;
       const values = { predecessorId: schedule.id, expectedRevision: revision(schedule.recordRevision) };
-      actions.push({ label: `Replace charge ${index + 1}`, action: "replace-recurring-schedule", values: { ...values, amountDollars: "", effectiveFrom: "" } });
-      actions.push({ label: `End charge ${index + 1}`, action: "end-recurring-schedule", values: { ...values, effectiveFrom: "" } });
+      actions.push({ label: `Replace ${scopeLabel} ${index + 1}`, action: "replace-recurring-schedule", values: { ...values, amountDollars: "", effectiveFrom: "" } });
+      actions.push({ label: `End ${scopeLabel} ${index + 1}`, action: "end-recurring-schedule", values: { ...values, effectiveFrom: "" } });
     });
   }
   if (tab === "ledger") actions.push({ label: "Add transaction", action: "post-ledger-transaction", values: {
@@ -574,4 +586,27 @@ export function tenancyDates(tenancy: AdminTenancyView): Array<{ label: string; 
     { label: "Expected move-out", value: tenancy.expectedMoveOutOn },
     { label: "Actual move-out", value: tenancy.actualMoveOutOn },
   ];
+}
+
+/** A total is only meaningful when every potentially current schedule has known cadence and activation. */
+export function currentMonthlyTotal(rows: RecurringChargeRow[], candidatesComplete = true): number | null {
+  if (!candidatesComplete || rows.some(row => row.state === "unknown")) return null;
+  const current = rows.filter(row => row.state === "current");
+  if (current.some(row => !row.billingFrequency || row.scope.warning)) return null;
+  const monthly = current.filter(row => row.billingFrequency === "monthly");
+  if (monthly.some(row => row.amountCents == null || !Number.isFinite(row.amountCents))) return null;
+  return monthly.reduce((sum, row) => sum + row.amountCents!, 0);
+}
+
+export function ledgerActionEligibility(row: TenantLedgerRow, rows: TenantLedgerRow[]): { reverse: boolean; allocate: boolean } {
+  const tx = row.transaction;
+  const realPosted = Boolean(tx.id && !tx.id.startsWith("shared-application:") && row.rowType === "transaction"
+    && tx.status === "posted" && !["unknown", "ambiguous", "inferred"].includes(tx.statusKnowledge ?? "")
+    && tx.kind && ["charge", "payment", "credit", "adjustment"].includes(tx.kind) && !tx.reversalOfId
+    && !rows.some(candidate => candidate.transaction.reversalOfId === tx.id && candidate.transaction.status !== "voided"));
+  const amountKnown = typeof tx.amountCents === "number" && Number.isFinite(tx.amountCents);
+  return {
+    reverse: realPosted && amountKnown && Boolean(tx.category && tx.propertyId && tx.postedOn && tx.description),
+    allocate: realPosted && tx.kind === "payment" && amountKnown && row.openCents !== null && row.openCents > 0,
+  };
 }

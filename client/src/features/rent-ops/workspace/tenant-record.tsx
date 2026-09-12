@@ -13,6 +13,8 @@ import type {
   TenantView,
 } from "../types";
 import {
+  currentMonthlyTotal,
+  ledgerActionEligibility,
   buildHouseholdRows,
   buildLedgerRows,
   buildRecurringChargeRows,
@@ -249,7 +251,7 @@ function ChargeTable({ rows, editActions, onEdit }: { rows: RecurringChargeRow[]
     const replace = chargeAction(editActions, "replace-recurring-schedule", row);
     const end = chargeAction(editActions, "end-recurring-schedule", row);
     const warning = row.uncertaintyCodes.length > 0 || row.state === "unknown";
-    return <tr key={row.id ?? `charge-${index}`}><td><strong>{row.description}</strong><small>{label(row.category)}{row.definitionName !== "Needs review" ? ` · ${row.definitionName}` : ""}</small>{warning && <small className="rm-warning-copy">Needs review: {row.uncertaintyCodes.map(label).join(" · ") || "temporal status"}</small>}</td><td><strong>{label(row.scope.type)}</strong><small>{row.scope.label}</small><small className={row.scope.warning ? "rm-warning-copy" : "rm-muted"}>{row.scope.inheritedIdentity}</small></td><td>{row.billingFrequency ? label(row.billingFrequency) : "Needs review"}</td><td>{formatDate(row.effectiveFrom)}</td><td>{formatDate(row.effectiveTo)}</td><td className="rm-align-right rm-amount">{formatMoney(row.amountCents)}</td><td>{statusValue(row.state, warning || row.active == null)}</td><td><div className="rm-row-actions">{replace && <ActionButton action={replace} onEdit={onEdit} />}{end && <ActionButton action={end} onEdit={onEdit} danger />}</div></td></tr>;
+    return <tr key={row.id ?? `charge-${index}`}><td><strong>{row.description}</strong><small>{label(row.category)}{row.definitionName !== "Needs review" ? ` · ${row.definitionName}` : ""}</small>{warning && <small className="rm-warning-copy">Needs review: {row.uncertaintyCodes.map(label).join(" · ") || "temporal status"}</small>}</td><td><strong>{label(row.scope.type)}</strong><small>{row.scope.label}</small><small className={row.scope.warning ? "rm-warning-copy" : "rm-muted"}>{row.scope.inheritedIdentity}</small>{(row.scope.type === "unit" || row.scope.type === "property") && <small className="rm-warning-copy">Shared schedule: replacing or ending changes charges for all applicable residents in this {row.scope.type}.</small>}</td><td>{row.billingFrequency ? label(row.billingFrequency) : "Needs review"}</td><td>{formatDate(row.effectiveFrom)}</td><td>{formatDate(row.effectiveTo)}</td><td className="rm-align-right rm-amount">{formatMoney(row.amountCents)}</td><td>{statusValue(row.state, warning || row.active == null)}</td><td><div className="rm-row-actions">{replace && <ActionButton action={replace} onEdit={onEdit} />}{end && <ActionButton action={end} onEdit={onEdit} danger />}</div></td></tr>;
   })}</tbody></table></div>;
 }
 
@@ -257,8 +259,7 @@ function ChargesTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantV
   const [filter, setFilter] = useState<RecurringChargeFilter>("all");
   const rows = useMemo(() => buildRecurringChargeRows(tenant, snapshot), [tenant, snapshot]);
   const filtered = useMemo(() => filterRecurringCharges(rows, filter), [rows, filter]);
-  const currentRows = rows.filter((row) => row.state === "current" || row.state === "unknown");
-  const monthlyTotal = currentRows.length > 0 && currentRows.every((row) => typeof row.amountCents === "number") ? currentRows.reduce((total, row) => total + (row.amountCents ?? 0), 0) : null;
+  const monthlyTotal = currentMonthlyTotal(rows, Array.isArray(tenant.schedules));
   return <div className="rm-tenant-tab-content"><Panel title="Recurring charges">
     <div className="rm-charge-toolbar"><div className="rm-segmented" role="group" aria-label="Recurring charge status">{(["all", "current", "future", "ended"] as RecurringChargeFilter[]).map((option) => <button type="button" key={option} className={filter === option ? "active" : ""} onClick={() => setFilter(option)}>{label(option)} <span>{option === "all" ? rows.length : filterRecurringCharges(rows, option).length}</span></button>)}</div><div className="rm-charge-total"><span>Current monthly total</span><strong>{formatMoney(monthlyTotal)}</strong></div></div>
     {rows.some((row) => row.uncertaintyCodes.length > 0) && <p className="rm-warning" role="status">Some charge fields need review. Unknown scope, frequency, dates, amount, or active status remains visible in the table.</p>}
@@ -266,17 +267,17 @@ function ChargesTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantV
   </Panel></div>;
 }
 
-function LedgerDetail({ row, snapshot }: { row: TenantLedgerRow; snapshot: AdminSnapshot }) {
-  const allocations = snapshot.snapshot.paymentAllocations.filter((allocation) => allocation.paymentTransactionId === row.transaction.id || allocation.chargeTransactionId === row.transaction.id);
-  return <dl className="rm-ledger-detail rm-form-grid"><Field label="Status" warning={!row.statusKnown}>{statusValue(row.status, !row.statusKnown)}</Field><Field label="Category">{label(row.category)}</Field><Field label="Due date">{formatDate(row.dueOn)}</Field><Field label="Payer">{label(row.payer)}</Field><Field label="Payment method">{label(row.paymentMethod)}</Field><Field label="Allocated">{formatMoney(row.allocatedCents)}</Field><Field label="Open">{formatMoney(row.openCents)}</Field><Field label="Related allocations">{allocations.length ? String(allocations.length) : "None"}</Field>{row.reversalOfId && <Field label="Reversal of">{row.reversalOfId}</Field>}{row.uncertaintyCodes.length > 0 && <div className="rm-ledger-warning"><strong>Needs review</strong><span>{row.uncertaintyCodes.map(label).join(" · ")}</span></div>}</dl>;
+function LedgerDetail({ row }: { row: TenantLedgerRow; snapshot: AdminSnapshot }) {
+  return <dl className="rm-ledger-detail rm-form-grid"><Field label="Status" warning={!row.statusKnown}>{statusValue(row.status, !row.statusKnown)}</Field><Field label="Category">{label(row.category)}</Field><Field label="Due date">{formatDate(row.dueOn)}</Field><Field label="Payer">{label(row.payer)}</Field><Field label="Payment method">{label(row.paymentMethod)}</Field><Field label="Allocated">{formatMoney(row.allocatedCents)}</Field><Field label="Open">{formatMoney(row.openCents)}</Field><Field label="Related allocations">Allocation details are not loaded</Field>{row.reversalOfId && <Field label="Reversal of">{row.reversalOfId}</Field>}{row.uncertaintyCodes.length > 0 && <div className="rm-ledger-warning"><strong>Needs review</strong><span>{row.uncertaintyCodes.map(label).join(" · ")}</span></div>}</dl>;
 }
 
 function LedgerTable({ rows, snapshot, onEdit, expanded, onToggle }: { rows: TenantLedgerRow[]; snapshot: AdminSnapshot; onEdit: EditAction; expanded?: string; onToggle: (key: string) => void }) {
   if (!rows.length) return <Empty message="No ledger entries are linked to this tenant." />;
   return <div className="rm-table-wrap"><table className="rm-table rm-ledger-table"><caption className="sr-only">Tenant ledger</caption><thead><tr><th>Date</th><th>Unit</th><th>Reference</th><th>Description</th><th className="rm-align-right">Charge</th><th className="rm-align-right">Payment</th><th className="rm-align-right">Running balance</th><th>Status</th><th><span className="sr-only">Details</span></th></tr></thead><tbody>{rows.map((row, index) => {
     const isOpen = expanded === row.key;
-    const reverse = row.transaction.id && row.rowType !== "opening_balance" && row.status?.toLowerCase() !== "voided" ? { label: "Reverse", action: "reverse-ledger-transaction" as QuickAction, values: { originalId: row.transaction.id, postedOn: "", status: "posted", description: "" } satisfies FormValues } : undefined;
-    const allocate = row.transaction.id && row.paymentLabel === "Payment" ? { label: "Allocate", action: "save-payment-allocation" as QuickAction, values: { paymentTransactionId: row.transaction.id, amountDollars: typeof row.transaction.amountCents === "number" ? String(Math.abs(row.transaction.amountCents) / 100) : "", allocatedOn: row.date ?? "" } satisfies FormValues } : undefined;
+    const eligible = ledgerActionEligibility(row, rows);
+    const reverse = eligible.reverse ? { label: "Reverse", action: "reverse-ledger-transaction" as QuickAction, values: { originalId: row.transaction.id, postedOn: "", status: "posted", description: "" } satisfies FormValues } : undefined;
+    const allocate = eligible.allocate ? { label: "Allocate", action: "save-payment-allocation" as QuickAction, values: { paymentTransactionId: row.transaction.id, amountDollars: typeof row.transaction.amountCents === "number" ? String((row.openCents ?? 0) / 100) : "", allocatedOn: row.date ?? "" } satisfies FormValues } : undefined;
     return <Fragment key={`${row.key}-${index}`}>
       <tr className={isOpen ? "rm-row-open" : ""}><td>{formatDate(row.date)}</td><td>{row.unitLabel}</td><td className="rm-reference">{row.reference}</td><td><strong>{row.description}</strong><small>{row.kind ? label(row.kind) : "Needs review"}</small></td><td className="rm-align-right rm-amount">{amountCell(row.chargeCents, row.chargeCents !== null || ["charge", "debit"].includes(row.kind?.toLowerCase() ?? ""))}</td><td className={`rm-align-right rm-amount${row.paymentLabel === "Credit" ? " rm-credit" : ""}`}>{row.paymentLabel ? <>{amountCell(row.paymentCents)}<small>{row.paymentLabel}</small></> : "—"}</td><td className="rm-align-right rm-amount">{formatMoney(row.runningBalanceCents)}</td><td>{statusValue(row.status, !row.statusKnown)}</td><td><div className="rm-row-actions"><button type="button" className="rm-button rm-button-icon" aria-expanded={isOpen} aria-label={`${isOpen ? "Hide" : "Show"} details for ${row.description}`} onClick={() => onToggle(row.key)}>{isOpen ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}</button>{allocate && <ActionButton action={allocate} onEdit={onEdit} />}{reverse && <ActionButton action={reverse} onEdit={onEdit} danger />}</div></td></tr>
       {isOpen && <tr key={`${row.key}-${index}-detail`} className="rm-detail-row"><td colSpan={9}><LedgerDetail row={row} snapshot={snapshot} /></td></tr>}

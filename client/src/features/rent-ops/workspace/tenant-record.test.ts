@@ -3,6 +3,10 @@ import test from "node:test";
 import { createDemoAdminSnapshot } from "../demo";
 import type { TenantView } from "../types";
 import {
+  currentMonthlyTotal,
+  ledgerActionEligibility,
+  isCurrentTenancy,
+  resolveTenantContext,
   buildLedgerRows,
   buildRecurringChargeRows,
   buildTenantEditActions,
@@ -125,3 +129,70 @@ test("recurring scope labels flag missing identity instead of showing an opaque 
   assert.ok(scope.warning);
 });
 
+
+test('tenant balance cannot use another resident delinquency row merely because property matches',()=>{
+  const snapshot=createDemoAdminSnapshot();
+  const tenant=structuredClone(snapshot.tenants[0]);
+  tenant.ledger=[];
+  snapshot.delinquency=[{personId:'other-person',tenancyId:'other-tenancy',propertyId:tenant.tenancy!.propertyId,totalBalanceCents:987600,balanceComplete:true}];
+  const balance=resolveTenantBalance(tenant,snapshot);
+  assert.equal(balance.amountCents,null);
+  assert.equal(balance.source,'unavailable');
+});
+
+test('incomplete ledger rows cannot present supplied numeric running balances as confirmed',()=>{
+  const snapshot=createDemoAdminSnapshot();
+  const tenant=structuredClone(snapshot.tenants[0]);
+  tenant.ledger=[{transaction:{id:'incomplete-charge',kind:'charge',status:'posted',amountCents:1000,postedOn:'2026-08-15'},runningBalanceCents:1000,allocatedCents:0,openCents:1000,balanceComplete:false,balanceUncertaintyCodes:['allocation_evidence_unknown']}];
+  assert.equal(buildLedgerRows(tenant,snapshot)[0].runningBalanceCents,null);
+  assert.equal(buildLedgerRows(tenant,snapshot)[0].allocatedCents,null);
+  assert.equal(buildLedgerRows(tenant,snapshot)[0].openCents,null);
+});
+
+test('unknown schedule activation cannot be categorized as confirmed current',()=>{
+  assert.equal(classifyRecurringSchedule({id:'unknown-active',effectiveFrom:'2026-08-01',active:null,amountCents:1000,billingFrequency:null},'2026-08-15'),'unknown');
+});
+
+test('actual move-out is exclusive but cancelled tenancy cannot be resurrected by old move-in date',()=>{
+  assert.equal(isCurrentTenancy({id:'moved-out',status:'current',actualMoveInOn:'2026-08-01',actualMoveOutOn:'2026-08-15'},'2026-08-15'),false);
+  assert.equal(isCurrentTenancy({id:'cancelled',status:'cancelled',actualMoveInOn:'2026-08-01'},'2026-08-15'),false);
+});
+
+test("monthly totals require known candidate facts and exclude nonmonthly schedules", () => {
+  const snapshot = createDemoAdminSnapshot();
+  const tenant = snapshot.tenants[0];
+  const schedule = { ...tenant.schedules[0], active: true, billingFrequency: "monthly", amountCents: 12000, effectiveFrom: "2026-08-01", effectiveTo: null };
+  const rows = buildRecurringChargeRows({ ...tenant, schedules: [schedule] }, snapshot, "2026-08-16");
+  assert.equal(currentMonthlyTotal(rows), 12000);
+  assert.equal(currentMonthlyTotal(rows, false), null);
+  assert.equal(currentMonthlyTotal([...rows, { ...rows[0], billingFrequency: "annual", amountCents: 90000 }]), 12000);
+  assert.equal(currentMonthlyTotal([...rows, { ...rows[0], billingFrequency: "one_time", amountCents: 80000 }]), 12000);
+  assert.equal(currentMonthlyTotal([...rows, { ...rows[0], billingFrequency: null }]), null);
+  assert.equal(currentMonthlyTotal([...rows, { ...rows[0], state: "unknown" }]), null);
+});
+
+test("ledger actions exclude derived entries, reversals, uncertain statuses, and reversed originals", () => {
+  const snapshot = createDemoAdminSnapshot();
+  const tenant = snapshot.tenants[0];
+  const transaction = { id: "payment", kind: "payment", status: "posted", category: "base_rent", propertyId: tenant.property!.id, amountCents: 10000, postedOn: "2026-08-01", description: "Receipt" };
+  const row = buildLedgerRows({ ...tenant, ledger: [{ transaction, allocatedCents: 2000, openCents: 8000 }] }, snapshot)[0];
+  assert.deepEqual(ledgerActionEligibility(row, [row]), { reverse: true, allocate: true });
+  for (const patch of [{ id: "shared-application:a" }, { status: undefined }, { status: "voided" }, { statusKnowledge: "unknown" }, { kind: "reversal", reversalOfId: "old" }]) {
+    const invalid = { ...row, transaction: { ...transaction, ...patch } };
+    assert.deepEqual(ledgerActionEligibility(invalid, [invalid]), { reverse: false, allocate: false });
+  }
+  const reversal = { ...row, transaction: { ...transaction, id: "reversal", kind: "reversal", reversalOfId: "payment" } };
+  assert.deepEqual(ledgerActionEligibility(row, [row, reversal]), { reverse: false, allocate: false });
+  assert.equal(ledgerActionEligibility({ ...row, openCents: 0 }, [row]).allocate, false);
+});
+
+test("profile tenancy is authoritative and inherited schedule actions name their shared scope", () => {
+  const snapshot = createDemoAdminSnapshot();
+  const tenant = snapshot.tenants[0];
+  const historical = { ...tenant.tenancy!, id: "historical", status: "cancelled" };
+  assert.equal(resolveTenantContext({ ...tenant, tenancy: historical, tenancies: [tenant.tenancy!, historical] }, snapshot).currentTenancy?.id, "historical");
+  const schedule = { ...tenant.schedules[0], scopeType: "property", scopeId: tenant.property!.id };
+  const actions = buildTenantEditActions({ ...tenant, schedules: [schedule] }, snapshot, "charges");
+  assert.ok(actions.find(action => action.label.startsWith("Replace shared property charge")));
+  assert.ok(actions.find(action => action.label.startsWith("End shared property charge")));
+});
