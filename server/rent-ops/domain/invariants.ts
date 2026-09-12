@@ -398,6 +398,20 @@ export function validateAllocation(
   historical = false,
   allocationHistory: RentOpsPaymentAllocation[] = [],
 ): InvariantViolation[] {
+  return validateAllocationWithReversals(allocation, payment, charge, transactions, historical, allocationHistory);
+}
+
+type AllocationReversalIndex = ReadonlyMap<string | null | undefined, readonly RentOpsLedgerTransaction[]>;
+
+function validateAllocationWithReversals(
+  allocation: RentOpsPaymentAllocation,
+  payment: RentOpsLedgerTransaction | undefined,
+  charge: RentOpsLedgerTransaction | undefined,
+  transactions: RentOpsLedgerTransaction[],
+  historical: boolean,
+  allocationHistory: RentOpsPaymentAllocation[],
+  reversalIndex?: AllocationReversalIndex,
+): InvariantViolation[] {
   const violations: InvariantViolation[] = [];
   if (allocation.kind === "credit_allocation") {
     const credit = transactions.find(row => row.id === allocation.creditTransactionId);
@@ -411,7 +425,7 @@ export function validateAllocation(
         && credit.sourceArtifactSha256===allocation.sourceArtifactSha256 && charge.sourceArtifactSha256===allocation.sourceArtifactSha256
         && !!credit.personId && credit.personId===charge.personId && credit.personLinkKnowledge==='exact' && charge.personLinkKnowledge==='exact'
         && !!allocation.sourcePropertyId && [credit.propertyId,charge.propertyId].includes(allocation.sourcePropertyId);
-      const parentChecks = validateAllocation({...allocation,kind:"allocation",creditTransactionId:null,paymentTransactionId:credit.id,paymentLinkKnowledge:allocation.creditLinkKnowledge},creditView,charge,transactions,historical);
+      const parentChecks = validateAllocationWithReversals({...allocation,kind:"allocation",creditTransactionId:null,paymentTransactionId:credit.id,paymentLinkKnowledge:allocation.creditLinkKnowledge},creditView,charge,transactions,historical,[],reversalIndex);
       const updated = charge?.source?.sourceUpdatedAt;
       const recordedFutureCharge = sourceAssociation && typeof updated==='string' && Number.isFinite(Date.parse(updated)) && isoDateSchema.safeParse(updated.slice(0,10)).success && !!allocation.allocatedOn && updated.slice(0,10)<=allocation.allocatedOn;
       violations.push(...parentChecks.filter(v=>!(sourceAssociation && v.code==='allocation_property_mismatch') && !(recordedFutureCharge && v.code==='allocation_predates_charge')));
@@ -444,7 +458,7 @@ export function validateAllocation(
     && allocation.paymentLinkKnowledge === "exact" && allocation.chargeLinkKnowledge === "exact"
     && typeof sourceUpdatedAt === "string" && /^\d{4}-\d{2}-\d{2}T/.test(sourceUpdatedAt) && Number.isFinite(Date.parse(sourceUpdatedAt))
     && isoDateSchema.safeParse(sourceUpdatedAt.slice(0, 10)).success ? sourceUpdatedAt.slice(0, 10) : undefined;
-  const invalidReversal = (id: string) => transactions.some(transaction => transaction.kind === "reversal" && transaction.status === "posted" && transaction.reversalOfId === id && (!historical || !transaction.postedOn || (!allocatedOnKnown || allocatedOn > transaction.postedOn) && (!sourceHistoryDate || sourceHistoryDate > transaction.postedOn)));
+  const invalidReversal = (id: string) => (reversalIndex ? reversalIndex.get(id) ?? [] : transactions).some(transaction => transaction.kind === "reversal" && transaction.status === "posted" && transaction.reversalOfId === id && (!historical || !transaction.postedOn || (!allocatedOnKnown || allocatedOn > transaction.postedOn) && (!sourceHistoryDate || sourceHistoryDate > transaction.postedOn)));
   if (payment && invalidReversal(payment.id)) violations.push({ code: "allocation_payment_reversed", entityId: allocation.id, message: `Payment ${payment.id} has already been reversed` });
   if (charge && invalidReversal(charge.id)) violations.push({ code: "allocation_charge_reversed", entityId: allocation.id, message: `Charge ${charge.id} has already been reversed` });
   if ((allocation.kind === "reversal" && (!historical || !isSourceAllocationReversal(allocation))) || (typeof allocation.amountCents === "number" && allocation.amountCents <= 0 && !(historical && isSourceAllocationReversal(allocation)))) violations.push({ code: "allocation_non_positive", entityId: allocation.id, message: "Allocation amount must be greater than zero" });
@@ -744,11 +758,20 @@ export function validateSnapshot(snapshot: RentOpsSnapshot): InvariantViolation[
   const allocationsByPayment = new Map<string, number>();
   const allocationsByCharge = new Map<string, number>();
   const reversedAllocationTargets = postedReversalTargets(snapshot.ledgerTransactions);
+  // Include malformed targets too: allocation validation must retain every
+  // candidate from the original scan, not only valid reversal originals.
+  const allocationReversals = new Map<string | null | undefined, RentOpsLedgerTransaction[]>();
+  for (const transaction of snapshot.ledgerTransactions) {
+    if (transaction.kind !== "reversal" || transaction.status !== "posted") continue;
+    const rows = allocationReversals.get(transaction.reversalOfId) ?? [];
+    rows.push(transaction);
+    allocationReversals.set(transaction.reversalOfId, rows);
+  }
   const allocationPairs = new Map<string, RentOpsPaymentAllocation[]>();
   for (const allocation of snapshot.paymentAllocations) {
     const allocationParentId = allocation.kind === "credit_allocation" ? allocation.creditTransactionId : allocation.paymentTransactionId;
     if (allocation.kind !== "transfer" && allocation.paymentTransactionId && allocation.chargeTransactionId) {const key = `${allocation.paymentTransactionId}\0${allocation.chargeTransactionId}`; const rows = allocationPairs.get(key) ?? []; rows.push(allocation); allocationPairs.set(key, rows);}
-    violations.push(...validateAllocation(allocation, allocation.paymentTransactionId ? transactionMap.get(allocation.paymentTransactionId) : undefined, allocation.chargeTransactionId ? transactionMap.get(allocation.chargeTransactionId) : undefined, snapshot.ledgerTransactions, true, snapshot.paymentAllocations));
+    violations.push(...validateAllocationWithReversals(allocation, allocation.paymentTransactionId ? transactionMap.get(allocation.paymentTransactionId) : undefined, allocation.chargeTransactionId ? transactionMap.get(allocation.chargeTransactionId) : undefined, snapshot.ledgerTransactions, true, snapshot.paymentAllocations, allocationReversals));
     if (allocation.kind !== "transfer" && allocationParentId && typeof allocation.amountCents === "number") allocationsByPayment.set(allocationParentId, (allocationsByPayment.get(allocationParentId) ?? 0) + allocation.amountCents);
     if (allocation.kind !== "transfer" && allocation.chargeTransactionId && !reversedAllocationTargets.has(allocation.chargeTransactionId) && !!allocationParentId && !reversedAllocationTargets.has(allocationParentId) && typeof allocation.amountCents === "number") allocationsByCharge.set(allocation.chargeTransactionId, (allocationsByCharge.get(allocation.chargeTransactionId) ?? 0) + allocation.amountCents);
   }

@@ -1,3 +1,4 @@
+import { measureRentOps, rentOpsRequestTiming } from "./request-timing";
 import { serializeWorkspaceBootstrap, serializeWorkspaceCollectionItems, sendWorkspaceJson, workspaceCollections, type WorkspaceCollection } from "./presentation/workspace-read";
 import {sendAdminSnapshot} from "./presentation/snapshot-transport";
 import { phoneMethodsSchema } from "./domain/phone-methods";
@@ -764,6 +765,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   router.use("/public", publicRouter);
 
   adminRouter.use(requireAdmin);
+  adminRouter.use(rentOpsRequestTiming);
   adminRouter.use((_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
   /**
    * Mutations must be attributable to the dedicated Rent Ops admin session.
@@ -798,7 +800,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   adminRouter.get("/preview-context", (_req, res) => { res.json({ asOfDate: nowIsoDate(configuredNow()), dataMode: options.previewSource ?? "live" }); });
   adminRouter.get("/dashboard", async (req, res) => { try { res.json(serializeAdminDashboardSummary(await service.dashboard(parseAdminFilters(req.query)))); } catch (error) { adminError(res, error); } });
   adminRouter.get("/workspace", async (req, res) => {
-    try { await sendWorkspaceJson(req, res, serializeWorkspaceBootstrap(await service.workspaceSnapshot(), parseAdminFilters(req.query))); }
+    try { const snapshot = await service.workspaceSnapshot(); await sendWorkspaceJson(req, res, measureRentOps("derive", () => serializeWorkspaceBootstrap(snapshot, parseAdminFilters(req.query)))); }
     catch (error) { adminError(res, error); }
   });
   adminRouter.get("/workspace/collections/:name", async (req, res) => {

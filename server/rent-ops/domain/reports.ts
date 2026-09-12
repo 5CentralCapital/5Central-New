@@ -301,8 +301,7 @@ interface ReversalSets {
   creditIds: Set<string>;
 }
 
-function reversalSets(snapshot: RentOpsSnapshot, asOf: IsoDate): ReversalSets {
-  const transactions = new Map(snapshot.ledgerTransactions.map((transaction) => [transaction.id, transaction]));
+function reversalSets(snapshot: RentOpsSnapshot, asOf: IsoDate, transactions = new Map(snapshot.ledgerTransactions.map((transaction) => [transaction.id, transaction]))): ReversalSets {
   const paymentIds = new Set<string>();
   const chargeIds = new Set<string>();
   const creditIds = new Set<string>();
@@ -318,9 +317,22 @@ function reversalSets(snapshot: RentOpsSnapshot, asOf: IsoDate): ReversalSets {
   return { paymentIds, chargeIds, creditIds };
 }
 
-function effectiveAllocations(snapshot: RentOpsSnapshot, asOf: IsoDate, tenancyId?: string): EffectiveAllocation[] {
-  const transactions = new Map(snapshot.ledgerTransactions.map((transaction) => [transaction.id, transaction]));
-  const reversed = reversalSets(snapshot, asOf);
+interface BalanceContext {
+  transactions: Map<string, RentOpsSnapshot["ledgerTransactions"][number]>;
+  reversed: ReversalSets;
+  tenancies: Map<string, RentOpsTenancy>;
+  transactionIds: Set<string>;
+}
+
+function createBalanceContext(snapshot: RentOpsSnapshot, asOf: IsoDate): BalanceContext {
+  const transactions = new Map(snapshot.ledgerTransactions.map(row => [row.id, row]));
+  return { transactions, reversed: reversalSets(snapshot, asOf, transactions),
+    tenancies: new Map(snapshot.tenancies.map(row => [row.id, row])), transactionIds: new Set(transactions.keys()) };
+}
+
+function effectiveAllocations(snapshot: RentOpsSnapshot, asOf: IsoDate, tenancyId?: string, context?: BalanceContext): EffectiveAllocation[] {
+  const transactions = context?.transactions ?? new Map(snapshot.ledgerTransactions.map((transaction) => [transaction.id, transaction]));
+  const reversed = context?.reversed ?? reversalSets(snapshot, asOf);
   const result: EffectiveAllocation[] = [];
   for (const allocation of snapshot.paymentAllocations) {
     if (allocation.kind === "transfer" || allocation.kind === "credit_allocation") continue;
@@ -352,9 +364,9 @@ function effectiveAllocations(snapshot: RentOpsSnapshot, asOf: IsoDate, tenancyI
   return result;
 }
 
-function effectiveCreditAllocations(snapshot: RentOpsSnapshot, cutoff: IsoDate) {
-  const transactions = new Map(snapshot.ledgerTransactions.map(row => [row.id, row]));
-  const reversed = reversalSets(snapshot, cutoff);
+function effectiveCreditAllocations(snapshot: RentOpsSnapshot, cutoff: IsoDate, context?: BalanceContext) {
+  const transactions = context?.transactions ?? new Map(snapshot.ledgerTransactions.map(row => [row.id, row]));
+  const reversed = context?.reversed ?? reversalSets(snapshot, cutoff);
   return snapshot.paymentAllocations.flatMap(allocation => {
     if (allocation.kind !== "credit_allocation" || allocation.paymentTransactionId || !allocation.creditTransactionId || !allocation.chargeTransactionId ||
       allocation.creditLinkKnowledge !== "exact" || allocation.chargeLinkKnowledge !== "exact" ||
@@ -426,11 +438,11 @@ function linkCanExclude(id: string | null | undefined, knowledge: unknown): bool
 
 /** Account evidence may prevent a lease balance from being known; it must
  * never be reassigned to that lease simply to produce a numeric balance. */
-function tenancyBalanceUncertainty(snapshot: RentOpsSnapshot, tenancyId: string, asOf: IsoDate): string[] {
+function tenancyBalanceUncertainty(snapshot: RentOpsSnapshot, tenancyId: string, asOf: IsoDate, context?: BalanceContext): string[] {
   const tenancy = snapshot.tenancies.find(row => row.id === tenancyId);
   if (!tenancy) return ["tenancy_balance_scope_unknown"];
-  const tenancyById = new Map(snapshot.tenancies.map(row => [row.id, row]));
-  const transactionIds = new Set(snapshot.ledgerTransactions.map(row => row.id));
+  const tenancyById = context?.tenancies ?? new Map(snapshot.tenancies.map(row => [row.id, row]));
+  const transactionIds = context?.transactionIds ?? new Set(snapshot.ledgerTransactions.map(row => row.id));
   const relevant = snapshot.ledgerTransactions.filter(row => {
     if (row.postedOn && row.postedOn > asOf || row.status === "pending" || row.status === "voided") return false;
     if (row.tenancyId === tenancyId) return true;
@@ -461,20 +473,20 @@ function tenancyBalanceUncertainty(snapshot: RentOpsSnapshot, tenancyId: string,
   return Array.from(codes).sort();
 }
 
-function accountBalance(snapshot: RentOpsSnapshot, tenancyId: string, asOf: IsoDate): AccountBalance {
+function accountBalance(snapshot: RentOpsSnapshot, tenancyId: string, asOf: IsoDate, context?: BalanceContext): AccountBalance {
   const transactions = snapshot.ledgerTransactions.filter((transaction) =>
     transaction.tenancyId === tenancyId && transaction.status === "posted" && !!transaction.postedOn && knownAmount(transaction.amountCents) && transaction.postedOn <= asOf,
   );
-  const transactionMap = new Map(snapshot.ledgerTransactions.map((transaction) => [transaction.id, transaction]));
-  const reversed = reversalSets(snapshot, asOf);
+  const transactionMap = context?.transactions ?? new Map(snapshot.ledgerTransactions.map((transaction) => [transaction.id, transaction]));
+  const reversed = context?.reversed ?? reversalSets(snapshot, asOf);
   const allocationsByCharge = new Map<string, number>();
   const allocationsByPayment = new Map<string, number>();
-  for (const effective of effectiveAllocations(snapshot, asOf, tenancyId)) {
+  for (const effective of effectiveAllocations(snapshot, asOf, tenancyId, context)) {
     allocationsByCharge.set(effective.charge.id, (allocationsByCharge.get(effective.charge.id) ?? 0) + effective.allocation.amountCents);
     allocationsByPayment.set(effective.payment.id, (allocationsByPayment.get(effective.payment.id) ?? 0) + effective.allocation.amountCents);
   }
   const allocationsByCredit = new Map<string, number>();
-  for (const { allocation, credit, charge } of effectiveCreditAllocations(snapshot, asOf)) {
+  for (const { allocation, credit, charge } of effectiveCreditAllocations(snapshot, asOf, context)) {
     if (charge.tenancyId === tenancyId) allocationsByCharge.set(charge.id, (allocationsByCharge.get(charge.id) ?? 0) + allocation.amountCents);
     if (credit.tenancyId === tenancyId) allocationsByCredit.set(credit.id, (allocationsByCredit.get(credit.id) ?? 0) + allocation.amountCents);
   }
@@ -530,7 +542,7 @@ function accountBalance(snapshot: RentOpsSnapshot, tenancyId: string, asOf: IsoD
     }
   }
   unappliedCashCents = Math.max(0, unappliedCashCents);
-  const balanceUncertaintyCodes = tenancyBalanceUncertainty(snapshot, tenancyId, asOf);
+  const balanceUncertaintyCodes = tenancyBalanceUncertainty(snapshot, tenancyId, asOf, context);
   return { balanceComplete: balanceUncertaintyCodes.length === 0, balanceUncertaintyCodes, rentOnlyBalanceCents: rentOnly, nonRentBalanceCents: nonRent, totalBalanceCents: rentOnly + nonRent - unappliedCashCents, unappliedCashCents, prepaidCents: unappliedCashCents, oldestUnpaidRentOn };
 }
 
@@ -541,8 +553,18 @@ function searchMatches(text: string, search?: string): boolean {
 
 type BalanceReader = (snapshot: RentOpsSnapshot, tenancyId: string, asOf: IsoDate) => AccountBalance;
 
+/** Full-source indexes live only for one synchronous report call. */
+function createBalanceReader(snapshot: RentOpsSnapshot, asOf: IsoDate): BalanceReader {
+  let context: BalanceContext | undefined;
+  return (source, tenancyId, date) => {
+    if (source !== snapshot || date !== asOf) return accountBalance(source, tenancyId, date);
+    context ??= createBalanceContext(snapshot, asOf);
+    return accountBalance(snapshot, tenancyId, asOf, context);
+  };
+}
+
 export function deriveRentRoll(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): RentRollRow[] {
-  return deriveRentRollWithBalance(snapshot, filters, accountBalance);
+  return deriveRentRollWithBalance(snapshot, filters, createBalanceReader(snapshot, asOfDate(filters)));
 }
 
 function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFilters, readBalance: BalanceReader): RentRollRow[] {
@@ -1110,7 +1132,7 @@ export function deriveScheduledVsCollected(snapshot: RentOpsSnapshot, filters: R
 }
 
 export function deriveDelinquency(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): DelinquencyRow[] {
-  return deriveDelinquencyWithBalance(snapshot, filters, accountBalance);
+  return deriveDelinquencyWithBalance(snapshot, filters, createBalanceReader(snapshot, asOfDate(filters)));
 }
 
 function deriveDelinquencyWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFilters, readBalance: BalanceReader): DelinquencyRow[] {
@@ -1544,11 +1566,12 @@ export function deriveDashboardSummary(snapshot: RentOpsSnapshot, filters: RentO
   // This cache exists only for this synchronous dashboard derivation. Keep the
   // complete account calculation, including unknown/unlinked evidence, intact.
   const balances = new Map<string, AccountBalance>();
+  const readIndexedBalance = createBalanceReader(snapshot, asOf);
   const readBalance: BalanceReader = (source, tenancyId, date) => {
     if (source !== snapshot || date !== asOf) return accountBalance(source, tenancyId, date);
     const existing = balances.get(tenancyId);
     if (existing) return existing;
-    const balance = accountBalance(snapshot, tenancyId, asOf);
+    const balance = readIndexedBalance(snapshot, tenancyId, asOf);
     balances.set(tenancyId, balance);
     return balance;
   };

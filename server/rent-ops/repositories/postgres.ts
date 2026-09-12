@@ -1,3 +1,4 @@
+import { measureRentOps } from "../request-timing";
 import { RENT_OPS_BATCH_TABLES, type RentOpsTableRows } from "./read-table-batch";
 import { createHash } from "node:crypto";
 import type {
@@ -1093,7 +1094,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       : this.client.transaction
         ? await this.client.transaction(executor => this.loadSnapshot(executor, false), { readOnly: true })
         : await this.loadSnapshot(this.client, false);
-    assertValidSnapshot(snapshot);
+    measureRentOps("validate", () => assertValidSnapshot(snapshot));
     return snapshot;
   }
 
@@ -1107,6 +1108,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       ];
       const batch = executor.readTableBatch ? await executor.readTableBatch(tables) : undefined;
       const rows = batch ? tables.map(table => batch[table]) : await Promise.all(tables.map(table => this.rows(table, executor)));
+      return measureRentOps("map", () => {
       snapshot.properties = rows[0].map(rowToProperty);
       snapshot.units = rows[1].map(rowToUnit);
       snapshot.people = rows[2].map(rowToPerson);
@@ -1116,6 +1118,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       snapshot.chargeDefinitions = rows[6].map(rowToChargeDefinition);
       if (rows[0].some(row => Object.prototype.hasOwnProperty.call(row, "name_knowledge")) || rows[6].length > 0) snapshot.modelVersion = 3;
       return snapshot;
+      });
     };
     return this.client.readTableBatch ? load(this.client) : this.client.transaction ? this.client.transaction(load, { readOnly: true }) : load(this.client);
   }
@@ -1185,6 +1188,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       includeHistory ? rows("rent_ops_application_history_blockers") : Promise.resolve([]),
       includeHistory ? rows("rent_ops_application_history_aggregates") : Promise.resolve([]),
     ]);
+    return measureRentOps("map", () => {
     snapshot.properties = propertyRows.map(rowToProperty);
     snapshot.units = unitRows.map(rowToUnit);
     snapshot.people = peopleRows.map(rowToPerson);
@@ -1238,6 +1242,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       || ledgerRows.some((row) => Object.prototype.hasOwnProperty.call(row, "amount_knowledge"))
       || documentRows.some((row) => Object.prototype.hasOwnProperty.call(row, "availability"))) snapshot.modelVersion = 3;
     return snapshot;
+    });
   }
 
   private async upsert(tableName: string, columns: string[], values: unknown[], updateColumns = columns.slice(1)): Promise<void> {

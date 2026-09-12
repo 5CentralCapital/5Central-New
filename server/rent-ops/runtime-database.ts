@@ -1,3 +1,4 @@
+import { countRentOpsTiming, measureRentOps, measureRentOpsAsync } from "./request-timing";
 import { buildRentOpsTableBatchSql, decodeRentOpsTableBatch } from "./repositories/read-table-batch";
 import type { RentOpsQueryExecutor } from "./repositories/postgres";
 
@@ -84,7 +85,8 @@ async function safeQuery<T>(
   values?: unknown[],
 ): Promise<{ rows: T[] }> {
   try {
-    return await query(text, values);
+    countRentOpsTiming("db_calls");
+    return await measureRentOpsAsync("db", () => query(text, values));
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "40001") throw new RentOpsRetryableConflict();
     // Do not retain the driver error as `cause`: connection errors can embed
@@ -104,10 +106,11 @@ export function createRentOpsPoolExecutor(pool: RentOpsRuntimePool): RentOpsRunt
     async readTableBatch(tables) {
       // Validation happens before issuing SQL; identifiers come only from the fixed catalog.
       const sql = buildRentOpsTableBatchSql(tables);
+      countRentOpsTiming("batch_calls");
       const result = await safeQuery<Record<string, unknown>>(pool.query.bind(pool), sql);
       try {
         if (result.rows.length !== 1) throw new Error("Invalid table batch envelope");
-        return decodeRentOpsTableBatch(result.rows[0], tables);
+        return measureRentOps("decode", () => decodeRentOpsTableBatch(result.rows[0], tables));
       } catch { throw redactedOperationError(); }
     },
 

@@ -148,7 +148,7 @@ function Widget({
       </header>
       {error && <p className="rm-error" role="alert"><AlertCircle aria-hidden="true" /> {error}</p>}
       {loading && !rows && <div className="rm-empty"><Loader2 className="rm-spin" aria-hidden="true" /><p>Loading selected report…</p></div>}
-      {!loading && !error && rows && <DataGrid rows={displayRows} columns={gridColumns(columns)} getRowKey={(row) => reportRowKey(row)} onRow={handler} pageSize={6} emptyMessage="No records returned for this view." caption={title} storageKey={`rent-ops-dashboard-${report}`} />}
+      {rows && <DataGrid rows={displayRows} columns={gridColumns(columns)} getRowKey={(row) => reportRowKey(row)} onRow={handler} pageSize={6} emptyMessage="No records returned for this view." caption={title} storageKey={`rent-ops-dashboard-${report}`} />}
     </section>
   );
 }
@@ -158,7 +158,7 @@ export function DashboardWorkspace({ snapshot, filters, onReport, onOpenTenant, 
   const widgetReports = ["rent-roll", "delinquency"] as const;
   const queries = useQueries({ queries: widgetReports.map((report) => {
     const query = reportQueryFilters(filters, report, { asOfDate: filters.asOfDate });
-    return { queryKey: reportQueryKey(report, query, auth.user?.id ?? ""), enabled: auth.status === "authenticated" && Boolean(auth.user?.id), queryFn: ({ signal }: { signal: AbortSignal }) => loadRentOpsReport(report, query, signal) };
+    return { queryKey: reportQueryKey(report, query, auth.user?.id ?? ""), staleTime: 30_000, gcTime: 300_000, enabled: auth.status === "authenticated" && Boolean(auth.user?.id), queryFn: ({ signal }: { signal: AbortSignal }) => loadRentOpsReport(report, query, signal) };
   }) });
   const widgetRows = { "rent-roll": queries[0].data, delinquency: queries[1].data };
   const widgetErrors = { "rent-roll": queries[0].error?.message, delinquency: queries[1].error?.message };

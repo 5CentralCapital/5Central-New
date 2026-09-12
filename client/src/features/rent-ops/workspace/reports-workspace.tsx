@@ -212,6 +212,8 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
   );
   const reportQuery = useQuery({
     queryKey: reportQueryKey(selected, queryFilters, auth.user?.id ?? ""),
+    staleTime: 30_000,
+    gcTime: 300_000,
     queryFn: ({ signal }) => loadRentOpsReport(selected, queryFilters, signal),
     enabled: auth.status === "authenticated" && Boolean(auth.user?.id) && !periodError,
   });
@@ -271,7 +273,7 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
 
         {error && <p className="rm-error" role="alert"><AlertCircle aria-hidden="true" /> {error}</p>}
         {loading && !loadedRows && <div className="rm-empty"><Loader2 className="rm-spin" aria-hidden="true" /><p>{emptyReportMessage(false)}</p></div>}
-        {!loading && !error && loadedRows && (
+        {loadedRows && (
           <>
             <ReportSubtotals keyName={selected} rows={visibleSourceRows} columns={activeColumns} snapshot={snapshot} />
             <div className="rm-report-screen-grid"><DataGrid

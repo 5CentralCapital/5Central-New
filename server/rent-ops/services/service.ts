@@ -1,3 +1,4 @@
+import { measureRentOps } from "../request-timing";
 import { phoneMethodsSchema } from "../domain/phone-methods";
 import { manualPaymentSchema, createChargeDefinitionSchema, patchChargeDefinitionSchema, type CreateChargeDefinitionInput, type PatchChargeDefinitionInput, type ManualPaymentInput } from "./operational-inputs";
 import { postedReversalTargets } from "../domain/invariants";
@@ -476,20 +477,23 @@ export class RentOpsService {
 
   async dashboard(filters: RentOpsFilters = {}): Promise<DashboardSummary> {
     validateReportFilters("dashboard", filters);
-    return deriveDashboardSummary(await this.operationalSnapshot(), filters);
+    const snapshot = await this.operationalSnapshot();
+    return measureRentOps("derive", () => deriveDashboardSummary(snapshot, filters));
   }
 
   async report(name: Parameters<typeof deriveFixedReport>[1], filters: RentOpsFilters = {}): Promise<unknown[]> {
-    return deriveFixedReport(await this.operationalSnapshot(), name, filters);
+    const snapshot = await this.operationalSnapshot();
+    return measureRentOps("derive", () => deriveFixedReport(snapshot, name, filters));
   }
 
   async tenantProfileContext(personId: string, filters: RentOpsFilters = {}) {
     const snapshot = await this.operationalSnapshot();
-    return { profile: deriveTenantProfile(snapshot, personId, filters), completeSchedules: snapshot.recurringSchedules };
+    return { profile: measureRentOps("derive", () => deriveTenantProfile(snapshot, personId, filters)), completeSchedules: snapshot.recurringSchedules };
   }
 
   async tenantProfile(personId: string, filters: RentOpsFilters = {}) {
-    return deriveTenantProfile(await this.operationalSnapshot(), personId, filters);
+    const snapshot = await this.operationalSnapshot();
+    return measureRentOps("derive", () => deriveTenantProfile(snapshot, personId, filters));
   }
 
   private async recordAdminChange(summary: string, refs: { propertyId?: string; unitId?: string; personId?: string; tenancyId?: string; applicationId?: string } = {}): Promise<void> {
