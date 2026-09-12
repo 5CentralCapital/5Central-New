@@ -7,6 +7,7 @@ import {
   buildUnitEditValues,
   occupancyHistoryForUnit,
   propertyUnitListItems,
+  propertyUnits,
   recurringSchedulesForUnit,
   recurringSchedulesForProperty,
   resolvePropertyUnitSelection,
@@ -146,4 +147,26 @@ test("explicit property filtering prevents another property's URL record from by
   const snapshot = makeSnapshot({ properties: [{ id: "p", state: "active" }, { id: "other", state: "active" }], units: [{ id: "other-u", propertyId: "other" }] });
   assert.equal(resolvePropertyUnitSelection(snapshot, { propertyId: "p", propertyScope: "all" }, "other", "other-u")?.property?.id, "p");
   assert.deepEqual(propertyUnitListItems(snapshot, { propertyId: "p", propertyScope: "all" }).map((row) => row.id), ["p"]);
+});
+
+test("directories retain natural property and unit ordering after an updated row moves to the end", () => {
+  const properties = [{ id: "p10", name: "Court 10", state: "active" }, { id: "p2", name: "Court 2", state: "active" }];
+  const units = [{ id: "u1", propertyId: "p2", unitNumber: "TEST 1" }, { id: "u2", propertyId: "p2", unitNumber: "TEST 2" }, { id: "u10", propertyId: "p2", unitNumber: "TEST 10" }];
+  const initial = makeSnapshot({ properties, units });
+  const updated = makeSnapshot({ properties: [...properties].reverse(), units: [units[2]!, units[1]!, { ...units[0]!, recordRevision: 2, readiness: "ready" }] });
+  const filters = { propertyId: "all", propertyScope: "active" as const };
+  const expected = ["p2", "u1", "u2", "u10", "p10"];
+  assert.deepEqual(propertyUnitListItems(initial, filters).map((row) => row.id), expected);
+  assert.deepEqual(propertyUnitListItems(updated, filters).map((row) => row.id), expected);
+  assert.deepEqual(propertyUnits(updated, "p2").map((unit) => unit.id), ["u1", "u2", "u10"]);
+  assert.equal(resolvePropertyUnitSelection(updated, filters)?.property?.id, "p2");
+  const selected = resolvePropertyUnitSelection(updated, filters, "p2", "u1");
+  assert.equal(selected?.unit?.id, "u1");
+  assert.equal(selected?.unit?.recordRevision, 2);
+  assert.deepEqual(updated.snapshot.units.map((unit) => unit.id), ["u10", "u2", "u1"], "Sorting does not mutate the shared snapshot");
+});
+
+test("equal and missing directory labels use stable identity ties", () => {
+  const snapshot = makeSnapshot({ properties: [{ id: "p", name: "Court", state: "active" }], units: [{ id: "z", propertyId: "p" }, { id: "b", propertyId: "p", unitNumber: "A" }, { id: "a", propertyId: "p", unitNumber: "a" }] });
+  assert.deepEqual(propertyUnits(snapshot, "p").map((unit) => unit.id), ["a", "b", "z"]);
 });

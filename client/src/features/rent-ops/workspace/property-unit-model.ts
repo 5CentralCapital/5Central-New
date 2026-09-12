@@ -155,6 +155,24 @@ function unitMatches(unit: AdminUnitView, query: string): boolean {
   ].some((value) => lower(value).includes(query));
 }
 
+const recordCollator = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+
+function compareRecordLabels(left: unknown, right: unknown, leftId?: string, rightId?: string): number {
+  const a = text(left);
+  const b = text(right);
+  // Unnamed records follow named records; identity breaks equal-label ties so
+  // database update order never becomes visible directory ordering.
+  return Number(!a) - Number(!b) || recordCollator.compare(a, b) || recordCollator.compare(leftId ?? "", rightId ?? "");
+}
+
+function compareProperties(left: AdminPropertyView, right: AdminPropertyView): number {
+  return compareRecordLabels(left.name, right.name, left.id, right.id);
+}
+
+function compareUnits(left: AdminUnitView, right: AdminUnitView): number {
+  return compareRecordLabels(left.unitNumber, right.unitNumber, left.id, right.id);
+}
+
 function propertyInFilters(property: AdminPropertyView, filters: Pick<ViewFilters, "propertyId" | "propertyScope">): boolean {
   const propertyId = filters.propertyId || "all";
   const propertyScope = filters.propertyScope || "active";
@@ -184,9 +202,9 @@ export function propertyUnitListItems(
   }
 
   const rows: PropertyUnitListItem[] = [];
-  snapshot.snapshot.properties.forEach((property, propertyIndex) => {
+  [...snapshot.snapshot.properties].sort(compareProperties).forEach((property, propertyIndex) => {
     if (!propertyInFilters(property, filters)) return;
-    const propertyUnits = property.id ? unitsByProperty.get(property.id) ?? [] : [];
+    const propertyUnits = property.id ? [...(unitsByProperty.get(property.id) ?? [])].sort(compareUnits) : [];
     const propertyIsMatch = propertyMatches(property, query);
     const matchingUnits = propertyUnits.filter((unit) => unitMatches(unit, query));
     if (query && !propertyIsMatch && matchingUnits.length === 0) return;
@@ -234,7 +252,7 @@ export function resolvePropertyUnitSelection(
   selectedUnitId?: string,
   search = "",
 ): PropertyUnitSelection | undefined {
-  const properties = snapshot.snapshot.properties.filter((property) => propertyInFilters(property, filters));
+  const properties = snapshot.snapshot.properties.filter((property) => propertyInFilters(property, filters)).sort(compareProperties);
   const list = propertyUnitListItems(snapshot, filters, search);
   const visiblePropertyIds = new Set(list.filter((row) => row.kind === "property" && row.id).map((row) => row.id));
 
@@ -310,7 +328,7 @@ export const buildUnitEditValues = unitEditValues;
 
 export function propertyUnits(snapshot: AdminSnapshot, propertyId?: string): AdminUnitView[] {
   if (!propertyId) return [];
-  return snapshot.snapshot.units.filter((unit) => unit.propertyId === propertyId && knownLink(unit.propertyId, unit.propertyLinkKnowledge));
+  return snapshot.snapshot.units.filter((unit) => unit.propertyId === propertyId && knownLink(unit.propertyId, unit.propertyLinkKnowledge)).sort(compareUnits);
 }
 
 export function propertyForUnit(snapshot: AdminSnapshot, unit?: AdminUnitView): AdminPropertyView | undefined {
