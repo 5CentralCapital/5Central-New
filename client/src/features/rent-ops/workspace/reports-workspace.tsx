@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { loadRentOpsReport } from "../api";
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from "react";
-import { AlertCircle, Download, Loader2, Printer, RefreshCw, SlidersHorizontal } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AlertCircle, Download, Loader2, Printer, RefreshCw } from "lucide-react";
 import type { GridColumn } from "./grid";
 import { DataGrid } from "./grid";
 import type { AdminSnapshot, ReportKey, ReportRow, ViewFilters } from "../types";
@@ -9,6 +9,7 @@ import {
   REPORT_PERIODS,
   buildPropertySubtotals,
   buildReportCsv,
+  projectReportGridView,
   createReportViewModel,
   emptyReportMessage,
   formatReportValue,
@@ -92,39 +93,6 @@ function downloadCsv(filename: string, contents: string): void {
   anchor.download = filename;
   anchor.click();
   URL.revokeObjectURL(url);
-}
-
-function ColumnSelector({
-  columns,
-  selected,
-  onChange,
-}: {
-  columns: readonly ReportColumnDefinition[];
-  selected: readonly string[];
-  onChange: (keys: string[]) => void;
-}) {
-  const toggle = (event: ChangeEvent<HTMLInputElement>) => {
-    const key = event.currentTarget.value;
-    const next = new Set(selected);
-    if (event.currentTarget.checked) next.add(key);
-    else if (next.size > 1) next.delete(key);
-    onChange(columns.filter((column) => next.has(column.key)).map((column) => column.key));
-  };
-  if (!columns.length) return null;
-  return (
-    <details className="rm-report-columns">
-      <summary><SlidersHorizontal aria-hidden="true" /> Columns <span>{selected.length} shown</span></summary>
-      <div className="rm-report-column-options">
-        {columns.map((column) => (
-          <label key={column.key}>
-            <input type="checkbox" value={column.key} checked={selected.includes(column.key)} onChange={toggle} />
-            <span>{column.label}</span>
-          </label>
-        ))}
-      </div>
-      <p>Optional fields remain available here. Record IDs stay hidden and remain available for drill-downs.</p>
-    </details>
-  );
 }
 
 function ReportSubtotals({
@@ -219,7 +187,7 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
   const [month, setMonth] = useState(filters.asOfDate.slice(0, 7));
   const [fromDate, setFromDate] = useState(firstDayOfMonth(filters.asOfDate));
   const [toDate, setToDate] = useState(filters.asOfDate);
-  const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
+  const [gridView, setGridView] = useState<ReturnType<typeof projectReportGridView>>();
 
   useEffect(() => {
     setAsOfDate(filters.asOfDate);
@@ -232,7 +200,7 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
     setMonth(asOfDate.slice(0, 7));
     setFromDate(firstDayOfMonth(asOfDate));
     setToDate(asOfDate);
-    setSelectedColumns([]);
+
   }, [selected]);
 
   const periodError = validateReportPeriod(selected, asOfDate, month, fromDate, toDate);
@@ -253,28 +221,23 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
     () => createReportViewModel(selected, visibleSourceRows, snapshot),
     [selected, visibleSourceRows, snapshot],
   );
-  const curatedColumnKey = view.curatedColumns.map((column) => column.key).join("|");
-  useEffect(() => {
-    if (!loadedRows) return;
-    const next = view.curatedColumns.map((column) => column.key);
-    setSelectedColumns((current) => current.join("|") === curatedColumnKey ? current : next);
-  }, [selected, loadedRows, curatedColumnKey]);
-
-  const activeColumns = useMemo(
-    () => {
-      const keys = selectedColumns.length ? selectedColumns : view.curatedColumns.map((column) => column.key);
-      return view.columns.filter((column) => keys.includes(column.key));
-    },
-    [view.columns, view.curatedColumns, selectedColumns],
-  );
-  const gridColumns = useMemo(() => makeGridColumns(activeColumns), [activeColumns]);
+  const gridColumns = useMemo(() => makeGridColumns(view.columns).map((column, index) => ({
+    ...column, hidden: view.columns[index].curated === false,
+  })), [view.columns]);
   const displayedRows = useMemo(() => toDisplayReportRows(selected, visibleSourceRows, snapshot), [selected, visibleSourceRows, snapshot]);
+  const handleGridView = useCallback((rows: DisplayReportRow[], columns: GridColumn<DisplayReportRow>[]) => {
+    const next = projectReportGridView(rows, columns.map(column => column.key));
+    setGridView(current => current?.signature === next.signature ? current : next);
+  }, []);
+  const exportRows = gridView?.rows ?? displayedRows;
+  const activeColumns = gridView
+    ? gridView.columnKeys.map(key => view.columns.find(column => column.key === key)).filter((column): column is ReportColumnDefinition => Boolean(column))
+    : view.curatedColumns;
   const rowHandler = onOpenTenant || onOpenUnit ? (row: DisplayReportRow) => openRow(row, onOpenTenant, onOpenUnit) : undefined;
   const periodLabel = reportPeriodLabel(selected, asOfDate, month, fromDate, toDate);
   const config = getReportConfig(selected);
 
-  const handleColumns = useCallback((keys: string[]) => setSelectedColumns(keys), []);
-  const saveCsv = () => downloadCsv(`rent-ops-${selected}-${asOfDate}.csv`, buildReportCsv(displayedRows, activeColumns));
+  const saveCsv = () => downloadCsv(`rent-ops-${selected}-${asOfDate}.csv`, buildReportCsv(exportRows, activeColumns));
 
   return (
     <section className="rm-report-workspace" aria-label="Rent Operations reports">
@@ -299,7 +262,6 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
             <h2>{config.label}</h2>
           </div>
           <div className="rm-report-actions">
-            <ColumnSelector columns={view.columns} selected={selectedColumns} onChange={handleColumns} />
             <button className="rm-button" type="button" onClick={saveCsv} disabled={!loadedRows || !activeColumns.length}><Download aria-hidden="true" /> CSV</button>
             <button className="rm-button" type="button" onClick={() => window.print()} disabled={!loadedRows}><Printer aria-hidden="true" /> Print</button>
           </div>
@@ -311,7 +273,9 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
           <>
             <ReportSubtotals keyName={selected} rows={visibleSourceRows} columns={activeColumns} snapshot={snapshot} />
             <div className="rm-report-screen-grid"><DataGrid
+              key={selected}
               rows={displayedRows}
+              onViewChange={handleGridView}
               columns={gridColumns}
               getRowKey={(row) => reportRowKey(row)}
               onRow={rowHandler}
@@ -322,7 +286,7 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
             /></div>
             <table className="rm-table rm-report-print-table">
               <thead><tr>{activeColumns.map(column => <th key={column.key}>{column.label}</th>)}</tr></thead>
-              <tbody>{displayedRows.map(row => <tr key={reportRowKey(row)}>{activeColumns.map(column => <td key={column.key}>{formatReportValue(row[column.key], column.format)}</td>)}</tr>)}</tbody>
+              <tbody>{exportRows.map(row => <tr key={reportRowKey(row)}>{activeColumns.map(column => <td key={column.key}>{formatReportValue(row[column.key], column.format)}</td>)}</tr>)}</tbody>
             </table>
           </>
         )}

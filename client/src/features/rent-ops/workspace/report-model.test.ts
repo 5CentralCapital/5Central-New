@@ -3,6 +3,8 @@ import test from "node:test";
 import type { DelinquencyRow, RentRollRow, ScheduledIncomeRow } from "../types";
 import {
   buildPropertySubtotals,
+  buildReportCsv,
+  projectReportGridView,
   createReportViewModel,
   discoverOptionalReportColumns,
   filterReportRowsForDisplay,
@@ -110,4 +112,17 @@ test("all eleven reports have explicit columns and ledger running balance is not
 
 test("report queries participate in workspace mutation invalidation", () => {
   assert.deepEqual(reportQueryKey("rent-roll", {asOfDate: "2026-09-12"}), ["rent-ops-workspace", "report", "rent-roll", {asOfDate: "2026-09-12"}]);
+});
+
+test("export projection preserves every filtered row, current sort and visible column order", () => {
+  const view = createReportViewModel("rent-roll", Array.from({length: 30}, (_, index) => ({unitId: `unit:${index}`, unitNumber: String(index), marketRentCents: index * 100})));
+  const sorted = view.displayRows.slice(2).reverse();
+  const projection = projectReportGridView(sorted, ["marketRentCents", "unitNumber"]);
+  const columns = projection.columnKeys.map(key => view.columns.find(column => column.key === key)!);
+  const csv = buildReportCsv(projection.rows, columns);
+  assert.equal(csv.split("\n").length, 29);
+  assert.equal(csv.split("\n")[0], "Market rent,Unit");
+  assert.equal(csv.split("\n")[1], "$29.00,29");
+  assert.equal(projection.signature, projectReportGridView([...sorted], [...projection.columnKeys]).signature);
+  assert.notEqual(projection.signature, projectReportGridView([...sorted].reverse(), projection.columnKeys).signature);
 });

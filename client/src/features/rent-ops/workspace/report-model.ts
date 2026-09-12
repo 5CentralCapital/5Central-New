@@ -668,3 +668,9 @@ export function emptyReportMessage(loaded: boolean): string {
 export function reportKeys(): readonly ReportKey[] {
   return REPORT_KEYS;
 }
+
+/** Preserve the grid's full filtered order and column order, without page slicing. */
+export function projectReportGridView(rows: DisplayReportRow[], columnKeys: string[]) {
+  const signature = JSON.stringify([columnKeys, rows.map(row => [reportRowKey(row), ...columnKeys.map(key => row[key])])]);
+  return { rows, columnKeys, signature };
+}
