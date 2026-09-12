@@ -1807,3 +1807,84 @@ export function currentLocalIsoDate(date = new Date()): string {
 }
 
 export { DEMO_ALLOWED };
+
+/** Explicit staged workspace payload. Unloaded collections are never evidence of absence. */
+export interface WorkspaceTenantIndexEntry {
+  person: AdminPersonView;
+  tenancyIds: string[];
+  accountContact: boolean;
+  selectedTenancyId?: string;
+  category?: string;
+}
+export interface RentOpsWorkspaceBootstrap {
+  workspaceVersion: 1;
+  generatedAt: string;
+  loadedCollections: string[];
+  snapshot: AdminSnapshotView;
+  chargeDefinitions: AdminChargeDefinitionView[];
+  tenantIndex: WorkspaceTenantIndexEntry[];
+}
+export const WORKSPACE_COLLECTIONS = ["recurringSchedules", "ledgerTransactions", "paymentAllocations", "securityDeposits", "subsidyContracts", "applications", "applicationHouseholdMembers", "applicationRequirements", "documents", "activityEvents"] as const;
+export type WorkspaceCollection = typeof WORKSPACE_COLLECTIONS[number];
+
+export function decodeRentOpsWorkspaceBootstrap(payload: unknown): RentOpsWorkspaceBootstrap {
+  assertNoForbiddenResponseFields(payload);
+  const root = exactRecord(unwrapData(payload), "workspace", ["workspaceVersion", "generatedAt", "loadedCollections", "snapshot", "tenantIndex"]);
+  if (root.workspaceVersion !== 1) invalidResponse();
+  const rawSnapshot = exactRecord(root.snapshot, "workspace snapshot", ["properties", "units", "people", "householdMemberships", "tenancies", "leaseTerms", "chargeDefinitions", ...WORKSPACE_COLLECTIONS]);
+  const { chargeDefinitions, ...ordinarySnapshot } = rawSnapshot;
+  const loadedCollections = requiredArrayOf(root, "loadedCollections", value => {
+    if (typeof value !== "string" || !["properties", "units", "people", "tenancies", "householdMemberships", "leaseTerms", "chargeDefinitions", ...WORKSPACE_COLLECTIONS].includes(value)) invalidResponse();
+    return value as string;
+  });
+  if (!["properties", "units", "people", "tenancies", "householdMemberships", "leaseTerms", "chargeDefinitions"].every(key => loadedCollections.includes(key))) invalidResponse();
+  return {
+    workspaceVersion: 1,
+    generatedAt: requiredTimestamp(root, "generatedAt"),
+    loadedCollections,
+    snapshot: decodeSnapshotView(ordinarySnapshot),
+    chargeDefinitions: requiredArrayOf({ chargeDefinitions }, "chargeDefinitions", decodeChargeDefinition),
+    tenantIndex: requiredArrayOf(root, "tenantIndex", value => {
+      const row = exactRecord(value, "tenant index", ["person", "tenancyIds", "accountContact", "selectedTenancyId", "category"]);
+      const tenancyIds = requiredArrayOf(row, "tenancyIds", id => { if (typeof id !== "string" || !validTargetId(id)) invalidResponse(); return id as string; });
+      return { person: decodePerson(row.person), tenancyIds, accountContact: requiredBoolean(row, "accountContact"), selectedTenancyId: optionalId(row, "selectedTenancyId"), category: optionalAllowed(row, "category", ["current", "future", "former", "contact", "unknown"]) };
+    }),
+  };
+}
+
+export async function loadRentOpsWorkspaceBootstrap(filters: ApiFilters = {}, signal?: AbortSignal): Promise<RentOpsWorkspaceBootstrap> {
+  if (DEMO_ALLOWED) {
+    const full = createDemoAdminSnapshot();
+    return { workspaceVersion: 1, generatedAt: full.generatedAt, loadedCollections: ["properties", "units", "people", "tenancies", "householdMemberships", "leaseTerms", "chargeDefinitions", ...WORKSPACE_COLLECTIONS], snapshot: full.snapshot, chargeDefinitions: full.chargeDefinitions, tenantIndex: full.tenants.map(tenant => ({ person: tenant.person, tenancyIds: (tenant.tenancies ?? (tenant.tenancy ? [tenant.tenancy] : [])).flatMap(t => t.id ? [t.id] : []), accountContact: !tenant.tenancy, selectedTenancyId: tenant.tenancy?.id, category: tenant.tenancy?.status === "current" ? "current" : tenant.tenancy?.status === "former" ? "former" : tenant.tenancy?.status === "future" ? "future" : "unknown" })) };
+  }
+  return decodeRentOpsWorkspaceBootstrap(await requestJson(`/api/rent-ops/workspace${buildRentOpsQuery(filters)}`, { signal }));
+}
+
+export async function loadRentOpsWorkspaceSummary(filters: ApiFilters = {}, signal?: AbortSignal): Promise<DashboardSummary> {
+  if (DEMO_ALLOWED) return createDemoAdminSnapshot().summary;
+  const value = await requestJson(`/api/rent-ops/dashboard${buildRentOpsQuery(filters)}`, { signal });
+  assertNoForbiddenResponseFields(value);
+  return decodeDashboardSummary(unwrapData(value));
+}
+
+export function decodeRentOpsWorkspaceCollection<K extends WorkspaceCollection>(name: K, payload: unknown): AdminSnapshotView[K] {
+  assertNoForbiddenResponseFields(payload);
+  const root = exactRecord(unwrapData(payload), "workspace collection", ["collection", "items"]);
+  if (root.collection !== name) invalidResponse();
+  const decoders: Record<WorkspaceCollection, (value: unknown) => unknown> = {
+    recurringSchedules: decodeRecurringSchedule, ledgerTransactions: decodeLedgerTransaction,
+    paymentAllocations: decodePaymentAllocation, securityDeposits: decodeSecurityDeposit,
+    subsidyContracts: decodeSubsidyContract, applications: decodeApplication,
+    applicationHouseholdMembers: decodeApplicationHouseholdMember, applicationRequirements: decodeApplicationRequirement,
+    documents: decodeDocument, activityEvents: decodeActivity,
+  };
+  return requiredArrayOf(root, "items", decoders[name]) as AdminSnapshotView[K];
+}
+export async function loadRentOpsWorkspaceCollection<K extends WorkspaceCollection>(name: K, filters: ApiFilters = {}, signal?: AbortSignal): Promise<AdminSnapshotView[K]> {
+  if (DEMO_ALLOWED) return createDemoAdminSnapshot().snapshot[name];
+  return decodeRentOpsWorkspaceCollection(name, await requestJson(`/api/rent-ops/workspace/collections/${name}${buildRentOpsQuery(filters)}`, { signal }));
+}
+
+export function createWorkspaceReportDefinition(key: ReportKey, rows: ReportRow[] = []): ReportDefinition {
+  return normalizeReport(key, rows);
+}
