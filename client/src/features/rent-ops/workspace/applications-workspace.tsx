@@ -297,7 +297,7 @@ export function ApplicationsWorkspace({ snapshot, filters, onChanged, onEdit }: 
   ], [busy, onChanged, onEdit, snapshot]);
 
   return <section className="rm-panel rm-leasing-workspace" aria-labelledby="rm-applications-title">
-    <header className="rm-panel-title rm-leasing-heading"><div><span className="rm-muted">Leasing register</span><h2 id="rm-applications-title">Applications</h2><p>Manual review only. Each application remains a separate case; no automatic screening or decisions are applied.</p></div><div className="rm-leasing-count"><strong>{visibleApplications.length}</strong><span>matching cases</span></div></header>
+    <header className="rm-panel-title rm-leasing-heading"><div><h2 id="rm-applications-title">Applications</h2></div><div className="rm-leasing-count"><strong>{visibleApplications.length}</strong><span>matching cases</span></div></header>
     {error && <div className="rm-error" role="alert"><AlertCircle aria-hidden="true" />{error}<button type="button" className="rm-button" onClick={() => setError(undefined)}>Dismiss</button></div>}
     <ApplicationFilterBar snapshot={snapshot} filters={filterState} applications={snapshot.applicants} onChange={setFilterState} />
     <DataGrid<ApplicationGridRow> rows={rows} columns={columns} getRowKey={(row, index) => row.recordKey || applicationRecordKey(row.application, index)} pageSize={25} emptyMessage="No applications match these filters." caption="Application register" initialSort={{ key: "submittedOn", direction: "desc" }} storageKey="rm-applications" />

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { AlertCircle, Download, FileCheck2, FileText, Loader2, ShieldCheck, Users, X } from "lucide-react";
+import { AlertCircle, Download, FileCheck2, FileText, Loader2, Users, X } from "lucide-react";
 
 import { downloadRentOpsDocument, loadRentOpsApplication } from "./api";
 import {
@@ -57,8 +57,8 @@ function DateFact({ label, value, knowledge }: { label: string; value: unknown; 
   return <div className="ro-case-fact"><dt>{label}</dt><dd>{dateFact(value, knowledge)}</dd></div>;
 }
 
-function SectionHeading({ id, eyebrow, title: sectionTitle, description }: { id: string; eyebrow: string; title: string; description: string }) {
-  return <header className="ro-case-section-heading"><div><span className="eyebrow">{eyebrow}</span><h3 id={id}>{sectionTitle}</h3></div><p>{description}</p></header>;
+function SectionHeading({ id, title: sectionTitle }: { id: string; title: string }) {
+  return <header className="ro-case-section-heading"><div><h3 id={id}>{sectionTitle}</h3></div></header>;
 }
 
 function EmptySection({ message }: { message: string }) {
@@ -73,7 +73,7 @@ function OverviewSection({ application }: { application: AdminApplicationDetailV
   const rentalHistory = application.rentalHistory;
   const emergencyContact = application.emergencyContact;
   return <section className="ro-case-section" aria-labelledby="application-case-overview">
-    <SectionHeading id="application-case-overview" eyebrow="Safe positive fields" title="Overview" description="Contact, application timing, and stated preferences." />
+    <SectionHeading id="application-case-overview" title="Overview" />
     <dl className="ro-case-facts">
       <Fact label="Email" value={application.email} knowledge={application.emailKnowledge} />
       <Fact label="Phone" value={application.phone} knowledge={application.phoneKnowledge} />
@@ -128,7 +128,7 @@ function HouseholdSection({ application }: { application: AdminApplicationDetail
   const summary = application.householdSummary;
   const members = application.householdMembers;
   return <section className="ro-case-section" aria-labelledby="application-case-household">
-    <SectionHeading id="application-case-household" eyebrow="Occupancy context" title="Household" description="Members supplied with this application." />
+    <SectionHeading id="application-case-household" title="Household" />
     <dl className="ro-case-facts ro-case-facts-compact">
       <Fact label="Adults" value={summary?.adults} />
       <Fact label="Children" value={summary?.children} />
@@ -145,7 +145,7 @@ function HouseholdSection({ application }: { application: AdminApplicationDetail
 
 function RequirementsSection({ application }: { application: AdminApplicationDetailView }) {
   return <section className="ro-case-section" aria-labelledby="application-case-requirements">
-    <SectionHeading id="application-case-requirements" eyebrow="Information checkpoints" title="Requirements" description="Items requested and their current recorded state." />
+    <SectionHeading id="application-case-requirements" title="Requirements" />
     {!application.requirements.length ? <EmptySection message="No application requirements recorded." /> : <div className="ro-case-requirement-list">
       {application.requirements.map((requirement, index) => <article className="ro-case-requirement" key={requirement.id ?? `${requirement.label ?? "requirement"}-${index}`}>
         <div><strong>{applicationCaseFact(requirement.label)}</strong><span>{title(applicationCaseFact(requirement.status))}</span></div>
@@ -183,7 +183,7 @@ function DocumentsSection({ application }: { application: AdminApplicationDetail
   }
 
   return <section className="ro-case-section" aria-labelledby="application-case-documents">
-    <SectionHeading id="application-case-documents" eyebrow="Attachments" title="Documents" description="Metadata is visible; only verified records with an available download can be opened." />
+    <SectionHeading id="application-case-documents" title="Documents" />
     {downloadError && <p className="ro-case-inline-error" role="alert"><AlertCircle aria-hidden="true" />{downloadError}</p>}
     {!application.documents.length ? <EmptySection message="No application documents recorded." /> : <div className="ro-case-document-list">
       {application.documents.map((document, index) => {
@@ -204,7 +204,7 @@ function HistoryOverviewSection({ history }: { history: AdminApplicationHistoryC
   const subject = history.application ?? history.prospect;
   const state = applicationHistorySectionState(history, "overview");
   return <section className="ro-case-section ro-history-section" aria-labelledby="application-history-overview">
-    <SectionHeading id="application-history-overview" eyebrow="Imported case evidence" title="Historical overview" description="Historical fields are shown with their recorded certainty; no source identifiers are displayed." />
+    <SectionHeading id="application-history-overview" title="Historical overview" />
     {state === "unknown" || !subject ? <EmptySection message="No historical applicant or prospect profile was resolved for this target." /> : <dl className="ro-case-facts">
       <Fact label="Historical application ID" value={history.application?.id} />
       <Fact label="First name" value={subject.firstName} />
@@ -222,7 +222,7 @@ function HistoryOverviewSection({ history }: { history: AdminApplicationHistoryC
 function HistoryInterestsSection({ history }: { history: AdminApplicationHistoryCaseView }) {
   const state = applicationHistorySectionState(history, "interests");
   return <section className="ro-case-section ro-history-section" aria-labelledby="application-history-interests">
-    <SectionHeading id="application-history-interests" eyebrow="Historical preferences" title="Interests" description="Only occurrences linked to this exact historical application or prospect are shown." />
+    <SectionHeading id="application-history-interests" title="Interests" />
     {state === "empty" && <EmptySection message="No historical interests were recorded." />}
     {state === "unknown" && <EmptySection message="No linked historical interests are available; some source occurrences could not be resolved." />}
     {state === "full" && <div className="ro-case-requirement-list">
@@ -244,7 +244,7 @@ function HistoryInterestsSection({ history }: { history: AdminApplicationHistory
 function HistoryParticipantsSection({ history }: { history: AdminApplicationHistoryCaseView }) {
   const state = applicationHistorySectionState(history, "participants");
   return <section className="ro-case-section ro-history-section" aria-labelledby="application-history-participants">
-    <SectionHeading id="application-history-participants" eyebrow="Historical household" title="Participants" description="Participant facts stay occurrence-bound; unavailable person identity is not filled by name matching." />
+    <SectionHeading id="application-history-participants" title="Participants" />
     {state !== "full" ? <EmptySection message={state === "unknown" ? "Historical participant links need review." : "No historical participants were recorded."} /> : <div className="ro-case-member-list">
       {history.participants.map((participant, index) => <article className="ro-case-member" key={`historical-participant-${index}`}>
         <Users aria-hidden="true" />
@@ -257,7 +257,7 @@ function HistoryParticipantsSection({ history }: { history: AdminApplicationHist
 function HistoryRequirementsSection({ history }: { history: AdminApplicationHistoryCaseView }) {
   const state = applicationHistorySectionState(history, "requirements");
   return <section className="ro-case-section ro-history-section" aria-labelledby="application-history-requirements">
-    <SectionHeading id="application-history-requirements" eyebrow="Historical checkpoints" title="Requirements" description="Historical requirement occurrences are read-only and retain unknown status explicitly." />
+    <SectionHeading id="application-history-requirements" title="Requirements" />
     {state !== "full" ? <EmptySection message={state === "unknown" ? "Historical requirement links need review." : "No historical requirements were recorded."} /> : <div className="ro-case-requirement-list">
       {history.requirements.map((requirement, index) => <article className="ro-case-requirement" key={`historical-requirement-${index}`}>
         <div><strong>{applicationCaseFact(requirement.label)}</strong><span>{title(applicationCaseFact(requirement.status, requirement.statusKnowledge))}</span></div>
@@ -274,7 +274,7 @@ function HistoryRequirementsSection({ history }: { history: AdminApplicationHist
 function HistoryAnswersSection({ history }: { history: AdminApplicationHistoryCaseView }) {
   const state = applicationHistorySectionState(history, "answers");
   return <section className="ro-case-section ro-history-section" aria-labelledby="application-history-answers">
-    <SectionHeading id="application-history-answers" eyebrow="Metadata only" title="Safe answers" description="Answer values are never sent to the browser; only typed markers and link certainty are shown." />
+    <SectionHeading id="application-history-answers" title="Answers" />
     {state === "empty" && <EmptySection message="No historical answer occurrences were recorded." />}
     {state === "restricted" && !history.answers.length && <EmptySection message="Historical answers exist, but their values are restricted or unmapped." />}
     {state === "full" && <div className="ro-case-answer-list">
@@ -291,7 +291,7 @@ function HistoryAnswersSection({ history }: { history: AdminApplicationHistoryCa
 function HistoryDocumentsSection({ history }: { history: AdminApplicationHistoryCaseView }) {
   const state = applicationHistorySectionState(history, "documents");
   return <section className="ro-case-section ro-history-section" aria-labelledby="application-history-documents">
-    <SectionHeading id="application-history-documents" eyebrow="Historical attachments" title="Documents" description="Historical documents are metadata-only or unavailable; no download path is implied." />
+    <SectionHeading id="application-history-documents" title="Documents" />
     {state === "empty" && <EmptySection message="No historical documents were recorded." />}
     {state === "restricted" && !history.documents.length && <EmptySection message="Historical document records are restricted to metadata and are not downloadable." />}
     {(state === "full" || state === "restricted") && history.documents.length > 0 && <div className="ro-case-document-list">
@@ -307,7 +307,7 @@ function HistoryDocumentsSection({ history }: { history: AdminApplicationHistory
 function HistoryActivitySection({ history }: { history: AdminApplicationHistoryCaseView }) {
   const state = applicationHistorySectionState(history, "activities");
   return <section className="ro-case-section ro-history-section" aria-labelledby="application-history-activity">
-    <SectionHeading id="application-history-activity" eyebrow="Historical timeline" title="Activity" description="Only allowlisted activity types, timestamps, and specifically attested summaries are displayed." />
+    <SectionHeading id="application-history-activity" title="Activity" />
     {state !== "full" ? <EmptySection message={state === "unknown" ? "Some historical activity could not be linked to this case." : "No historical activity was recorded."} /> : <div className="ro-case-history-activity-list">
       {history.activities.map((activity, index) => <article className="ro-case-member" key={`historical-activity-${index}`}>
         <FileText aria-hidden="true" />
@@ -320,7 +320,7 @@ function HistoryActivitySection({ history }: { history: AdminApplicationHistoryC
 function HistoryUnknownRestrictedSection({ history }: { history: AdminApplicationHistoryCaseView }) {
   const summary = history.unknownRestricted;
   return <section className="ro-case-section ro-history-section" aria-labelledby="application-history-unknown">
-    <SectionHeading id="application-history-unknown" eyebrow="Coverage boundary" title="Unknown / restricted" description="Counts describe what remains unavailable or unresolved in the historical projection." />
+    <SectionHeading id="application-history-unknown" title="Unknown / restricted" />
     <dl className="ro-case-facts">
       <Fact label="Restricted answers" value={summary.restrictedAnswerCount} />
       <Fact label="Unmapped answers" value={summary.unmappedAnswerCount} />
@@ -337,7 +337,7 @@ function HistoryUnknownRestrictedSection({ history }: { history: AdminApplicatio
 
 function HistoricalCaseSections({ history }: { history: AdminApplicationHistoryCaseView }) {
   return <div className="ro-history-case">
-    <div className="ro-case-record-note"><ShieldCheck aria-hidden="true" /><span>Historical projection view. Values, raw source identifiers, actors, and file bytes are withheld.</span></div>
+
     <HistoryOverviewSection history={history} />
     <HistoryInterestsSection history={history} />
     <HistoryParticipantsSection history={history} />
@@ -409,16 +409,16 @@ export function ApplicationCaseDetail({ applicationId, summary, onClose }: Appli
   const displayName = applicationCaseDisplayName(detail ?? { firstName: summary?.firstName, lastName: summary?.lastName });
   const status = detail?.status ?? summary?.status;
   return <div className="ro-case-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <section className="ro-case-dialog" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="application-case-title" aria-describedby="application-case-description" onKeyDown={handleDialogKeyDown}>
+    <section className="ro-case-dialog" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="application-case-title" onKeyDown={handleDialogKeyDown}>
       <header className="ro-case-header">
-        <div><span className="eyebrow">Application case</span><h2 id="application-case-title">{displayName}</h2><p id="application-case-description">Review the current positive record. Unknown facts remain unfilled for operator review.</p></div>
+        <div><h2 id="application-case-title">{displayName}</h2></div>
         <div className="ro-case-header-actions"><span className={`ro-case-status ${status ?? "unknown"}`}>{title(applicationCaseFact(status, detail?.statusKnowledge ?? summary?.statusKnowledge))}</span><button type="button" className="ro-icon-button" ref={closeButtonRef} onClick={onClose} aria-label="Close application details"><X aria-hidden="true" /></button></div>
       </header>
 
       {loadState === "loading" && <div className="ro-case-state" role="status"><Loader2 className="spin" aria-hidden="true" /><h3>Loading application detail</h3><p>Fetching the current case record…</p></div>}
       {loadState === "error" && <div className="ro-case-state ro-case-state-error" role="alert"><AlertCircle aria-hidden="true" /><h3>Application detail unavailable</h3><p>{loadError ?? "The current case record could not be loaded."}</p><div className="ro-case-state-actions"><button type="button" className="primary" onClick={() => setRetry((value) => value + 1)}>Try again</button><button type="button" className="secondary" onClick={onClose}>Close</button></div></div>}
       {loadState === "ready" && detail && <div className="ro-case-content">
-        <div className="ro-case-record-note"><ShieldCheck aria-hidden="true" /><span>Safe admin view. Sensitive identity and file-reference fields are not included.</span></div>
+
         <OverviewSection application={detail} />
         <HouseholdSection application={detail} />
         <RequirementsSection application={detail} />

@@ -452,6 +452,7 @@
 }
 
 .rm-open-tab {
+  flex-shrink: 0;
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -469,7 +470,9 @@
   white-space: nowrap;
 }
 
-.rm-open-tab > :where(span, strong) {
+.rm-open-tab > :where(span, strong),
+.rm-open-tab-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -2379,6 +2382,7 @@ button.rm-stat:hover {
   .rm-ribbon,
   .rm-open-tabs,
   .rm-sidebar,
+  .rm-workspace-toolbar,
   .rm-page-heading-actions,
   .rm-toolbar-actions,
   .rm-panel-actions,

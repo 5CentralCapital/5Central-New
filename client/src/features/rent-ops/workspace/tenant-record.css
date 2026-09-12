@@ -1,4 +1,7 @@
 .rm-tenant-record {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
   --rm-charcoal: #3A3A3C;
   --rm-gold: #D4A843;
   --rm-cream: #F5F0E8;
