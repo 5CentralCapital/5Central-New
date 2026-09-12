@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createDemoAdminSnapshot } from "../demo";
+import { createDemoAdminSnapshot as rawDemoSnapshot } from "../demo";
+import { scheduleDisplayInterval } from "./schedule-display";
+function createDemoAdminSnapshot() {
+  const snapshot = rawDemoSnapshot();
+  snapshot.tenants.forEach(tenant => tenant.schedules.forEach(schedule => Object.assign(schedule, { lineageState: "valid", resolvedEffectiveTo: schedule.effectiveTo ?? null, canScheduleSuccessor: true })));
+  return snapshot;
+}
 import type { TenantView } from "../types";
 import {
   currentMonthlyTotal,
@@ -35,6 +41,7 @@ test("recurring charges retain scope identity and classify date boundaries", () 
   const inactive = { id: "inactive", propertyId, unitId, tenancyId: tenant.tenancy?.id, amountCents: 1000, effectiveFrom: "2026-09-01", active: false };
   const unknown = { id: "unknown", propertyId, unitId, tenancyId: tenant.tenancy?.id, amountCents: null, effectiveFrom: null, active: null };
   const withExtra = { ...tenant, schedules: [...tenant.schedules, explicitUnit, explicitProperty, ended, inactive, unknown] } as TenantView;
+  withExtra.schedules.forEach(schedule => Object.assign(schedule, { lineageState: "valid", resolvedEffectiveTo: schedule.effectiveTo ?? null, canScheduleSuccessor: true }));
   const mapped = buildRecurringChargeRows(withExtra, snapshot, "2026-08-16");
   const unitRow = mapped.find((row) => row.id === "unit-scope");
   assert.equal(unitRow?.scope.type, "unit");
@@ -42,7 +49,7 @@ test("recurring charges retain scope identity and classify date boundaries", () 
   assert.equal(unitRow?.state, "current", "end date equal to as-of remains current");
   assert.equal(mapped.find((row) => row.id === "property-scope")?.state, "future");
   assert.equal(mapped.find((row) => row.id === "ended")?.state, "ended");
-  assert.equal(mapped.find((row) => row.id === "inactive")?.state, "ended", "inactive schedules remain in ended history even if their date is future");
+  assert.equal(mapped.find((row) => row.id === "inactive")?.state, "future", "future inactive versions do not take effect before their start date");
   assert.equal(mapped.find((row) => row.id === "unknown")?.state, "unknown");
   assert.equal(filterRecurringCharges(mapped, "current").some((row) => row.id === "unknown"), true, "uncertain rows stay visible in the current review");
   assert.equal(filterRecurringCharges(mapped, "future").some((row) => row.id === "property-scope"), true);
@@ -214,4 +221,36 @@ test("ledger entry labels never expose opaque identifiers and filters preserve a
   assert.deepEqual(filtered.map(row => row.key), ["second", "third"]);
   assert.deepEqual(filtered.map(row => row.runningBalanceCents), [5000, 2000]);
   assert.equal(filtered[0], rows[1]);
+});
+
+test("server-resolved replacement intervals prevent duplicate current totals and preserve source history", () => {
+  const snapshot = createDemoAdminSnapshot();
+  const tenant = snapshot.tenants[0];
+  const root = { ...tenant.schedules[0], amountCents: 125000, billingFrequency: "monthly" as const, effectiveFrom: "2026-01-01", effectiveTo: "2027-09-30", resolvedEffectiveTo: "2026-10-31", lineageState: "valid" as const, canScheduleSuccessor: false, active: true };
+  const replacement = { ...root, id: "replacement", effectiveFrom: "2026-11-01", resolvedEffectiveTo: "2027-09-30", amountCents: 130000, canScheduleSuccessor: true };
+  const profile = { ...tenant, schedules: [root, replacement] };
+  const before = buildRecurringChargeRows(profile, snapshot, "2026-10-01");
+  assert.deepEqual(before.map(row => row.state), ["current", "future"]);
+  assert.equal(before[0].effectiveTo, "2026-10-31");
+  assert.equal(root.effectiveTo, "2027-09-30");
+  assert.equal(currentMonthlyTotal(before), 125000);
+  const after = buildRecurringChargeRows(profile, snapshot, "2026-11-01");
+  assert.deepEqual(after.map(row => row.state), ["ended", "current"]);
+  assert.equal(currentMonthlyTotal(after), 130000);
+  const actions = buildTenantEditActions(profile, snapshot, "charges");
+  assert.equal(actions.some(action => action.values.predecessorId === root.id), false);
+  assert.equal(actions.some(action => action.values.predecessorId === replacement.id), true);
+});
+
+test("end markers and unknown or omitted lineage metadata cannot resurrect current charges", () => {
+  const base = { id: "end", effectiveFrom: "2026-11-01", resolvedEffectiveTo: "2026-11-01", active: false, lineageState: "valid" as const, canScheduleSuccessor: false };
+  assert.equal(scheduleDisplayInterval(base, "2026-10-01").state, "future");
+  assert.equal(scheduleDisplayInterval(base, "2026-11-01").state, "ended");
+  assert.equal(scheduleDisplayInterval(base, "2027-01-01").state, "ended");
+  for (const metadata of [{ lineageState: "unknown" as const }, { lineageState: undefined }, { resolvedEffectiveTo: undefined }]) {
+    const row = scheduleDisplayInterval({ ...base, active: true, ...metadata }, "2027-01-01");
+    assert.equal(row.state, "unknown");
+    assert.equal(row.effectiveTo, undefined);
+  }
+  assert.equal(scheduleDisplayInterval({ ...base, active: true, resolvedEffectiveTo: null }, "2027-01-01").state, "current");
 });

@@ -1,3 +1,4 @@
+import { scheduleDisplayInterval } from "./schedule-display";
 import type {
   AdminChargeDefinitionView,
   AdminHouseholdMembershipView,
@@ -358,6 +359,7 @@ function chargeUncertainty(schedule: AdminRecurringScheduleView, definition?: Ad
 
 export function buildRecurringChargeRows(tenant: TenantView, snapshot: AdminSnapshot, asOfDate = snapshot.summary.asOfDate): RecurringChargeRow[] {
   return (tenant.schedules ?? []).map((schedule) => {
+    const display = scheduleDisplayInterval(schedule, asOfDate);
     const definition = schedule.chargeDefinitionId ? snapshot.chargeDefinitions.find((candidate) => candidate.id === schedule.chargeDefinitionId) : undefined;
     const scope = recurringChargeScope(schedule, tenant, snapshot);
     const description = nonEmpty(schedule.description) ?? nonEmpty(definition?.displayName) ?? "Needs review";
@@ -372,11 +374,11 @@ export function buildRecurringChargeRows(tenant: TenantView, snapshot: AdminSnap
       amountCents: schedule.amountCents ?? null,
       billingFrequency: schedule.billingFrequency ?? null,
       effectiveFrom: schedule.effectiveFrom,
-      effectiveTo: schedule.effectiveTo,
+      effectiveTo: display.effectiveTo,
       active: schedule.active,
-      state: classifyRecurringSchedule(schedule, asOfDate),
+      state: display.state,
       scope,
-      uncertaintyCodes: chargeUncertainty(schedule, definition, scope),
+      uncertaintyCodes: [...chargeUncertainty(schedule, definition, scope), ...display.uncertaintyCodes],
     };
   });
 }
@@ -513,7 +515,7 @@ export function buildTenantEditActions(tenant: TenantView, snapshot: AdminSnapsh
       } });
     }
     (tenant.schedules ?? []).forEach((schedule, index) => {
-      if (!schedule.id) return;
+      if (!schedule.id || schedule.lineageState !== "valid" || schedule.canScheduleSuccessor !== true) return;
       const scope = recurringChargeScope(schedule, tenant, snapshot);
       if (scope.warning) return;
       const scopeLabel = scope.type === "tenant" ? "charge" : `shared ${scope.type} charge`;

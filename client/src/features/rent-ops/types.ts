@@ -240,6 +240,9 @@ export interface AdminLeaseTermView {
   createdAtKnowledge?: string;
 }
 export interface AdminRecurringScheduleView {
+  resolvedEffectiveTo?: string | null;
+  lineageState?: "valid" | "unknown";
+  canScheduleSuccessor?: boolean;
   chargeDefinitionId?: string | null;
   billingFrequency?: "monthly" | null;
   recordRevision?: number;
