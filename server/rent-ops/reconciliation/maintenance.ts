@@ -65,38 +65,48 @@ export function buildMaintenanceManifest(snapshot: RentOpsSnapshot, pack: Mainte
   for (const requirement of [...grouped, ...(phase.checks ?? [])]) checkFields(select(snapshot, requirement.target), resolveValue(snapshot, requirement.expected, pack.data));
   const archivedSnapshot = structuredClone(snapshot);
   for (const record of phase.archive ?? []) Object.assign(select(archivedSnapshot, record.target), resolveValue(snapshot, record.expected, pack.data));
-  const allowed = ["account-facts", "tenancy-status", "tenancy-future-departure", "schedule-establish", "lease-term-correction", "manual-schedule-replace", "subsidy-establish"];
+  const allowed = ["account-facts", "tenancy-status", "tenancy-future-departure", "schedule-establish", "lease-term-correction", "manual-schedule-replace", "subsidy-establish", "schedule-end"];
   const operations = phase.operations.map(spec => {
     requireGuard(plain(spec) && typeof spec.reference === "string" && spec.reference.trim(), "evidence_reference_required");
     const target = select(snapshot, spec.target);
     if (spec.expected) checkFields(target, resolveValue(snapshot, spec.expected, pack.data));
     const values = resolveValue(snapshot, spec.values, pack.data);
     requireGuard(allowed.includes(values.kind) && !["targetId", "expectedRevision", "beforeSha256", "sourceId", "evidence"].some(k => Object.hasOwn(values, k)), "operation_guard_override");
+    requireGuard(values.kind !== "schedule-end" || spec.target.collection === "recurringSchedules", "operation_collection_mismatch");
     requireGuard(values.kind === "manual-schedule-replace" ? spec.target.collection === "recurringSchedules" && !target.source : target.source?.system === "rent_manager", "operation_source_mismatch");
     return { ...values, targetId: target.id, expectedRevision: target.recordRevision ?? 1, beforeSha256: hash(target), ...(values.kind === "manual-schedule-replace" ? {} : { sourceId: target.source.sourceId }), evidence: { path: context.packPath, sha256: context.packSha256, reference: spec.reference } } as ReconciliationOperation;
   });
   return { manifest: { id: phase.id, actorSubject: context.actor, occurredAt: context.occurredAt, operations }, archivedSnapshot };
 }
 export function verifyMaintenanceReadback(before: RentOpsSnapshot, after: RentOpsSnapshot, manifest: ReconciliationManifest, plan: ReconciliationPlan) {
+  const indexCollections = (snapshot: RentOpsSnapshot) => new Map(Object.entries(snapshot).filter(([, rows]) => Array.isArray(rows)).map(([collection, rows]) => {
+    const index = new Map((rows as any[]).map(row => [row.id, row]));
+    requireGuard(index.size === (rows as any[]).length, "duplicate_record_id");
+    return [collection, index] as const;
+  }));
+  const beforeIndexes = indexCollections(before);
+  const afterIndexes = indexCollections(after);
   const changed = new Map<string, Set<string>>();
   const created = new Map<string, Set<string>>();
   for (let i = 0; i < manifest.operations.length; i++) {
     const op = manifest.operations[i];
-    const collection = op.kind === "account-facts" ? "people" : op.kind === "lease-term-correction" ? "leaseTerms" : op.kind === "schedule-establish" || op.kind === "manual-schedule-replace" ? "recurringSchedules" : op.kind === "subsidy-establish" ? "subsidyContracts" : "tenancies";
+    const collection = op.kind === "account-facts" ? "people" : op.kind === "lease-term-correction" ? "leaseTerms" : op.kind === "schedule-establish" || op.kind === "manual-schedule-replace" || op.kind === "schedule-end" ? "recurringSchedules" : op.kind === "subsidy-establish" ? "subsidyContracts" : "tenancies";
     const expected = plan.changes[i]?.after as any;
     requireGuard(expected?.id, "readback_target_missing");
-    const actual = (after[collection] as any[]).find(row => row.id === expected.id);
+    if (op.kind === "schedule-end") requireGuard(expected.id === op.successorId && expected.id !== op.targetId && expected.versionAction === "end" && expected.supersedesId === op.targetId, "readback_successor_mismatch");
+    const actual = afterIndexes.get(collection)?.get(expected.id);
     requireGuard(actual, "readback_record_missing"); checkFields(actual, expected);
-    if (!(before[collection] as any[]).some(row => row.id === expected.id)) { const ids = created.get(collection) ?? new Set<string>(); ids.add(expected.id); created.set(collection, ids); }
-    if (!["schedule-establish", "manual-schedule-replace", "subsidy-establish"].includes(op.kind)) {
+    if (!beforeIndexes.get(collection)?.has(expected.id)) { const ids = created.get(collection) ?? new Set<string>(); ids.add(expected.id); created.set(collection, ids); }
+    if (!["schedule-establish", "manual-schedule-replace", "subsidy-establish", "schedule-end"].includes(op.kind)) {
       const ids = changed.get(collection) ?? new Set<string>(); ids.add(op.targetId); changed.set(collection, ids);
     }
   }
-  for (const [collection, rows] of Object.entries(before)) {
-    if (!Array.isArray(rows)) continue;
-    if (collection !== "activityEvents") for (const row of (after as any)[collection] as any[]) requireGuard(rows.some(old => old.id === row.id) || created.get(collection)?.has(row.id), "unexpected_record_created");
-    for (const row of rows) if (!changed.get(collection)?.has(row.id)) {
-      const actual = ((after as any)[collection] as any[]).find(r => r.id === row.id);
+  for (const [collection, rows] of Array.from(beforeIndexes)) {
+    const actualRows = afterIndexes.get(collection);
+    requireGuard(actualRows, "readback_collection_missing");
+    if (collection !== "activityEvents") for (const id of Array.from(actualRows.keys())) requireGuard(rows.has(id) || created.get(collection)?.has(id), "unexpected_record_created");
+    for (const [id, row] of Array.from(rows)) if (!changed.get(collection)?.has(id)) {
+      const actual = actualRows.get(id);
       requireGuard(actual && hash(actual) === hash(row), "unrelated_record_changed");
     }
   }

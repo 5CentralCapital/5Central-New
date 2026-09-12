@@ -53,3 +53,53 @@ test("literal data references cannot read prototypes or silently skip required g
   pack.phases[0].checkGroups = ["required"];
   assert.throws(() => buildMaintenanceManifest(snapshot, pack, pack.phases[0], { actor: "test-operator", occurredAt: "2025-01-01T00:00:00Z", packPath: "unused", packSha256: "a".repeat(64) }), /check_group_missing/);
 });
+
+test("schedule-end pack appends a verified end marker and preserves imported history and ledger", async () => {
+  const { snapshot, pack } = setup(), directory = await mkdtemp(join(tmpdir(), "maintenance-end-test-"));
+  try {
+    const original = snapshot.recurringSchedules[0];
+    Object.assign(original, { source: { system: "rent_manager", entityType: "recurring_charge_schedule", sourceId: "reviewed-fee" }, lineageRootOrigin: "artifact", versionOrigin: "artifact", sourceArtifactSha256: "b".repeat(64), artifactObservationOn: "2026-09-07" });
+    pack.phases[0].operations = [{ target: { collection: "recurringSchedules", sourceId: "reviewed-fee" }, expected: { amountCents: original.amountCents }, values: { kind: "schedule-end", successorId: "reviewed-fee-end", effectiveFrom: "2026-09-12" }, reference: "Reviewed excluded fee" }];
+    const path = join(directory, "pack.json"), bytes = Buffer.from(JSON.stringify(pack)); await writeFile(path, bytes);
+    const context = { actor: "test-operator", occurredAt: "2026-09-12T00:00:00Z", packPath: path, packSha256: bytesHash(bytes) };
+    const { manifest } = buildMaintenanceManifest(snapshot, pack, pack.phases[0], context);
+    const wrongCollection = structuredClone(pack); wrongCollection.phases[0].operations[0].target = { collection: "tenancies", sourceId: "example-source" }; delete wrongCollection.phases[0].operations[0].expected;
+    assert.throws(() => buildMaintenanceManifest(snapshot, wrongCollection, wrongCollection.phases[0], context), /operation_collection_mismatch/);
+    const repository = new SyntheticRentOpsRepository(snapshot), before = await repository.getSnapshot();
+    const plan = await reconcileImportedRecords(repository, manifest, { mode: "plan" });
+    assert.deepEqual(await repository.getSnapshot(), before);
+    const applied = await reconcileImportedRecords(repository, manifest, { mode: "apply", approvedPlanToken: plan.token });
+    const after = await repository.getSnapshot();
+    verifyMaintenanceReadback(before, after, manifest, applied);
+    assert.deepEqual(after.recurringSchedules.find(row => row.id === original.id), original);
+    const ended = after.recurringSchedules.find(row => row.id === "reviewed-fee-end")!;
+    assert.equal(ended.supersedesId, original.id); assert.equal(ended.versionAction, "end"); assert.equal(ended.active, false);
+    assert.deepEqual(after.ledgerTransactions, before.ledgerTransactions); assert.deepEqual(after.paymentAllocations, before.paymentAllocations);
+    const missing = structuredClone(after); missing.recurringSchedules = missing.recurringSchedules.filter(row => row.id !== ended.id);
+    assert.throws(() => verifyMaintenanceReadback(before, missing, manifest, applied), /readback_record_missing/);
+    const changed = structuredClone(after); changed.recurringSchedules.find(row => row.id === original.id)!.active = false;
+    assert.throws(() => verifyMaintenanceReadback(before, changed, manifest, applied), /unrelated_record_changed/);
+    const ledger = structuredClone(after); ledger.ledgerTransactions[0].amountCents += 100;
+    assert.throws(() => verifyMaintenanceReadback(before, ledger, manifest, applied), /unrelated_record_changed|ledger_changed/);
+  } finally { await rm(directory, { recursive: true }); }
+});
+
+test("indexed readback retains collection guards and rejects duplicate IDs", () => {
+  const { snapshot } = setup();
+  const manifest = { id: "readback", actorSubject: "test", occurredAt: "2025-01-01T00:00:00Z", operations: [] };
+  const plan = { token: "test", manifestHash: "test", changes: [], ledgerUnchanged: true as const };
+  verifyMaintenanceReadback(snapshot, structuredClone(snapshot), manifest, plan);
+  const reordered = structuredClone(snapshot); reordered.people.reverse();
+  verifyMaintenanceReadback(snapshot, reordered, manifest, plan);
+  const duplicate = structuredClone(snapshot); duplicate.people.push({ ...duplicate.people[0] });
+  assert.throws(() => verifyMaintenanceReadback(snapshot, duplicate, manifest, plan), /duplicate_record_id/);
+  assert.throws(() => verifyMaintenanceReadback(duplicate, snapshot, manifest, plan), /duplicate_record_id/);
+  const missing = structuredClone(snapshot); missing.people.pop();
+  assert.throws(() => verifyMaintenanceReadback(snapshot, missing, manifest, plan), /unrelated_record_changed/);
+  const added = structuredClone(snapshot); added.people.push({ ...added.people[0], id: "unexpected" });
+  assert.throws(() => verifyMaintenanceReadback(snapshot, added, manifest, plan), /unexpected_record_created/);
+  const activity = structuredClone(snapshot); activity.activityEvents.push({ id: "operator-event", type: "system", occurredAt: "2025-01-01T00:00:00Z", actor: "admin", summary: "Reviewed correction" });
+  verifyMaintenanceReadback(snapshot, activity, manifest, plan);
+  activity.activityEvents.push({ ...activity.activityEvents[activity.activityEvents.length - 1] });
+  assert.throws(() => verifyMaintenanceReadback(snapshot, activity, manifest, plan), /duplicate_record_id/);
+});
