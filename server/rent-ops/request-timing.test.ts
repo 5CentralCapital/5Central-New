@@ -54,12 +54,12 @@ test("protected request timings expose only isolated numeric phases and preserve
     assert.equal(preview.status, 200);
     assert.equal(preview.headers.get("server-timing"), null);
     assert.equal(preview.headers.get("x-rent-ops-timing"), null);
-    const [workspace, dashboard, report, tenant] = await Promise.all([
+    const [workspace, dashboard, report, tenant, combined] = await Promise.all([
       fetch(`${origin}/workspace`, {headers}), fetch(`${origin}/dashboard`, {headers}),
-      fetch(`${origin}/reports/rent-roll`, {headers}), fetch(`${origin}/tenants/not-a-real-person`, {headers}),
+      fetch(`${origin}/reports/rent-roll`, {headers}), fetch(`${origin}/tenants/not-a-real-person`, {headers}), fetch(`${origin}/workspace/dashboard`, {headers}),
     ]);
     assert.equal(workspace.status, 200); assert.equal(dashboard.status, 200); assert.equal(report.status, 200); assert.equal(tenant.status, 404);
-    for (const response of [workspace, dashboard, report, tenant]) {
+    for (const response of [workspace, dashboard, report, tenant, combined]) {
       assert.equal(response.headers.get("x-rent-ops-timing"), response.headers.get("server-timing"));
       const timing = metrics(response.headers.get("server-timing"));
       assert.equal(timing.get("db_calls"), 1);
@@ -68,6 +68,8 @@ test("protected request timings expose only isolated numeric phases and preserve
       assert.equal(response.headers.get("cache-control"), "no-store");
       if (response !== workspace) assert.ok(timing.has("validate"));
     }
+    assert.equal(combined.status, 200);
+    assert.deepEqual(Object.keys(await combined.json()).sort(), ["delinquency", "rentRoll", "summary"]);
     const workspaceBody = await workspace.json();
     assert.equal(workspaceBody.workspaceVersion, 1);
     assert.deepEqual(workspaceBody.tenantIndex, []);

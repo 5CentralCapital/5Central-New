@@ -1375,7 +1375,7 @@ async function requestJson(path: string, init?: RequestInit): Promise<unknown> {
   if (!response.ok) {
     const errorPayload = await response.json().catch(() => undefined);
     const code = safeErrorCode(errorPayload);
-    const reportRequest = /\/api\/rent-ops\/(?:preview-context|dashboard|snapshot|reports(?:\/|$))/.test(path);
+    const reportRequest = /\/api\/rent-ops\/(?:preview-context|dashboard|snapshot|workspace\/dashboard(?:\?|$)|reports(?:\/|$))/.test(path);
     const message = code === "not_authorized" ? "Rent Operations authorization is required."
       : code === "not_found" ? "The requested Rent Operations record was not found."
         : code === "conflict" || code === "versioned_schedule_required" ? undefined
@@ -1878,6 +1878,37 @@ export async function loadRentOpsWorkspaceSummary(filters: ApiFilters = {}, sign
   const value = await requestJson(`/api/rent-ops/dashboard${buildRentOpsQuery(filters)}`, { signal });
   assertNoForbiddenResponseFields(value);
   return decodeDashboardSummary(unwrapData(value));
+}
+
+export interface RentOpsWorkspaceDashboard {
+  summary: DashboardSummary;
+  reports: { "rent-roll": ReportRow[]; delinquency: ReportRow[] };
+}
+
+export function decodeRentOpsWorkspaceDashboard(payload: unknown): RentOpsWorkspaceDashboard {
+  assertNoForbiddenResponseFields(payload);
+  const root = exactRecord(unwrapData(payload), "workspace dashboard", ["summary", "rentRoll", "delinquency"]);
+  const decodeReport = (value: unknown, report: "rent-roll" | "delinquency"): ReportRow[] => {
+    const envelope = exactRecord(value, "workspace dashboard report", ["report", "filters", "rows"]);
+    if (requiredText(envelope, "report") !== report) invalidResponse();
+    decodeApiFilters(envelope.filters);
+    return decodeReportRows(report, envelope.rows);
+  };
+  return {
+    summary: decodeDashboardSummary(root.summary),
+    reports: {
+      "rent-roll": decodeReport(root.rentRoll, "rent-roll"),
+      delinquency: decodeReport(root.delinquency, "delinquency"),
+    },
+  };
+}
+
+export async function loadRentOpsWorkspaceDashboard(filters: ApiFilters = {}, signal?: AbortSignal): Promise<RentOpsWorkspaceDashboard> {
+  if (DEMO_ALLOWED) {
+    const snapshot = createDemoAdminSnapshot();
+    return { summary: snapshot.summary, reports: { "rent-roll": snapshot.reports["rent-roll"].rows, delinquency: snapshot.reports.delinquency.rows } };
+  }
+  return decodeRentOpsWorkspaceDashboard(await requestJson(`/api/rent-ops/workspace/dashboard${buildRentOpsQuery(filters)}`, { signal }));
 }
 
 export function decodeRentOpsWorkspaceCollection<K extends WorkspaceCollection>(name: K, payload: unknown): AdminSnapshotView[K] {

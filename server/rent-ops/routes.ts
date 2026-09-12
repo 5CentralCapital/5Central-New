@@ -803,6 +803,17 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
     try { const snapshot = await service.workspaceSnapshot(); await sendWorkspaceJson(req, res, measureRentOps("derive", () => serializeWorkspaceBootstrap(snapshot, parseAdminFilters(req.query)))); }
     catch (error) { adminError(res, error); }
   });
+  adminRouter.get("/workspace/dashboard", async (req, res) => {
+    try {
+      const filters = parseAdminFilters(req.query);
+      const result = await service.workspaceDashboard(filters);
+      await sendWorkspaceJson(req, res, {
+        summary: serializeAdminDashboardSummary(result.summary),
+        rentRoll: serializeReportEnvelope({ report: "rent-roll", filters, rows: result.rentRoll }),
+        delinquency: serializeReportEnvelope({ report: "delinquency", filters, rows: result.delinquency }),
+      });
+    } catch (error) { adminError(res, error); }
+  });
   adminRouter.get("/workspace/collections/:name", async (req, res) => {
     try {
       if (!workspaceCollections.includes(req.params.name as WorkspaceCollection)) {

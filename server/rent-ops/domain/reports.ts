@@ -1561,7 +1561,18 @@ export function deriveApplicantPipeline(snapshot: RentOpsSnapshot, filters: Rent
     .filter((row) => searchMatches(`${row.displayName} ${row.propertyName ?? ""} ${row.unitInterest ?? ""}`, filters.search));
 }
 
+export interface DashboardWorkspaceResult {
+  summary: DashboardSummary;
+  rentRoll: RentRollRow[];
+  delinquency: DelinquencyRow[];
+}
+
 export function deriveDashboardSummary(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): DashboardSummary {
+  return deriveDashboardWorkspace(snapshot, filters).summary;
+}
+
+/** Return the same report rows used to calculate the summary in this call. */
+export function deriveDashboardWorkspace(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): DashboardWorkspaceResult {
   const asOf = asOfDate(filters);
   // This cache exists only for this synchronous dashboard derivation. Keep the
   // complete account calculation, including unknown/unlinked evidence, intact.
@@ -1603,7 +1614,7 @@ export function deriveDashboardSummary(snapshot: RentOpsSnapshot, filters: RentO
   const expiringIn30Days = expirations.filter((row) => row.actionStatus === "expiring" && row.contractEndOn && row.contractEndOn <= addDays(asOf, 30)).length;
   const expiringIn60Days = expirations.filter((row) => row.actionStatus === "expiring" && row.contractEndOn && row.contractEndOn <= addDays(asOf, 60)).length;
   const expiringIn90Days = expirations.filter((row) => row.actionStatus === "expiring").length;
-  return {
+  const summary: DashboardSummary = {
     asOfDate: asOf,
     propertyCount: propertyIds.size,
     unitCount: activeUnits.length,
@@ -1641,6 +1652,7 @@ export function deriveDashboardSummary(snapshot: RentOpsSnapshot, filters: RentO
       securityDepositLiabilityCents: { report: "deposits", filters },
     },
   };
+  return { summary, rentRoll, delinquency };
 }
 
 export function deriveTenantNavigation(snapshot: RentOpsSnapshot, personId: string, filters: RentOpsFilters = {}) {

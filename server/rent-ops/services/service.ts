@@ -40,7 +40,7 @@ import type {
   ApplicantPublicView,
   DashboardSummary,
 } from "../../../shared/rent-ops-contracts";
-import { validateReportFilters, deriveApplicantPipeline, deriveCollectedIncome, deriveDashboardSummary, deriveDepositLiability, deriveDelinquency, deriveFixedReport, deriveHap, deriveLeaseExpirations, deriveRentRoll, deriveScheduledIncome, deriveScheduledVsCollected, deriveTenantLedger, deriveTenantProfile, toApplicantPublicView } from "../domain/reports";
+import { validateReportFilters, deriveApplicantPipeline, deriveCollectedIncome, deriveDashboardSummary, deriveDashboardWorkspace, deriveDepositLiability, deriveDelinquency, deriveFixedReport, deriveHap, deriveLeaseExpirations, deriveRentRoll, deriveScheduledIncome, deriveScheduledVsCollected, deriveTenantLedger, deriveTenantProfile, toApplicantPublicView } from "../domain/reports";
 import { assertApplicationStatusTransition, assertCents, assertPositiveCents, assertPrivateStorageKey, buildReversal, documentReferenceViolations, effectiveSchedules, RentOpsInvariantError, validateAllocation, validateSnapshot } from "../domain/invariants";
 import { addDays, addMonths, nowIsoDate, nowIsoTimestamp } from "../domain/dates";
 import { isPublicApplicationInventory, serializePublicListings } from "../presentation/public";
@@ -479,6 +479,12 @@ export class RentOpsService {
     validateReportFilters("dashboard", filters);
     const snapshot = await this.operationalSnapshot();
     return measureRentOps("derive", () => deriveDashboardSummary(snapshot, filters));
+  }
+
+  async workspaceDashboard(filters: RentOpsFilters = {}) {
+    validateReportFilters("dashboard", filters);
+    const snapshot = await this.operationalSnapshot();
+    return measureRentOps("derive", () => deriveDashboardWorkspace(snapshot, filters));
   }
 
   async report(name: Parameters<typeof deriveFixedReport>[1], filters: RentOpsFilters = {}): Promise<unknown[]> {

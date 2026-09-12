@@ -46,7 +46,7 @@ function timingHeader(state: TimingState): string {
 /** Install only after manager authorization. No data, identifiers, SQL or
  * request parameters enter the fixed numeric header; no metric is retained. */
 export const rentOpsRequestTiming: RequestHandler = (req, res, next) => {
-  if (req.method !== "GET" || !/^\/(?:workspace|dashboard|reports\/[^/]+|tenants\/[^/]+)$/.test(req.path)) { next(); return; }
+  if (req.method !== "GET" || !/^\/(?:workspace(?:\/dashboard)?|dashboard|reports\/[^/]+|tenants\/[^/]+)$/.test(req.path)) { next(); return; }
   const state: TimingState = {started: performance.now(), durations: {}, counts: {}};
   const original = res.writeHead;
   res.writeHead = function (this: Response, ...args: any[]) {
