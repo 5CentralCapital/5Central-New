@@ -123,3 +123,69 @@ test("workspace HTTP reads use existing admin guard and explicit collection enve
     assert.deepEqual(collection, {collection: "documents", items: []});
   } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
+
+test("scoped tenant navigation excludes other properties and keeps only relevant account contacts", () => {
+  const source = structuredClone(syntheticRentOpsSnapshot());
+  source.people.push({id: "account-a", firstName: "Account", lastName: "A"}, {id: "account-b", firstName: "Account", lastName: "B"});
+  source.householdMemberships.push(
+    {id: "account-link-a", personId: source.people[0].id, accountPersonId: "account-a", tenancyId: source.tenancies[0].id},
+    {id: "account-link-b", personId: source.people[2].id, accountPersonId: "account-b", tenancyId: source.tenancies[2].id},
+  );
+  const result = serializeWorkspaceBootstrap(source, {propertyId: source.properties[0].id, asOfDate: "2026-08-15"});
+  assert.deepEqual(result.tenantIndex.map(row => row.person.id).sort(), [source.people[0].id, source.people[1].id, "account-a"].sort());
+  assert.equal(result.tenantIndex.find(row => row.person.id === "account-a")?.selectedTenancyId, undefined);
+});
+
+test("narrow collection repository reads one table using identical full-snapshot mappers and positive DTOs", async () => {
+  const { createPostgresRentOpsRepository } = await import("../repositories/postgres");
+  const { RENT_OPS_RUNTIME_REQUIRED_TABLES } = await import("../persistence");
+  const { workspaceCollections, serializeWorkspaceCollectionItems } = await import("./workspace-read");
+  const queried: string[] = [];
+  const tableRows: Record<string, Record<string, unknown>[]> = {
+    rent_ops_documents: [{id: "document-one", file_name: "lease.pdf", mime_type: "application/pdf", type: "lease", state: "executed", availability: "metadata_only", storage_key: "SENSITIVE_SENTINEL", storage_key_knowledge: "unknown", checksum_sha256: "SENSITIVE_SENTINEL", metadata_size_bytes: 2000, record_revision: 4}],
+    rent_ops_security_deposits: [{id: "deposit-one", amount_held_cents: null, source_balance_cents: null, record_revision: 2}],
+    rent_ops_activity_events: [{id: "activity-one", summary: "Recorded note", type: "note", occurred_at: "2026-08-15T00:00:00.000Z", raw_payload: "SENSITIVE_SENTINEL"}],
+    rent_ops_applications: [{id: "application-one", first_name: "Test", last_name: "Applicant", status: "draft", source_type: "manual", resume_token_hash: "SENSITIVE_SENTINEL"}],
+  };
+  const executor = {
+    async query<T>(sql: string, values?: unknown[]): Promise<{rows: T[]}> {
+      if (sql.includes("information_schema.tables")) return {rows: RENT_OPS_RUNTIME_REQUIRED_TABLES.map(table_name => ({table_name})) as T[]};
+      if (sql.includes("has_table_privilege")) return {rows: ((values?.[0] as string[]) ?? []).map(table_name => ({table_name, can_select: false, can_insert: false, can_update: false, can_delete: false})) as T[]};
+      const table = sql.match(/^SELECT \* FROM (\w+)/)?.[1];
+      if (table) queried.push(table);
+      return {rows: (tableRows[table ?? ""] ?? []) as T[]};
+    },
+  };
+  const repository = createPostgresRentOpsRepository(executor);
+  // Compare the full loader's mapping before global graph validation: deliberately
+  // incomplete nullable fixtures test the row boundary, not imported graph validity.
+  const full = await (repository as unknown as {loadSnapshot(executor: typeof executor, history: boolean): Promise<ReturnType<typeof syntheticRentOpsSnapshot>>}).loadSnapshot(executor, false);
+  for (const name of workspaceCollections) {
+    queried.length = 0;
+    const items = await repository.getWorkspaceCollection(name);
+    assert.equal(queried.length, 1, name);
+    assert.deepEqual(items, full[name], name);
+    const serialized = serializeWorkspaceCollectionItems(items, name);
+    assert.deepEqual(serialized, serializeWorkspaceCollection(full, name));
+    assert.ok(!JSON.stringify(serialized).includes("SENSITIVE_SENTINEL"));
+  }
+  queried.length = 0;
+  await assert.rejects(repository.getWorkspaceCollection("applicationHistory" as never), /Unknown workspace collection/);
+  assert.equal(queried.length, 0);
+  const deposits = serializeWorkspaceCollection(full, "securityDeposits");
+  assert.equal(deposits.items[0].amountHeldCents, null);
+});
+
+test("service dispatches independent collection reads without full financial snapshots", async () => {
+  const source = syntheticRentOpsSnapshot();
+  const repository = createSyntheticRentOpsRepository();
+  const reads: string[] = [];
+  Object.assign(repository, {
+    getSnapshot: async () => { throw new Error("Full snapshot must not be loaded"); },
+    getOperationalSnapshot: async () => { throw new Error("Financial snapshot must not be loaded"); },
+    getWorkspaceCollection: async (name: "recurringSchedules" | "documents" | "activityEvents") => { reads.push(name); return source[name]; },
+  });
+  const service = new RentOpsService(repository, createInMemoryObjectStore());
+  for (const name of ["recurringSchedules", "documents", "activityEvents"] as const) assert.deepEqual(await service.workspaceCollection(name), source[name]);
+  assert.deepEqual(reads, ["recurringSchedules", "documents", "activityEvents"]);
+});

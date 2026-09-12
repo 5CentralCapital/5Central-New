@@ -1800,6 +1800,9 @@ export interface RentOpsRecordPatchUpdate {
   values: Record<string, unknown>;
 }
 
+/** Closed navigation collection names; these rows are not financial report inputs. */
+export type RentOpsWorkspaceCollection = "recurringSchedules" | "ledgerTransactions" | "paymentAllocations" | "securityDeposits" | "subsidyContracts" | "applications" | "applicationHouseholdMembers" | "applicationRequirements" | "documents" | "activityEvents";
+
 export interface RentOpsRepository {
   /** Runs a multi-record business operation atomically. */
   transaction<T>(work: (repository: RentOpsRepository) => Promise<T>, options?: RentOpsTransactionOptions): Promise<T>;
@@ -1808,6 +1811,7 @@ export interface RentOpsRepository {
   getOperationalSnapshot?(): Promise<RentOpsSnapshot>;
   /** Record navigation only; never use this partial projection for financial derivation. */
   getWorkspaceSnapshot?(): Promise<RentOpsSnapshot>;
+  getWorkspaceCollection?<K extends RentOpsWorkspaceCollection>(name: K): Promise<RentOpsSnapshot[K]>;
   /** Dedicated catalog read avoids loading unrelated financial and history rows. */
   getChargeDefinitions?(): Promise<RentOpsChargeDefinition[]>;
   /** Public inventory needs complete tenancy evidence, but no financial/history rows. */

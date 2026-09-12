@@ -1,4 +1,4 @@
-import { serializeWorkspaceBootstrap, serializeWorkspaceCollection, sendWorkspaceJson, workspaceCollections, type WorkspaceCollection } from "./presentation/workspace-read";
+import { serializeWorkspaceBootstrap, serializeWorkspaceCollectionItems, sendWorkspaceJson, workspaceCollections, type WorkspaceCollection } from "./presentation/workspace-read";
 import {sendAdminSnapshot} from "./presentation/snapshot-transport";
 import { phoneMethodsSchema } from "./domain/phone-methods";
 import { RentOpsRetryableConflict } from "./runtime-database";
@@ -806,7 +806,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
       if (!workspaceCollections.includes(req.params.name as WorkspaceCollection)) {
         res.status(404).json(errorBody("not_found")); return;
       }
-      await sendWorkspaceJson(req, res, serializeWorkspaceCollection(await service.operationalSnapshot(), req.params.name as WorkspaceCollection));
+      await sendWorkspaceJson(req, res, serializeWorkspaceCollectionItems(await service.workspaceCollection(req.params.name as WorkspaceCollection), req.params.name as WorkspaceCollection));
     } catch (error) { adminError(res, error); }
   });
   adminRouter.get("/snapshot", async (req, res) => { try { const filters = parseAdminFilters(req.query); validateReportFilters("overview", filters); await sendAdminSnapshot(req, res, buildClientSnapshot(await service.snapshot(), filters)); } catch (error) { adminError(res, error); } });

@@ -31,6 +31,7 @@ import type {
   RentOpsRecordPatchUpdate,
   RentOpsSecurityDeposit,
   RentOpsSnapshot,
+  RentOpsWorkspaceCollection,
   RentOpsSubsidyContract,
   RentOpsTenancy,
   RentOpsUnit,
@@ -443,6 +444,11 @@ export class RentOpsService {
   async snapshot(): Promise<RentOpsSnapshot> { return this.repository.getSnapshot(); }
   async operationalSnapshot(): Promise<RentOpsSnapshot> {
     return this.repository.getOperationalSnapshot ? this.repository.getOperationalSnapshot() : this.snapshot();
+  }
+  async workspaceCollection<K extends RentOpsWorkspaceCollection>(name: K): Promise<RentOpsSnapshot[K]> {
+    return this.repository.getWorkspaceCollection
+      ? this.repository.getWorkspaceCollection(name)
+      : (await this.operationalSnapshot())[name];
   }
   async workspaceSnapshot(): Promise<RentOpsSnapshot> {
     return this.repository.getWorkspaceSnapshot ? this.repository.getWorkspaceSnapshot() : this.snapshot();

@@ -34,6 +34,7 @@ import type {
   RentOpsPatchEntityType,
   RentOpsSecurityDeposit,
   RentOpsSnapshot,
+  RentOpsWorkspaceCollection,
   RentOpsSubsidyContract,
   RentOpsSubsidyTenant,
   RentOpsSubsidyPayment,
@@ -1111,41 +1112,63 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     return this.client.transaction ? this.client.transaction(load, { readOnly: true }) : load(this.client);
   }
 
-  private async loadSnapshot(executor: RentOpsQueryExecutor, includeHistory = true): Promise<RentOpsSnapshot> {
+  async getWorkspaceCollection<K extends RentOpsWorkspaceCollection>(name: K): Promise<RentOpsSnapshot[K]> {
+    const tables: Record<RentOpsWorkspaceCollection, string> = {
+      recurringSchedules: "rent_ops_recurring_charge_schedules",
+      ledgerTransactions: "rent_ops_ledger_transactions",
+      paymentAllocations: "rent_ops_payment_allocations",
+      securityDeposits: "rent_ops_security_deposits",
+      subsidyContracts: "rent_ops_subsidy_contracts",
+      applications: "rent_ops_applications",
+      applicationHouseholdMembers: "rent_ops_application_household_members",
+      applicationRequirements: "rent_ops_application_requirements",
+      documents: "rent_ops_documents",
+      activityEvents: "rent_ops_activity_events",
+    };
+    if (!Object.prototype.hasOwnProperty.call(tables, name)) throw new RentOpsInvariantError("Unknown workspace collection");
+    await this.assertReady();
+    // Reuse the exact full-snapshot row mappers, including document availability.
+    // Only this collection escapes; the partial internal carrier cannot be mistaken for a report snapshot.
+    const snapshot = await this.loadSnapshot(this.client, false, tables[name]);
+    return snapshot[name];
+  }
+
+  private async loadSnapshot(executor: RentOpsQueryExecutor, includeHistory = true, selectedTable?: string): Promise<RentOpsSnapshot> {
+    const rows = (table: string) => !selectedTable || selectedTable === table ? this.rows(table, executor) : Promise.resolve([]);
     const snapshot = emptyRentOpsSnapshot();
     const [propertyRows, unitRows, peopleRows, tenancyRows, householdRows, leaseRows, chargeDefinitionRows, scheduleRows, ledgerRows, allocationRows, depositRows, subsidyRows, subsidyTenantRows, subsidyPaymentRows, applicationRows, applicationMemberRows, requirementRows, documentRows, activityRows, historyProspectRows, historyApplicationRows, historyInterestRows, historyParticipantRows, historyRequirementRows, historyTemplateRows, historySectionRows, historyFieldRows, historyAnswerRows, historyDocumentRows, historyActivityRows, historyBlockerRows, historyAggregateRows] = await Promise.all([
-      this.rows("rent_ops_properties", executor),
-      this.rows("rent_ops_units", executor),
-      this.rows("rent_ops_people", executor),
-      this.rows("rent_ops_tenancies", executor),
-      this.rows("rent_ops_household_memberships", executor),
-      this.rows("rent_ops_lease_terms", executor),
-      this.rows("rent_ops_charge_definitions", executor),
-      this.rows("rent_ops_recurring_charge_schedules", executor),
-      this.rows("rent_ops_ledger_transactions", executor),
-      this.rows("rent_ops_payment_allocations", executor),
-      this.rows("rent_ops_security_deposits", executor),
-      this.rows("rent_ops_subsidy_contracts", executor),
-      this.rows("rent_ops_subsidy_tenants", executor),
-      this.rows("rent_ops_subsidy_payments", executor),
-      this.rows("rent_ops_applications", executor),
-      this.rows("rent_ops_application_household_members", executor),
-      this.rows("rent_ops_application_requirements", executor),
-      this.rows("rent_ops_documents", executor),
-      this.rows("rent_ops_activity_events", executor),
-      includeHistory ? this.rows("rent_ops_prospects", executor) : Promise.resolve([]),
-      includeHistory ? this.rows("rent_ops_application_history", executor) : Promise.resolve([]),
-      includeHistory ? this.rows("rent_ops_application_interests", executor) : Promise.resolve([]),
-      includeHistory ? this.rows("rent_ops_application_participants", executor) : Promise.resolve([]),
-      includeHistory ? this.rows("rent_ops_application_requirement_occurrences", executor) : Promise.resolve([]),
-      includeHistory ? this.rows("rent_ops_application_template_definitions", executor) : Promise.resolve([]),
-      includeHistory ? this.rows("rent_ops_application_template_sections", executor) : Promise.resolve([]),
-      includeHistory ? this.rows("rent_ops_application_template_fields", executor) : Promise.resolve([]),
-      includeHistory ? this.rows("rent_ops_application_answer_occurrences", executor) : Promise.resolve([]),
-      includeHistory ? this.rows("rent_ops_application_history_documents", executor) : Promise.resolve([]),
-      includeHistory ? this.rows("rent_ops_application_history_activities", executor) : Promise.resolve([]),
-      includeHistory ? this.rows("rent_ops_application_history_blockers", executor) : Promise.resolve([]),
-      includeHistory ? this.rows("rent_ops_application_history_aggregates", executor) : Promise.resolve([]),
+      rows("rent_ops_properties"),
+      rows("rent_ops_units"),
+      rows("rent_ops_people"),
+      rows("rent_ops_tenancies"),
+      rows("rent_ops_household_memberships"),
+      rows("rent_ops_lease_terms"),
+      rows("rent_ops_charge_definitions"),
+      rows("rent_ops_recurring_charge_schedules"),
+      rows("rent_ops_ledger_transactions"),
+      rows("rent_ops_payment_allocations"),
+      rows("rent_ops_security_deposits"),
+      rows("rent_ops_subsidy_contracts"),
+      rows("rent_ops_subsidy_tenants"),
+      rows("rent_ops_subsidy_payments"),
+      rows("rent_ops_applications"),
+      rows("rent_ops_application_household_members"),
+      rows("rent_ops_application_requirements"),
+      rows("rent_ops_documents"),
+      rows("rent_ops_activity_events"),
+      includeHistory ? rows("rent_ops_prospects") : Promise.resolve([]),
+      includeHistory ? rows("rent_ops_application_history") : Promise.resolve([]),
+      includeHistory ? rows("rent_ops_application_interests") : Promise.resolve([]),
+      includeHistory ? rows("rent_ops_application_participants") : Promise.resolve([]),
+      includeHistory ? rows("rent_ops_application_requirement_occurrences") : Promise.resolve([]),
+      includeHistory ? rows("rent_ops_application_template_definitions") : Promise.resolve([]),
+      includeHistory ? rows("rent_ops_application_template_sections") : Promise.resolve([]),
+      includeHistory ? rows("rent_ops_application_template_fields") : Promise.resolve([]),
+      includeHistory ? rows("rent_ops_application_answer_occurrences") : Promise.resolve([]),
+      includeHistory ? rows("rent_ops_application_history_documents") : Promise.resolve([]),
+      includeHistory ? rows("rent_ops_application_history_activities") : Promise.resolve([]),
+      includeHistory ? rows("rent_ops_application_history_blockers") : Promise.resolve([]),
+      includeHistory ? rows("rent_ops_application_history_aggregates") : Promise.resolve([]),
     ]);
     snapshot.properties = propertyRows.map(rowToProperty);
     snapshot.units = unitRows.map(rowToUnit);
