@@ -112,7 +112,9 @@ function assertRecurringSuccessor(
   }
   if (successor.versionAction === "root") throw new RentOpsInvariantError("Recurring schedule successor cannot be a root");
   if (successor.effectiveFromKnowledge !== "manual") throw new RentOpsInvariantError("Recurring schedule successor effectiveFrom must be manual");
+  if (predecessor.effectiveFrom && (!successor.effectiveFrom || successor.effectiveFrom < predecessor.effectiveFrom || (successor.effectiveFrom === predecessor.effectiveFrom && successor.versionAction !== "end"))) throw new RentOpsInvariantError("Only a terminal end may share its predecessor start");
   if (predecessor.effectiveTo && successor.effectiveFrom && successor.effectiveFrom > predecessor.effectiveTo) throw new RentOpsInvariantError("Recurring schedule successor starts after predecessor end");
+  if (successor.effectiveFrom === predecessor.effectiveFrom && predecessor.lineageRootOrigin === "artifact" && (!predecessor.artifactObservationOn || !successor.effectiveFrom || successor.effectiveFrom < predecessor.artifactObservationOn)) throw new RentOpsInvariantError("Same-start end is outside its verified artifact boundary");
   if (successor.recordRevision !== expectedRevision + 1) throw new RentOpsInvariantError("Recurring schedule successor revision is stale");
   if (successor.versionAction === "replace" && (successor.effectiveTo !== predecessor.effectiveTo || successor.active !== predecessor.active || successor.activeKnowledge !== predecessor.activeKnowledge)) throw new RentOpsInvariantError("Recurring schedule successor changed immutable fields");
   if (successor.versionAction === "end" && (successor.amountCents !== null || successor.amountKnowledge !== "unknown" || successor.active !== false || successor.activeKnowledge !== "manual" || successor.effectiveTo !== successor.effectiveFrom)) {

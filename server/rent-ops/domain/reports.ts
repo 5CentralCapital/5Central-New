@@ -304,7 +304,7 @@ export function deriveOperationalScheduleRegister(snapshot: RentOpsSnapshot, fil
     const tenancy = snapshot.tenancies.find(candidate => candidate.id === row.tenancyId);
     const formerAccount = isKnownPastAccountOn(snapshot, row.personId ?? tenancy?.primaryPersonId ?? (row.scopeType === "tenant" ? row.scopeId : "") ?? "", asOf, tenancy);
     const former = formerAccount || tenancy && confirmedTenancyFact(tenancy.statusKnowledge) && (tenancy.status === "past" || tenancy.status === "cancelled") && !isOccupiedTenancyOn(tenancy, asOf);
-    if (!invalid.has(row.id) && (row.active === false || !!interval?.effectiveTo && interval.effectiveTo < asOf || former)) historical.push(row.id);
+    if (!invalid.has(row.id) && (row.active === false || !!interval?.effectiveTo && (interval.effectiveTo < asOf || !!interval.effectiveFrom && interval.effectiveTo < interval.effectiveFrom) || former)) historical.push(row.id);
     else if (!invalid.has(row.id) && scheduleAmountConfirmed(row) && row.scopeType === "property") continue;
     else review.push(row.id);
   }

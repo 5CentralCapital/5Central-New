@@ -1281,7 +1281,7 @@ export class RentOpsService {
     const predecessorRevision = predecessor.recordRevision ?? 1;
     if (predecessorRevision !== input.expectedRevision) throw new RentOpsInvariantError("Recurring schedule predecessor revision is stale");
     if (!predecessor.lineageRootId || !predecessor.lineageRootOrigin || predecessor.versionAction === "end") throw new RentOpsInvariantError("Recurring schedule predecessor is terminal or has unresolved lineage");
-    if (predecessor.effectiveFrom && input.effectiveFrom <= predecessor.effectiveFrom) throw new RentOpsInvariantError("Recurring schedule successor date must be after its predecessor");
+    if (predecessor.effectiveFrom && (input.effectiveFrom < predecessor.effectiveFrom || (input.effectiveFrom === predecessor.effectiveFrom && input.action !== "end"))) throw new RentOpsInvariantError("Recurring schedule successor date must be after its predecessor");
     if (!predecessor.effectiveFrom && predecessor.effectiveFromKnowledge !== "unknown_open_start") throw new RentOpsInvariantError("Recurring schedule predecessor start is unresolved");
     if (predecessor.lineageRootOrigin === "artifact" && (!predecessor.sourceArtifactSha256 || !predecessor.artifactObservationOn || input.effectiveFrom < predecessor.artifactObservationOn)) {
       throw new RentOpsInvariantError("Recurring schedule successor is outside its verified artifact boundary");

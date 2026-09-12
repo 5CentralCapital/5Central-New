@@ -71,6 +71,17 @@ test("imported account backfill is revision-guarded, rollback-safe and uses UPDA
     assert.deepEqual(established.recurringSchedules.find(row => row.id === "future-rent"), establishBefore.recurringSchedules.find(row => row.id === "future-rent"));
     assert.equal(established.recurringSchedules.filter(row => row.id.startsWith("established-")).length, 2);
     assert.equal(established.ledgerTransactions.length, 0);
+    await assert.rejects(service.saveRecurringScheduleSuccessor("future-rent", {id:"invalid-equal-replace",expectedRevision:1,action:"replace",effectiveFrom:"2026-10-01",amountCents:100000}, {actorSubject:"qa",occurredAt:new Date(manifest.occurredAt).toISOString()}), /after its predecessor/);
+    await assert.rejects(db.query(`INSERT INTO rent_ops_recurring_charge_schedules SELECT (jsonb_populate_record(NULL::rent_ops_recurring_charge_schedules,to_jsonb(r)||jsonb_build_object('id','db-invalid-equal','source_system',NULL,'source_id',NULL,'supersedes_id',r.id,'version_origin','manual','version_action','replace','record_revision',2,'effective_from_knowledge','manual'))).* FROM rent_ops_recurring_charge_schedules r WHERE id='future-rent'`), /lineage_boundary_invalid/);
+    const endFuture: ReconciliationManifest = {...manifest,id:"end-before-start",operations:[{kind:"schedule-end",targetId:"future-rent",sourceId:"charge:457",expectedRevision:1,beforeSha256:reconciliationHash(established.recurringSchedules.find(row=>row.id==="future-rent")),successorId:"future-rent-terminal",effectiveFrom:"2026-10-01",evidence:manifest.operations[0].evidence}]};
+    const endPlan=await reconcileImportedRecords(repository,endFuture,{mode:"plan"});
+    assert.deepEqual((await repository.getSnapshot()).recurringSchedules,established.recurringSchedules);
+    await reconcileImportedRecords(repository,endFuture,{mode:"apply",approvedPlanToken:endPlan.token});
+    const endedFuture=await repository.getSnapshot();
+    assert.deepEqual(endedFuture.recurringSchedules.find(row=>row.id==="future-rent"),established.recurringSchedules.find(row=>row.id==="future-rent"));
+    assert.equal(endedFuture.recurringSchedules.find(row=>row.id==="future-rent-terminal")?.active,false);
+    assert.deepEqual(endedFuture.ledgerTransactions,established.ledgerTransactions);
+
     await db.exec("RESET ROLE; GRANT SELECT,INSERT ON rent_ops_lease_terms TO rent_ops_staging_importer; SET ROLE rent_ops_staging_importer");
     await db.exec("INSERT INTO rent_ops_lease_terms(id,tenancy_id,status,contract_start_on,contract_end_on,created_at,status_knowledge,contract_start_knowledge,contract_end_knowledge,tenancy_link_knowledge,source_system,source_id) VALUES('lease-term','t2','draft','2026-09-01','2026-09-30',NOW(),'source','source','source','exact','rent_manager','lease:552')");
     await db.exec("SET ROLE qa_reconcile");

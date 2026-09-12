@@ -415,7 +415,7 @@ export function resolveEffectiveScheduleVersions(
       if (schedule.effectiveFromKnowledge !== "manual") addInvalid(schedule, "schedule_lineage_manual_date_required", root || `invalid:${schedule.id}`);
     }
     const predecessorBoundaryValid = predecessor.effectiveFrom
-      ? Boolean(schedule.effectiveFrom && schedule.effectiveFrom > predecessor.effectiveFrom && (!predecessor.effectiveTo || schedule.effectiveFrom <= predecessor.effectiveTo) && isKnownDateKnowledge(schedule.effectiveFromKnowledge))
+      ? Boolean(schedule.effectiveFrom && (schedule.effectiveFrom > predecessor.effectiveFrom || (action === "end" && schedule.effectiveFrom === predecessor.effectiveFrom && (expectedOrigin !== "artifact" || !!rootSchedule?.artifactObservationOn && schedule.effectiveFrom >= rootSchedule.artifactObservationOn))) && (!predecessor.effectiveTo || schedule.effectiveFrom <= predecessor.effectiveTo) && isKnownDateKnowledge(schedule.effectiveFromKnowledge))
       : predecessor.effectiveFromKnowledge === "unknown_open_start"
         && Boolean(rootSchedule?.artifactObservationOn && schedule.effectiveFrom && schedule.effectiveFrom >= rootSchedule.artifactObservationOn)
         && isKnownDateKnowledge(schedule.effectiveFromKnowledge)
@@ -494,7 +494,14 @@ export function resolveEffectiveScheduleVersions(
     const startDates = rows
       .filter((schedule): schedule is RentOpsRecurringChargeSchedule & { effectiveFrom: IsoDate } => schedule.effectiveFrom !== null && schedule.effectiveFrom !== undefined)
       .map((schedule) => schedule.effectiveFrom);
-    const duplicateStart = new Set(startDates).size !== startDates.length;
+    const duplicateStart = startDates.some(date => {
+      const sameDate = rows.filter(schedule => schedule.effectiveFrom === date);
+      if (sameDate.length < 2) return false;
+      // A terminal END at its direct predecessor start creates an empty
+      // active interval. No replacement or unrelated same-date pair is legal.
+      return sameDate.length !== 2 || !sameDate.some(end => lineageAction(end, strictLineage) === "end"
+        && sameDate.some(predecessor => predecessor.id === end.supersedesId && predecessor.id !== end.id));
+    });
     if (duplicateStart) {
       exceptionCodes.add("schedule_lineage_same_date_conflict");
       invalidRoots.add(root);

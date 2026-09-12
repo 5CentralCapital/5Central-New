@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyRentOpsSnapshot, type RentOpsSnapshot } from "../../../shared/rent-ops-contracts";
+import { deriveOperationalScheduleRegister } from "./reports";
 import { projectFinancialOccupancy, projectFinancialSchedules, resolveEffectiveScheduleVersions } from "./financial-projection";
 
 function snapshotWithUnit(propertyId = "p1", unitId = "u1"): RentOpsSnapshot {
@@ -653,4 +654,22 @@ test("as-of lineage resolves predecessor before a later same-month replacement a
   assert.equal(projectFinancialSchedules(snapshot, "2026-09", { asOfDate: "2026-09-20" }).rows.length, 0);
   assert.equal(projectFinancialSchedules(snapshot, "2026-09", { asOfDate: "2026-09-07", selection: "month_forecast" }).rows.length, 0);
   assert.equal(snapshot.recurringSchedules.length, 3);
+});
+
+test("terminal end at a future root start produces no active interval and never resurrects",()=>{
+  const root=schedule({id:'future-fee',scopeType:'tenant',scopeId:'person-u1',personId:'person-u1',tenancyId:'tenancy-u1',unitId:'u1',chargeDefinitionId:'fee',category:'recurring_fee',amountCents:3500,effectiveFrom:'2026-10-01',artifactObservationOn:'2026-09-07'});
+  const end={...root,id:'future-fee-end',source:undefined,supersedesId:root.id,versionOrigin:'manual',versionAction:'end',recordRevision:2,effectiveFromKnowledge:'manual',effectiveTo:'2026-10-01',active:false,activeKnowledge:'manual',amountCents:null,amountKnowledge:'unknown'} as typeof root;
+  const snapshot=snapshotWithUnit();addLeaseBackedTenancy(snapshot,{});snapshot.recurringSchedules=[root,end];
+  for(const asOf of ['2026-09-12','2026-10-01','2026-10-02','2027-01-01']){
+    const projection=resolveEffectiveScheduleVersions([root,end],asOf.slice(0,7),{strictLineage:true,effectiveAsOf:asOf});
+    assert.equal(projection.invalidSchedules.length,0);
+    assert.equal(projection.selectedSchedules.length,0);
+    const register=deriveOperationalScheduleRegister(snapshot,{asOfDate:asOf});
+    assert.equal(register.currentScheduleIds.length,0);assert.equal(register.futureScheduleIds.length,0);
+    assert.deepEqual(register.historicalScheduleIds.sort(),['future-fee','future-fee-end']);
+  }
+  const replacement={...end,versionAction:'replace',effectiveTo:root.effectiveTo,amountCents:4000,amountKnowledge:'known',active:root.active,activeKnowledge:root.activeKnowledge} as typeof root;
+  assert.equal(resolveEffectiveScheduleVersions([root,replacement],'2026-10',{strictLineage:true}).invalidSchedules.length,2);
+  assert.equal(resolveEffectiveScheduleVersions([root,{...end,artifactObservationOn:'2026-09-06'}],'2026-10',{strictLineage:true}).invalidSchedules.length,2);
+  assert.equal(resolveEffectiveScheduleVersions([{...root,artifactObservationOn:'2026-10-02'},{...end,artifactObservationOn:'2026-10-02'}],'2026-10',{strictLineage:true}).invalidSchedules.length,2);
 });
