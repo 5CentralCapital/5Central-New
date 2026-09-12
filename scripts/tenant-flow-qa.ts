@@ -1,6 +1,7 @@
 /** Synthetic HTTP integration checks against the same routers used in production. */
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { RENT_OPS_APPEND_ONLY_TABLES, RENT_OPS_RUNTIME_READ_ONLY_TABLES } from '../server/rent-ops/security/deployment-security';
 import { createTenantQa, syntheticLeasePdf } from './tenant-local-qa';
 export async function runTenantFlow(qa:Awaited<ReturnType<typeof createTenantQa>>, options:{serve?:boolean;untilBilling?:boolean}={}) {
 const serve=options.serve??false;
@@ -21,6 +22,11 @@ const pass=(name:string)=>console.log(`PASS ${name}`);
 const expected=(result:any,status:number,label:string)=>{assert.equal(result.status,status,`${label}: ${JSON.stringify(result.data)}`);return result.data;};
 let completed=false;
 try {
+ for (const table of [...RENT_OPS_APPEND_ONLY_TABLES, ...RENT_OPS_RUNTIME_READ_ONLY_TABLES]) {
+  const privileges=await qa.executor.query<{can_select:boolean;can_insert:boolean;can_update:boolean;can_delete:boolean}>("SELECT has_table_privilege(current_user,$1,'SELECT') AS can_select,has_table_privilege(current_user,$1,'INSERT') AS can_insert,has_table_privilege(current_user,$1,'UPDATE') AS can_update,has_table_privilege(current_user,$1,'DELETE') AS can_delete",[table]);
+  assert.deepEqual(privileges.rows[0],{can_select:true,can_insert:(RENT_OPS_APPEND_ONLY_TABLES as readonly string[]).includes(table),can_update:false,can_delete:false},`runtime privileges for ${table}`);
+ }
+ pass('actual runtime role enforces read-only metadata and append-only financial history');
  expected(await manager.request('/api/rent-ops/auth/login',{email:'manager@example.test',password:'LocalQA-Only-2026'}),200,'manager login');
  expected(await applicant.request('/api/rent-ops/public/applications/start',{email:'resident@example.test',firstName:'Test',lastName:'Applicant',phone:'555-0100',currentAddress:'2 Synthetic Street'}),202,'start');
  const resume=String(qa.inbox.at(-1)!.token),bearer={Authorization:`Bearer ${resume}`};

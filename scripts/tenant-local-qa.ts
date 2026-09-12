@@ -5,7 +5,8 @@ import session from "express-session";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
-import { ensureRentOpsSchema, RENT_OPS_RUNTIME_REQUIRED_TABLES } from "../server/rent-ops/persistence";
+import { ensureRentOpsSchema, rentOpsMigrationDefinitions } from "../server/rent-ops/persistence";
+import { createRentOpsSecurityManifest, renderRentOpsSecuritySql } from "../server/rent-ops/security/deployment-security";
 import { createPostgresRentOpsRepository, type RentOpsQueryExecutor } from "../server/rent-ops/repositories/postgres";
 import { registerRentOpsRoutes } from "../server/rent-ops/routes";
 import { registerRentOpsBillingRoutes } from "../server/rent-ops/billing/routes";
@@ -34,9 +35,15 @@ export async function createTenantQa(options: { provider?: PaymentProvider } = {
   if (process.env.NODE_ENV === "production") throw new Error("Local QA cannot run in production");
   const db = new PGlite();
   await ensureRentOpsSchema({ apply: true, executor: async sql => { await db.exec(sql); } });
-  await db.exec('CREATE ROLE qa_runtime; GRANT USAGE ON SCHEMA public TO qa_runtime');
-  for (const table of RENT_OPS_RUNTIME_REQUIRED_TABLES) await db.exec(`GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE ${table} TO qa_runtime`);
-  await db.exec('SET ROLE qa_runtime');
+  // Apply the production privilege contract to this disposable in-memory DB.
+  // These attestations describe synthetic fixtures only, never a deployment.
+  const security = createRentOpsSecurityManifest("staging", {
+    gates: { backupVerified: true, backupAttestation: "synthetic-disposable-qa", independentAuditVerified: true, independentAuditAttestation: "synthetic-qa-role-check", schemaChecksumSha256: rentOpsMigrationDefinitions().at(-1)!.checksum },
+    roleAttestation: { runtimeRoleIsNotRestrictedTableOwner: true, runtimeRoleNoInherit: true, importerRoleIsDistinct: true, auditorRoleIsDistinct: true, auditorRoleNoInherit: true },
+  });
+  for (const role of [security.target.runtimeRole, security.target.importerRole, security.target.auditorRole]) await db.exec(`CREATE ROLE "${role}" NOINHERIT`);
+  await db.exec(renderRentOpsSecuritySql(security, { mode: "apply" }).sql);
+  await db.exec(`SET ROLE "${security.target.runtimeRole}"`);
   console.log('QA schema ready');
   const executor: RentOpsQueryExecutor = {
     query: async (text, values) => db.query(text, values),
