@@ -1,3 +1,4 @@
+import { serializeBalanceReview } from "./balance-review";
 import type { FixedReportName } from "../../../shared/rent-ops-contracts";
 import {
   booleanValue,
@@ -68,6 +69,8 @@ function row(input: JsonObject, fields: Record<string, unknown>): JsonObject {
 export function serializeRentRollRow(value: unknown): JsonObject {
   const input = inputOf(value);
   return row(input, {
+    balanceReview: serializeBalanceReview(input.balanceReview),
+    operationalBalanceCents: nullableNumberValue(input.operationalBalanceCents),
     balanceComplete: bool(input, "balanceComplete"),
     balanceUncertaintyCodes: strings(input, "balanceUncertaintyCodes"),
     propertyId: text(input, "propertyId"),
@@ -205,6 +208,8 @@ export function serializeScheduledVsCollectedRow(value: unknown): JsonObject {
 export function serializeDelinquencyRow(value: unknown): JsonObject {
   const input = inputOf(value);
   return row(input, {
+    balanceReview: serializeBalanceReview(input.balanceReview),
+    operationalBalanceCents: nullableNumberValue(input.operationalBalanceCents),
     balanceComplete: bool(input, "balanceComplete"),
     balanceUncertaintyCodes: strings(input, "balanceUncertaintyCodes"),
     propertyId: text(input, "propertyId"),

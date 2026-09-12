@@ -71,7 +71,7 @@ export function dashboardMetrics(summary: DashboardSummary, onReport: (report: R
   const scheduledKnown = summary.scheduledRentCadenceComplete === true && summary.scheduledRentComplete !== false
     && (typeof summary.scheduledRentConfirmedCents === "number" || summary.scheduledRentComplete === true);
   const scheduled = summary.scheduledRentConfirmedCents ?? (summary.scheduledRentComplete === true ? summary.scheduledRentCents : undefined);
-  const delinquencyKnown = summary.balanceComplete !== false && summary.rentOnlyDelinquencyCents !== null && summary.rentOnlyDelinquencyCents !== undefined;
+  const delinquencyKnown = summary.operationalBalanceUnresolvedCount === 0 && typeof summary.operationalDelinquencyCents === "number";
   const unknownOccupancy = unknownOccupancyCount(summary);
   const vacancies = isValidCount(summary.genuineVacantUnits) && isValidCount(summary.readyVacantUnits)
     ? `${countValue(summary.genuineVacantUnits)} confirmed · ${countValue(summary.readyVacantUnits)} ready`
@@ -82,7 +82,7 @@ export function dashboardMetrics(summary: DashboardSummary, onReport: (report: R
     { label: "Vacant units", value: vacancies, detail: unknownOccupancy === undefined ? "Occupancy needs review" : unknownOccupancy > 0 ? `${countValue(unknownOccupancy)} occupancy unknown` : `${countValue(summary.notReadyUnits)} not ready`, tone: unknownOccupancy === undefined || unknownOccupancy > 0 || !isValidCount(summary.readyVacantUnits) || summary.readyVacantUnits > 0 ? "warn" : "good", onClick: () => onReport("occupancy") },
     { label: "Scheduled rent", value: moneyValue(scheduled, scheduledKnown), detail: scheduledKnown ? "Confirmed configuration" : "Configuration needs review", tone: scheduledKnown ? "normal" : "warn", onClick: () => onReport("scheduled-income") },
     { label: "Collected rent", value: moneyValue(summary.collectedRentCents), detail: "Posted receipts", onClick: () => onReport("collected-income") },
-    { label: "Rent delinquency", value: moneyValue(summary.rentOnlyDelinquencyCents, delinquencyKnown), detail: delinquencyKnown ? "Rent-only balance" : "Balance needs review", tone: delinquencyKnown && summary.rentOnlyDelinquencyCents ? "warn" : delinquencyKnown ? "good" : "warn", onClick: () => onReport("delinquency") },
+    { label: "Current balances due", value: moneyValue(summary.operationalDelinquencyCents, delinquencyKnown), detail: delinquencyKnown ? "Operational account balances" : summary.operationalBalanceUnresolvedCount ? `${summary.operationalBalanceUnresolvedCount} balances need review` : "Balance needs review", tone: delinquencyKnown && summary.operationalDelinquencyCents ? "warn" : delinquencyKnown ? "good" : "warn", onClick: () => onReport("delinquency") },
     { label: "Applications", value: countValue(summary.applicationsSubmitted), detail: summary.applicationsMissingInformation === undefined ? undefined : `${countValue(summary.applicationsMissingInformation)} missing information`, onClick: () => onReport("applicant-pipeline") },
     { label: "Deposit liability", value: moneyValue(summary.securityDepositLiabilityCents), detail: "Held liability", onClick: () => onReport("security-deposit") },
   ];
@@ -198,7 +198,7 @@ export function DashboardWorkspace({ snapshot, filters, onReport, onOpenTenant, 
         {loading && <span className="rm-status"><RefreshCw className="rm-spin" aria-hidden="true" /> Refreshing previews</span>}
       </header>
       <div className="rm-dashboard-grid">{metrics.map((metric) => <MetricCard key={metric.label} metric={metric} />)}</div>
-      {(snapshot.summary.balanceComplete === false || snapshot.summary.scheduledRentComplete === false) && <p className="rm-warning" role="status"><AlertCircle aria-hidden="true" /> {snapshot.summary.balanceComplete === false ? "Some account balances need review because the available history is incomplete." : "Some recurring income facts need review before the scheduled total is confirmed."}</p>}
+      {((snapshot.summary.operationalBalanceUnresolvedCount ?? 0) > 0 || snapshot.summary.scheduledRentComplete === false) && <p className="rm-warning" role="status"><AlertCircle aria-hidden="true" /> {(snapshot.summary.operationalBalanceUnresolvedCount ?? 0) > 0 ? "Some current account balances need a fresh review before the total is confirmed." : "Some recurring income facts need review before the scheduled total is confirmed."}</p>}
       <section className="rm-panel rm-dashboard-vacancy">
         <header className="rm-panel-title"><div><span className="rm-muted">Unit status</span><h2>Vacancy and pipeline</h2></div><button type="button" className="rm-button" onClick={() => onReport("occupancy")}>Open occupancy <ArrowRight aria-hidden="true" /></button></header>
         <div className="rm-dashboard-counts">{vacancyDetail.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>

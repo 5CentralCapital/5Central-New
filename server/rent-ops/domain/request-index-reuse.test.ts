@@ -62,8 +62,13 @@ test("request indexes preserve reviewed financial outputs and ordered violations
   assert.deepEqual(confirmedRow.exceptionCodes, []);
   baseline.tenancies.push({...baseline.tenancies[0], primaryPersonId: "demo-person-2"});
   assert.throws(() => deriveRentRoll(baseline, {asOfDate: "2026-08-16"}), /Overlapping/);
-  const digest = createHash("sha256").update(JSON.stringify(indexReuseResults())).digest("hex");
-  assert.equal(digest, "aeca338a7e59c8363d579e541a894975b6f726b007b37e85d2c2d28bbf71faa4");
+  const results = indexReuseResults();
+  // Source-backed review fields are additive. The unreviewed fixture must retain
+  // every pre-existing financial amount, due-filter row and ordered violation.
+  const financialOnly = JSON.stringify(results, (key, value) => ["operationalBalanceCents", "operationalDelinquencyCents", "operationalBalanceUnresolvedCount", "balanceReview"].includes(key) ? undefined : value);
+  assert.equal(createHash("sha256").update(financialOnly).digest("hex"), "aeca338a7e59c8363d579e541a894975b6f726b007b37e85d2c2d28bbf71faa4");
+  const digest = createHash("sha256").update(JSON.stringify(results)).digest("hex");
+  assert.equal(digest, "cda88b31ff149f25dc323d02ebab843e6cc40143e08384ad87ee06ac9c16fb61");
 });
 
 test("separate calls observe changed reversal and allocation facts on the same snapshot", () => {

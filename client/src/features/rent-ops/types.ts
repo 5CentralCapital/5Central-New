@@ -45,6 +45,8 @@ export interface ApiFilters {
 }
 
 export interface DashboardSummary {
+  operationalDelinquencyCents?: number | null;
+  operationalBalanceUnresolvedCount?: number;
   balanceUnresolvedCount?: number;
   balanceComplete?: boolean;
   balanceUncertaintyCodes?: string[];
@@ -592,7 +594,34 @@ export interface AdminLedgerRowView {
   runningBalanceCents?: number | null;
 }
 
+export interface AdminBalanceReviewView {
+  schema: "balance_review_v1";
+  id: string;
+  tenancyId: string;
+  personId: string;
+  propertyId: string;
+  unitId: string;
+  asOfDate: string;
+  reviewedAt: string;
+  reviewedBy: string;
+  reviewedBalanceCents: number | null;
+  tenantBalanceCents: number | null;
+  agencyBalanceCents: number | null;
+  qualifications: string[];
+  stale: boolean;
+}
+
+export interface AdminMeteredUtilityView {
+  utility: "water";
+  billingMethod: "metered";
+  effectiveFrom: string;
+  amountCents: null;
+  amountKnowledge: "unknown";
+}
+
 export interface TenantView {
+  meteredUtilities?: AdminMeteredUtilityView[];
+  balanceReview?: AdminBalanceReviewView;
   person: AdminPersonView;
   household: AdminHouseholdMembershipView[];
   tenancy?: AdminTenancyView;
@@ -617,6 +646,8 @@ export interface TenantView {
  * API adapter; these browser types intentionally contain no source or
  * persistence-definition fields. */
 export interface RentRollRow {
+  operationalBalanceCents?: number | null;
+  balanceReview?: AdminBalanceReviewView;
   balanceComplete?: boolean;
   balanceUncertaintyCodes?: string[];
   propertyId?: string;
@@ -722,6 +753,8 @@ export interface ScheduledVsCollectedRow {
 }
 
 export interface DelinquencyRow {
+  operationalBalanceCents?: number | null;
+  balanceReview?: AdminBalanceReviewView;
   balanceComplete?: boolean;
   balanceUncertaintyCodes?: string[];
   propertyId?: string;

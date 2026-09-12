@@ -1,3 +1,4 @@
+import { balanceReviewReportText } from "./balance-review-display";
 import type {
   AdminSnapshot,
   ApiFilters,
@@ -185,7 +186,9 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
         currency("recurringFeesCents", "Recurring fees"),
         currency("subsidyCents", "Subsidy"),
         currency("totalScheduledCents", "Scheduled total"),
-        currency("balanceDueCents", "Account balance due"),
+        currency("operationalBalanceCents", "Current operational balance"),
+        text("reviewedOperationalBalance", "Reviewed operational balance", (row) => balanceReviewReportText("balanceReview" in row ? row.balanceReview : undefined)),
+        currency("balanceDueCents", "Posted ledger balance"),
       ];
     case "occupancy":
       return [
@@ -233,9 +236,11 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
         text("propertyName", "Property", propertyName),
         text("unitNumber", "Unit", unitNumber),
         text("tenantName", "Resident", tenantName),
-        currency("rentOnlyBalanceCents", "Rent balance"),
-        currency("nonRentBalanceCents", "Non-rent balance"),
-        currency("totalBalanceCents", "Total balance"),
+        currency("operationalBalanceCents", "Current operational balance"),
+        text("reviewedOperationalBalance", "Reviewed operational balance", (row) => balanceReviewReportText("balanceReview" in row ? row.balanceReview : undefined)),
+        currency("rentOnlyBalanceCents", "Posted rent balance"),
+        currency("nonRentBalanceCents", "Posted non-rent balance"),
+        currency("totalBalanceCents", "Posted ledger total"),
         currency("unappliedCashCents", "Unapplied cash"),
         date("oldestUnpaidRentOn", "Oldest unpaid rent"),
         date("lastPaymentOn", "Last payment"),
@@ -399,12 +404,12 @@ function discoverSourceKeys(rows: readonly ReportRow[]): string[] {
   for (const row of rows) {
     if (!isRecord(row)) continue;
     for (const key of Object.keys(row)) {
-      if (!isInternalIdKey(key)) keys.add(key);
+      if (!isInternalIdKey(key) && key !== "balanceReview") keys.add(key);
     }
     const transaction = row.transaction;
     if (isRecord(transaction)) {
       for (const key of Object.keys(transaction)) {
-        if (!isInternalIdKey(key)) keys.add(key);
+        if (!isInternalIdKey(key) && key !== "balanceReview") keys.add(key);
       }
     }
   }

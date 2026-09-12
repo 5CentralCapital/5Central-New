@@ -1,3 +1,4 @@
+import { hasOperationalEndOn } from "./tenancy-occupancy";
 import type {
   Cents,
   IsoDate,
@@ -10,7 +11,7 @@ import type {
   ApplicationStatus,
 } from "../../../shared/rent-ops-contracts";
 import { isoDateSchema, POSTGRES_INTEGER_MAX, POSTGRES_INTEGER_MIN } from "../../../shared/rent-ops-contracts";
-import { addDays, rangesOverlap } from "./dates";
+import { addDays, rangesOverlap, nowIsoDate } from "./dates";
 import { resolveEffectiveScheduleVersions } from "./financial-projection";
 
 export interface InvariantViolation {
@@ -470,6 +471,7 @@ export function activeTenancyViolations(snapshot: RentOpsSnapshot): InvariantVio
   const grouped = new Map<string, typeof snapshot.tenancies>();
   for (const tenancy of snapshot.tenancies) {
     if (tenancy.status !== "current" && tenancy.status !== "notice") continue;
+    if (hasOperationalEndOn(tenancy, nowIsoDate())) continue;
     if (!tenancy.unitId || tenancy.unitLinkKnowledge === "unknown" || tenancy.unitLinkKnowledge === "ambiguous") continue;
     const existing = grouped.get(tenancy.unitId) ?? [];
     existing.push(tenancy);

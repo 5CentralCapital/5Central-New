@@ -538,9 +538,9 @@ test("actual payment allocation DTO preserves supported kinds and signed amounts
 test("financial completeness contract preserves unknown balances across dashboard reports and tenant ledger", async () => {
   const legacy = serializedServerDocumentBundle();
   const unknown = { balanceComplete: false, balanceUncertaintyCodes: ["imported_history_unavailable"] };
-  Object.assign(legacy.summary as object, unknown, { balanceUnresolvedCount: 1, rentOnlyDelinquencyCents: null, totalDelinquencyCents: null, unappliedCashCents: null });
+  Object.assign(legacy.summary as object, unknown, { balanceUnresolvedCount: 1, operationalDelinquencyCents: null, operationalBalanceUnresolvedCount: 1, rentOnlyDelinquencyCents: null, totalDelinquencyCents: null, unappliedCashCents: null });
   const reportMap = legacy.reports as Record<string, unknown>;
-  reportMap["rent-roll"] = [{ ...unknown, unitId: "unit:unknown", balanceDueCents: null }, { balanceComplete: true, balanceUncertaintyCodes: [], unitId: "unit:known", balanceDueCents: 0 }];
+  reportMap["rent-roll"] = [{ ...unknown, unitId: "unit:unknown", balanceDueCents: null, operationalBalanceCents: null }, { balanceComplete: true, balanceUncertaintyCodes: [], unitId: "unit:known", balanceDueCents: 0, operationalBalanceCents: 12500 }];
   reportMap.delinquency = [{ ...unknown, personId: "person:unknown", rentOnlyBalanceCents: null, nonRentBalanceCents: null, grossBalanceCents: null, totalBalanceCents: null, netAccountBalanceCents: null, unappliedCashCents: null, prepaidCents: null }];
   const ledger = [{ ...unknown, transaction: { id: "transaction:unknown", kind: "charge" }, allocatedCents: null, openCents: null, runningBalanceCents: null, openingBalanceCents: null }];
   reportMap["tenant-ledger"] = ledger;
@@ -551,6 +551,10 @@ test("financial completeness contract preserves unknown balances across dashboar
     assert.equal(result.summary.rentOnlyDelinquencyCents, null);
     assert.equal(result.summary.balanceComplete, false);
     assert.equal(result.summary.balanceUnresolvedCount, 1);
+    assert.equal(result.summary.operationalDelinquencyCents, null);
+    assert.equal(result.summary.operationalBalanceUnresolvedCount, 1);
+    assert.equal(result.rentRoll[0].operationalBalanceCents, null);
+    assert.equal(result.rentRoll[1].operationalBalanceCents, 12500);
     assert.equal(result.rentRoll[0].balanceDueCents, null);
     assert.equal(result.rentRoll[1].balanceDueCents, 0);
     assert.equal(result.delinquency[0].netAccountBalanceCents, null);

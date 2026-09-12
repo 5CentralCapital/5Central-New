@@ -1,3 +1,4 @@
+import { hasOperationalEndOn, hasOccupancyConfirmationOn } from "../domain/tenancy-occupancy";
 import { measureRentOps } from "../request-timing";
 import { phoneMethodsSchema } from "../domain/phone-methods";
 import { manualPaymentSchema, createChargeDefinitionSchema, patchChargeDefinitionSchema, type CreateChargeDefinitionInput, type PatchChargeDefinitionInput, type ManualPaymentInput } from "./operational-inputs";
@@ -943,7 +944,7 @@ export class RentOpsService {
     if ((await this.unresolvedApplicationRequirements(snapshot, application.id)).length) throw new RentOpsInvariantError("Application still has unresolved information requirements");
     const conflictingFuture = snapshot.tenancies.find((candidate) => candidate.unitId === unit.id && candidate.status === "future");
     if (conflictingFuture) throw new RentOpsInvariantError("Unit already has a future tenancy");
-    const conflictingCurrent = snapshot.tenancies.find((candidate) => candidate.unitId === unit.id && (candidate.status === "current" || candidate.status === "notice") && (!candidate.expectedMoveOutOn || candidate.expectedMoveOutOn >= facts.plannedMoveInOn));
+    const conflictingCurrent = snapshot.tenancies.find((candidate) => candidate.unitId === unit.id && !hasOperationalEndOn(candidate, nowIsoDate(this.now())) && (candidate.status === "current" || candidate.status === "notice") && (!candidate.expectedMoveOutOn || candidate.expectedMoveOutOn >= facts.plannedMoveInOn));
     if (conflictingCurrent) throw new RentOpsInvariantError("Unit is not available by the requested planned move-in date");
 
     const personId = `person:application:${application.id}`;
@@ -1078,7 +1079,7 @@ export class RentOpsService {
       const tenancy = next as unknown as RentOpsTenancy;
       const unit = snapshot.units.find((candidate) => candidate.id === tenancy.unitId);
       if (!snapshot.properties.some((candidate) => candidate.id === tenancy.propertyId) || !unit || unit.propertyId !== tenancy.propertyId || !snapshot.people.some((candidate) => candidate.id === tenancy.primaryPersonId)) throw new RentOpsInvariantError("Tenancy property, unit, or primary resident is invalid");
-      if ((tenancy.status === "current" || tenancy.status === "notice") && !tenancy.actualMoveInOn) throw new RentOpsInvariantError("Current and notice tenancies require an actual move-in date");
+      if ((tenancy.status === "current" || tenancy.status === "notice") && !tenancy.actualMoveInOn && !hasOccupancyConfirmationOn(tenancy, nowIsoDate(this.now()))) throw new RentOpsInvariantError("Current and notice tenancies require an actual move-in date or dated occupancy confirmation");
       if (tenancy.status === "future" && !tenancy.plannedMoveInOn) throw new RentOpsInvariantError("Future tenancies require a planned move-in date");
       if (tenancy.actualMoveInOn && tenancy.actualMoveOutOn && tenancy.actualMoveOutOn < tenancy.actualMoveInOn) throw new RentOpsInvariantError("Actual move-out cannot predate move-in");
     }
@@ -1143,11 +1144,11 @@ export class RentOpsService {
     if (snapshot.tenancies.some((candidate) => candidate.id === tenancy.id)) throw new RentOpsInvariantError("Tenancy already exists; use PATCH for an existing record");
     const unit = snapshot.units.find((candidate) => candidate.id === tenancy.unitId);
     if (!snapshot.properties.some((candidate) => candidate.id === tenancy.propertyId) || !unit || unit.propertyId !== tenancy.propertyId || !snapshot.people.some((candidate) => candidate.id === tenancy.primaryPersonId)) throw new RentOpsInvariantError("Tenancy property, unit, or primary resident is invalid");
-    if ((tenancy.status === "current" || tenancy.status === "notice") && !tenancy.actualMoveInOn) throw new RentOpsInvariantError("Current and notice tenancies require an actual move-in date");
+    if ((tenancy.status === "current" || tenancy.status === "notice") && !tenancy.actualMoveInOn && !hasOccupancyConfirmationOn(tenancy, nowIsoDate(this.now()))) throw new RentOpsInvariantError("Current and notice tenancies require an actual move-in date or dated occupancy confirmation");
     if (tenancy.status === "future" && !tenancy.plannedMoveInOn) throw new RentOpsInvariantError("Future tenancies require a planned move-in date");
     if (tenancy.actualMoveInOn && tenancy.actualMoveOutOn && tenancy.actualMoveOutOn < tenancy.actualMoveInOn) throw new RentOpsInvariantError("Actual move-out cannot predate move-in");
     const peers = snapshot.tenancies.filter((candidate) => candidate.id !== tenancy.id && candidate.unitId === tenancy.unitId);
-    if ((tenancy.status === "current" || tenancy.status === "notice") && peers.some((candidate) => candidate.status === "current" || candidate.status === "notice")) throw new RentOpsInvariantError("Unit already has a current or notice tenancy");
+    if ((tenancy.status === "current" || tenancy.status === "notice") && peers.some((candidate) => !hasOperationalEndOn(candidate, nowIsoDate(this.now())) && (candidate.status === "current" || candidate.status === "notice"))) throw new RentOpsInvariantError("Unit already has a current or notice tenancy");
     if (tenancy.status === "future" && peers.some((candidate) => candidate.status === "future")) throw new RentOpsInvariantError("Unit already has a future tenancy");
     const saved = await this.repository.saveTenancy(manualCreationKnowledge("tenancy", tenancy));
     await this.recordAdminChange(`Tenancy ${tenancy.id} saved`, { propertyId: tenancy.propertyId, unitId: tenancy.unitId, personId: tenancy.primaryPersonId, tenancyId: tenancy.id });

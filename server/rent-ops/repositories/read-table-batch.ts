@@ -57,7 +57,7 @@ export function decodeRentOpsTableBatch(value: unknown, tables: readonly string[
 export const RENT_OPS_REPORT_TABLES = RENT_OPS_BATCH_TABLES.filter(table => table !== "rent_ops_documents");
 export function buildRentOpsReportBatchSql(): string {
   return `SELECT ${RENT_OPS_REPORT_TABLES.map(table => {
-    const predicate = table === "rent_ops_activity_events" ? " WHERE type IN ('promise_to_pay', 'hold')" : "";
+    const predicate = table === "rent_ops_activity_events" ? " WHERE type IN ('promise_to_pay', 'hold') OR (type = 'note' AND detail LIKE '%balance_review_v1%')" : "";
     return `COALESCE((SELECT json_agg(row_to_json(r)) FROM ${table} AS r${predicate}), '[]'::json) AS ${table}`;
   }).join(", ")}`;
 }

@@ -40,6 +40,7 @@ test("PGlite batch preserves legacy mapped rows, dates, nulls, JSON and financia
       INSERT INTO rent_ops_activity_events(id,property_id,unit_id,person_id,tenancy_id,type,occurred_at,actor,summary,detail,metadata) VALUES('event','p','u','person','t','note','2026-08-15 12:34:56.987654+05:30','QA','Note',NULL,'{"source":"test","nested":[true,null]}');
       INSERT INTO rent_ops_ledger_transactions(id,property_id,unit_id,tenancy_id,person_id,kind,category,status,amount_cents,posted_on,description,payer,amount_knowledge,category_knowledge,status_knowledge,posted_on_knowledge,description_knowledge,payer_knowledge,charge_definition_link_knowledge,property_link_knowledge,unit_link_knowledge,person_link_knowledge,tenancy_link_knowledge,due_on_knowledge,payment_method_knowledge) VALUES('charge','p','u','t','person','charge','base_rent','posted',2147483647,'2026-08-01','Rent','tenant','known','manual','manual','manual','manual','manual','unknown','manual','manual','manual','manual','unknown','unknown');
       INSERT INTO rent_ops_activity_events(id,tenancy_id,type,occurred_at,actor,summary) VALUES('promise','t','promise_to_pay','2026-08-14','QA','Promise'),('hold','t','hold','2026-08-14','QA','Hold');
+      INSERT INTO rent_ops_activity_events(id,property_id,unit_id,person_id,tenancy_id,type,occurred_at,actor,summary,detail) VALUES('z-review','p','u','person','t','note','2026-08-15','QA','Reviewed','{"schema":"balance_review_v1"}');
       INSERT INTO rent_ops_documents(id,file_name,mime_type,type,state,availability) VALUES('doc','lease.pdf','application/pdf','lease','requested','metadata');
       CREATE ROLE rent_ops_staging_importer; GRANT USAGE ON SCHEMA public TO rent_ops_staging_importer; GRANT SELECT,INSERT ON rent_ops_security_deposits TO rent_ops_staging_importer; SET ROLE rent_ops_staging_importer;
       INSERT INTO rent_ops_security_deposits(id,property_id,unit_id,tenancy_id,person_id,type,amount_held_cents,source_balance_cents,source_system,source_id,received_on_knowledge,unit_link_knowledge) VALUES('deposit','p','u','t','person','security',NULL,-500,'rent_manager','source-deposit','unknown','exact');
@@ -90,7 +91,8 @@ test("PGlite batch preserves legacy mapped rows, dates, nulls, JSON and financia
     assert.ok(calls[0].includes("WHERE type IN ('promise_to_pay', 'hold')"));
     assert.equal(newOperational.documents.length, 1);
     assert.equal(reportSnapshot.documents.length, 0);
-    assert.deepEqual(reportSnapshot.activityEvents.map(event => event.type).sort(), ["hold", "promise_to_pay"]);
+    assert.deepEqual(reportSnapshot.activityEvents.map(event => event.type).sort(), ["hold", "note", "promise_to_pay"]);
+    assert.equal(reportSnapshot.activityEvents.find(row => row.id === "z-review")?.detail, '{"schema":"balance_review_v1"}');
     assert.deepEqual(reportSnapshot.ledgerTransactions, newOperational.ledgerTransactions);
     assert.deepEqual(reportSnapshot.paymentAllocations, newOperational.paymentAllocations);
     const reportFilters = {asOfDate:"2026-08-15",month:"2026-08"};
