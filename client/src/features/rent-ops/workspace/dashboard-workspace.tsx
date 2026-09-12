@@ -174,7 +174,7 @@ export function DashboardWorkspace({ snapshot, filters, onReport, onOpenTenant, 
   return (
     <section className="rm-dashboard-workspace" aria-label="Rent Operations dashboard">
       <header className="rm-dashboard-heading">
-        <div><span className="rm-muted">Operating summary · as of {snapshot.summary.asOfDate || "Needs review"}</span><h2>Dashboard</h2><p>Current portfolio counts and server-derived operating reports.</p></div>
+        <div><span className="rm-muted">Operating summary · as of {snapshot.summary.asOfDate || "Needs review"}</span><h2>Dashboard</h2></div>
         {loading && <span className="rm-status"><RefreshCw className="rm-spin" aria-hidden="true" /> Refreshing previews</span>}
       </header>
       <div className="rm-dashboard-grid">{metrics.map((metric) => <MetricCard key={metric.label} metric={metric} />)}</div>

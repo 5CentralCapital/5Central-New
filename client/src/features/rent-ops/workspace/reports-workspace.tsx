@@ -297,7 +297,6 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
           <div>
             <span className="rm-muted">{periodLabel}</span>
             <h2>{config.label}</h2>
-            <p>{config.description}</p>
           </div>
           <div className="rm-report-actions">
             <ColumnSelector columns={view.columns} selected={selectedColumns} onChange={handleColumns} />
@@ -305,13 +304,13 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
             <button className="rm-button" type="button" onClick={() => window.print()} disabled={!loadedRows}><Printer aria-hidden="true" /> Print</button>
           </div>
         </header>
-        <p className="rm-report-source">{config.sourceNote}</p>
+
         {error && <p className="rm-error" role="alert"><AlertCircle aria-hidden="true" /> {error}</p>}
         {loading && !loadedRows && <div className="rm-empty"><Loader2 className="rm-spin" aria-hidden="true" /><p>{emptyReportMessage(false)}</p></div>}
         {!loading && !error && loadedRows && (
           <>
             <ReportSubtotals keyName={selected} rows={visibleSourceRows} columns={activeColumns} snapshot={snapshot} />
-            <DataGrid
+            <div className="rm-report-screen-grid"><DataGrid
               rows={displayedRows}
               columns={gridColumns}
               getRowKey={(row) => reportRowKey(row)}
@@ -320,7 +319,11 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
               pageSize={25}
               caption={`${config.label} · ${periodLabel}`}
               storageKey={`rent-ops-report-${selected}`}
-            />
+            /></div>
+            <table className="rm-table rm-report-print-table">
+              <thead><tr>{activeColumns.map(column => <th key={column.key}>{column.label}</th>)}</tr></thead>
+              <tbody>{displayedRows.map(row => <tr key={reportRowKey(row)}>{activeColumns.map(column => <td key={column.key}>{formatReportValue(row[column.key], column.format)}</td>)}</tr>)}</tbody>
+            </table>
           </>
         )}
         {!loading && !error && !loadedRows && <div className="rm-empty"><p>{emptyReportMessage(false)}</p></div>}

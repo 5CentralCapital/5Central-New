@@ -404,3 +404,11 @@ button.rm-stat:hover {
     box-shadow: none;
   }
 }
+
+.rm-report-print-table { display: none; }
+@media print {
+  .rm-report-screen-grid { display: none !important; }
+  .rm-report-print-table { display: table; width: 100%; font-size: 9px; }
+  .rm-report-print-table thead { display: table-header-group; }
+  .rm-report-print-table tr { break-inside: avoid; }
+}
