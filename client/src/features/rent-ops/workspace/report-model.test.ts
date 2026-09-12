@@ -1,0 +1,113 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { DelinquencyRow, RentRollRow, ScheduledIncomeRow } from "../types";
+import {
+  buildPropertySubtotals,
+  createReportViewModel,
+  discoverOptionalReportColumns,
+  filterReportRowsForDisplay,
+  formatReportValue,
+  reportQueryFilters,
+  reportQueryKey,
+  reportKeys,
+  validateReportPeriod,
+} from "./report-model";
+
+test("curated report mappings keep drilldown IDs out of display columns", () => {
+  const rows: RentRollRow[] = [{
+    propertyId: "property:one",
+    propertyName: "One",
+    unitId: "unit:one",
+    unitNumber: "101",
+    currentPersonId: "person:one",
+    currentTenantName: "Resident One",
+    occupancy: "current",
+    marketRentCents: 125000,
+    balanceDueCents: 0,
+  }];
+  const view = createReportViewModel("rent-roll", rows);
+  assert.ok(view.curatedColumns.length >= 8);
+  assert.equal(view.curatedColumns.some((column) => /id$/i.test(column.key)), false);
+  assert.equal(view.displayRows[0].unitNumber, "101");
+  assert.equal(view.displayRows[0].__source.unitId, "unit:one");
+  assert.equal(formatReportValue(view.displayRows[0].marketRentCents, "currency"), "$1,250.00");
+});
+
+test("property subtotals sum complete amounts and withhold incomplete balance totals", () => {
+  const rows: DelinquencyRow[] = [
+    { propertyId: "property:one", propertyName: "One", unitId: "unit:one", rentOnlyBalanceCents: 15000, totalBalanceCents: 15000, balanceComplete: true },
+    { propertyId: "property:one", propertyName: "One", unitId: "unit:two", rentOnlyBalanceCents: 25000, totalBalanceCents: null, balanceComplete: false },
+    { propertyId: "property:two", propertyName: "Two", unitId: "unit:three", rentOnlyBalanceCents: 0, totalBalanceCents: 0, balanceComplete: true },
+  ];
+  const subtotals = buildPropertySubtotals("delinquency", rows);
+  assert.deepEqual(subtotals.map((item) => [item.label, item.count]), [["One", 2], ["Two", 1]]);
+  assert.equal(subtotals[0].amounts.rentOnlyBalanceCents, null);
+  assert.equal(subtotals[0].amounts.totalBalanceCents, null);
+  assert.equal(subtotals[1].amounts.rentOnlyBalanceCents, 0);
+});
+
+test("scheduled income subtotal does not turn an uncertain amount into a total", () => {
+  const rows: ScheduledIncomeRow[] = [
+    { propertyId: "property:one", propertyName: "One", amountCents: 100000, category: "base_rent", known: true },
+    { propertyId: "property:one", propertyName: "One", amountCents: 50000, category: "base_rent", known: true, temporalUncertainty: true },
+  ];
+  const [subtotal] = buildPropertySubtotals("scheduled-income", rows);
+  assert.equal(subtotal.amounts.amountCents, null);
+});
+
+test("optional positive fields are available while identity fields stay hidden", () => {
+  const rows: RentRollRow[] = [{
+    propertyId: "property:one",
+    unitId: "unit:one",
+    propertyName: "One",
+    unitNumber: "101",
+    balanceComplete: false,
+    balanceUncertaintyCodes: ["history_incomplete"],
+    exceptionCodes: ["missing_lease"],
+  }];
+  const optional = discoverOptionalReportColumns("rent-roll", rows);
+  assert.ok(optional.some((column) => column.key === "balanceComplete"));
+  assert.ok(optional.some((column) => column.key === "exceptionCodes"));
+  assert.equal(optional.some((column) => /id$/i.test(column.key)), false);
+});
+
+test("display filtering matches a selected property and searchable visible values", () => {
+  const rows: RentRollRow[] = [
+    { propertyId: "property:one", propertyName: "One", unitNumber: "101", currentTenantName: "Alex Rivera" },
+    { propertyId: "property:two", propertyName: "Two", unitNumber: "201", currentTenantName: "Jamie Lee" },
+  ];
+  const filtered = filterReportRowsForDisplay(rows, "rent-roll", { propertyId: "property:one", propertyScope: "all", status: "all", search: "alex" });
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].propertyId, "property:one");
+});
+
+test("period validation and query construction preserve report date boundaries", () => {
+  assert.equal(validateReportPeriod("collected-income", "2026-09-12", "2026-09", "2026-09-01", "2026-09-12"), undefined);
+  assert.match(validateReportPeriod("collected-income", "2026-09-12", "2026-09", "2026-09-12", "2026-09-01") ?? "", /start date/i);
+  assert.match(validateReportPeriod("scheduled-income", "2026-09-12", "2026-10", "", "") ?? "", /after/i);
+  const query = reportQueryFilters({ propertyScope: "active", propertyId: "property:one", asOfDate: "2026-09-12", status: "all", search: "" }, "collected-income", { asOfDate: "2026-09-12", fromDate: "2026-09-01", toDate: "2026-09-12" });
+  assert.deepEqual(query, { propertyScope: "active", propertyId: "property:one", asOfDate: "2026-09-12", fromDate: "2026-09-01", toDate: "2026-09-12" });
+});
+
+test("missing base rent, uncertain deposits and HAP exceptions never display false totals", () => {
+  const rent = createReportViewModel("rent-roll", [{ propertyId: "one", totalScheduledCents: 0 }]);
+  assert.equal(rent.displayRows[0].totalScheduledCents, null);
+  const deposits = createReportViewModel("security-deposit", [{ totalHeldCents: 10000, unknownHeldCount: 1 }]);
+  assert.equal(deposits.displayRows[0].totalHeldCents, null);
+  const hap = createReportViewModel("hap", [{ expectedTotalCents: 0, receivedAgencyCents: 5000, exception: true }]);
+  assert.equal(hap.displayRows[0].expectedTotalCents, null);
+  assert.equal(hap.displayRows[0].receivedAgencyCents, 5000);
+});
+
+test("all eleven reports have explicit columns and ledger running balance is not additive", () => {
+  for (const key of reportKeys()) {
+    const view = createReportViewModel(key, []);
+    assert.ok(view.curatedColumns.length >= 5, key);
+    assert.equal(view.curatedColumns.some(column => /Id$/.test(column.key)), false);
+  }
+  assert.equal(createReportViewModel("tenant-ledger", []).columns.find(column => column.key === "runningBalanceCents")?.subtotal, false);
+});
+
+test("report queries participate in workspace mutation invalidation", () => {
+  assert.deepEqual(reportQueryKey("rent-roll", {asOfDate: "2026-09-12"}), ["rent-ops-workspace", "report", "rent-roll", {asOfDate: "2026-09-12"}]);
+});
