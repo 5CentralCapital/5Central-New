@@ -14,6 +14,7 @@ import type {
 } from "../types";
 import {
   currentMonthlyTotal,
+  filterTenantLedger,
   ledgerActionEligibility,
   buildHouseholdRows,
   buildLedgerRows,
@@ -271,11 +272,11 @@ function LedgerDetail({ row }: { row: TenantLedgerRow; snapshot: AdminSnapshot }
   return <dl className="rm-ledger-detail rm-form-grid"><Field label="Status" warning={!row.statusKnown}>{statusValue(row.status, !row.statusKnown)}</Field><Field label="Category">{label(row.category)}</Field><Field label="Due date">{formatDate(row.dueOn)}</Field><Field label="Payer">{label(row.payer)}</Field><Field label="Payment method">{label(row.paymentMethod)}</Field><Field label="Allocated">{formatMoney(row.allocatedCents)}</Field><Field label="Open">{formatMoney(row.openCents)}</Field><Field label="Related allocations">Allocation details are not loaded</Field>{row.reversalOfId && <Field label="Reversal of">{row.reversalOfId}</Field>}{row.uncertaintyCodes.length > 0 && <div className="rm-ledger-warning"><strong>Needs review</strong><span>{row.uncertaintyCodes.map(label).join(" · ")}</span></div>}</dl>;
 }
 
-function LedgerTable({ rows, snapshot, onEdit, expanded, onToggle }: { rows: TenantLedgerRow[]; snapshot: AdminSnapshot; onEdit: EditAction; expanded?: string; onToggle: (key: string) => void }) {
+function LedgerTable({ rows, allRows, snapshot, onEdit, expanded, onToggle }: { rows: TenantLedgerRow[]; allRows: TenantLedgerRow[]; snapshot: AdminSnapshot; onEdit: EditAction; expanded?: string; onToggle: (key: string) => void }) {
   if (!rows.length) return <Empty message="No ledger entries are linked to this tenant." />;
-  return <div className="rm-table-wrap"><table className="rm-table rm-ledger-table"><caption className="sr-only">Tenant ledger</caption><thead><tr><th>Date</th><th>Unit</th><th>Reference</th><th>Description</th><th className="rm-align-right">Charge</th><th className="rm-align-right">Payment</th><th className="rm-align-right">Running balance</th><th>Status</th><th><span className="sr-only">Details</span></th></tr></thead><tbody>{rows.map((row, index) => {
+  return <div className="rm-table-wrap"><table className="rm-table rm-ledger-table"><caption className="sr-only">Tenant ledger</caption><thead><tr><th>Date</th><th>Unit</th><th>Entry</th><th>Description</th><th className="rm-align-right">Charge</th><th className="rm-align-right">Payment</th><th className="rm-align-right">Running balance</th><th>Status</th><th><span className="sr-only">Details</span></th></tr></thead><tbody>{rows.map((row, index) => {
     const isOpen = expanded === row.key;
-    const eligible = ledgerActionEligibility(row, rows);
+    const eligible = ledgerActionEligibility(row, allRows);
     const reverse = eligible.reverse ? { label: "Reverse", action: "reverse-ledger-transaction" as QuickAction, values: { originalId: row.transaction.id, postedOn: "", status: "posted", description: "" } satisfies FormValues } : undefined;
     const allocate = eligible.allocate ? { label: "Allocate", action: "save-payment-allocation" as QuickAction, values: { paymentTransactionId: row.transaction.id, amountDollars: typeof row.transaction.amountCents === "number" ? String((row.openCents ?? 0) / 100) : "", allocatedOn: row.date ?? "" } satisfies FormValues } : undefined;
     return <Fragment key={`${row.key}-${index}`}>
@@ -288,7 +289,24 @@ function LedgerTable({ rows, snapshot, onEdit, expanded, onToggle }: { rows: Ten
 function LedgerTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantView; snapshot: AdminSnapshot; onEdit: EditAction; editActions: TenantEditAction[] }) {
   const [expanded, setExpanded] = useState<string>();
   const rows = useMemo(() => buildLedgerRows(tenant, snapshot), [tenant, snapshot]);
-  return <div className="rm-tenant-tab-content"><Panel title="Tenant ledger"><div className="rm-ledger-toolbar"><span>{rows.length} entr{rows.length === 1 ? "y" : "ies"}</span><span>Charges and payments stay separate; balances use the supplied running balance.</span></div><LedgerTable rows={rows} snapshot={snapshot} onEdit={onEdit} expanded={expanded} onToggle={(key) => setExpanded((prior) => prior === key ? undefined : key)} /></Panel></div>;
+  const [search, setSearch] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [page, setPage] = useState(0);
+  const filtered = useMemo(() => filterTenantLedger(rows, search, from, to), [rows, search, from, to]);
+  const pages = Math.max(1, Math.ceil(filtered.length / 25));
+  const currentPage = Math.min(page, pages - 1);
+  const visible = filtered.slice(currentPage * 25, (currentPage + 1) * 25);
+  return <div className="rm-tenant-tab-content"><Panel title="Tenant ledger">
+    <div className="rm-ledger-filters">
+      <label>Search ledger<input type="search" value={search} placeholder="Description, payment method, status" onChange={event => { setSearch(event.target.value); setPage(0); }} /></label>
+      <label>From<input type="date" value={from} onChange={event => { setFrom(event.target.value); setPage(0); }} /></label>
+      <label>Through<input type="date" value={to} onChange={event => { setTo(event.target.value); setPage(0); }} /></label>
+    </div>
+    <div className="rm-ledger-toolbar"><span>{filtered.length} entr{filtered.length === 1 ? "y" : "ies"}</span>{(search || from || to) && <span>Balances include earlier account activity.</span>}</div>
+    <LedgerTable rows={visible} allRows={rows} snapshot={snapshot} onEdit={onEdit} expanded={expanded} onToggle={(key) => setExpanded((prior) => prior === key ? undefined : key)} />
+    {pages > 1 && <div className="rm-ledger-toolbar"><span>Page {currentPage + 1} of {pages}</span><div className="rm-row-actions"><button type="button" className="rm-button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button type="button" className="rm-button" disabled={currentPage >= pages - 1} onClick={() => setPage(currentPage + 1)}>Next</button></div></div>}
+  </Panel></div>;
 }
 
 function DepositsTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantView; snapshot: AdminSnapshot; onEdit: EditAction; editActions: TenantEditAction[] }) {

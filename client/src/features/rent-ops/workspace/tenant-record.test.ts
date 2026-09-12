@@ -4,6 +4,8 @@ import { createDemoAdminSnapshot } from "../demo";
 import type { TenantView } from "../types";
 import {
   currentMonthlyTotal,
+  ledgerEntryReference,
+  filterTenantLedger,
   ledgerActionEligibility,
   isCurrentTenancy,
   resolveTenantContext,
@@ -195,4 +197,21 @@ test("profile tenancy is authoritative and inherited schedule actions name their
   const actions = buildTenantEditActions({ ...tenant, schedules: [schedule] }, snapshot, "charges");
   assert.ok(actions.find(action => action.label.startsWith("Replace shared property charge")));
   assert.ok(actions.find(action => action.label.startsWith("End shared property charge")));
+});
+
+test("ledger entry labels never expose opaque identifiers and filters preserve account balances and order", () => {
+  assert.equal(ledgerEntryReference({ id: "billing:40064a2c", kind: "charge" }), "Monthly billing");
+  assert.equal(ledgerEntryReference({ id: "tp_random_ledger_1", kind: "payment" }), "Payment");
+  assert.equal(ledgerEntryReference({ id: "opaque" }), "—");
+  const snapshot = createDemoAdminSnapshot();
+  const tenant = snapshot.tenants[0];
+  const rows = buildLedgerRows({ ...tenant, ledger: [
+    { transaction: { id: "first", description: "Rent", postedOn: "2026-08-01", kind: "charge" }, runningBalanceCents: 10000 },
+    { transaction: { id: "second", description: "Check payment", postedOn: "2026-08-02", kind: "payment" }, runningBalanceCents: 5000 },
+    { transaction: { id: "third", description: "Check payment", postedOn: "2026-08-03", kind: "payment" }, runningBalanceCents: 2000 },
+  ] }, snapshot);
+  const filtered = filterTenantLedger(rows, "CHECK", "2026-08-02", "2026-08-03");
+  assert.deepEqual(filtered.map(row => row.key), ["second", "third"]);
+  assert.deepEqual(filtered.map(row => row.runningBalanceCents), [5000, 2000]);
+  assert.equal(filtered[0], rows[1]);
 });

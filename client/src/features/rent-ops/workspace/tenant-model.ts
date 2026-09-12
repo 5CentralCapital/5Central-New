@@ -421,7 +421,7 @@ export function buildLedgerRows(tenant: TenantView, snapshot: AdminSnapshot): Te
       rowType: source.rowType ?? "transaction",
       date: transaction.postedOn || transaction.dueOn,
       unitLabel: ledgerUnitLabel(transaction, tenant, snapshot),
-      reference: nonEmpty(transaction.id) ?? "Needs review",
+      reference: ledgerEntryReference(transaction, source.rowType),
       description: source.rowType === "opening_balance" ? "Opening balance" : nonEmpty(transaction.description) ?? nonEmpty(transaction.category) ?? "Needs review",
       chargeCents: entryKind === "charge" ? amount : null,
       paymentCents: entryKind === "payment" || entryKind === "credit" ? amount : null,
@@ -609,4 +609,21 @@ export function ledgerActionEligibility(row: TenantLedgerRow, rows: TenantLedger
     reverse: realPosted && amountKnown && Boolean(tx.category && tx.propertyId && tx.postedOn && tx.description),
     allocate: realPosted && tx.kind === "payment" && amountKnown && row.openCents !== null && row.openCents > 0,
   };
+}
+
+export function ledgerEntryReference(transaction: AdminLedgerTransactionView, rowType?: string): string {
+  if (rowType === "opening_balance") return "Opening balance";
+  if (transaction.id?.startsWith("shared-application:")) return "Shared payment";
+  if (transaction.id?.startsWith("billing:")) return "Monthly billing";
+  return ({ payment: "Payment", charge: "Charge", credit: "Credit", reversal: "Reversal", adjustment: "Adjustment" } as Record<string, string>)[transaction.kind ?? ""] ?? "—";
+}
+
+export function filterTenantLedger(rows: TenantLedgerRow[], search: string, from: string, to: string): TenantLedgerRow[] {
+  const query = search.trim().toLowerCase();
+  return rows.filter(row => {
+    const date = dateKey(row.date);
+    if ((from || to) && !date) return false;
+    if (from && date! < from || to && date! > to) return false;
+    return !query || [row.description, row.reference, row.unitLabel, row.status, row.payer, row.paymentMethod].some(value => value?.toLowerCase().includes(query));
+  });
 }
