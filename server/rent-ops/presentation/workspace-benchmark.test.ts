@@ -8,6 +8,7 @@ import { emptyRentOpsSnapshot, type RentOpsSnapshot, type RentOpsWorkspaceCollec
 import { syntheticRentOpsSnapshot } from "../fixtures/synthetic";
 import { SyntheticRentOpsRepository } from "../repositories/synthetic";
 import { registerRentOpsRoutes } from "../routes";
+import { deriveDashboardSummary, deriveRentRoll, deriveOccupancy, deriveScheduledIncome, deriveCollectedIncome, deriveDelinquency, deriveLeaseExpirations, deriveDepositLiability } from "../domain/reports";
 import { workspaceBootstrapCollections } from "./workspace-read";
 
 /** Opt-in, entirely synthetic HTTP benchmark. No database or provider connection. */
@@ -23,6 +24,18 @@ test("synthetic HTTP workspace workload benchmark", {skip: process.env.RENT_OPS_
       : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, remap(entry)])) : value;
     const copy = remap(original) as RentOpsSnapshot;
     for (const [name, rows] of Object.entries(copy)) if (Array.isArray(rows)) (fixture[name as keyof RentOpsSnapshot] as unknown[]).push(...rows);
+  }
+  const domainTimings: Record<string, number> = {};
+  const filters = {propertyScope: "active" as const, asOfDate: "2026-08-15", month: "2026-08"};
+  for (const [name, derive] of Object.entries({deriveDashboardSummary, deriveRentRoll, deriveOccupancy, deriveScheduledIncome, deriveCollectedIncome, deriveDelinquency, deriveLeaseExpirations, deriveDepositLiability})) {
+    const times: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const start = performance.now();
+      derive(fixture, filters);
+      if (i > 0) times.push(performance.now() - start);
+    }
+    times.sort((a, b) => a - b);
+    domainTimings[name] = Number(times[2].toFixed(2));
   }
   const repository = new SyntheticRentOpsRepository(fixture);
   const reads = {full: 0, operational: 0, bootstrap: 0, collection: 0};
@@ -61,6 +74,6 @@ test("synthetic HTTP workspace workload benchmark", {skip: process.env.RENT_OPS_
       times.sort((a, b) => a - b);
       results.push({path, medianMs: Number(times[2].toFixed(2)), minMs: Number(times[0].toFixed(2)), maxMs: Number(times[4].toFixed(2)), decodedBytes, wireBytes, encoding, repositoryReadsPerRequest: Object.fromEntries(Object.entries(reads).map(([key, count]) => [key, count / 5]))});
     }
-    console.log(JSON.stringify({fixture: {copies, people: fixture.people.length, tenancies: fixture.tenancies.length, ledgerTransactions: fixture.ledgerTransactions.length}, results}, null, 2));
+    console.log(JSON.stringify({fixture: {copies, people: fixture.people.length, tenancies: fixture.tenancies.length, ledgerTransactions: fixture.ledgerTransactions.length}, domainMedianMs: domainTimings, results}, null, 2));
   } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });

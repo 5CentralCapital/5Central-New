@@ -847,7 +847,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
     if (!report) { res.status(404).json(errorBody("unknown_report")); return; }
     try {
       const filters = parseAdminFilters(req.query);
-      res.json(serializeReportEnvelope({ report, filters, rows: await service.report(report, filters) }));
+      await sendWorkspaceJson(req, res, serializeReportEnvelope({ report, filters, rows: await service.report(report, filters) }));
     } catch (error) { adminError(res, error); }
   });
   adminRouter.get("/properties", async (_req, res) => { try { res.json((await service.snapshot()).properties.map(serializeAdminProperty)); } catch (error) { adminError(res, error); } });
@@ -940,7 +940,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   adminRouter.post("/ledger/transactions", async (req, res) => { const parsed = ledgerSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminLedgerTransaction(await service.saveLedgerTransaction(parsed.data))); } catch (error) { adminError(res, error); } });
   adminRouter.post("/ledger/allocations", async (req, res) => { const parsed = allocationSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminPaymentAllocation(await service.savePaymentAllocation(parsed.data))); } catch (error) { adminError(res, error); } });
   adminRouter.post("/ledger/:id/reverse", async (req, res) => { const parsed = z.object({ id: z.string().max(160).optional(), postedOn: isoDateSchema, description: z.string().trim().min(1).max(240), payer: z.enum(["tenant", "agency", "owner", "unknown"]).optional(), status: z.enum(["posted", "voided", "pending"]).default("posted") }).strict().safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminLedgerTransaction(await service.reverseLedgerTransaction(req.params.id, parsed.data))); } catch (error) { adminError(res, error); } });
-  adminRouter.get("/ledger/:tenancyId", async (req, res) => { try { res.json(serializeReportRows("tenant-ledger", await service.report("tenant-ledger", { ...parseAdminFilters(req.query), tenancyId: req.params.tenancyId }))); } catch (error) { adminError(res, error); } });
+  adminRouter.get("/ledger/:tenancyId", async (req, res) => { try { await sendWorkspaceJson(req, res, serializeReportRows("tenant-ledger", await service.report("tenant-ledger", { ...parseAdminFilters(req.query), tenancyId: req.params.tenancyId }))); } catch (error) { adminError(res, error); } });
   adminRouter.post("/deposits", async (req, res) => { const parsed = depositSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminSecurityDeposit(await service.saveSecurityDeposit(parsed.data))); } catch (error) { adminError(res, error); } });
   adminRouter.patch("/deposits/:id", (req, res) => patchAdminRecord(req, res, "security_deposit", patchDepositSchema, (value) => serializeAdminSecurityDeposit(value as Parameters<typeof serializeAdminSecurityDeposit>[0])));
   // HAP creates stay disabled until agency/link/date/amount facts have
