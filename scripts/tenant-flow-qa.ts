@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { RENT_OPS_APPEND_ONLY_TABLES, RENT_OPS_RUNTIME_READ_ONLY_TABLES } from '../server/rent-ops/security/deployment-security';
 import { createTenantQa, syntheticLeasePdf } from './tenant-local-qa';
-export async function runTenantFlow(qa:Awaited<ReturnType<typeof createTenantQa>>, options:{serve?:boolean;untilBilling?:boolean}={}) {
+export async function runTenantFlow(qa:Awaited<ReturnType<typeof createTenantQa>>, options:{serve?:boolean;untilBilling?:boolean;keepOpen?:boolean;port?:number}={}) {
 const serve=options.serve??false;
-await new Promise<void>(ok=>qa.server.listen(serve?4176:0,'127.0.0.1',ok));
+await new Promise<void>(ok=>qa.server.listen(options.port??(serve?4176:0),'127.0.0.1',ok));
 const base=`http://127.0.0.1:${(qa.server.address() as any).port}`;
 class Client {
  cookie='';csrf='';
@@ -39,7 +39,7 @@ try {
   expected(await manager.request(`/api/rent-ops/applications/${application.id}/status`,{revision:application.recordRevision,status},'PATCH'),200,`status ${status}`);
   application=(await qa.repository.getSnapshot()).applications.find(a=>a.id===application.id)!;
  }
- const nextMonth=new Date();nextMonth.setUTCMonth(nextMonth.getUTCMonth()+1,1);
+ const nextMonth=new Date(qa.control.clock.date);nextMonth.setUTCMonth(nextMonth.getUTCMonth()+1,1);
  const moveIn=nextMonth.toISOString().slice(0,10);
  const year=Number(moveIn.slice(0,4));
  const converted=expected(await manager.request(`/api/rent-ops/applications/${application.id}/convert`,{propertyId:'qa-property',unitId:'qa-unit-1',plannedMoveInOn:moveIn,leaseStatus:'executed',contractStartOn:moveIn,contractEndOn:`${year+1}-09-30`,monthToMonth:false,baseRentCents:125000,billingFrequency:'monthly',chargeDefinitionId:'qa-base-rent',category:'base_rent',scheduleDescription:'TEST monthly rent',primaryFinanciallyResponsible:true,members:[{applicationMemberId:'primary',role:'primary',isFinanciallyResponsible:true}]}),201,'conversion');
@@ -103,7 +103,7 @@ try {
  expected(await tenant.request('/api/tenant/auth/logout',{}),200,'logout');expected(await tenant.request('/api/tenant/home'),401,'logged out session');
  expected(await tenant.request('/api/tenant/auth/login',{email:'resident@example.test',password:'LocalQA-Reset-2026'}),200,'reset password login');pass('logout and new password login');
  completed=true;console.log('ALL COMPLETED SYNTHETIC FLOW CHECKS PASSED');
-} finally {if(!serve||!completed){await new Promise<void>(ok=>qa.server.close(()=>ok()));await qa.db.close();} else console.log('TEST ONLY synthetic flow host: '+base+'/qa · resident@example.test / LocalQA-Reset-2026');}
+} finally {if((!serve&&!options.keepOpen)||!completed){await new Promise<void>(ok=>qa.server.close(()=>ok()));await qa.db.close();} else if(serve) console.log('TEST ONLY synthetic flow host: '+base+'/qa · resident@example.test / LocalQA-Reset-2026');}
 
 }
 if(process.argv[1]?.endsWith('/tenant-flow-qa.ts')||process.argv[1]==='scripts/tenant-flow-qa.ts') {await runTenantFlow(await createTenantQa(),{serve:process.argv.includes('--serve')});}
