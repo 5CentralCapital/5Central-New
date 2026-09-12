@@ -1608,7 +1608,14 @@ export function deriveTenantNavigation(snapshot: RentOpsSnapshot, personId: stri
   const effective = tenancies.filter((candidate) => candidate.status !== "cancelled" && occupancyMoveInOn(candidate) && occupancyMoveInOn(candidate)! <= asOf && (!candidate.actualMoveOutOn || candidate.actualMoveOutOn > asOf));
   const future = tenancies.filter((candidate) => candidate.status === "future" && occupancyMoveInOn(candidate) && occupancyMoveInOn(candidate)! > asOf);
   const tenancy = chooseLatestTenancy(effective) ?? chooseUpcomingTenancy(future) ?? tenancies[0];
-  return { person, tenancies, tenancy, category: effective.length ? "current" : future.length ? "future" : tenancies.some(row => row.status !== "cancelled" && !row.actualMoveOutOn) ? "unknown" : tenancies.length ? "former" : "contact" };
+  const unresolvedSelected = !!tenancy && (
+    !["current", "notice", "future", "past", "cancelled"].includes(tenancy.status ?? "") ||
+    ((tenancy.status === "current" || tenancy.status === "notice") && !occupancyMoveInOn(tenancy)) ||
+    (tenancy.status === "future" && (!occupancyMoveInOn(tenancy) || occupancyMoveInOn(tenancy)! <= asOf)) ||
+    (tenancy.status === "past" && !tenancy.actualMoveOutOn)
+  );
+  const category = unresolvedSelected ? "unknown" : effective.length ? "current" : future.length ? "future" : tenancies.some(row => row.status !== "cancelled" && !row.actualMoveOutOn) ? "unknown" : tenancies.length ? "former" : "contact";
+  return { person, tenancies, tenancy, category };
 }
 
 export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string, filters: RentOpsFilters = {}): TenantProfile | undefined {

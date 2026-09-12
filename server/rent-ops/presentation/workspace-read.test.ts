@@ -189,3 +189,13 @@ test("service dispatches independent collection reads without full financial sna
   for (const name of ["recurringSchedules", "documents", "activityEvents"] as const) assert.deepEqual(await service.workspaceCollection(name), source[name]);
   assert.deepEqual(reads, ["recurringSchedules", "documents", "activityEvents"]);
 });
+
+test("navigation preserves selection but does not confirm unresolved tenancy occupancy", () => {
+  for (const patch of [{status: undefined}, {status: "future", plannedMoveInOn: "2026-07-01"}, {status: "current", actualMoveInOn: undefined}, {status: "past", actualMoveOutOn: undefined}] as const) {
+    const source = structuredClone(syntheticRentOpsSnapshot());
+    Object.assign(source.tenancies[0], patch);
+    const entry = serializeWorkspaceBootstrap(source, {asOfDate: "2026-08-15"}).tenantIndex.find(row => row.person.id === source.people[0].id)!;
+    assert.equal(entry.selectedTenancyId, source.tenancies[0].id);
+    assert.equal(entry.category, "unknown");
+  }
+});
