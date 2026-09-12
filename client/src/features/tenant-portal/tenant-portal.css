@@ -8,6 +8,7 @@
 .tp-brand em { font-size: 12px; font-style: normal; padding-left: 14px; border-left: 1px solid #cfc8bc; }
 .tp-main { max-width: 1160px; margin: 0 auto; padding: 38px 24px 72px; }
 .tp-root h1, .tp-root h2, .tp-root h3, .tp-root p, .tp-admin-accounts h3, .tp-admin-accounts p { margin: 0; }
+.tp-root h1, .tp-root h2, .tp-root h3, .tp-admin-accounts h3 { font-family: inherit; }
 .tp-root h1 { font-size: clamp(32px, 4vw, 48px); font-weight: 600; line-height: 1.16; letter-spacing: -1.7px; }
 .tp-root h2 { font-size: 21px; font-weight: 600; letter-spacing: -.5px; }
 .tp-root h3 { font-size: 14px; font-weight: 600; margin-bottom: 14px; }
