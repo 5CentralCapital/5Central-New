@@ -1,0 +1,55 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { syntheticRentOpsSnapshot } from "../fixtures/synthetic";
+import { SyntheticRentOpsRepository } from "../repositories/synthetic";
+import { readPack, bytesHash, buildMaintenanceManifest, resolveValue, verifyMaintenanceReadback, type MaintenancePack } from "./maintenance";
+import { reconcileImportedRecords, reconciliationHash } from "./operator";
+function setup() {
+  const snapshot = syntheticRentOpsSnapshot();
+  snapshot.tenancies[0].source = { system: "rent_manager", entityType: "tenancy", sourceId: "example-source" };
+  const pack: MaintenancePack = { version: 1, initialBaselineSha256: "a".repeat(64), counts: { tenancies: snapshot.tenancies.length }, provenance: { role: "test" }, phases: [{ id: "reviewed", operations: [{ target: { collection: "tenancies", sourceId: "example-source" }, expected: { status: snapshot.tenancies[0].status }, values: { kind: "tenancy-status", status: "past" }, reference: "Reviewed example source" }] }] };
+  return { snapshot, pack };
+}
+test("pack bytes, ambiguous identity, guard override and references fail closed", () => {
+  const { snapshot, pack } = setup(), bytes = Buffer.from(JSON.stringify(pack)), digest = bytesHash(bytes);
+  assert.deepEqual(readPack(bytes, digest), pack);
+  assert.throws(() => readPack(Buffer.concat([bytes, Buffer.from(" ")]), digest), /pack_hash/);
+  const context = { actor: "test-operator", occurredAt: "2025-01-01T00:00:00Z", packPath: "unused", packSha256: digest };
+  const built = buildMaintenanceManifest(snapshot, pack, pack.phases[0], context);
+  assert.equal(built.manifest.operations[0].targetId, snapshot.tenancies[0].id);
+  assert.equal(built.manifest.operations[0].beforeSha256, reconciliationHash(snapshot.tenancies[0]));
+  const changed = structuredClone(pack); changed.phases[0].operations[0].values.targetId = "override";
+  assert.throws(() => buildMaintenanceManifest(snapshot, changed, changed.phases[0], context), /guard_override/);
+  const duplicate = structuredClone(snapshot); duplicate.tenancies.push({ ...snapshot.tenancies[0], id: "duplicate" });
+  assert.throws(() => resolveValue(duplicate, { $ref: { collection: "tenancies", sourceId: "example-source" }, field: "id" }), /identity_not_unique/);
+  assert.throws(() => resolveValue(snapshot, { $ref: { collection: "tenancies", sourceId: "example-source" }, field: "source.sourceId" }), /invalid_reference/);
+  const wrong = structuredClone(pack); wrong.phases[0].operations[0].expected = { status: "cancelled" };
+  assert.throws(() => buildMaintenanceManifest(snapshot, wrong, wrong.phases[0], context), /expected_value_changed/);
+});
+test("resolved plan rolls back, exact application reads back, unrelated edits are rejected", async () => {
+  const { snapshot, pack } = setup(), directory = await mkdtemp(join(tmpdir(), "maintenance-test-"));
+  try {
+    const path = join(directory, "private.json"), bytes = Buffer.from(JSON.stringify(pack)); await writeFile(path, bytes);
+    const { manifest, archivedSnapshot } = buildMaintenanceManifest(snapshot, pack, pack.phases[0], { actor: "test-operator", occurredAt: "2025-01-01T00:00:00Z", packPath: path, packSha256: bytesHash(bytes) });
+    const repository = new SyntheticRentOpsRepository(snapshot), before = await repository.getSnapshot();
+    const plan = await reconcileImportedRecords(repository, manifest, { mode: "plan", archivedSnapshot });
+    assert.deepEqual(await repository.getSnapshot(), before);
+    await assert.rejects(() => reconcileImportedRecords(repository, manifest, { mode: "apply", approvedPlanToken: "wrong", archivedSnapshot }), /token/);
+    const applied = await reconcileImportedRecords(repository, manifest, { mode: "apply", approvedPlanToken: plan.token, archivedSnapshot });
+    const after = await repository.getSnapshot(); verifyMaintenanceReadback(before, after, manifest, applied);
+    const tampered = structuredClone(after); tampered.people[0].displayName += " changed";
+    assert.throws(() => verifyMaintenanceReadback(before, tampered, manifest, applied), /unrelated_record_changed/);
+  } finally { await rm(directory, { recursive: true }); }
+});
+
+test("literal data references cannot read prototypes or silently skip required groups", () => {
+  const { snapshot, pack } = setup();
+  assert.deepEqual(resolveValue(snapshot, { $data: ["facts", "sample"] }, { facts: { sample: { status: "current" } } }), { status: "current" });
+  assert.throws(() => resolveValue(snapshot, { $data: ["__proto__"] }, {}), /invalid_data_reference/);
+  assert.throws(() => resolveValue(snapshot, { $data: ["missing"] }, {}), /data_reference_missing/);
+  pack.phases[0].checkGroups = ["required"];
+  assert.throws(() => buildMaintenanceManifest(snapshot, pack, pack.phases[0], { actor: "test-operator", occurredAt: "2025-01-01T00:00:00Z", packPath: "unused", packSha256: "a".repeat(64) }), /check_group_missing/);
+});
