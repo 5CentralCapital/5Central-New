@@ -21,6 +21,11 @@
   --rm-faint: #8b8b8e;
   --rm-success: #2e6650;
   --rm-success-surface: #e9f3ed;
+  /* Older record modules share these names; keep surfaces neutral and
+     retain green only where the component means a positive status. */
+  --rm-paper: var(--rm-surface);
+  --rm-wash: var(--rm-surface-subtle);
+  --rm-green: var(--rm-success);
   --rm-warning: #805d09;
   --rm-warning-surface: #fff4d8;
   --rm-error: #9f302b;
@@ -269,6 +274,45 @@
   font-family: inherit;
   letter-spacing: 0;
   line-height: 1.3;
+}
+
+/* Component styles load separately; scope these typography and containment
+   rules above their standalone selectors without altering semantic statuses. */
+.rm-workspace .rm-main :is(h1, h2, h3, h4) {
+  font-family: inherit;
+  letter-spacing: 0;
+}
+
+.rm-workspace .rm-property-unit-list-icon,
+.rm-workspace .rm-link-button {
+  color: var(--rm-charcoal);
+}
+
+.rm-workspace .rm-link-button:hover {
+  color: var(--rm-warning);
+}
+
+.rm-workspace .rm-table-wrap {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.rm-workspace .rm-report-control :is(input, select),
+.rm-workspace .rm-leasing-toolbar :is(input, select),
+.rm-workspace .rm-leasing-assignment :is(input, select) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.rm-workspace .rm-leasing-heading > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.rm-workspace .rm-charge-total {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Shell and grouped RM-style navigation */
@@ -2255,6 +2299,42 @@ button.rm-stat:hover {
 
   .rm-form-actions {
     align-items: stretch;
+  }
+}
+
+/* A phone viewport must shrink controls, not the financial table columns. */
+@media (max-width: 480px) {
+  .rm-workspace .rm-workspace-toolbar > h1 {
+    flex-basis: 100%;
+  }
+
+  .rm-workspace .rm-workspace-toolbar > .rm-search {
+    max-width: none;
+  }
+
+  .rm-workspace .rm-leasing-toolbar,
+  .rm-workspace .rm-leasing-assignment {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rm-workspace .rm-leasing-heading {
+    flex-wrap: wrap;
+  }
+
+  .rm-workspace .rm-leasing-count {
+    justify-items: start;
+  }
+
+  .rm-workspace .rm-ledger-filters > label,
+  .rm-workspace .rm-ledger-filters > label:first-child {
+    min-width: 0;
+    max-width: 100%;
+    flex: 1 1 100%;
+  }
+
+  .rm-workspace .rm-ledger-filters input {
+    min-width: 0;
+    width: 100%;
   }
 }
 
