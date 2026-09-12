@@ -9,6 +9,7 @@ import { RecurringBillingPanel } from '../recurring-billing-panel';
 import type { QuickAction, FormValues } from '../form-payload';
 import { REPORT_LABELS, type AdminSnapshot, type ReportKey, type TenantTab, type ViewFilters } from '../types';
 import { TenantRecord } from './tenant-record';
+import { DEFAULT_TENANT_DIRECTORY_STATUS, tenantDirectoryFilters } from './tenant-directory-state';
 import { scheduleDisplayInterval } from './schedule-display';
 import { PropertyUnitRecords } from './property-unit-records';
 import { ReportsWorkspace } from './reports-workspace';
@@ -37,7 +38,7 @@ const destinations: Array<{section:WorkspaceSection;label:string;icon:typeof Hom
  {section:'reports',label:'Reports',icon:FileText,group:'Reports'},
  {section:'documents',label:'Documents & activity',icon:FileText,group:'Records'},
 ];
-const tenantStatuses=[['all','All tenants'],['current','Current'],['future','Future'],['former','Former'],['contact','Account contacts'],['unknown','Status needs review']];
+const tenantStatuses=[['current','Current'],['all','All tenants'],['future','Future'],['former','Former'],['contact','Account contacts'],['unknown','Status needs review']];
 const generalStatuses=[['all','All statuses'],['current','Current'],['future_preleased','Future preleased'],['vacant','Vacant'],['not_ready','Not ready'],['off_market','Off market']];
 const applicationStatuses=[['all','All applications'],['submitted','Submitted'],['missing_information','Missing information'],['under_review','Under review'],['approved','Approved'],['declined','Declined'],['withdrawn','Withdrawn'],['converted','Converted']];
 function Busy({label='Loading records…'}:{label?:string}){return <div className="rm-empty" role="status"><RefreshCw size={18} className="spin"/><span>{label}</span></div>;}
@@ -88,6 +89,7 @@ function AuthenticatedWorkspace(){
  const auth=useRentOpsAuth();const client=useQueryClient();
  const [route,setRoute]=useState<WorkspaceRoute>(()=>parseWorkspaceRoute(window.location.search));
  const [filters,setFilters]=useState<ViewFilters>({propertyScope:'active',propertyId:'all',asOfDate:'',status:'all',search:''});
+ const [tenantStatus,setTenantStatus]=useState(DEFAULT_TENANT_DIRECTORY_STATUS);
  const [source,setSource]=useState<'live'|'synthetic'>('live');const [contextError,setContextError]=useState<unknown>();
  const [businessDate,setBusinessDate]=useState('');const [notice,setNotice]=useState('');
  const [editing,setEditing]=useState<{action:QuickAction;values:FormValues}>();
@@ -122,7 +124,7 @@ function AuthenticatedWorkspace(){
   void loadRentOpsPreviewContext().then(context=>{if(!active)return;setSource(context.source);setBusinessDate(context.asOfDate);setFilters(current=>({...current,asOfDate:current.asOfDate||context.asOfDate}));}).catch(error=>{if(active)setContextError(error);});
   return()=>{active=false;};
  },[auth.status,auth.user?.id,client]);
- const directory=useMemo(()=>data.bootstrap.data?filterTenantDirectory(data.bootstrap.data,filters):[],[data.bootstrap.data,filters]);
+ const directory=useMemo(()=>data.bootstrap.data?filterTenantDirectory(data.bootstrap.data,tenantDirectoryFilters(filters,tenantStatus)):[],[data.bootstrap.data,filters,tenantStatus]);
  useEffect(()=>{if(route.section==='tenants'&&!route.recordId&&directory[0]?.person.id)go({...route,recordId:directory[0].person.id},true);},[route,directory,go]);
  function changeScope(changes:Partial<Pick<ViewFilters,'propertyScope'|'propertyId'>>){
   const nextFilters={...filters,...changes};setFilters(nextFilters);
@@ -136,7 +138,7 @@ function AuthenticatedWorkspace(){
  }
  function navigate(section:WorkspaceSection,kind?:'property'|'unit'){
   setFilters(current=>({...current,status:'all',search:''}));
-  const existing=[...openRecords].reverse().find(r=>r.section===section&&(section!=='properties'||r.kind===kind)&&workspaceRecordInScope(r,data.bootstrap.data,filters));
+  const existing=[...openRecords].reverse().find(r=>r.section===section&&(section!=='properties'||r.kind===kind)&&workspaceRecordInScope(r,data.bootstrap.data,filters)&&(section!=='tenants'||directory.some(tenant=>tenant.person.id===r.recordId)));
   const propertyIds=new Set(snapshot?scopeProperties(snapshot,filters).map(p=>p.id):[]);
   const firstId=section==='properties'?(kind==='unit'?snapshot?.snapshot.units.find(u=>propertyIds.has(u.propertyId)&&(filters.propertyId==='all'||u.propertyId===filters.propertyId))?.id:snapshot?.snapshot.properties.find(p=>propertyIds.has(p.id)&&(filters.propertyId==='all'||p.id===filters.propertyId))?.id):undefined;
   go(existing??{section,kind,recordId:firstId,tab:'summary',report:'rent-roll'});
@@ -165,7 +167,7 @@ function AuthenticatedWorkspace(){
     <label>Portfolio<select aria-label="Portfolio scope" value={filters.propertyScope} onChange={e=>changeScope({propertyScope:e.target.value as 'active'|'all',propertyId:'all'})}><option value="active">Active portfolio</option><option value="all">All imported properties</option></select></label>
     <label>Property<select value={filters.propertyId} onChange={e=>changeScope({propertyId:e.target.value})}><option value="all">All properties</option>{snapshot&&scopeProperties(snapshot,filters).map(p=><option value={p.id} key={p.id}>{p.name??'Unnamed property'}</option>)}</select></label>
     <label>As of<input type="date" value={filters.asOfDate} onChange={e=>{if(e.target.value)setFilters(f=>({...f,asOfDate:e.target.value}));}}/></label>
-    {['tenants','applicants','reports','rent-roll','leases'].includes(route.section)&&<label>Status<select value={filters.status} onChange={e=>setFilters(f=>({...f,status:e.target.value}))}>{statusOptions.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>}
+    {['tenants','applicants','reports','rent-roll','leases'].includes(route.section)&&<label>Status<select value={route.section==='tenants'?tenantStatus:filters.status} onChange={e=>{if(route.section==='tenants'){setTenantStatus(e.target.value);go({...route,recordId:undefined},true);}else setFilters(f=>({...f,status:e.target.value}));}}>{statusOptions.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>}
     <label className="rm-search"><Search size={14}/><input aria-label="Search records" placeholder={route.section==='tenants'?'Name, property, unit, email or phone':'Search records'} value={filters.search} onChange={e=>setFilters(f=>({...f,search:e.target.value}))}/></label>
     <button className="rm-button rm-button--icon" aria-label="Refresh workspace" title="Refresh" onClick={()=>void refresh()} disabled={data.isRefreshing}><RefreshCw size={15} className={data.isRefreshing?'spin':''}/></button>
     {route.section==='properties'&&snapshot&&<button className="rm-button rm-button-primary" onClick={()=>openEditor('save-property')}><Plus size={14}/>Add property</button>}
