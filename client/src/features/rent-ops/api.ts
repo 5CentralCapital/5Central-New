@@ -1914,6 +1914,20 @@ export async function loadRentOpsWorkspaceSummary(filters: ApiFilters = {}, sign
   return decodeDashboardSummary(unwrapData(value));
 }
 
+export async function loadDashboardTrends(filters: ApiFilters, signal?: AbortSignal) {
+  const { dashboardTrendsSchema } = await import("../../../../shared/rent-ops-dashboard");
+  const result = dashboardTrendsSchema.safeParse(await requestJson(`/api/rent-ops/workspace/dashboard-trends${buildRentOpsQuery(filters)}`, { signal }));
+  if (!result.success) throw new Error("Dashboard history is unavailable.");
+  return result.data;
+}
+
+export async function loadDashboardCash(signal?: AbortSignal) {
+  const { dashboardCashSchema } = await import("../../../../shared/rent-ops-dashboard");
+  const result = dashboardCashSchema.safeParse(await requestJson("/api/rent-ops/workspace/dashboard-cash", { signal }));
+  if (!result.success) throw new Error("Cash balance is unavailable.");
+  return result.data;
+}
+
 export interface RentOpsWorkspaceDashboard {
   summary: DashboardSummary;
   reports: { "rent-roll": ReportRow[]; delinquency: ReportRow[] };

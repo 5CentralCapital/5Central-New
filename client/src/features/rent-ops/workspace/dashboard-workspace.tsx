@@ -1,26 +1,9 @@
-import {EntityLink,RecordLink} from "./entity-link";
-import { useReportSearch } from "./use-report-search";
-import { useRentOpsAuth } from "../auth-ui";
-import { useQueries } from "@tanstack/react-query";
-import { loadRentOpsReport, type RentOpsWorkspaceDashboard } from "../api";
-import { useMemo } from "react";
-import { AlertCircle, ArrowRight, Loader2 } from "lucide-react";
+import { EntityLink, RecordLink } from "./entity-link";
+import type { RentOpsWorkspaceDashboard } from "../api";
 import type { GridColumn } from "./grid";
-import { DataGrid } from "./grid";
-import type { AdminSnapshot, DashboardSummary, ReportKey, ReportRow, TenantTab, ViewFilters } from "../types";
-import {
-  createReportViewModel,
-  formatReportValue,
-  formatReportCellValue,
-  reportQueryKey,
-  reportQueryFilters,
-  reportRowKey,
-  reportCellPersonId,
-  readReportValue,
-  type DisplayReportRow,
-  type ReportColumnDefinition,
-} from "./report-model";
-import "./reports.css";
+import type { AdminSnapshot, DashboardSummary, ReportKey, TenantTab, ViewFilters } from "../types";
+import { formatReportValue, formatReportCellValue, reportCellPersonId, readReportValue,
+  type DisplayReportRow, type ReportColumnDefinition } from "./report-model";
 
 export interface DashboardWorkspaceProps {
   snapshot: AdminSnapshot;
@@ -115,88 +98,4 @@ export function gridColumns(columns: readonly ReportColumnDefinition[], navigati
   }));
 }
 
-function MetricCard({ metric }: { metric: DashboardMetric }) {
-  const content = <><span>{metric.label}</span><strong>{metric.value}</strong></>;
-  return metric.onClick
-    ? <button type="button" className={`rm-stat rm-stat-${metric.tone ?? "normal"}`} onClick={metric.onClick}>{content}</button>
-    : <div className={`rm-stat rm-stat-${metric.tone ?? "normal"}`}>{content}</div>;
-}
-
-function Widget({
-  report,
-  rows,
-  loading,
-  error,
-  snapshot,
-  onReport,
-  onOpenTenant,
-  onOpenUnit,
-  onOpenProperty,
-}: {
-  report: ReportKey;
-  rows?: ReportRow[];
-  loading: boolean;
-  error?: string;
-  snapshot: AdminSnapshot;
-  onReport: (report: ReportKey) => void;
-  onOpenTenant?: (personId: string,tab?:TenantTab) => void;
-  onOpenUnit?: (unitId: string) => void;
-  onOpenProperty?: (propertyId:string)=>void;
-}) {
-  const view = useMemo(() => createReportViewModel(report, rows ?? [], snapshot), [report, rows, snapshot]);
-  const columns = useMemo(() => dashboardColumns(report, view.columns), [report, view.columns]);
-  const displayRows = view.displayRows;
-  const title = report === "rent-roll" ? "Rent roll" : "Balances due";
-  return (
-    <section className="rm-panel rm-dashboard-widget" aria-label={title}>
-      <header className="rm-panel-title">
-        <h2>{title}</h2>
-        <button type="button" className="rm-button" onClick={() => onReport(report)}>Open report <ArrowRight aria-hidden="true" /></button>
-      </header>
-      {error && <p className="rm-error" role="alert"><AlertCircle aria-hidden="true" /> {error}</p>}
-      {loading && !rows && <div className="rm-empty"><Loader2 className="rm-spin" aria-hidden="true" /><p>Loading selected report…</p></div>}
-      {rows && <DataGrid rows={displayRows} columns={gridColumns(columns, { onOpenTenant, onOpenUnit, onOpenProperty })} getRowKey={(row) => reportRowKey(row)} pageSize={6} emptyMessage="No records returned for this view." storageKey={`rent-ops-dashboard-${report}`} />}
-    </section>
-  );
-}
-
-export function DashboardWorkspace({ snapshot, filters, onReport, onOpenTenant, onOpenUnit, onOpenProperty, previews, refreshing = false }: DashboardWorkspaceProps) {
-  const auth = useRentOpsAuth();
-  const { debouncedSearch, searchPending } = useReportSearch(filters.search);
-  const bundledPreviews = Boolean(previews) && filters.status === "all" && !filters.search.trim();
-  const widgetReports = ["rent-roll", "delinquency"] as const;
-  const queries = useQueries({ queries: widgetReports.map((report) => {
-    const query = reportQueryFilters({ ...filters, search: debouncedSearch }, report, { asOfDate: filters.asOfDate });
-    return { queryKey: reportQueryKey(report, query, auth.user?.id ?? ""), staleTime: 30_000, gcTime: 300_000, enabled: auth.status === "authenticated" && Boolean(auth.user?.id) && !bundledPreviews && !searchPending, queryFn: ({ signal }: { signal: AbortSignal }) => loadRentOpsReport(report, query, signal) };
-  }) });
-  const widgetRows = searchPending ? { "rent-roll": undefined, delinquency: undefined } : bundledPreviews ? previews! : { "rent-roll": queries[0].data, delinquency: queries[1].data };
-  const widgetErrors = searchPending || bundledPreviews ? { "rent-roll": undefined, delinquency: undefined } : { "rent-roll": queries[0].error?.message, delinquency: queries[1].error?.message };
-  const loading = searchPending || refreshing || queries.some((query) => query.isFetching);
-
-  const metrics = useMemo(() => dashboardMetrics(snapshot.summary, onReport), [snapshot.summary, onReport]);
-  const vacancyDetail = [
-    ["Future preleased", countValue(snapshot.summary.futurePreleasedUnits)],
-    ["Occupancy unknown", countValue(unknownOccupancyCount(snapshot.summary))],
-    ["Confirmed vacant", countValue(snapshot.summary.genuineVacantUnits)],
-    ["Ready vacant", countValue(snapshot.summary.readyVacantUnits)],
-    ["Not ready", countValue(snapshot.summary.notReadyUnits)],
-    ["Off market", countValue(snapshot.summary.offMarketUnits)],
-  ];
-
-  return (
-    <section className="rm-dashboard-workspace" aria-label="Rent Operations dashboard">
-      <div className="rm-dashboard-grid">{metrics.map((metric) => <MetricCard key={metric.label} metric={metric} />)}</div>
-      <section className="rm-panel rm-dashboard-vacancy">
-        <header className="rm-panel-title"><h2>Vacancies</h2><button type="button" className="rm-button" onClick={() => onReport("occupancy")}>Open report <ArrowRight aria-hidden="true" /></button></header>
-        <div className="rm-dashboard-counts">{vacancyDetail.map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>
-        <div className="rm-dashboard-links"><button type="button" className="rm-button" onClick={() => onReport("applicant-pipeline")}>Review applications <ArrowRight aria-hidden="true" /></button><button type="button" className="rm-button" onClick={() => onReport("lease-expiration")}>Review lease dates <ArrowRight aria-hidden="true" /></button></div>
-      </section>
-      <div className="rm-dashboard-widget-grid">
-        <Widget report="rent-roll" rows={widgetRows["rent-roll"]} loading={loading} error={widgetErrors["rent-roll"]} snapshot={snapshot} onReport={onReport} onOpenTenant={onOpenTenant} onOpenUnit={onOpenUnit} onOpenProperty={onOpenProperty} />
-        <Widget report="delinquency" rows={widgetRows.delinquency} loading={loading} error={widgetErrors.delinquency} snapshot={snapshot} onReport={onReport} onOpenTenant={onOpenTenant} onOpenUnit={onOpenUnit} onOpenProperty={onOpenProperty} />
-      </div>
-    </section>
-  );
-}
-
-export default DashboardWorkspace;
+export { RmDashboard as DashboardWorkspace } from "./rm-dashboard";

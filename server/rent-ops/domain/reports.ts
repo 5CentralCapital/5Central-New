@@ -1,4 +1,5 @@
 import { deriveAccountBalances } from "./account-balances";
+import type { DashboardPropertyPoint } from "../../../shared/rent-ops-dashboard";
 import { meteredUtilitiesForTenancy } from "./metered-utility";
 import { selectBalanceReview, operationalBalanceCents } from "./balance-review";
 import { hasVacancyConfirmationOn, hasOperationalEndOn, hasOccupancyConfirmationOn, hasConfirmedTenancyLinks, confirmedTenancyFact, isOccupiedTenancyOn, isKnownPastAccountOn } from "./tenancy-occupancy";
@@ -790,6 +791,62 @@ export function deriveOccupancy(snapshot: RentOpsSnapshot, filters: RentOpsFilte
       exceptionCodes: exceptionCodes.length > 0 ? exceptionCodes : undefined,
     };
   }).filter((row) => !filters.occupancy || filters.occupancy.includes(row.occupancy));
+}
+
+/** Dashboard history shares the report occupancy and effective-rent rules, but
+ * never computes balances or loads posted transaction history for every month. */
+export function deriveDashboardLeasingPoint(snapshot: RentOpsSnapshot, filters: RentOpsFilters, historical: boolean): DashboardPropertyPoint[] {
+  const date = asOfDate(filters);
+  const selectedProperties = scopedProperties(snapshot, filters);
+  const selectSchedules = createEffectiveScheduleSelector(snapshot.recurringSchedules);
+  const units = unitMap(snapshot);
+  const tenancies = new Map(snapshot.tenancies.map(tenancy => [tenancy.id, tenancy]));
+  const points = new Map(selectedProperties.map(property => [property.id, {
+    propertyId: property.id, propertyName: property.name, unitCount: 0, occupiedUnits: 0, vacantUnits: 0,
+    preleasedUnits: 0, unknownUnits: 0, occupancyRate: null, vacancyRate: null, baseRentCents: null,
+    confirmedBaseRentCents: 0, unconfirmedRentUnits: 0,
+  } as DashboardPropertyPoint]));
+  let occupancy: OccupancyRow[];
+  try { occupancy = deriveOccupancy(snapshot, filters); }
+  catch (error) {
+    if (!(error instanceof RentOpsInvariantError)) throw error;
+    // Conflicting historical tenancies must produce gaps, never a fabricated line.
+    occupancy = scopedUnits(snapshot, filters).map(unit => ({ ...unit, unitId: unit.id, propertyName: "", occupancy: "unknown", exceptionCodes: ["occupancy_conflict"] }));
+  }
+  for (const row of occupancy) {
+    const point = points.get(row.propertyId);
+    if (!point) continue;
+    point.unitCount++;
+    let state = row.occupancy;
+    // Current empty-unit state cannot prove vacancy before its observation.
+    if (historical && (state === "vacant" || state === "future_preleased")) {
+      const unit = units.get(row.unitId)!;
+      const vacancyDated = hasVacancyConfirmationOn(unit, date) || snapshot.tenancies.some(tenancy =>
+        tenancy.unitId === row.unitId && hasConfirmedTenancyLinks(tenancy) && confirmedTenancyFact(tenancy.actualMoveOutKnowledge)
+        && !!tenancy.actualMoveOutOn && tenancy.actualMoveOutOn <= date);
+      if (!vacancyDated) state = "unknown";
+    }
+    if (state === "unknown") { point.unknownUnits++; continue; }
+    if (state !== "current") { point.vacantUnits++; if (state === "future_preleased") point.preleasedUnits++; continue; }
+    point.occupiedUnits++;
+    const tenancy = row.tenancyId ? tenancies.get(row.tenancyId) : undefined;
+    if (!tenancy) { point.unconfirmedRentUnits++; continue; }
+    try {
+      const amounts = scheduledAmounts(snapshot, tenancy.id, date, selectSchedules);
+      const base = effectiveSchedulesFor(snapshot, tenancy.id, date, selectSchedules).filter(schedule => schedule.scopeType !== "property" && schedule.category === "base_rent");
+      if (amounts.baseRentCents === undefined || !base.length || base.some(schedule => schedule.billingFrequency !== "monthly")) point.unconfirmedRentUnits++;
+      else point.confirmedBaseRentCents += amounts.baseRentCents;
+    } catch (error) {
+      if (!(error instanceof RentOpsInvariantError)) throw error;
+      point.unconfirmedRentUnits++;
+    }
+  }
+  return Array.from(points.values()).filter(point => point.unitCount > 0).map(point => ({
+    ...point,
+    occupancyRate: point.unknownUnits ? null : 100 * point.occupiedUnits / point.unitCount,
+    vacancyRate: point.unknownUnits ? null : 100 * point.vacantUnits / point.unitCount,
+    baseRentCents: point.unknownUnits || point.unconfirmedRentUnits ? null : point.confirmedBaseRentCents,
+  }));
 }
 
 /**

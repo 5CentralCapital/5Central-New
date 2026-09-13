@@ -27,6 +27,7 @@ import {
 import { RentOpsInvariantError } from "./domain/invariants";
 import { nowIsoDate } from "./domain/dates";
 import { deriveOperationalScheduleRegister, validateReportFilters, deriveApplicantPipeline, deriveDashboardSummary, deriveFixedReport, deriveRentRoll, deriveTenantProfile } from "./domain/reports";
+import { dashboardCash } from "./services/dashboard-cash";
 import { toCsv } from "./services/csv";
 import { RentOpsService } from "./services/service";
 import { MagicLinkDeliveryError } from "./services/notifier";
@@ -817,6 +818,13 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
         delinquency: serializeReportEnvelope({ report: "delinquency", filters, rows: result.delinquency }),
       });
     } catch (error) { adminError(res, error); }
+  });
+  adminRouter.get("/workspace/dashboard-trends", async (req, res) => {
+    try { await sendWorkspaceJson(req, res, await service.dashboardTrends(parseAdminFilters(req.query))); }
+    catch (error) { adminError(res, error); }
+  });
+  adminRouter.get("/workspace/dashboard-cash", async (_req, res) => {
+    res.json(options.previewSource === "synthetic" ? { state: "unconfigured" } : await dashboardCash());
   });
   adminRouter.get("/workspace/collections/:name", async (req, res) => {
     try {
