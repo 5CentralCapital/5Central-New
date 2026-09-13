@@ -76,7 +76,7 @@ export function WorkspaceReportPreload({selected,filters,enabled}:{selected:Repo
   const readiness=readPreference(selected,'readiness',filters.readiness?.[0]??'all');
   const listing=readPreference(selected,'listing','all');
   const balance=readPreference<ReportBalanceFilter>(selected,'balance',filters.balanceStatus??(selected==='delinquency'?'due':'all'));
-  const tenantStatus=defaultReportTenantStatus(selected,readPreference(selected,'tenantStatus',defaultReportTenantStatus(selected,filters.tenantStatus)));
+  const tenantStatus=defaultReportTenantStatus(selected);
   const queryFilters={...reportQueryFilters({...filters,status:primaryReports.includes(selected)?'all':filters.status,search:'',
     balanceStatus:selected==='delinquency'||selected==='rent-roll'?balance:undefined,
     tenantStatus:isTenantStatusReport(selected)?tenantStatus:undefined,
@@ -89,7 +89,7 @@ export function WorkspaceReportPreload({selected,filters,enabled}:{selected:Repo
   return null;
 }
 
-/** A report change restores its own preferences before issuing its first query. */
+/** Each newly opened report starts with current tenants; display preferences remain saved. */
 export function ReportsWorkspace(props: ReportsWorkspaceProps) {
   return <ReportWorkspaceView key={props.selected} {...props} />;
 }
@@ -106,18 +106,21 @@ function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTena
   const [readiness, setReadiness] = useState(() => readPreference(selected, "readiness", filters.readiness?.[0] ?? "all"));
   const [listing, setListing] = useState(() => readPreference(selected, "listing", "all"));
   const [balance, setBalance] = useState<ReportBalanceFilter>(() => readPreference(selected, "balance", filters.balanceStatus ?? (selected === "delinquency" ? "due" : "all")));
-  const [tenancyStatus, setTenancyStatus] = useState<NonNullable<ViewFilters["tenantStatus"]>>(() => defaultReportTenantStatus(selected, readPreference(selected, "tenantStatus", defaultReportTenantStatus(selected, filters.tenantStatus))));
+  const [tenancyStatus, setTenancyStatus] = useState<NonNullable<ViewFilters["tenantStatus"]>>(() => defaultReportTenantStatus(selected));
   const [exportFormat, setExportFormat] = useState<"csv" | "print" | null>(null);
-  const [extraColumns, setExtraColumns] = useState<string[]>([]);
-  const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" }>({ key: "unitNumber", direction: "asc" });
+  const [extraColumns, setExtraColumns] = useState<string[]>(() => readPreference(selected, "columns", []));
+  const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" }>(() => readPreference(selected, "sort", { key: "unitNumber", direction: "asc" }));
   useEffect(() => {
     setMonth(asOfDate.slice(0, 7)); setFromDate(`${asOfDate.slice(0, 7)}-01`); setToDate(asOfDate);
   }, [asOfDate]);
   useEffect(() => {
     setOccupancy(readPreference(selected, "occupancy", defaultReportOccupancy(selected, filters.status)));
     setReadiness(readPreference(selected, "readiness", filters.readiness?.[0] ?? "all")); setListing(readPreference(selected, "listing", "all"));
-    setBalance(readPreference(selected, "balance", filters.balanceStatus ?? (selected === "delinquency" ? "due" : "all"))); setTenancyStatus(defaultReportTenantStatus(selected, readPreference(selected, "tenantStatus", defaultReportTenantStatus(selected, filters.tenantStatus))));
-    setExtraColumns(readPreference(selected, "columns", [])); setSort(readPreference(selected, "sort", { key: "unitNumber", direction: "asc" }));
+    setBalance(readPreference(selected, "balance", filters.balanceStatus ?? (selected === "delinquency" ? "due" : "all")));
+    const columns = readPreference<string[]>(selected, "columns", []);
+    setExtraColumns(current => current.length === columns.length && current.every((value, index) => value === columns[index]) ? current : columns);
+    const savedSort = readPreference<{ key: string; direction: "asc" | "desc" }>(selected, "sort", { key: "unitNumber", direction: "asc" });
+    setSort(current => current.key === savedSort.key && current.direction === savedSort.direction ? current : savedSort);
   }, [selected, filters.status, filters.balanceStatus, filters.tenantStatus, filters.readiness]);
 
   const periodError = validateReportPeriod(selected, asOfDate, month, fromDate, toDate);
@@ -168,7 +171,7 @@ function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTena
         <label>Listing<select value={listing} onChange={event => { setListing(event.target.value); savePreference(selected, "listing", event.target.value); }}><option value="all">All listing states</option>{listingOptions.map(value => <option key={value} value={value}>{formatReportValue(value, "status")}</option>)}</select></label>
       </>}
       {(selected === "rent-roll" || selected === "delinquency") && <label>Balance<select value={balance} onChange={event => { setBalance(event.target.value as ReportBalanceFilter); savePreference(selected, "balance", event.target.value); }}>{balanceOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}
-      {isTenantStatusReport(selected) && <label>Tenant status<select value={tenancyStatus} onChange={event => { setTenancyStatus(event.target.value as NonNullable<ViewFilters["tenantStatus"]>); savePreference(selected, "tenantStatus", event.target.value); }}><option value="all">All tenants</option><option value="current">Current tenants</option><option value="former">Former tenants</option><option value="future">Future tenants</option><option value="unknown">Unverified status</option></select></label>}
+      {isTenantStatusReport(selected) && <label>Tenant status<select value={tenancyStatus} onChange={event => { setTenancyStatus(event.target.value as NonNullable<ViewFilters["tenantStatus"]>); }}><option value="all">All tenants</option><option value="current">Current tenants</option><option value="former">Former tenants</option><option value="future">Future tenants</option><option value="unknown">Unverified status</option></select></label>}
       {mode === "month" && <label>Month<input type="month" value={month} max={asOfDate.slice(0, 7)} onChange={event => setMonth(event.target.value)} /></label>}
       {mode === "range" && <><label>From<input type="date" value={fromDate} max={asOfDate} onChange={event => setFromDate(event.target.value)} /></label><label>Through<input type="date" value={toDate} max={asOfDate} onChange={event => setToDate(event.target.value)} /></label></>}
       <div className="rm-report-toolbar-actions">
