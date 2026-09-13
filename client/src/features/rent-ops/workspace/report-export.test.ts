@@ -3,7 +3,7 @@ import test from "node:test";
 import type { AdminSnapshot, RentRollRow } from "../types";
 import { brandedReportCsv, brandedReportHtml, exportPeriodLabel, exportPropertyOptions, initialExportPropertyScope, exportQueryFilters, exportSelectionError, prepareReportExport, type ReportExportSelection } from "./report-export";
 const selection: ReportExportSelection = { propertyScope: "active", propertyIds: ["p2"], asOfDate: "2026-09-10", month: "2026-08", fromDate: "2026-08-01", toDate: "2026-08-31", tenantStatus: "current" };
-const snapshot = { snapshot: { properties: [{ id: "p1", name: "One" }, { id: "p2", name: "Two" }] } } as AdminSnapshot;
+const snapshot = { snapshot: { properties: [{ id: "p1", name: "One" }, { id: "p2", name: "Two" }], people: [], units: [], tenancies: [] } } as AdminSnapshot;
 test("export selection replaces stale property and date query scope while preserving report view", () => {
   const query = exportQueryFilters("rent-roll", { propertyScope: "active", propertyId: "p1", propertyIds: ["p1"], asOfDate: "2026-09-12", fromDate: "2025-01-01", month: "2025-01", occupancy: ["vacant"], balanceStatus: "unverified" }, selection);
   assert.deepEqual(query, { propertyScope: "active", propertyIds: ["p2"], asOfDate: "2026-09-10", occupancy: ["vacant"], balanceStatus: "unverified" });
@@ -53,4 +53,16 @@ test("property picker defaults active, retains explicit inactive selection, and 
   assert.equal(initialExportPropertyScope({ propertyScope: "all" }, directory), "all");
   assert.deepEqual(exportPropertyOptions(directory, "active").map(property => property.id), ["a", "z"]);
   assert.deepEqual(exportPropertyOptions(directory, "all").map(property => property.id), ["a", "z", "old"]);
+});
+
+test("property-scoped ledger export retains person-level opening balances without assigning a property", () => {
+  const opening = { rowType: "opening_balance", openingBalanceCents: 109000, transaction: { id: "opening:p", personId: "resident", postedOn: "2026-09-01", description: "Opening balance" }, runningBalanceCents: 109000 };
+  const inScope = { rowType: "transaction", transaction: { id: "tx1", personId: "resident", propertyId: "p2", postedOn: "2026-09-02", description: "Payment", amountCents: 10000, kind: "payment" }, runningBalanceCents: 99000 };
+  const elsewhere = { ...inScope, transaction: { ...inScope.transaction, id: "tx2", propertyId: "p1" } };
+  const result = prepareReportExport("tenant-ledger", [opening, inScope, elsewhere] as any, snapshot, selection);
+  assert.equal(result.rows.length, 2);
+  assert.ok(result.rows.some(row => row.__source === opening));
+  assert.equal((opening.transaction as any).propertyId, undefined);
+  assert.ok(result.groups.some(group => group.label === "Account opening balances · selected report scope"));
+  assert.ok(!result.rows.some(row => row.__source === elsewhere));
 });

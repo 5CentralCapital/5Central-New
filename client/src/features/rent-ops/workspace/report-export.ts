@@ -1,5 +1,5 @@
 import type { AdminSnapshot, ApiFilters, ReportKey, ReportRow } from "../types";
-import { REPORT_PERIODS, buildReportCsv, createReportViewModel, defaultReportTenantStatus, filterRentRollRows, filterReportLocalRows, formatReportCellValue, formatReportValue, groupReportRows, isTenantStatusReport, validateReportPeriod, type ReportLocalFilters } from "./report-model";
+import { REPORT_PERIODS, buildReportCsv, createReportViewModel, defaultReportTenantStatus, filterRentRollRows, filterReportLocalRows, formatReportCellValue, formatReportValue, groupReportRows, isTenantStatusReport, readReportValue, validateReportPeriod, type ReportLocalFilters } from "./report-model";
 
 export interface ReportExportSelection {
   propertyIds: string[]; // Empty means every property within the chosen scope.
@@ -37,11 +37,23 @@ export function exportPeriodLabel(report: ReportKey, selection: ReportExportSele
 }
 export function prepareReportExport(report: ReportKey, rows: ReportRow[], snapshot: AdminSnapshot, selection: ReportExportSelection,
   options: { localFilters?: ReportLocalFilters; search?: string; extraColumns?: string[]; sort?: { key: string; direction: "asc" | "desc" } } = {}) {
-  const filtered = filterReportLocalRows(report === "rent-roll" ? filterRentRollRows(rows, options.search ?? "") : rows, report,
-    { ...options.localFilters, propertyIds: selection.propertyIds, ...(report === "delinquency" ? { tenancyStatus: selection.tenantStatus } : {}) });
+  // Ledger opening balances are person-level rows returned by the already scoped
+  // server query. Retain them even though their transaction has no property ID.
+  const scopedRows = rows.filter(row => filterReportLocalRows([row], report, { propertyIds: selection.propertyIds }).length > 0
+    || (report === "tenant-ledger" && readReportValue(row, "rowType") === "opening_balance" && !readReportValue(row, "propertyId")));
+  const filtered = filterReportLocalRows(report === "rent-roll" ? filterRentRollRows(scopedRows, options.search ?? "") : scopedRows, report,
+    { ...options.localFilters, propertyIds: undefined, ...(report === "delinquency" ? { tenancyStatus: selection.tenantStatus } : {}) });
   const view = createReportViewModel(report, filtered, snapshot);
   const columns = view.columns.filter(column => column.curated !== false || options.extraColumns?.includes(column.key));
   const groups = groupReportRows(report, view.displayRows, snapshot, options.sort);
+  if (report === "tenant-ledger") {
+    for (const group of groups) {
+      if (!group.propertyId && group.rows.every(row => readReportValue(row.__source, "rowType") === "opening_balance")) {
+        group.label = "Account opening balances · selected report scope";
+        for (const row of group.rows) row.propertyName = "Account opening balance · selected report scope";
+      }
+    }
+  }
   return { columns, groups, rows: groups.flatMap(group => group.rows) };
 }
 export interface ReportExportHeader { title: string; properties: string; period: string; tenantStatus?: string }
