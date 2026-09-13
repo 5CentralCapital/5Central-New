@@ -28,7 +28,7 @@ import {
 } from "../../shared/rent-ops-contracts";
 import { RentOpsInvariantError } from "./domain/invariants";
 import { nowIsoDate } from "./domain/dates";
-import { deriveOperationalScheduleRegister, validateReportFilters, deriveApplicantPipeline, deriveDashboardSummary, deriveFixedReport, deriveRentRoll, deriveTenantProfile } from "./domain/reports";
+import { createTenantProfileReader, validateReportFilters, deriveApplicantPipeline, deriveDashboardSummary, deriveFixedReport, deriveRentRoll, deriveTenantProfile } from "./domain/reports";
 import { dashboardCash } from "./services/dashboard-cash";
 import { bankingRead, readBanking } from "./services/banking-read";
 import { toCsv } from "./services/csv";
@@ -609,10 +609,10 @@ function buildClientSnapshot(snapshot: Awaited<ReturnType<RentOpsService["snapsh
     ...snapshot.tenancies.map((tenancy) => tenancy.primaryPersonId),
     ...snapshot.householdMemberships.flatMap((membership) => [membership.personId, membership.accountPersonId]),
   ].filter((personId): personId is string => typeof personId === "string" && personId.length > 0));
-  const operationalRegister = deriveOperationalScheduleRegister(snapshot, filters);
+  const readProfile = createTenantProfileReader(snapshot, filters);
   const tenantProfiles = snapshot.people
     .filter((person) => profilePersonIds.has(person.id))
-    .map((person) => deriveTenantProfile(snapshot, person.id, filters, operationalRegister))
+    .map((person) => readProfile(person.id))
     .filter((profile): profile is NonNullable<ReturnType<typeof deriveTenantProfile>> => Boolean(profile))
     // A scoped operational bundle must not turn a person whose only tenancy
     // is outside the selected portfolio into a resident card. The profile

@@ -2039,7 +2039,14 @@ export function deriveTenantNavigation(snapshot: RentOpsSnapshot, personId: stri
   return { person, tenancies, tenancy, category };
 }
 
-export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string, filters: RentOpsFilters = {}, preparedRegister?: ReturnType<typeof deriveOperationalScheduleRegister>): TenantProfile | undefined {
+/** Batch profile reads share indexes only within this exact snapshot/request. */
+export function createTenantProfileReader(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}) {
+  const register = deriveOperationalScheduleRegister(snapshot, filters);
+  const ledger = createAccountLedgerReader(snapshot, filters);
+  return (personId: string) => deriveTenantProfile(snapshot, personId, filters, register, ledger);
+}
+
+export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string, filters: RentOpsFilters = {}, preparedRegister?: ReturnType<typeof deriveOperationalScheduleRegister>, preparedLedger?: ReturnType<typeof createAccountLedgerReader>): TenantProfile | undefined {
   const navigation = deriveTenantNavigation(snapshot, personId, filters);
   if (!navigation) return undefined;
   const { person, tenancies, tenancy } = navigation;
@@ -2068,7 +2075,7 @@ export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string,
       schedule.scopeType === "property" && !!tenancy && schedule.propertyId === tenancy.propertyId ||
       schedule.scopeType === "unit" && !!tenancy && schedule.unitId === tenancy.unitId,
     ),
-    ledger: deriveManagerAccountLedger(snapshot, personId, tenancies.map(candidate => candidate.id), filters),
+    ledger: preparedLedger ? preparedLedger(personId, tenancies.map(candidate => candidate.id)) : deriveManagerAccountLedger(snapshot, personId, tenancies.map(candidate => candidate.id), filters),
     deposits: snapshot.securityDeposits
       .filter((deposit) => (deposit.personId === personId || tenancyIds.has(deposit.tenancyId ?? "")) && (!deposit.receivedOn || deposit.receivedOn <= asOf))
       .map((deposit) => deposit.disposedOn && deposit.disposedOn > asOf && (deposit.dispositionStatus === "disposed" || deposit.dispositionStatus === "returned") ? { ...deposit, dispositionStatus: "held" as const, disposedOn: undefined, dispositionNotes: undefined } : deposit),

@@ -481,6 +481,26 @@ test("compact snapshot rejects unknown versions, duplicate aliases and missing r
   }
 });
 
+test("snapshot validation remains fresh after successful and rejected responses", async () => {
+  const body = compactSnapshotWire(serializedServerDocumentBundle());
+  const originalFetch = globalThis.fetch;
+  // Deliberately reuse the same objects: a completed response must never leave
+  // a trusted-object cache that could hide a later change to its fields.
+  globalThis.fetch = (async () => ({ ok: true, status: 200, json: async () => body })) as typeof fetch;
+  try {
+    const expected = await loadRentOpsAdminSnapshot();
+    const snapshot = body.snapshot as Record<string, unknown>;
+    const document = (snapshot.documents as Array<Record<string, unknown>>)[0];
+    for (const [key, value] of [["source", "private-canary"], ["unexpected", "unknown-field"], ["sizeBytes", "invalid-number"]] as const) {
+      const previous = document[key];
+      document[key] = value;
+      await assert.rejects(loadRentOpsAdminSnapshot(), /invalid response/);
+      if (previous === undefined) delete document[key]; else document[key] = previous;
+      assert.deepEqual(await loadRentOpsAdminSnapshot(), expected);
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("actual recurring serializer preserves null imported cadence and links in compact snapshot and tenant profiles", async () => {
   const { serializeAdminRecurringSchedule } = await import("../../../../server/rent-ops/presentation/entities");
   const imported = serializeAdminRecurringSchedule({ id: "schedule:unknown", billingFrequency: null, chargeDefinitionId: null, amountCents: null, effectiveFrom: null, effectiveFromKnowledge: "unknown_open_start", sourceConfidence: "exception" } as never);
