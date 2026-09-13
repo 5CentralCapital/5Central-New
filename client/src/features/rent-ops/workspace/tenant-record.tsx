@@ -213,14 +213,14 @@ function tenancyLocation(tenancy: AdminTenancyView, snapshot: AdminSnapshot): st
 }
 
 function TenancyDates({ tenancy }: { tenancy: AdminTenancyView }) {
-  const dates: Array<[string, string | undefined]> = [
-    ["Planned move-in", tenancy.plannedMoveInOn],
-    ["Actual move-in", tenancy.actualMoveInOn],
-    ["Notice", tenancy.noticeOn],
-    ["Expected move-out", tenancy.expectedMoveOutOn],
-    ["Actual move-out", tenancy.actualMoveOutOn],
+  const dates: Array<[string, string | undefined, boolean]> = [
+    ["Planned move-in", tenancy.plannedMoveInOn, false],
+    ["Actual move-in", tenancy.actualMoveInOn, tenancy.status !== "future" && tenancy.status !== "cancelled"],
+    ["Notice", tenancy.noticeOn, false],
+    ["Expected move-out", tenancy.expectedMoveOutOn, false],
+    ["Actual move-out", tenancy.actualMoveOutOn, tenancy.status === "past"],
   ];
-  return <dl className="rm-form-grid rm-detail-grid rm-tenancy-dates">{dates.map(([fieldLabel, value]) => <Field key={fieldLabel} label={fieldLabel}>{formatDate(value)}</Field>)}</dl>;
+  return <dl className="rm-form-grid rm-detail-grid rm-tenancy-dates">{dates.filter(([, value, required]) => value || required).map(([fieldLabel, value, required]) => <Field key={fieldLabel} label={fieldLabel} warning={required && !value}>{formatDate(value)}</Field>)}</dl>;
 }
 
 function LeaseTermsTable({ terms, snapshot, editActions, onEdit }: { terms: AdminLeaseTermView[]; snapshot: AdminSnapshot; editActions: TenantEditAction[]; onEdit: EditAction }) {
@@ -228,7 +228,7 @@ function LeaseTermsTable({ terms, snapshot, editActions, onEdit }: { terms: Admi
   return <div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Lease terms</caption><thead><tr><th>Tenancy</th><th>Status</th><th>Contract start</th><th>Contract end</th><th>Signed</th><th>Month to month</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{terms.map((term, index) => {
     const action = findAction(editActions, "save-lease-term", (candidate) => candidate.values.id === term.id) ?? editActions.filter((candidate) => candidate.action === "save-lease-term")[index];
     const tenancy = snapshot.snapshot.tenancies.find((candidate) => candidate.id === term.tenancyId);
-    return <tr key={term.id ?? `lease-${index}`}><td>{tenancy ? tenancyLocation(tenancy, snapshot) : "Needs review"}</td><td>{statusValue(term.status, !term.status)}</td><td>{formatDate(term.contractStartOn)}</td><td>{formatDate(term.contractEndOn)}</td><td>{formatDate(term.signedOn)}</td><td>{term.monthToMonth == null ? "Needs review" : term.monthToMonth ? "Yes" : "No"}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
+    return <tr key={term.id ?? `lease-${index}`}><td>{tenancy ? tenancyLocation(tenancy, snapshot) : "Needs review"}</td><td>{!term.status || ["unknown", "ambiguous", "inferred"].includes(term.statusKnowledge ?? "") ? <span className="rm-muted">Execution not recorded</span> : statusValue(term.status)}</td><td>{formatDate(term.contractStartOn)}</td><td>{formatDate(term.contractEndOn)}</td><td>{term.signedOn ? formatDate(term.signedOn) : <span className="rm-muted">Not recorded</span>}</td><td>{term.monthToMonth == null ? "Not recorded" : term.monthToMonth ? "Yes" : "No"}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
   })}</tbody></table></div>;
 }
 
@@ -236,14 +236,17 @@ function TenancyTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantV
   const context = resolveTenantContext(tenant, snapshot);
   const current = context.tenancies.filter((tenancy) => isCurrentTenancy(tenancy, context.asOfDate));
   const history = context.tenancies.filter((tenancy) => !isCurrentTenancy(tenancy, context.asOfDate));
+  const showPlannedMoveIn = history.some(tenancy => tenancy.plannedMoveInOn);
+  const showNotice = history.some(tenancy => tenancy.noticeOn);
+  const showExpectedMoveOut = history.some(tenancy => tenancy.expectedMoveOutOn);
   return <div className="rm-tenant-tab-content">
     <Panel title="Current tenancy">
       {current.length === 0 ? <Empty message="No current or future tenancy is linked." /> : current.map((tenancy, index) => <article className="rm-tenancy-card" key={tenancy.id ?? `current-${index}`}><div className="rm-card-heading"><div><strong>{tenancyLocation(tenancy, snapshot)}</strong></div>{statusValue(tenancy.status, !tenancy.status)}</div><TenancyDates tenancy={tenancy} /><div className="rm-panel-actions">{findAction(editActions, "save-tenancy", (candidate) => candidate.values.id === tenancy.id) && <ActionButton action={findAction(editActions, "save-tenancy", (candidate) => candidate.values.id === tenancy.id)!} onEdit={onEdit} />}</div></article>)}
     </Panel>
     <Panel title="Tenancy history">
-      {history.length === 0 ? <Empty message="No prior tenancy records are linked." /> : <div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Tenancy history</caption><thead><tr><th>Property / unit</th><th>Status</th><th>Planned move-in</th><th>Actual move-in</th><th>Notice</th><th>Expected move-out</th><th>Actual move-out</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{history.map((tenancy, index) => {
+      {history.length === 0 ? <Empty message="No prior tenancy records are linked." /> : <div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Tenancy history</caption><thead><tr><th>Property / unit</th><th>Status</th>{showPlannedMoveIn && <th>Planned move-in</th>}<th>Actual move-in</th>{showNotice && <th>Notice</th>}{showExpectedMoveOut && <th>Expected move-out</th>}<th>Actual move-out</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{history.map((tenancy, index) => {
         const action = findAction(editActions, "save-tenancy", (candidate) => candidate.values.id === tenancy.id) ?? editActions.filter((candidate) => candidate.action === "save-tenancy")[index];
-        return <tr key={tenancy.id ?? `history-${index}`}><td>{tenancyLocation(tenancy, snapshot)}</td><td>{statusValue(tenancy.status, !tenancy.status)}</td><td>{formatDate(tenancy.plannedMoveInOn)}</td><td>{formatDate(tenancy.actualMoveInOn)}</td><td>{formatDate(tenancy.noticeOn)}</td><td>{formatDate(tenancy.expectedMoveOutOn)}</td><td>{formatDate(tenancy.actualMoveOutOn)}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
+        return <tr key={tenancy.id ?? `history-${index}`}><td>{tenancyLocation(tenancy, snapshot)}</td><td>{statusValue(tenancy.status, !tenancy.status)}</td>{showPlannedMoveIn && <td>{tenancy.plannedMoveInOn ? formatDate(tenancy.plannedMoveInOn) : "—"}</td>}<td>{tenancy.actualMoveInOn || !["future", "cancelled"].includes(tenancy.status ?? "") ? formatDate(tenancy.actualMoveInOn) : "—"}</td>{showNotice && <td>{tenancy.noticeOn ? formatDate(tenancy.noticeOn) : "—"}</td>}{showExpectedMoveOut && <td>{tenancy.expectedMoveOutOn ? formatDate(tenancy.expectedMoveOutOn) : "—"}</td>}<td>{tenancy.actualMoveOutOn || tenancy.status === "past" ? formatDate(tenancy.actualMoveOutOn) : "—"}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
       })}</tbody></table></div>}
     </Panel>
     <Panel title="Lease terms"><LeaseTermsTable terms={context.leaseTerms} snapshot={snapshot} editActions={editActions} onEdit={onEdit} /></Panel>
