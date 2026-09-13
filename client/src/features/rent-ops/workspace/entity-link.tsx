@@ -3,8 +3,15 @@ export const EntityNavigationContext=createContext<{onTenant?:(id:string,tab?:Te
 import type { TenantTab } from '../types';
 import { workspaceRouteSearch, type WorkspaceRoute } from './workspace-state';
 
+let hrefSearch: string | undefined;
+const hrefCache=new Map<string,string>();
 export function entityHref(route:WorkspaceRoute, search=typeof window==='undefined'?'':window.location.search):string {
-  return workspaceRouteSearch(route,undefined,search);
+  if(hrefSearch!==search){hrefSearch=search;hrefCache.clear();}
+  const key=JSON.stringify([route.section,route.recordId,route.kind,route.tab,route.report]);
+  const existing=hrefCache.get(key);if(existing!==undefined)return existing;
+  const href=workspaceRouteSearch(route,undefined,search);
+  if(hrefCache.size>=2048)hrefCache.clear();hrefCache.set(key,href);
+  return href;
 }
 export function shouldHandleEntityClick(event:Pick<MouseEvent,'button'|'metaKey'|'ctrlKey'|'shiftKey'|'altKey'|'defaultPrevented'>):boolean {
   return !event.defaultPrevented&&event.button===0&&!event.metaKey&&!event.ctrlKey&&!event.shiftKey&&!event.altKey;

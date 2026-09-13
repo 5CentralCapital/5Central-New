@@ -10,7 +10,7 @@ import type {
   RentOpsSnapshot,
   ApplicationStatus,
 } from "../../../shared/rent-ops-contracts";
-import { isoDateSchema, POSTGRES_INTEGER_MAX, POSTGRES_INTEGER_MIN } from "../../../shared/rent-ops-contracts";
+import { isIsoDate, POSTGRES_INTEGER_MAX, POSTGRES_INTEGER_MIN } from "../../../shared/rent-ops-contracts";
 import { addDays, rangesOverlap, nowIsoDate } from "./dates";
 import { resolveEffectiveScheduleVersions } from "./financial-projection";
 
@@ -365,10 +365,10 @@ function optionalRangesOverlap(leftStart: string | null | undefined, leftEnd: st
 export function isSourceAllocationReversal(allocation: RentOpsPaymentAllocation): boolean {
   return allocation.kind === "reversal" && typeof allocation.amountCents === "number" && Number.isSafeInteger(allocation.amountCents) && allocation.amountCents < 0
     && allocation.source?.system === "rent_manager" && !!allocation.source.sourceId
-    && /^[a-f0-9]{64}$/.test(allocation.sourceArtifactSha256 ?? "") && isoDateSchema.safeParse(allocation.artifactObservationOn).success
+    && /^[a-f0-9]{64}$/.test(allocation.sourceArtifactSha256 ?? "") && isIsoDate(allocation.artifactObservationOn)
     && !!allocation.paymentTransactionId && allocation.paymentLinkKnowledge === "exact"
     && !!allocation.chargeTransactionId && allocation.chargeLinkKnowledge === "exact"
-    && allocation.amountKnowledge === "known" && allocation.allocatedOnKnowledge === "source" && isoDateSchema.safeParse(allocation.allocatedOn).success;
+    && allocation.amountKnowledge === "known" && allocation.allocatedOnKnowledge === "source" && isIsoDate(allocation.allocatedOn);
 }
 
 export function isSourceAllocationTransfer(allocation: RentOpsPaymentAllocation): boolean {
@@ -387,7 +387,7 @@ function recordedFutureAllocationAmount(row: RentOpsPaymentAllocation, history: 
   return history.filter(a=>a.kind!=="reversal" && a.kind!=="transfer" && a.kind!=="credit_allocation" && a.source?.system==='rent_manager' && a.sourceArtifactSha256===row.sourceArtifactSha256
     && a.paymentTransactionId===row.paymentTransactionId && a.chargeTransactionId===row.chargeTransactionId && a.paymentLinkKnowledge==='exact' && a.chargeLinkKnowledge==='exact'
     && a.amountKnowledge==='known' && typeof a.amountCents==='number' && a.amountCents>0 && !!a.allocatedOn && a.allocatedOn>row.allocatedOn!
-    && !!a.source.sourceUpdatedAt && Number.isFinite(Date.parse(a.source.sourceUpdatedAt)) && isoDateSchema.safeParse(a.source.sourceUpdatedAt.slice(0,10)).success && a.source.sourceUpdatedAt.slice(0,10)<row.allocatedOn!)
+    && !!a.source.sourceUpdatedAt && Number.isFinite(Date.parse(a.source.sourceUpdatedAt)) && isIsoDate(a.source.sourceUpdatedAt.slice(0,10)) && a.source.sourceUpdatedAt.slice(0,10)<row.allocatedOn!)
     .reduce((sum,a)=>sum+a.amountCents!,0);
 }
 
@@ -412,10 +412,11 @@ function validateAllocationWithReversals(
   historical: boolean,
   allocationHistory: RentOpsPaymentAllocation[],
   reversalIndex?: AllocationReversalIndex,
+  transactionIndex?: ReadonlyMap<string, RentOpsLedgerTransaction>,
 ): InvariantViolation[] {
   const violations: InvariantViolation[] = [];
   if (allocation.kind === "credit_allocation") {
-    const credit = transactions.find(row => row.id === allocation.creditTransactionId);
+    const credit = transactionIndex ? transactionIndex.get(allocation.creditTransactionId ?? "") : transactions.find(row => row.id === allocation.creditTransactionId);
     const bound = historical && allocation.source?.system === "rent_manager" && /^[a-f0-9]{64}$/.test(allocation.sourceArtifactSha256 ?? "") && !!allocation.artifactObservationOn
       && allocation.paymentTransactionId === null && allocation.creditLinkKnowledge === "exact" && allocation.chargeLinkKnowledge === "exact" && allocation.amountKnowledge === "known" && allocation.allocatedOnKnowledge === "source";
     if (!bound) violations.push({code:"credit_allocation_source_invalid",entityId:allocation.id,message:"Credit application requires exact artifact-bound source evidence"});
@@ -426,9 +427,9 @@ function validateAllocationWithReversals(
         && credit.sourceArtifactSha256===allocation.sourceArtifactSha256 && charge.sourceArtifactSha256===allocation.sourceArtifactSha256
         && !!credit.personId && credit.personId===charge.personId && credit.personLinkKnowledge==='exact' && charge.personLinkKnowledge==='exact'
         && !!allocation.sourcePropertyId && [credit.propertyId,charge.propertyId].includes(allocation.sourcePropertyId);
-      const parentChecks = validateAllocationWithReversals({...allocation,kind:"allocation",creditTransactionId:null,paymentTransactionId:credit.id,paymentLinkKnowledge:allocation.creditLinkKnowledge},creditView,charge,transactions,historical,[],reversalIndex);
+      const parentChecks = validateAllocationWithReversals({...allocation,kind:"allocation",creditTransactionId:null,paymentTransactionId:credit.id,paymentLinkKnowledge:allocation.creditLinkKnowledge},creditView,charge,transactions,historical,[],reversalIndex,transactionIndex);
       const updated = charge?.source?.sourceUpdatedAt;
-      const recordedFutureCharge = sourceAssociation && typeof updated==='string' && Number.isFinite(Date.parse(updated)) && isoDateSchema.safeParse(updated.slice(0,10)).success && !!allocation.allocatedOn && updated.slice(0,10)<=allocation.allocatedOn;
+      const recordedFutureCharge = sourceAssociation && typeof updated==='string' && Number.isFinite(Date.parse(updated)) && isIsoDate(updated.slice(0,10)) && !!allocation.allocatedOn && updated.slice(0,10)<=allocation.allocatedOn;
       violations.push(...parentChecks.filter(v=>!(sourceAssociation && v.code==='allocation_property_mismatch') && !(recordedFutureCharge && v.code==='allocation_predates_charge')));
       if (allocation.sourcePropertyId && charge && ![credit.propertyId,charge.propertyId].includes(allocation.sourcePropertyId)) violations.push({code:'credit_allocation_property_unbound',entityId:allocation.id,message:'Source credit allocation property is unrelated to its exact parents'});
       if (credit.personId && charge?.personId && credit.personId !== charge.personId) violations.push({code:"credit_allocation_person_mismatch",entityId:allocation.id,message:"Credit and charge belong to different source accounts"});
@@ -449,7 +450,7 @@ function validateAllocationWithReversals(
   if (payment && charge && payment.tenancyId && charge.tenancyId && payment.tenancyId !== charge.tenancyId) violations.push({ code: "allocation_tenancy_mismatch", entityId: allocation.id, message: `Payment ${payment.id} and charge ${charge.id} belong to different tenancies` });
   const allocatedOn = allocation.allocatedOn;
   const allocatedOnKnown = typeof allocatedOn === "string" && allocatedOn.length > 0;
-  if (allocatedOnKnown && !isoDateSchema.safeParse(allocatedOn).success) violations.push({ code: "allocation_date_invalid", entityId: allocation.id, message: "Allocation date must be a real calendar date" });
+  if (allocatedOnKnown && !isIsoDate(allocatedOn)) violations.push({ code: "allocation_date_invalid", entityId: allocation.id, message: "Allocation date must be a real calendar date" });
   if (allocatedOnKnown && payment && typeof payment.postedOn === "string" && allocatedOn < payment.postedOn) violations.push({ code: "allocation_predates_payment", entityId: allocation.id, message: `Allocation ${allocation.id} predates payment ${payment.id}` });
   if (allocatedOnKnown && charge && typeof charge.postedOn === "string" && allocatedOn < charge.postedOn && !(historical && recordedFutureAllocationAmount(allocation, allocationHistory, transactions) >= -(allocation.amountCents ?? 0) && isSourceAllocationReversal(allocation))) violations.push({ code: "allocation_predates_charge", entityId: allocation.id, message: `Allocation ${allocation.id} predates charge ${charge.id}` });
   // A source allocation can have a future effective date while its immutable source
@@ -458,7 +459,7 @@ function validateAllocationWithReversals(
   const sourceHistoryDate = allocation.source?.system === "rent_manager" && /^[a-f0-9]{64}$/.test(allocation.sourceArtifactSha256 ?? "")
     && allocation.paymentLinkKnowledge === "exact" && allocation.chargeLinkKnowledge === "exact"
     && typeof sourceUpdatedAt === "string" && /^\d{4}-\d{2}-\d{2}T/.test(sourceUpdatedAt) && Number.isFinite(Date.parse(sourceUpdatedAt))
-    && isoDateSchema.safeParse(sourceUpdatedAt.slice(0, 10)).success ? sourceUpdatedAt.slice(0, 10) : undefined;
+    && isIsoDate(sourceUpdatedAt.slice(0, 10)) ? sourceUpdatedAt.slice(0, 10) : undefined;
   const invalidReversal = (id: string) => (reversalIndex ? reversalIndex.get(id) ?? [] : transactions).some(transaction => transaction.kind === "reversal" && transaction.status === "posted" && transaction.reversalOfId === id && (!historical || !transaction.postedOn || (!allocatedOnKnown || allocatedOn > transaction.postedOn) && (!sourceHistoryDate || sourceHistoryDate > transaction.postedOn)));
   if (payment && invalidReversal(payment.id)) violations.push({ code: "allocation_payment_reversed", entityId: allocation.id, message: `Payment ${payment.id} has already been reversed` });
   if (charge && invalidReversal(charge.id)) violations.push({ code: "allocation_charge_reversed", entityId: allocation.id, message: `Charge ${charge.id} has already been reversed` });
@@ -657,8 +658,8 @@ export function validateSnapshot(snapshot: RentOpsSnapshot): InvariantViolation[
     const invalidProperty = transaction.propertyId ? !propertyIds.has(transaction.propertyId) : !unknownProperty;
     if (invalidProperty || transaction.unitId && !units.has(transaction.unitId) || (!transaction.unitId && !unknownUnit) || transaction.tenancyId && !tenancies.has(transaction.tenancyId) || (!transaction.tenancyId && !unknownTenancy) || transaction.personId && !personIds.has(transaction.personId) || (!transaction.personId && !unknownPerson)) violations.push({ code: "ledger_reference_invalid", entityId: transaction.id, message: `Ledger transaction ${transaction.id} has an invalid property, unit, tenancy, or person reference` });
     if (transaction.amountCents !== null && transaction.amountCents !== undefined && (!Number.isSafeInteger(transaction.amountCents) || transaction.amountCents < 0 || transaction.amountCents > POSTGRES_INTEGER_MAX)) violations.push({ code: "invalid_ledger_amount", entityId: transaction.id, message: "Ledger amounts must be non-negative PostgreSQL integer cents" });
-    if (transaction.postedOn !== null && transaction.postedOn !== undefined && !isoDateSchema.safeParse(transaction.postedOn).success) violations.push({ code: "ledger_date_invalid", entityId: transaction.id, message: "Ledger posted date must be a real calendar date" });
-    if (transaction.dueOn && !isoDateSchema.safeParse(transaction.dueOn).success) violations.push({ code: "ledger_due_date_invalid", entityId: transaction.id, message: "Ledger due date must be a real calendar date" });
+    if (transaction.postedOn !== null && transaction.postedOn !== undefined && !isIsoDate(transaction.postedOn)) violations.push({ code: "ledger_date_invalid", entityId: transaction.id, message: "Ledger posted date must be a real calendar date" });
+    if (transaction.dueOn && !isIsoDate(transaction.dueOn)) violations.push({ code: "ledger_due_date_invalid", entityId: transaction.id, message: "Ledger due date must be a real calendar date" });
     if (transaction.kind === "reversal") {
       if (!transaction.reversalOfId) {
         violations.push({ code: "reversal_missing_link", entityId: transaction.id, message: "Reversals must link to the corrected transaction" });
@@ -773,7 +774,7 @@ export function validateSnapshot(snapshot: RentOpsSnapshot): InvariantViolation[
   for (const allocation of snapshot.paymentAllocations) {
     const allocationParentId = allocation.kind === "credit_allocation" ? allocation.creditTransactionId : allocation.paymentTransactionId;
     if (allocation.kind !== "transfer" && allocation.paymentTransactionId && allocation.chargeTransactionId) {const key = `${allocation.paymentTransactionId}\0${allocation.chargeTransactionId}`; const rows = allocationPairs.get(key) ?? []; rows.push(allocation); allocationPairs.set(key, rows);}
-    violations.push(...validateAllocationWithReversals(allocation, allocation.paymentTransactionId ? transactionMap.get(allocation.paymentTransactionId) : undefined, allocation.chargeTransactionId ? transactionMap.get(allocation.chargeTransactionId) : undefined, snapshot.ledgerTransactions, true, snapshot.paymentAllocations, allocationReversals));
+    violations.push(...validateAllocationWithReversals(allocation, allocation.paymentTransactionId ? transactionMap.get(allocation.paymentTransactionId) : undefined, allocation.chargeTransactionId ? transactionMap.get(allocation.chargeTransactionId) : undefined, snapshot.ledgerTransactions, true, snapshot.paymentAllocations, allocationReversals, transactionMap));
     if (allocation.kind !== "transfer" && allocationParentId && typeof allocation.amountCents === "number") allocationsByPayment.set(allocationParentId, (allocationsByPayment.get(allocationParentId) ?? 0) + allocation.amountCents);
     if (allocation.kind !== "transfer" && allocation.chargeTransactionId && !reversedAllocationTargets.has(allocation.chargeTransactionId) && !!allocationParentId && !reversedAllocationTargets.has(allocationParentId) && typeof allocation.amountCents === "number") allocationsByCharge.set(allocation.chargeTransactionId, (allocationsByCharge.get(allocation.chargeTransactionId) ?? 0) + allocation.amountCents);
   }

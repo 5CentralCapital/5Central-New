@@ -1,3 +1,4 @@
+import { usdCurrencyFormatter } from '../../lib/rent-ops-formatters';
 import {EntityLink} from "./workspace/entity-link";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { AlertCircle, Download, FileCheck2, FileText, Loader2, Users, X } from "lucide-react";
@@ -37,7 +38,7 @@ function moneyFact(value: unknown, knowledge?: string): string {
   if (fact === "Unknown" || fact === "Needs review") return fact;
   const cents = Number(value);
   return Number.isFinite(cents)
-    ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100)
+    ? usdCurrencyFormatter.format(cents / 100)
     : "Unknown";
 }
 

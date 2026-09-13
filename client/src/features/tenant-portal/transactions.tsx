@@ -1,8 +1,9 @@
+import { usdCurrencyFormatter } from '../../lib/rent-ops-formatters';
 import { useState } from 'react';
 import { FileDown } from 'lucide-react';
 import type { TenantHome } from '@shared/tenant-portal-contracts';
 import { emptyTransactionFilters, filterTransactions, hasTransactionReferences, transactionSide, transactionPage, transactionsCsv, type ResidentTransaction } from './transactions-view';
-function money(value: number | null | undefined) { return Number.isSafeInteger(value) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value! / 100) : 'Unverified'; }
+function money(value: number | null | undefined) { return Number.isSafeInteger(value) ? usdCurrencyFormatter.format(value! / 100) : 'Unverified'; }
 function date(value: string | null) { if (!value) return 'Unverified'; const parsed = new Date(`${value.slice(0, 10)}T12:00:00`); return Number.isFinite(parsed.getTime()) ? parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Unverified'; }
 function label(value: string) { return value.replaceAll('_', ' ').replace(/^./, x => x.toUpperCase()); }
 function sideMoney(row: ResidentTransaction, side: 'chargeCents' | 'paymentCreditCents') {

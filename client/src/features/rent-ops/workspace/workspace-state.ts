@@ -77,10 +77,10 @@ export function composeWorkspaceSnapshot(bootstrap:RentOpsWorkspaceBootstrap,asO
   const reports=Object.fromEntries(REPORT_KEYS.map(key=>[key,createWorkspaceReportDefinition(key)])) as AdminSnapshot['reports'];
   return {generatedAt:bootstrap.generatedAt,snapshot:source,summary:summary??unavailableSummary(bootstrap,asOfDate),rentRoll:[],occupancy:[],scheduledIncome:[],collectedIncome:[],scheduledVsCollected:[],delinquency:[],ledger:[],leaseExpiration:[],depositLiability:[],hap:[],tenants:indexTenantViews(bootstrap),applicants:source.applications,documents:source.documents,activities:source.activityEvents,reports,chargeDefinitions:bootstrap.chargeDefinitions};
 }
-export function workspaceCollectionsFor(section:WorkspaceSection,editing?:QuickAction):WorkspaceCollection[] {
+export function workspaceCollectionsFor(section:WorkspaceSection,editing?:QuickAction,includeIncomeHistory=true):WorkspaceCollection[] {
   const names:WorkspaceCollection[]=[];
   if(section==='properties'||section==='recurring')names.push('recurringSchedules');
-  if(section==='income')names.push('ledgerTransactions','paymentAllocations');
+  if(section==='income'&&includeIncomeHistory)names.push('ledgerTransactions','paymentAllocations');
   if(section==='applicants')names.push('applications','applicationHouseholdMembers','applicationRequirements');
   if(section==='documents')names.push('documents','activityEvents');
   if(editing==='save-payment-allocation'||editing==='reverse-ledger-transaction')names.push('ledgerTransactions','paymentAllocations');

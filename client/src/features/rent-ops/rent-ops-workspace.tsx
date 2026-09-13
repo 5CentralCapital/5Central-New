@@ -1,3 +1,4 @@
+import { usdCurrencyFormatter } from '../../lib/rent-ops-formatters';
 import { APPLICATION_STATUS_TRANSITIONS } from "../../../../shared/application-status-transitions";
 import { ManagerLeaseUpload } from "./manager-lease-upload";
 import { useCallback, useEffect, useMemo, useState, useRef, type FormEvent } from "react";
@@ -83,7 +84,7 @@ function money(cents: unknown): string {
   if (cents == null || cents === "") return "Needs review";
   const amount = typeof cents === "number" ? cents : Number(cents);
   if (!Number.isFinite(amount)) return "Needs review";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount / 100);
+  return usdCurrencyFormatter.format(amount / 100);
 }
 
 function formatCell(value: unknown, key: string, format?: string): string {
@@ -467,7 +468,7 @@ export default function RentOpsWorkspace() {
 
   useEffect(() => {
     if (auth.status !== "unknown") return;
-    void rentOpsAuthClient.restore().catch(() => undefined);
+    void rentOpsAuthClient.initialize().catch(() => undefined);
   }, [auth.status]);
 
   useEffect(() => {

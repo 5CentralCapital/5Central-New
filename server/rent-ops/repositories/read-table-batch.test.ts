@@ -7,7 +7,7 @@ import { createPostgresRentOpsRepository, type RentOpsQueryExecutor } from "./po
 import { buildRentOpsTableBatchSql, decodeRentOpsTableBatch, RENT_OPS_BATCH_TABLES } from "./read-table-batch";
 import { ensureRentOpsSchema, RENT_OPS_RUNTIME_REQUIRED_TABLES } from "../persistence";
 import { serializeWorkspaceBootstrap } from "../presentation/workspace-read";
-import { deriveDashboardWorkspace, deriveFixedReport, deriveDelinquency } from "../domain/reports";
+import { deriveDashboardWorkspace, deriveFixedReport, deriveDelinquency, deriveOperationalScheduleRegister } from "../domain/reports";
 import { serializeAdminSnapshot } from "../presentation/entities";
 
 test("batch SQL rejects unknown, duplicate, empty and unsafe identifiers before querying", async () => {
@@ -101,6 +101,19 @@ test("PGlite batch preserves legacy mapped rows, dates, nulls, JSON and financia
       assert.deepEqual(deriveFixedReport(reportSnapshot, report, reportFilters), deriveFixedReport(newOperational, report, reportFilters), report);
     }
     assert.equal(deriveDelinquency(reportSnapshot, reportFilters)[0].hasPromiseOrHold, true);
+    calls.length = 0;
+    const scheduleSnapshot = await newRepository.getScheduleSnapshot();
+    assert.equal(calls.length,1);
+    assert.ok(!calls[0].includes('FROM rent_ops_ledger_transactions'));
+    assert.ok(!calls[0].includes('FROM rent_ops_documents'));
+    assert.deepEqual(deriveOperationalScheduleRegister(scheduleSnapshot,reportFilters),deriveOperationalScheduleRegister(newOperational,reportFilters));
+    const legacySchedule = await oldRepository.getScheduleSnapshot();
+    assert.deepEqual(scheduleSnapshot,legacySchedule);
+    const oldInventory = await oldRepository.getPublicInventory();
+    calls.length = 0;
+    const newInventory = await newRepository.getPublicInventory();
+    assert.equal(calls.length,1);
+    assert.deepEqual(newInventory,oldInventory);
     // Complete row-level parity also checks JSON payloads intentionally omitted by presentation.
     const rawLegacy = await Promise.all(RENT_OPS_BATCH_TABLES.map(async table => (await query<Record<string, unknown>>(`SELECT * FROM ${table}`)).rows));
     const rawBatch = await batch.readTableBatch!(RENT_OPS_BATCH_TABLES);

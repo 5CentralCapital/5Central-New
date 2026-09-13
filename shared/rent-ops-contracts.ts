@@ -14,6 +14,12 @@ function isCalendarDate(value: string): boolean {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+/** Boolean equivalent of isoDateSchema, without allocating schema results in
+ * retained-history validation loops. The schema remains the API boundary. */
+export function isIsoDate(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && isCalendarDate(value);
+}
+
 export const isoDateSchema = z.string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Expected YYYY-MM-DD")
   .refine(isCalendarDate, "Expected a real calendar date");
@@ -1899,6 +1905,8 @@ export interface RentOpsRepository {
   getOperationalSnapshot?(): Promise<RentOpsSnapshot>;
   /** Financial reports only: complete money inputs, no documents, promise/hold activity only. */
   getReportSnapshot?(): Promise<RentOpsSnapshot>;
+  /** Complete navigation and schedule lineage for classification; no financial derivations. */
+  getScheduleSnapshot?(): Promise<RentOpsSnapshot>;
   /** Record navigation only; never use this partial projection for financial derivation. */
   getWorkspaceSnapshot?(): Promise<RentOpsSnapshot>;
   getWorkspaceCollection?<K extends RentOpsWorkspaceCollection>(name: K): Promise<RentOpsSnapshot[K]>;

@@ -1,3 +1,4 @@
+import { usdCurrencyFormatter } from '../../lib/rent-ops-formatters';
 import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import { ArrowRight, Building2, Check, CreditCard, FileDown, Loader2, LockKeyhole, LogOut, RefreshCw } from "lucide-react";
 import type { TenantHome } from "@shared/tenant-portal-contracts";
@@ -12,7 +13,7 @@ const LeaseViewer=lazy(()=>import("./lease-viewer").then(module=>({default:modul
 
 function money(cents: number | null | undefined): string {
   return typeof cents === "number" && Number.isSafeInteger(cents)
-    ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100)
+    ? usdCurrencyFormatter.format(cents / 100)
     : "Unavailable";
 }
 

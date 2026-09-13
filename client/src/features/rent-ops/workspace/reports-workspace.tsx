@@ -56,7 +56,7 @@ function rowId(row: ReportRow, key: string): string | undefined {
   return typeof value === "string" && value.length ? value : undefined;
 }
 
-function ReportCell({ row, column, onOpenTenant, onOpenUnit, onOpenProperty }: {
+function renderReportCell({ row, column, onOpenTenant, onOpenUnit, onOpenProperty }: {
   row: DisplayReportRow; column: ReportColumnDefinition;
 } & Pick<ReportsWorkspaceProps, "onOpenTenant" | "onOpenUnit" | "onOpenProperty">) {
   const label = formatReportCellValue(row, column);
@@ -70,7 +70,28 @@ function ReportCell({ row, column, onOpenTenant, onOpenUnit, onOpenProperty }: {
     const personId = reportCellPersonId(source, column.key);
     return <EntityLink personId={personId} tab={recurringField ? "charges" : balanceField ? "ledger" : "summary"} onOpen={onOpenTenant}>{label}</EntityLink>;
   }
-  return <>{label}</>;
+  return label;
+}
+
+/** Begin the selected report alongside its directory read. The eventual report
+ * uses the exact same authenticated query key and retains all local filters. */
+export function WorkspaceReportPreload({selected,filters,enabled}:{selected:ReportKey;filters:ViewFilters;enabled:boolean}) {
+  const auth=useRentOpsAuth();const asOfDate=filters.asOfDate;
+  const occupancy=readPreference(selected,'occupancy',defaultReportOccupancy(selected,filters.status));
+  const readiness=readPreference(selected,'readiness',filters.readiness?.[0]??'all');
+  const listing=readPreference(selected,'listing','all');
+  const balance=readPreference<ReportBalanceFilter>(selected,'balance',filters.balanceStatus??(selected==='delinquency'?'due':'all'));
+  const tenantStatus=readPreference(selected,'tenantStatus',filters.tenantStatus??'all');
+  const queryFilters={...reportQueryFilters({...filters,status:primaryReports.includes(selected)?'all':filters.status,search:'',
+    balanceStatus:selected==='delinquency'||selected==='rent-roll'?balance:undefined,
+    tenantStatus:selected==='delinquency'?tenantStatus:undefined,
+    readiness:selected==='occupancy'&&readiness!=='all'?[readiness]:undefined,
+  },selected,{asOfDate,month:asOfDate.slice(0,7),fromDate:`${asOfDate.slice(0,7)}-01`,toDate:asOfDate}),
+    ...(selected==='occupancy'&&occupancy!=='all'?{occupancy:[occupancy]}:{}),
+    ...(selected==='occupancy'&&listing!=='all'?{listing:[listing]}:{})};
+  useQuery({queryKey:reportQueryKey(selected,queryFilters,auth.user?.id??''),queryFn:({signal})=>loadRentOpsReport(selected,queryFilters,signal),
+    enabled:enabled&&auth.status==='authenticated'&&!!auth.user?.id&&!!asOfDate&&!filters.search.trim(),staleTime:30_000,gcTime:300_000});
+  return null;
 }
 
 export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpenTenant, onOpenUnit, onOpenProperty }: ReportsWorkspaceProps) {
@@ -82,10 +103,10 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
   const [fromDate, setFromDate] = useState(`${asOfDate.slice(0, 7)}-01`);
   const [toDate, setToDate] = useState(asOfDate);
   const [occupancy, setOccupancy] = useState(() => readPreference(selected, "occupancy", defaultReportOccupancy(selected, filters.status)));
-  const [readiness, setReadiness] = useState("all");
-  const [listing, setListing] = useState("all");
-  const [balance, setBalance] = useState<ReportBalanceFilter>("all");
-  const [tenancyStatus, setTenancyStatus] = useState<NonNullable<ViewFilters["tenantStatus"]>>("all");
+  const [readiness, setReadiness] = useState(() => readPreference(selected, "readiness", filters.readiness?.[0] ?? "all"));
+  const [listing, setListing] = useState(() => readPreference(selected, "listing", "all"));
+  const [balance, setBalance] = useState<ReportBalanceFilter>(() => readPreference(selected, "balance", filters.balanceStatus ?? (selected === "delinquency" ? "due" : "all")));
+  const [tenancyStatus, setTenancyStatus] = useState<NonNullable<ViewFilters["tenantStatus"]>>(() => readPreference(selected, "tenantStatus", filters.tenantStatus ?? "all"));
   const [extraColumns, setExtraColumns] = useState<string[]>([]);
   const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" }>({ key: "unitNumber", direction: "asc" });
   useEffect(() => {
@@ -165,7 +186,7 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
       <thead><tr>{activeColumns.map(column => <th key={column.key} className={column.align === "right" ? "rm-report-number" : undefined} aria-sort={sort.key === column.key ? sort.direction === "asc" ? "ascending" : "descending" : "none"}><button type="button" onClick={() => { const next = { key: column.key, direction: sort.key === column.key && sort.direction === "asc" ? "desc" as const : "asc" as const }; setSort(next); savePreference(selected, "sort", next); }}>{column.label}{sort.key === column.key && (sort.direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}</button></th>)}</tr></thead>
       {groups.map(group => <tbody key={group.propertyId ?? group.label}>
         <tr className="rm-report-property-heading"><th colSpan={activeColumns.length} scope="rowgroup"><RecordLink kind="property" recordId={group.propertyId} onOpen={onOpenProperty}>{group.label}</RecordLink></th></tr>
-        {group.rows.map(row => <tr key={reportRowKey(row)}>{activeColumns.map(column => <td key={column.key} className={column.align === "right" ? "rm-report-number" : undefined}><ReportCell row={row} column={column} onOpenTenant={onOpenTenant} onOpenUnit={onOpenUnit} onOpenProperty={onOpenProperty} /></td>)}</tr>)}
+        {group.rows.map(row => <tr key={reportRowKey(row)}>{activeColumns.map(column => <td key={column.key} className={column.align === "right" ? "rm-report-number" : undefined}>{renderReportCell({row,column,onOpenTenant,onOpenUnit,onOpenProperty})}</td>)}</tr>)}
         <tr className="rm-report-property-total">{activeColumns.map((column, index) => <td key={column.key} className={column.align === "right" ? "rm-report-number" : undefined}>{index === 0 ? `Subtotal · ${group.count} ${selected === "delinquency" ? "accounts" : selected === "rent-roll" || selected === "occupancy" ? "units" : "rows"}` : column.subtotal ? formatReportValue(group.amounts[column.key], column.format) : ""}</td>)}</tr>
       </tbody>)}
     </table>{!groups.length && <div className="rm-empty">{emptyReportMessage(true)}</div>}</div>}

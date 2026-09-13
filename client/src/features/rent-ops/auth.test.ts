@@ -12,7 +12,7 @@ function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-test("dedicated browser flow restores only the Rent Ops session and fetches CSRF in memory", async () => {
+test("dedicated browser flow reuses its authenticated session CSRF token only in memory", async () => {
   const calls: Array<{ path: string; init?: RequestInit }> = [];
   const client = new RentOpsAuthClient({
     fetchImpl: async (input, init) => {
@@ -27,18 +27,18 @@ test("dedicated browser flow restores only the Rent Ops session and fetches CSRF
 
   assert.equal(await client.restore(), true);
   assert.equal(client.getSnapshot().user?.email, user.email);
-  assert.deepEqual(calls.map((call) => call.path), [RENT_OPS_AUTH_ROUTES.session, RENT_OPS_AUTH_ROUTES.csrf]);
+  assert.deepEqual(calls.map((call) => call.path), [RENT_OPS_AUTH_ROUTES.session]);
 
   const mutation = await client.request("/api/rent-ops/properties", { method: "POST", body: "{}" });
   assert.equal(mutation.ok, true);
-  const mutationHeaders = new Headers(calls[2]?.init?.headers);
+  const mutationHeaders = new Headers(calls[1]?.init?.headers);
   assert.equal(mutationHeaders.get("x-rent-ops-csrf"), csrfToken);
-  assert.equal(calls[2]?.init?.credentials, "include");
+  assert.equal(calls[1]?.init?.credentials, "include");
   assert.equal(mutationHeaders.get("x-api-key"), null);
   assert.equal(mutationHeaders.get("authorization"), null);
 });
 
-test("dedicated login posts credentials only to the dedicated route and then fetches CSRF", async () => {
+test("dedicated login posts credentials only to the dedicated route and retains its CSRF token", async () => {
   const calls: Array<{ path: string; init?: RequestInit }> = [];
   const client = new RentOpsAuthClient({
     fetchImpl: async (input, init) => {
@@ -51,7 +51,7 @@ test("dedicated login posts credentials only to the dedicated route and then fet
   });
   const loggedIn = await client.login(user.email, "one-time-password");
   assert.equal(loggedIn.email, user.email);
-  assert.deepEqual(calls.map((call) => call.path), [RENT_OPS_AUTH_ROUTES.login, RENT_OPS_AUTH_ROUTES.csrf]);
+  assert.deepEqual(calls.map((call) => call.path), [RENT_OPS_AUTH_ROUTES.login]);
   const loginHeaders = new Headers(calls[0]?.init?.headers);
   assert.equal(loginHeaders.get("x-api-key"), null);
   assert.equal(loginHeaders.get("authorization"), null);
@@ -155,9 +155,9 @@ test('a superseded CSRF fetch cannot replace the later login token', async () =>
       return response({ csrfToken: newToken });
     }
     if (String(input).endsWith('/properties')) mutationToken = new Headers(init?.headers).get('x-rent-ops-csrf');
-    return response({ user, csrfToken });
+    return response({ user, csrfToken: newToken });
   } });
-  const first = client.login(user.email, 'synthetic');
+  const first = client.request('/api/rent-ops/properties', {method:'POST'});
   const rejected = assert.rejects(first, /earlier Rent Operations session/);
   await entered.promise;
   await client.login(user.email, 'synthetic');
@@ -166,4 +166,22 @@ test('a superseded CSRF fetch cannot replace the later login token', async () =>
   await client.request('/api/rent-ops/properties', { method: 'POST' });
   assert.equal(mutationToken, newToken);
   assert.equal(client.getSnapshot().status, 'authenticated');
+});
+
+test('startup shares one restore and rejects late results after session expiry', async () => {
+  const pending = deferred<Response>(); let calls = 0;
+  const client = new RentOpsAuthClient({fetchImpl:async()=>{calls++;return pending.promise;}});
+  const first = client.initialize(); const second = client.initialize();
+  assert.equal(first, second); assert.equal(calls,1);
+  const rejected = assert.rejects(first, /earlier Rent Operations session/);
+  client.expireSession(); pending.resolve(response({user,csrfToken}));
+  await rejected;
+  assert.equal(client.getSnapshot().status,'unauthenticated');
+  assert.equal(await client.initialize(),false); assert.equal(calls,1);
+});
+
+test('invalid session CSRF is rejected before authentication or mutation', async()=>{
+  const client = new RentOpsAuthClient({fetchImpl:async()=>response({user,csrfToken:'short'})});
+  await assert.rejects(client.initialize(),/sign-in is unavailable/);
+  assert.equal(client.getSnapshot().status,'unauthenticated');
 });

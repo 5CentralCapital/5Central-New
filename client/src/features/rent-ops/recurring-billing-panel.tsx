@@ -1,3 +1,4 @@
+import { usdCurrencyFormatter } from '../../lib/rent-ops-formatters';
 import {EntityLink,EntityNavigationContext} from "./workspace/entity-link";
 import React, { useState, useContext } from "react";
 import { z } from "zod";
@@ -23,7 +24,7 @@ const errorMessages: Record<string, string> = {
   no_ready_charges: "There are no new charges ready to post.",
   billing_unavailable: "Billing is unavailable. The database setup must be complete before charges can be posted.",
 };
-const money = (value: number | null): string => value === null ? "Needs review" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value / 100);
+const money = (value: number | null): string => value === null ? "Needs review" : usdCurrencyFormatter.format(value / 100);
 const statusLabels = { ready: "Ready", blocked: "Needs review", posted: "Posted", excluded: "Separate workflow" };
 
 async function requestBilling(path: string, body?: { month: string; previewToken: string; scope?: { propertyId?: string } }): Promise<unknown> {
