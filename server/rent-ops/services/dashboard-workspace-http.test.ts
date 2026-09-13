@@ -36,7 +36,7 @@ test("workspace dashboard loads and validates once with summary and report parit
   assert.deepEqual(counts(), {reads: 1, validations: 1});
   assert.deepEqual(result.summary, deriveDashboardSummary(source, filters));
   assert.deepEqual(result.rentRoll, deriveRentRoll(source, filters));
-  assert.deepEqual(result.delinquency, deriveDelinquency(source, filters));
+  assert.deepEqual(result.delinquency, deriveDelinquency(source, { ...filters, tenantStatus: "current" }));
   assert.ok(result.rentRoll.every(row => row.propertyId === "demo-property-a"));
   assert.ok(result.delinquency.every(row => row.propertyId === "demo-property-a"));
   await assert.rejects(service.workspaceDashboard({...filters, fromDate: "2026-08-01", toDate: "2026-08-15"}));
@@ -77,7 +77,9 @@ test("workspace dashboard HTTP preserves authorization, positive DTOs and existi
     const [summary, rentRoll, delinquency] = await Promise.all([
       fetch(`${origin}/dashboard${query}`, {headers}).then(response => response.json()),
       fetch(`${origin}/reports/rent-roll${query}`, {headers}).then(response => response.json()),
-      fetch(`${origin}/reports/delinquency${query}`, {headers}).then(response => response.json()),
+      // The combined dashboard defaults to the canonical current account
+      // scope; request that scope explicitly for this parity comparison.
+      fetch(`${origin}/reports/delinquency${query}&tenantStatus=current`, {headers}).then(response => response.json()),
     ]);
     assert.deepEqual(body, {summary, rentRoll, delinquency});
     assert.deepEqual(counts(), {reads: 4, validations: 4}, "three legacy requests retain their independent reads");
@@ -98,7 +100,7 @@ test("workspace dashboard preserves unknown balances instead of manufacturing ze
   assert.deepEqual(counts(), {reads: 1, validations: 1});
   assert.deepEqual(combined.summary, deriveDashboardSummary(source, filters));
   assert.deepEqual(combined.rentRoll, deriveRentRoll(source, filters));
-  assert.deepEqual(combined.delinquency, deriveDelinquency(source, filters));
+  assert.deepEqual(combined.delinquency, deriveDelinquency(source, { ...filters, tenantStatus: "current" }));
   assert.equal(combined.summary.balanceComplete, false);
   assert.equal(combined.summary.totalDelinquencyCents, null);
   assert.ok(combined.delinquency.some(row => row.balanceComplete === false));

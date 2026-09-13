@@ -30,10 +30,13 @@ test("account debt spanning leases never becomes lease zero or gets duplicated i
   const summary = deriveDashboardSummary(snapshot, filters);
   assert.equal(roll.balanceDueCents, null); assert.equal(roll.balanceComplete, false);
   assert.equal(due.rentOnlyBalanceCents, null); assert.equal(due.totalBalanceCents, null);
-  assert.equal(summary.rentOnlyDelinquencyCents, null); assert.equal(summary.balanceComplete, false);
+  // The dashboard summary is account-scoped: this exact person-linked,
+  // property-scoped ledger row is known for the account even though it cannot
+  // be attributed to either lease row, so the tenancy reports stay unknown.
+  assert.equal(summary.rentOnlyDelinquencyCents, 12345); assert.equal(summary.balanceComplete, true);
   assert.equal(serializeRentRollRow(roll).balanceDueCents, null);
   assert.equal(serializeDelinquencyRow(due).totalBalanceCents, null);
-  assert.equal(serializeDashboardSummary(summary).rentOnlyDelinquencyCents, null);
+  assert.equal(serializeDashboardSummary(summary).rentOnlyDelinquencyCents, 12345);
   const ledger = deriveTenantProfile(snapshot, person.id, filters)!.ledger;
   assert.equal(ledger.length, 1); assert.equal(ledger[0].transaction.tenancyId, null);
   assert.equal(ledger[0].runningBalanceCents, 12345);

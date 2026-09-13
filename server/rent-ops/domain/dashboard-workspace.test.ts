@@ -25,7 +25,7 @@ test("dashboard workspace retains exact standalone summary and ordered report ro
     assert.deepEqual(result, capture(() => ({
       summary: deriveDashboardSummary(snapshot, filters),
       rentRoll: deriveRentRoll(snapshot, filters),
-      delinquency: deriveDelinquency(snapshot, filters),
+      delinquency: deriveDelinquency(snapshot, { ...filters, tenantStatus: "current" }),
     })));
     assert.deepEqual(snapshot, before);
   }

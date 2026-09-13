@@ -38,10 +38,11 @@ function indexReuseResults(reports = {deriveDashboardSummary, deriveRentRoll, de
 }
 
 test("request indexes preserve reviewed financial outputs and ordered violations", () => {
-  // Reviewed against the previous reports: exactly 377 rent-roll rows changed
-  // only subsidy 40000 -> null, tenant 80000 -> omitted and the new subsidy
-  // review exception. This fixture has no subsidy status knowledge. Gross,
-  // fees, balances, other reports and ordered invariant violations are unchanged.
+  // Compared with HEAD across 35 fixtures x 28 filters (980 calls), ordered
+  // violations, rent-roll rows and standalone delinquency rows are unchanged.
+  // The 714 changed dashboard summaries contain only the canonical current
+  // account fields and the current tenantStatus drilldown; review-derived
+  // operational fields remain excluded from this financial golden below.
   const baseline = structuredClone(syntheticRentOpsSnapshot());
   assert.equal(deriveDashboardSummary(baseline, {asOfDate: "2026-08-16"}).scheduledRentCadenceComplete, true);
   assert.equal(baseline.subsidyContracts[0].statusKnowledge, undefined);
@@ -69,14 +70,11 @@ test("request indexes preserve reviewed financial outputs and ordered violations
   assert.ok(dueRows.every(row => row.balanceDueCents !== null && row.balanceDueCents > 0));
   assert.ok(reviewRows.some(row => row.unitId === "demo-unit-a-1" && row.balanceDueCents === null));
   assert.ok(!dueRows.some(row => row.unitId === "demo-unit-a-1"));
-  // Compared with the preceding golden: only 35 null-balance rent-roll rows
-  // leave the due filter; those accounts now belong to the unverified filter.
-  // Removing exactly those rows makes the complete result trees identical.
   const results = indexReuseResults();
   // Source-backed reviews are additive and tested separately. Preserve every
-  // financial field and ordered violation after the due-filter correction.
+  // financial field and ordered violation after the canonical dashboard change.
   const financialOnly = JSON.stringify(results, (key, value) => ["operationalBalanceCents", "operationalDelinquencyCents", "operationalBalanceUnresolvedCount", "balanceReview"].includes(key) ? undefined : value);
-  assert.equal(createHash("sha256").update(financialOnly).digest("hex"), "a7ecb97c63a0d5e8153b1535d685faeb521daff1bdc437213689a36688bee4d0");
+  assert.equal(createHash("sha256").update(financialOnly).digest("hex"), "1428751590f1fbd4f5663f7d5a17b15c212d54edf9b26a5dd19e184843719e68");
 });
 
 test("separate calls observe changed reversal and allocation facts on the same snapshot", () => {

@@ -1939,7 +1939,12 @@ export function deriveDashboardWorkspace(snapshot: RentOpsSnapshot, filters: Ren
   const occupancy = deriveOccupancy(snapshot, filters);
   const scheduled = deriveScheduledIncome(snapshot, filters);
   const collected = deriveCollectedIncome(snapshot, filters);
-  const delinquency = deriveDelinquencyWithBalance(snapshot, filters, readBalance);
+  // The dashboard default is the canonical current account view. It combines
+  // historical tenancy ledger facts once, selects the current occupied unit,
+  // and applies the same balance/reversal/review rules as the report route.
+  // An explicit tenant status remains an intentional historical/status scope.
+  const delinquencyFilters = filters.tenantStatus ? filters : { ...filters, tenantStatus: "current" as const };
+  const delinquency = deriveDelinquency(snapshot, delinquencyFilters);
   const expirations = deriveLeaseExpirations(snapshot, filters);
   const deposits = deriveDepositLiability(snapshot, filters);
   const propertyIds = new Set(scopedProperties(snapshot, filters).map((property) => property.id));
@@ -2000,7 +2005,7 @@ export function deriveDashboardWorkspace(snapshot: RentOpsSnapshot, filters: Ren
       occupiedUnits: { report: "occupancy", filters: { ...filters, occupancy: ["current"] } },
       futurePreleasedUnits: { report: "rent-roll", filters: { ...filters, occupancy: ["future_preleased"] } },
       genuineVacantUnits: { report: "occupancy", filters: { ...filters, occupancy: ["vacant"] } },
-      rentOnlyDelinquencyCents: { report: "delinquency", filters: { ...filters, balanceStatus: "due" } },
+      rentOnlyDelinquencyCents: { report: "delinquency", filters: { ...delinquencyFilters, balanceStatus: "due" } },
       securityDepositLiabilityCents: { report: "deposits", filters },
     },
   };

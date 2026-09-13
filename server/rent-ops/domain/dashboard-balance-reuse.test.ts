@@ -39,7 +39,7 @@ test("dashboard balance reuse preserves independent report totals and unknown/un
   for (const {snapshot, filters} of dashboardParityCases()) {
     const dashboard = deriveDashboardSummary(snapshot, filters);
     const rentRoll = deriveRentRoll(snapshot, filters);
-    const delinquency = deriveDelinquency(snapshot, filters);
+    const delinquency = deriveDelinquency(snapshot, { ...filters, tenantStatus: "current" });
     const unknownOccupancy = rentRoll.filter(row => row.occupancy === "unknown");
     const unresolvedCount = delinquency.filter(row => row.balanceComplete === false).length + unknownOccupancy.length;
     assert.equal(dashboard.balanceUnresolvedCount, unresolvedCount);
@@ -60,6 +60,23 @@ test("dashboard balance reuse cannot retain values across calls on the same snap
   snapshot.ledgerTransactions[0].amountCents! += 12345;
   const after = deriveDashboardSummary(snapshot, filters);
   assert.equal(after.totalDelinquencyCents, before.totalDelinquencyCents! + 12345);
-  Object.assign(snapshot.ledgerTransactions[0], {tenancyId: null, tenancyLinkKnowledge: "unknown"});
-  assert.equal(deriveDashboardSummary(snapshot, filters).balanceComplete, false);
+  const person = snapshot.people.find(row => row.id === "demo-person-1")!;
+  Object.assign(person, {source: {system: "rent_manager", sourceId: "tenant:123"}});
+  Object.assign(snapshot.ledgerTransactions[0], {
+    tenancyId: null,
+    tenancyLinkKnowledge: "unknown",
+    personLinkKnowledge: "exact",
+    source: {system: "rent_manager", sourceId: "entry:123", entityType: "ledger_transaction"},
+    sourceArtifactSha256: "a".repeat(64),
+  });
+  const unlinked = deriveDashboardSummary(snapshot, filters);
+  // An exact RM account identity keeps an unassigned tenancy row in the
+  // account balance; removing that identity makes the same fresh read unknown.
+  assert.equal(unlinked.balanceComplete, true);
+  assert.equal(unlinked.totalDelinquencyCents, after.totalDelinquencyCents);
+  const tenancy = snapshot.tenancies.find(row => row.id === "demo-tenancy-1")!;
+  Object.assign(tenancy, {primaryPersonId: null, primaryPersonLinkKnowledge: "unknown"});
+  const unknown = deriveDashboardSummary(snapshot, filters);
+  assert.equal(unknown.balanceComplete, false);
+  assert.equal(unknown.totalDelinquencyCents, null);
 });

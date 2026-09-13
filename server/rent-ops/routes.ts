@@ -815,10 +815,11 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
     try {
       const filters = parseAdminFilters(req.query);
       const result = await service.workspaceDashboard(filters);
+      const delinquencyFilters = filters.tenantStatus ? filters : { ...filters, tenantStatus: "current" as const };
       await sendWorkspaceJson(req, res, {
         summary: serializeAdminDashboardSummary(result.summary),
         rentRoll: serializeReportEnvelope({ report: "rent-roll", filters, rows: result.rentRoll }),
-        delinquency: serializeReportEnvelope({ report: "delinquency", filters, rows: result.delinquency }),
+        delinquency: serializeReportEnvelope({ report: "delinquency", filters: delinquencyFilters, rows: result.delinquency }),
       });
     } catch (error) { adminError(res, error); }
   });
