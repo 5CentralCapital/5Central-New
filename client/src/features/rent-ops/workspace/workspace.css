@@ -2381,11 +2381,19 @@ button.rm-stat:hover {
 
 /* A phone viewport must shrink controls, not the financial table columns. */
 @media (max-width: 480px) {
+  .rm-workspace .rm-workspace-toolbar > label,
+  .rm-workspace .rm-workspace-toolbar > label:has([aria-label="Portfolio scope"]),
+  .rm-workspace .rm-workspace-toolbar > label:has(input[type="date"]),
+  .rm-workspace .rm-workspace-toolbar > .rm-property-filter,
   .rm-workspace .rm-workspace-toolbar > .rm-search {
-    flex-basis: 100%;
-    max-width: none;
+    flex: 1 1 100%;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
   }
   .rm-workspace-toolbar-actions {
+    flex-basis: 100%;
+    justify-content: flex-end;
     padding-left: 0;
   }
 

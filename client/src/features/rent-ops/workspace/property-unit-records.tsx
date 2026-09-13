@@ -83,6 +83,15 @@ function statusValue(valueToShow: unknown, knowledge?: unknown): ReactNode {
   return <span className={`rm-status ${textValue === "Needs review" ? "unknown" : String(valueToShow ?? "unknown")}`}>{textValue === "Needs review" ? textValue : label(textValue)}</span>;
 }
 
+function recordedOptionalStatus(status: unknown, knowledge?: unknown): boolean {
+  const raw = typeof status === "string" ? status.trim().toLowerCase() : "";
+  return Boolean(raw) && !["unknown", "ambiguous", "inferred", "needs_review", "needs review"].includes(raw) && !propertyUnitFieldUnverified(knowledge);
+}
+
+function optionalStatus(status: unknown, knowledge?: unknown, omitUnknown = false): ReactNode {
+  return recordedOptionalStatus(status, knowledge) ? statusValue(status, knowledge) : omitUnknown ? null : <span className="rm-muted">Not recorded</span>;
+}
+
 function EmptyState({ message }: { message: string }) {
   return <div className="rm-empty rm-property-unit-empty"><Home aria-hidden="true" /><p>{message}</p></div>;
 }
@@ -235,18 +244,18 @@ function MarketingGrid({ units, onSelect }: { units: AdminUnitView[]; onSelect: 
   const rows: MarketingGridRow[] = units.map((unit, index) => ({ id: unit.id ?? `marketing:${index}`, unit }));
   const columns: GridColumn<MarketingGridRow>[] = [
     { key: "unit", label: "Unit", render: (row) => <RecordLink kind="unit" recordId={row.unit.id} onOpen={onSelect}>{value(row.unit.unitNumber, row.unit.unitNumberKnowledge)}</RecordLink>, sortValue: (row) => row.unit.unitNumber ?? "" },
-    { key: "readiness", label: "Readiness", render: (row) => statusValue(row.unit.readiness, row.unit.readinessKnowledge), sortValue: (row) => row.unit.readiness ?? "" },
-    { key: "listing", label: "Listing", render: (row) => statusValue(row.unit.listing, row.unit.listingKnowledge), sortValue: (row) => row.unit.listing ?? "" },
+    { key: "readiness", label: "Readiness", render: (row) => optionalStatus(row.unit.readiness, row.unit.readinessKnowledge), sortValue: (row) => row.unit.readiness ?? "" },
+    { key: "listing", label: "Listing", render: (row) => optionalStatus(row.unit.listing, row.unit.listingKnowledge), sortValue: (row) => row.unit.listing ?? "" },
     { key: "access", label: "Access notes", render: (row) => propertyUnitFieldValue(row.unit.accessNotes), sortValue: (row) => row.unit.accessNotes ?? "" },
   ];
   return <DataGrid<MarketingGridRow> rows={rows} columns={columns} getRowKey={(row) => row.id} emptyMessage="No unit marketing fields are available." caption="Unit readiness and listing" storageKey="rm-property-marketing" />;
 }
 
 function marketingCounts(units: AdminUnitView[]): string {
-  const count = (key: "readiness" | "listing", target: string) => units.filter((unit) => unit[key] === target).length;
-  const readinessKnown = units.filter((unit) => unit.readiness !== undefined && unit.readiness !== null).length;
-  const listingKnown = units.filter((unit) => unit.listing !== undefined && unit.listing !== null).length;
-  return [`${count("readiness", "ready")} ready`, `${count("readiness", "not_ready")} not ready`, `${count("readiness", "off_market")} off market`, units.length > readinessKnown ? `${units.length - readinessKnown} readiness need review` : undefined, `${count("listing", "listed")} listed`, `${count("listing", "unlisted")} unlisted`, units.length > listingKnown ? `${units.length - listingKnown} listing need review` : undefined].filter(Boolean).join(" · ");
+  const count = (key: "readiness" | "listing", target: string) => units.filter((unit) => unit[key] === target && recordedOptionalStatus(unit[key], unit[key === "readiness" ? "readinessKnowledge" : "listingKnowledge"])).length;
+  const readinessKnown = units.filter((unit) => recordedOptionalStatus(unit.readiness, unit.readinessKnowledge)).length;
+  const listingKnown = units.filter((unit) => recordedOptionalStatus(unit.listing, unit.listingKnowledge)).length;
+  return [`${count("readiness", "ready")} ready`, `${count("readiness", "not_ready")} not ready`, `${count("readiness", "off_market")} off market`, units.length > readinessKnown ? `${units.length - readinessKnown} readiness not recorded` : undefined, `${count("listing", "listed")} listed`, `${count("listing", "unlisted")} unlisted`, units.length > listingKnown ? `${units.length - listingKnown} listing not recorded` : undefined].filter(Boolean).join(" · ");
 }
 
 function PropertyMarketing({ units, onSelect }: { units: AdminUnitView[]; onSelect: (unitId: string) => void }) {
@@ -271,7 +280,7 @@ function PropertyRecord({ snapshot, asOfDate, property, activeTab, onTab, onSele
 function UnitSummary({ unit, property, propertyUnitCount, onSelect, onEdit }: { unit: AdminUnitView; property?: AdminPropertyView; propertyUnitCount: number; onSelect: (kind: "property" | "unit", id: string) => void; onEdit: EditAction }) {
   const layout = unitLayoutLabel(unit);
   return <header className="rm-property-unit-summary" data-testid="unit-record" aria-labelledby="unit-record-title">
-    <div className="rm-property-unit-summary-heading"><div className="rm-property-unit-identity"><div className="rm-property-unit-title-row"><h2 id="unit-record-title">Unit {propertyUnitFieldValue(unit.unitNumber)}</h2>{statusValue(unit.readiness, unit.readinessKnowledge)}{statusValue(unit.listing, unit.listingKnowledge)}</div><p className="rm-property-unit-context">{property?.id ? <button type="button" className="rm-link-button" onClick={() => onSelect("property", property.id!)}>{propertyUnitFieldValue(property.name)}</button> : <span>Property needs review</span>}<span>{propertyUnitCount} {propertyUnitCount === 1 ? "unit" : "units"}</span></p><p className="rm-property-unit-context">{layout !== "—" && <span>{layout}</span>}{unit.squareFeet != null && <span>{unit.squareFeet.toLocaleString()} sq ft</span>}{unit.unitType && <span>{unit.unitType}</span>}</p></div><div className="rm-property-unit-actions">{unit.id && <button type="button" className="rm-button" onClick={() => onEdit("save-unit", buildUnitEditValues(unit))}><Pencil aria-hidden="true" /> Edit unit</button>}{property?.id && <button type="button" className="rm-button rm-button-primary" onClick={() => onEdit("save-unit", addUnitValues(property))}><Plus aria-hidden="true" /> Add unit</button>}</div></div>
+    <div className="rm-property-unit-summary-heading"><div className="rm-property-unit-identity"><div className="rm-property-unit-title-row"><h2 id="unit-record-title">Unit {propertyUnitFieldValue(unit.unitNumber)}</h2>{optionalStatus(unit.readiness, unit.readinessKnowledge, true)}{optionalStatus(unit.listing, unit.listingKnowledge, true)}</div><p className="rm-property-unit-context">{property?.id ? <button type="button" className="rm-link-button" onClick={() => onSelect("property", property.id!)}>{propertyUnitFieldValue(property.name)}</button> : <span>Property needs review</span>}<span>{propertyUnitCount} {propertyUnitCount === 1 ? "unit" : "units"}</span></p><p className="rm-property-unit-context">{layout !== "—" && <span>{layout}</span>}{unit.squareFeet != null && <span>{unit.squareFeet.toLocaleString()} sq ft</span>}{unit.unitType && <span>{unit.unitType}</span>}</p></div><div className="rm-property-unit-actions">{unit.id && <button type="button" className="rm-button" onClick={() => onEdit("save-unit", buildUnitEditValues(unit))}><Pencil aria-hidden="true" /> Edit unit</button>}{property?.id && <button type="button" className="rm-button rm-button-primary" onClick={() => onEdit("save-unit", addUnitValues(property))}><Plus aria-hidden="true" /> Add unit</button>}</div></div>
   </header>;
 }
 
@@ -295,7 +304,7 @@ function UnitRecurring({ snapshot, onEdit, asOfDate, unit }: { snapshot: AdminSn
 }
 
 function UnitMarketing({ unit }: { unit: AdminUnitView }) {
-  return <section className="rm-property-unit-tab-panel"><div className="rm-property-unit-groups"><FieldGroup title="Listing and readiness"><Field label="Readiness" value={statusValue(unit.readiness, unit.readinessKnowledge)} /><Field label="Listing" value={statusValue(unit.listing, unit.listingKnowledge)} /><Field label="Access notes" value={unit.accessNotes} /></FieldGroup></div></section>;
+  return <section className="rm-property-unit-tab-panel"><div className="rm-property-unit-groups"><FieldGroup title="Listing and readiness"><Field label="Readiness" value={optionalStatus(unit.readiness, unit.readinessKnowledge)} /><Field label="Listing" value={optionalStatus(unit.listing, unit.listingKnowledge)} /><Field label="Access notes" value={unit.accessNotes} /></FieldGroup></div></section>;
 }
 
 function UnitRecord({ snapshot, asOfDate, unit, property, activeTab, onTab, onSelect, onEdit }: { snapshot: AdminSnapshot; asOfDate: string; unit: AdminUnitView; property?: AdminPropertyView; activeTab: PropertyUnitTab; onTab: (tab: PropertyUnitTab) => void; onSelect: (kind: "property" | "unit", id: string) => void; onEdit: EditAction }) {
