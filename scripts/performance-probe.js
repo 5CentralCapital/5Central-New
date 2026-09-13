@@ -13,7 +13,7 @@
     const root = document.getElementById('root');
     const text = root?.innerText ?? '';
     if (document.querySelector('.rm-report-workspace') && !document.querySelector('.rm-report-table-scroll') && !document.querySelector('[role=alert]')) return false;
-    return !!document.querySelector('.rm-body,.ro-workspace,.tp-root,.apply-shell,.ro-app') && text.trim()
+    return !!document.querySelector('.rm-body,.ro-workspace,.tp-root,.apply-shell,.ro-app,.rent-ops-shell') && text.trim()
       && !pending && !/Loading (the workspace|portfolio|tenant|records|the selected report|current charge)|Opening Rent Operations|Opening your account|Loading your home|Opening your application|Signing in…/.test(text);
   }
   function schedule() {

@@ -14,7 +14,7 @@ import { performanceNetwork } from './performance-network';
 import { performanceFixture } from './performance-fixture';
 
 if (process.env.NODE_ENV === 'production') throw new Error('Performance host is local and synthetic only');
-const fixture = performanceFixture();
+const fixture = performanceFixture(30,40,process.env.RENT_OPS_PERFORMANCE_SINGLE_MONTH === '1');
 assertValidSnapshot(fixture);
 const repository = new SyntheticRentOpsRepository(fixture);
 Object.assign(repository, {

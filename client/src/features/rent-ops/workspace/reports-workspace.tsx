@@ -112,8 +112,8 @@ function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTena
   const [listing, setListing] = useState(() => readPreference(selected, "listing", "all"));
   const [balance, setBalance] = useState<ReportBalanceFilter>(() => readPreference(selected, "balance", filters.balanceStatus ?? (selected === "delinquency" ? "due" : "all")));
   const [tenancyStatus, setTenancyStatus] = useState<NonNullable<ViewFilters["tenantStatus"]>>(() => defaultReportTenantStatus(selected, readPreference(selected, "tenantStatus", defaultReportTenantStatus(selected, filters.tenantStatus))));
-  const [extraColumns, setExtraColumns] = useState<string[]>([]);
-  const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" }>({ key: "unitNumber", direction: "asc" });
+  const [extraColumns, setExtraColumns] = useState<string[]>(() => readPreference(selected, "columns", []));
+  const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" }>(() => readPreference(selected, "sort", { key: "unitNumber", direction: "asc" }));
   useEffect(() => {
     setMonth(asOfDate.slice(0, 7)); setFromDate(`${asOfDate.slice(0, 7)}-01`); setToDate(asOfDate);
   }, [asOfDate]);
@@ -121,7 +121,10 @@ function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTena
     setOccupancy(readPreference(selected, "occupancy", defaultReportOccupancy(selected, filters.status)));
     setReadiness(readPreference(selected, "readiness", filters.readiness?.[0] ?? "all")); setListing(readPreference(selected, "listing", "all"));
     setBalance(readPreference(selected, "balance", filters.balanceStatus ?? (selected === "delinquency" ? "due" : "all"))); setTenancyStatus(defaultReportTenantStatus(selected, readPreference(selected, "tenantStatus", defaultReportTenantStatus(selected, filters.tenantStatus))));
-    setExtraColumns(readPreference(selected, "columns", [])); setSort(readPreference(selected, "sort", { key: "unitNumber", direction: "asc" }));
+    const columns=readPreference<string[]>(selected,"columns",[]);
+    setExtraColumns(current=>current.length===columns.length&&current.every((value,index)=>value===columns[index])?current:columns);
+    const savedSort=readPreference<{key:string;direction:'asc'|'desc'}>(selected,"sort",{key:'unitNumber',direction:'asc'});
+    setSort(current=>current.key===savedSort.key&&current.direction===savedSort.direction?current:savedSort);
   }, [selected, filters.status, filters.balanceStatus, filters.tenantStatus, filters.readiness]);
 
   const periodError = validateReportPeriod(selected, asOfDate, month, fromDate, toDate);

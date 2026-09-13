@@ -171,19 +171,26 @@ function invalidResponse(): never {
   throw new Error(INVALID_RESPONSE_MESSAGE);
 }
 
+// A snapshot is decoded synchronously. Reuse its completed recursive privacy
+// checks only within that decode; every field still receives its positive DTO
+// check, and later responses always start with a fresh validation scope.
+let snapshotValidatedObjects: WeakSet<object> | undefined;
+
 function assertNoForbiddenResponseFields(value: unknown, seen = new Set<object>()): void {
+  if (!Array.isArray(value) && !isRecord(value)) return;
+  if (seen.has(value)) invalidResponse();
+  if (snapshotValidatedObjects?.has(value)) return;
+  seen.add(value);
   if (Array.isArray(value)) {
     for (const item of value) assertNoForbiddenResponseFields(item, seen);
-    return;
-  }
-  if (!isRecord(value)) return;
-  if (seen.has(value)) invalidResponse();
-  seen.add(value);
-  for (const [key, child] of Object.entries(value)) {
-    if (FORBIDDEN_RESPONSE_KEYS.has(key.toLowerCase())) invalidResponse();
-    assertNoForbiddenResponseFields(child, seen);
+  } else {
+    for (const [key, child] of Object.entries(value)) {
+      if (FORBIDDEN_RESPONSE_KEYS.has(key.toLowerCase())) invalidResponse();
+      assertNoForbiddenResponseFields(child, seen);
+    }
   }
   seen.delete(value);
+  snapshotValidatedObjects?.add(value);
 }
 
 function exactRecord(value: unknown, label: string, allowedKeys: readonly string[]): JsonRecord {
@@ -1521,6 +1528,16 @@ function decodeReports(value: unknown): Record<ReportKey, ReportDefinition> {
 }
 
 function bundleToSnapshot(payload: unknown, _asOfDate: string): AdminSnapshot {
+  const previousScope = snapshotValidatedObjects;
+  snapshotValidatedObjects = new WeakSet();
+  try {
+    return decodeSnapshotBundle(payload, _asOfDate);
+  } finally {
+    snapshotValidatedObjects = previousScope;
+  }
+}
+
+function decodeSnapshotBundle(payload: unknown, _asOfDate: string): AdminSnapshot {
   assertNoForbiddenResponseFields(payload);
   const root = unwrapData(payload);
   const compact = "transportVersion" in root;
