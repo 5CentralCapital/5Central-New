@@ -655,6 +655,16 @@ export function isOccupancyReport(key: ReportKey): boolean {
   return key === "rent-roll" || key === "occupancy";
 }
 
+/** Report statuses are distinct from tenant populations and unit occupancy. */
+export function reportSupportsStatus(key: ReportKey, status: string): boolean {
+  switch (key) {
+    case "lease-expiration": return ["month_to_month", "expiring", "not_due"].includes(status);
+    case "hap": return ["active", "ended", "pending"].includes(status);
+    case "applicant-pipeline": return ["complete", "in_progress", "awaiting_payment", "draft", "submitted", "missing_information", "under_review", "approved", "declined", "withdrawn", "converted"].includes(status);
+    default: return false;
+  }
+}
+
 export function reportQueryFilters(
   filters: ViewFilters,
   key: ReportKey,
@@ -665,14 +675,14 @@ export function reportQueryFilters(
     propertyScope: filters.propertyScope,
     ...(filters.propertyIds?.length ? { propertyIds: [...filters.propertyIds].sort() } : filters.propertyId !== "all" ? { propertyId: filters.propertyId } : {}),
     ...(filters.balanceStatus ? { balanceStatus: filters.balanceStatus } : {}),
-    ...(filters.tenantStatus ? { tenantStatus: filters.tenantStatus } : {}),
+    ...(isTenantStatusReport(key) ? { tenantStatus: defaultReportTenantStatus(key, filters.tenantStatus) } : {}),
     ...(filters.readiness?.length ? { readiness: filters.readiness } : {}),
     asOfDate: period.asOfDate,
     ...(mode === "month" && period.month ? { month: period.month } : {}),
     ...(mode === "range" && period.fromDate && period.toDate ? { fromDate: period.fromDate, toDate: period.toDate } : {}),
     ...(isOccupancyReport(key)
       ? occupancyReportStatusOptions.some(([value]) => value !== "all" && value === filters.status) ? { occupancy: [filters.status] } : {}
-      : filters.status !== "all" && filters.status ? { status: [filters.status] } : {}),
+      : reportSupportsStatus(key, filters.status) ? { status: [filters.status] } : {}),
     ...(key !== "rent-roll" && filters.search.trim() ? { search: filters.search.trim() } : {}),
   };
 }
@@ -787,4 +797,16 @@ export function reportCellPersonId(row: ReportRow, columnKey: string): string | 
 export function defaultReportOccupancy(key: ReportKey, status = "all"): string {
   if (["current", "vacant", "future_preleased", "unknown"].includes(status)) return status;
   return key === "rent-roll" ? "current" : key === "occupancy" ? "vacant" : "all";
+}
+
+/** Vacancy and applicant reports describe different populations; rent roll uses occupancy. */
+export function isTenantStatusReport(key: ReportKey): boolean {
+  return key !== "rent-roll" && key !== "occupancy" && key !== "applicant-pipeline";
+}
+
+/** Explicit alternate selections remain valid; unfiltered tenant reports start current. */
+export function defaultReportTenantStatus(key: ReportKey, status?: string): NonNullable<ViewFilters["tenantStatus"]> {
+  if (!isTenantStatusReport(key)) return "all";
+  return status && ["all", "current", "former", "future", "unknown"].includes(status)
+    ? status as NonNullable<ViewFilters["tenantStatus"]> : "current";
 }

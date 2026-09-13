@@ -21,8 +21,13 @@ test("dashboard history is manager-only, loads once, and exposes only aggregates
   const server = await new Promise<Server>(resolve => { const listener = app.listen(0, "127.0.0.1", () => resolve(listener)); });
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/rent-ops/workspace`;
   try {
-    for (const path of ["dashboard-trends", "dashboard-cash"]) assert.equal((await fetch(`${base}/${path}`)).status, 401);
+    for (const path of ["dashboard-trends", "dashboard-cash", "banking"]) assert.equal((await fetch(`${base}/${path}`)).status, 401);
     assert.equal(reads, 0);
+    assert.equal((await fetch(`${base}/banking`, { headers: { "x-api-key": "legacy", "x-test-tenant": "yes" } })).status, 401);
+    const banking = await fetch(`${base}/banking`, { headers: { "x-test-admin": "yes" } });
+    assert.equal(banking.headers.get("cache-control"), "no-store");
+    assert.equal((await banking.json()).state, "unconfigured");
+    assert.equal((await fetch(`${base}/banking`, { method: "POST", headers: { "x-test-admin": "yes" } })).status, 404);
     const response = await fetch(`${base}/dashboard-trends?asOfDate=2026-08-15&propertyId=demo-property-a`, { headers: { "x-test-admin": "yes" } });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("cache-control"), "no-store");

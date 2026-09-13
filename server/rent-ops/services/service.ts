@@ -1,3 +1,4 @@
+import { chargeTermsPrefix } from "../domain/recurring-charge-terms";
 import { hasOperationalEndOn, hasOccupancyConfirmationOn } from "../domain/tenancy-occupancy";
 import { measureRentOps } from "../request-timing";
 import { phoneMethodsSchema } from "../domain/phone-methods";
@@ -1529,5 +1530,5 @@ export class RentOpsService {
     await this.recordAdminChange(`Document metadata ${document.id} saved`, { propertyId: document.propertyId, unitId: document.unitId, tenancyId: document.tenancyId, personId: document.personId, applicationId: document.applicationId });
     return saved;
   }
-  async saveActivity(event: RentOpsActivityEvent): Promise<RentOpsActivityEvent> { if ((await this.snapshot()).activityEvents.some((candidate) => candidate.id === event.id)) throw new RentOpsInvariantError("Activity already exists; use PATCH for an existing record"); const saved = await this.repository.saveActivity(event); await this.recordAdminChange(`Activity ${event.id} recorded`, { propertyId: event.propertyId, unitId: event.unitId, tenancyId: event.tenancyId, personId: event.personId, applicationId: event.applicationId }); return saved; }
+  async saveActivity(event: RentOpsActivityEvent): Promise<RentOpsActivityEvent> { if (event.id.startsWith(chargeTermsPrefix) || /recurring_charge_terms_v1/.test(event.detail ?? "")) throw new RentOpsInvariantError("Dedicated charge terms review endpoint required"); if ((await this.snapshot()).activityEvents.some((candidate) => candidate.id === event.id)) throw new RentOpsInvariantError("Activity already exists; use PATCH for an existing record"); const saved = await this.repository.saveActivity(event); await this.recordAdminChange(`Activity ${event.id} recorded`, { propertyId: event.propertyId, unitId: event.unitId, tenancyId: event.tenancyId, personId: event.personId, applicationId: event.applicationId }); return saved; }
 }

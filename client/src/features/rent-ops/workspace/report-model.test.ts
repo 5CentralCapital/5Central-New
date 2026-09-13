@@ -4,6 +4,8 @@ import type { DelinquencyRow, RentRollRow, ScheduledIncomeRow } from "../types";
 import {
   buildPropertySubtotals,
   defaultReportOccupancy,
+  defaultReportTenantStatus,
+  isTenantStatusReport,
   formatReportCellValue,
   getReportConfig,
   filterReportLocalRows,
@@ -97,7 +99,7 @@ test("period validation and query construction preserve report date boundaries",
   assert.match(validateReportPeriod("collected-income", "2026-09-12", "2026-09", "2026-09-12", "2026-09-01") ?? "", /start date/i);
   assert.match(validateReportPeriod("scheduled-income", "2026-09-12", "2026-10", "", "") ?? "", /after/i);
   const query = reportQueryFilters({ propertyScope: "active", propertyId: "property:one", asOfDate: "2026-09-12", status: "all", search: "" }, "collected-income", { asOfDate: "2026-09-12", fromDate: "2026-09-01", toDate: "2026-09-12" });
-  assert.deepEqual(query, { propertyScope: "active", propertyId: "property:one", asOfDate: "2026-09-12", fromDate: "2026-09-01", toDate: "2026-09-12" });
+  assert.deepEqual(query, { propertyScope: "active", propertyId: "property:one", tenantStatus: "current", asOfDate: "2026-09-12", fromDate: "2026-09-01", toDate: "2026-09-12" });
 });
 
 test("missing base rent, uncertain deposits and HAP exceptions never display false totals", () => {
@@ -200,7 +202,8 @@ test("occupancy status controls send the exact API field and filter report rows"
       assert.equal(query.status, undefined); assert.equal(query.occupancy, undefined);
     }
   }
-  assert.deepEqual(reportQueryFilters({ ...filters, status: "current" }, "lease-expiration", { asOfDate: filters.asOfDate }).status, ["current"]);
+  assert.equal(reportQueryFilters({ ...filters, status: "current" }, "lease-expiration", { asOfDate: filters.asOfDate }).status, undefined);
+  assert.deepEqual(reportQueryFilters({ ...filters, status: "expiring" }, "lease-expiration", { asOfDate: filters.asOfDate }).status, ["expiring"]);
 });
 
 
@@ -284,4 +287,31 @@ test("all units includes confirmed zero-obligation vacancy without contaminating
   assert.equal(unknown.displayRows[0].baseRentCents, undefined);
   assert.equal(unknown.displayRows[0].totalScheduledCents, null);
   assert.equal(buildPropertySubtotals("rent-roll", [{ ...rows[1], occupancy: "unknown" }])[0].amounts.baseRentCents, null);
+});
+
+
+test("every tenant report defaults current while explicit alternate populations survive query construction", () => {
+  const filters = { propertyScope: "active" as const, propertyId: "all", asOfDate: "2026-09-12", status: "all", search: "" };
+  const period = { asOfDate: filters.asOfDate, month: "2026-09", fromDate: "2026-09-01", toDate: filters.asOfDate };
+  const tenantReports = reportKeys().filter(isTenantStatusReport);
+  assert.deepEqual(tenantReports.slice().sort(), ["scheduled-income", "collected-income", "scheduled-vs-collected", "delinquency", "tenant-ledger", "lease-expiration", "security-deposit", "hap"].sort());
+  for (const report of tenantReports) {
+    assert.equal(defaultReportTenantStatus(report), "current", report);
+    assert.equal(defaultReportTenantStatus(report, "invalid"), "current", report);
+    assert.equal(reportQueryFilters(filters, report, period).tenantStatus, "current", report);
+    for (const tenantStatus of ["all", "current", "former", "future", "unknown"] as const) {
+      assert.equal(defaultReportTenantStatus(report, tenantStatus), tenantStatus, report);
+      assert.equal(reportQueryFilters({ ...filters, tenantStatus }, report, period).tenantStatus, tenantStatus, report);
+    }
+  }
+});
+
+test("tenant defaults do not impose tenant status on vacancies, rent-roll occupancy, or applicants", () => {
+  const filters = { propertyScope: "active" as const, propertyId: "all", asOfDate: "2026-09-12", status: "all", search: "", tenantStatus: "current" as const };
+  for (const report of ["rent-roll", "occupancy", "applicant-pipeline"] as const) {
+    assert.equal(isTenantStatusReport(report), false);
+    assert.equal(reportQueryFilters(filters, report, { asOfDate: filters.asOfDate }).tenantStatus, undefined);
+  }
+  assert.equal(defaultReportOccupancy("rent-roll"), "current");
+  assert.equal(defaultReportOccupancy("occupancy"), "vacant");
 });

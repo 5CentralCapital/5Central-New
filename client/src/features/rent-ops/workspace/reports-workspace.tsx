@@ -7,7 +7,7 @@ import { AlertCircle, ArrowDown, ArrowUp, Download, Loader2, Printer, SlidersHor
 import type { AdminSnapshot, ReportKey, ReportRow, TenantTab, ViewFilters } from "../types";
 import { EntityLink, RecordLink } from "./entity-link";
 import {
-  REPORT_PERIODS, buildReportCsv, createReportViewModel, defaultReportOccupancy, emptyReportMessage, formatReportCellValue,
+  REPORT_PERIODS, buildReportCsv, createReportViewModel, defaultReportOccupancy, defaultReportTenantStatus, isTenantStatusReport, emptyReportMessage, formatReportCellValue,
   filterRentRollRows, filterReportLocalRows, formatReportValue, getReportConfig,
   groupReportRows, readReportValue, reportCellPersonId, reportKeys, reportQueryFilters,
   reportQueryKey, reportRowKey, validateReportPeriod,
@@ -73,7 +73,12 @@ function ReportCell({ row, column, onOpenTenant, onOpenUnit, onOpenProperty }: {
   return <>{label}</>;
 }
 
-export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpenTenant, onOpenUnit, onOpenProperty }: ReportsWorkspaceProps) {
+/** A report change restores its own preferences before issuing its first query. */
+export function ReportsWorkspace(props: ReportsWorkspaceProps) {
+  return <ReportWorkspaceView key={props.selected} {...props} />;
+}
+
+function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTenant, onOpenUnit, onOpenProperty }: ReportsWorkspaceProps) {
   const auth = useRentOpsAuth();
   const core = primaryReports.includes(selected);
   const { debouncedSearch, searchPending } = useReportSearch(selected === "rent-roll" ? "" : filters.search);
@@ -85,7 +90,7 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
   const [readiness, setReadiness] = useState("all");
   const [listing, setListing] = useState("all");
   const [balance, setBalance] = useState<ReportBalanceFilter>("all");
-  const [tenancyStatus, setTenancyStatus] = useState<NonNullable<ViewFilters["tenantStatus"]>>("all");
+  const [tenancyStatus, setTenancyStatus] = useState<NonNullable<ViewFilters["tenantStatus"]>>(() => defaultReportTenantStatus(selected, readPreference(selected, "tenantStatus", defaultReportTenantStatus(selected, filters.tenantStatus))));
   const [extraColumns, setExtraColumns] = useState<string[]>([]);
   const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" }>({ key: "unitNumber", direction: "asc" });
   useEffect(() => {
@@ -94,7 +99,7 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
   useEffect(() => {
     setOccupancy(readPreference(selected, "occupancy", defaultReportOccupancy(selected, filters.status)));
     setReadiness(readPreference(selected, "readiness", filters.readiness?.[0] ?? "all")); setListing(readPreference(selected, "listing", "all"));
-    setBalance(readPreference(selected, "balance", filters.balanceStatus ?? (selected === "delinquency" ? "due" : "all"))); setTenancyStatus(readPreference(selected, "tenantStatus", filters.tenantStatus ?? "all"));
+    setBalance(readPreference(selected, "balance", filters.balanceStatus ?? (selected === "delinquency" ? "due" : "all"))); setTenancyStatus(defaultReportTenantStatus(selected, readPreference(selected, "tenantStatus", defaultReportTenantStatus(selected, filters.tenantStatus))));
     setExtraColumns(readPreference(selected, "columns", [])); setSort(readPreference(selected, "sort", { key: "unitNumber", direction: "asc" }));
   }, [selected, filters.status, filters.balanceStatus, filters.tenantStatus, filters.readiness]);
 
@@ -102,7 +107,7 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
   const queryFilters = useMemo(() => ({
     ...reportQueryFilters({ ...filters, status: core ? "all" : filters.status, search: debouncedSearch,
       balanceStatus: selected === "delinquency" || selected === "rent-roll" ? balance : undefined,
-      tenantStatus: selected === "delinquency" ? tenancyStatus : undefined,
+      tenantStatus: isTenantStatusReport(selected) ? tenancyStatus : undefined,
       readiness: selected === "occupancy" && readiness !== "all" ? [readiness] : undefined,
     }, selected, { asOfDate, month, fromDate, toDate }),
     ...(selected === "occupancy" && occupancy !== "all" ? { occupancy: [occupancy] } : {}),
@@ -149,7 +154,7 @@ export function ReportsWorkspace({ snapshot, filters, selected, onSelect, onOpen
         <label>Listing<select value={listing} onChange={event => { setListing(event.target.value); savePreference(selected, "listing", event.target.value); }}><option value="all">All listing states</option>{listingOptions.map(value => <option key={value} value={value}>{formatReportValue(value, "status")}</option>)}</select></label>
       </>}
       {(selected === "rent-roll" || selected === "delinquency") && <label>Balance<select value={balance} onChange={event => { setBalance(event.target.value as ReportBalanceFilter); savePreference(selected, "balance", event.target.value); }}>{balanceOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}
-      {selected === "delinquency" && <label>Tenant status<select value={tenancyStatus} onChange={event => { setTenancyStatus(event.target.value as NonNullable<ViewFilters["tenantStatus"]>); savePreference(selected, "tenantStatus", event.target.value); }}><option value="all">All tenants</option><option value="current">Current tenants</option><option value="former">Former tenants</option><option value="future">Future tenants</option><option value="unknown">Unverified status</option></select></label>}
+      {isTenantStatusReport(selected) && <label>Tenant status<select value={tenancyStatus} onChange={event => { setTenancyStatus(event.target.value as NonNullable<ViewFilters["tenantStatus"]>); savePreference(selected, "tenantStatus", event.target.value); }}><option value="all">All tenants</option><option value="current">Current tenants</option><option value="former">Former tenants</option><option value="future">Future tenants</option><option value="unknown">Unverified status</option></select></label>}
       {mode === "month" && <label>Month<input type="month" value={month} max={asOfDate.slice(0, 7)} onChange={event => setMonth(event.target.value)} /></label>}
       {mode === "range" && <><label>From<input type="date" value={fromDate} max={asOfDate} onChange={event => setFromDate(event.target.value)} /></label><label>Through<input type="date" value={toDate} max={asOfDate} onChange={event => setToDate(event.target.value)} /></label></>}
       <div className="rm-report-toolbar-actions">

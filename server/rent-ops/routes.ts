@@ -1,3 +1,5 @@
+import { recurringChargeTermsInputSchema } from "../../shared/recurring-charge-terms";
+import { readChargeTerms, saveChargeTerms } from "./services/recurring-charge-terms";
 import { measureRentOps, rentOpsRequestTiming } from "./request-timing";
 import { serializeWorkspaceBootstrap, serializeWorkspaceCollectionItems, sendWorkspaceJson, workspaceCollections, type WorkspaceCollection } from "./presentation/workspace-read";
 import {sendAdminSnapshot} from "./presentation/snapshot-transport";
@@ -28,6 +30,7 @@ import { RentOpsInvariantError } from "./domain/invariants";
 import { nowIsoDate } from "./domain/dates";
 import { deriveOperationalScheduleRegister, validateReportFilters, deriveApplicantPipeline, deriveDashboardSummary, deriveFixedReport, deriveRentRoll, deriveTenantProfile } from "./domain/reports";
 import { dashboardCash } from "./services/dashboard-cash";
+import { bankingRead, readBanking } from "./services/banking-read";
 import { toCsv } from "./services/csv";
 import { RentOpsService } from "./services/service";
 import { MagicLinkDeliveryError } from "./services/notifier";
@@ -823,6 +826,10 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
     try { await sendWorkspaceJson(req, res, await service.dashboardTrends(parseAdminFilters(req.query))); }
     catch (error) { adminError(res, error); }
   });
+  adminRouter.get("/workspace/banking", async (_req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.json(options.previewSource === "synthetic" ? await readBanking({}) : await bankingRead());
+  });
   adminRouter.get("/workspace/dashboard-cash", async (_req, res) => {
     res.json(options.previewSource === "synthetic" ? { state: "unconfigured" } : await dashboardCash());
   });
@@ -918,6 +925,17 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
     } catch (error) { adminError(res, error); }
   });
   adminRouter.patch("/lease-terms/:id", (req, res) => patchAdminRecord(req, res, "lease_term", patchLeaseTermSchema, (value) => serializeAdminLeaseTerm(value as Parameters<typeof serializeAdminLeaseTerm>[0])));
+  adminRouter.get("/recurring-charge-terms", async (req, res) => {
+    const parsed = z.object({scheduleIds:z.string().min(1).transform(value=>value.split(",")).pipe(z.array(targetIdSchema).min(1).max(200)),asOfDate:isoDateSchema.optional()}).strict().safeParse(req.query);
+    if(!parsed.success){res.status(400).json(errorBody("invalid_input"));return;}
+    try {res.json({rows:await readChargeTerms(options.repository,parsed.data.scheduleIds,parsed.data.asOfDate)});} catch(error){adminError(res,error);}
+  });
+  adminRouter.post("/recurring-schedules/:id/terms", async (req,res)=>{
+    let actorSubject:string;try{actorSubject=patchActorSubject(req);}catch{res.status(401).json(errorBody("not_authorized"));return;}
+    const parsed=recurringChargeTermsInputSchema.safeParse(req.body);
+    if(!parsed.success||!targetIdSchema.safeParse(req.params.id).success){res.status(400).json(errorBody("invalid_input"));return;}
+    try{res.status(201).json(await saveChargeTerms(options.repository,req.params.id,parsed.data,{actorSubject,occurredAt:patchOccurredAt()}));}catch(error){adminError(res,error);}
+  });
   adminRouter.post("/recurring-schedules", async (req, res) => {
     let actorSubject: string;
     try { actorSubject = patchActorSubject(req); } catch { res.status(401).json(errorBody("not_authorized")); return; }

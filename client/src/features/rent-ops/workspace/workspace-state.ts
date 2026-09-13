@@ -3,9 +3,9 @@ import { REPORT_KEYS } from '../types';
 import { createWorkspaceReportDefinition, type RentOpsWorkspaceBootstrap, type WorkspaceCollection } from '../api';
 import type { QuickAction } from '../form-payload';
 
-export type WorkspaceSection = SectionKey | 'recurring';
+export type WorkspaceSection = SectionKey | 'recurring' | 'banking';
 export interface WorkspaceRoute { section: WorkspaceSection; recordId?: string; kind?: 'property' | 'unit'; tab: TenantTab; report: ReportKey; }
-const sections: WorkspaceSection[] = ['dashboard','tenants','properties','reports','rent-roll','leases','income','applicants','documents','recurring'];
+const sections: WorkspaceSection[] = ['dashboard','tenants','properties','reports','rent-roll','leases','income','applicants','documents','recurring','banking'];
 const tabs: TenantTab[] = ['summary','household','tenancy','charges','ledger','deposits','housing-assistance','documents','activity'];
 export function parseWorkspaceRoute(search: string): WorkspaceRoute {
   const params = new URLSearchParams(search);

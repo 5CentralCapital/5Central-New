@@ -1,3 +1,4 @@
+import { createTenantStatusMatcher } from "./tenant-status";
 import { deriveAccountBalances } from "./account-balances";
 import type { DashboardPropertyPoint } from "../../../shared/rent-ops-dashboard";
 import { meteredUtilitiesForTenancy } from "./metered-utility";
@@ -906,7 +907,9 @@ function deriveTruthScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
     asOfDate: asOfDate(filters),
     selection: month === monthFromDate(asOfDate(filters)) ? "as_of" : "month_forecast",
   });
+  const matchesTenantStatus = createTenantStatusMatcher(snapshot, filters);
   const rows = projection.rows
+    .filter(matchesTenantStatus)
     // Subsidy/deposit schedules are controlled by their dedicated reports.
     // An unknown category remains visible as an explicitly unclassified row;
     // it is never silently reinterpreted as rent or a fee.
@@ -932,6 +935,7 @@ interface TruthCollectedResult {
 }
 
 function deriveTruthCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsFilters): TruthCollectedResult {
+  const matchesTenantStatus = createTenantStatusMatcher(snapshot, filters);
   const month = truthMonth(filters);
   const cutoff = filters.asOfDate ?? ("9999-12-31" as IsoDate);
   const propertyIds = scopedPropertyIds(snapshot, filters);
@@ -956,6 +960,7 @@ function deriveTruthCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
     if (allocation.allocatedOn && allocation.allocatedOn > cutoff) continue;
     const payment = allocation.paymentTransactionId ? transactions.get(allocation.paymentTransactionId) : undefined;
     const charge = allocation.chargeTransactionId ? transactions.get(allocation.chargeTransactionId) : undefined;
+    if (!matchesTenantStatus(charge ?? payment ?? {})) continue;
     const propertyId = charge?.propertyId ?? payment?.propertyId;
     const paymentOn = payment?.postedOn ?? null;
     if (paymentOn && !receiptInPeriod(paymentOn, filters)) continue;
@@ -1036,6 +1041,7 @@ function deriveTruthCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
 
 export function deriveScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): ScheduledIncomeRow[] {
   if (snapshot.modelVersion === 3) return deriveTruthScheduledIncome(snapshot, filters);
+  const matchesTenantStatus = createTenantStatusMatcher(snapshot, filters);
   const asOf = asOfDate(filters);
   assertNoAmbiguousOccupancy(snapshot, asOf);
   assertNoOverlappingBaseRentSchedules(snapshot.recurringSchedules);
@@ -1051,6 +1057,7 @@ export function deriveScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOp
   const rows: ScheduledIncomeRow[] = [];
   for (const tenancy of snapshot.tenancies) {
     if (!propertyIds.has(tenancy.propertyId) || (tenancy.status !== "current" && tenancy.status !== "future" && tenancy.status !== "notice")) continue;
+    if (!matchesTenantStatus({ tenancyId: tenancy.id })) continue;
     const unit = units.get(tenancy.unitId);
     const person = people.get(tenancy.primaryPersonId);
     if (!unit || !person) continue;
@@ -1093,6 +1100,7 @@ export function deriveScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOp
   // Property schedules are not allocated to units. Emit each applicable
   // property definition once, regardless of the number of units/tenancies.
   for (const propertyId of Array.from(propertyIds)) {
+    if (!matchesTenantStatus({})) continue;
     const propertySchedules = snapshot.recurringSchedules.filter((schedule) => {
       if (schedule.active === false || schedule.scopeType !== "property" || schedule.propertyId !== propertyId
         || (schedule.category !== "base_rent" && schedule.category !== "recurring_fee")) return false;
@@ -1148,6 +1156,7 @@ export function deriveScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOp
 
 export function deriveCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): CollectedIncomeRow[] {
   validateReportFilters("collected-income", filters);
+  const matchesTenantStatus = createTenantStatusMatcher(snapshot, filters);
   if (snapshot.modelVersion === 3) {
     const collected = deriveTruthCollectedIncome(snapshot, filters);
     const rows = collected.rows;
@@ -1186,6 +1195,7 @@ export function deriveCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOp
   const propertyIds = new Set(scopedProperties(snapshot, filters).map((property) => property.id));
   const rows: CollectedIncomeRow[] = [];
   for (const { allocation, payment, charge } of effectiveAllocations(snapshot, reportCutoff)) {
+    if (!matchesTenantStatus(charge)) continue;
     if (!charge.propertyId || !receiptInPeriod(payment.postedOn, filters) || !charge.category || !incomeCategories.has(charge.category) || !propertyIds.has(charge.propertyId)) continue;
     if (filters.unitId && (charge.unitId ?? payment.unitId) !== filters.unitId) continue;
     if (filters.tenancyId && (charge.tenancyId ?? payment.tenancyId) !== filters.tenancyId) continue;
@@ -1403,7 +1413,7 @@ function createAccountLedgerContext(snapshot: RentOpsSnapshot, filters: RentOpsF
   const credits = bucket(effectiveCreditAllocations(snapshot, cutoff), row => [row.credit.id, row.charge.id]);
   const allocations = bucket(snapshot.paymentAllocations, row => [row.paymentTransactionId ?? row.creditTransactionId, row.chargeTransactionId]);
   const returns = bucket(snapshot.ledgerTransactions.filter(row => row.kind === "reversal" && row.status === "posted" && (!row.postedOn || row.postedOn <= cutoff)), row => [row.reversalOfId]);
-  return { transactions, transactionIds: new Set(transactions.keys()),
+  return { matchesTenantStatus: createTenantStatusMatcher(snapshot, filters), transactions, transactionIds: new Set(transactions.keys()),
     tenancies: new Map(snapshot.tenancies.map(row => [row.id, row])), people: new Map(snapshot.people.map(row => [row.id, row])),
     byPerson: bucket(snapshot.ledgerTransactions, row => [row.personId]),
     byTenancy: bucket(snapshot.ledgerTransactions, row => [row.tenancyId]),
@@ -1425,8 +1435,10 @@ export function createAccountLedgerReader(snapshot: RentOpsSnapshot, filters: Re
 
 export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string, filters: RentOpsFilters = {}, accountTransactionIds?: ReadonlySet<string>, inheritedBalanceCodes: string[] = [], context?: AccountLedgerContext): LedgerRow[] {
   validateReportFilters("tenant-ledger", filters);
+  const matchesTenantStatus = context?.matchesTenantStatus ?? createTenantStatusMatcher(snapshot, filters);
   const allocationCutoff = filters.asOfDate ?? ("9999-12-31" as IsoDate);
   const transactions = (context ? accountTransactionIds ? Array.from(accountTransactionIds).flatMap(id => context.transactions.get(id) ? [context.transactions.get(id)!] : []) : context.byTenancy.get(tenancyId) ?? [] : snapshot.ledgerTransactions)
+    .filter(matchesTenantStatus)
     .filter((transaction) => (accountTransactionIds ? accountTransactionIds.has(transaction.id) : transaction.tenancyId === tenancyId) && (!transaction.postedOn || !filters.asOfDate || transaction.postedOn <= filters.asOfDate))
     .sort((left, right) => compareOptionalTimestamp(left.postedOn, right.postedOn) || left.id.localeCompare(right.id));
     const ledgerCodes = new Set([...inheritedBalanceCodes, ...(!transactions.length && tenancyId ? tenancyBalanceUncertainty(snapshot, tenancyId, allocationCutoff) : []), ...transactions.flatMap(row => ledgerFactUncertainty(row, false))]);
@@ -1546,6 +1558,7 @@ export function deriveTenantLedger(snapshot: RentOpsSnapshot, tenancyId: string,
 export function deriveManagerAccountLedger(snapshot: RentOpsSnapshot, personId: string, tenancyIds: readonly string[], filters: RentOpsFilters = {}, context?: AccountLedgerContext): LedgerRow[] {
   const propertyIds = context?.propertyIds ?? scopedPropertyIds(snapshot, filters);
   const readAccountRows = context?.accountRows ?? ((account: { personId: string; tenancyId?: string }) => tenantAccountLedgerRows(snapshot, account));
+  const matchesTenantStatus = context?.matchesTenantStatus ?? createTenantStatusMatcher(snapshot, filters);
   const selectedTenancyIds = new Set(tenancyIds);
   const candidateIds = new Set(readAccountRows({ personId }).map(row => row.id));
   for (const tenancyId of Array.from(selectedTenancyIds)) {
@@ -1558,7 +1571,7 @@ export function deriveManagerAccountLedger(snapshot: RentOpsSnapshot, personId: 
     }
   }
   const scopedIds = new Set((context ? Array.from(candidateIds).flatMap(id => context.transactions.get(id) ? [context.transactions.get(id)!] : []) : snapshot.ledgerTransactions).filter(row => {
-    if (!candidateIds.has(row.id)) return false;
+    if (!candidateIds.has(row.id) || !matchesTenantStatus(row)) return false;
     const tenancy = row.tenancyId ? context ? context.tenancies.get(row.tenancyId) : snapshot.tenancies.find(candidate => candidate.id === row.tenancyId) : undefined;
     const propertyId = row.propertyId ?? tenancy?.propertyId;
     return matchesPropertyScope(propertyId, filters, propertyIds) && (!filters.unitId || (row.unitId ?? tenancy?.unitId) === filters.unitId);
@@ -1577,6 +1590,7 @@ export function deriveManagerAccountLedger(snapshot: RentOpsSnapshot, personId: 
 }
 
 export function deriveLeaseExpirations(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): LeaseExpirationRow[] {
+  const matchesTenantStatus = createTenantStatusMatcher(snapshot, filters);
   const asOf = asOfDate(filters);
   assertNoAmbiguousOccupancy(snapshot, asOf);
   assertNoOverlappingBaseRentSchedules(snapshot.recurringSchedules);
@@ -1588,7 +1602,8 @@ export function deriveLeaseExpirations(snapshot: RentOpsSnapshot, filters: RentO
   const rows: LeaseExpirationRow[] = [];
   const selectSchedules = createEffectiveScheduleSelector(snapshot.recurringSchedules);
   for (const tenancy of snapshot.tenancies) {
-    if (tenancy.status !== "current" && tenancy.status !== "notice") continue;
+    if (!filters.tenantStatus && tenancy.status !== "current" && tenancy.status !== "notice") continue;
+    if (!matchesTenantStatus({ tenancyId: tenancy.id })) continue;
     if (!matchesPropertyScope(tenancy.propertyId, filters, propertyIds)) continue;
     const term = activeLeaseTerm(snapshot, tenancy.id, asOf);
     if (!term) continue;
@@ -1617,6 +1632,7 @@ export function deriveLeaseExpirations(snapshot: RentOpsSnapshot, filters: RentO
 }
 
 export function deriveDepositLiability(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): DepositLiabilityRow[] {
+  const matchesTenantStatus = createTenantStatusMatcher(snapshot, filters);
   const asOf = asOfDate(filters);
   const properties = propertyMap(snapshot);
   const units = unitMap(snapshot);
@@ -1624,6 +1640,7 @@ export function deriveDepositLiability(snapshot: RentOpsSnapshot, filters: RentO
   const propertyIds = scopedPropertyIds(snapshot, filters);
   const grouped = new Map<string, DepositLiabilityRow>();
   for (const deposit of snapshot.securityDeposits) {
+    if (!matchesTenantStatus(deposit)) continue;
     if (!matchesPropertyScope(deposit.propertyId, filters, propertyIds)) continue;
     if (filters.unitId && deposit.unitId !== filters.unitId) continue;
     // A known future receipt is excluded at the as-of boundary. Unknown
@@ -1686,6 +1703,7 @@ export function deriveDepositLiability(snapshot: RentOpsSnapshot, filters: RentO
 }
 
 export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): HapRow[] {
+  const matchesTenantStatus = createTenantStatusMatcher(snapshot, filters);
   const month = reportMonth(filters);
   const properties = propertyMap(snapshot);
   const units = unitMap(snapshot);
@@ -1696,6 +1714,7 @@ export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {
   const reportCutoff = filters.asOfDate ?? nowIsoDate();
   const rows: HapRow[] = [];
   const effectiveContracts = snapshot.subsidyContracts.filter((contract) =>
+    matchesTenantStatus(contract) &&
     matchesPropertyScope(contract.propertyId, filters, propertyIds) &&
     contract.status !== "pending" &&
     !!contract.status && (!filters.status?.length || filters.status.includes(contract.status)) &&
@@ -1708,7 +1727,7 @@ export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {
   // A non-null source contract with no normalized status cannot be safely
   // classified as active/ended/pending. Do not silently turn it into zero
   // HAP; the caller must resolve the artifact-bound status crosswalk first.
-  if (snapshot.subsidyContracts.some((contract) => !contract.status && matchesPropertyScope(contract.propertyId, filters, propertyIds))) {
+  if (snapshot.subsidyContracts.some((contract) => matchesTenantStatus(contract) && !contract.status && matchesPropertyScope(contract.propertyId, filters, propertyIds))) {
     throw new RentOpsInvariantError("HAP report is blocked by an unknown subsidy contract status");
   }
   const contractsByTenancy = new Map<string, RentOpsSubsidyContract[]>();
@@ -2055,7 +2074,9 @@ export function deriveFixedReport(snapshot: RentOpsSnapshot, report: FixedReport
     case "delinquency": return deriveDelinquency(snapshot, filters);
     case "tenant-ledger": {
       const propertyIds = scopedPropertyIds(snapshot, filters);
+      const matchesTenantStatus = createTenantStatusMatcher(snapshot, filters);
       const tenancies = snapshot.tenancies.filter((tenancy) =>
+        matchesTenantStatus({ tenancyId: tenancy.id }) &&
         (!filters.tenancyId || tenancy.id === filters.tenancyId) &&
         matchesPropertyScope(tenancy.propertyId, filters, propertyIds),
       );
@@ -2069,7 +2090,8 @@ export function deriveFixedReport(snapshot: RentOpsSnapshot, report: FixedReport
         if ((!filters.personId || person.id === filters.personId) && !accounts.has(person.id)) accounts.set(person.id, []);
       }
       const rows = new Map<string, LedgerRow>();
-      for (const [personId, tenancyIds] of Array.from(accounts.entries())) for (const row of deriveManagerAccountLedger(snapshot, personId, tenancyIds, filters)) {
+      const readAccountLedger = createAccountLedgerReader(snapshot, filters);
+      for (const [personId, tenancyIds] of Array.from(accounts.entries())) for (const row of readAccountLedger(personId, tenancyIds)) {
         if (!rows.has(row.transaction.id)) rows.set(row.transaction.id, row);
       }
       return Array.from(rows.values());

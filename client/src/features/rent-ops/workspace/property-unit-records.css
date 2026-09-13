@@ -105,3 +105,9 @@
   .rm-property-unit-actions { width: 100%; }
   .rm-property-unit-group .rm-field { grid-template-columns: minmax(88px, .8fr) minmax(0, 1.2fr); gap: 10px; }
 }
+
+.rm-readiness-button { cursor: pointer; font: inherit; }
+.rm-readiness-button:hover { box-shadow: 0 0 0 1px currentColor; }
+.rm-readiness-button:focus-visible { outline: 3px solid #D4A843; outline-offset: 3px; }
+.rm-readiness-dialog { width: min(480px, 100%); }
+.rm-readiness-field { display: grid; gap: 8px; }

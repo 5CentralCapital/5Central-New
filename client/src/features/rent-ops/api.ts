@@ -2000,3 +2000,10 @@ export function decodeOperationalScheduleRegister(payload: unknown): Operational
 export async function loadOperationalScheduleRegister(filters: ApiFilters = {}, signal?: AbortSignal): Promise<OperationalScheduleRegister> {
   return decodeOperationalScheduleRegister(await requestJson(`/api/rent-ops/workspace/recurring${buildRentOpsQuery(filters)}`, { signal }));
 }
+
+export async function loadBanking(signal?: AbortSignal) {
+  const { bankingSnapshotSchema } = await import("../../../../shared/rent-ops-banking");
+  const result = bankingSnapshotSchema.safeParse(await requestJson("/api/rent-ops/workspace/banking", { signal }));
+  if (!result.success) throw new Error("Banking is unavailable.");
+  return result.data;
+}

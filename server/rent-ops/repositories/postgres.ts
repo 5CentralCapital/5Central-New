@@ -1181,6 +1181,17 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     return this.client.readTableBatch ? load(this.client) : this.client.transaction ? this.client.transaction(load, { readOnly: true }) : load(this.client);
   }
 
+  async getRecurringChargeTermInputs(scheduleIds: string[]): Promise<Pick<RentOpsSnapshot, "recurringSchedules" | "tenancies" | "activityEvents">> {
+    await this.assertReady();
+    const schedules = await this.client.query<Record<string, unknown>>("SELECT * FROM rent_ops_recurring_charge_schedules WHERE id = ANY($1::text[])", [scheduleIds]);
+    const tenancyIds = Array.from(new Set(schedules.rows.map(row => row.tenancy_id).filter(Boolean)));
+    const [tenancies, activities] = await Promise.all([
+      this.client.query<Record<string, unknown>>("SELECT * FROM rent_ops_tenancies WHERE id = ANY($1::text[])", [tenancyIds]),
+      this.client.query<Record<string, unknown>>("SELECT * FROM rent_ops_activity_events WHERE tenancy_id = ANY($1::text[]) AND id LIKE 'activity:charge-terms:%'", [tenancyIds]),
+    ]);
+    return {recurringSchedules:schedules.rows.map(rowToSchedule),tenancies:tenancies.rows.map(rowToTenancy),activityEvents:activities.rows.map(rowToActivity)};
+  }
+
   async getWorkspaceCollection<K extends RentOpsWorkspaceCollection>(name: K): Promise<RentOpsSnapshot[K]> {
     const tables: Record<RentOpsWorkspaceCollection, string> = {
       recurringSchedules: "rent_ops_recurring_charge_schedules",

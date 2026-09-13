@@ -1889,6 +1889,7 @@ export interface RentOpsPortalTransferHistory {
 }
 
 export interface RentOpsRepository {
+  getRecurringChargeTermInputs?(scheduleIds: string[]): Promise<Pick<RentOpsSnapshot, "recurringSchedules" | "tenancies" | "activityEvents">>;
   readPortalTransferHistory?(accountId: string): Promise<RentOpsPortalTransferHistory[]>;
   readPortalAccountBindings?(personId: string): Promise<RentOpsPortalAccountBinding[]>;
   transferPortalAccountBinding?(input: RentOpsPortalAccountTransfer): Promise<RentOpsPortalAccountBinding>;

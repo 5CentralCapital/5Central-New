@@ -9,6 +9,7 @@ import type {
   ViewFilters,
 } from "../types";
 import type { FormValues } from "../form-payload";
+import { unitReadinessDisplay } from "./unit-readiness-model";
 import { scheduleDisplayInterval } from "./schedule-display";
 
 export type PropertyUnitRecordKind = "property" | "unit";
@@ -155,7 +156,7 @@ function propertyMatches(property: AdminPropertyView, query: string): boolean {
   return values.some((value) => lower(value).includes(query));
 }
 
-function unitMatches(unit: AdminUnitView, query: string): boolean {
+function unitMatches(unit: AdminUnitView, query: string, occupancy?: Map<string, string>): boolean {
   if (!query) return true;
   return [
     unit.unitNumber,
@@ -163,7 +164,7 @@ function unitMatches(unit: AdminUnitView, query: string): boolean {
     unit.bedrooms,
     unit.bathrooms,
     unit.squareFeet,
-    unit.readiness,
+    occupancy ? unitReadinessDisplay(unit, occupancy.get(unit.id ?? "")).label : unit.readiness,
     unit.listing,
     unit.amenities?.join(" "),
     unit.accessNotes,
@@ -205,6 +206,7 @@ export function propertyUnitListItems(
   snapshot: AdminSnapshot,
   filters: Pick<ViewFilters, "propertyId" | "propertyIds" | "propertyScope">,
   search = "",
+  occupancy?: Map<string, string>,
 ): PropertyUnitListItem[] {
   const query = lower(search);
   const unitsByProperty = new Map<string, AdminUnitView[]>();
@@ -221,7 +223,7 @@ export function propertyUnitListItems(
     if (!propertyInFilters(property, filters)) return;
     const propertyUnits = property.id ? [...(unitsByProperty.get(property.id) ?? [])].sort(compareUnits) : [];
     const propertyIsMatch = propertyMatches(property, query);
-    const matchingUnits = propertyUnits.filter((unit) => unitMatches(unit, query));
+    const matchingUnits = propertyUnits.filter((unit) => unitMatches(unit, query, occupancy));
     if (query && !propertyIsMatch && matchingUnits.length === 0) return;
 
     const propertyId = text(property.id) || undefined;
@@ -243,7 +245,7 @@ export function propertyUnitListItems(
         id: unitId,
         propertyId,
         title: text(unit.unitNumber) || "Needs review",
-        subtitle: [text(unit.unitType), !propertyUnitFieldUnverified(unit.readinessKnowledge) && text(unit.readiness) !== "unknown" ? text(unit.readiness).replaceAll("_", " ") : ""].filter(Boolean).join(" · "),
+        subtitle: [text(unit.unitType), occupancy ? unitReadinessDisplay(unit, occupancy.get(unit.id ?? "")).label : !propertyUnitFieldUnverified(unit.readinessKnowledge) && text(unit.readiness) !== "unknown" ? text(unit.readiness).replaceAll("_", " ") : ""].filter(Boolean).join(" · "),
         searchText: [unit.unitNumber, unit.unitType, unit.readiness, unit.listing, unit.amenities?.join(" "), unit.accessNotes].filter(Boolean).join(" "),
       });
     });
@@ -266,9 +268,10 @@ export function resolvePropertyUnitSelection(
   selectedPropertyId?: string,
   selectedUnitId?: string,
   search = "",
+  occupancy?: Map<string, string>,
 ): PropertyUnitSelection | undefined {
   const properties = snapshot.snapshot.properties.filter((property) => propertyInFilters(property, filters)).sort(compareProperties);
-  const list = propertyUnitListItems(snapshot, filters, search);
+  const list = propertyUnitListItems(snapshot, filters, search, occupancy);
   const visiblePropertyIds = new Set(list.filter((row) => row.kind === "property" && row.id).map((row) => row.id));
 
   if (selectedUnitId) {

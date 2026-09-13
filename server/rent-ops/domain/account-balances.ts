@@ -1,37 +1,16 @@
-import type { DelinquencyRow, LedgerRow, RentOpsFilters, RentOpsPerson, RentOpsSnapshot, RentOpsTenancy } from "../../../shared/rent-ops-contracts";
+import { accountTenantStatusOn } from "./tenant-status";
+import type { DelinquencyRow, LedgerRow, RentOpsFilters, RentOpsSnapshot, RentOpsTenancy } from "../../../shared/rent-ops-contracts";
 import { nowIsoDate } from "./dates";
 import { ledgerBalanceSign } from "./invariants";
-import { confirmedTenancyFact, isOccupiedTenancyOn, hasOperationalEndOn, isKnownPastAccountOn, hasConfirmedTenancyLinks } from "./tenancy-occupancy";
+import { isOccupiedTenancyOn, isKnownPastAccountOn } from "./tenancy-occupancy";
 
 import { selectBalanceReview, operationalBalanceCents } from "./balance-review";
 
-type Status = NonNullable<DelinquencyRow["tenancyStatus"]>;
 export interface AccountBalanceAllocation { parentTransactionId: string; chargeTransactionId: string; amountCents: number; }
 type AllocationReader = (snapshot: RentOpsSnapshot, asOf: string) => AccountBalanceAllocation[];
 type LedgerReader = (snapshot: RentOpsSnapshot, personId: string, tenancyIds: string[], filters: RentOpsFilters) => LedgerRow[];
 const exact = (value: string | null | undefined, legacy: boolean) => value === "exact" || value === "manual" || (legacy && value === undefined);
 const amountKnown = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value);
-
-function statusOn(snapshot: RentOpsSnapshot, person: RentOpsPerson, tenancies: RentOpsTenancy[], occupied: RentOpsTenancy[], asOf: string): Status {
-  // Match Rent Roll's exact, dated occupancy predicate. A still-occupied
-  // tenancy is not ended by a different historical tenancy in this property.
-  if (occupied.length) return "current";
-  if (tenancies.some(t => hasConfirmedTenancyLinks(t) && !isKnownPastAccountOn(snapshot, person.id, asOf, t)
-    && confirmedTenancyFact(t.statusKnowledge) && confirmedTenancyFact(t.plannedMoveInKnowledge)
-    && t.status === "future" && !!t.plannedMoveInOn && t.plannedMoveInOn > asOf)) return "future";
-  if (tenancies.some(t => hasConfirmedTenancyLinks(t) && (
-    (["manual", "confirmed"].includes(t.statusKnowledge ?? "") && (t.status === "past" || t.status === "cancelled"))
-    || hasOperationalEndOn(t, asOf)
-    || (confirmedTenancyFact(t.actualMoveOutKnowledge) && !!t.actualMoveOutOn && t.actualMoveOutOn <= asOf)))) return "former";
-  const facts = person.sourceAccountFacts;
-  if (facts?.statusKnowledge === "source" && facts.observedOn <= asOf) {
-    if (facts.status === "past" || facts.status === "cancelled") return "former";
-    if (facts.status === "future") return "future";
-  }
-  // A historical account-level Current flag proves neither a current property
-  // nor an occupied unit, and cannot override a manual departure correction.
-  return "unknown";
-}
 
 /** One row per exact resident account and historical property. The account
  * reader owns receipt sharing, reversals and source identity validation. */
@@ -117,7 +96,7 @@ export function deriveAccountBalances(snapshot: RentOpsSnapshot, filters: RentOp
       if (selected.size && (!propertyId || !selected.has(propertyId))) continue;
       if (!selected.size && filters.propertyScope === "active" && (!propertyId || properties.get(propertyId)?.state !== "active")) continue;
       const occupied = value.tenancies.filter(t => isOccupiedTenancyOn(t, asOf) && !isKnownPastAccountOn(personSnapshot, person.id, asOf, t));
-      const tenancyStatus = statusOn(personSnapshot, person, value.tenancies, occupied, asOf);
+      const tenancyStatus = accountTenantStatusOn(personSnapshot, person, value.tenancies, occupied, asOf);
       if (filters.tenantStatus && filters.tenantStatus !== "all" && filters.tenantStatus !== tenancyStatus) continue;
       let total = 0, rent = 0, nonRent = 0, unapplied = 0;
       let complete = !accountIncomplete, detailComplete = true;

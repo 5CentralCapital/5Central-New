@@ -1,3 +1,4 @@
+import { useRecurringChargeTerms } from './use-recurring-charge-terms';
 import { currentPhoneMethods, phoneTypeLabel } from "../phone-methods-display";
 import { balanceReviewDisplay } from "./balance-review-display";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
@@ -257,13 +258,14 @@ function chargeAction(actions: TenantEditAction[], type: "replace-recurring-sche
   return findAction(actions, type, (candidate) => candidate.values.predecessorId === row.id);
 }
 
-function ChargeTable({ rows, editActions, onEdit }: { rows: RecurringChargeRow[]; editActions: TenantEditAction[]; onEdit: EditAction }) {
+function ChargeTable({ rows, editActions, onEdit, asOfDate }: { asOfDate: string; rows: RecurringChargeRow[]; editActions: TenantEditAction[]; onEdit: EditAction }) {
+  const chargeTerms = useRecurringChargeTerms(rows.map(row => row.id), asOfDate);
   if (!rows.length) return <Empty message="No recurring charges match this view." />;
-  return <div className="rm-table-wrap"><table className="rm-table rm-charge-table"><caption className="sr-only">Recurring charges</caption><thead><tr><th>Charge</th><th>Applies to</th><th>Frequency</th><th>Effective from</th><th>Effective to</th><th className="rm-align-right">Amount</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{rows.map((row, index) => {
+  return <div className="rm-table-wrap"><table className="rm-table rm-charge-table"><caption className="sr-only">Recurring charges</caption><thead><tr><th>Charge</th><th>Applies to</th><th>Frequency</th><th>Charge starts</th><th>Lease through</th><th>Scheduled end</th><th className="rm-align-right">Amount</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{rows.map((row, index) => {
     const replace = chargeAction(editActions, "replace-recurring-schedule", row);
     const end = chargeAction(editActions, "end-recurring-schedule", row);
     const warning = row.uncertaintyCodes.length > 0 || row.state === "unknown";
-    return <tr key={row.id ?? `charge-${index}`}><td><strong>{row.description}</strong>{warning && <small className="rm-warning-copy">Needs review: {recurringChargeIssueLabels(row.uncertaintyCodes).join(" · ") || "Schedule status unconfirmed"}</small>}</td><td><span>{row.applicabilityLabel}</span>{(row.scope.type === "unit" || row.scope.type === "property") && <small className="rm-warning-copy">Shared schedule: replacing or ending changes charges for all applicable residents in this {row.scope.type}.</small>}</td><td>{row.billingFrequency ? label(row.billingFrequency) : "Needs review"}</td><td>{formatDate(row.effectiveFrom)}</td><td>{row.effectiveTo === null ? "Ongoing" : formatDate(row.effectiveTo)}</td><td className="rm-align-right rm-amount">{formatMoney(row.amountCents)}</td><td>{statusValue(row.state === "unknown" ? "Needs review" : row.state, warning || row.active == null)}{row.stateReason && <small>{row.stateReason}</small>}</td><td><div className="rm-row-actions">{replace && <ActionButton action={{...replace,label:"Schedule change"}} onEdit={onEdit} />}{end && <ActionButton action={{...end,label:"End"}} onEdit={onEdit} danger />}</div></td></tr>;
+    return <tr key={row.id ?? `charge-${index}`}><td><strong>{row.description}</strong>{warning && <small className="rm-warning-copy">Needs review: {recurringChargeIssueLabels(row.uncertaintyCodes).join(" · ") || "Schedule status unconfirmed"}</small>}</td><td><span>{row.applicabilityLabel}</span>{(row.scope.type === "unit" || row.scope.type === "property") && <small className="rm-warning-copy">Shared schedule: replacing or ending changes charges for all applicable residents in this {row.scope.type}.</small>}</td><td>{row.billingFrequency ? label(row.billingFrequency) : "Needs review"}</td><td>{chargeTerms.label(row.id, "start", row.scope.type)}</td><td>{chargeTerms.label(row.id, "through", row.scope.type)}</td><td>{row.effectiveTo ? formatDate(row.effectiveTo) : "—"}</td><td className="rm-align-right rm-amount">{formatMoney(row.amountCents)}</td><td>{statusValue(row.state === "unknown" ? "Needs review" : row.state, warning || row.active == null)}{row.stateReason && <small>{row.stateReason}</small>}</td><td><div className="rm-row-actions">{replace && <ActionButton action={{...replace,label:"Schedule change"}} onEdit={onEdit} />}{end && <ActionButton action={{...end,label:"End"}} onEdit={onEdit} danger />}</div></td></tr>;
   })}</tbody></table></div>;
 }
 
@@ -274,7 +276,7 @@ function ChargesTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantV
   const monthlyTotal = currentMonthlyTotal(rows, tenant.operationalSchedulesComplete === true && Array.isArray(tenant.operationalScheduleIds));
   return <div className="rm-tenant-tab-content"><Panel title="Recurring charges">
     <div className="rm-charge-toolbar"><div className="rm-segmented" role="group" aria-label="Recurring charge status">{(["current", "all", "history", "future", "review"] as RecurringChargeFilter[]).map((option) => <button type="button" key={option} className={filter === option ? "active" : ""} onClick={() => setFilter(option)}>{option === "review" ? "Needs review" : label(option)} <span>{option === "all" ? rows.length : filterRecurringCharges(rows, option).length}</span></button>)}</div><div className="rm-charge-total"><span>Current monthly total</span><strong>{formatMoney(monthlyTotal)}</strong></div></div>
-    <ChargeTable rows={filtered} editActions={editActions} onEdit={onEdit} />
+    <ChargeTable asOfDate={snapshot.summary.asOfDate} rows={filtered} editActions={editActions} onEdit={onEdit} />
     {(tenant.meteredUtilities ?? []).map(utility => <p key={`${utility.utility}:${utility.effectiveFrom}`} className="rm-warning" role="status">Water — metered · starts {formatDate(utility.effectiveFrom)} · amount unknown. Metered usage is excluded from the fixed monthly total.</p>)}
   </Panel></div>;
 }
