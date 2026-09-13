@@ -8,6 +8,7 @@ import { noPaymentDueMessage, paymentReviewMessage } from "./payment-view";
 import { depositAmounts } from "./deposit-view";
 import { ResidentTransactions, TransactionTable } from "./transactions";
 import { filterTransactions, emptyTransactionFilters } from "./transactions-view";
+import { takeTenantStartup } from './startup';
 import "./tenant-portal.css";
 const LeaseViewer=lazy(()=>import("./lease-viewer").then(module=>({default:module.LeaseViewer})));
 
@@ -118,7 +119,7 @@ function PasswordPanel({ client, onError, onChanged }: { client: TenantPortalCli
 export default function TenantPortal() {
   // Capture during initial render, ahead of effects and session calls.
   const [link, setLink] = useState(() => consumeActivationLink(window.location, window.history));
-  const [client] = useState(() => new TenantPortalClient());
+  const [{ client, restoration }] = useState(takeTenantStartup);
   const [account, setAccount] = useState<TenantSessionAccount | null>(null);
   const [viewLease,setViewLease]=useState<{id:string;fileName:string}>();
   const [page, setPage] = useState<"home" | "transactions">("home");
@@ -156,7 +157,7 @@ export default function TenantPortal() {
     if (paymentReturn === "return" || paymentReturn === "returned") setMessage("Payment confirmation pending.");
     if (paymentReturn === "cancelled") setMessage("Checkout closed.");
     const restoreGeneration = generation.current;
-    if (!link.token) client.restore().then((restored) => { if (mounted.current && generation.current === restoreGeneration) setAccount(restored); }).catch((caught) => { if (mounted.current && generation.current === restoreGeneration) handleError(caught); }).finally(() => { if (mounted.current) setLoading(false); });
+    if (!link.token) (restoration ?? client.restore()).then((restored) => { if (mounted.current && generation.current === restoreGeneration) setAccount(restored); }).catch((caught) => { if (mounted.current && generation.current === restoreGeneration) handleError(caught); }).finally(() => { if (mounted.current) setLoading(false); });
     return () => { mounted.current = false; generation.current++; client.clear(); document.title = oldTitle; };
   }, [client]);
   useEffect(() => {
