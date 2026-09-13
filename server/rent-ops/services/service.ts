@@ -1088,6 +1088,14 @@ export class RentOpsService {
     }
     if (entityType === "tenancy") {
       const tenancy = next as unknown as RentOpsTenancy;
+      const today = nowIsoDate(this.now());
+      if (hasOperationalEndOn(existing as unknown as RentOpsTenancy, today) && ["status", "actualMoveInOn", "actualMoveOutOn", "noticeOn", "expectedMoveOutOn"].some(field => !jsonEqual(existing[field], next[field]))) throw new RentOpsInvariantError("Operationally ended tenancy cannot receive new move events; select the current tenancy");
+
+      for (const field of ["actualMoveInOn", "actualMoveOutOn"] as const) {
+        const value = tenancy[field];
+        if (value && value !== existing[field] && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(`${value}T00:00:00Z`)) || new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value || value > today)) throw new RentOpsInvariantError("Actual move dates must be valid dates on or before today; use planned dates for future events");
+      }
+
       const unit = snapshot.units.find((candidate) => candidate.id === tenancy.unitId);
       if (!snapshot.properties.some((candidate) => candidate.id === tenancy.propertyId) || !unit || unit.propertyId !== tenancy.propertyId || !snapshot.people.some((candidate) => candidate.id === tenancy.primaryPersonId)) throw new RentOpsInvariantError("Tenancy property, unit, or primary resident is invalid");
       if ((tenancy.status === "current" || tenancy.status === "notice") && !tenancy.actualMoveInOn && !hasOccupancyConfirmationOn(tenancy, nowIsoDate(this.now()))) throw new RentOpsInvariantError("Current and notice tenancies require an actual move-in date or dated occupancy confirmation");

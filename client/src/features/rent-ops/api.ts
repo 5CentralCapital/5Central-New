@@ -544,7 +544,7 @@ function decodeHouseholdMembership(value: unknown): AdminHouseholdMembershipView
 }
 
 function decodeTenancy(value: unknown): AdminTenancyView {
-  const input = exactRecord(value, "tenancy", ["id", "propertyId", "unitId", "primaryPersonId", "status", "plannedMoveInOn", "actualMoveInOn", "noticeOn", "expectedMoveOutOn", "actualMoveOutOn", "createdAt", "endedAt", "applicationId", "propertyLinkKnowledge", "unitLinkKnowledge", "primaryPersonLinkKnowledge", "statusKnowledge", "plannedMoveInKnowledge", "actualMoveInKnowledge", "noticeKnowledge", "expectedMoveOutKnowledge", "actualMoveOutKnowledge", "createdAtKnowledge", "endedAtKnowledge", "recordRevision"]);
+  const input = exactRecord(value, "tenancy", ["occupancyConfirmedOn", "occupancyConfirmationKnowledge", "operationalEndConfirmedOn", "operationalEndConfirmationKnowledge", "id", "propertyId", "unitId", "primaryPersonId", "status", "plannedMoveInOn", "actualMoveInOn", "noticeOn", "expectedMoveOutOn", "actualMoveOutOn", "createdAt", "endedAt", "applicationId", "propertyLinkKnowledge", "unitLinkKnowledge", "primaryPersonLinkKnowledge", "statusKnowledge", "plannedMoveInKnowledge", "actualMoveInKnowledge", "noticeKnowledge", "expectedMoveOutKnowledge", "actualMoveOutKnowledge", "createdAtKnowledge", "endedAtKnowledge", "recordRevision"]);
   return {
     id: optionalId(input, "id"),
     propertyId: optionalId(input, "propertyId"),
@@ -553,6 +553,10 @@ function decodeTenancy(value: unknown): AdminTenancyView {
     status: optionalAllowed(input, "status", TENANCY_STATUSES),
     plannedMoveInOn: optionalDate(input, "plannedMoveInOn"),
     actualMoveInOn: optionalDate(input, "actualMoveInOn"),
+    occupancyConfirmedOn: optionalDate(input, "occupancyConfirmedOn"),
+    occupancyConfirmationKnowledge: optionalAllowed(input, "occupancyConfirmationKnowledge", FACT_KNOWLEDGE),
+    operationalEndConfirmedOn: optionalDate(input, "operationalEndConfirmedOn"),
+    operationalEndConfirmationKnowledge: optionalAllowed(input, "operationalEndConfirmationKnowledge", FACT_KNOWLEDGE),
     noticeOn: optionalDate(input, "noticeOn"),
     expectedMoveOutOn: optionalDate(input, "expectedMoveOutOn"),
     actualMoveOutOn: optionalDate(input, "actualMoveOutOn"),

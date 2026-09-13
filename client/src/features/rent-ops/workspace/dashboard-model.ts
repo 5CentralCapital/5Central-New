@@ -2,7 +2,7 @@ import type { DashboardPropertyPoint, DashboardTrends } from "../../../../../sha
 
 export type TrendMetric = "occupancy" | "vacancy" | "rent";
 export type TrendMeasure = "rate" | "units";
-export type TrendSeries = { id: string; name: string; values: Array<number | null> };
+export type TrendSeries = { id: string; name: string; values: Array<number | null>; unknownUnits: Array<number | null> };
 
 /** Weighted portfolio totals: never average property percentages or treat a gap as zero. */
 export function aggregateDashboardPoints(points: DashboardPropertyPoint[]): DashboardPropertyPoint | undefined {
@@ -28,11 +28,14 @@ export function dashboardChartSeries(data: DashboardTrends, selection: string, m
   const properties = data.months.at(-1)?.properties ?? [];
   const choices = selection === "compare" ? properties.map(property => ({ id: property.propertyId, name: property.propertyName }))
     : [{ id: selection, name: selection === "portfolio" ? "Portfolio" : properties.find(property => property.propertyId === selection)?.propertyName ?? "Property" }];
-  return choices.map(choice => ({ ...choice, values: data.months.map(month => {
+  return choices.map(choice => ({ ...choice, unknownUnits: data.months.map(month => {
+    const point = choice.id === "portfolio" ? aggregateDashboardPoints(month.properties) : month.properties.find(property => property.propertyId === choice.id);
+    return point?.unknownUnits ?? null;
+  }), values: data.months.map(month => {
     const point = choice.id === "portfolio" ? aggregateDashboardPoints(month.properties) : month.properties.find(property => property.propertyId === choice.id);
     if (!point) return null;
     if (metric === "rent") return point.baseRentCents === null ? null : point.baseRentCents / 100;
-    if (point.unknownUnits) return null;
+    if (point.unknownUnits && measure === "rate") return null;
     return metric === "occupancy" ? measure === "rate" ? point.occupancyRate : point.occupiedUnits
       : measure === "rate" ? point.vacancyRate : point.vacantUnits;
   }) }));
@@ -45,4 +48,10 @@ export function chartLineSegments(values: Array<number | null>, x: (i: number) =
     const command = open ? "L" : "M"; open = true;
     return `${command}${x(i)},${y(value)}`;
   }).join(" ");
+}
+
+/** Keep complete percentages as the default; incomplete history is useful as
+ * explicitly confirmed counts, never as a partial percentage. */
+export function defaultDashboardMeasure(data?: DashboardTrends): TrendMeasure {
+  return data?.months.slice(0, -1).some(month => month.properties.some(point => point.unknownUnits > 0)) ? "units" : "rate";
 }

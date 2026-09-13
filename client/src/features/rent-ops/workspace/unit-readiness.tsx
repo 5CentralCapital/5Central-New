@@ -4,12 +4,12 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRentOpsAuth } from '../auth-ui';
 import { loadRentOpsReport, postRentOpsMutation } from '../api';
 import { handleRentOpsMutationError, RENT_OPS_CONFLICT_NOTICE } from '../ui';
-import type { AdminUnitView, ViewFilters } from '../types';
+import type { AdminUnitView, RentRollRow, ViewFilters } from '../types';
 import { reportQueryKey } from './report-model';
 import { READINESS_OPTIONS, unitOccupancyMap, unitReadinessDisplay, unitReadinessPayload, unitReadinessQuery } from './unit-readiness-model';
 import './editor.css';
 
-const ReadinessContext = createContext<{ occupancy: Map<string, string>; open: (unit: AdminUnitView) => void }>({ occupancy: new Map(), open: () => {} });
+const ReadinessContext = createContext<{ occupancy: Map<string, string>; occupancyRows: RentRollRow[]; occupancyReady: boolean; occupancyError: boolean; open: (unit: AdminUnitView) => void }>({ occupancy: new Map(), occupancyRows: [], occupancyReady: false, occupancyError: false, open: () => {} });
 export function useUnitReadiness() { return useContext(ReadinessContext); }
 export function UnitReadinessBadge({ unit }: { unit: AdminUnitView }) {
   const { occupancy, open } = useUnitReadiness();
@@ -25,7 +25,7 @@ export function UnitReadinessProvider({ filters, readOnly, children }: { filters
   const [selected, setSelected] = useState<AdminUnitView>();
   const [notice, setNotice] = useState('');
   const refresh = () => client.invalidateQueries({ queryKey: ['rent-ops-workspace'] });
-  return <ReadinessContext.Provider value={{ occupancy, open: unit => { setNotice(''); setSelected(unit); } }}>
+  return <ReadinessContext.Provider value={{ occupancy, occupancyRows: (report.isError ? [] : report.data ?? []) as RentRollRow[], occupancyReady: report.isSuccess, occupancyError: report.isError, open: unit => { setNotice(''); setSelected(unit); } }}>
     {notice && <p className="rm-warning" role="status">{notice}</p>}
     {report.isError && <p className="rm-warning" role="alert">Occupancy could not be loaded. <button className="rm-link-button" onClick={() => void report.refetch()}>Retry</button></p>}
     {children}

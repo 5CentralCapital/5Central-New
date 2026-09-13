@@ -2,6 +2,7 @@ import type { RentOpsFilters, RentOpsSnapshot } from "../../../shared/rent-ops-c
 import { dashboardTrendsSchema, type DashboardTrends } from "../../../shared/rent-ops-dashboard";
 import { addMonths, monthEnd, monthStart, nowIsoDate } from "./dates";
 import { deriveDashboardLeasingPoint } from "./reports";
+import { dashboardHistoricalSnapshot } from "./dashboard-history";
 
 /** Twelve lightweight month-end reads from one immutable operational snapshot.
  * The final point is the selected as-of date, never an invented month-end forecast. */
@@ -13,7 +14,7 @@ export function deriveDashboardTrends(snapshot: RentOpsSnapshot, filters: RentOp
     months: Array.from({ length: 12 }, (_, i) => {
       const month = addMonths(start, i - 11).slice(0, 7);
       const date = i === 11 ? asOfDate : monthEnd(month);
-      return { month, asOfDate: date, properties: deriveDashboardLeasingPoint(snapshot, { ...filters, asOfDate: date }, i < 11) };
+      return { month, asOfDate: date, properties: deriveDashboardLeasingPoint(i < 11 ? dashboardHistoricalSnapshot(snapshot, date) : snapshot, { ...filters, asOfDate: date }, i < 11) };
     }),
   });
 }

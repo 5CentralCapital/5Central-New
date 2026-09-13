@@ -1,3 +1,5 @@
+import { ReportExportDialog } from "./workspace/report-export-dialog";
+import { reportQueryFilters } from "./workspace/report-model";
 import { usdCurrencyFormatter } from '../../lib/rent-ops-formatters';
 import { APPLICATION_STATUS_TRANSITIONS } from "../../../../shared/application-status-transitions";
 import { ManagerLeaseUpload } from "./manager-lease-upload";
@@ -31,7 +33,6 @@ import {
   loadRentOpsPreviewContext,
   postRentOpsMutation,
   reportCell,
-  reportToCsv,
 } from "./api";
 import { rentOpsAuthClient } from "./auth";
 import { RentOpsAdminLogin, RentOpsAuthLoading, useRentOpsAuth } from "./auth-ui";
@@ -106,16 +107,6 @@ function formatCell(value: unknown, key: string, format?: string): string {
   if (Array.isArray(value)) return value.length ? value.map(title).join(", ") : "Needs review";
   if (typeof value === "object") return Object.values(value).filter(value => value != null && value !== "").join(", ") || "Needs review";
   return format === "status" || /status|state|occupancy|readiness/i.test(key) ? title(value) : String(value);
-}
-
-function saveTextFile(name: string, contents: string): void {
-  const blob = new Blob([contents], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = name;
-  link.click();
-  URL.revokeObjectURL(url);
 }
 
 async function saveDocumentFile(record: { id: string; fileName?: string; downloadAvailable: boolean }): Promise<void> {
@@ -321,6 +312,7 @@ function FilterBar({ filters, snapshot, onChange, onRefresh, refreshing }: { fil
 }
 
 function Reports({ snapshot, filters, selected, onSelect }: { snapshot: AdminSnapshot; filters: ViewFilters; selected: ReportKey; onSelect: (report: ReportKey) => void }) {
+  const [exportFormat, setExportFormat] = useState<"csv" | "print" | null>(null);
   const rangeReport = selected === "collected-income" || selected === "tenant-ledger";
   const monthlyReport = ["scheduled-income", "scheduled-vs-collected", "hap"].includes(selected);
   const [fromDate, setFromDate] = useState("");
@@ -343,7 +335,8 @@ function Reports({ snapshot, filters, selected, onSelect }: { snapshot: AdminSna
     } catch (cause) { if (version === requestVersion.current) { setLoaded(undefined); setError(cause instanceof Error ? cause.message : "Report unavailable."); } }
     finally { if (version === requestVersion.current) setBusy(false); }
   }
-  return <><div className="ro-report-picker" aria-label="Report list">{REPORT_KEYS.map((key) => <button key={key} className={selected === key ? "active" : ""} onClick={() => onSelect(key)}>{REPORT_LABELS[key]}</button>)}</div><section className="ro-panel"><div className="ro-panel-heading"><h2>{report.label} · {appliedPeriod || (monthlyReport || selected === "collected-income" ? filters.asOfDate.slice(0, 7) : `As of ${filters.asOfDate}`)}</h2><div className="ro-actions"><button className="secondary" disabled={busy} onClick={() => saveTextFile(`rent-ops-${selected}-${filters.asOfDate}.csv`, reportToCsv(report))}><Download /> CSV</button><button className="secondary" onClick={() => window.print()}><Printer /> Print</button></div></div>
+  return <><div className="ro-report-picker" aria-label="Report list">{REPORT_KEYS.map((key) => <button key={key} className={selected === key ? "active" : ""} onClick={() => onSelect(key)}>{REPORT_LABELS[key]}</button>)}</div><section className="ro-panel"><div className="ro-panel-heading"><h2>{report.label} · {appliedPeriod || (monthlyReport || selected === "collected-income" ? filters.asOfDate.slice(0, 7) : `As of ${filters.asOfDate}`)}</h2><div className="ro-actions"><button className="secondary" disabled={busy} onClick={() => setExportFormat("csv")}><Download /> CSV</button><button className="secondary" onClick={() => setExportFormat("print")}><Printer /> Print</button></div></div>
+    {exportFormat && <ReportExportDialog key={selected} report={selected} snapshot={snapshot} queryFilters={reportQueryFilters(filters, selected, { asOfDate: filters.asOfDate, month: month || filters.asOfDate.slice(0, 7), fromDate: fromDate || `${filters.asOfDate.slice(0, 7)}-01`, toDate: toDate || filters.asOfDate })} format={exportFormat} onClose={() => setExportFormat(null)} search={filters.search} />}
     {(rangeReport || monthlyReport) && <div className="ro-filters">{rangeReport ? <><label>From<input type="date" max={filters.asOfDate} value={fromDate} onChange={event => setFromDate(event.target.value)} /></label><label>Through<input type="date" max={filters.asOfDate} value={toDate} onChange={event => setToDate(event.target.value)} /></label></> : <label>Month<input type="month" value={month || filters.asOfDate.slice(0, 7)} onChange={event => setMonth(event.target.value)} /></label>}<button className="secondary" disabled={busy} onClick={() => void applyPeriod()}>{busy ? "Loading…" : "Apply period"}</button></div>}
     {error && <p className="ro-panel-message" role="alert">{error}</p>}<DataTable report={report} /></section></>;
 }

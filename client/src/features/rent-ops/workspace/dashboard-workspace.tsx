@@ -14,6 +14,7 @@ export interface DashboardWorkspaceProps {
   onOpenProperty?: (propertyId:string)=>void;
   previews?: RentOpsWorkspaceDashboard["reports"];
   refreshing?: boolean;
+  onManageMoves?: () => void;
 }
 
 type MetricTone = "normal" | "good" | "warn";

@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { ArrowUpRight, RefreshCw } from "lucide-react";
-import { loadDashboardCash, loadDashboardTrends, loadRentOpsReport } from "../api";
+import { loadDashboardCash, loadDashboardTrends, loadRentOpsReport, loadRentOpsWorkspaceCollection } from "../api";
 import { useRentOpsAuth } from "../auth-ui";
 import type { DashboardWorkspaceProps } from "./dashboard-workspace";
-import { EntityLink, RecordLink } from "./entity-link";
+import { EntityLink, RecordLink, entityHref, shouldHandleEntityClick } from "./entity-link";
 import { createReportViewModel, formatReportValue, readReportValue, reportQueryFilters, reportQueryKey } from "./report-model";
-import { workspaceApiFilters, workspacePropertyMatches } from "./workspace-state";
+import { workspaceApiFilters } from "./workspace-state";
 import { DashboardChart } from "./dashboard-chart";
 import { useReportSearch } from "./use-report-search";
+import { recentOnlineApplications, dashboardMovements } from "./dashboard-tiles";
+import { ApplicationCaseDetail } from "../application-case-detail";
 import "./rm-dashboard.css";
 
 type Row = Record<string, unknown>;
@@ -41,17 +43,17 @@ function Notes({ identity }: { identity: string }) {
   return <Panel title="Notes" className="rmd-notes"><textarea aria-label="Dashboard notes" placeholder="Add a dashboard note…" value={value} onChange={event => { setValue(event.target.value); setMessage(""); }} maxLength={10000} /><div className="rmd-note-actions"><span role="status">{message || "This browser"}</span><button type="button" disabled={value === saved} onClick={() => { try { localStorage.setItem(key, value); setSaved(value); setMessage("Saved in this browser"); } catch { setMessage("Could not save. Try again."); } }}>Save</button><button type="button" disabled={value === saved} onClick={() => { setValue(saved); setMessage(""); }}>Cancel</button></div></Panel>;
 }
 
-export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenUnit, onOpenProperty, previews, refreshing = false }: DashboardWorkspaceProps) {
+export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenUnit, onOpenProperty, previews, refreshing = false, onManageMoves }: DashboardWorkspaceProps) {
   const auth = useRentOpsAuth();
   const enabled = auth.status === "authenticated" && !!auth.user?.id;
   const identity = auth.user?.id ?? "";
   const apiFilters = workspaceApiFilters(filters);
   const { debouncedSearch, searchPending } = useReportSearch(filters.search);
   const bundled = !!previews && !filters.search.trim() && filters.status === "all";
-  const reports = ["rent-roll", "delinquency", "collected-income", "applicant-pipeline", "occupancy"] as const;
+  const reports = ["rent-roll", "delinquency", "collected-income", "occupancy"] as const;
   const requests = useQueries({ queries: reports.map(report => {
     const query = reportQueryFilters({ ...filters, search: debouncedSearch }, report, { asOfDate: filters.asOfDate });
-    return { queryKey: reportQueryKey(report, query, identity), queryFn: ({ signal }: { signal: AbortSignal }) => loadRentOpsReport(report, query, signal), enabled: enabled && !searchPending && !(bundled && (report === "rent-roll" || report === "delinquency")), staleTime: 30_000, gcTime: 300_000, retry: false };
+    return { queryKey: reportQueryKey(report, query, identity), queryFn: ({ signal }: { signal: AbortSignal }) => loadRentOpsReport(report, query, signal), enabled: enabled && !searchPending && !(bundled && (report === "rent-roll" || report === "delinquency")), staleTime: 30_000, gcTime: 300_000, retry: false, refetchOnWindowFocus: true };
   }) });
   const rowsFor = (report: typeof reports[number]): Row[] | undefined => {
     if (searchPending) return undefined;
@@ -69,8 +71,10 @@ export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenU
     receiptGroups.set(key, previous ? { ...previous, amountCents: numeric(previous.amountCents) && numeric(row.amountCents) ? previous.amountCents + row.amountCents : null } : row);
   }
   const receipts = receiptRows ? Array.from(receiptGroups.values()).sort((a, b) => text(b.paymentOn).localeCompare(text(a.paymentOn))) : undefined;
-  const recentFrom = new Date(`${filters.asOfDate}T12:00:00Z`); recentFrom.setUTCDate(recentFrom.getUTCDate() - 30);
-  const applications = rowsFor("applicant-pipeline")?.filter(row => typeof row.submittedOn === "string" && row.submittedOn >= recentFrom.toISOString().slice(0, 10) && row.submittedOn <= filters.asOfDate).sort((a, b) => text(b.submittedOn).localeCompare(text(a.submittedOn)));
+  const applicationQuery = useQuery({ queryKey: ["rent-ops-workspace", "collection", "applications", identity, filters.propertyScope, filters.propertyId, [...(filters.propertyIds ?? [])].sort(), filters.asOfDate], queryFn: ({ signal }) => loadRentOpsWorkspaceCollection("applications", apiFilters, signal), enabled, staleTime: 60_000, gcTime: 300_000, retry: false, refetchOnWindowFocus: true });
+  const applications = applicationQuery.data ? recentOnlineApplications(applicationQuery.data, snapshot, filters) : undefined;
+  const [applicationId, setApplicationId] = useState<string>();
+  const selectedApplication = applications?.find(application => application.id === applicationId);
   const occupancy = rowsFor("occupancy");
   const daysVacant = new Map(occupancy?.map(row => [row.unitId, row.daysVacant]) ?? []);
   const vacancy = rentRoll?.filter(row => row.occupancy === "vacant" || row.occupancy === "future_preleased").map(row => {
@@ -92,8 +96,8 @@ export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenU
     }
     return Array.from(groups.values()).map<Row>(row => ({ ...row, vacancyRate: row.unknown ? null : 100 * Number(row.vacant) / Number(row.unitCount) }));
   }, [rentRoll]);
-  const trends = useQuery({ queryKey: ["rent-ops-workspace", "dashboard-trends", identity, apiFilters], queryFn: ({ signal }) => loadDashboardTrends(apiFilters, signal), enabled, staleTime: 60_000, gcTime: 300_000, retry: false });
-  const cash = useQuery({ queryKey: ["rent-ops-workspace", "dashboard-cash", identity], queryFn: ({ signal }) => loadDashboardCash(signal), enabled, staleTime: 60_000, gcTime: 60_000, retry: false });
+  const trends = useQuery({ queryKey: ["rent-ops-workspace", "dashboard-trends", identity, apiFilters], queryFn: ({ signal }) => loadDashboardTrends(apiFilters, signal), enabled, staleTime: 60_000, gcTime: 300_000, retry: false, refetchOnWindowFocus: true });
+  const cash = useQuery({ queryKey: ["rent-ops-workspace", "dashboard-cash", identity], queryFn: ({ signal }) => loadDashboardCash(signal), enabled, staleTime: 60_000, gcTime: 60_000, retry: false, refetchOnWindowFocus: true });
   const propertyLink = (row: Row) => <RecordLink kind="property" recordId={String(row.propertyId ?? "")} onOpen={onOpenProperty}>{text(row.propertyName)}</RecordLink>;
   const unitLink = (row: Row) => <RecordLink kind="unit" recordId={String(row.unitId ?? "")} onOpen={onOpenUnit}>{text(row.unitNumber)}</RecordLink>;
   const personLink = (row: Row) => <EntityLink personId={String(row.currentPersonId ?? row.personId ?? row.futurePersonId ?? "")} onOpen={onOpenTenant}>{text(row.tenantName ?? row.currentTenantName ?? row.futureTenantName)}</EntityLink>;
@@ -101,24 +105,7 @@ export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenU
   const unitColumn: Column = { key: "unitNumber", label: "Unit", render: unitLink };
   const amountColumn = (key: string, label: string): Column => ({ key, label, number: true, render: row => money(row[key]) });
   const total = (rows: Row[] | undefined, key: string) => !rows || rows.some(row => !numeric(row[key])) ? undefined : rows.reduce((sum, row) => sum + Number(row[key]), 0);
-  const movements = snapshot.snapshot.tenancies.flatMap(tenancy => {
-    const property = snapshot.snapshot.properties.find(property => property.id === tenancy.propertyId);
-    if (!property || filters.propertyScope === "active" && property.state !== "active" || !workspacePropertyMatches(filters, property.id)) return [];
-    const monthStart = `${filters.asOfDate.slice(0, 7)}-01`;
-    const inMonth = (date?: string) => !!date && date >= monthStart && date <= filters.asOfDate;
-    const confirmed = (knowledge?: string | null) => knowledge === undefined || knowledge === "manual" || knowledge === "source";
-    const future = tenancy.status === "future";
-    const moveIn = future ? confirmed(tenancy.plannedMoveInKnowledge) ? tenancy.plannedMoveInOn ?? (tenancy.actualMoveInKnowledge === undefined ? tenancy.actualMoveInOn : undefined) : undefined : confirmed(tenancy.actualMoveInKnowledge) ? tenancy.actualMoveInOn : undefined;
-    const moveOut = confirmed(tenancy.actualMoveOutKnowledge) ? tenancy.actualMoveOutOn : undefined;
-    const expectedOut = (tenancy.status === "notice" || tenancy.noticeOn && confirmed(tenancy.noticeKnowledge)) && confirmed(tenancy.expectedMoveOutKnowledge) ? tenancy.expectedMoveOutOn : undefined;
-    if (!(future && moveIn && moveIn > filters.asOfDate) && !(["current", "notice"].includes(tenancy.status ?? "") && inMonth(moveIn)) && !inMonth(moveOut) && !expectedOut) return [];
-    const unit = snapshot.snapshot.units.find(unit => unit.id === tenancy.unitId);
-    const person = snapshot.snapshot.people.find(person => person.id === tenancy.primaryPersonId);
-    if (filters.search && !`${property.name} ${unit?.unitNumber} ${person?.firstName} ${person?.lastName}`.toLowerCase().includes(filters.search.trim().toLowerCase())) return [];
-    return [{ id: tenancy.id, propertyId: property.id, propertyName: property.name, unitId: unit?.id, unitNumber: unit?.unitNumber,
-      moveIn: moveIn ? `${moveIn}${future ? " (expected)" : ""}` : undefined,
-      actualMoveOutOn: moveOut, expectedMoveOutOn: expectedOut }];
-  });
+  const movements = dashboardMovements(snapshot, filters);
   const errors = requests.flatMap((request, index) => request.error && !(bundled && index < 2) ? [reports[index]] : []);
   const cashReady = cash.data?.state === "ready" ? cash.data : undefined;
   return <section className="rm-dashboard-workspace rmd-dashboard" aria-label="Rent Operations dashboard">
@@ -135,9 +122,10 @@ export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenU
     <div className="rmd-trend-grid">{(["vacancy", "occupancy", "rent"] as const).map(metric => <DashboardChart key={metric} metric={metric} data={trends.data} loading={trends.isFetching} error={trends.error?.message} onRetry={() => void trends.refetch()} />)}</div>
     <div className="rmd-bottom-grid">
       <Panel title="Vacancy List" onOpen={() => onReport("occupancy")}><Table rows={vacancy} empty="No vacant units." columns={[propertyColumn, unitColumn, { key: "type", label: "Type" }, amountColumn("marketRentCents", "Rent"), { key: "daysVacant", label: "Days vacant", number: true }]} footer={<span>{vacancy?.length ?? "—"} vacant units · {total(propertyRows, "preleased") ?? "—"} preleased</span>} /></Panel>
-      <Panel title="Move In / Move Out List" onOpen={() => onReport("lease-expiration")}><Table rows={movements} empty="No moves recorded for this period." columns={[propertyColumn, unitColumn, { key: "moveIn", label: "Move in" }, { key: "actualMoveOutOn", label: "Move out" }, { key: "expectedMoveOutOn", label: "Expected out" }]} /></Panel>
-      <Panel title="Recent Online Applications" onOpen={() => onReport("applicant-pipeline")}><Table rows={applications} empty="No applications submitted in the last 30 days." columns={[{ key: "submittedOn", label: "Date" }, { key: "displayName", label: "Applicant" }, propertyColumn, { key: "status", label: "Status", render: row => text(row.status).replaceAll("_", " ") }]} /></Panel>
+      <Panel title="Move In / Move Out List" onOpen={() => onReport("lease-expiration")}>{onManageMoves && <div className="rm-toolbar"><button className="rm-button" onClick={onManageMoves}>Record move</button></div>}<Table rows={movements} empty="No moves recorded for this period." columns={[propertyColumn, unitColumn, { key: "tenantName", label: "Tenant", render: personLink }, { key: "date", label: "Date" }, { key: "movement", label: "Move" }, { key: "state", label: "Status" }]} footer={<span>{filters.asOfDate.slice(0, 7)} · Completed and upcoming moves</span>} /></Panel>
+      <Panel title="Recent online applications" onOpen={() => onReport("applicant-pipeline")}><Table rows={applicationQuery.error ? [] : applications} empty={applicationQuery.error ? "Online applications could not be loaded." : "No online applications received in the last 30 days."} columns={[{ key: "submittedOn", label: "Date" }, { key: "displayName", label: "Applicant", render: row => <a className="rm-entity-link" href={entityHref({ section: "applicants", recordId: String(row.id), tab: "summary", report: "applicant-pipeline" })} onClick={event => { if (shouldHandleEntityClick(event)) { event.preventDefault(); setApplicationId(String(row.id)); } }}>{text(row.displayName)}</a> }, propertyColumn, { key: "status", label: "Status", render: row => text(row.status).replaceAll("_", " ") }]} /></Panel>
     </div>
+    {applicationId && selectedApplication && <ApplicationCaseDetail key={applicationId} applicationId={applicationId} summary={selectedApplication} onClose={() => setApplicationId(undefined)} />}
     {refreshing && <div className="rmd-refreshing" role="status">Refreshing dashboard…</div>}
   </section>;
 }

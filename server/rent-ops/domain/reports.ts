@@ -142,6 +142,18 @@ function unresolvedTenancyForUnit(snapshot: RentOpsSnapshot, unit: RentOpsUnit, 
   const codes: string[] = [];
   for (const tenancy of snapshot.tenancies) {
     if (hasOperationalEndOn(tenancy, asOf)) continue;
+    // A later confirmed tenancy supersedes this closed historical interval.
+    // An isolated source departure with unknown status remains unresolved.
+    const departure = tenancy.actualMoveOutOn;
+    if (hasConfirmedTenancyLinks(tenancy) && confirmedTenancyFact(tenancy.actualMoveOutKnowledge)
+      && departure && /^\d{4}-\d{2}-\d{2}$/.test(departure) && Number.isFinite(Date.parse(departure))
+      && new Date(departure).toISOString().slice(0, 10) === departure && departure <= asOf
+      && snapshot.tenancies.some(later => later.id !== tenancy.id && later.unitId === tenancy.unitId
+        && hasConfirmedTenancyLinks(later) && confirmedTenancyFact(later.statusKnowledge)
+        && ["current", "notice", "past"].includes(later.status)
+        && confirmedTenancyFact(later.actualMoveInKnowledge) && !!later.actualMoveInOn
+        && later.actualMoveInOn >= departure && later.actualMoveInOn <= asOf)) continue;
+
     const status = tenancy.status as string | undefined;
     const knownStatus = ["current", "notice", "future", "past", "cancelled"].includes(status ?? "");
     const activeOrFuture = status === "current" || status === "notice" || status === "future";
@@ -803,7 +815,7 @@ export function deriveOccupancy(snapshot: RentOpsSnapshot, filters: RentOpsFilte
     const future = chooseUpcomingTenancy(futureTenanciesForUnit(snapshot, unit.id, asOf));
     const selected = current ?? future;
     const lastPast = [...snapshot.tenancies]
-      .filter((tenancy) => tenancy.unitId === unit.id && tenancy.actualMoveOutOn && tenancy.actualMoveOutOn <= asOf)
+      .filter((tenancy) => tenancy.unitId === unit.id && hasConfirmedTenancyLinks(tenancy) && confirmedTenancyFact(tenancy.actualMoveOutKnowledge) && tenancy.actualMoveOutOn && tenancy.actualMoveOutOn <= asOf)
       .sort((left, right) => compareIsoDate(right.actualMoveOutOn, left.actualMoveOutOn))[0];
     const exceptionCodes = unresolvedTenancyForUnit(snapshot, unit, asOf);
     const balanceReview = selected ? selectBalanceReview(snapshot, selected.id, asOf) : undefined;
@@ -816,7 +828,7 @@ export function deriveOccupancy(snapshot: RentOpsSnapshot, filters: RentOpsFilte
       occupancy,
       readiness: unit.readiness,
       listing: unit.listing,
-      daysVacant: !selected && lastPast?.actualMoveOutOn ? daysBetween(lastPast.actualMoveOutOn, asOf) : undefined,
+      daysVacant: (occupancy === "vacant" || occupancy === "future_preleased") && lastPast?.actualMoveOutOn ? daysBetween(lastPast.actualMoveOutOn, asOf) : undefined,
       tenancyId: selected?.id,
       exceptionCodes: exceptionCodes.length > 0 ? exceptionCodes : undefined,
     };

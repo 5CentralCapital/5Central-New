@@ -35,3 +35,10 @@
   .rm-report-property-heading { break-after: avoid; }
   .rm-grouped-report-table thead svg { display: none; }
 }
+
+@media print {
+  .rm-report-print-title { border-bottom: 2px solid #D4A843; padding-bottom: 12px; color: #3A3A3C; }
+  .rm-report-print-brand { font-size: 22px; font-weight: 700; }
+  .rm-report-print-title h2 { font-size: 18px; margin: 10px 0 6px; }
+  .rm-report-print-title p { font-size: 11px; margin: 4px 0; }
+}

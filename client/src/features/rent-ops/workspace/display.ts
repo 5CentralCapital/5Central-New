@@ -89,6 +89,7 @@ export function formatLabel(value: unknown): string {
   }
 
   if (typeof value !== "string") return NEEDS_REVIEW;
+  if (value.trim().toLowerCase() === "unlisted") return "Not listed";
   const normalized = value
     .trim()
     .replace(/([a-z\d])([A-Z])/g, "$1 $2")

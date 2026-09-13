@@ -270,6 +270,10 @@ export interface AdminTenancyView {
   primaryPersonId?: string;
   status?: string;
   actualMoveInOn?: string;
+  occupancyConfirmedOn?: string;
+  occupancyConfirmationKnowledge?: string;
+  operationalEndConfirmedOn?: string;
+  operationalEndConfirmationKnowledge?: string;
   noticeOn?: string;
   expectedMoveOutOn?: string;
   actualMoveOutOn?: string;
@@ -300,6 +304,10 @@ export function serializeAdminTenancy(value: RentOpsTenancy): AdminTenancyView {
     status: text(input, "status"),
     plannedMoveInOn: dateText(input, "plannedMoveInOn"),
     actualMoveInOn: dateText(input, "actualMoveInOn"),
+    occupancyConfirmedOn: dateText(input, "occupancyConfirmedOn"),
+    occupancyConfirmationKnowledge: text(input, "occupancyConfirmationKnowledge"),
+    operationalEndConfirmedOn: dateText(input, "operationalEndConfirmedOn"),
+    operationalEndConfirmationKnowledge: text(input, "operationalEndConfirmationKnowledge"),
     noticeOn: dateText(input, "noticeOn"),
     expectedMoveOutOn: dateText(input, "expectedMoveOutOn"),
     actualMoveOutOn: dateText(input, "actualMoveOutOn"),

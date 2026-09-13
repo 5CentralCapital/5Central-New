@@ -1,4 +1,4 @@
-import { useRecurringChargeTerms } from './use-recurring-charge-terms';
+import { PropertyRecurringPanel } from './property-recurring-panel';
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Building2, Home, Pencil, Plus, Search } from "lucide-react";
 
@@ -16,24 +16,16 @@ import {
   propertyUnitFieldUnverified,
   unitLayoutLabel,
   knownLink,
-  occupancyHistoryForProperty,
-  occupancyHistoryForUnit,
   propertyUnitListItems,
   propertyUnits,
-  recurringSchedulesForProperty,
-  propertyUnitRecurringDisplay,
-  recurringRecordCreateValues,
-  recurringRecordSuccessorValues,
-  recurringSchedulesForUnit,
   resolvePropertyUnitSelection,
-  type OccupancyHistoryRecord,
   type PropertyUnitListItem,
   type PropertyUnitTab,
-  type UnitRecurringRecord,
 } from "./property-unit-model";
 import type { FormValues, QuickAction } from "../form-payload";
 import type { AdminPropertyView, AdminSnapshot, AdminUnitView, ViewFilters } from "../types";
 import "./property-unit-records.css";
+import { PropertyOccupancyPanel } from "./property-occupancy-panel";
 import { UnitReadinessBadge, UnitReadinessProvider, useUnitReadiness } from "./unit-readiness";
 import { unitReadinessDisplay } from "./unit-readiness-model";
 
@@ -179,74 +171,13 @@ function PropertyUnits({ units, onSelect, onEdit }: { units: AdminUnitView[]; on
   return <section className="rm-property-unit-tab-panel"><div className="rm-property-unit-panel-heading"><h3>Units</h3><span className="rm-muted">{units.length} total</span></div><UnitGrid units={units} onSelect={onSelect} onEdit={onEdit} /></section>;
 }
 
-type OccupancyGridRow = GridRow & { id: string; record: OccupancyHistoryRecord };
-
-function occupancyLeaseLabel(record: OccupancyHistoryRecord): string {
-  if (!record.lease) return "Needs review";
-  if (record.lease.monthToMonth === true) return "Month to month";
-  const start = record.lease.contractStartOn ? date(record.lease.contractStartOn) : "Needs review";
-  const end = record.lease.contractEndOn ? date(record.lease.contractEndOn) : "Needs review";
-  return `${start} → ${end}`;
-}
-
-function OccupancyGrid({ rows, onSelect }: { rows: OccupancyHistoryRecord[]; onSelect: (unitId: string) => void }) {
-  const gridRows: OccupancyGridRow[] = rows.map((record, index) => ({ id: record.key || `occupancy:${index}`, record }));
-  const columns: GridColumn<OccupancyGridRow>[] = [
-    { key: "unit", label: "Unit", render: (row) => <RecordLink kind="unit" recordId={row.record.unit.id} onOpen={onSelect}>{value(row.record.unit.unitNumber, row.record.unit.unitNumberKnowledge)}</RecordLink>, sortValue: (row) => row.record.unit.unitNumber ?? "" },
-    { key: "status", label: "Occupancy", render: (row) => statusValue(row.record.occupancyStatus), sortValue: (row) => row.record.occupancyStatus },
-    { key: "resident", label: "Resident", render: (row) => <EntityLink personId={row.record.occupantName&&knownLink(row.record.tenancy?.primaryPersonId,row.record.tenancy?.primaryPersonLinkKnowledge)?row.record.tenancy?.primaryPersonId:undefined}>{row.record.occupantName ?? "Needs review"}</EntityLink>, sortValue: (row) => row.record.occupantName ?? "" },
-    { key: "moveIn", label: "Move in", render: (row) => date(row.record.tenancy?.actualMoveInOn ?? row.record.tenancy?.plannedMoveInOn), sortValue: (row) => row.record.tenancy?.actualMoveInOn ?? row.record.tenancy?.plannedMoveInOn ?? "" },
-    { key: "lease", label: "Lease term", render: (row) => occupancyLeaseLabel(row.record) },
-    { key: "leaseStatus", label: "Lease status", render: (row) => statusValue(row.record.lease?.status, row.record.lease?.statusKnowledge), sortValue: (row) => row.record.lease?.status ?? "" },
-  ];
-  return <DataGrid<OccupancyGridRow> rows={gridRows} columns={columns} getRowKey={(row) => row.id} emptyMessage="No linked tenancy or lease history is available." caption="Known occupancy history" storageKey="rm-property-occupancy" />;
-}
-
 function unresolvedTenancyLinkCount(snapshot: AdminSnapshot, propertyId?: string): number {
   if (!propertyId) return 0;
   return snapshot.snapshot.tenancies.filter((tenancy) => tenancy.propertyId === propertyId && tenancy.unitId && !knownLink(tenancy.unitId, tenancy.unitLinkKnowledge)).length;
 }
 
-function PropertyOccupancy({ snapshot, property, units, onSelect }: { snapshot: AdminSnapshot; property: AdminPropertyView; units: AdminUnitView[]; onSelect: (unitId: string) => void }) {
-  const rows = occupancyHistoryForProperty(snapshot, property.id);
-  const { occupancy } = useUnitReadiness();
-  const summary = {
-    current: units.filter(unit => occupancy.get(unit.id ?? "") === "current").length,
-    future: units.filter(unit => occupancy.get(unit.id ?? "") === "future_preleased").length,
-    unknown: units.filter(unit => !occupancy.get(unit.id ?? "") || occupancy.get(unit.id ?? "") === "unknown").length,
-  };
-  const unresolved = unresolvedTenancyLinkCount(snapshot, property.id);
-  return <section className="rm-property-unit-tab-panel"><div className="rm-property-unit-panel-heading"><div><h3>Occupancy history</h3><p>{summary.current} current · {summary.future} future preleased{summary.unknown > 0 && ` · ${summary.unknown} need review`}</p></div></div>{unresolved > 0 && <p className="rm-warning">{unresolved} tenancy link{unresolved === 1 ? "" : "s"} has an unresolved unit relationship. Occupancy is shown only from known linked records.</p>}<OccupancyGrid rows={rows} onSelect={onSelect} /></section>;
-}
-
-type RecurringGridRow = GridRow & { id: string; record: UnitRecurringRecord; interval: ReturnType<typeof propertyUnitRecurringDisplay> };
-
-function RecurringGrid({ rows, caption, storageKey, asOfDate, snapshot, onEdit }: { snapshot: AdminSnapshot; onEdit: EditAction; rows: UnitRecurringRecord[]; caption: string; storageKey: string; asOfDate: string }) {
-  const chargeTerms = useRecurringChargeTerms(rows.map(row => row.schedule.id), asOfDate);
-  const gridRows: RecurringGridRow[] = rows.map((record, index) => ({ id: record.key || `schedule:${index}`, record, interval: propertyUnitRecurringDisplay(record, asOfDate) }));
-  const columns: GridColumn<RecurringGridRow>[] = [
-    { key: "relationship", label: "Scope", render: (row) => row.record.relationshipLabel, sortValue: (row) => row.record.relationship },
-    { key: "category", label: "Category", render: (row) => label(row.record.schedule.category), sortValue: (row) => row.record.schedule.category ?? "" },
-    { key: "description", label: "Description", render: (row) => value(row.record.schedule.description, row.record.schedule.descriptionKnowledge), sortValue: (row) => row.record.schedule.description ?? "" },
-    { key: "amount", label: "Amount", align: "right", render: (row) => <EntityLink personId={row.record.schedule.personId} tab="charges">{money(row.record.schedule.amountCents)}</EntityLink>, sortValue: (row) => row.record.schedule.amountCents },
-    { key: "chargeStarts", label: "Charge starts", render: (row) => chargeTerms.label(row.record.schedule.id, "start", row.record.schedule.scopeType) },
-    { key: "leaseThrough", label: "Lease through", render: (row) => chargeTerms.label(row.record.schedule.id, "through", row.record.schedule.scopeType) },
-    { key: "scheduledEnd", label: "Scheduled end", render: (row) => row.interval.effectiveTo ? date(row.interval.effectiveTo) : "—" },
-    { key: "status", label: "Status", render: (row) => statusValue(row.interval.state, row.interval.state === "unknown" ? "unknown" : undefined), sortValue: (row) => row.interval.state },
-    { key: "actions", label: "Actions", render: (row) => {
-      const values = recurringRecordSuccessorValues(snapshot, row.record.schedule);
-      const impact = row.record.schedule.scopeType === "property" ? "Shared property charge" : row.record.schedule.scopeType === "unit" ? "Shared unit charge" : "Tenant charge";
-      return <div><small>{impact}</small><div className="rm-actions"><button className="rm-button" disabled={!values} onClick={() => { if (values) onEdit("replace-recurring-schedule", values); }}>Schedule change</button><button className="rm-button" disabled={!values} onClick={() => { if (values) onEdit("end-recurring-schedule", values); }}>End</button></div></div>;
-    } },
-  ];
-  if (!gridRows.length) return <EmptyState message="No linked recurring schedules are available." />;
-  return <DataGrid<RecurringGridRow> rows={gridRows} columns={columns} getRowKey={(row) => row.id} emptyMessage="No linked recurring schedules are available." caption={caption} storageKey={storageKey} />;
-}
-
-function PropertyRecurring({ snapshot, onEdit, asOfDate, property }: { snapshot: AdminSnapshot; onEdit: EditAction; asOfDate: string; property: AdminPropertyView }) {
-  const rows = recurringSchedulesForProperty(snapshot, property.id);
-  const createValues = recurringRecordCreateValues(snapshot, property.id);
-  return <section className="rm-property-unit-tab-panel"><div className="rm-property-unit-panel-heading"><h3>Recurring schedules</h3><button className="rm-button rm-button-primary" disabled={!createValues} onClick={() => { if (createValues) onEdit("save-recurring-schedule", createValues); }}><Plus aria-hidden="true" /> Add recurring charge</button></div><RecurringGrid snapshot={snapshot} onEdit={onEdit} asOfDate={asOfDate} rows={rows} caption="Recurring schedules at this property" storageKey="rm-property-recurring" /></section>;
+function PropertyOccupancy({ snapshot, property, units, asOfDate, onSelect }: { snapshot: AdminSnapshot; property: AdminPropertyView; units: AdminUnitView[]; asOfDate: string; onSelect: (unitId: string) => void }) {
+  return <PropertyOccupancyPanel key={property.id} snapshot={snapshot} units={units} asOfDate={asOfDate} onSelect={onSelect} unresolvedLinks={unresolvedTenancyLinkCount(snapshot, property.id)} />;
 }
 
 type MarketingGridRow = GridRow & { id: string; unit: AdminUnitView };
@@ -279,7 +210,7 @@ function PropertyMarketing({ units, onSelect }: { units: AdminUnitView[]; onSele
   return <section className="rm-property-unit-tab-panel"><div className="rm-property-unit-panel-heading"><div><h3>Marketing readiness</h3><p>{marketingCounts(units, occupancy)}</p></div></div><MarketingGrid units={units} onSelect={onSelect} /></section>;
 }
 
-function PropertyRecord({ snapshot, asOfDate, property, activeTab, onTab, onSelect, onEdit }: { snapshot: AdminSnapshot; asOfDate: string; property: AdminPropertyView; activeTab: PropertyUnitTab; onTab: (tab: PropertyUnitTab) => void; onSelect: (kind: "property" | "unit", id: string) => void; onEdit: EditAction }) {
+function PropertyRecord({ snapshot, asOfDate, readOnly, property, activeTab, onTab, onSelect, onEdit }: { snapshot: AdminSnapshot; asOfDate: string; readOnly?: boolean; property: AdminPropertyView; activeTab: PropertyUnitTab; onTab: (tab: PropertyUnitTab) => void; onSelect: (kind: "property" | "unit", id: string) => void; onEdit: EditAction }) {
   const units = propertyUnits(snapshot, property.id);
   const allUnitsForProperty = snapshot.snapshot.units.filter((unit) => unit.propertyId === property.id);
   const unresolvedUnitCount = allUnitsForProperty.length - units.length;
@@ -288,50 +219,57 @@ function PropertyRecord({ snapshot, asOfDate, property, activeTab, onTab, onSele
   return <div className="rm-property-unit-detail"><PropertySummary property={property} units={units} unresolvedUnitCount={unresolvedUnitCount} onEdit={onEdit} onAddUnit={() => onEdit("save-unit", addUnitValues(property))} /><RecordTabs tabs={tabs} selected={tab} onSelect={onTab} /><div className="rm-property-unit-tab-content">
     {tab === "general" && <PropertyGeneral property={property} />}
     {tab === "units" && <PropertyUnits units={units} onSelect={(id) => onSelect("unit", id)} onEdit={onEdit} />}
-    {tab === "occupancy" && <PropertyOccupancy snapshot={snapshot} property={property} units={units} onSelect={(id) => onSelect("unit", id)} />}
-    {tab === "recurring" && <PropertyRecurring onEdit={onEdit} asOfDate={asOfDate} snapshot={snapshot} property={property} />}
+    {tab === "occupancy" && <PropertyOccupancy asOfDate={asOfDate} snapshot={snapshot} property={property} units={units} onSelect={(id) => onSelect("unit", id)} />}
+    {tab === "recurring" && <PropertyRecurringPanel key={`property:${property.id}`} onEdit={onEdit} asOfDate={asOfDate} snapshot={snapshot} property={property} readOnly={readOnly} />}
     {tab === "marketing" && <PropertyMarketing units={units} onSelect={(id) => onSelect("unit", id)} />}
   </div></div>;
 }
 
 function UnitSummary({ unit, property, propertyUnitCount, onSelect, onEdit }: { unit: AdminUnitView; property?: AdminPropertyView; propertyUnitCount: number; onSelect: (kind: "property" | "unit", id: string) => void; onEdit: EditAction }) {
   const layout = unitLayoutLabel(unit);
-  return <header className="rm-property-unit-summary" data-testid="unit-record" aria-labelledby="unit-record-title">
-    <div className="rm-property-unit-summary-heading"><div className="rm-property-unit-identity"><div className="rm-property-unit-title-row"><h2 id="unit-record-title">Unit {propertyUnitFieldValue(unit.unitNumber)}</h2>{<UnitReadinessBadge unit={unit} />}{optionalStatus(unit.listing, unit.listingKnowledge, true)}</div><p className="rm-property-unit-context">{property?.id ? <button type="button" className="rm-link-button" onClick={() => onSelect("property", property.id!)}>{propertyUnitFieldValue(property.name)}</button> : <span>Property needs review</span>}<span>{propertyUnitCount} {propertyUnitCount === 1 ? "unit" : "units"}</span></p><p className="rm-property-unit-context">{layout !== "—" && <span>{layout}</span>}{unit.squareFeet != null && <span>{unit.squareFeet.toLocaleString()} sq ft</span>}{unit.unitType && <span>{unit.unitType}</span>}</p></div><div className="rm-property-unit-actions">{unit.id && <button type="button" className="rm-button" onClick={() => onEdit("save-unit", buildUnitEditValues(unit))}><Pencil aria-hidden="true" /> Edit unit</button>}{property?.id && <button type="button" className="rm-button rm-button-primary" onClick={() => onEdit("save-unit", addUnitValues(property))}><Plus aria-hidden="true" /> Add unit</button>}</div></div>
+  return <header className="rm-property-unit-summary rm-unit-summary" data-testid="unit-record" aria-labelledby="unit-record-title">
+    <div className="rm-property-unit-summary-heading">
+      <div className="rm-property-unit-identity">
+        <div className="rm-property-unit-title-row"><h2 id="unit-record-title">Unit {propertyUnitFieldValue(unit.unitNumber)}</h2><UnitReadinessBadge unit={unit} />{optionalStatus(unit.listing, unit.listingKnowledge, true)}</div>
+        <p className="rm-property-unit-context rm-unit-property-context">{property?.id ? <button type="button" className="rm-link-button" onClick={() => onSelect("property", property.id!)}>{propertyUnitFieldValue(property.name)}</button> : <span>Property needs review</span>}<span>{propertyUnitCount} {propertyUnitCount === 1 ? "unit" : "units"}</span></p>
+        <dl className="rm-unit-summary-facts">
+          {layout !== "—" && <div><dt>Layout</dt><dd>{layout}</dd></div>}
+          {unit.squareFeet != null && <div><dt>Area</dt><dd>{unit.squareFeet.toLocaleString()} sq ft</dd></div>}
+          {unit.unitType && <div><dt>Type</dt><dd>{unit.unitType}</dd></div>}
+        </dl>
+      </div>
+      <div className="rm-property-unit-actions">{unit.id && <button type="button" className="rm-button" onClick={() => onEdit("save-unit", buildUnitEditValues(unit))}><Pencil aria-hidden="true" /> Edit unit</button>}{property?.id && <button type="button" className="rm-button rm-button-primary" onClick={() => onEdit("save-unit", addUnitValues(property))}><Plus aria-hidden="true" /> Add unit</button>}</div>
+    </div>
   </header>;
 }
 
 function UnitGeneral({ unit, property, onSelect }: { unit: AdminUnitView; property?: AdminPropertyView; onSelect: (kind: "property" | "unit", id: string) => void }) {
-  return <div className="rm-property-unit-groups">
+  return <div className="rm-property-unit-groups rm-unit-general-groups">
     <FieldGroup title="Unit details"><Field label="Unit" value={unit.unitNumber} knowledge={unit.unitNumberKnowledge} required /><Field label="Type" value={unit.unitType} knowledge={unit.unitTypeKnowledge} /><Field label="Bedrooms" value={unit.bedrooms} /><Field label="Bathrooms" value={unit.bathrooms} /><Field label="Area" value={unit.squareFeet == null ? undefined : `${unit.squareFeet.toLocaleString()} sq ft`} /><Field label="Property" value={property?.id ? <button type="button" className="rm-link-button" onClick={() => onSelect("property", property.id!)}>{propertyUnitFieldValue(property.name)}</button> : undefined} required />{!knownLink(unit.propertyId, unit.propertyLinkKnowledge) && <Field label="Property relationship" value="Needs review" />}</FieldGroup>
-    <FieldGroup title="Pricing and access"><Field label="Market rent" value={unit.marketRentCents == null ? undefined : money(unit.marketRentCents)} /><Field label="Default deposit" value={unit.defaultDepositCents == null ? undefined : money(unit.defaultDepositCents)} /><Field label="Amenities" value={unit.amenities?.length ? unit.amenities.join(", ") : undefined} /><Field label="Access notes" value={unit.accessNotes} /></FieldGroup>
+    <FieldGroup title="Pricing and access"><Field label="Market rent" value={unit.marketRentCents == null ? undefined : money(unit.marketRentCents)} /><Field label="Default deposit" value={unit.defaultDepositCents == null ? undefined : money(unit.defaultDepositCents)} /><Field label="Access notes" value={unit.accessNotes} /></FieldGroup>
+    <section className="rm-property-unit-group rm-unit-amenities" aria-labelledby="unit-amenities-title">
+      <h3 id="unit-amenities-title">Amenities</h3>
+      {unit.amenities?.length ? <ul>{unit.amenities.map((amenity, index) => <li key={`${amenity}-${index}`}>{amenity}</li>)}</ul> : <p className="rm-muted">No amenities recorded</p>}
+    </section>
   </div>;
 }
 
-function UnitOccupancy({ snapshot, unit, onSelect }: { snapshot: AdminSnapshot; unit: AdminUnitView; onSelect: (unitId: string) => void }) {
-  const rows = occupancyHistoryForUnit(snapshot, unit);
-  const hasKnownTenancy = rows.some((row) => row.tenancy);
-  return <section className="rm-property-unit-tab-panel"><div className="rm-property-unit-panel-heading"><div><h3>Occupancy history</h3><p>{hasKnownTenancy ? "Linked tenancy and lease history" : "No known linked tenancy or lease history"}</p></div></div>{!hasKnownTenancy && <p className="rm-warning">No linked tenancy was found for this unit. Vacancy is not inferred from the absence of a tenancy or from market rent.</p>}<OccupancyGrid rows={rows} onSelect={onSelect} /></section>;
-}
-
-function UnitRecurring({ snapshot, onEdit, asOfDate, unit }: { snapshot: AdminSnapshot; onEdit: EditAction; asOfDate: string; unit: AdminUnitView }) {
-  const rows = recurringSchedulesForUnit(snapshot, unit);
-  const createValues = recurringRecordCreateValues(snapshot, unit.propertyId, unit);
-  return <section className="rm-property-unit-tab-panel"><div className="rm-property-unit-panel-heading"><h3>Recurring schedules</h3><button className="rm-button rm-button-primary" disabled={!createValues} onClick={() => { if (createValues) onEdit("save-recurring-schedule", createValues); }}><Plus aria-hidden="true" /> Add recurring charge</button></div><RecurringGrid snapshot={snapshot} onEdit={onEdit} asOfDate={asOfDate} rows={rows} caption="Recurring schedules for this unit" storageKey="rm-unit-recurring" /></section>;
+function UnitOccupancy({ snapshot, unit, asOfDate, onSelect }: { snapshot: AdminSnapshot; unit: AdminUnitView; asOfDate: string; onSelect: (unitId: string) => void }) {
+  return <PropertyOccupancyPanel key={unit.id} snapshot={snapshot} units={[unit]} asOfDate={asOfDate} onSelect={onSelect} />;
 }
 
 function UnitMarketing({ unit }: { unit: AdminUnitView }) {
   return <section className="rm-property-unit-tab-panel"><div className="rm-property-unit-groups"><FieldGroup title="Listing and readiness"><Field label="Readiness" value={<UnitReadinessBadge unit={unit} />} /><Field label="Listing" value={optionalStatus(unit.listing, unit.listingKnowledge)} /><Field label="Access notes" value={unit.accessNotes} /></FieldGroup></div></section>;
 }
 
-function UnitRecord({ snapshot, asOfDate, unit, property, activeTab, onTab, onSelect, onEdit }: { snapshot: AdminSnapshot; asOfDate: string; unit: AdminUnitView; property?: AdminPropertyView; activeTab: PropertyUnitTab; onTab: (tab: PropertyUnitTab) => void; onSelect: (kind: "property" | "unit", id: string) => void; onEdit: EditAction }) {
+function UnitRecord({ snapshot, asOfDate, readOnly, unit, property, activeTab, onTab, onSelect, onEdit }: { snapshot: AdminSnapshot; asOfDate: string; readOnly?: boolean; unit: AdminUnitView; property?: AdminPropertyView; activeTab: PropertyUnitTab; onTab: (tab: PropertyUnitTab) => void; onSelect: (kind: "property" | "unit", id: string) => void; onEdit: EditAction }) {
   const units = propertyUnits(snapshot, property?.id);
   const tabs = availableUnitTabs(snapshot, unit);
   const tab = tabs.includes(activeTab) ? activeTab : "general";
   return <div className="rm-property-unit-detail"><UnitSummary unit={unit} property={property} propertyUnitCount={units.length} onSelect={onSelect} onEdit={onEdit} /><RecordTabs tabs={tabs} selected={tab} onSelect={onTab} /><div className="rm-property-unit-tab-content">
     {tab === "general" && <UnitGeneral unit={unit} property={property} onSelect={onSelect} />}
-    {tab === "occupancy" && <UnitOccupancy snapshot={snapshot} unit={unit} onSelect={(id) => onSelect("unit", id)} />}
-    {tab === "recurring" && <UnitRecurring onEdit={onEdit} asOfDate={asOfDate} snapshot={snapshot} unit={unit} />}
+    {tab === "occupancy" && <UnitOccupancy asOfDate={asOfDate} snapshot={snapshot} unit={unit} onSelect={(id) => onSelect("unit", id)} />}
+    {tab === "recurring" && (property ? <PropertyRecurringPanel key={`unit:${unit.id}`} onEdit={onEdit} asOfDate={asOfDate} snapshot={snapshot} property={property} unit={unit} readOnly={readOnly} /> : <EmptyState message="The unit’s property link needs review before recurring charges can be shown." />)}
     {tab === "marketing" && <UnitMarketing unit={unit} />}
   </div></div>;
 }
@@ -340,7 +278,7 @@ export function PropertyUnitRecords(props: PropertyUnitRecordsProps) {
   return <UnitReadinessProvider filters={props.filters} readOnly={props.readOnly ?? false}><PropertyUnitRecordsContent {...props} /></UnitReadinessProvider>;
 }
 
-function PropertyUnitRecordsContent({ snapshot, filters, selectedPropertyId, selectedUnitId, onSelect, onEdit, onSearchChange }: PropertyUnitRecordsProps) {
+function PropertyUnitRecordsContent({ snapshot, readOnly, filters, selectedPropertyId, selectedUnitId, onSelect, onEdit, onSearchChange }: PropertyUnitRecordsProps) {
   const { occupancy } = useUnitReadiness();
   const [search, setSearch] = useState(filters.search ?? "");
   const [activeTab, setActiveTab] = useState<PropertyUnitTab>(()=>(new URLSearchParams(window.location.search).get("propertyTab")??"general") as PropertyUnitTab);
@@ -354,8 +292,8 @@ function PropertyUnitRecordsContent({ snapshot, filters, selectedPropertyId, sel
     <RecordList rows={listRows} selected={selected ? { kind: selected.kind, id: selected.kind === "unit" ? selected.unit?.id : selected.property?.id } : undefined} search={search} onSearch={next=>{setSearch(next);onSearchChange?.(next);}} onSelect={onSelect} />
     <main className="rm-property-unit-main">
       {!selected && <section className="rm-panel"><EmptyState message="Select a property or unit record to continue." /></section>}
-      {selected?.kind === "property" && selected.property && <PropertyRecord asOfDate={filters.asOfDate} snapshot={snapshot} property={selected.property} activeTab={activeTab} onTab={changeTab} onSelect={onSelect} onEdit={onEdit} />}
-      {selected?.kind === "unit" && selected.unit && <UnitRecord asOfDate={filters.asOfDate} snapshot={snapshot} unit={selected.unit} property={selected.property} activeTab={activeTab} onTab={changeTab} onSelect={onSelect} onEdit={onEdit} />}
+      {selected?.kind === "property" && selected.property && <PropertyRecord readOnly={readOnly} asOfDate={filters.asOfDate} snapshot={snapshot} property={selected.property} activeTab={activeTab} onTab={changeTab} onSelect={onSelect} onEdit={onEdit} />}
+      {selected?.kind === "unit" && selected.unit && <UnitRecord readOnly={readOnly} asOfDate={filters.asOfDate} snapshot={snapshot} unit={selected.unit} property={selected.property} activeTab={activeTab} onTab={changeTab} onSelect={onSelect} onEdit={onEdit} />}
     </main>
   </div>;
 }

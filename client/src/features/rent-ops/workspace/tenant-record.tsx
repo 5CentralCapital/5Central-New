@@ -1,3 +1,5 @@
+import { TenantLedgerExportDialog } from "./tenant-ledger-export";
+import { ManagerTenancyActions } from './manager-tenancy-actions';
 import { useRecurringChargeTerms } from './use-recurring-charge-terms';
 import { currentPhoneMethods, phoneTypeLabel } from "../phone-methods-display";
 import { usdAccountingFormatter, utcCalendarDateFormatter } from '../../../lib/rent-ops-formatters';
@@ -47,6 +49,9 @@ export interface TenantRecordProps {
   onTab: (tab: TenantTab) => void;
   onEdit: EditAction;
   onChanged: () => void;
+  businessDate?: string;
+  onManageMoves?: () => void;
+  readOnly?: boolean;
 }
 
 export const TENANT_RECORD_TABS: TenantTab[] = [
@@ -303,6 +308,7 @@ function LedgerTable({ rows, allRows, snapshot, onEdit, expanded, onToggle }: { 
 
 function LedgerTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantView; snapshot: AdminSnapshot; onEdit: EditAction; editActions: TenantEditAction[] }) {
   const [expanded, setExpanded] = useState<string>();
+  const [exportOpen, setExportOpen] = useState(false);
   const rows = useMemo(() => buildLedgerRows(tenant, snapshot), [tenant, snapshot]);
   const [search, setSearch] = useState("");
   const [from, setFrom] = useState("");
@@ -312,14 +318,7 @@ function LedgerTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantVi
   const pages = Math.max(1, Math.ceil(filtered.length / 25));
   const currentPage = Math.min(page, pages - 1);
   const visible = filtered.slice(currentPage * 25, (currentPage + 1) * 25);
-  function exportTransactions() {
-    const escape = (value: unknown) => '"' + String(value ?? "").replace(/^[=+@-]/, "'$&").replaceAll('"', '""') + '"';
-    const showReference = rows.some(row => Boolean(row.reference));
-    const csv = [["Date", "Property", "Unit", ...(showReference ? ["Reference"] : []), "Description", "Charge", "Payment or credit", "Running balance", "Status"], ...rows.map(row => [row.date, row.propertyName, row.unitLabel, ...(showReference ? [row.reference] : []), row.description, row.chargeCents == null ? "" : row.chargeCents / 100, row.paymentCents == null ? "" : row.paymentCents / 100, row.runningBalanceCents == null ? "Needs review" : row.runningBalanceCents / 100, row.status])].map(row => row.map(escape).join(",")).join("\r\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-    const link = document.createElement("a"); link.href = url; link.download = "tenant-transactions.csv"; link.click(); URL.revokeObjectURL(url);
-  }
-  return <div className="rm-tenant-tab-content"><Panel title="Transactions" action={<button type="button" className="rm-button" onClick={exportTransactions}>Export all</button>}>
+  return <div className="rm-tenant-tab-content">{exportOpen && <TenantLedgerExportDialog rows={rows} tenant={tenant} snapshot={snapshot} initialFrom={from} initialThrough={to} search={search} onClose={() => setExportOpen(false)} />}<Panel title="Transactions" action={<button type="button" className="rm-button" onClick={() => setExportOpen(true)}>Export CSV</button>}>
     <div className="rm-ledger-filters">
       <label>Search transactions<input type="search" value={search} placeholder="Description, payment method, status" onChange={event => { setSearch(event.target.value); setPage(0); }} /></label>
       <label>From<input type="date" value={from} onChange={event => { setFrom(event.target.value); setPage(0); }} /></label>
@@ -388,7 +387,8 @@ function tabContent(tab: TenantTab, props: Omit<TenantRecordProps, "tab" | "onTa
   }
 }
 
-export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged }: TenantRecordProps) {
+export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged, businessDate, readOnly = false, onManageMoves }: TenantRecordProps) {
+  const [movesOpen, setMovesOpen] = useState(false);
   const review = balanceReviewDisplay(tenant.balanceReview);
   const summary = buildTenantSummary(tenant, snapshot);
   const editActions = useMemo(() => buildTenantEditActions(tenant, snapshot, tab), [tenant, snapshot, tab]);
@@ -403,6 +403,8 @@ export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged }
       <div className="rm-record-summary-main"><h2>{summary.displayName}</h2><p>{summary.propertyName} · Unit {summary.unitLabel}</p></div>
       <div className="rm-record-summary-meta"><span className={statusClass(summary.status, summary.status === "Needs review")}>{label(summary.status)}</span><span className={`rm-record-balance${review ? tenant.balanceReview?.stale || tenant.balanceReview?.reviewedBalanceCents ? " rm-record-balance-warning" : "" : summary.balance.complete && summary.balance.amountCents ? " rm-record-balance-warning" : ""}`}><small>{review ? review.label : "Posted ledger balance"}</small><strong>{review ? review.amount : summary.balance.complete ? formatMoney(summary.balance.amountCents) : "Needs review"}</strong></span><span className="rm-record-as-of"><small>As of</small><strong>{formatDate(review ? tenant.balanceReview?.asOfDate : summary.asOfDate)}</strong></span></div>
     </header>
+    {!readOnly && businessDate && <div className="rm-toolbar"><button className="rm-button" onClick={() => onManageMoves ? onManageMoves() : setMovesOpen(true)}>Move-in / move-out</button></div>}
+    {movesOpen && !readOnly && businessDate && <ManagerTenancyActions key={tenant.person.id} snapshot={snapshot} personId={tenant.person.id} businessDate={businessDate} onSaved={async () => { await onChanged(); }} onClose={() => setMovesOpen(false)} />}
     <nav className="rm-tabs rm-tenant-tabs" role="tablist" aria-label="Tenant record sections">{TENANT_RECORD_TABS.map((item) => <button type="button" role="tab" aria-selected={tab === item} aria-controls={`tenant-panel-${item}`} className={tab === item ? "active" : ""} key={item} onClick={() => onTab(item)}>{TAB_LABELS[item]}</button>)}</nav>
     {headerActions.length > 0 && <div className="rm-toolbar rm-tenant-toolbar">{headerActions.map((action) => <ActionButton key={`${action.action}-${action.label}`} action={action} onEdit={onEdit} primary />)}</div>}
     <div id={`tenant-panel-${tab}`} role="tabpanel" className="rm-tenant-panel-body">{tabContent(tab, { tenant, snapshot, onEdit, onChanged, editActions })}</div>

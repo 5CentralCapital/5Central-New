@@ -1,0 +1,21 @@
+.rm-occupancy-panel .rm-property-unit-panel-heading { gap: 16px; flex-wrap: wrap; }
+.rm-occupancy-filter { display: flex; gap: 6px; }
+.rm-occupancy-filter button { white-space: nowrap; }
+.rm-occupancy-filter button span { margin-left: 5px; font-variant-numeric: tabular-nums; }
+.rm-occupancy-table-scroll { overflow-x: auto; border: 1px solid #e1ddd6; border-radius: 6px; }
+.rm-occupancy-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+.rm-occupancy-table th { background: #f5f0e8; color: #3a3a3c; font-weight: 600; white-space: nowrap; }
+.rm-occupancy-table th, .rm-occupancy-table td { padding: 11px 13px; vertical-align: top; border-bottom: 1px solid #e9e5df; }
+.rm-occupancy-table tr:last-child td { border-bottom: 0; }
+.rm-occupancy-table td:nth-child(4), .rm-occupancy-table td:nth-child(5) { white-space: nowrap; }
+.rm-occupancy-table td:nth-child(6) { min-width: 205px; }
+.rm-occupancy-unverified { display: block; margin-top: 4px; font-size: 11px; color: #6b6862; max-width: 220px; }
+.rm-occupancy-lease-history { margin-top: 7px; font-size: 11px; }
+.rm-occupancy-lease-history summary { cursor: pointer; color: #5c574c; }
+.rm-occupancy-lease-history ul { list-style: none; margin: 8px 0 0; padding: 0; }
+.rm-occupancy-lease-history li { border-left: 2px solid #ddd6c9; padding-left: 8px; margin: 10px 0; }
+.rm-occupancy-lease-history li > small { display: block; margin-top: 3px; color: #6b6862; }
+.rm-occupancy-group + .rm-occupancy-group { margin-top: 28px; }
+.rm-occupancy-group h4 { margin: 0 0 9px; color: #3a3a3c; font-size: 13px; }
+.rm-occupancy-group h4 span { margin-left: 6px; color: #777; font-weight: 400; }
+.rm-occupancy-empty { padding: 24px 0; color: #6b6862; }

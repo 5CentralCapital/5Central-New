@@ -98,6 +98,7 @@ export interface ViewFilters {
   propertyId: string;
   propertyIds?: string[];
   asOfDate: string;
+  asOfMode?: "today" | "fixed";
   status: string;
   search: string;
   balanceStatus?: "all" | "due" | "credit" | "zero" | "unverified";
@@ -209,6 +210,10 @@ export interface AdminTenancyView {
   status?: string;
   plannedMoveInOn?: string;
   actualMoveInOn?: string;
+  occupancyConfirmedOn?: string;
+  occupancyConfirmationKnowledge?: string;
+  operationalEndConfirmedOn?: string;
+  operationalEndConfirmationKnowledge?: string;
   noticeOn?: string;
   expectedMoveOutOn?: string;
   actualMoveOutOn?: string;

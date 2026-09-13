@@ -7,12 +7,13 @@ import { AlertCircle, ArrowDown, ArrowUp, Download, Loader2, Printer, SlidersHor
 import type { AdminSnapshot, ReportKey, ReportRow, TenantTab, ViewFilters } from "../types";
 import { EntityLink, RecordLink } from "./entity-link";
 import {
-  REPORT_PERIODS, buildReportCsv, createReportViewModel, defaultReportOccupancy, defaultReportTenantStatus, isTenantStatusReport, emptyReportMessage, formatReportCellValue,
+  REPORT_PERIODS, createReportViewModel, defaultReportOccupancy, defaultReportTenantStatus, isTenantStatusReport, emptyReportMessage, formatReportCellValue,
   filterRentRollRows, filterReportLocalRows, formatReportValue, getReportConfig,
   groupReportRows, readReportValue, reportCellPersonId, reportKeys, reportQueryFilters,
-  reportQueryKey, reportRowKey, validateReportPeriod,
+  reportQueryKey, reportRowKey, reportPeriodLabel, validateReportPeriod,
   type DisplayReportRow, type ReportBalanceFilter, type ReportColumnDefinition,
 } from "./report-model";
+import { ReportExportDialog } from "./report-export-dialog";
 import "./reports.css";
 import "./reports-clean.css";
 
@@ -43,12 +44,6 @@ function savePreference(report: ReportKey, key: string, value: unknown): void {
   const url = new URL(window.location.href);
   url.searchParams.set(`r_${report}_${key}`, JSON.stringify(value));
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
-}
-
-function downloadCsv(filename: string, contents: string): void {
-  const url = URL.createObjectURL(new Blob([contents], { type: "text/csv;charset=utf-8" }));
-  const anchor = document.createElement("a");
-  anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url);
 }
 
 function rowId(row: ReportRow, key: string): string | undefined {
@@ -112,6 +107,7 @@ function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTena
   const [listing, setListing] = useState(() => readPreference(selected, "listing", "all"));
   const [balance, setBalance] = useState<ReportBalanceFilter>(() => readPreference(selected, "balance", filters.balanceStatus ?? (selected === "delinquency" ? "due" : "all")));
   const [tenancyStatus, setTenancyStatus] = useState<NonNullable<ViewFilters["tenantStatus"]>>(() => defaultReportTenantStatus(selected, readPreference(selected, "tenantStatus", defaultReportTenantStatus(selected, filters.tenantStatus))));
+  const [exportFormat, setExportFormat] = useState<"csv" | "print" | null>(null);
   const [extraColumns, setExtraColumns] = useState<string[]>([]);
   const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" }>({ key: "unitNumber", direction: "asc" });
   useEffect(() => {
@@ -150,9 +146,6 @@ function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTena
   const activeColumns = useMemo(() => view.columns.filter(column => column.key !== "propertyName" && (column.curated !== false || extraColumns.includes(column.key))), [view.columns, extraColumns]);
   const optionalColumns = view.optionalColumns.filter(column => column.key !== "propertyName");
   const groups = useMemo(() => groupReportRows(selected, view.displayRows, snapshot, sort), [selected, view.displayRows, snapshot, sort]);
-  const exportRows = groups.flatMap(group => group.rows);
-  const propertyColumn = view.columns.find(column => column.key === "propertyName");
-  const exportColumns = propertyColumn ? [propertyColumn, ...activeColumns] : activeColumns;
   const config = getReportConfig(selected);
   const mode = REPORT_PERIODS[selected];
   const readinessOptions = Array.from(new Set((loadedRows ?? []).map(row => readReportValue(row, "readiness")).filter((value): value is string => typeof value === "string"))).sort();
@@ -180,11 +173,12 @@ function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTena
       {mode === "range" && <><label>From<input type="date" value={fromDate} max={asOfDate} onChange={event => setFromDate(event.target.value)} /></label><label>Through<input type="date" value={toDate} max={asOfDate} onChange={event => setToDate(event.target.value)} /></label></>}
       <div className="rm-report-toolbar-actions">
         {optionalColumns.length > 0 && <details className="rm-report-columns"><summary><SlidersHorizontal size={14} />Columns</summary><div className="rm-report-column-options">{optionalColumns.map(column => <label key={column.key}><input type="checkbox" checked={extraColumns.includes(column.key)} onChange={event => { const next = event.target.checked ? [...extraColumns, column.key] : extraColumns.filter(key => key !== column.key); setExtraColumns(next); savePreference(selected, "columns", next); }} />{column.label}</label>)}</div></details>}
-        <button className="rm-button" type="button" onClick={() => downloadCsv(`rent-ops-${selected}-${asOfDate}.csv`, buildReportCsv(exportRows, exportColumns))} disabled={!loadedRows}><Download size={14} />CSV</button>
-        <button className="rm-button" type="button" onClick={() => window.print()} disabled={!loadedRows}><Printer size={14} />Print</button>
+        <button className="rm-button" type="button" onClick={() => setExportFormat("csv")} disabled={!loadedRows}><Download size={14} />CSV</button>
+        <button className="rm-button" type="button" onClick={() => setExportFormat("print")} disabled={!loadedRows}><Printer size={14} />Print / PDF</button>
       </div>
     </div>
-    <h2 className="rm-report-print-title">{config.label} · {asOfDate}</h2>
+    {exportFormat && <ReportExportDialog report={selected} snapshot={snapshot} queryFilters={queryFilters} format={exportFormat} onClose={() => setExportFormat(null)} search={filters.search} extraColumns={extraColumns} sort={sort} localFilters={{ occupancy: selected === "rent-roll" || selected === "occupancy" ? occupancy : "all", readiness: selected === "occupancy" ? readiness : "all", listing: selected === "occupancy" ? listing : "all", balance: selected === "rent-roll" || selected === "delinquency" ? balance : "all" }} />}
+    <header className="rm-report-print-title"><div className="rm-report-print-brand">5Central Capital</div><h2>{config.label}</h2><p>{filters.propertyIds?.length ? filters.propertyIds.map(id => snapshot.snapshot.properties.find(property => property.id === id)?.name ?? id).join(" · ") : filters.propertyId !== "all" ? snapshot.snapshot.properties.find(property => property.id === filters.propertyId)?.name ?? filters.propertyId : filters.propertyScope === "active" ? "Active portfolio" : "All properties"}</p><p>{reportPeriodLabel(selected, asOfDate, month, fromDate, toDate)}</p></header>
     {error && <p className="rm-error" role="alert"><AlertCircle aria-hidden="true" />{error}</p>}
     {loading && !loadedRows && <div className="rm-empty"><Loader2 className="rm-spin" aria-hidden="true" />{emptyReportMessage(false)}</div>}
     {loadedRows && <div className="rm-report-table-scroll"><table className="rm-table rm-grouped-report-table" aria-label={config.label}>

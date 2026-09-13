@@ -1,3 +1,4 @@
+import { workspaceToday } from './workspace-date';
 import type { AdminSnapshot, AdminSnapshotView, ApiFilters, DashboardSummary, ReportKey, SectionKey, TenantTab, TenantView, ViewFilters } from '../types';
 import { REPORT_KEYS } from '../types';
 import { createWorkspaceReportDefinition, type RentOpsWorkspaceBootstrap, type WorkspaceCollection } from '../api';
@@ -26,7 +27,7 @@ export function workspaceRouteSearch(route: WorkspaceRoute, filters?: ViewFilter
   if(filters) {
     params.set("scope",filters.propertyScope); params.delete("property");
     for(const id of selectedWorkspaceProperties(filters)) params.append("property",id);
-    params.set("asOf",filters.asOfDate); params.set("status",filters.status); params.set("search",filters.search);
+    params.set("asOf",filters.asOfMode==='today'?'today':filters.asOfDate); params.set("status",filters.status); params.set("search",filters.search);
   }
   return `?${params.toString()}`;
 }
@@ -36,9 +37,10 @@ export function selectedWorkspaceProperties(filters: Pick<ViewFilters,'propertyI
 export function workspacePropertyMatches(filters: Pick<ViewFilters,'propertyId'|'propertyIds'>, id?:string):boolean {
   const selected=selectedWorkspaceProperties(filters);return !selected.length || !!id&&selected.includes(id);
 }
-export function parseWorkspaceFilters(search:string):ViewFilters {
+export function parseWorkspaceFilters(search:string, now=new Date()):ViewFilters {
   const params=new URLSearchParams(search); const propertyIds=Array.from(new Set(params.getAll('property').filter(id=>/^[A-Za-z0-9:_-]{1,160}$/.test(id))));
-  return {propertyScope:params.get('scope')==='all'?'all':'active',propertyId:propertyIds.length===1?propertyIds[0]:'all',propertyIds,asOfDate:params.get('asOf')??'',status:params.get('status')??'all',search:params.get('search')??''};
+  const date=params.get('asOf');const rolling=!date||date==='today';
+  return {propertyScope:params.get('scope')==='all'?'all':'active',propertyId:propertyIds.length===1?propertyIds[0]:'all',propertyIds,asOfDate:rolling?workspaceToday(now):date!,...(rolling?{asOfMode:'today' as const}:{}),status:params.get('status')??'all',search:params.get('search')??''};
 }
 export function workspaceApiFilters(filters: ViewFilters): ApiFilters {
   const propertyIds=selectedWorkspaceProperties(filters);
@@ -84,6 +86,7 @@ export function workspaceCollectionsFor(section:WorkspaceSection,editing?:QuickA
   if(section==='applicants')names.push('applications','applicationHouseholdMembers','applicationRequirements');
   if(section==='documents')names.push('documents','activityEvents');
   if(editing==='save-payment-allocation'||editing==='reverse-ledger-transaction')names.push('ledgerTransactions','paymentAllocations');
+  if(editing==='save-tenancy')names.push('recurringSchedules','securityDeposits');
   if(editing==='save-security-deposit')names.push('securityDeposits');
   if(editing==='save-subsidy-contract')names.push('subsidyContracts');
   if(editing==='save-recurring-schedule'||editing==='replace-recurring-schedule'||editing==='end-recurring-schedule')names.push('recurringSchedules');

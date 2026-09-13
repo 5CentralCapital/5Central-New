@@ -251,7 +251,7 @@ function ApplicationFilterBar({ snapshot, filters, applications, onChange }: { s
 
 export function ApplicationsWorkspace({ snapshot, filters, onChanged, onEdit }: { snapshot: AdminSnapshot; filters: ViewFilters; onChanged: () => void; onEdit: EditAction }) {
   const [filterState, setFilterState] = useState<ApplicationFilterState>(() => ({ ...initialFilterState(filters), status: applicationStatusFilter(filters.status, snapshot.applicants) }));
-  const [selectedApplicationId, setSelectedApplicationId] = useState<string>();
+  const [selectedApplicationId, setSelectedApplicationId] = useState<string | undefined>(() => typeof window === "undefined" ? undefined : new URLSearchParams(window.location.search).get("record") ?? undefined);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState<string>();
 
