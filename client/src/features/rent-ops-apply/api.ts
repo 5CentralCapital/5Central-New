@@ -24,6 +24,7 @@ import {
   demoStartApplication,
   demoSubmitApplication,
 } from "./demo";
+import { takeApplicantOptions } from './startup';
 
 export const APPLY_DEMO_ALLOWED = import.meta.env?.VITE_RENT_OPS_APPLY_DEMO === "true"
   && import.meta.env?.VITE_RENT_OPS_LOCAL_SYNTHETIC_BUILD === "true";
@@ -38,15 +39,15 @@ export class ApplicantPublicError extends Error {
   }
 }
 
-async function requestJson(path: string, init?: RequestInit): Promise<unknown> {
+async function requestJson(path: string, init?: RequestInit, initialResponse?: Promise<Response>): Promise<unknown> {
   let response: Response;
   try {
-    response = await fetch(path, {
+    response = await (initialResponse ?? fetch(path, {
       ...init,
       credentials: "omit",
       referrerPolicy: "no-referrer",
       headers: { Accept: "application/json", ...(init?.headers ?? {}) },
-    });
+    }));
   } catch {
     throw new ApplicantPublicError("request", "We couldn't reach the application service. Try again.");
   }
@@ -226,7 +227,7 @@ export interface ApplicantPropertyOption {
 
 export async function loadApplicantPropertyOptions(): Promise<ApplicantPropertyOption[]> {
   if (APPLY_DEMO_ALLOWED) return [{ id: "demo-property", name: "Sample Apartments", slug: "sample-apartments", units: [{ id: "demo-unit", unitNumber: "A-101", bedrooms: 1, bathrooms: 1, marketRentCents: 125000 }] }];
-  const payload = await requestJson("/api/rent-ops/public/application-options");
+  const payload = await requestJson("/api/rent-ops/public/application-options", undefined, takeApplicantOptions());
   if (!Array.isArray(payload)) throw new ApplicantPublicError("request", "Available homes could not be loaded.");
   return payload.flatMap((entry) => {
     const property = nestedRecord(entry);
