@@ -52,5 +52,11 @@ test('page hints preload only selected route modules and leave style application
     assert.match(shell('/ops?ui=classic'),/classic-abcdefgh.js/);assert.doesNotMatch(shell('/ops?ui=classic'),/workspace-abcdefgh.js/);
     assert.doesNotMatch(shell('/tenant'),/fonts.example.test|workspace-abcdefgh/);assert.match(shell('/tenant'),/tenant-abcdefgh.js/);
     assert.match(shell('/apply/property'),/apply-abcdefgh.js/);assert.match(shell('/'),/Same UI/);
+    writeFileSync(join(dir,'.vite/manifest.json'),JSON.stringify({
+      '_tenant-portal-abcdefgh.js':{file:'assets/tenant-abcdefgh.js',name:'tenant-portal',isDynamicEntry:true,css:['assets/tenant-abcdefgh.css']},
+    }));
+    const mergedTenant=createPageShell(dir)('/tenant');
+    assert.match(mergedTenant,/modulepreload[^>]+tenant-abcdefgh.js/);
+    assert.match(mergedTenant,/preload" as="style"[^>]+tenant-abcdefgh.css/);
   }finally{rmSync(dir,{recursive:true,force:true});}
 });

@@ -32,6 +32,9 @@ export default defineConfig({
   build: {
     manifest: true,
     rollupOptions: { output: { manualChunks(id) {
+      // The tiny shared arithmetic module otherwise adds another request to
+      // every portal. Keep it with the runtime all these routes already use.
+      if (id.endsWith('/features/rent-ops/money.ts')) return 'react-core';
       if (/\/node_modules\/(?:react|react-dom|scheduler)\//.test(id)) return 'react-core';
       if (id.includes('/node_modules/lucide-react/')) return 'icons';
     } } },

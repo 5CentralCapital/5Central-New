@@ -1,12 +1,10 @@
 import { lazy, Suspense } from "react";
 import { Switch, Route, useLocation } from "wouter";
-import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
-import { Toaster } from "@/components/ui/toaster";
-import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/auth-context";
 import { ACCOUNT_ENTRY_ROUTES } from "@/components/account-entry";
 import ProtectedRoute from "@/components/protected-route";
+const AppProviders = lazy(() => import("@/components/app-providers"));
+const Toaster = lazy(() => import("@/components/ui/toaster").then(module => ({ default: module.Toaster })));
 const Navigation = lazy(() => import("@/components/navigation"));
 const Home = lazy(() => import("@/pages/home"));
 const Founder = lazy(() => import("@/pages/founder"));
@@ -65,7 +63,7 @@ function AppContent() {
   return (
     <>
       {!isApplicantRoute && !isRentOpsRoute && !isTenantRoute && <Suspense fallback={null}><Navigation /></Suspense>}
-      <Toaster />
+      {!isApplicantRoute && !isTenantRoute && <Suspense fallback={null}><Toaster /></Suspense>}
       <Suspense fallback={<div role="status" className="p-6 text-sm">Loading…</div>}><Router /></Suspense>
     </>
   );
@@ -73,12 +71,15 @@ function AppContent() {
 
 function App() {
   const [location] = useLocation();
+  // These self-contained portals use their own account and form state. Avoid
+  // downloading staff query, tooltip and toast libraries for their first page.
+  if (location === "/tenant" || location === "/apply" || location.startsWith("/apply/")) return <AppContent />;
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        {location === "/tenant" || location === "/ops" || location.startsWith("/ops/") ? <AppContent /> : <AuthProvider><AppContent /></AuthProvider>}
-      </TooltipProvider>
-    </QueryClientProvider>
+    <Suspense fallback={<div role="status" className="p-6 text-sm">Loading…</div>}>
+      <AppProviders>
+        {location === "/ops" || location.startsWith("/ops/") ? <AppContent /> : <AuthProvider><AppContent /></AuthProvider>}
+      </AppProviders>
+    </Suspense>
   );
 }
 
