@@ -458,6 +458,9 @@ export function getReportColumns(key: ReportKey, rows: readonly ReportRow[] = []
 
 export function toDisplayReportRows(key: ReportKey, rows: readonly ReportRow[], snapshot?: AdminSnapshot): DisplayReportRow[] {
   const columns = getReportColumns(key, rows, snapshot);
+  return displayRowsWithColumns(rows,columns,snapshot);
+}
+function displayRowsWithColumns(rows: readonly ReportRow[],columns: ReportColumnDefinition[],snapshot?: AdminSnapshot): DisplayReportRow[] {
   return rows.map((source, index) => {
     const display: DisplayReportRow = { __source: source, __index: index };
     for (const column of columns) display[column.key] = column.read(source, snapshot);
@@ -474,7 +477,7 @@ export function createReportViewModel(key: ReportKey, rows: readonly ReportRow[]
     curatedColumns: columns.filter((column) => column.curated !== false),
     optionalColumns: columns.filter((column) => column.curated === false),
     rows: [...rows],
-    displayRows: toDisplayReportRows(key, rows, snapshot),
+    displayRows: displayRowsWithColumns(rows, columns, snapshot),
   };
 }
 
@@ -768,14 +771,15 @@ export interface ReportPropertyGroup extends PropertySubtotal { rows: DisplayRep
 /** Property sections, unit-natural order, and their complete filtered subtotals. */
 export function groupReportRows(key: ReportKey, rows: readonly DisplayReportRow[], snapshot?: AdminSnapshot, sort?: { key: string; direction: "asc" | "desc" }): ReportPropertyGroup[] {
   const collator = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+  const grouped=new Map<string,DisplayReportRow[]>();
+  for(const row of rows){
+    const id=propertyId(row.__source);const name=id?undefined:propertyName(row.__source,snapshot);
+    const groupKey=id ? `id:${id}` : `name:${typeof name==='string'&&name.trim()?name:'Needs review'}`;
+    const group=grouped.get(groupKey)??[];group.push(row);grouped.set(groupKey,group);
+  }
   return buildPropertySubtotals(key, rows.map(row => row.__source), snapshot).map(subtotal => ({
     ...subtotal,
-    rows: rows.filter(row => {
-      if (subtotal.propertyId) return propertyId(row.__source) === subtotal.propertyId;
-      const name = propertyName(row.__source, snapshot);
-      const label = typeof name === "string" && name.trim() ? name : "Needs review";
-      return !propertyId(row.__source) && label === subtotal.label;
-    }).sort((left, right) => {
+    rows: (grouped.get(subtotal.propertyId?`id:${subtotal.propertyId}`:`name:${subtotal.label}`)??[]).sort((left, right) => {
       const column = sort?.key ?? "unitNumber";
       const a = left[column]; const b = right[column];
       const comparison = a == null ? b == null ? 0 : 1 : b == null ? -1 : typeof a === "number" && typeof b === "number" ? a - b : collator.compare(String(a), String(b));

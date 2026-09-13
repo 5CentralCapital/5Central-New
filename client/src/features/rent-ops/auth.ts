@@ -101,6 +101,7 @@ export class RentOpsAuthClient {
   private generation = 0;
   private csrfToken: string | undefined;
   private csrfRequest: Promise<string> | undefined;
+  private initialization: Promise<boolean> | undefined;
   private readonly listeners = new Set<Listener>();
 
   constructor(options: AuthClientOptions = {}) {
@@ -148,6 +149,17 @@ export class RentOpsAuthClient {
     this.clearSession("Your Rent Operations session has ended. Sign in again.");
   }
 
+  /** Share startup restoration between the entry module and the mounted page.
+   * Explicit restore/login/logout operations keep their existing generation checks. */
+  initialize(): Promise<boolean> {
+    if (this.snapshot.status !== 'unknown') return Promise.resolve(this.snapshot.status === 'authenticated');
+    if (this.initialization) return this.initialization;
+    const request = this.restore();
+    this.initialization = request;
+    void request.finally(() => { if (this.initialization === request) this.initialization = undefined; }).catch(() => undefined);
+    return request;
+  }
+
   async restore(): Promise<boolean> {
     const generation = this.beginSessionChange();
     try {
@@ -166,11 +178,9 @@ export class RentOpsAuthClient {
         throw new RentOpsAuthError(response.status, safeMessage(payload, "Rent Operations sign-in is unavailable right now."));
       }
       const user = parseUser(payload.user);
-      // Validate the login contract, then fetch the dedicated CSRF endpoint
-      // explicitly. Only the in-memory token from that endpoint is retained.
-      parseCsrfToken(payload);
-      this.csrfToken = undefined;
-      await this.ensureCsrfToken();
+      // The authenticated session response already carries this session's
+      // CSRF token. Keep it only in memory; every mutation still sends it.
+      this.csrfToken = parseCsrfToken(payload);
       this.assertCurrent(generation);
       this.publish({ status: "authenticated", user });
       return true;
@@ -203,9 +213,7 @@ export class RentOpsAuthClient {
         throw new RentOpsAuthError(response.status, safeMessage(payload, "The dedicated administrator sign-in was not accepted."));
       }
       const user = parseUser(payload.user);
-      parseCsrfToken(payload);
-      this.csrfToken = undefined;
-      await this.ensureCsrfToken();
+      this.csrfToken = parseCsrfToken(payload);
       this.assertCurrent(generation);
       this.publish({ status: "authenticated", user });
       return user;

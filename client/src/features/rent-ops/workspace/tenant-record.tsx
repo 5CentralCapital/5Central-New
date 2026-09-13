@@ -1,5 +1,6 @@
 import { useRecurringChargeTerms } from './use-recurring-charge-terms';
 import { currentPhoneMethods, phoneTypeLabel } from "../phone-methods-display";
+import { usdAccountingFormatter, utcCalendarDateFormatter } from '../../../lib/rent-ops-formatters';
 import { balanceReviewDisplay } from "./balance-review-display";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, Plus } from "lucide-react";
@@ -89,12 +90,12 @@ function formatDate(value: string | null | undefined): string {
   if (!value) return "Needs review";
   const parsed = new Date(value);
   if (!Number.isFinite(parsed.getTime())) return "Needs review";
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).format(parsed);
+  return utcCalendarDateFormatter.format(parsed);
 }
 
 function formatMoney(cents: number | null | undefined): string {
   if (cents == null || !Number.isFinite(cents)) return "Needs review";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", currencySign: "accounting" }).format(cents / 100);
+  return usdAccountingFormatter.format(cents / 100);
 }
 
 function valueOrDash(value: string | null | undefined): string {

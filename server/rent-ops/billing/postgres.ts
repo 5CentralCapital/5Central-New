@@ -9,7 +9,7 @@ export class PostgresBillingStore implements BillingStore {
     const repository = new PostgresRentOpsRepository(executor, true);
     return {
       async read(month: IsoMonth): Promise<BillingData> {
-        const snapshot = await repository.getSnapshot();
+        const snapshot = await (repository.getOperationalSnapshot?.() ?? repository.getSnapshot());
         const result = await executor.query<{
           lineage_root_id: string; schedule_id: string; billing_on: string; ledger_transaction_id: string;
           tenancy_id: string; amount_cents: number | string; preview_token: string; actor_subject: string; posted_at: string;

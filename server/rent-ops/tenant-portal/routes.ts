@@ -1,3 +1,4 @@
+import { sendWorkspaceJson } from "../presentation/workspace-read";
 import { TenantAccountAdminService, TenantPortalError } from "./admin-service";
 export { tenantAccountSummary } from "./admin-service";
 import { Readable } from "node:stream";
@@ -95,6 +96,13 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
   const router = Router();
   const documentService = new RentOpsService(options.repository, now, undefined, undefined, false, { documentStorage: options.documentStorage, allowEphemeralDocumentBindings: false });
   let activePasswordOperations = 0;
+  const bindingSnapshot = async () => {
+    const directory = await options.repository.getWorkspaceSnapshot?.();
+    // Legacy knowledge mode can depend on history outside the directory.
+    // Retain the full read unless the strict mode is positively established.
+    return directory?.modelVersion === 3 ? directory : options.repository.getSnapshot();
+  };
+  const operationalSnapshot = () => options.repository.getOperationalSnapshot?.() ?? options.repository.getSnapshot();
 
   async function passwordOperation<T>(work: () => Promise<T>): Promise<T> {
     if (activePasswordOperations >= 4) throw new TenantPortalError(429, "Sign-in is busy. Please try again shortly.");
@@ -134,7 +142,7 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
       const record = await store.getById(req.session.tenantAccountId);
       if (!record || record.status !== "active" || record.sessionVersion !== req.session.tenantSessionVersion) throw new TenantPortalError(401, "Your session has ended. Sign in again.");
       if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && !sameSecret(req.session.tenantCsrfToken, req.get("x-tenant-csrf"))) throw new TenantPortalError(403, "Refresh the tenant portal and try again.");
-      const snapshot = await options.repository.getSnapshot();
+      const snapshot = await bindingSnapshot();
       if (!resolveTenantBinding(snapshot, record.personId, record.tenancyId)) throw new TenantPortalError(403, "Contact management to review your account access.");
       req.tenantAccount = tenantIdentity(record);
       next();
@@ -150,7 +158,7 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
     const record = await store.getByEmail(input.email);
     const valid = await passwordOperation(() => verifyTenantPassword(input.password, record?.passwordHash));
     if (!valid || !record || record.status !== "active") throw new TenantPortalError(401, "Email or password was not accepted.");
-    if (!resolveTenantBinding(await options.repository.getSnapshot(), record.personId, record.tenancyId)) throw new TenantPortalError(401, "Email or password was not accepted.");
+    if (!resolveTenantBinding(await bindingSnapshot(), record.personId, record.tenancyId)) throw new TenantPortalError(401, "Email or password was not accepted.");
     const current = await store.recordLogin(record.id, record.sessionVersion, now().toISOString());
     if (!current) throw new TenantPortalError(401, "Email or password was not accepted.");
     res.json(await establishSession(req, current));
@@ -162,7 +170,7 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
     const passwordHash = await passwordOperation(() => hashTenantPassword(input.password));
     const record = await store.consumeActivation(digest(input.token), passwordHash, now().toISOString());
     if (!record) throw new TenantPortalError(400, "This link has expired or was already used. Request a new link from management.");
-    if (!resolveTenantBinding(await options.repository.getSnapshot(), record.personId, record.tenancyId)) throw new TenantPortalError(403, "Contact management to review your account access.");
+    if (!resolveTenantBinding(await bindingSnapshot(), record.personId, record.tenancyId)) throw new TenantPortalError(403, "Contact management to review your account access.");
     res.json(await establishSession(req, record));
   }));
 
@@ -179,7 +187,7 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
     await limit(req, "recovery", 10, input.email);
     if (!notifier) { res.json({ message: "Email recovery is unavailable. Contact management to request a new secure sign-in link." }); return; }
     const record = await store.getByEmail(input.email);
-    if (record?.status === "active" && resolveTenantBinding(await options.repository.getSnapshot(), record.personId, record.tenancyId)) {
+    if (record?.status === "active" && resolveTenantBinding(await bindingSnapshot(), record.personId, record.tenancyId)) {
       // Keep the same public response for unknown accounts and delivery errors.
       try { await deliverAccess(record, "password_reset"); } catch { /* never reveal account membership */ }
     }
@@ -209,7 +217,7 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
   }));
 
   const getTenantHome = async (identity: TenantIdentity) => {
-    const snapshot = await options.repository.getSnapshot();
+    const snapshot = await operationalSnapshot();
     const transfers = await options.repository.readPortalTransferHistory?.(identity.id) ?? [];
     const home = presentTenantHome(snapshot, identity, now().toISOString().slice(0, 10), transfers);
     if (!home) return home;
@@ -228,13 +236,13 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
   router.get("/home", requireTenant, safeHandler(async (req, res) => {
     const home = await getTenantHome(req.tenantAccount!);
     if (!home) throw new TenantPortalError(403, "Contact management to review your account access.");
-    res.json(home);
+    await sendWorkspaceJson(req, res, home);
   }));
   router.get("/lease-files/:id/download", requireTenant, safeHandler(async (req, res) => {
     const unavailable = () => new TenantPortalError(404, "Lease file is unavailable.");
     if (!/^[A-Za-z0-9:_-]{1,160}$/.test(req.params.id) || Object.keys(req.query).length) throw unavailable();
     const identity = req.tenantAccount!;
-    const snapshot = await options.repository.getSnapshot();
+    const snapshot = await operationalSnapshot();
     const tenancy = resolveTenantBinding(snapshot, identity.personId, identity.tenancyId);
     const document = snapshot.documents.find(row => row.id === req.params.id);
     const transfers = await options.repository.readPortalTransferHistory?.(identity.id) ?? [];

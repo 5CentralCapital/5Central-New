@@ -1,3 +1,4 @@
+import { usdCurrencyFormatter, utcCalendarDateFormatter } from '../../../lib/rent-ops-formatters';
 /**
  * Display helpers used by the manager workspace.  Values arrive from the
  * browser API as presentation data, so an absent value must remain visibly
@@ -28,10 +29,7 @@ export function formatMoney(value: unknown): string {
 
   // Avoid displaying a negative sign for the otherwise equivalent -0 value.
   const normalizedCents = Object.is(cents, -0) ? 0 : cents;
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-  }).format(normalizedCents / 100);
+  return usdCurrencyFormatter.format(normalizedCents / 100);
 }
 
 function dateFromValue(value: unknown): Date | undefined {
@@ -73,12 +71,7 @@ export function formatDate(value: unknown): string {
   const date = dateFromValue(value);
   if (!date) return NEEDS_REVIEW;
 
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(date);
+  return utcCalendarDateFormatter.format(date);
 }
 
 function titleWord(word: string): string {

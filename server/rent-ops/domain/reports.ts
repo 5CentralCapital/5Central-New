@@ -420,15 +420,42 @@ interface BalanceContext {
   reversed: ReversalSets;
   tenancies: Map<string, RentOpsTenancy>;
   transactionIds: Set<string>;
+  transactionsByTenancy: Map<string | null | undefined, RentOpsSnapshot['ledgerTransactions']>;
+  uncertainTransactions: RentOpsSnapshot['ledgerTransactions'];
+  allocationsByTransaction: Map<string, RentOpsSnapshot['paymentAllocations']>;
+  effective?: EffectiveAllocation[];
+  effectiveByTenancy?: Map<string, EffectiveAllocation[]>;
 }
 
 function createBalanceContext(snapshot: RentOpsSnapshot, asOf: IsoDate): BalanceContext {
   const transactions = new Map(snapshot.ledgerTransactions.map(row => [row.id, row]));
-  return { transactions, reversed: reversalSets(snapshot, asOf, transactions),
-    tenancies: new Map(snapshot.tenancies.map(row => [row.id, row])), transactionIds: new Set(transactions.keys()) };
+  const tenancies = new Map(snapshot.tenancies.map(row => [row.id, row]));
+  const transactionsByTenancy: BalanceContext['transactionsByTenancy'] = new Map();
+  const uncertainTransactions: BalanceContext['uncertainTransactions'] = [];
+  for (const row of snapshot.ledgerTransactions) {
+    const rows = transactionsByTenancy.get(row.tenancyId) ?? []; rows.push(row); transactionsByTenancy.set(row.tenancyId,rows);
+    const linked = tenancies.get(row.tenancyId ?? '');
+    const conflict = linked && ((row.personId && row.personId !== linked.primaryPersonId) || (row.propertyId && row.propertyId !== linked.propertyId) || (row.unitId && row.unitId !== linked.unitId));
+    // Preserve every row that cannot be excluded by a confirmed, consistent
+    // tenancy link. Each account still applies the original uncertainty rules.
+    if (!linkCanExclude(row.tenancyId,row.tenancyLinkKnowledge) || !linked || conflict) uncertainTransactions.push(row);
+  }
+  const allocationsByTransaction: BalanceContext['allocationsByTransaction'] = new Map();
+  for (const row of snapshot.paymentAllocations) for (const id of Array.from(new Set([row.paymentTransactionId ?? row.creditTransactionId,row.chargeTransactionId]))) {
+    if (!id) continue; const rows = allocationsByTransaction.get(id) ?? []; rows.push(row); allocationsByTransaction.set(id,rows);
+  }
+  const context: BalanceContext = {transactions,reversed:reversalSets(snapshot,asOf,transactions),tenancies,transactionIds:new Set(transactions.keys()),transactionsByTenancy,uncertainTransactions,allocationsByTransaction};
+  const effective = effectiveAllocations(snapshot,asOf,undefined,context);
+  const effectiveByTenancy = new Map<string,EffectiveAllocation[]>();
+  for (const row of effective) for (const id of Array.from(new Set([row.payment.tenancyId,row.charge.tenancyId]))) {
+    if (!id) continue; const rows = effectiveByTenancy.get(id) ?? []; rows.push(row); effectiveByTenancy.set(id,rows);
+  }
+  context.effective = effective; context.effectiveByTenancy = effectiveByTenancy;
+  return context;
 }
 
 function effectiveAllocations(snapshot: RentOpsSnapshot, asOf: IsoDate, tenancyId?: string, context?: BalanceContext): EffectiveAllocation[] {
+  if (context?.effective && context.effectiveByTenancy) return tenancyId ? context.effectiveByTenancy.get(tenancyId) ?? [] : context.effective;
   const transactions = context?.transactions ?? new Map(snapshot.ledgerTransactions.map((transaction) => [transaction.id, transaction]));
   const reversed = context?.reversed ?? reversalSets(snapshot, asOf);
   const result: EffectiveAllocation[] = [];
@@ -541,7 +568,8 @@ function tenancyBalanceUncertainty(snapshot: RentOpsSnapshot, tenancyId: string,
   if (!tenancy) return ["tenancy_balance_scope_unknown"];
   const tenancyById = context?.tenancies ?? new Map(snapshot.tenancies.map(row => [row.id, row]));
   const transactionIds = context?.transactionIds ?? new Set(snapshot.ledgerTransactions.map(row => row.id));
-  const relevant = snapshot.ledgerTransactions.filter(row => {
+  const candidates = context ? [...(context.transactionsByTenancy.get(tenancyId) ?? []),...context.uncertainTransactions.filter(row=>row.tenancyId!==tenancyId)] : snapshot.ledgerTransactions;
+  const relevant = candidates.filter(row => {
     if (row.postedOn && row.postedOn > asOf || row.status === "pending" || row.status === "voided") return false;
     if (row.tenancyId === tenancyId) return true;
     const linked = tenancyById.get(row.tenancyId ?? "");
@@ -561,7 +589,8 @@ function tenancyBalanceUncertainty(snapshot: RentOpsSnapshot, tenancyId: string,
     ledgerFactUncertainty(row, true).forEach(code => codes.add(code));
   }
   const ids = new Set(relevant.map(row => row.id));
-  for (const allocation of snapshot.paymentAllocations) {
+  const allocations = context ? Array.from(new Set(relevant.flatMap(row=>context.allocationsByTransaction.get(row.id) ?? []))) : snapshot.paymentAllocations;
+  for (const allocation of allocations) {
     if (allocation.allocatedOn && allocation.allocatedOn > asOf) continue;
     if (!ids.has(allocation.paymentTransactionId ?? allocation.creditTransactionId ?? "") && !ids.has(allocation.chargeTransactionId ?? "")) continue;
     if (allocationEvidenceUnknown(transactionIds, allocation)) codes.add("allocation_evidence_unknown");
@@ -572,7 +601,7 @@ function tenancyBalanceUncertainty(snapshot: RentOpsSnapshot, tenancyId: string,
 }
 
 function accountBalance(snapshot: RentOpsSnapshot, tenancyId: string, asOf: IsoDate, context?: BalanceContext): AccountBalance {
-  const transactions = snapshot.ledgerTransactions.filter((transaction) =>
+  const transactions = (context ? context.transactionsByTenancy.get(tenancyId) ?? [] : snapshot.ledgerTransactions).filter((transaction) =>
     transaction.tenancyId === tenancyId && transaction.status === "posted" && !!transaction.postedOn && knownAmount(transaction.amountCents) && transaction.postedOn <= asOf,
   );
   const transactionMap = context?.transactions ?? new Map(snapshot.ledgerTransactions.map((transaction) => [transaction.id, transaction]));

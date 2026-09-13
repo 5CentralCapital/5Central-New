@@ -1115,12 +1115,14 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     const load = async (executor: RentOpsQueryExecutor) => {
       // Retain every tenancy: unknown links/status can block a vacancy and
       // must not disappear through an optimistic SQL status filter.
-      const [properties, units, tenancies] = await Promise.all([
+      const tables = ['rent_ops_properties','rent_ops_units','rent_ops_tenancies'];
+      const batch = executor.readTableBatch ? await executor.readTableBatch(tables) : undefined;
+      const [properties, units, tenancies] = batch ? tables.map(table=>batch[table]) : await Promise.all([
         this.rows("rent_ops_properties", executor), this.rows("rent_ops_units", executor), this.rows("rent_ops_tenancies", executor),
       ]);
       return { properties: properties.map(rowToProperty), units: units.map(rowToUnit), tenancies: tenancies.map(rowToTenancy) };
     };
-    return this.client.transaction ? this.client.transaction(load, { readOnly: true }) : load(this.client);
+    return this.client.readTableBatch ? load(this.client) : this.client.transaction ? this.client.transaction(load, { readOnly: true }) : load(this.client);
   }
 
   async getSnapshot(): Promise<RentOpsSnapshot> {
@@ -1190,6 +1192,22 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       this.client.query<Record<string, unknown>>("SELECT * FROM rent_ops_activity_events WHERE tenancy_id = ANY($1::text[]) AND id LIKE 'activity:charge-terms:%'", [tenancyIds]),
     ]);
     return {recurringSchedules:schedules.rows.map(rowToSchedule),tenancies:tenancies.rows.map(rowToTenancy),activityEvents:activities.rows.map(rowToActivity)};
+  }
+
+  async getScheduleSnapshot(): Promise<RentOpsSnapshot> {
+    await this.assertReady();
+    const tables = ['rent_ops_properties','rent_ops_units','rent_ops_people','rent_ops_tenancies',
+      'rent_ops_household_memberships','rent_ops_lease_terms','rent_ops_charge_definitions','rent_ops_recurring_charge_schedules'];
+    const load = async (executor: RentOpsQueryExecutor) => {
+      const selected = executor.readTableBatch ? await executor.readTableBatch(tables)
+        : Object.fromEntries(await Promise.all(tables.map(async table => [table,await this.rows(table,executor)])));
+      const batch = Object.fromEntries(RENT_OPS_BATCH_TABLES.map(table => [table,selected[table] ?? []]));
+      const snapshot = await this.loadSnapshot(executor,false,undefined,batch);
+      measureRentOps('validate',()=>assertValidSnapshot(snapshot));
+      return snapshot;
+    };
+    return this.client.readTableBatch ? load(this.client) : this.client.transaction
+      ? this.client.transaction(load,{readOnly:true}) : load(this.client);
   }
 
   async getWorkspaceCollection<K extends RentOpsWorkspaceCollection>(name: K): Promise<RentOpsSnapshot[K]> {

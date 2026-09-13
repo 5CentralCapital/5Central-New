@@ -389,3 +389,31 @@ test("configured reset is nonenumerating, preserves access until use, and reject
   const sent=await f.admin.request(`${adminPath}/${invite.account.id}/send-link`,{method:"POST",body:{}});
   assert.equal(sent.status,200); assert.equal(sent.body.delivery,"accepted");
 });
+
+
+test("strict tenant binding uses the directory while home retains complete financial evidence", async t => {
+  const source=structuredClone(syntheticRentOpsSnapshot());source.modelVersion=3;
+  for(const row of source.tenancies) Object.assign(row,{primaryPersonLinkKnowledge:'manual',propertyLinkKnowledge:'manual',unitLinkKnowledge:'manual',statusKnowledge:'manual'});
+  for(const row of source.units) row.propertyLinkKnowledge='manual';
+  const f=await fixture(t,source);const invite=await f.create();
+  const directory=structuredClone(source);directory.ledgerTransactions=[];directory.paymentAllocations=[];directory.documents=[];
+  let directoryReads=0,operationalReads=0;
+  Object.assign(f.repository,{getWorkspaceSnapshot:async()=>{directoryReads++;return structuredClone(directory);},getOperationalSnapshot:async()=>{operationalReads++;return structuredClone(source);},getSnapshot:async()=>{throw new Error('Full legacy history must not be read');}});
+  const {target}=await f.activate(undefined,invite);
+  assert.equal((await target.request(`${tenantPath}/auth/session`)).status,200);
+  const home=await target.request<TenantHome>(`${tenantPath}/home`);assert.equal(home.status,200);
+  assert.ok(directoryReads>=3);assert.equal(operationalReads,1);
+  assert.ok(home.body.ledger.length>0);
+  directory.units.find(row=>row.id===source.tenancies[0].unitId)!.propertyLinkKnowledge='unknown';
+  assert.equal((await target.request(`${tenantPath}/auth/session`)).status,403);
+  assert.equal((await target.request(`${tenantPath}/home`)).status,403);
+  assert.equal(operationalReads,1);
+});
+
+test("legacy directory binding falls back to complete snapshot knowledge mode", async t => {
+  const f=await fixture(t);const {target}=await f.activate();
+  const original=f.repository.getSnapshot.bind(f.repository);let fullReads=0;
+  Object.assign(f.repository,{getWorkspaceSnapshot:async()=>({...await original(),modelVersion:2}),getSnapshot:async()=>{fullReads++;return original();}});
+  assert.equal((await target.request(`${tenantPath}/auth/session`)).status,200);
+  assert.equal(fullReads,1);
+});

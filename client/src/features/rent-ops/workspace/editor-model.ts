@@ -1,3 +1,4 @@
+import { usdCurrencyFormatter } from '../../../lib/rent-ops-formatters';
 import type { AdminSnapshot, AdminLedgerTransactionView } from "../types";
 import type { FormValues, QuickAction } from "../form-payload";
 function title(value: unknown): string {
@@ -10,7 +11,7 @@ function money(cents: unknown): string {
   if (cents == null || cents === "") return "Needs review";
   const amount = typeof cents === "number" ? cents : Number(cents);
   if (!Number.isFinite(amount)) return "Needs review";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount / 100);
+  return usdCurrencyFormatter.format(amount / 100);
 }
 
 type Field = { name: string; label: string; type?: "text" | "date" | "datetime-local" | "number" | "select" | "textarea" | "checkbox"; required?: boolean; options?: Array<[string, string]>; locked?: boolean };

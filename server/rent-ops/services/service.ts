@@ -455,7 +455,7 @@ export class RentOpsService {
   async getOperationalScheduleRegister(filters: RentOpsFilters = {}) {
     // Tenancy, person source status and complete lineage must be read together.
     // The operational repository omits large document/activity histories.
-    const snapshot = await this.operationalSnapshot();
+    const snapshot = this.repository.getScheduleSnapshot ? await this.repository.getScheduleSnapshot() : await this.operationalSnapshot();
     return measureRentOps("derive", () => deriveOperationalScheduleRegister(snapshot, filters));
   }
   async workspaceCollection<K extends RentOpsWorkspaceCollection>(name: K): Promise<RentOpsSnapshot[K]> {

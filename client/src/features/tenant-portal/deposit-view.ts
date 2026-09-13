@@ -1,7 +1,8 @@
+import { usdCurrencyFormatter } from '../../lib/rent-ops-formatters';
 /** A signed source balance does not establish the amount of cash held. */
 export function depositMoney(value: unknown): string {
   return typeof value === "number" && Number.isSafeInteger(value)
-    ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value / 100)
+    ? usdCurrencyFormatter.format(value / 100)
     : "Unavailable";
 }
 

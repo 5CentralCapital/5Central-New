@@ -31,7 +31,7 @@ export function syntheticLeasePdf(): Buffer {
   return Buffer.from(pdf);
 }
 
-export async function createTenantQa(options: { provider?: PaymentProvider } = {}) {
+export async function createTenantQa(options: { provider?: PaymentProvider; publicDir?: string; setupApp?: (app:express.Express)=>void; assets?:RequestHandler; transformHtml?: (html:string,url:string)=>string } = {}) {
   if (options.provider?.live) throw new Error("Local QA refuses live payment providers");
   if (process.env.NODE_ENV === "production") throw new Error("Local QA cannot run in production");
   const db = new PGlite();
@@ -68,6 +68,7 @@ export async function createTenantQa(options: { provider?: PaymentProvider } = {
   const inbox: Array<Record<string, unknown>> = [];
   const control = { failMail:false, clock };
   const app = express();
+  options.setupApp?.(app);
   let testPaymentService: TenantPaymentService | undefined;
   registerTenantPaymentWebhook(app,{getService:()=>testPaymentService});
   app.use(express.json());
@@ -104,8 +105,9 @@ export async function createTenantQa(options: { provider?: PaymentProvider } = {
     <p>After the full flow runner: resident@example.test · Password: LocalQA-Reset-2026</p>
     <p><a href="/ops">Manager</a> · <a href="/apply">Application</a> · <a href="/tenant">Tenant</a> · <a href="/qa/inbox">Local test email inbox</a></p>
     <p>${options.provider ? "Payments use the explicitly injected Stripe sandbox provider. Test payment methods only." : "Payments use a local fake processor. Do not open its synthetic Stripe URL. Real card/bank Checkout is not verified here."}</p>`));
-  app.use(express.static(resolve('dist/public'),{index:false}));
-  app.get(/.*/,(req,res)=>res.type('html').send(privatePortalHtml(readFileSync(resolve('dist/public/index.html'),'utf8'),req.originalUrl)));
+  const publicDir=resolve(options.publicDir??'dist/public');
+  app.use(options.assets??express.static(publicDir,{index:false}));
+  app.get(/.*/,(req,res)=>{const html=privatePortalHtml(readFileSync(resolve(publicDir,'index.html'),'utf8'),req.originalUrl);res.type('html').send(options.transformHtml?options.transformHtml(html,req.originalUrl):html);});
   const server = createServer(app);
   return {app,server,db,executor,repository,storage,inbox,control,service,today};
 }
