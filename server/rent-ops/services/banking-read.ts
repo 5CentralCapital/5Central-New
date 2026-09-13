@@ -8,6 +8,8 @@ const currency = (value: unknown) => typeof value === "string" && /^[A-Z]{3}$/.t
 const label = (value: unknown, fallback: string) => typeof value === "string" ? value.slice(0, 240) : fallback;
 const date = (value: unknown) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
 
+const timestamp = (value: unknown) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value) && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+
 /** Read-only bank evidence. Never creates ledger records or assigns an entity. */
 export async function readBanking(env: Environment = process.env, request: typeof fetch = fetch, now = new Date()): Promise<BankingSnapshot> {
   const throughDate = now.toISOString().slice(0, 10);
@@ -22,7 +24,13 @@ export async function readBanking(env: Environment = process.env, request: typeo
   }
   result.connections = await Promise.all(tokens.map(async (token, index) => {
     const id = opaque(token);
-    const connection: BankingSnapshot["connections"][number] = { id, name: `Connection ${index + 1}`, balancesState: "unavailable", transactionsState: "unavailable", accounts: [], transactions: [] };
+    const connection: BankingSnapshot["connections"][number] = { id, name: `Connection ${index + 1}`, balancesState: "unavailable", transactionsState: "unavailable", transactionsLastSuccessfulUpdate: null, transactionsLastFailedUpdate: null, accounts: [], transactions: [] };
+    // Item status is independent of the balance and transaction reads; an outage here
+    // must not discard usable bank data. Plaid returns status beside item, not inside it.
+    const freshness = call("item/get", token).then(body => {
+      connection.transactionsLastSuccessfulUpdate = timestamp(body.status?.transactions?.last_successful_update);
+      connection.transactionsLastFailedUpdate = timestamp(body.status?.transactions?.last_failed_update);
+    }).catch(() => { /* Freshness stays explicitly unknown. */ });
     const accountIds = new Map<string, string>();
     try {
       const body = await call("accounts/balance/get", token);
@@ -59,6 +67,7 @@ export async function readBanking(env: Environment = process.env, request: typeo
       }
       connection.transactions = Array.from(new Map(transactions.map(tx => [tx.id, tx])).values()).sort((a, b) => b.date.localeCompare(a.date));
     } catch { connection.transactionsState = "unavailable"; connection.transactions = []; }
+    await freshness;
     return connection;
   }));
   const allReady = result.connections.every(connection => connection.balancesState === "ready" && connection.transactionsState === "ready");
