@@ -49,6 +49,7 @@ export interface TenantRecordProps {
   onTab: (tab: TenantTab) => void;
   onEdit: EditAction;
   onChanged: () => void;
+  onMoveRefresh?: () => Promise<void>;
   businessDate?: string;
   onManageMoves?: () => void;
   readOnly?: boolean;
@@ -387,7 +388,7 @@ function tabContent(tab: TenantTab, props: Omit<TenantRecordProps, "tab" | "onTa
   }
 }
 
-export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged, businessDate, readOnly = false, onManageMoves }: TenantRecordProps) {
+export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged, onMoveRefresh, businessDate, readOnly = false, onManageMoves }: TenantRecordProps) {
   const [movesOpen, setMovesOpen] = useState(false);
   const review = balanceReviewDisplay(tenant.balanceReview);
   const summary = buildTenantSummary(tenant, snapshot);
@@ -404,7 +405,7 @@ export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged, 
       <div className="rm-record-summary-meta"><span className={statusClass(summary.status, summary.status === "Needs review")}>{label(summary.status)}</span><span className={`rm-record-balance${review ? tenant.balanceReview?.stale || tenant.balanceReview?.reviewedBalanceCents ? " rm-record-balance-warning" : "" : summary.balance.complete && summary.balance.amountCents ? " rm-record-balance-warning" : ""}`}><small>{review ? review.label : "Posted ledger balance"}</small><strong>{review ? review.amount : summary.balance.complete ? formatMoney(summary.balance.amountCents) : "Needs review"}</strong></span><span className="rm-record-as-of"><small>As of</small><strong>{formatDate(review ? tenant.balanceReview?.asOfDate : summary.asOfDate)}</strong></span></div>
     </header>
     {!readOnly && businessDate && <div className="rm-toolbar"><button className="rm-button" onClick={() => onManageMoves ? onManageMoves() : setMovesOpen(true)}>Move-in / move-out</button></div>}
-    {movesOpen && !readOnly && businessDate && <ManagerTenancyActions key={tenant.person.id} snapshot={snapshot} personId={tenant.person.id} businessDate={businessDate} onSaved={async () => { await onChanged(); }} onClose={() => setMovesOpen(false)} />}
+    {movesOpen && !readOnly && businessDate && <ManagerTenancyActions key={tenant.person.id} snapshot={snapshot} personId={tenant.person.id} businessDate={businessDate} onSaved={onMoveRefresh ?? (async () => { await onChanged(); })} onClose={() => setMovesOpen(false)} />}
     <nav className="rm-tabs rm-tenant-tabs" role="tablist" aria-label="Tenant record sections">{TENANT_RECORD_TABS.map((item) => <button type="button" role="tab" aria-selected={tab === item} aria-controls={`tenant-panel-${item}`} className={tab === item ? "active" : ""} key={item} onClick={() => onTab(item)}>{TAB_LABELS[item]}</button>)}</nav>
     {headerActions.length > 0 && <div className="rm-toolbar rm-tenant-toolbar">{headerActions.map((action) => <ActionButton key={`${action.action}-${action.label}`} action={action} onEdit={onEdit} primary />)}</div>}
     <div id={`tenant-panel-${tab}`} role="tabpanel" className="rm-tenant-panel-body">{tabContent(tab, { tenant, snapshot, onEdit, onChanged, editActions })}</div>

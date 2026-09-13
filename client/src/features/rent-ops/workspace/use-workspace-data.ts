@@ -1,11 +1,33 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient, type QueryClient, type QueryKey } from '@tanstack/react-query';
 import { loadRentOpsTenantProfile, loadRentOpsWorkspaceBootstrap, loadRentOpsWorkspaceCollection, loadRentOpsWorkspaceDashboard, type WorkspaceCollection } from '../api';
 import { rentOpsAuthClient } from '../auth';
 import type { AdminSnapshotView, ViewFilters } from '../types';
 import { composeWorkspaceSnapshot, workspaceApiFilters } from './workspace-state';
 import { seedWorkspaceDashboardReports } from './dashboard-cache';
 const queryRoot=['rent-ops-workspace'] as const;
+
+/**
+ * Refresh the workspace for a mutation whose saved state must be reflected in
+ * the current view. TanStack Query can resolve an invalidation when a query is
+ * paused or when a matching query is no longer active, so the move workflow
+ * needs an explicit postcondition instead of treating resolution as proof of
+ * fresh occupancy.
+ */
+export async function refreshWorkspaceQueriesRequired(client: QueryClient, requiredKeys: readonly QueryKey[]): Promise<void> {
+ if(!requiredKeys.length) throw new Error('The workspace has no required records to refresh.');
+ const requiredBefore=requiredKeys.map(queryKey=>client.getQueryCache().find({queryKey,exact:true}));
+ const activeRequired=requiredBefore.filter((query): query is NonNullable<typeof query> => Boolean(query));
+ if(activeRequired.length!==requiredBefore.length||activeRequired.some(query=>!query.isActive())) throw new Error('The workspace has no active records to refresh.');
+ await client.invalidateQueries({queryKey:queryRoot,type:'active',refetchType:'active'},{throwOnError:true});
+ for(const before of activeRequired){
+  const after=client.getQueryCache().find({queryKey:before.queryKey,exact:true});
+  if(after!==before||!after?.isActive()) throw new Error('The workspace records could not be refreshed.');
+  if(after.state.status==='error') throw after.state.error instanceof Error?after.state.error:new Error('The workspace records could not be refreshed.');
+  if(after.state.status!=='success'||after.state.fetchStatus!=='idle'||after.state.isInvalidated) throw new Error('The workspace records could not be refreshed.');
+ }
+}
+
 export function useWorkspaceData({enabled,identity,filters,collections,summaryNeeded,personId}:{enabled:boolean;identity:string;filters:ViewFilters;collections:WorkspaceCollection[];summaryNeeded:boolean;personId?:string}){
  const client=useQueryClient();
  useEffect(()=>{
@@ -36,5 +58,14 @@ export function useWorkspaceData({enabled,identity,filters,collections,summaryNe
  const collectionError=fetched.find(q=>q.error)?.error;
  const collectionsReady=!!bootstrap.data&&collections.every((name,i)=>bootstrap.data!.loadedCollections.includes(name)||fetched[i].isSuccess);
  const refresh=useCallback(async()=>{await client.invalidateQueries({queryKey:queryRoot}, {throwOnError:true});},[client]);
- return {bootstrap,summary,tenant,snapshot,collectionsReady,collectionError,refresh,isRefreshing:bootstrap.isFetching||summary.isFetching||tenant.isFetching||fetched.some(q=>q.isFetching)};
+ const refreshRequired=useCallback(()=>{
+  const loadedCollections=new Set(bootstrap.data?.loadedCollections??[]);
+  return refreshWorkspaceQueriesRequired(client,[
+   [...queryRoot,'bootstrap',...scope],
+   ...(summaryNeeded?[[...queryRoot,'dashboard',...scope]]:[]),
+   ...(personId?[[...queryRoot,'tenant',personId,...scope]]:[]),
+   ...collections.filter(name=>!loadedCollections.has(name)).map(name=>[...queryRoot,'collection',name,...scope]),
+  ]);
+ },[client,identity,filters.propertyScope,filters.propertyId,filters.propertyIds,filters.asOfDate,summaryNeeded,personId,collections,bootstrap.data?.loadedCollections]);
+ return {bootstrap,summary,tenant,snapshot,collectionsReady,collectionError,refresh,refreshRequired,isRefreshing:bootstrap.isFetching||summary.isFetching||tenant.isFetching||fetched.some(q=>q.isFetching)};
 }
