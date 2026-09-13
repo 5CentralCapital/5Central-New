@@ -44,5 +44,8 @@ integrations = ["javascript_database:1.0.0"]
 
 [userenv]
 
-[userenv.shared]
+[userenv.development]
 PLAID_ENV = "development"
+
+[userenv.production]
+PLAID_ENV = "production"
