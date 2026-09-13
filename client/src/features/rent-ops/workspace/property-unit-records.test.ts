@@ -3,6 +3,9 @@ import test from "node:test";
 
 import {
   addressLines,
+  propertyUnitFieldValue,
+  propertyUnitFieldUnverified,
+  unitLayoutLabel,
   buildPropertyEditValues,
   buildUnitEditValues,
   occupancyHistoryForUnit,
@@ -208,4 +211,18 @@ test("multiple chosen properties retain only their unit inventories",()=>{
  const filters={propertyId:'all',propertyIds:['a','b'],propertyScope:'active' as const};
  assert.deepEqual(propertyUnitListItems(snapshot,filters).map(row=>row.id),['a','ua','b','ub']);
  assert.notEqual(resolvePropertyUnitSelection(snapshot,filters,'c')?.property?.id,'c');
+});
+
+
+test("optional property metadata stays neutral while real values and explicit uncertainty remain available", () => {
+  assert.equal(propertyUnitFieldValue(undefined), "—");
+  assert.equal(propertyUnitFieldValue(" "), "—");
+  assert.equal(propertyUnitFieldValue(0), "0");
+  assert.equal(propertyUnitFieldValue("A complete long operating contact name"), "A complete long operating contact name");
+  assert.equal(propertyUnitFieldUnverified("unknown"), true);
+  assert.equal(propertyUnitFieldUnverified("manual"), false);
+  assert.deepEqual(addressLines(undefined), []);
+  assert.equal(unitLayoutLabel({ bedrooms: 0, bathrooms: 1 }), "0 bd · 1 ba");
+  assert.equal(unitLayoutLabel({ bedrooms: 2 }), "2 bd");
+  assert.equal(unitLayoutLabel({}), "—");
 });

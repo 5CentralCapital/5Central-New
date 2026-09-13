@@ -69,6 +69,20 @@ export function knownLink(id: unknown, knowledge?: unknown): boolean {
   return Boolean(value) && !UNKNOWN_LINK_VALUES.has(lower(knowledge));
 }
 
+/** Optional metadata has a neutral empty state; supplied values remain visible. */
+export function propertyUnitFieldValue(value: unknown): string {
+  const display = text(value);
+  return display || "—";
+}
+
+export function propertyUnitFieldUnverified(knowledge: unknown): boolean {
+  return UNKNOWN_LINK_VALUES.has(lower(knowledge));
+}
+
+export function unitLayoutLabel(unit: Pick<AdminUnitView, "bedrooms" | "bathrooms">): string {
+  return [unit.bedrooms == null ? undefined : `${unit.bedrooms} bd`, unit.bathrooms == null ? undefined : `${unit.bathrooms} ba`].filter(Boolean).join(" · ") || "—";
+}
+
 export function centsAsDollars(cents: number | null | undefined): string {
   return typeof cents === "number" && Number.isFinite(cents) ? String(cents / 100) : "";
 }
@@ -95,7 +109,7 @@ function containsAddressPart(existing: string, candidate: unknown): boolean {
  * "123 Main St, Tampa, FL 33601" plus separate city/state fields.
  */
 export function addressLines(address?: AdminAddressView): string[] {
-  if (!address) return ["Needs review"];
+  if (!address) return [];
 
   const line1 = text(address.line1);
   const line2 = text(address.line2);
@@ -116,11 +130,11 @@ export function addressLines(address?: AdminAddressView): string[] {
     const locality = [localityParts.city, [localityParts.state, localityParts.postalCode].filter(Boolean).join(" ")].filter(Boolean).join(", ");
     if (locality) lines.push(locality);
   }
-  return lines.length ? lines : ["Needs review"];
+  return lines;
 }
 
 export function formatAddress(address?: AdminAddressView): string {
-  return addressLines(address).join(", ");
+  return addressLines(address).join(", ") || "—";
 }
 
 function propertyMatches(property: AdminPropertyView, query: string): boolean {
@@ -216,7 +230,7 @@ export function propertyUnitListItems(
       kind: "property",
       id: propertyId,
       title: text(property.name) || "Needs review",
-      subtitle: `${propertyUnits.length} ${propertyUnits.length === 1 ? "unit" : "units"} · ${formatAddress(property.address)}`,
+      subtitle: [`${propertyUnits.length} ${propertyUnits.length === 1 ? "unit" : "units"}`, addressLines(property.address).join(", ")].filter(Boolean).join(" · "),
       searchText: [property.name, property.slug, formatAddress(property.address)].filter(Boolean).join(" "),
     });
 
@@ -229,7 +243,7 @@ export function propertyUnitListItems(
         id: unitId,
         propertyId,
         title: text(unit.unitNumber) || "Needs review",
-        subtitle: [text(unit.unitType), text(unit.readiness) || "Readiness needs review"].filter(Boolean).join(" · "),
+        subtitle: [text(unit.unitType), !propertyUnitFieldUnverified(unit.readinessKnowledge) && text(unit.readiness) !== "unknown" ? text(unit.readiness).replaceAll("_", " ") : ""].filter(Boolean).join(" · "),
         searchText: [unit.unitNumber, unit.unitType, unit.readiness, unit.listing, unit.amenities?.join(" "), unit.accessNotes].filter(Boolean).join(" "),
       });
     });

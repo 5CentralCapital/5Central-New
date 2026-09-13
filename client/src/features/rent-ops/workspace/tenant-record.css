@@ -1,14 +1,14 @@
 .rm-tenant-record {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
+  gap: var(--rm-space-3, .75rem);
   --rm-charcoal: #3A3A3C;
   --rm-gold: #D4A843;
   --rm-cream: #F5F0E8;
   --rm-ink: #1d1d1f;
   --rm-muted: #6d6a63;
   --rm-border: rgba(58, 58, 60, .16);
-  --rm-panel-bg: #fffdf9;
+  --rm-panel-bg: var(--rm-surface, #fff);
   min-width: 0;
   color: var(--rm-ink, #1d1d1f);
 }
@@ -25,11 +25,11 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 18px;
-  padding: 20px 22px;
+  gap: var(--rm-space-4, 1rem);
+  padding: var(--rm-panel-inset, 1rem);
   border: 1px solid var(--rm-border);
-  border-top: 3px solid var(--rm-gold);
-  background: var(--rm-cream);
+  border-radius: var(--rm-radius, .75rem);
+  background: var(--rm-panel-bg);
 }
 
 .rm-record-summary-main,
@@ -135,31 +135,33 @@
   gap: 7px;
 }
 
-.rm-tenant-toolbar {
+.rm-tenant-record .rm-tenant-toolbar {
   justify-content: flex-end;
-  min-height: 42px;
-  padding: 8px 0;
+  min-height: var(--rm-control-height, 2.25rem);
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .rm-tenant-tab-content {
   display: grid;
-  gap: 12px;
+  gap: var(--rm-section-gap, 1rem);
   min-width: 0;
-  padding-top: 12px;
+  padding-top: 0;
 }
 
 .rm-summary-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--rm-section-gap, 1rem);
   align-items: start;
 }
 
 .rm-tenant-panel {
   min-width: 0;
-  padding: 15px 16px;
+  padding: var(--rm-panel-inset, 1rem);
   border: 1px solid var(--rm-border);
-  border-radius: 5px;
+  border-radius: var(--rm-radius, .75rem);
   background: var(--rm-panel-bg);
 }
 
@@ -187,23 +189,24 @@
 .rm-form-grid.rm-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 9px 15px;
+  gap: var(--rm-space-3, .75rem) var(--rm-space-4, 1rem);
   margin: 0;
 }
 
-.rm-field {
+.rm-tenant-record .rm-detail-grid .rm-field {
   min-width: 0;
-  padding-bottom: 7px;
+  gap: var(--rm-space-1, .25rem);
+  padding-bottom: var(--rm-space-2, .5rem);
   border-bottom: 1px solid rgba(58, 58, 60, .09);
 }
 
 .rm-field dt {
   margin-bottom: 3px;
   color: var(--rm-muted);
-  font-size: .63rem;
-  font-weight: 750;
-  letter-spacing: .07em;
-  text-transform: uppercase;
+  font-size: .75rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .rm-field dd {
@@ -486,10 +489,10 @@
 }
 
 .rm-tenancy-card {
-  padding: 12px;
-  border: 1px solid rgba(58, 58, 60, .12);
-  border-left: 3px solid var(--rm-gold);
-  background: #fff;
+  padding: var(--rm-space-3, .75rem) 0;
+  border: 0;
+  border-top: 1px solid var(--rm-border);
+  background: transparent;
 }
 
 .rm-card-heading {
@@ -571,6 +574,7 @@
 
   .rm-record-summary-meta {
     justify-content: flex-start;
+    gap: var(--rm-space-3, .75rem);
   }
 
   .rm-summary-grid,

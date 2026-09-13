@@ -1041,7 +1041,10 @@ export class RentOpsService {
     const values: Record<string, unknown> = {};
     for (const field of changedFields) {
       if (field === "address" && next.address && typeof next.address === "object" && !Array.isArray(next.address)) {
-        for (const [addressField, value] of Object.entries(next.address as Record<string, unknown>)) values[`address_${snakeCase(addressField).replace(/^_/, "")}`] = value;
+        for (const [addressField, value] of Object.entries(next.address as Record<string, unknown>)) {
+          const column = addressField === "line1" || addressField === "line2" ? `address_${addressField}` : snakeCase(addressField);
+          values[column] = value;
+        }
       } else {
         // The property status column retains its historical SQL name; all
         // other patch fields use the contract's snake_case spelling.

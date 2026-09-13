@@ -1391,7 +1391,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     await this.assertReady();
     const assignments = entries.map(([column], index) => `${column} = $${index + 1}`);
     assignments.push(`record_revision = $${entries.length + 1}`);
-    const values = entries.map(([column, value]) => ["phone_methods", "source_account_facts"].includes(column) ? JSON.stringify(value) : value);
+    const values = entries.map(([column, value]) => ["phone_methods", "source_account_facts", "amenities"].includes(column) ? JSON.stringify(value) : value);
     values.push(update.nextRevision, update.targetId, update.expectedRevision);
     const result = await this.client.query<Record<string, unknown>>(
       `UPDATE ${table} SET ${assignments.join(", ")} WHERE id = $${entries.length + 2} AND record_revision = $${entries.length + 3} RETURNING id`,

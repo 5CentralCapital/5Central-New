@@ -39,7 +39,15 @@
   --rm-record-list-width: 220px;
   --rm-radius: 12px;
   --rm-radius-small: 7px;
-  --rm-control-height: 36px;
+  --rm-control-height: 2.25rem;
+  --rm-space-1: .25rem;
+  --rm-space-2: .5rem;
+  --rm-space-3: .75rem;
+  --rm-space-4: 1rem;
+  --rm-space-5: 1.25rem;
+  --rm-page-inset: clamp(.875rem, 2vw, 1.5rem);
+  --rm-section-gap: 1rem;
+  --rm-panel-inset: 1rem;
   --rm-shadow: none;
 
   min-width: 0;
@@ -117,7 +125,9 @@
 
 .rm-workspace .rm-main h1,
 .rm-workspace .rm-dialog h1 {
-  font-size: 20px;
+  font-size: 1.5rem;
+  letter-spacing: -.025em;
+  line-height: 1.2;
 }
 
 .rm-workspace .rm-main h2,
@@ -179,58 +189,78 @@
 .rm-workspace .rm-workspace-toolbar {
   justify-content: flex-start;
   align-items: flex-end;
-  gap: 10px;
-  margin-bottom: 14px;
-  padding: 10px 12px;
-}
-
-.rm-workspace .rm-workspace-toolbar > h1 {
-  align-self: center;
-  flex: 1 0 130px;
-  margin: 0 12px 0 0;
+  gap: var(--rm-space-3);
+  margin-bottom: var(--rm-section-gap);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .rm-workspace .rm-workspace-toolbar > label {
   display: grid;
-  gap: 3px;
-  flex: 0 1 180px;
-  min-width: 125px;
+  gap: var(--rm-space-1);
+  flex: 0 1 11rem;
+  min-width: 8rem;
   color: var(--rm-muted);
   font-size: 11px;
   line-height: 1.3;
 }
 
-.rm-workspace .rm-workspace-toolbar > label:nth-of-type(2) {
-  flex-basis: 220px;
+.rm-workspace .rm-workspace-toolbar > label:has([aria-label="Portfolio scope"]) {
+  flex-basis: 12rem;
+  max-width: 13rem;
+}
+
+.rm-workspace .rm-workspace-toolbar > label:has(input[type="date"]) {
+  flex-basis: 10.625rem;
+  max-width: 10.625rem;
+}
+
+.rm-workspace .rm-workspace-toolbar > .rm-property-filter {
+  flex: 0 1 13.75rem;
+  max-width: 13.75rem;
+}
+
+.rm-workspace-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: var(--rm-space-2);
+  margin-left: auto;
+  padding-left: var(--rm-space-2);
 }
 
 .rm-workspace .rm-workspace-toolbar > label > :is(input, select) {
   width: 100%;
   min-width: 0;
-  height: 32px;
+  height: var(--rm-control-height);
   color: var(--rm-ink);
-  font-size: 12px;
+  font-size: .8125rem;
 }
 
 .rm-workspace .rm-workspace-toolbar > .rm-search {
   position: relative;
-  flex: 1 1 180px;
-  max-width: 280px;
+  flex: 1 1 15rem;
+  max-width: 30rem;
 }
 
 .rm-workspace .rm-workspace-toolbar > .rm-search > svg {
   position: absolute;
-  top: 9px;
-  left: 8px;
+  top: 50%;
+  left: 10px;
+  transform: translateY(-50%);
   pointer-events: none;
 }
 
 .rm-workspace .rm-workspace-toolbar > .rm-search > input {
-  padding-left: 28px;
+  padding-left: 32px;
 }
 
-.rm-workspace .rm-workspace-toolbar > .rm-button {
-  min-height: 32px;
+.rm-workspace .rm-workspace-toolbar-actions > .rm-button {
+  min-height: var(--rm-control-height);
 }
 
 .rm-workspace .rm-sidebar-footer {
@@ -278,11 +308,6 @@
 
 /* Component styles load separately; scope these typography and containment
    rules above their standalone selectors without altering semantic statuses. */
-.rm-workspace .rm-main :is(h1, h2, h3, h4) {
-  font-family: inherit;
-  letter-spacing: 0;
-}
-
 .rm-workspace .rm-property-unit-list-icon,
 .rm-workspace .rm-link-button {
   color: var(--rm-charcoal);
@@ -677,8 +702,8 @@
 
 .rm-main {
   min-width: 0;
-  padding: 18px 24px 40px;
-  background: var(--rm-cream);
+  padding: var(--rm-page-inset) var(--rm-page-inset) 2.5rem;
+  background: var(--rm-surface-subtle);
 }
 
 .rm-main > :where(h1, h2, h3, p) {
@@ -696,8 +721,8 @@
 }
 
 .rm-page-heading {
-  min-height: 40px;
-  margin-bottom: 14px;
+  min-height: 2rem;
+  margin-bottom: var(--rm-space-3);
 }
 
 .rm-page-heading :where(h1, h2),
@@ -724,13 +749,18 @@
   flex-wrap: wrap;
 }
 
+.rm-workspace-heading {
+  justify-content: flex-start;
+  gap: var(--rm-space-2);
+}
+
 /* Inner record navigation: fixed-width list, flexible record detail */
 
 .rm-record-layout {
   display: grid;
   grid-template-columns: var(--rm-record-list-width) minmax(0, 1fr);
   align-items: start;
-  gap: 12px;
+  gap: var(--rm-section-gap);
   min-width: 0;
 }
 
@@ -839,10 +869,9 @@
 
 .rm-record-summary {
   align-items: flex-start;
-  padding: 12px 14px;
+  padding: var(--rm-panel-inset);
   background: var(--rm-surface);
   border: 1px solid var(--rm-line);
-  border-left: 3px solid var(--rm-gold);
   border-radius: var(--rm-radius);
   box-shadow: var(--rm-shadow);
 }
@@ -990,29 +1019,46 @@
   }
 }
 
+/* Controls belong to the containing surface, with one boundary per group. */
+.rm-panel > .rm-toolbar,
+.rm-record-list > .rm-toolbar {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.rm-panel > .rm-toolbar {
+  padding: 0 0 var(--rm-space-3);
+  margin-bottom: var(--rm-space-3);
+  border-bottom: 1px solid var(--rm-line);
+}
+.rm-record-list > .rm-toolbar {
+  padding: var(--rm-space-3);
+  border-bottom: 1px solid var(--rm-line);
+}
+
 /* Panels and forms */
 
-.rm-panel {
+.rm-workspace .rm-panel {
   min-width: 0;
-  padding: 14px;
+  padding: var(--rm-panel-inset);
   background: var(--rm-surface);
   border: 1px solid var(--rm-line);
   border-radius: var(--rm-radius);
   box-shadow: var(--rm-shadow);
 }
 
-.rm-panel--flush {
+.rm-workspace .rm-panel--flush {
   padding: 0;
 }
 
-.rm-panel--dense {
-  padding: 10px;
+.rm-workspace .rm-panel--dense {
+  padding: var(--rm-space-3);
 }
 
 .rm-panel-heading {
   align-items: flex-start;
   min-height: 26px;
-  margin-bottom: 11px;
+  margin-bottom: var(--rm-space-3);
 }
 
 .rm-panel-heading :where(h2, h3),
@@ -1031,7 +1077,7 @@
 .rm-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 11px 12px;
+  gap: var(--rm-space-3) var(--rm-space-4);
   min-width: 0;
 }
 
@@ -1509,17 +1555,17 @@
 .rm-dashboard-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--rm-space-3);
   min-width: 0;
 }
 
 .rm-stat {
   display: grid;
   min-width: 0;
-  min-height: 76px;
+  min-height: 5rem;
   gap: 6px;
   align-content: center;
-  padding: 11px 12px;
+  padding: var(--rm-space-3) var(--rm-space-4);
   border: 1px solid var(--rm-line);
   border-radius: var(--rm-radius);
   background: var(--rm-surface);
@@ -1638,7 +1684,7 @@ button.rm-stat:hover {
 
 .rm-stack {
   display: grid;
-  gap: 12px;
+  gap: var(--rm-section-gap);
 }
 
 .rm-inline {
@@ -1693,7 +1739,7 @@ button.rm-stat:hover {
 }
 
 .rm-workspace .ro-panel {
-  padding: 14px;
+  padding: var(--rm-panel-inset);
 }
 
 .rm-workspace :where(.ro-panel h1, .ro-panel h2, .ro-panel h3, .ro-panel h4, .ro-topbar h1, .ro-dialog h2, .ro-auth-card h1, .ro-stat strong) {
@@ -2059,9 +2105,6 @@ button.rm-stat:hover {
     --rm-record-list-width: 204px;
   }
 
-  .rm-main {
-    padding-inline: 18px;
-  }
 
   .rm-dashboard-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2198,9 +2241,7 @@ button.rm-stat:hover {
     margin-left: auto;
   }
 
-  .rm-main {
-    padding: 14px 12px 30px;
-  }
+  .rm-workspace { --rm-section-gap: .875rem; }
 
   .rm-page-heading {
     align-items: flex-start;
@@ -2340,12 +2381,12 @@ button.rm-stat:hover {
 
 /* A phone viewport must shrink controls, not the financial table columns. */
 @media (max-width: 480px) {
-  .rm-workspace .rm-workspace-toolbar > h1 {
-    flex-basis: 100%;
-  }
-
   .rm-workspace .rm-workspace-toolbar > .rm-search {
+    flex-basis: 100%;
     max-width: none;
+  }
+  .rm-workspace-toolbar-actions {
+    padding-left: 0;
   }
 
   .rm-workspace .rm-leasing-toolbar,
@@ -2428,10 +2469,6 @@ button.rm-stat:hover {
 
 /* Manager refinement: quiet chrome, readable records, immediate feedback. */
 .rm-workspace { background: #fafaf9; }
-.rm-workspace .rm-main { background: #fafaf9; padding: 28px 28px 48px; }
-.rm-workspace .rm-main h1, .rm-workspace .rm-dialog h1 {
-  font-size: 24px; font-weight: 650; letter-spacing: -.025em; line-height: 1.2;
-}
 .rm-workspace .rm-main :is(h2, h3, h4) { letter-spacing: -.015em; }
 .rm-workspace .rm-ribbon {
   align-items: center; gap: 8px; padding-inline: 18px;
@@ -2480,25 +2517,6 @@ button.rm-stat:hover {
 .rm-workspace .rm-sidebar-footer { border-color: var(--rm-line); color: var(--rm-muted); padding-top: 16px; }
 .rm-workspace .rm-sidebar-footer a { color: var(--rm-muted); }
 .rm-workspace .rm-sidebar-footer a:hover { color: var(--rm-ink); }
-.rm-workspace .rm-workspace-toolbar {
-  padding: 0 0 22px; margin-bottom: 0; gap: 12px; border: 0; border-radius: 0;
-  background: transparent; box-shadow: none;
-}
-.rm-workspace .rm-workspace-toolbar > h1 { flex-basis: 160px; }
-.rm-workspace .rm-workspace-toolbar > label { gap: 6px; font-size: 12px; }
-.rm-workspace .rm-workspace-toolbar > label > :is(input, select) { height: 36px; font-size: 13px; }
-.rm-workspace .rm-workspace-toolbar > .rm-button { min-height: 36px; }
-.rm-workspace .rm-workspace-toolbar > .rm-search > svg { top: 11px; left: 10px; }
-.rm-workspace .rm-workspace-toolbar > .rm-search > input { padding-left: 32px; }
-.rm-workspace .rm-panel { padding: 20px; }
-.rm-workspace .rm-panel--flush { padding: 0; }
-.rm-workspace .rm-panel--dense { padding: 14px; }
-.rm-workspace .rm-panel-heading { margin-bottom: 16px; }
-.rm-workspace .rm-panel-heading :is(h2, h3) { font-weight: 650; }
-.rm-workspace .rm-stack { gap: 20px; }
-.rm-workspace .rm-record-layout { gap: 20px; }
-.rm-workspace .rm-form-grid { gap: 18px 20px; }
-.rm-workspace .rm-field { gap: 7px; }
 .rm-workspace .rm-field-label, .rm-workspace .rm-field > label { color: var(--rm-charcoal); font-size: 12px; font-weight: 550; }
 .rm-workspace .rm-button { font-size: 13px; font-weight: 550; padding-inline: 13px; }
 .rm-workspace .rm-button--icon { padding: 0; }
@@ -2520,16 +2538,11 @@ button.rm-stat:hover {
 .rm-workspace :is(button, a) { -webkit-tap-highlight-color: transparent; }
 .rm-workspace :is(button, [role="button"]):active { transition-duration: 0ms; }
 @media (max-width: 1100px) {
-  .rm-workspace .rm-main { padding: 22px 20px 40px; }
   .rm-workspace .rm-ribbon { gap: 4px; padding-inline: 10px; }
   .rm-workspace .rm-ribbon .rm-nav-group > :is(button, a) { padding-inline: 8px; }
 }
 @media (max-width: 768px) {
-  .rm-workspace .rm-main { padding: 20px 14px 32px; }
   .rm-workspace .rm-sidebar { padding: 10px; }
-  .rm-workspace .rm-workspace-toolbar { padding-bottom: 18px; }
-  .rm-workspace .rm-panel { padding: 16px; }
-  .rm-workspace .rm-panel--flush { padding: 0; }
   .rm-workspace .rm-dialog-header, .rm-workspace .rm-dialog-body { padding: 18px; }
   .rm-workspace .rm-dialog-footer { padding: 14px 18px; }
 }

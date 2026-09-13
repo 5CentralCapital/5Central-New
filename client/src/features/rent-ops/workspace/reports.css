@@ -1,7 +1,7 @@
 .rm-report-workspace,
 .rm-dashboard-workspace {
   display: grid;
-  gap: 16px;
+  gap: var(--rm-section-gap, 1rem);
   min-width: 0;
 }
 
@@ -9,8 +9,8 @@
   display: flex;
   align-items: end;
   flex-wrap: wrap;
-  gap: 10px;
-  padding: 12px;
+  gap: var(--rm-space-3, .75rem);
+  padding: var(--rm-space-3, .75rem);
   border: 1px solid var(--rm-line, #dde2df);
   border-radius: 10px;
   background: var(--rm-paper, #fff);
@@ -278,7 +278,7 @@ button.rm-stat:hover {
 
 .rm-dashboard-vacancy {
   display: grid;
-  gap: 14px;
+  gap: var(--rm-space-3, .75rem);
 }
 
 .rm-dashboard-counts {
@@ -288,9 +288,8 @@ button.rm-stat:hover {
 }
 
 .rm-dashboard-counts div {
-  padding: 10px;
-  border-radius: 7px;
-  background: var(--rm-wash, #f3f5f2);
+  padding: var(--rm-space-2, .5rem) 0;
+  border-bottom: 1px solid var(--rm-line, #e5e5e3);
 }
 
 .rm-dashboard-counts span,
@@ -312,7 +311,7 @@ button.rm-stat:hover {
 .rm-dashboard-widget-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--rm-section-gap, 1rem);
 }
 
 .rm-dashboard-widget {

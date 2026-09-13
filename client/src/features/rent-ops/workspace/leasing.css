@@ -40,12 +40,10 @@
 .rm-leasing-toolbar {
   display: grid;
   grid-template-columns: repeat(2, minmax(8rem, 1fr));
-  gap: .55rem;
-  margin: 1rem 0;
-  padding: .7rem;
-  border: 1px solid var(--rm-line, #dfe4e0);
-  border-radius: .5rem;
-  background: var(--rm-paper, #f7f8f6);
+  gap: var(--rm-space-3, .75rem);
+  margin: var(--rm-space-4, 1rem) 0;
+  padding: 0 0 var(--rm-space-3, .75rem);
+  border-bottom: 1px solid var(--rm-line, #dfe4e0);
 }
 
 .rm-leasing-toolbar .rm-field {

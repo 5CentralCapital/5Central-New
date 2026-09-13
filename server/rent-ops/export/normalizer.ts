@@ -334,6 +334,8 @@ function normalizeProperty(record: Raw, exceptions: NormalizationException[]): R
     state: ["State"],
     postalCode: ["PostalCode", "Zip", "ZipCode"],
     archived: ["IsArchived", "Archived"],
+    propertyType: ["PropertyType"],
+    operatingContact: ["ManagerName"],
   }, undefined, "property");
   const address = value(record, "Address", "PropertyAddress");
   const addressObject = address && typeof address === "object" && !Array.isArray(address) ? address as Record<string, unknown> : undefined;
@@ -345,7 +347,7 @@ function normalizeProperty(record: Raw, exceptions: NormalizationException[]): R
     // The collector intentionally does not alias Addresses[0].  Assign the
     // selected row directly so a stale compatibility alias from an older
     // archive cannot override an explicit primary/type/role selection.
-    normalized.addressLine1 = selected.Line1 ?? selected.AddressLine1 ?? selected.Address ?? selected.Street ?? normalized.addressLine1;
+    normalized.addressLine1 = selected.Line1 ?? selected.AddressLine1 ?? selected.Street ?? selected.Address ?? normalized.addressLine1;
     normalized.addressLine2 = selected.Line2 ?? selected.AddressLine2 ?? normalized.addressLine2;
     normalized.city = selected.City ?? normalized.city;
     normalized.state = selected.State ?? normalized.state;
@@ -385,6 +387,7 @@ function normalizeUnit(record: Raw, properties: Map<string, Raw>, unitTypes: Map
     unitTypeId: ["UnitTypeID"],
     marketRent: ["MarketRent", "Rent"],
     marketRentCents: ["MarketRentCents"],
+    bedrooms: ["Bedrooms"],
     bathrooms: ["Bathrooms"],
     squareFeet: ["SquareFootage"],
   }, undefined, "unit");
@@ -396,6 +399,7 @@ function normalizeUnit(record: Raw, properties: Map<string, Raw>, unitTypes: Map
     const embedded = unitType as Record<string, unknown>;
     normalized.unitType ??= embedded.Name ?? embedded.Description ?? embedded.UnitTypeName;
     normalized.unitTypeId ??= embedded.UnitTypeID;
+    normalized.bedrooms ??= embedded.Bedrooms;
     normalized.bathrooms ??= embedded.Bathrooms;
   }
   const marketRentValue = value(record, "MarketRent");
@@ -426,10 +430,12 @@ function normalizeUnit(record: Raw, properties: Map<string, Raw>, unitTypes: Map
   }
   const amenities = value(record, "Amenities");
   if (Array.isArray(amenities)) {
-    normalized.amenities ??= amenities.map((amenity) => {
+    // This is the unit-owned embedded relationship, never the global amenity catalog.
+    // Replace the collector compatibility alias, which may still hold raw objects.
+    normalized.amenities = amenities.map((amenity) => {
       if (amenity && typeof amenity === "object" && !Array.isArray(amenity)) {
         const row = amenity as Record<string, unknown>;
-        return row.Name ?? row.Description ?? row.AmenityName ?? row.AmenityID;
+        return row.Name ?? row.Description ?? row.AmenityName;
       }
       return amenity;
     }).filter((amenity): amenity is string | number => typeof amenity === "string" || typeof amenity === "number").map(String);
@@ -439,6 +445,10 @@ function normalizeUnit(record: Raw, properties: Map<string, Raw>, unitTypes: Map
   const unitTypeId = text(normalized, "unitTypeId");
   if (unitTypeId && !unitTypes.has(unitTypeId) && !hasEmbeddedUnitType) addException(exceptions, "missing_relationship", "units", normalized, "unit_type_not_resolved");
   const lookupUnitType = unitTypeId ? unitTypes.get(unitTypeId) : undefined;
+  if (lookupUnitType) {
+    normalized.bedrooms ??= value(lookupUnitType, "Bedrooms", "bedrooms");
+    normalized.bathrooms ??= value(lookupUnitType, "Bathrooms", "bathrooms");
+  }
   if (lookupUnitType && normalized.unitType === undefined) normalized.unitType = text(lookupUnitType, "Name", "Description", "UnitTypeName");
   if (!text(normalized, "unitType")) addException(exceptions, "incomplete_coverage", "units", normalized, "unit_type_not_returned_or_joined", "unresolved");
   if (value(normalized, "marketRent", "marketRentCents") === undefined) addException(exceptions, "incomplete_coverage", "units", normalized, marketRentSelection.ambiguous ? "market_rent_effective_interval_ambiguous" : "market_rent_not_returned", marketRentSelection.ambiguous ? "ambiguous" : "unresolved");
@@ -451,6 +461,7 @@ function normalizeTenant(record: Raw, contacts: readonly Raw[], phones: readonly
     firstName: ["FirstName"],
     lastName: ["LastName"],
     status: ["Status", "TenantStatus"],
+    archived: ["IsArchived"],
   }, undefined, "person");
   const embeddedContactRows = Array.isArray(record.Contacts)
     ? record.Contacts

@@ -1,3 +1,4 @@
+import { currentPhoneMethods, phoneTypeLabel } from "../phone-methods-display";
 import { balanceReviewDisplay } from "./balance-review-display";
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, Plus } from "lucide-react";
@@ -139,7 +140,7 @@ function SummaryTab({ tenant, snapshot, onChanged }: { tenant: TenantView; snaps
   const summary = buildTenantSummary(tenant, snapshot);
   const context = resolveTenantContext(tenant, snapshot);
   const tenancy = summary.currentTenancy;
-  const primaryPhone = tenant.person.phone || tenant.person.phoneMethods?.find((method) => method.isPrimary === true)?.value || tenant.person.phoneMethods?.[0]?.value;
+  const phoneDisplay = currentPhoneMethods(tenant.person);
   const balanceWarning = !summary.balance.complete;
   const review = balanceReviewDisplay(tenant.balanceReview);
   return <div className="rm-tenant-tab-content">
@@ -154,17 +155,17 @@ function SummaryTab({ tenant, snapshot, onChanged }: { tenant: TenantView; snaps
           <Field label="Posted ledger balance" warning={balanceWarning}><span className={balanceWarning ? "rm-muted" : summary.balance.amountCents ? "rm-amount rm-amount-warning" : "rm-amount"}>{summary.balance.complete ? formatMoney(summary.balance.amountCents) : "Needs review"}</span>{balanceWarning && summary.balance.uncertaintyCodes.length > 0 && <small className="rm-warning-copy">{summary.balance.uncertaintyCodes.map(label).join(" · ")}</small>}</Field>
           <Field label="As of date">{formatDate(summary.asOfDate)}</Field>
           {(tenant.meteredUtilities ?? []).map(utility => <Field key={`${utility.utility}:${utility.effectiveFrom}`} label="Water — metered"><span>Starts {formatDate(utility.effectiveFrom)}</span><small>Amount unknown · billed from meter readings</small></Field>)}
-          <Field label="Planned move-in">{formatDate(tenancy?.plannedMoveInOn)}</Field>
+          {tenancy?.plannedMoveInOn && <Field label="Planned move-in">{formatDate(tenancy.plannedMoveInOn)}</Field>}
           <Field label="Actual move-in">{formatDate(tenancy?.actualMoveInOn)}</Field>
-          <Field label="Lease end">{formatDate(summary.primaryLease?.contractEndOn)}</Field>
+          <Field label="Lease end">{formatDate(summary.primaryLease?.contractEndOn)}{!tenant.primaryLease && summary.primaryLease && <small className="rm-muted">Execution not recorded</small>}</Field>
         </dl>
       </Panel>
       <Panel title="Contact">
         <dl className="rm-form-grid rm-detail-grid">
           <Field label="Email">{valueOrDash(tenant.person.email)}</Field>
-          <Field label="Phone">{valueOrDash(primaryPhone)}</Field>
-          <Field label="Insurance expires">{formatDate(tenant.person.renterInsuranceExpiresOn)}</Field>
-          <Field label="Archived">{tenant.person.archived == null ? "Needs review" : tenant.person.archived ? "Yes" : "No"}</Field>
+          {phoneDisplay.rows.length ? phoneDisplay.rows.map((phone, index) => <Field key={phone.id ?? index} label={phone.isPrimary ? "Primary phone" : phoneDisplay.hasPreviousPrimary ? "Other / previous phone" : "Phone"}><span>{phone.value}</span>{phoneTypeLabel(phone.type) && <small>{phoneTypeLabel(phone.type)}</small>}</Field>) : <Field label="Phone">{valueOrDash(undefined)}</Field>}
+          <Field label="Insurance expires">{tenant.person.renterInsuranceExpiresOn ? formatDate(tenant.person.renterInsuranceExpiresOn) : "Not on file"}</Field>
+          {typeof tenant.person.archived === "boolean" && <Field label="Archived">{tenant.person.archived ? "Yes" : "No"}</Field>}
         </dl>
         {tenant.person.id && <PhoneMethodsEditor key={`phones:${tenant.person.id}:${tenant.person.recordRevision ?? 1}`} person={tenant.person} onSaved={onChanged} />}
       </Panel>
@@ -177,7 +178,7 @@ function SummaryTab({ tenant, snapshot, onChanged }: { tenant: TenantView; snaps
         <Field label="Bathrooms">{context.unit?.bathrooms == null ? "Needs review" : String(context.unit.bathrooms)}</Field>
         <Field label="Square feet">{context.unit?.squareFeet == null ? "Needs review" : context.unit.squareFeet.toLocaleString()}</Field>
         <Field label="Market rent">{formatMoney(context.unit?.marketRentCents)}</Field>
-        <Field label="Default deposit">{formatMoney(context.unit?.defaultDepositCents)}</Field>
+        <Field label="Default deposit">{context.unit?.defaultDepositCents == null ? "—" : formatMoney(context.unit.defaultDepositCents)}</Field>
       </dl>
     </Panel>
   </div>;

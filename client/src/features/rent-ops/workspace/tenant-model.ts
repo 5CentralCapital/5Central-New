@@ -255,11 +255,29 @@ export function resolveTenantBalance(tenant: TenantView, snapshot: AdminSnapshot
   return balanceFromReport(tenant, snapshot) ?? balanceFromLedger(tenant);
 }
 
+/** Display sourced contract dates without treating an unrecorded execution as
+ * occupancy or billing evidence. The server remains authoritative for those. */
+function sourcedCurrentLeaseDates(tenant: TenantView, context: TenantContext): AdminLeaseTermView | undefined {
+  if (tenant.operationalStatus !== "current" || !context.currentTenancy?.id) return undefined;
+  const asOf = dateKey(context.asOfDate);
+  if (!asOf) return undefined;
+  const trusted = (value?: string) => value === "source" || value === "manual";
+  const candidates = context.leaseTerms.filter(term => {
+    const start = dateKey(term.contractStartOn), end = dateKey(term.contractEndOn);
+    return term.tenancyId === context.currentTenancy!.id
+      && ["exact", "manual"].includes(term.tenancyLinkKnowledge ?? "")
+      && (!term.status || ["executed", "month_to_month"].includes(term.status))
+      && trusted(term.contractStartKnowledge) && trusted(term.contractEndKnowledge)
+      && !!start && !!end && start <= asOf && end >= asOf;
+  });
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
 export function buildTenantSummary(tenant: TenantView, snapshot: AdminSnapshot): TenantSummaryModel {
   const context = resolveTenantContext(tenant, snapshot);
   const balance = resolveTenantBalance(tenant, snapshot);
   // The server selects the lease using the same dated tenancy context as rent roll.
-  const primaryLease = tenant.primaryLease;
+  const primaryLease = tenant.primaryLease ?? sourcedCurrentLeaseDates(tenant, context);
   return {
     displayName: personDisplayName(tenant.person),
     propertyName: propertyDisplayName(context.property),
