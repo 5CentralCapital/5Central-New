@@ -1,3 +1,5 @@
+import { recurringChargeTermsObservationSchema } from "../../../shared/recurring-charge-terms";
+import { chargeTermsPrefix, chargeTermsSummary } from "../domain/recurring-charge-terms";
 import type { AdminBalanceReviewView } from "./balance-review";
 import { serializeBalanceReview } from "./balance-review";
 import { effectiveScheduleIntervals } from "../domain/invariants";
@@ -900,6 +902,25 @@ export interface AdminActivityView {
 
 export function serializeAdminActivity(value: RentOpsActivityEvent): AdminActivityView {
   const input = inputOf(value);
+  const reserved = text(input, "id")?.startsWith(chargeTermsPrefix) === true;
+  let reviewedTermsDetail: string | undefined;
+  if (reserved) {
+    reviewedTermsDetail = "Charge terms could not be verified.";
+    try {
+      const parsed = recurringChargeTermsObservationSchema.safeParse(JSON.parse(text(input, "detail") ?? ""));
+      if (parsed.success) {
+        const row = parsed.data;
+        if (row.id === text(input, "id") && row.personId === text(input, "personId") && row.tenancyId === text(input, "tenancyId")
+          && row.propertyId === text(input, "propertyId") && row.unitId === text(input, "unitId")
+          && row.reviewedBy === text(input, "actor") && row.reviewedAt === dateText(input, "occurredAt")) {
+          const starts = row.rateFromKnowledge === "verified" ? row.verifiedRateFrom : "Unverified";
+          const leaseFrom = row.leaseFromKnowledge === "verified" ? row.leaseFrom : "Unverified";
+          const leaseThrough = row.leaseThroughKnowledge === "verified" ? row.leaseThrough : row.leaseThroughKnowledge === "month_to_month" ? "Month-to-month" : "Unverified";
+          reviewedTermsDetail = `Charge starts: ${starts}. Lease from: ${leaseFrom}. Lease through: ${leaseThrough}. Applies from: ${row.appliesFrom}.`;
+        }
+      }
+    } catch { /* Reserved review payloads never expose private evidence, even when malformed. */ }
+  }
   return presentationObject({
     id: text(input, "id"),
     propertyId: text(input, "propertyId"),
@@ -910,8 +931,8 @@ export function serializeAdminActivity(value: RentOpsActivityEvent): AdminActivi
     type: text(input, "type"),
     occurredAt: dateText(input, "occurredAt"),
     actor: text(input, "actor"),
-    summary: text(input, "summary"),
-    detail: text(input, "detail"),
+    summary: reserved ? chargeTermsSummary : text(input, "summary"),
+    detail: reserved ? reviewedTermsDetail : text(input, "detail"),
     occurredAtKnowledge: text(input, "occurredAtKnowledge"),
     actorKnowledge: text(input, "actorKnowledge"),
     summaryKnowledge: text(input, "summaryKnowledge"),
