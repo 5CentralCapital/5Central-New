@@ -1,3 +1,5 @@
+import { HISTORICAL_LEASING_SNAPSHOT_SCHEMA } from "../../../shared/rent-ops-dashboard";
+
 /** Fixed read-only operational catalog. Restricted source/history tables cannot enter this path. */
 export const RENT_OPS_BATCH_TABLES = [
   "rent_ops_properties", "rent_ops_units", "rent_ops_people", "rent_ops_tenancies",
@@ -57,7 +59,11 @@ export function decodeRentOpsTableBatch(value: unknown, tables: readonly string[
 export const RENT_OPS_REPORT_TABLES = RENT_OPS_BATCH_TABLES.filter(table => table !== "rent_ops_documents");
 export function buildRentOpsReportBatchSql(): string {
   return `SELECT ${RENT_OPS_REPORT_TABLES.map(table => {
-    const predicate = table === "rent_ops_activity_events" ? " WHERE type IN ('promise_to_pay', 'hold') OR (type = 'note' AND detail LIKE '%balance_review_v1%')" : "";
+    // Reports need the narrow balance-review activity set plus immutable
+    // historical leasing observations.  The domain parser applies the exact
+    // JSON schema; this LIKE only keeps those direct bodies in the snapshot
+    // without admitting the full activity stream to financial reports.
+    const predicate = table === "rent_ops_activity_events" ? ` WHERE type IN ('promise_to_pay', 'hold') OR (type = 'note' AND detail LIKE '%balance_review_v1%') OR (type = 'system' AND detail LIKE '%${HISTORICAL_LEASING_SNAPSHOT_SCHEMA}%')` : "";
     return `COALESCE((SELECT json_agg(row_to_json(r)) FROM ${table} AS r${predicate}), '[]'::json) AS ${table}`;
   }).join(", ")}`;
 }

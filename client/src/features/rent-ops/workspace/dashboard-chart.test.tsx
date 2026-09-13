@@ -4,7 +4,7 @@ import test from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DashboardTrends } from "../../../../../shared/rent-ops-dashboard";
 import { DashboardChart } from "./dashboard-chart";
-import { dashboardChartSeries, defaultDashboardMeasure } from "./dashboard-model";
+import { dashboardChartSeries, dashboardTrendPoints, defaultDashboardMeasure } from "./dashboard-model";
 
 const fixture = (): DashboardTrends => ({
   asOfDate: "2026-09-12",
@@ -55,4 +55,20 @@ test("rent chart leaves historical values absent with a concise explanation", ()
   assert.match(html, /Historical charge dates or frequency missing/);
   assert.match(html, /2026-08-31: Portfolio —/);
   assert.doesNotMatch(html, /Confirmed vacant units/);
+});
+
+test("recorded mode preserves exact dates, labels the source, and keeps current point", () => {
+  const data = fixture();
+  data.archivedSnapshots = [{
+    asOfDate: "2026-08-03",
+    sourceSystem: "appfolio",
+    properties: [{ ...data.months[0].properties[0] }],
+  }];
+  const points = dashboardTrendPoints(data, "recorded");
+  assert.deepEqual(points.map(point => point.asOfDate), ["2026-08-03", "2026-09-12"]);
+  assert.deepEqual(dashboardChartSeries(data, "portfolio", "occupancy", "units", "recorded")[0].values, [4, 7]);
+  const html = renderToStaticMarkup(<DashboardChart metric="occupancy" data={data} loading={false} onRetry={() => {}} />);
+  assert.match(html, /Recorded dates/);
+  assert.match(html, /2026-08-03 · Evernest/);
+  assert.match(html, /2 recorded dates/);
 });

@@ -4,10 +4,11 @@ import { PGlite } from "@electric-sql/pglite";
 import { performance } from "node:perf_hooks";
 import { createRentOpsPoolExecutor, type RentOpsRuntimePool } from "../runtime-database";
 import { createPostgresRentOpsRepository, type RentOpsQueryExecutor } from "./postgres";
-import { buildRentOpsTableBatchSql, decodeRentOpsTableBatch, RENT_OPS_BATCH_TABLES } from "./read-table-batch";
+import { buildRentOpsReportBatchSql, buildRentOpsTableBatchSql, decodeRentOpsTableBatch, RENT_OPS_BATCH_TABLES } from "./read-table-batch";
 import { ensureRentOpsSchema, RENT_OPS_RUNTIME_REQUIRED_TABLES } from "../persistence";
 import { serializeWorkspaceBootstrap } from "../presentation/workspace-read";
 import { deriveDashboardWorkspace, deriveFixedReport, deriveDelinquency, deriveOperationalScheduleRegister } from "../domain/reports";
+import { deriveDashboardTrends } from "../domain/dashboard-trends";
 import { serializeAdminSnapshot } from "../presentation/entities";
 
 test("batch SQL rejects unknown, duplicate, empty and unsafe identifiers before querying", async () => {
@@ -22,6 +23,7 @@ test("batch SQL rejects unknown, duplicate, empty and unsafe identifiers before 
   assert.throws(() => decodeRentOpsTableBatch({}, ["rent_ops_people"]), /Invalid Rent Operations table batch result/);
   assert.throws(() => decodeRentOpsTableBatch({rent_ops_people: [null]}, ["rent_ops_people"]), /Invalid Rent Operations table batch row/);
   assert.deepEqual(decodeRentOpsTableBatch({rent_ops_people: '[{"id":"one","archived":false,"phone_methods":[]}]'}, ["rent_ops_people"]), {rent_ops_people: [{id:"one",archived:false,phone_methods:[]}]});
+  assert.match(buildRentOpsReportBatchSql(), /type = 'system'.*historical_leasing_snapshot_v1/);
 });
 
 test("PGlite batch preserves legacy mapped rows, dates, nulls, JSON and financial inputs with one statement", async () => {
@@ -41,6 +43,7 @@ test("PGlite batch preserves legacy mapped rows, dates, nulls, JSON and financia
       INSERT INTO rent_ops_ledger_transactions(id,property_id,unit_id,tenancy_id,person_id,kind,category,status,amount_cents,posted_on,description,payer,amount_knowledge,category_knowledge,status_knowledge,posted_on_knowledge,description_knowledge,payer_knowledge,charge_definition_link_knowledge,property_link_knowledge,unit_link_knowledge,person_link_knowledge,tenancy_link_knowledge,due_on_knowledge,payment_method_knowledge) VALUES('charge','p','u','t','person','charge','base_rent','posted',2147483647,'2026-08-01','Rent','tenant','known','manual','manual','manual','manual','manual','unknown','manual','manual','manual','manual','unknown','unknown');
       INSERT INTO rent_ops_activity_events(id,tenancy_id,type,occurred_at,actor,summary) VALUES('promise','t','promise_to_pay','2026-08-14','QA','Promise'),('hold','t','hold','2026-08-14','QA','Hold');
       INSERT INTO rent_ops_activity_events(id,property_id,unit_id,person_id,tenancy_id,type,occurred_at,actor,summary,detail) VALUES('z-review','p','u','person','t','note','2026-08-15','QA','Reviewed','{"schema":"balance_review_v1"}');
+      INSERT INTO rent_ops_activity_events(id,property_id,type,occurred_at,actor,summary,detail) VALUES('archive','p','system','2026-08-03 12:00:00+00','QA','Archived leasing snapshot','{"schema":"historical_leasing_snapshot_v1","propertyId":"p","asOfDate":"2026-08-03","sourceReference":"archive:test","sourceSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sourceSystem":"rent_manager","unitCount":1,"occupied":1,"vacant":0,"preleased":0,"unknown":0,"monthlyBaseRentCents":100000,"evidence":{"knowledge":"source","completeness":"complete_property_snapshot"}}');
       INSERT INTO rent_ops_documents(id,file_name,mime_type,type,state,availability) VALUES('doc','lease.pdf','application/pdf','lease','requested','metadata');
       CREATE ROLE rent_ops_staging_importer; GRANT USAGE ON SCHEMA public TO rent_ops_staging_importer; GRANT SELECT,INSERT ON rent_ops_security_deposits TO rent_ops_staging_importer; SET ROLE rent_ops_staging_importer;
       INSERT INTO rent_ops_security_deposits(id,property_id,unit_id,tenancy_id,person_id,type,amount_held_cents,source_balance_cents,source_system,source_id,received_on_knowledge,unit_link_knowledge) VALUES('deposit','p','u','t','person','security',NULL,-500,'rent_manager','source-deposit','unknown','exact');
@@ -91,8 +94,10 @@ test("PGlite batch preserves legacy mapped rows, dates, nulls, JSON and financia
     assert.ok(calls[0].includes("WHERE type IN ('promise_to_pay', 'hold')"));
     assert.equal(newOperational.documents.length, 1);
     assert.equal(reportSnapshot.documents.length, 0);
-    assert.deepEqual(reportSnapshot.activityEvents.map(event => event.type).sort(), ["hold", "note", "promise_to_pay"]);
+    assert.deepEqual(reportSnapshot.activityEvents.map(event => event.type).sort(), ["hold", "note", "promise_to_pay", "system"]);
     assert.equal(reportSnapshot.activityEvents.find(row => row.id === "z-review")?.detail, '{"schema":"balance_review_v1"}');
+    assert.equal(reportSnapshot.activityEvents.find(row => row.id === "archive")?.detail?.includes("historical_leasing_snapshot_v1"), true);
+    assert.deepEqual(deriveDashboardTrends(reportSnapshot, { propertyId: "p", asOfDate: "2026-08-15" }).archivedSnapshots?.map(point => point.asOfDate), ["2026-08-03"]);
     assert.deepEqual(reportSnapshot.ledgerTransactions, newOperational.ledgerTransactions);
     assert.deepEqual(reportSnapshot.paymentAllocations, newOperational.paymentAllocations);
     const reportFilters = {asOfDate:"2026-08-15",month:"2026-08"};
