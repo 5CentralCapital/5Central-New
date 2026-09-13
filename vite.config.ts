@@ -37,6 +37,9 @@ export default defineConfig({
       if (id.endsWith('/features/rent-ops/money.ts')) return 'react-core';
       if (/\/node_modules\/(?:react|react-dom|scheduler)\//.test(id)) return 'react-core';
       if (id.includes('/node_modules/lucide-react/')) return 'icons';
+      // Keep staff providers in one download: splitting their many small
+      // shared dependencies reintroduces a connection queue on manager pages.
+      if (/\/node_modules\/(?:@radix-ui|@tanstack)\//.test(id)) return 'app-libraries';
     } } },
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
