@@ -1386,7 +1386,7 @@ export class RentOpsService {
     const payment = snapshot.ledgerTransactions.find(row => row.id === id);
     if (!payment || payment.kind !== "payment" || payment.status !== "posted") throw new RentOpsInvariantError("Only posted payments can be edited");
     if (/^tp_.*_ledger_/.test(id)) throw new RentOpsInvariantError("Online payments are managed by the payment processor");
-    if (!payment.propertyId || !payment.personId || !payment.category || (payment.amountCents === null || payment.amountCents <= 0) || !payment.postedOn) throw new RentOpsInvariantError("Payment account or amount must be resolved before editing");
+    if (!payment.propertyId || !payment.personId || (payment.amountCents === null || payment.amountCents <= 0) || !payment.postedOn) throw new RentOpsInvariantError("Payment account or amount must be resolved before editing");
     if (snapshot.ledgerTransactions.some(row => row.reversalOfId === id && row.status === "posted")) throw new RentOpsInvariantError("This payment was already corrected or reversed");
     if ([payment.propertyLinkKnowledge,payment.personLinkKnowledge,...(payment.unitId?[payment.unitLinkKnowledge]:[]),...(payment.tenancyId?[payment.tenancyLinkKnowledge]:[])].some(value=>value!=="manual"&&value!=="exact")) throw new RentOpsInvariantError("Payment account links need review before editing");
     const allocations = snapshot.paymentAllocations.filter(row => row.paymentTransactionId === id);
@@ -1418,7 +1418,7 @@ export class RentOpsService {
       if (input.allocations.some(row=>!allowed.has(row.chargeTransactionId))) throw new RentOpsInvariantError("Correction cannot allocate to an unrelated charge");
       // Construct native records explicitly: never copy importer-only provenance.
       const common = {chargeDefinitionId:null, chargeDefinitionLinkKnowledge:"unknown" as const, dueOn:null, dueOnKnowledge:"unknown" as const, paymentMethod:null, paymentMethodKnowledge:"unknown" as const, propertyId:original.propertyId, unitId:original.unitId, tenancyId:original.tenancyId, personId:original.personId,
-        category:original.category, categoryKnowledge:"manual" as const, payer:original.payer, payerKnowledge:original.payer && original.payer !== "unknown" ? "manual" as const : "unknown" as const,
+        category:original.category, categoryKnowledge:original.category ? "manual" as const : "unknown" as const, payer:original.payer, payerKnowledge:original.payer && original.payer !== "unknown" ? "manual" as const : "unknown" as const,
         propertyLinkKnowledge:"manual" as const, unitLinkKnowledge:original.unitId ? "manual" as const : "unknown" as const, tenancyLinkKnowledge:original.tenancyId ? "manual" as const : "unknown" as const, personLinkKnowledge:"manual" as const,
         status:"posted" as const, statusKnowledge:"manual" as const, amountKnowledge:"known" as const, postedOnKnowledge:"manual" as const, descriptionKnowledge:"manual" as const};
       await repository.saveLedgerTransaction({...common, id:`payment-reversal:${operation}`, kind:"reversal", reversalOfId:originalId,
