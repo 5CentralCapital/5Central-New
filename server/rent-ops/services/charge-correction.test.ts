@@ -49,5 +49,18 @@ test("charge corrections preserve receipts and update balances atomically",async
   failAudit=false;
   assert.equal((await service.snapshot()).ledgerTransactions.length,snapshot.ledgerTransactions.length);
   assert.equal((await service.chargeEditContext(result.charge.id)).expectedRevision,current.expectedRevision);
+  // Every supported charge category must load and save through the same editor.
+  for (const category of ["security_deposit","refundable_pet_deposit","move_in_funds","subsidy","unapplied_cash"] as const) {
+    const original={...snapshot.ledgerTransactions.find(row=>row.id==="charge")!,id:`category-${category}`,category};
+    await service.saveLedgerTransaction(original);
+    const edit=await service.chargeEditContext(original.id);
+    const fixed=await service.correctCharge(original.id,{...correction,id:`fix-${category}`,expectedRevision:edit.expectedRevision,category,amountCents:900},context);
+    assert.equal(fixed.charge.category,category);
+    assert.equal(fixed.charge.amountCents,900);
+    assert.equal((await service.snapshot()).ledgerTransactions.find(row=>row.id===original.id)!.amountCents,1000);
+  }
+  const finalSnapshot=await service.snapshot();
+  assert.deepEqual(finalSnapshot.securityDeposits,snapshot.securityDeposits,"a charge correction does not invent held cash");
+  assert.deepEqual(finalSnapshot.subsidyContracts,snapshot.subsidyContracts,"a charge correction does not change contractual obligations");
  } finally {await db.close();}
 });

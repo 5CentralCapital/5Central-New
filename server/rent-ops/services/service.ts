@@ -1385,7 +1385,6 @@ export class RentOpsService {
     const snapshot=await this.snapshot();
     const charge=snapshot.ledgerTransactions.find(row=>row.id===id);
     if (!charge || charge.kind!=="charge" || charge.status!=="posted" || !charge.propertyId || !charge.personId || charge.amountCents===null || !charge.postedOn) throw new RentOpsInvariantError("Only posted charges with a known account, amount and date can be edited");
-    if (charge.category && !["base_rent","recurring_fee","one_time_fee","other"].includes(charge.category)) throw new RentOpsInvariantError("Use the dedicated workflow to correct deposit or subsidy charges");
     if ([charge.propertyLinkKnowledge,charge.personLinkKnowledge,...(charge.unitId?[charge.unitLinkKnowledge]:[]),...(charge.tenancyId?[charge.tenancyLinkKnowledge]:[])].some(value=>value!=="manual"&&value!=="exact")) throw new RentOpsInvariantError("Charge account links need review before editing");
     const reversed=new Set(snapshot.ledgerTransactions.filter(row=>row.kind==="reversal"&&row.status==="posted").map(row=>row.reversalOfId));
     if (reversed.has(id)) throw new RentOpsInvariantError("This charge was already corrected or reversed");

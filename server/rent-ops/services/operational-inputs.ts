@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CHARGE_CATEGORIES } from "../../../shared/rent-ops-contracts";
 const id = z.string().trim().min(1).max(160);
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0,10) === value);
 const cents = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -12,5 +13,5 @@ export type PatchChargeDefinitionInput = z.infer<typeof patchChargeDefinitionSch
 export const correctPaymentSchema = manualPaymentSchema.pick({id:true, amountCents:true, postedOn:true, paymentMethod:true, description:true, allocations:true}).extend({expectedRevision: z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 export type CorrectPaymentInput = z.infer<typeof correctPaymentSchema>;
 
-export const correctChargeSchema = correctPaymentSchema.omit({paymentMethod:true,allocations:true}).extend({dueOn:date.nullable(),category:z.enum(["base_rent","recurring_fee","one_time_fee","other"]).nullable()}).strict();
+export const correctChargeSchema = correctPaymentSchema.omit({paymentMethod:true,allocations:true}).extend({dueOn:date.nullable(),category:z.enum(CHARGE_CATEGORIES).nullable()}).strict();
 export type CorrectChargeInput = z.infer<typeof correctChargeSchema>;
