@@ -396,6 +396,8 @@ function tabContent(tab: TenantTab, props: Omit<TenantRecordProps, "tab" | "onTa
 
 export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged, onMoveRefresh, businessDate, readOnly = false, onManageMoves }: TenantRecordProps) {
   const [movesOpen, setMovesOpen] = useState(false);
+  const [addPaymentOpen,setAddPaymentOpen]=useState(false);
+  const paymentTenancy=resolveTenantContext(tenant,snapshot).currentTenancy;
   const review = balanceReviewDisplay(tenant.balanceReview);
   const summary = buildTenantSummary(tenant, snapshot);
   const editActions = useMemo(() => buildTenantEditActions(tenant, snapshot, tab), [tenant, snapshot, tab]);
@@ -406,6 +408,7 @@ export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged, 
     return [...charges, ...oneTime, ...contextual];
   }, [tenant, snapshot, editActions, tab]);
   return <section className="rm-tenant-record" aria-label={`Tenant record for ${summary.displayName}`}>
+    {addPaymentOpen && paymentTenancy?.id && <PaymentEditDialog id="new" tenancyId={paymentTenancy.id} businessDate={businessDate??summary.asOfDate} tenantName={summary.displayName} onClose={()=>setAddPaymentOpen(false)} onSaved={onMoveRefresh??(async()=>{await onChanged();})}/>}
     <header className="rm-record-summary">
       <div className="rm-record-summary-main"><h2>{summary.displayName}</h2><p>{summary.propertyName} · Unit {summary.unitLabel}</p></div>
       <div className="rm-record-summary-meta"><span className={statusClass(summary.status, summary.status === "Needs review")}>{label(summary.status)}</span><span className={`rm-record-balance${review ? tenant.balanceReview?.stale || tenant.balanceReview?.reviewedBalanceCents ? " rm-record-balance-warning" : "" : summary.balance.complete && summary.balance.amountCents ? " rm-record-balance-warning" : ""}`}><small>{review ? review.label : "Posted ledger balance"}</small><strong>{review ? review.amount : summary.balance.complete ? formatMoney(summary.balance.amountCents) : "Needs review"}</strong></span><span className="rm-record-as-of"><small>As of</small><strong>{formatDate(review ? tenant.balanceReview?.asOfDate : summary.asOfDate)}</strong></span></div>
@@ -413,7 +416,7 @@ export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged, 
     {!readOnly && businessDate && <div className="rm-toolbar"><button className="rm-button" onClick={() => onManageMoves ? onManageMoves() : setMovesOpen(true)}>Move-in / move-out</button></div>}
     {movesOpen && !readOnly && businessDate && <ManagerTenancyActions key={tenant.person.id} snapshot={snapshot} personId={tenant.person.id} businessDate={businessDate} onSaved={onMoveRefresh ?? (async () => { await onChanged(); })} onClose={() => setMovesOpen(false)} />}
     <nav className="rm-tabs rm-tenant-tabs" role="tablist" aria-label="Tenant record sections">{TENANT_RECORD_TABS.map((item) => <button type="button" role="tab" aria-selected={tab === item} aria-controls={`tenant-panel-${item}`} className={tab === item ? "active" : ""} key={item} onClick={() => onTab(item)}>{TAB_LABELS[item]}</button>)}</nav>
-    {headerActions.length > 0 && <div className="rm-toolbar rm-tenant-toolbar">{headerActions.map((action) => <ActionButton key={`${action.action}-${action.label}`} action={action} onEdit={onEdit} primary />)}</div>}
-    <div id={`tenant-panel-${tab}`} role="tabpanel" className="rm-tenant-panel-body">{tabContent(tab, { tenant, snapshot, onEdit, onChanged, editActions })}</div>
+    {headerActions.length > 0 && <div className="rm-toolbar rm-tenant-toolbar">{tab==="ledger"&&!readOnly&&<button className="rm-button rm-button-primary" disabled={!paymentTenancy?.id} onClick={()=>setAddPaymentOpen(true)}>Add payment</button>}{headerActions.map((action) => <ActionButton key={`${action.action}-${action.label}`} action={action} onEdit={onEdit} primary />)}</div>}
+    <div id={`tenant-panel-${tab}`} role="tabpanel" className="rm-tenant-panel-body">{tabContent(tab, { tenant, snapshot, onEdit, onChanged, onMoveRefresh, businessDate, readOnly, editActions })}</div>
   </section>;
 }

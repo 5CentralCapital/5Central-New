@@ -1,3 +1,4 @@
+import { ProrateRent } from "./prorate-rent";
 import { useEffect, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -41,7 +42,7 @@ export function ChargeEditDialog({id,tenantName,onClose,onSaved}:{id:string;tena
         <label>Due date<input type="date" value={due} onChange={e=>setDue(e.target.value)}/></label>
         <label>Category<select value={method} onChange={e=>setMethod(e.target.value)}><option value="">Not recorded</option>{Object.entries({base_rent:"Rent",recurring_fee:"Recurring fee",one_time_fee:"One-time fee",security_deposit:"Security deposit",refundable_pet_deposit:"Refundable pet deposit",move_in_funds:"Move-in funds",subsidy:"Subsidy",unapplied_cash:"Unapplied cash",other:"Other"}).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
         <label className="rops-payment-wide">Description<input required maxLength={240} value={description} onChange={e=>setDescription(e.target.value)}/></label>
-      </div><p>This edits this posted charge only. Recurring schedules remain unchanged.</p>{["security_deposit","refundable_pet_deposit","move_in_funds","subsidy"].includes(method)&&<p>Changing the charge does not record money received, refund a deposit, or change a subsidy contract.</p>}{context.appliedCents>0&&<p>Existing payments stay applied up to the corrected amount. Any excess becomes unapplied credit.</p>}</fieldset>}
+      </div><ProrateRent amount={amount} date={date} onApply={value=>{setAmount(value);setMethod("base_rent");}}/><p>This edits this posted charge only. Recurring schedules remain unchanged.</p>{["security_deposit","refundable_pet_deposit","move_in_funds","subsidy"].includes(method)&&<p>Changing the charge does not record money received, refund a deposit, or change a subsidy contract.</p>}{context.appliedCents>0&&<p>Existing payments stay applied up to the corrected amount. Any excess becomes unapplied credit.</p>}</fieldset>}
       {saved&&<p role="status">Charge saved. Refreshing the updated records…</p>}
       {error&&<p role="alert" className="rops-payment-error">{saved?"Saved, but the page could not refresh. Retry refresh. ":""}{error}</p>}
       <DialogFooter><button type="button" disabled={busy} onClick={onClose}>Cancel</button>{context&&<button className="rops-payment-save" disabled={busy} type="submit">{busy?"Saving…":saved?"Retry refresh":pending?"Retry save":"Save charge"}</button>}</DialogFooter>
