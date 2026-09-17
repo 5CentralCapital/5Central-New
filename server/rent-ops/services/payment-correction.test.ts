@@ -55,8 +55,9 @@ test("payment corrections are atomic, persistent, allocated and idempotent",asyn
   await db.exec(`INSERT INTO rent_ops_ledger_transactions(id,property_id,unit_id,tenancy_id,person_id,kind,category,category_knowledge,status,status_knowledge,amount_cents,amount_knowledge,posted_on,posted_on_knowledge,due_on_knowledge,payment_method_knowledge,description,description_knowledge,payer,payer_knowledge,property_link_knowledge,unit_link_knowledge,tenancy_link_knowledge,person_link_knowledge,charge_definition_link_knowledge,source_system,source_id,source_artifact_sha256,artifact_observation_on)
    VALUES('imported-payment','p',NULL,'t','person','payment',NULL,'unknown','posted','source',125000,'known','2026-09-02','source','unknown','unknown','Payment','source',NULL,'unknown','exact','unknown','exact','exact','unknown','rent_manager','source-payment',repeat('a',64),'2026-09-12')`);
   await db.exec("SET ROLE qa_operations");
+  await service.savePaymentAllocation({id:"imported-application",paymentTransactionId:"imported-payment",chargeTransactionId:"charge",amountCents:500,allocatedOn:"2026-09-02"});
   const imported=await service.paymentEditContext("imported-payment");
-  const importedResult=await service.correctPayment("imported-payment",{...correction,id:"import-correction",expectedRevision:imported.expectedRevision,amountCents:120000,allocations:[]},context);
+  const importedResult=await service.correctPayment("imported-payment",{...correction,id:"import-correction",expectedRevision:imported.expectedRevision,amountCents:120000,allocations:[{chargeTransactionId:"charge",amountCents:400}]},context);
   assert.equal(importedResult.payment.amountCents,120000);
   assert.equal(importedResult.payment.unitId,null,"editing never guesses a missing unit");
   assert.equal((await service.snapshot()).ledgerTransactions.find(row=>row.id==="imported-payment")!.source!.system,"rent_manager");
