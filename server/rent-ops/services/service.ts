@@ -2,7 +2,7 @@ import { chargeTermsPrefix } from "../domain/recurring-charge-terms";
 import { hasOperationalEndOn, hasOccupancyConfirmationOn } from "../domain/tenancy-occupancy";
 import { measureRentOps } from "../request-timing";
 import { phoneMethodsSchema } from "../domain/phone-methods";
-import { manualPaymentSchema, createChargeDefinitionSchema, patchChargeDefinitionSchema, type CreateChargeDefinitionInput, type PatchChargeDefinitionInput, type ManualPaymentInput } from "./operational-inputs";
+import { correctPaymentSchema, type CorrectPaymentInput, manualPaymentSchema, createChargeDefinitionSchema, patchChargeDefinitionSchema, type CreateChargeDefinitionInput, type PatchChargeDefinitionInput, type ManualPaymentInput } from "./operational-inputs";
 import { postedReversalTargets } from "../domain/invariants";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable, Transform } from "node:stream";
@@ -1379,6 +1379,59 @@ export class RentOpsService {
     const parsed = patchChargeDefinitionSchema.safeParse(raw);
     if (!parsed.success) throw new RentOpsInvariantError("Invalid charge definition patch");
     return this.patchRecord("charge_definition", id, expectedRevision, parsed.data, context) as Promise<RentOpsChargeDefinition>;
+  }
+
+  async paymentEditContext(id: string) {
+    const snapshot = await this.snapshot();
+    const payment = snapshot.ledgerTransactions.find(row => row.id === id);
+    if (!payment || payment.kind !== "payment" || payment.status !== "posted") throw new RentOpsInvariantError("Only posted payments can be edited");
+    if (/^tp_.*_ledger_/.test(id)) throw new RentOpsInvariantError("Online payments are managed by the payment processor");
+    if (!payment.propertyId || !payment.personId || !payment.category || (payment.amountCents === null || payment.amountCents <= 0) || !payment.postedOn) throw new RentOpsInvariantError("Payment account or amount must be resolved before editing");
+    if (snapshot.ledgerTransactions.some(row => row.reversalOfId === id && row.status === "posted")) throw new RentOpsInvariantError("This payment was already corrected or reversed");
+    const allocations = snapshot.paymentAllocations.filter(row => row.paymentTransactionId === id);
+    if (allocations.some(row => (row.kind && row.kind !== "allocation") || !row.chargeTransactionId || row.amountCents === null || row.amountCents < 0)) throw new RentOpsInvariantError("This payment has transfers or unresolved allocations that require reconciliation");
+    const expectedRevision = createHash("sha256").update(JSON.stringify({payment, allocations: [...allocations].sort((a,b)=>a.id.localeCompare(b.id))})).digest("hex");
+    return {payment, allocations, expectedRevision};
+  }
+
+  async correctPayment(originalId: string, raw: CorrectPaymentInput, context: RentOpsAdminPatchContext) {
+    const parsed = correctPaymentSchema.safeParse(raw);
+    if (!parsed.success || !context.actorSubject?.trim()) throw new RentOpsInvariantError("Invalid payment correction");
+    const input = parsed.data;
+    if (new Set(input.allocations.map(row=>row.chargeTransactionId)).size !== input.allocations.length || input.allocations.reduce((sum,row)=>sum+row.amountCents,0) > input.amountCents) throw new RentOpsInvariantError("Allocations exceed payment amount or repeat a charge");
+    const operation = createHash("sha256").update(JSON.stringify([originalId,input.id])).digest("hex");
+    const requestHash = createHash("sha256").update(JSON.stringify({...input, allocations:[...input.allocations].sort((a,b)=>a.chargeTransactionId.localeCompare(b.chargeTransactionId))})).digest("hex");
+    return this.repository.transaction(async repository => {
+      const service = this.withRepository(repository);
+      const snapshot = await repository.getSnapshot();
+      const saved = snapshot.ledgerTransactions.find(row=>row.id===`payment-correction:${operation}`);
+      if (saved) {
+        const receipt = snapshot.activityEvents.find(row=>row.id===`payment-correction:${operation}`);
+        if (!receipt?.summary.endsWith(requestHash)) throw new RentOpsInvariantError("Payment correction conflicts with an existing operation");
+        return {payment:saved,replayed:true};
+      }
+      const current = await service.paymentEditContext(originalId);
+      if (current.expectedRevision !== input.expectedRevision) throw new RentOpsInvariantError("Payment revision is stale");
+      const original = current.payment;
+      const allowed = new Set(current.allocations.map(row=>row.chargeTransactionId));
+      if (input.allocations.some(row=>!allowed.has(row.chargeTransactionId))) throw new RentOpsInvariantError("Correction cannot allocate to an unrelated charge");
+      // Construct native records explicitly: never copy importer-only provenance.
+      const common = {chargeDefinitionId:null, chargeDefinitionLinkKnowledge:"unknown" as const, dueOn:null, dueOnKnowledge:"unknown" as const, paymentMethod:null, paymentMethodKnowledge:"unknown" as const, propertyId:original.propertyId, unitId:original.unitId, tenancyId:original.tenancyId, personId:original.personId,
+        category:original.category, categoryKnowledge:original.categoryKnowledge, payer:original.payer, payerKnowledge:original.payerKnowledge,
+        propertyLinkKnowledge:original.propertyLinkKnowledge, unitLinkKnowledge:original.unitLinkKnowledge, tenancyLinkKnowledge:original.tenancyLinkKnowledge, personLinkKnowledge:original.personLinkKnowledge,
+        status:"posted" as const, statusKnowledge:"manual" as const, amountKnowledge:"known" as const, postedOnKnowledge:"manual" as const, descriptionKnowledge:"manual" as const};
+      await repository.saveLedgerTransaction({...common, id:`payment-reversal:${operation}`, kind:"reversal", reversalOfId:originalId,
+        amountCents:original.amountCents, postedOn:original.postedOn, description:`Payment correction: ${originalId}`});
+      const payment: RentOpsLedgerTransaction = {...common, id:`payment-correction:${operation}`,kind:"payment",amountCents:input.amountCents,postedOn:input.postedOn,description:input.description,paymentMethod:input.paymentMethod,paymentMethodKnowledge:"manual"};
+      await repository.saveLedgerTransaction(payment);
+      for (const allocation of input.allocations) {
+        const charge = snapshot.ledgerTransactions.find(row=>row.id===allocation.chargeTransactionId);
+        if (!charge?.postedOn) throw new RentOpsInvariantError("Allocation charge date needs review");
+        await service.savePaymentAllocationRecord({id:`corrected-allocation:${createHash("sha256").update(operation+allocation.chargeTransactionId).digest("hex")}`,kind:"allocation",paymentTransactionId:payment.id,chargeTransactionId:charge.id,amountCents:allocation.amountCents,amountKnowledge:"known",allocatedOn:input.postedOn > charge.postedOn ? input.postedOn : charge.postedOn,allocatedOnKnowledge:"manual",paymentLinkKnowledge:"manual",chargeLinkKnowledge:"manual"});
+      }
+      await repository.saveActivity({id:`payment-correction:${operation}`,propertyId:original.propertyId!,unitId:original.unitId??undefined,tenancyId:original.tenancyId??undefined,personId:original.personId!,type:"system",actor:"admin",occurredAt:context.occurredAt,summary:`Payment ${originalId} corrected by ${context.actorSubject}; request ${requestHash}`});
+      return {payment,replayed:false};
+    }, {lockTransactionIds:[originalId,...input.allocations.map(row=>row.chargeTransactionId)]});
   }
 
   async recordManualPayment(raw: ManualPaymentInput, context: RentOpsAdminPatchContext): Promise<{ payment: RentOpsLedgerTransaction; allocations: RentOpsPaymentAllocation[]; replayed: boolean }> {

@@ -5,7 +5,7 @@ import { serializeWorkspaceBootstrap, serializeWorkspaceCollectionItems, sendWor
 import {sendAdminSnapshot} from "./presentation/snapshot-transport";
 import { phoneMethodsSchema } from "./domain/phone-methods";
 import { RentOpsRetryableConflict } from "./runtime-database";
-import { manualPaymentSchema, createChargeDefinitionSchema, patchChargeDefinitionSchema } from "./services/operational-inputs";
+import { correctPaymentSchema, manualPaymentSchema, createChargeDefinitionSchema, patchChargeDefinitionSchema } from "./services/operational-inputs";
 import type { Express, Request, RequestHandler, Response } from "express";
 import { Router } from "express";
 import { Readable, Transform } from "node:stream";
@@ -978,6 +978,18 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
     } catch (error) { adminError(res, error); }
   });
   adminRouter.patch("/recurring-schedules/:id", (_req, res) => { res.status(409).json(errorBody("versioned_schedule_required")); });
+  adminRouter.get("/payments/:id/edit", async (req,res) => {
+    try { const result = await service.paymentEditContext(req.params.id); res.json({...result,payment:serializeAdminLedgerTransaction(result.payment),allocations:result.allocations.map(serializeAdminPaymentAllocation)}); }
+    catch(error) { res.status(409).json({error:error instanceof RentOpsInvariantError ? error.message : "Payment could not be loaded"}); }
+  });
+  adminRouter.post("/payments/:id/corrections", async (req,res) => {
+    const parsed = correctPaymentSchema.safeParse(req.body);
+    if (!parsed.success) {res.status(400).json(errorBody("invalid_input"));return;}
+    const actorSubject=req.rentOpsAdminUser?.id;
+    if (!actorSubject) {res.status(401).json(errorBody("not_authorized"));return;}
+    try {const result=await service.correctPayment(req.params.id,parsed.data,{actorSubject,occurredAt:patchOccurredAt()});res.status(result.replayed?200:201).json({payment:serializeAdminLedgerTransaction(result.payment),replayed:result.replayed});}
+    catch(error) {if(error instanceof RentOpsInvariantError)res.status(409).json({error:error.message});else adminError(res,error);}
+  });
   adminRouter.post("/manual-payments", async (req, res) => {
     const parsed = manualPaymentSchema.safeParse(req.body);
     if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; }

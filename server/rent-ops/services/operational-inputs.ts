@@ -8,3 +8,6 @@ export const manualPaymentSchema = z.object({ id, tenancyId: id, amountCents: ce
 export type ManualPaymentInput = z.infer<typeof manualPaymentSchema>;
 export type CreateChargeDefinitionInput = z.infer<typeof createChargeDefinitionSchema>;
 export type PatchChargeDefinitionInput = z.infer<typeof patchChargeDefinitionSchema>;
+
+export const correctPaymentSchema = manualPaymentSchema.pick({id:true, amountCents:true, postedOn:true, paymentMethod:true, description:true, allocations:true}).extend({expectedRevision: z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+export type CorrectPaymentInput = z.infer<typeof correctPaymentSchema>;
