@@ -11,3 +11,6 @@ export type PatchChargeDefinitionInput = z.infer<typeof patchChargeDefinitionSch
 
 export const correctPaymentSchema = manualPaymentSchema.pick({id:true, amountCents:true, postedOn:true, paymentMethod:true, description:true, allocations:true}).extend({expectedRevision: z.string().regex(/^[a-f0-9]{64}$/)}).strict();
 export type CorrectPaymentInput = z.infer<typeof correctPaymentSchema>;
+
+export const correctChargeSchema = correctPaymentSchema.omit({paymentMethod:true,allocations:true}).extend({dueOn:date.nullable(),category:z.enum(["base_rent","recurring_fee","one_time_fee","other"]).nullable()}).strict();
+export type CorrectChargeInput = z.infer<typeof correctChargeSchema>;

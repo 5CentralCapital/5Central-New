@@ -2,7 +2,7 @@ import { chargeTermsPrefix } from "../domain/recurring-charge-terms";
 import { hasOperationalEndOn, hasOccupancyConfirmationOn } from "../domain/tenancy-occupancy";
 import { measureRentOps } from "../request-timing";
 import { phoneMethodsSchema } from "../domain/phone-methods";
-import { correctPaymentSchema, type CorrectPaymentInput, manualPaymentSchema, createChargeDefinitionSchema, patchChargeDefinitionSchema, type CreateChargeDefinitionInput, type PatchChargeDefinitionInput, type ManualPaymentInput } from "./operational-inputs";
+import { correctChargeSchema, type CorrectChargeInput, correctPaymentSchema, type CorrectPaymentInput, manualPaymentSchema, createChargeDefinitionSchema, patchChargeDefinitionSchema, type CreateChargeDefinitionInput, type PatchChargeDefinitionInput, type ManualPaymentInput } from "./operational-inputs";
 import { postedReversalTargets } from "../domain/invariants";
 import { createHash, randomUUID } from "node:crypto";
 import { Readable, Transform } from "node:stream";
@@ -1381,6 +1381,57 @@ export class RentOpsService {
     return this.patchRecord("charge_definition", id, expectedRevision, parsed.data, context) as Promise<RentOpsChargeDefinition>;
   }
 
+  async chargeEditContext(id: string) {
+    const snapshot=await this.snapshot();
+    const charge=snapshot.ledgerTransactions.find(row=>row.id===id);
+    if (!charge || charge.kind!=="charge" || charge.status!=="posted" || !charge.propertyId || !charge.personId || charge.amountCents===null || !charge.postedOn) throw new RentOpsInvariantError("Only posted charges with a known account, amount and date can be edited");
+    if (charge.category && !["base_rent","recurring_fee","one_time_fee","other"].includes(charge.category)) throw new RentOpsInvariantError("Use the dedicated workflow to correct deposit or subsidy charges");
+    if ([charge.propertyLinkKnowledge,charge.personLinkKnowledge,...(charge.unitId?[charge.unitLinkKnowledge]:[]),...(charge.tenancyId?[charge.tenancyLinkKnowledge]:[])].some(value=>value!=="manual"&&value!=="exact")) throw new RentOpsInvariantError("Charge account links need review before editing");
+    const reversed=new Set(snapshot.ledgerTransactions.filter(row=>row.kind==="reversal"&&row.status==="posted").map(row=>row.reversalOfId));
+    if (reversed.has(id)) throw new RentOpsInvariantError("This charge was already corrected or reversed");
+    const history=snapshot.paymentAllocations.filter(row=>row.chargeTransactionId===id);
+    const allocations=history.filter(row=>!reversed.has(row.paymentTransactionId));
+    if (allocations.some(row=>(row.kind&&row.kind!=="allocation")||!row.paymentTransactionId||row.amountCents===null||row.amountCents<0||!row.allocatedOn||!["manual","exact"].includes(row.paymentLinkKnowledge??"")||!["manual","exact"].includes(row.chargeLinkKnowledge??""))) throw new RentOpsInvariantError("This charge has unresolved allocations or transfers requiring reconciliation");
+    const payments=snapshot.ledgerTransactions.filter(row=>history.some(allocation=>allocation.paymentTransactionId===row.id)||row.kind==="reversal"&&history.some(allocation=>allocation.paymentTransactionId===row.reversalOfId)).sort((a,b)=>a.id.localeCompare(b.id));
+    const expectedRevision=createHash("sha256").update(JSON.stringify({charge,allocations:[...history].sort((a,b)=>a.id.localeCompare(b.id)),payments})).digest("hex");
+    return {charge,allocations,expectedRevision};
+  }
+
+  async correctCharge(originalId:string,raw:CorrectChargeInput,context:RentOpsAdminPatchContext) {
+    const parsed=correctChargeSchema.safeParse(raw);
+    if (!parsed.success||!context.actorSubject?.trim()) throw new RentOpsInvariantError("Invalid charge correction");
+    const input=parsed.data;
+    const initial=await this.snapshot();
+    const paymentIds=initial.paymentAllocations.filter(row=>row.chargeTransactionId===originalId).map(row=>row.paymentTransactionId).filter((id):id is string=>!!id);
+    const operation=createHash("sha256").update(JSON.stringify([originalId,input.id])).digest("hex");
+    const requestHash=createHash("sha256").update(JSON.stringify(input)).digest("hex");
+    return this.repository.transaction(async repository=>{
+      const service=this.withRepository(repository), snapshot=await repository.getSnapshot();
+      const saved=snapshot.ledgerTransactions.find(row=>row.id===`charge-correction:${operation}`);
+      if(saved){if(!snapshot.activityEvents.find(row=>row.id===`charge-correction:${operation}`)?.summary.endsWith(requestHash))throw new RentOpsInvariantError("Charge correction conflicts with an existing operation");return {charge:saved,replayed:true};}
+      const current=await service.chargeEditContext(originalId);
+      if(current.expectedRevision!==input.expectedRevision)throw new RentOpsInvariantError("Charge revision is stale. Reopen the editor.");
+      const original=current.charge;
+      const reversalDate=[original.postedOn!,...snapshot.paymentAllocations.filter(row=>row.chargeTransactionId===originalId).map(row=>row.allocatedOn??"")].sort().at(-1)!;
+      const common={propertyId:original.propertyId,unitId:original.unitId,tenancyId:original.tenancyId,personId:original.personId,propertyLinkKnowledge:"manual" as const,unitLinkKnowledge:original.unitId?"manual" as const:"unknown" as const,tenancyLinkKnowledge:original.tenancyId?"manual" as const:"unknown" as const,personLinkKnowledge:"manual" as const,status:"posted" as const,statusKnowledge:"manual" as const,amountKnowledge:"known" as const,postedOnKnowledge:"manual" as const,descriptionKnowledge:"manual" as const,payer:original.payer,payerKnowledge:original.payer&&original.payer!=="unknown"?"manual" as const:"unknown" as const,paymentMethod:null,paymentMethodKnowledge:"unknown" as const,chargeDefinitionId:null,chargeDefinitionLinkKnowledge:"unknown" as const};
+      await repository.saveLedgerTransaction({...common,id:`charge-reversal:${operation}`,kind:"reversal",reversalOfId:originalId,category:original.category,categoryKnowledge:original.category?"manual":"unknown",amountCents:original.amountCents,postedOn:reversalDate,dueOn:null,dueOnKnowledge:"unknown",description:`Charge correction: ${originalId}`});
+      const charge:RentOpsLedgerTransaction={...common,id:`charge-correction:${operation}`,kind:"charge",category:input.category,categoryKnowledge:input.category?"manual":"unknown",amountCents:input.amountCents,postedOn:input.postedOn,dueOn:input.dueOn,dueOnKnowledge:input.dueOn?"manual":"unknown",description:input.description};
+      await repository.saveLedgerTransaction(charge);
+      // Reapply existing receipts oldest first. Any excess remains unapplied
+      // on the original payment; the receipt itself is never rewritten.
+      let remaining=input.amountCents;
+      const grouped=new Map<string,{amount:number;date:string}>();
+      for(const allocation of [...current.allocations].sort((a,b)=>a.allocatedOn!.localeCompare(b.allocatedOn!)||a.id.localeCompare(b.id))){
+        const amount=Math.min(remaining,allocation.amountCents!);if(!amount)continue;remaining-=amount;
+        const previous=grouped.get(allocation.paymentTransactionId!);
+        grouped.set(allocation.paymentTransactionId!,{amount:(previous?.amount??0)+amount,date:[previous?.date??"",allocation.allocatedOn!,input.postedOn,reversalDate].sort().at(-1)!});
+      }
+      for(const [paymentId,application] of Array.from(grouped.entries()))await service.savePaymentAllocationRecord({id:`charge-application:${createHash("sha256").update(operation+paymentId).digest("hex")}`,paymentTransactionId:paymentId,chargeTransactionId:charge.id,amountCents:application.amount,allocatedOn:application.date});
+      await repository.saveActivity({id:`charge-correction:${operation}`,propertyId:original.propertyId!,unitId:original.unitId??undefined,tenancyId:original.tenancyId??undefined,personId:original.personId!,type:"system",actor:"admin",occurredAt:context.occurredAt,summary:`Charge ${originalId} corrected by ${context.actorSubject}; request ${requestHash}`});
+      return {charge,replayed:false};
+    },{lockTransactionIds:[originalId,...paymentIds]});
+  }
+
   async paymentEditContext(id: string) {
     const snapshot = await this.snapshot();
     const payment = snapshot.ledgerTransactions.find(row => row.id === id);
@@ -1522,8 +1573,8 @@ export class RentOpsService {
     const charge = allocation.chargeTransactionId ? snapshot.ledgerTransactions.find((transaction) => transaction.id === allocation.chargeTransactionId) : undefined;
     const violations = validateAllocation(allocation, payment, charge, snapshot.ledgerTransactions);
     if (violations.length > 0) throw new RentOpsInvariantError("Payment allocation failed validation", violations);
-    const paymentTotal = snapshot.paymentAllocations.filter((candidate) => candidate.kind !== "transfer" && candidate.paymentTransactionId === allocation.paymentTransactionId && candidate.id !== allocation.id && typeof candidate.amountCents === "number").reduce((sum, candidate) => sum + (candidate.amountCents ?? 0), 0) + amountCents;
     const reversedTargets = postedReversalTargets(snapshot.ledgerTransactions);
+    const paymentTotal = snapshot.paymentAllocations.filter((candidate) => !reversedTargets.has(candidate.chargeTransactionId??"") && candidate.kind !== "transfer" && candidate.paymentTransactionId === allocation.paymentTransactionId && candidate.id !== allocation.id && typeof candidate.amountCents === "number").reduce((sum, candidate) => sum + (candidate.amountCents ?? 0), 0) + amountCents;
     const chargeTotal = snapshot.paymentAllocations.filter((candidate) => candidate.kind !== "transfer" && !!(candidate.paymentTransactionId ?? candidate.creditTransactionId) && !reversedTargets.has((candidate.paymentTransactionId ?? candidate.creditTransactionId)!) && !!candidate.chargeTransactionId && !reversedTargets.has(candidate.chargeTransactionId) && candidate.chargeTransactionId === allocation.chargeTransactionId && candidate.id !== allocation.id && typeof candidate.amountCents === "number").reduce((sum, candidate) => sum + (candidate.amountCents ?? 0), 0) + amountCents;
     if (payment && typeof payment.amountCents === "number" && paymentTotal > payment.amountCents) throw new RentOpsInvariantError("Allocations exceed payment amount");
     if (charge && typeof charge.amountCents === "number" && chargeTotal > charge.amountCents) throw new RentOpsInvariantError("Allocations exceed charge amount");
