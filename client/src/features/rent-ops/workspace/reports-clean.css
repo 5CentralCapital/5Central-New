@@ -1,11 +1,11 @@
 .rm-clean-report { gap: 0; color: #202022; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 .rm-report-view-tabs { display: flex; align-items: center; flex-wrap: wrap; gap: var(--rm-space-5, 1.25rem); border-bottom: 1px solid #ddd9d2; padding: 0 2px; }
-.rm-report-view-tabs > button { background: transparent; border: 0; border-bottom: 2px solid transparent; padding: .75rem 0 .625rem; color: #707073; font: inherit; font-size: 13px; cursor: pointer; }
+.rm-report-view-tabs > button { min-height: var(--rm-control-height, 32px); background: transparent; border: 0; border-bottom: 2px solid transparent; padding: .4rem 0 .35rem; color: #707073; font: inherit; font-size: 13px; cursor: pointer; }
 .rm-report-view-tabs > button.active { color: #3A3A3C; border-bottom-color: #D4A843; font-weight: 650; }
-.rm-report-view-tabs > select { margin-left: auto; border: 0; background: transparent; color: #646466; font: inherit; font-size: 12px; padding: 9px 4px; max-width: 230px; }
+.rm-report-view-tabs > select { min-height: var(--rm-control-height, 32px); margin-left: auto; border: 0; background: transparent; color: #646466; font: inherit; font-size: 12px; padding: 5px 4px; max-width: 230px; }
 .rm-clean-report .rm-report-toolbar { margin: 0; padding: var(--rm-space-3, .75rem) 0; border: 0; border-radius: 0; background: transparent; gap: 12px; }
 .rm-clean-report .rm-report-toolbar > label { display: grid; gap: 5px; color: #66666a; font-size: 11px; font-weight: 500; }
-.rm-clean-report .rm-report-toolbar select, .rm-clean-report .rm-report-toolbar input:not([type="checkbox"]) { min-height: 34px; padding: 6px 9px; border: 1px solid #dedbd5; border-radius: 6px; background: #fff; color: #3A3A3C; font: inherit; font-size: 12px; }
+.rm-clean-report .rm-report-toolbar select, .rm-clean-report .rm-report-toolbar input:not([type="checkbox"]) { min-height: var(--rm-control-height, 32px); padding: 5px 8px; border: 1px solid #dedbd5; border-radius: 6px; background: #fff; color: #3A3A3C; font: inherit; font-size: 12px; }
 .rm-report-toolbar-actions { display: flex; flex-wrap: wrap; gap: var(--rm-space-2, .5rem); margin-left: auto; align-items: center; }
 .rm-clean-report .rm-report-columns { min-width: auto; }
 .rm-clean-report .rm-report-columns summary { gap: 6px; font-size: 12px; font-weight: 500; }
@@ -24,6 +24,19 @@
 .rm-grouped-report-table a:focus-visible, .rm-grouped-report-table button:focus-visible, .rm-report-view-tabs button:focus-visible { outline: 2px solid #D4A843; outline-offset: 3px; border-radius: 2px; }
 .rm-report-print-title { display: none; }
 @media (max-width: 680px) { .rm-report-toolbar-actions { margin-left: 0; } .rm-report-view-tabs { gap: 18px; } .rm-report-view-tabs > select { margin-left: 0; } }
+@media (pointer: coarse) {
+  .rm-workspace .rm-report-view-tabs > button,
+  .rm-workspace .rm-report-view-tabs > select,
+  .rm-workspace .rm-clean-report .rm-report-toolbar select,
+  .rm-workspace .rm-clean-report .rm-report-toolbar input:not([type="checkbox"]) {
+    min-height: 44px;
+  }
+
+  .rm-workspace .rm-grouped-report-table thead button {
+    min-height: 44px;
+    padding-block: 0;
+  }
+}
 @media print {
   .rm-report-view-tabs, .rm-clean-report .rm-report-toolbar { display: none !important; }
   .rm-report-print-title { display: block; margin: 0 0 16px; font-size: 16px; }

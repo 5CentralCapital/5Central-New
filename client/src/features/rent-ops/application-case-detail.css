@@ -566,3 +566,45 @@
     flex-direction:column-reverse
   }
 }
+
+@media (min-width: 701px) and (pointer: fine) {
+  .ro-case-dialog {
+    max-height: min(760px, calc(100vh - 40px));
+    border-radius: 12px;
+  }
+
+  .ro-case-header {
+    padding: 18px 22px 16px;
+  }
+
+  .ro-case-header-actions {
+    gap: 8px;
+  }
+
+  .ro-icon-button {
+    width: 32px;
+    height: 32px;
+  }
+
+  .ro-case-state {
+    min-height: 260px;
+    padding: 24px;
+  }
+
+  .ro-case-content {
+    gap: 12px;
+    padding: 14px 18px 20px;
+  }
+}
+
+@media (pointer: coarse) {
+  .ro-icon-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .ro-case-state-actions :where(button),
+  .ro-case-download {
+    min-height: 44px;
+  }
+}

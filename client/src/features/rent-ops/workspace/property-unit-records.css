@@ -87,7 +87,7 @@
 .rm-property-unit-records .rm-table th { white-space: nowrap; }
 .rm-property-unit-records .rm-table td { white-space: normal; overflow-wrap: anywhere; }
 .rm-property-unit-records .rm-table td .rm-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
-.rm-property-unit-records .rm-button-small { min-height: 30px; padding: 0 9px; font-size: 11px; }
+.rm-property-unit-records .rm-button-small { min-height: var(--rm-control-height, 28px); padding: 0 8px; font-size: 11px; }
 .rm-property-unit-records .rm-link-button { border: 0; padding: 0; background: transparent; color: var(--rm-charcoal, #3a3a3c); font: inherit; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
 
 .rm-unit-summary { padding-bottom: 24px; }
@@ -127,8 +127,15 @@
   .rm-property-unit-group .rm-field { grid-template-columns: minmax(88px, .8fr) minmax(0, 1.2fr); gap: 10px; }
 }
 
-.rm-readiness-button { cursor: pointer; font: inherit; }
+.rm-readiness-button { min-height: var(--rm-control-height, 28px); padding: 3px 8px; cursor: pointer; font: inherit; }
 .rm-readiness-button:hover { box-shadow: 0 0 0 1px currentColor; }
 .rm-readiness-button:focus-visible { outline: 3px solid #D4A843; outline-offset: 3px; }
 .rm-readiness-dialog { width: min(480px, 100%); }
 .rm-readiness-field { display: grid; gap: 8px; }
+
+@media (pointer: coarse) {
+  .rm-property-unit-records .rm-button-small,
+  .rm-readiness-button {
+    min-height: 44px;
+  }
+}

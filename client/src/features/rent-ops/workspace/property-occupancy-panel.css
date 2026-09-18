@@ -2,6 +2,12 @@
 .rm-occupancy-filter { display: flex; gap: 6px; }
 .rm-occupancy-filter button { white-space: nowrap; }
 .rm-occupancy-filter button span { margin-left: 5px; font-variant-numeric: tabular-nums; }
+
+@media (pointer: coarse) {
+  .rm-occupancy-filter button {
+    min-height: 44px;
+  }
+}
 .rm-occupancy-table-scroll { overflow-x: auto; border: 1px solid #e1ddd6; border-radius: 6px; }
 .rm-occupancy-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
 .rm-occupancy-table th { background: #f5f0e8; color: #3a3a3c; font-weight: 600; white-space: nowrap; }

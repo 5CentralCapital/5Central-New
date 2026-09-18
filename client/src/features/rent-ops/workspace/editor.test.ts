@@ -78,7 +78,7 @@ test("one-time tenant charges hide posting internals and keep billable amount an
   assert.ok(!fields.some(field => ["kind", "status", "payer", "paymentMethod"].includes(field.name)));
   assert.ok(fields.some(field => field.name === "amountDollars"));
   assert.ok(fields.some(field => field.name === "category"));
-  assert.equal(editorTitle("post-ledger-transaction", initial), "Add one-time charge");
+  assert.equal(editorTitle("post-ledger-transaction", initial), "Add charge");
 });
 
 test("charge account label contains each identity once", () => {

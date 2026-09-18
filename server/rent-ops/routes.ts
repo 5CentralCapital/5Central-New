@@ -996,6 +996,17 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
     try {const result=await service.correctPayment(req.params.id,parsed.data,{actorSubject,occurredAt:patchOccurredAt()});res.status(result.replayed?200:201).json({payment:serializeAdminLedgerTransaction(result.payment),replayed:result.replayed});}
     catch(error) {if(error instanceof RentOpsInvariantError)res.status(409).json({error:error.message});else adminError(res,error);}
   });
+  adminRouter.post("/payments/:id/auto-allocate", async (req,res) => {
+    const actorSubject=req.rentOpsAdminUser?.id;
+    if(!actorSubject){res.status(401).json(errorBody("not_authorized"));return;}
+    try {
+      const result=await service.autoAllocatePayment(req.params.id,{actorSubject,occurredAt:patchOccurredAt()});
+      res.json({saved:true,allocatedCents:result.allocatedCents,unappliedCents:result.unappliedCents});
+    } catch(error) {
+      if(error instanceof RentOpsInvariantError)res.status(409).json({error:error.message});
+      else adminError(res,error);
+    }
+  });
   adminRouter.post("/manual-payments", async (req, res) => {
     const parsed = manualPaymentSchema.safeParse(req.body);
     if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; }

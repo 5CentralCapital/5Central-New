@@ -106,12 +106,13 @@
 
 .rm-tabs.rm-tenant-tabs button {
   flex: 0 0 auto;
+  min-height: var(--rm-control-height, 2rem);
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--rm-muted);
   cursor: pointer;
-  padding: 11px 12px 9px;
+  padding: 5px 10px 4px;
   font-size: .74rem;
   font-weight: 700;
   white-space: nowrap;
@@ -251,6 +252,20 @@
   font-size: .7rem;
   font-weight: 700;
   white-space: nowrap;
+}
+
+@media (pointer: coarse) {
+  .rm-tabs.rm-tenant-tabs button,
+  .rm-tenant-record .rm-button,
+  .rm-tenant-record .rm-ledger-filters input {
+    min-height: 44px;
+  }
+
+  .rm-tenant-record .rm-button-icon {
+    width: 44px;
+    min-width: 44px;
+    padding: 0;
+  }
 }
 
 .rm-button:hover {
@@ -596,4 +611,4 @@
 .rm-ledger-filters { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
 .rm-ledger-filters label { display: grid; gap: 5px; font-size: 12px; }
 .rm-ledger-filters label:first-child { flex: 1; min-width: 220px; }
-.rm-ledger-filters input { min-height: 34px; padding: 6px 9px; border: 1px solid #d8d5cf; border-radius: 4px; background: white; }
+.rm-ledger-filters input { min-height: var(--rm-control-height, 32px); padding: 5px 8px; border: 1px solid #d8d5cf; border-radius: 4px; background: white; }

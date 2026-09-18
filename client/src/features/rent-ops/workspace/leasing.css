@@ -198,8 +198,8 @@ button.rm-leasing-record-link:not(:disabled):hover {
   display: inline-flex;
   align-items: center;
   gap: .35rem;
-  min-height: 2.15rem;
-  padding: .35rem .65rem;
+  min-height: var(--rm-control-height, 2rem);
+  padding: .25rem .55rem;
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
@@ -257,6 +257,12 @@ button.rm-leasing-record-link:not(:disabled):hover {
 
   .rm-leasing-search {
     grid-column: span 2;
+  }
+}
+
+@media (pointer: coarse) {
+  .rm-leasing-register-tabs button {
+    min-height: 44px;
   }
 }
 @media (min-width: 1080px) {

@@ -35,7 +35,8 @@
 .rm-report-control input,
 .rm-report-control select {
   width: 100%;
-  height: 34px;
+  height: var(--rm-control-height, 32px);
+  min-height: var(--rm-control-height, 32px);
   padding: 0 9px;
   border: 1px solid var(--rm-line, #dde2df);
   border-radius: 6px;
@@ -93,7 +94,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 34px;
+  min-height: var(--rm-control-height, 32px);
   padding: 0 10px;
   border: 1px solid var(--rm-line, #dde2df);
   border-radius: 6px;
@@ -401,6 +402,20 @@ button.rm-stat:hover {
   .rm-report-panel {
     border: 0;
     box-shadow: none;
+  }
+}
+
+@media (pointer: coarse) {
+  .rm-workspace .rm-report-control input,
+  .rm-workspace .rm-report-control select,
+  .rm-workspace .rm-report-columns summary,
+  .rm-workspace .rm-report-actions > .rm-button {
+    min-height: 44px;
+  }
+
+  .rm-workspace .rm-report-control input,
+  .rm-workspace .rm-report-control select {
+    height: 44px;
   }
 }
 

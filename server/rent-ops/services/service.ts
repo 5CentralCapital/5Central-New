@@ -44,7 +44,7 @@ import type {
 } from "../../../shared/rent-ops-contracts";
 import { deriveOperationalScheduleRegister, validateReportFilters, deriveApplicantPipeline, deriveCollectedIncome, deriveDashboardSummary, deriveDashboardWorkspace, deriveDepositLiability, deriveDelinquency, deriveFixedReport, deriveHap, deriveLeaseExpirations, deriveRentRoll, deriveScheduledIncome, deriveScheduledVsCollected, deriveTenantLedger, deriveTenantProfile, toApplicantPublicView } from "../domain/reports";
 import { deriveDashboardTrends } from "../domain/dashboard-trends";
-import { assertApplicationStatusTransition, assertCents, assertPositiveCents, assertPrivateStorageKey, buildReversal, documentReferenceViolations, effectiveSchedules, RentOpsInvariantError, validateAllocation, validateSnapshot } from "../domain/invariants";
+import { assertApplicationStatusTransition, assertCents, assertPositiveCents, assertPrivateStorageKey, buildReversal, documentReferenceViolations, effectiveSchedules, isSourceAllocationReversal, RentOpsInvariantError, validateAllocation, validateSnapshot } from "../domain/invariants";
 import { addDays, addMonths, nowIsoDate, nowIsoTimestamp } from "../domain/dates";
 import { isPublicApplicationInventory, serializePublicListings } from "../presentation/public";
 export { isPublicApplicationInventory } from "../presentation/public";
@@ -258,6 +258,194 @@ function assertPatchValueSafe(value: unknown, seen = new Set<object>()): void {
 
 function snakeCase(value: string): string {
   return value.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+}
+
+interface AutoAllocationPlan {
+  allocations: RentOpsPaymentAllocation[];
+  allocatedCents: number;
+  unappliedCents: number;
+}
+
+/**
+ * Native auto-allocation is deliberately conservative. An absent knowledge
+ * marker is retained for legacy v1/v2 rows, while an explicit unknown or
+ * ambiguous marker blocks the row from being treated as an account fact.
+ */
+function allocationFactKnown(value: unknown): boolean {
+  return value !== null && value !== "unknown" && value !== "ambiguous";
+}
+
+function autoAllocationId(paymentId: string, chargeId: string): string {
+  return `manual-auto-allocation:${createHash("sha256").update(JSON.stringify([paymentId, chargeId])).digest("hex")}`;
+}
+
+function autoAllocationActivityId(paymentId: string): string {
+  return `activity:auto-allocate-payment:${createHash("sha256").update(paymentId).digest("hex")}`;
+}
+
+function samePaymentAccount(payment: RentOpsLedgerTransaction, charge: RentOpsLedgerTransaction, tenancy: RentOpsTenancy): boolean {
+  if (charge.tenancyId !== tenancy.id || charge.propertyId !== tenancy.propertyId || charge.personId !== tenancy.primaryPersonId) return false;
+  // Imported charges may have no unit link even when their tenancy, property,
+  // and person links are exact. A present unit link must still agree with the
+  // tenancy and payment account.
+  if (charge.unitId && charge.unitId !== tenancy.unitId) return false;
+  if (payment.unitId && charge.unitId && payment.unitId !== charge.unitId) return false;
+  return true;
+}
+
+function transactionLinksKnown(transaction: RentOpsLedgerTransaction): boolean {
+  const links = [transaction.propertyLinkKnowledge, transaction.tenancyLinkKnowledge, transaction.personLinkKnowledge];
+  if (transaction.unitId) links.push(transaction.unitLinkKnowledge);
+  return links.every(allocationFactKnown);
+}
+
+function sourceAllocationFactsKnown(allocation: RentOpsPaymentAllocation): boolean {
+  if (!allocationFactKnown(allocation.amountKnowledge) || !allocationFactKnown(allocation.allocatedOnKnowledge)) return false;
+  if (!allocationFactKnown(allocation.chargeLinkKnowledge)) return false;
+  if (allocation.kind === "credit_allocation") return allocation.creditLinkKnowledge === "exact";
+  return allocationFactKnown(allocation.paymentLinkKnowledge);
+}
+
+function autoAllocationPlan(snapshot: RentOpsSnapshot, payment: RentOpsLedgerTransaction, tenancy: RentOpsTenancy): AutoAllocationPlan {
+  const paymentPostedOn = payment.postedOn;
+  const paymentAmountCents = payment.amountCents;
+  if (payment.kind !== "payment" || payment.status !== "posted" || !paymentPostedOn || !allocationFactKnown(payment.postedOnKnowledge) || !allocationFactKnown(payment.statusKnowledge) || typeof paymentAmountCents !== "number" || !Number.isSafeInteger(paymentAmountCents) || paymentAmountCents <= 0 || !allocationFactKnown(payment.amountKnowledge)) {
+    throw new RentOpsInvariantError("Payment account, status, amount, or date must be resolved before auto-allocation");
+  }
+  const resolvedPaymentPostedOn = paymentPostedOn;
+  const resolvedPaymentAmountCents = paymentAmountCents;
+  if (!payment.tenancyId || payment.tenancyId !== tenancy.id || !payment.propertyId || payment.propertyId !== tenancy.propertyId || !payment.personId || payment.personId !== tenancy.primaryPersonId) {
+    throw new RentOpsInvariantError("Payment account links need review before auto-allocation");
+  }
+  if (!transactionLinksKnown(payment)) throw new RentOpsInvariantError("Payment account links need review before auto-allocation");
+
+  const transactions = new Map(snapshot.ledgerTransactions.map((row) => [row.id, row]));
+  const reversed = postedReversalTargets(snapshot.ledgerTransactions);
+  if (reversed.has(payment.id)) throw new RentOpsInvariantError("This payment was already reversed");
+
+  const existingTargetCharges = new Set<string>();
+  const appliedByCharge = new Map<string, number>();
+  let appliedToPayment = 0;
+  let paymentHistoryUncertain = false;
+  const uncertainCharges = new Set<string>();
+
+  const addApplied = (chargeId: string, amount: number) => {
+    const next = (appliedByCharge.get(chargeId) ?? 0) + amount;
+    if (!Number.isSafeInteger(next)) throw new RentOpsInvariantError("Charge allocation balance exceeds safe integer range");
+    appliedByCharge.set(chargeId, next);
+  };
+
+  for (const allocation of snapshot.paymentAllocations) {
+    if (allocation.kind === "transfer") continue;
+    const chargeId = allocation.chargeTransactionId;
+    if (!chargeId) {
+      if (allocation.paymentTransactionId === payment.id) paymentHistoryUncertain = true;
+      continue;
+    }
+    const charge = transactions.get(chargeId);
+    if (!charge || charge.kind !== "charge") {
+      if (allocation.paymentTransactionId === payment.id) paymentHistoryUncertain = true;
+      continue;
+    }
+    if (allocation.paymentTransactionId === payment.id) existingTargetCharges.add(chargeId);
+    // A reversed charge no longer consumes payment or credit application
+    // capacity. The receipt remains unapplied and may be used elsewhere.
+    if (reversed.has(chargeId)) continue;
+
+    const amount = allocation.amountCents;
+    const validSourceReversal = isSourceAllocationReversal(allocation);
+    if (!Number.isSafeInteger(amount) || amount === null || !sourceAllocationFactsKnown(allocation) || amount <= 0 && !validSourceReversal || amount > 0 && allocation.kind === "reversal") {
+      uncertainCharges.add(chargeId);
+      if (allocation.paymentTransactionId === payment.id) paymentHistoryUncertain = true;
+      continue;
+    }
+    const parentId = allocation.kind === "credit_allocation" ? allocation.creditTransactionId : allocation.paymentTransactionId;
+    const parent = parentId ? transactions.get(parentId) : undefined;
+    const expectedParentKind = allocation.kind === "credit_allocation" ? "credit" : "payment";
+    if (!parent || parent.kind !== expectedParentKind || parent.status !== "posted" || reversed.has(parent.id)) continue;
+    if (allocation.kind === "credit_allocation" && (allocation.paymentTransactionId !== null && allocation.paymentTransactionId !== undefined || allocation.creditTransactionId === null || allocation.creditTransactionId === undefined)) {
+      uncertainCharges.add(chargeId);
+      continue;
+    }
+    if (allocation.kind !== "credit_allocation" && !allocation.paymentTransactionId) {
+      uncertainCharges.add(chargeId);
+      continue;
+    }
+    addApplied(chargeId, amount);
+    if (allocation.paymentTransactionId === payment.id) {
+      appliedToPayment += amount;
+      if (!Number.isSafeInteger(appliedToPayment)) throw new RentOpsInvariantError("Payment allocation balance exceeds safe integer range");
+    }
+  }
+  if (paymentHistoryUncertain) throw new RentOpsInvariantError("Payment allocation history needs review before auto-allocation");
+  if (appliedToPayment > resolvedPaymentAmountCents) throw new RentOpsInvariantError("Payment allocations exceed the payment amount");
+
+  let remaining = resolvedPaymentAmountCents - appliedToPayment;
+  if (remaining <= 0) return { allocations: [], allocatedCents: appliedToPayment, unappliedCents: 0 };
+
+  const candidates = snapshot.ledgerTransactions
+    .filter((charge) => {
+      const chargeAmountCents = charge.amountCents;
+      if (charge.kind !== "charge" || charge.status !== "posted" || !charge.postedOn || !allocationFactKnown(charge.postedOnKnowledge) || !allocationFactKnown(charge.statusKnowledge) || charge.postedOn > resolvedPaymentPostedOn) return false;
+      if (typeof chargeAmountCents !== "number" || !Number.isSafeInteger(chargeAmountCents) || chargeAmountCents <= 0 || !allocationFactKnown(charge.amountKnowledge)) return false;
+      if (charge.dueOn && charge.dueOn > resolvedPaymentPostedOn) return false;
+      if (!samePaymentAccount(payment, charge, tenancy)) return false;
+      if (!transactionLinksKnown(charge) || charge.payer !== "tenant" || !allocationFactKnown(charge.payerKnowledge) || reversed.has(charge.id) || uncertainCharges.has(charge.id)) return false;
+      return true;
+    })
+    .sort((left, right) => left.postedOn!.localeCompare(right.postedOn!) || left.id.localeCompare(right.id));
+
+  // A native payment/charge pair is unique and allocation rows are immutable.
+  // Do not silently move on to a newer charge when this receipt already has a
+  // partial application to an older one; the remainder requires a correction.
+  for (const charge of candidates) {
+    if (!existingTargetCharges.has(charge.id)) continue;
+    const open = Math.max(0, charge.amountCents! - (appliedByCharge.get(charge.id) ?? 0));
+    if (open > 0) throw new RentOpsInvariantError(`Payment ${payment.id} already has a partial allocation to charge ${charge.id}; correct that allocation before auto-allocation`);
+  }
+
+  const allocations: RentOpsPaymentAllocation[] = [];
+  for (const charge of candidates) {
+    const alreadyApplied = appliedByCharge.get(charge.id) ?? 0;
+    const open = Math.max(0, charge.amountCents! - alreadyApplied);
+    if (!open) continue;
+    const amount = Math.min(remaining, open);
+    if (!Number.isSafeInteger(amount) || amount <= 0) continue;
+    allocations.push({
+      id: autoAllocationId(payment.id, charge.id),
+      kind: "allocation",
+      paymentTransactionId: payment.id,
+      chargeTransactionId: charge.id,
+      amountCents: amount,
+      allocatedOn: resolvedPaymentPostedOn,
+      paymentLinkKnowledge: "manual",
+      chargeLinkKnowledge: "manual",
+      amountKnowledge: "known",
+      allocatedOnKnowledge: "manual",
+    });
+    remaining -= amount;
+    if (remaining === 0) break;
+  }
+  const allocatedCents = resolvedPaymentAmountCents - remaining;
+  return { allocations, allocatedCents, unappliedCents: remaining };
+}
+
+function paymentAllocatedCents(snapshot: RentOpsSnapshot, payment: RentOpsLedgerTransaction): number {
+  const transactions = new Map(snapshot.ledgerTransactions.map((row) => [row.id, row]));
+  const reversed = postedReversalTargets(snapshot.ledgerTransactions);
+  let allocated = 0;
+  for (const allocation of snapshot.paymentAllocations) {
+    if (allocation.paymentTransactionId !== payment.id || allocation.kind === "transfer" || allocation.kind === "credit_allocation") continue;
+    const charge = allocation.chargeTransactionId ? transactions.get(allocation.chargeTransactionId) : undefined;
+    if (!charge || charge.kind !== "charge") throw new RentOpsInvariantError("Payment allocation history needs review before auto-allocation");
+    if (reversed.has(charge.id)) continue;
+    if (!Number.isSafeInteger(allocation.amountCents) || !sourceAllocationFactsKnown(allocation) || allocation.amountCents! <= 0 && !isSourceAllocationReversal(allocation) || allocation.amountCents! > 0 && allocation.kind === "reversal") {
+      throw new RentOpsInvariantError("Payment allocation history needs review before auto-allocation");
+    }
+    allocated += allocation.amountCents!;
+    if (!Number.isSafeInteger(allocated) || allocated < 0) throw new RentOpsInvariantError("Payment allocation balance needs review before auto-allocation");
+  }
+  return allocated;
 }
 
 function patchRow(snapshot: RentOpsSnapshot, entityType: RentOpsPatchEntityType, targetId: string): Record<string, unknown> | undefined {
@@ -1485,10 +1673,65 @@ export class RentOpsService {
     }, {lockTransactionIds:[originalId,...input.allocations.map(row=>row.chargeTransactionId)]});
   }
 
-  async recordManualPayment(raw: ManualPaymentInput, context: RentOpsAdminPatchContext): Promise<{ payment: RentOpsLedgerTransaction; allocations: RentOpsPaymentAllocation[]; replayed: boolean }> {
+  private async autoAllocatePaymentRecord(id: string, context: RentOpsAdminPatchContext): Promise<{ payment: RentOpsLedgerTransaction; allocations: RentOpsPaymentAllocation[]; allocatedCents: number; unappliedCents: number; replayed: boolean }> {
+    const snapshot = await this.repository.getSnapshot();
+    const payment = snapshot.ledgerTransactions.find((row) => row.id === id);
+    if (!payment || payment.kind !== "payment" || payment.status !== "posted") throw new RentOpsInvariantError("Only a posted payment can be auto-allocated");
+    if (/^tp_.*_ledger_/.test(payment.id)) throw new RentOpsInvariantError("Online payments are managed by the payment processor");
+    if (!payment.tenancyId || !payment.personId || !payment.propertyId) throw new RentOpsInvariantError("Payment account links need review before auto-allocation");
+    const tenancy = snapshot.tenancies.find((row) => row.id === payment.tenancyId);
+    const unit = tenancy?.unitId ? snapshot.units.find((row) => row.id === tenancy.unitId) : undefined;
+    if (!tenancy || !unit || tenancy.status === "cancelled" || tenancy.primaryPersonId !== payment.personId || tenancy.propertyId !== payment.propertyId || unit.propertyId !== tenancy.propertyId || payment.unitId && payment.unitId !== unit.id) {
+      throw new RentOpsInvariantError("Exact payment tenancy required");
+    }
+    if ((snapshot.modelVersion === 3 || tenancy.source) && [tenancy.propertyLinkKnowledge, tenancy.unitLinkKnowledge, tenancy.primaryPersonLinkKnowledge, unit.propertyLinkKnowledge].some((value) => value !== "manual" && value !== "exact")) {
+      throw new RentOpsInvariantError("Payment tenancy links need review");
+    }
+
+    const activityId = autoAllocationActivityId(payment.id);
+    const priorActivity = snapshot.activityEvents.find((row) => row.id === activityId);
+    const plan = autoAllocationPlan(snapshot, payment, tenancy);
+    const service = this;
+    for (const allocation of plan.allocations) await service.savePaymentAllocationRecord(allocation);
+    const after = await this.repository.getSnapshot();
+    const savedPayment = after.ledgerTransactions.find((row) => row.id === payment.id) ?? payment;
+    const savedAllocations = after.paymentAllocations.filter((row) => row.paymentTransactionId === payment.id);
+    const allocatedCents = paymentAllocatedCents(after, savedPayment);
+    if (savedPayment.amountCents === null || allocatedCents > savedPayment.amountCents) throw new RentOpsInvariantError("Payment allocations exceed the payment amount");
+    const unappliedCents = savedPayment.amountCents - allocatedCents;
+    // Keep the first operation's stable audit row, but do not use it as a
+    // state lockout: a later retry may legitimately apply newly posted
+    // charges with the receipt's remaining unapplied funds.
+    if (!priorActivity) await this.repository.saveActivity({
+        id: activityId,
+        propertyId: savedPayment.propertyId ?? undefined,
+        unitId: savedPayment.unitId ?? undefined,
+        tenancyId: savedPayment.tenancyId ?? undefined,
+        personId: savedPayment.personId ?? undefined,
+        type: "system",
+        actor: "admin",
+        occurredAt: context.occurredAt,
+        summary: `Payment ${savedPayment.id} auto-allocated by ${context.actorSubject}; ${plan.allocations.length} charge(s) applied`,
+      });
+    return { payment: savedPayment, allocations: savedAllocations, allocatedCents, unappliedCents, replayed: plan.allocations.length === 0 && Boolean(priorActivity) };
+  }
+
+  /** Apply one existing posted receipt to its oldest open account charges. */
+  async autoAllocatePayment(id: string, context: RentOpsAdminPatchContext): Promise<{ payment: RentOpsLedgerTransaction; allocations: RentOpsPaymentAllocation[]; allocatedCents: number; unappliedCents: number; replayed: boolean }> {
+    assertAdminPatchContext(context);
+    const initial = await this.snapshot();
+    const payment = initial.ledgerTransactions.find((row) => row.id === id);
+    if (!payment || payment.kind !== "payment" || !payment.personId) throw new RentOpsInvariantError("Only a posted payment with an exact account can be auto-allocated");
+    return this.repository.transaction((repository) => this.withRepository(repository).autoAllocatePaymentRecord(id, context), {
+      lockAccountPersonId: payment.personId,
+      lockTransactionIds: [id],
+    });
+  }
+
+  async recordManualPayment(raw: ManualPaymentInput, context: RentOpsAdminPatchContext): Promise<{ payment: RentOpsLedgerTransaction; allocations: RentOpsPaymentAllocation[]; allocatedCents: number; unappliedCents: number; replayed: boolean }> {
     const parsed = manualPaymentSchema.safeParse(raw);
     if (!parsed.success || !context.actorSubject?.trim()) throw new RentOpsInvariantError("Invalid manual payment input");
-    const input = parsed.data;
+    const input = { ...parsed.data, autoAllocate: parsed.data.autoAllocate !== false };
     if (new Set(input.allocations.map(row => row.chargeTransactionId)).size !== input.allocations.length) throw new RentOpsInvariantError("Duplicate allocation target");
     const total = input.allocations.reduce((sum, row) => sum + row.amountCents, 0);
     if (!Number.isSafeInteger(total) || total > input.amountCents) throw new RentOpsInvariantError("Allocations exceed payment amount");
@@ -1512,19 +1755,27 @@ export class RentOpsService {
       if (existing) {
         const savedAllocations = snapshot.paymentAllocations.filter(row => row.paymentTransactionId === payment.id);
         const equal = (a: object, b: object) => Object.entries(b).every(([key,value]) => (a as Record<string,unknown>)[key] === value);
-        if (existing.source || !equal(existing,payment) || savedAllocations.length !== allocations.length || allocations.some(row => !savedAllocations.some(saved => equal(saved,row)))) throw new RentOpsInvariantError("Manual payment id conflicts with an existing operation");
-        return { payment: existing, allocations: savedAllocations, replayed: true };
+        const expectedAllocations = input.allocations.length === 0 && input.autoAllocate ? undefined : allocations;
+        if (existing.source || !equal(existing,payment) || expectedAllocations && (savedAllocations.length !== expectedAllocations.length || expectedAllocations.some(row => !savedAllocations.some(saved => equal(saved,row))))) throw new RentOpsInvariantError("Manual payment id conflicts with an existing operation");
+        const allocatedCents = paymentAllocatedCents(snapshot, existing);
+        if (existing.amountCents === null || allocatedCents > existing.amountCents) throw new RentOpsInvariantError("Payment allocations exceed the payment amount");
+        return { payment: existing, allocations: savedAllocations, allocatedCents, unappliedCents: existing.amountCents - allocatedCents, replayed: true };
       }
       for (const allocation of allocations) {
         const charge = snapshot.ledgerTransactions.find(row => row.id === allocation.chargeTransactionId);
-        if (!charge || charge.tenancyId !== tenancy.id || charge.propertyId !== tenancy.propertyId || charge.unitId !== unit.id || charge.personId !== tenancy.primaryPersonId || !["base_rent", "recurring_fee", "one_time_fee", "other"].includes(charge.category ?? "") || charge.payer !== "tenant" || charge.amountKnowledge === "unknown") throw new RentOpsInvariantError("Allocation requires an exact non-deposit tenant charge");
-        if ((snapshot.modelVersion === 3 || charge.source) && [charge.propertyLinkKnowledge, charge.unitLinkKnowledge, charge.tenancyLinkKnowledge, charge.personLinkKnowledge].some(value => value !== "manual" && value !== "exact")) throw new RentOpsInvariantError("Charge links need review");
+        if (!charge || charge.kind !== "charge" || charge.status !== "posted" || charge.tenancyId !== tenancy.id || charge.propertyId !== tenancy.propertyId || charge.unitId && charge.unitId !== unit.id || charge.personId !== tenancy.primaryPersonId || charge.payer !== "tenant" || charge.amountCents === null || !Number.isSafeInteger(charge.amountCents) || charge.amountKnowledge === "unknown") throw new RentOpsInvariantError("Allocation requires an exact posted tenant charge");
+        if ((snapshot.modelVersion === 3 || charge.source) && [charge.propertyLinkKnowledge, ...(charge.unitId ? [charge.unitLinkKnowledge] : []), charge.tenancyLinkKnowledge, charge.personLinkKnowledge].some(value => value !== "manual" && value !== "exact")) throw new RentOpsInvariantError("Charge links need review");
         if (snapshot.paymentAllocations.some(row => row.chargeTransactionId === charge.id && (row.amountCents === null || row.amountKnowledge === "unknown"))) throw new RentOpsInvariantError("Charge allocation amount needs review");
       }
       await repository.saveLedgerTransaction(payment);
       for (const allocation of allocations) await service.savePaymentAllocationRecord(allocation);
+      const autoResult = input.allocations.length === 0 && input.autoAllocate ? await service.autoAllocatePaymentRecord(payment.id, context) : undefined;
+      const after = await repository.getSnapshot();
+      const savedAllocations = after.paymentAllocations.filter((row) => row.paymentTransactionId === payment.id);
+      const allocatedCents = autoResult?.allocatedCents ?? paymentAllocatedCents(after, payment);
+      const unappliedCents = autoResult?.unappliedCents ?? (payment.amountCents === null ? 0 : payment.amountCents - allocatedCents);
       await repository.saveActivity({id: `activity:manual-payment:${createHash("sha256").update(payment.id).digest("hex")}`, tenancyId: tenancy.id, personId: tenancy.primaryPersonId, propertyId: tenancy.propertyId, unitId: unit.id, type: "system", actor: "admin", occurredAt: context.occurredAt, summary: `Manual payment recorded by ${context.actorSubject}`});
-      return { payment, allocations, replayed: false };
+      return { payment, allocations: savedAllocations, allocatedCents, unappliedCents, replayed: false };
     }, { lockAccountPersonId: initial.primaryPersonId, lockTransactionIds: input.allocations.map(row => row.chargeTransactionId) });
   }
 

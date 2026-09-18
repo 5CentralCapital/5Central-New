@@ -2526,9 +2526,9 @@ button.rm-stat:hover {
 .rm-workspace .rm-sidebar-footer a { color: var(--rm-muted); }
 .rm-workspace .rm-sidebar-footer a:hover { color: var(--rm-ink); }
 .rm-workspace .rm-field-label, .rm-workspace .rm-field > label { color: var(--rm-charcoal); font-size: 12px; font-weight: 550; }
-.rm-workspace .rm-button { font-size: 13px; font-weight: 550; padding-inline: 13px; }
+.rm-workspace .rm-button { font-size: 13px; font-weight: 550; padding-inline: 10px; }
 .rm-workspace .rm-button--icon { padding: 0; }
-.rm-workspace .rm-button--small { min-height: 30px; padding-inline: 10px; font-size: 12px; }
+.rm-workspace .rm-button--small { min-height: 28px; padding-inline: 8px; font-size: 12px; }
 .rm-workspace .rm-button[aria-pressed="true"] {
   border-color: var(--rm-charcoal); background: var(--rm-charcoal); color: #fff;
 }
@@ -2606,4 +2606,118 @@ button.rm-stat:hover {
 @media (max-width: 600px) {
   .rm-workspace .rm-property-filter { flex: 1 1 180px; }
   .rm-workspace .rm-property-filter-options { left: 0; right: auto; }
+}
+
+/* Keep the desktop manager chrome compact while reserving larger targets for
+   coarse pointers. Text stays at the normal operational size for readability. */
+@media (min-width: 769px) and (pointer: fine) {
+  .rm-workspace {
+    --rm-control-height: 2rem;
+    --rm-ribbon-height: 52px;
+    --rm-open-tabs-height: 36px;
+  }
+
+  .rm-workspace .rm-ribbon {
+    gap: 6px;
+    padding-inline: 12px;
+  }
+
+  .rm-workspace .rm-ribbon .rm-nav-group > :is(button, a) {
+    min-height: 34px;
+    padding-inline: 8px;
+  }
+
+  .rm-workspace .rm-ribbon > .rm-button {
+    min-height: 32px;
+    flex-basis: 32px;
+  }
+
+  .rm-workspace .rm-sidebar-link,
+  .rm-workspace .rm-history-item {
+    min-height: 32px;
+  }
+
+  .rm-workspace .rm-tabs > :where(button, a),
+  .rm-workspace .ro-tabs button {
+    min-height: 32px;
+  }
+
+  .rm-workspace .rm-dialog-header,
+  .rm-workspace .rm-dialog-body {
+    padding: 16px;
+  }
+
+  .rm-workspace .rm-dialog-footer {
+    padding: 12px 16px;
+  }
+
+  .rm-workspace .rm-property-filter > summary {
+    min-height: var(--rm-control-height);
+    padding: 4px 9px;
+    font-size: 12px;
+  }
+
+  .rm-workspace .rops-payment-dialog button,
+  .rm-workspace .rm-export-actions > button,
+  .rm-workspace .rmb button {
+    min-height: var(--rm-control-height);
+    padding-block: 0;
+  }
+}
+
+/* Touch devices get full-size controls even when the viewport is wide. */
+@media (pointer: coarse) {
+  .rm-workspace {
+    --rm-control-height: 2.75rem;
+  }
+
+  .rm-workspace .rm-button,
+  .rm-workspace .rm-workspace-toolbar-actions > .rm-button,
+  .rm-workspace .ro-actions :where(button),
+  .rm-workspace .ro-inline-actions :where(button),
+  .rm-workspace .ro-app-actions :where(button),
+  .rm-workspace .ro-quick-actions :where(button),
+  .rm-workspace :where(.primary, .secondary, .icon-button),
+  .rm-workspace .rm-tabs > :where(button, a),
+  .rm-workspace .ro-tabs button,
+  .rm-workspace .rm-ribbon .rm-nav-group > :is(button, a),
+  .rm-workspace .rm-sidebar-link,
+  .rm-workspace .rm-history-item,
+  .rm-workspace .rm-property-filter > summary,
+  .rm-workspace .rops-payment-dialog button,
+  .rm-workspace .rm-export-actions > button,
+  .rm-workspace .rmb button {
+    min-height: 44px;
+  }
+
+  .rm-workspace .rm-button--icon,
+  .rm-workspace .rm-button-icon,
+  .rm-workspace .icon-button,
+  .rm-workspace .rm-sidebar-toggle {
+    width: 44px;
+    min-width: 44px;
+    flex-basis: 44px;
+    height: 44px;
+  }
+
+  .rm-workspace .rm-ribbon > .rm-button {
+    flex-basis: 44px;
+  }
+
+  .rm-workspace .rm-table th > button.rm-button,
+  .rm-workspace .rm-grouped-report-table thead button {
+    min-height: 44px;
+    padding-block: 0;
+  }
+
+  .rm-workspace .rm-readiness-button,
+  .rm-workspace .rm-occupancy-filter button,
+  .rm-workspace .rm-ledger-filters input {
+    min-height: 44px;
+  }
+
+  .rm-workspace .rm-open-tab-close {
+    width: 36px;
+    height: 36px;
+  }
 }

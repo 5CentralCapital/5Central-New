@@ -575,7 +575,7 @@ export function buildTenantEditActions(tenant: TenantView, snapshot: AdminSnapsh
       actions.push({ label: `End ${scopeLabel} ${index + 1}`, action: "end-recurring-schedule", values: { ...values, effectiveFrom: "" } });
     });
   }
-  if (tab === "ledger") actions.push({ label: "Add one-time charge", action: "post-ledger-transaction", values: {
+  if (tab === "ledger") actions.push({ label: "Add charge", action: "post-ledger-transaction", values: {
     kind: "charge", status: "posted", payer: "tenant",
     propertyId: context.property?.id,
     unitId: context.unit?.id,

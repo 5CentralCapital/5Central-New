@@ -1,3 +1,5 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { rentOpsAuthClient } from "../auth";
 import { ChargeEditDialog } from "./charge-edit-dialog";
 import { PaymentEditDialog } from "./payment-edit-dialog";
 import { TenantLedgerExportDialog } from "./tenant-ledger-export";
@@ -294,7 +296,7 @@ function LedgerDetail({ row }: { row: TenantLedgerRow; snapshot: AdminSnapshot }
   return <dl className="rm-ledger-detail rm-form-grid"><Field label="Status" warning={!row.statusKnown}>{statusValue(row.status, !row.statusKnown)}</Field><Field label="Category">{label(row.category)}</Field><Field label="Due date">{formatDate(row.dueOn)}</Field><Field label="Payer">{label(row.payer)}</Field><Field label="Payment method">{label(row.paymentMethod)}</Field><Field label="Allocated">{formatMoney(row.allocatedCents)}</Field><Field label="Open">{formatMoney(row.openCents)}</Field>{row.reversalOfId && <Field label="Reversal">Reverses an earlier transaction</Field>}{row.uncertaintyCodes.length > 0 && <div className="rm-ledger-warning"><strong>Needs review</strong><span>{row.uncertaintyCodes.map(label).join(" · ")}</span></div>}</dl>;
 }
 
-function LedgerTable({ rows, allRows, snapshot, onEdit, expanded, onToggle, onPayment, onCharge }: { onCharge?: (id:string)=>void; onPayment?: (id:string)=>void; rows: TenantLedgerRow[]; allRows: TenantLedgerRow[]; snapshot: AdminSnapshot; onEdit: EditAction; expanded?: string; onToggle: (key: string) => void }) {
+function LedgerTable({ rows, allRows, snapshot, onEdit, expanded, onToggle, onPayment, onCharge, onAutoAllocate, allocatingId }: { onAutoAllocate?: (id:string)=>void; allocatingId?:string; onCharge?: (id:string)=>void; onPayment?: (id:string)=>void; rows: TenantLedgerRow[]; allRows: TenantLedgerRow[]; snapshot: AdminSnapshot; onEdit: EditAction; expanded?: string; onToggle: (key: string) => void }) {
   if (!rows.length) return <Empty message="No transactions match this view." />;
   const showReference = allRows.some(row => Boolean(row.reference));
   return <div className="rm-table-wrap"><table className="rm-table rm-ledger-table"><caption className="sr-only">Transactions</caption><thead><tr><th>Date</th><th>Property</th><th>Unit</th>{showReference && <th>Reference</th>}<th>Description</th><th className="rm-align-right">Charge</th><th className="rm-align-right">Payment or credit</th><th className="rm-align-right">Running balance</th><th>Status</th><th><span className="sr-only">Details</span></th></tr></thead><tbody>{rows.map((row, index) => {
@@ -303,15 +305,34 @@ function LedgerTable({ rows, allRows, snapshot, onEdit, expanded, onToggle, onPa
     const editTransaction = row.transaction.kind === "charge" ? onCharge : onPayment;
     const canEditPayment = ["payment","charge"].includes(row.transaction.kind??"") && row.transaction.status === "posted" && !!row.transaction.id && !!editTransaction && !allRows.some(other=>other.transaction.reversalOfId===row.transaction.id && other.transaction.status==="posted");
     const reverse = eligible.reverse ? { label: "Reverse", action: "reverse-ledger-transaction" as QuickAction, values: { originalId: row.transaction.id, postedOn: "", status: "posted", description: "" } satisfies FormValues } : undefined;
-    const allocate = eligible.allocate ? { label: "Allocate", action: "save-payment-allocation" as QuickAction, values: { paymentTransactionId: row.transaction.id, amountDollars: typeof row.transaction.amountCents === "number" ? String((row.openCents ?? 0) / 100) : "", allocatedOn: row.date ?? "" } satisfies FormValues } : undefined;
+
     return <Fragment key={`${row.key}-${index}`}>
-      <tr className={isOpen ? "rm-row-open" : canEditPayment ? "rm-editable-payment" : ""} onClick={event=>{if(canEditPayment && !(event.target as HTMLElement).closest("button,a,input"))editTransaction?.(row.transaction.id!);}}><td>{formatDate(row.date)}</td><td>{row.propertyName}</td><td>{row.unitLabel}</td>{showReference && <td className="rm-reference">{row.reference || "—"}</td>}<td>{canEditPayment && editTransaction ? <button type="button" className="rm-payment-link" onClick={()=>editTransaction(row.transaction.id!)}>{row.description}</button> : <strong>{row.description}</strong>}</td><td className="rm-align-right rm-amount">{amountCell(row.chargeCents, row.chargeCents !== null || ["charge", "debit"].includes(row.kind?.toLowerCase() ?? ""))}</td><td className={`rm-align-right rm-amount${row.paymentLabel === "Credit" ? " rm-credit" : ""}`}>{row.paymentLabel ? <>{amountCell(row.paymentCents)}<small>{row.paymentLabel}</small></> : "—"}</td><td className="rm-align-right rm-amount">{formatMoney(row.runningBalanceCents)}</td><td>{statusValue(row.status, !row.statusKnown)}</td><td><div className="rm-row-actions"><button type="button" className="rm-button rm-button-icon" aria-expanded={isOpen} aria-label={canEditPayment ? `Edit ${row.transaction.kind}: ${row.description}` : `${isOpen ? "Hide" : "Show"} details for ${row.description}`} onClick={() => canEditPayment && editTransaction ? editTransaction(row.transaction.id!) : onToggle(row.key)}>{isOpen ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}</button>{allocate && <ActionButton action={allocate} onEdit={onEdit} />}{reverse && <ActionButton action={reverse} onEdit={onEdit} danger />}</div></td></tr>
+      <tr className={isOpen ? "rm-row-open" : canEditPayment ? "rm-editable-payment" : ""} onClick={event=>{if(canEditPayment && !(event.target as HTMLElement).closest("button,a,input"))editTransaction?.(row.transaction.id!);}}><td>{formatDate(row.date)}</td><td>{row.propertyName}</td><td>{row.unitLabel}</td>{showReference && <td className="rm-reference">{row.reference || "—"}</td>}<td>{canEditPayment && editTransaction ? <button type="button" className="rm-payment-link" onClick={()=>editTransaction(row.transaction.id!)}>{row.description}</button> : <strong>{row.description}</strong>}</td><td className="rm-align-right rm-amount">{amountCell(row.chargeCents, row.chargeCents !== null || ["charge", "debit"].includes(row.kind?.toLowerCase() ?? ""))}</td><td className={`rm-align-right rm-amount${row.paymentLabel === "Credit" ? " rm-credit" : ""}`}>{row.paymentLabel ? <>{amountCell(row.paymentCents)}<small>{row.paymentLabel}</small></> : "—"}</td><td className="rm-align-right rm-amount">{formatMoney(row.runningBalanceCents)}</td><td>{statusValue(row.status, !row.statusKnown)}</td><td><div className="rm-row-actions"><button type="button" className="rm-button rm-button-icon" aria-expanded={isOpen} aria-label={canEditPayment ? `Edit ${row.transaction.kind}: ${row.description}` : `${isOpen ? "Hide" : "Show"} details for ${row.description}`} onClick={() => canEditPayment && editTransaction ? editTransaction(row.transaction.id!) : onToggle(row.key)}>{isOpen ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}</button>{eligible.allocate && onAutoAllocate && <button type="button" className="rm-button" disabled={!!allocatingId} onClick={()=>onAutoAllocate(row.transaction.id!)}>{allocatingId===row.transaction.id ? "Allocating…" : "Auto-allocate"}</button>}{reverse && <ActionButton action={reverse} onEdit={onEdit} danger />}</div></td></tr>
       {isOpen && <tr key={`${row.key}-${index}-detail`} className="rm-detail-row"><td colSpan={showReference ? 10 : 9}><LedgerDetail row={row} snapshot={snapshot} /></td></tr>}
     </Fragment>;
   })}</tbody></table></div>;
 }
 
 function LedgerTab({ tenant, snapshot, onEdit, editActions, onChanged, onMoveRefresh, readOnly }: Omit<TenantRecordProps,"tab"|"onTab"> & {editActions:TenantEditAction[]}) {
+  const queryClient=useQueryClient();
+  const [allocatingId,setAllocatingId]=useState<string>();
+  const [allocationMessage,setAllocationMessage]=useState("");
+  const [allocationError,setAllocationError]=useState("");
+  async function autoAllocate(id:string){
+    if(allocatingId)return;
+    setAllocatingId(id);setAllocationError("");setAllocationMessage("");
+    let saved=false;
+    try{
+      const response=await rentOpsAuthClient.request(`/api/rent-ops/payments/${encodeURIComponent(id)}/auto-allocate`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+      const result=await response.json();
+      if(!response.ok)throw new Error(typeof result.error==="string"?result.error:"Payment could not be allocated.");
+      saved=true;
+      await queryClient.invalidateQueries({predicate:q=>String(q.queryKey[0]).startsWith("rent-ops")},{throwOnError:true});
+      await (onMoveRefresh ? onMoveRefresh() : onChanged());
+      setAllocationMessage(`${formatMoney(result.allocatedCents)} applied to charges.${result.unappliedCents > 0 ? ` ${formatMoney(result.unappliedCents)} remains as credit.` : ""}`);
+    }catch(error){setAllocationError(`${saved?"Allocation saved, but refresh failed. ":""}${error instanceof Error?error.message:"Payment could not be allocated."}`);}
+    finally{setAllocatingId(undefined);}
+  }
   const [paymentId,setPaymentId]=useState<string>();
   const [chargeId,setChargeId]=useState<string>();
   const [expanded, setExpanded] = useState<string>();
@@ -332,7 +353,8 @@ function LedgerTab({ tenant, snapshot, onEdit, editActions, onChanged, onMoveRef
       <label>Through<input type="date" value={to} onChange={event => { setTo(event.target.value); setPage(0); }} /></label>
     </div>
     <div className="rm-ledger-toolbar"><span>{filtered.length} entr{filtered.length === 1 ? "y" : "ies"}</span></div>
-    <LedgerTable onCharge={readOnly ? undefined : setChargeId} onPayment={readOnly ? undefined : setPaymentId} rows={visible} allRows={rows} snapshot={snapshot} onEdit={onEdit} expanded={expanded} onToggle={(key) => setExpanded((prior) => prior === key ? undefined : key)} />
+    {allocationError && <p role="alert" className="rm-warning">{allocationError}</p>}{allocationMessage && <p role="status">{allocationMessage}</p>}
+    <LedgerTable onAutoAllocate={readOnly ? undefined : autoAllocate} allocatingId={allocatingId} onCharge={readOnly ? undefined : setChargeId} onPayment={readOnly ? undefined : setPaymentId} rows={visible} allRows={rows} snapshot={snapshot} onEdit={onEdit} expanded={expanded} onToggle={(key) => setExpanded((prior) => prior === key ? undefined : key)} />
     {pages > 1 && <div className="rm-ledger-toolbar"><span>Page {currentPage + 1} of {pages}</span><div className="rm-row-actions"><button type="button" className="rm-button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button type="button" className="rm-button" disabled={currentPage >= pages - 1} onClick={() => setPage(currentPage + 1)}>Next</button></div></div>}
   </Panel></div>;
 }
@@ -402,10 +424,9 @@ export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged, 
   const summary = buildTenantSummary(tenant, snapshot);
   const editActions = useMemo(() => buildTenantEditActions(tenant, snapshot, tab), [tenant, snapshot, tab]);
   const headerActions = useMemo(() => {
-    const charges = buildTenantEditActions(tenant, snapshot, "charges").filter(action => action.action === "save-recurring-schedule");
     const oneTime = buildTenantEditActions(tenant, snapshot, "ledger").filter(action => action.action === "post-ledger-transaction");
     const contextual = editActions.filter(action => (tab === "summary" && action.action === "save-person") || (tab === "activity" && action.action === "save-activity") || (tab === "deposits" && action.label.startsWith("Add ")));
-    return [...charges, ...oneTime, ...contextual];
+    return [...oneTime, ...contextual];
   }, [tenant, snapshot, editActions, tab]);
   return <section className="rm-tenant-record" aria-label={`Tenant record for ${summary.displayName}`}>
     {addPaymentOpen && paymentTenancy?.id && <PaymentEditDialog id="new" tenancyId={paymentTenancy.id} businessDate={businessDate??summary.asOfDate} tenantName={summary.displayName} onClose={()=>setAddPaymentOpen(false)} onSaved={onMoveRefresh??(async()=>{await onChanged();})}/>}

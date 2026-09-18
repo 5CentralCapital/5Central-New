@@ -163,7 +163,7 @@ export function scopedFields(action: QuickAction, snapshot: AdminSnapshot, initi
 
 export function editorTitle(action: QuickAction, initial: FormValues) {
   const noun = ({ "save-person": "Tenant", "save-property": "Property", "save-unit": "Unit" } as Partial<Record<QuickAction, string>>)[action];
-  if (action === "post-ledger-transaction" && initial.kind === "charge") return "Add one-time charge";
+  if (action === "post-ledger-transaction" && initial.kind === "charge") return "Add charge";
   return noun ? `${initial.id ? "Edit" : "Add"} ${noun}` : ACTION_LABELS[action] ?? "Edit record";
 }
 
