@@ -1,4 +1,3 @@
-import { useReportSearch } from "./use-report-search";
 import { useRentOpsAuth } from "../auth-ui";
 import { useQuery } from "@tanstack/react-query";
 import { loadRentOpsReport } from "../api";
@@ -7,13 +6,38 @@ import { AlertCircle, ArrowDown, ArrowUp, Download, Loader2, Printer, SlidersHor
 import type { AdminSnapshot, ReportKey, ReportRow, TenantTab, ViewFilters } from "../types";
 import { EntityLink, RecordLink } from "./entity-link";
 import {
-  REPORT_PERIODS, createReportViewModel, defaultReportOccupancy, defaultReportTenantStatus, isTenantStatusReport, emptyReportMessage, formatReportCellValue,
-  filterRentRollRows, filterReportLocalRows, formatReportValue, getReportConfig,
-  groupReportRows, readReportValue, reportCellPersonId, reportKeys, reportQueryFilters,
-  reportQueryKey, reportRowKey, reportPeriodLabel, validateReportPeriod,
-  type DisplayReportRow, type ReportBalanceFilter, type ReportColumnDefinition,
+  createReportViewModel,
+  emptyReportMessage,
+  formatReportCellValue,
+  formatReportValue,
+  getReportConfig,
+  groupReportRows,
+  readReportValue,
+  reportCellPersonId,
+  reportKeys,
+  reportQueryKey,
+  reportPeriodLabel,
+  reportRowKey,
+  type DisplayReportRow,
+  type ReportColumnDefinition,
 } from "./report-model";
 import { ReportExportDialog } from "./report-export-dialog";
+import {
+  applyReportSetupLocalFilters,
+  createInitialReportSetup,
+  normalizeReportSetup,
+  reportSetupEqual,
+  reportSetupFromUrlValue,
+  reportSetupLocalFilters,
+  reportSetupQueryFilters,
+  reportSetupSearch,
+  reportSetupToUrlValue,
+  reportSetupUrlKey,
+  validateReportSetup,
+  type ReportSetupDirectory,
+  type ReportSetupState,
+} from "./report-setup-model";
+import { ReportSetup } from "./report-setup";
 import "./reports.css";
 import "./reports-clean.css";
 
@@ -25,9 +49,13 @@ export interface ReportsWorkspaceProps {
   onOpenTenant?: (personId: string, tab?: TenantTab) => void;
   onOpenUnit?: (unitId: string) => void;
   onOpenProperty?: (propertyId: string) => void;
+  /** Optional unscoped directory loaded for report reference controls. */
+  directory?: ReportSetupDirectory;
+  /** False while the report page only has the active global directory snapshot. */
+  allowAllScope?: boolean;
 }
+
 const primaryReports: ReportKey[] = ["rent-roll", "occupancy", "delinquency"];
-const balanceOptions: [ReportBalanceFilter, string][] = [["all", "All balances"], ["due", "Balance due"], ["zero", "Zero balance"], ["credit", "Credit balance"], ["unverified", "Unverified balance"]];
 
 function readPreference<T>(report: ReportKey, key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
@@ -35,12 +63,16 @@ function readPreference<T>(report: ReportKey, key: string, fallback: T): T {
   if (value === null) return fallback;
   try {
     const parsed: unknown = JSON.parse(value);
-    if (Array.isArray(fallback)) return (Array.isArray(parsed) && parsed.every(item => typeof item === "string") ? parsed : fallback) as T;
-    if (fallback && typeof fallback === "object") return (parsed && typeof parsed === "object" && "key" in parsed && typeof parsed.key === "string" && "direction" in parsed && ["asc", "desc"].includes(String(parsed.direction)) ? parsed : fallback) as T;
+    if (Array.isArray(fallback)) return Array.isArray(parsed) && parsed.every(item => typeof item === "string") ? parsed as T : fallback;
+    if (fallback && typeof fallback === "object") return parsed && typeof parsed === "object" && "key" in parsed && typeof (parsed as { key?: unknown }).key === "string" && "direction" in parsed && ["asc", "desc"].includes(String((parsed as { direction?: unknown }).direction)) ? parsed as T : fallback;
     return typeof parsed === typeof fallback ? parsed as T : fallback;
-  } catch { return fallback; }
+  } catch {
+    return fallback;
+  }
 }
+
 function savePreference(report: ReportKey, key: string, value: unknown): void {
+  if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
   url.searchParams.set(`r_${report}_${key}`, JSON.stringify(value));
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
@@ -68,130 +100,138 @@ function renderReportCell({ row, column, onOpenTenant, onOpenUnit, onOpenPropert
   return label;
 }
 
-/** Begin the selected report alongside its directory read. The eventual report
- * uses the exact same authenticated query key and retains all local filters. */
-export function WorkspaceReportPreload({selected,filters,enabled}:{selected:ReportKey;filters:ViewFilters;enabled:boolean}) {
-  const auth=useRentOpsAuth();const asOfDate=filters.asOfDate;
-  const occupancy=readPreference(selected,'occupancy',defaultReportOccupancy(selected,filters.status));
-  const readiness=readPreference(selected,'readiness',filters.readiness?.[0]??'all');
-  const listing=readPreference(selected,'listing','all');
-  const balance=readPreference<ReportBalanceFilter>(selected,'balance',filters.balanceStatus??(selected==='delinquency'?'due':'all'));
-  const tenantStatus=defaultReportTenantStatus(selected);
-  const queryFilters={...reportQueryFilters({...filters,status:primaryReports.includes(selected)?'all':filters.status,search:'',
-    balanceStatus:selected==='delinquency'||selected==='rent-roll'?balance:undefined,
-    tenantStatus:isTenantStatusReport(selected)?tenantStatus:undefined,
-    readiness:selected==='occupancy'&&readiness!=='all'?[readiness]:undefined,
-  },selected,{asOfDate,month:asOfDate.slice(0,7),fromDate:`${asOfDate.slice(0,7)}-01`,toDate:asOfDate}),
-    ...(selected==='occupancy'&&occupancy!=='all'?{occupancy:[occupancy]}:{}),
-    ...(selected==='occupancy'&&listing!=='all'?{listing:[listing]}:{})};
-  useQuery({queryKey:reportQueryKey(selected,queryFilters,auth.user?.id??''),queryFn:({signal})=>loadRentOpsReport(selected,queryFilters,signal),
-    enabled:enabled&&auth.status==='authenticated'&&!!auth.user?.id&&!!asOfDate&&!filters.search.trim(),staleTime:30_000,gcTime:300_000});
-  return null;
+function directoryFromSnapshot(snapshot: AdminSnapshot): ReportSetupDirectory {
+  return {
+    properties: snapshot.snapshot.properties,
+    units: snapshot.snapshot.units,
+    people: snapshot.snapshot.people,
+    tenancies: snapshot.snapshot.tenancies,
+  };
 }
 
-/** Each newly opened report starts with current tenants; display preferences remain saved. */
+function createReportRunToken(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** Each report now waits for an explicit Run report submission. */
 export function ReportsWorkspace(props: ReportsWorkspaceProps) {
-  return <ReportWorkspaceView key={props.selected} {...props} />;
+  return <ReportWorkspaceView key={`${props.selected}:${props.directory ? "directory" : "scoped"}`} {...props} />;
 }
 
-function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTenant, onOpenUnit, onOpenProperty }: ReportsWorkspaceProps) {
+function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTenant, onOpenUnit, onOpenProperty, directory: providedDirectory, allowAllScope = false }: ReportsWorkspaceProps) {
   const auth = useRentOpsAuth();
-  const core = primaryReports.includes(selected);
-  const { debouncedSearch, searchPending } = useReportSearch(selected === "rent-roll" ? "" : filters.search);
-  const asOfDate = filters.asOfDate;
-  const [month, setMonth] = useState(asOfDate.slice(0, 7));
-  const [fromDate, setFromDate] = useState(`${asOfDate.slice(0, 7)}-01`);
-  const [toDate, setToDate] = useState(asOfDate);
-  const [occupancy, setOccupancy] = useState(() => readPreference(selected, "occupancy", defaultReportOccupancy(selected, filters.status)));
-  const [readiness, setReadiness] = useState(() => readPreference(selected, "readiness", filters.readiness?.[0] ?? "all"));
-  const [listing, setListing] = useState(() => readPreference(selected, "listing", "all"));
-  const [balance, setBalance] = useState<ReportBalanceFilter>(() => readPreference(selected, "balance", filters.balanceStatus ?? (selected === "delinquency" ? "due" : "all")));
-  const [tenancyStatus, setTenancyStatus] = useState<NonNullable<ViewFilters["tenantStatus"]>>(() => defaultReportTenantStatus(selected));
-  const [exportFormat, setExportFormat] = useState<"csv" | "print" | null>(null);
-  const [extraColumns, setExtraColumns] = useState<string[]>(() => readPreference(selected, "columns", []));
-  const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" }>(() => readPreference(selected, "sort", { key: "unitNumber", direction: "asc" }));
-  useEffect(() => {
-    setMonth(asOfDate.slice(0, 7)); setFromDate(`${asOfDate.slice(0, 7)}-01`); setToDate(asOfDate);
-  }, [asOfDate]);
-  useEffect(() => {
-    setOccupancy(readPreference(selected, "occupancy", defaultReportOccupancy(selected, filters.status)));
-    setReadiness(readPreference(selected, "readiness", filters.readiness?.[0] ?? "all")); setListing(readPreference(selected, "listing", "all"));
-    setBalance(readPreference(selected, "balance", filters.balanceStatus ?? (selected === "delinquency" ? "due" : "all")));
-    const columns = readPreference<string[]>(selected, "columns", []);
-    setExtraColumns(current => current.length === columns.length && current.every((value, index) => value === columns[index]) ? current : columns);
-    const savedSort = readPreference<{ key: string; direction: "asc" | "desc" }>(selected, "sort", { key: "unitNumber", direction: "asc" });
-    setSort(current => current.key === savedSort.key && current.direction === savedSort.direction ? current : savedSort);
-  }, [selected, filters.status, filters.balanceStatus, filters.tenantStatus, filters.readiness]);
-
-  const periodError = validateReportPeriod(selected, asOfDate, month, fromDate, toDate);
-  const queryFilters = useMemo(() => ({
-    ...reportQueryFilters({ ...filters, status: core ? "all" : filters.status, search: debouncedSearch,
-      balanceStatus: selected === "delinquency" || selected === "rent-roll" ? balance : undefined,
-      tenantStatus: isTenantStatusReport(selected) ? tenancyStatus : undefined,
-      readiness: selected === "occupancy" && readiness !== "all" ? [readiness] : undefined,
-    }, selected, { asOfDate, month, fromDate, toDate }),
-    ...(selected === "occupancy" && occupancy !== "all" ? { occupancy: [occupancy] } : {}),
-    ...(selected === "occupancy" && listing !== "all" ? { listing: [listing] } : {}),
-  }), [filters.propertyId, filters.propertyIds, filters.propertyScope, debouncedSearch, filters.status, selected, core, asOfDate, month, fromDate, toDate, balance, tenancyStatus, readiness, occupancy, listing]);
-  const reportQuery = useQuery({
-    queryKey: reportQueryKey(selected, queryFilters, auth.user?.id ?? ""), staleTime: 30_000, gcTime: 300_000,
-    queryFn: ({ signal }) => loadRentOpsReport(selected, queryFilters, signal),
-    enabled: auth.status === "authenticated" && Boolean(auth.user?.id) && !periodError && !searchPending,
+  const directory = providedDirectory ?? directoryFromSnapshot(snapshot);
+  // The report request may span properties outside the global workspace
+  // snapshot. Use the unscoped report directory for labels and export
+  // projection while retaining the other collections from the workspace.
+  const reportSnapshot = useMemo<AdminSnapshot>(() => providedDirectory ? {
+    ...snapshot,
+    snapshot: {
+      ...snapshot.snapshot,
+      properties: [...providedDirectory.properties],
+      units: [...providedDirectory.units],
+      people: [...providedDirectory.people],
+      tenancies: [...providedDirectory.tenancies],
+    },
+  } : snapshot, [providedDirectory, snapshot]);
+  const [draft, setDraft] = useState<ReportSetupState>(() => {
+    const fallback = createInitialReportSetup(selected, filters, directory);
+    return reportSetupFromUrlValue(selected, new URLSearchParams(window.location.search).get(reportSetupUrlKey(selected)), fallback, directory);
   });
-  const loadedRows = periodError || searchPending ? undefined : reportQuery.data;
-  const loading = !periodError && (searchPending || reportQuery.isFetching);
-  const error = periodError ?? (searchPending ? undefined : reportQuery.error instanceof Error ? reportQuery.error.message : reportQuery.error ? "The selected report could not be loaded." : undefined);
-  const visibleRows = useMemo(() => filterReportLocalRows(selected === "rent-roll" ? filterRentRollRows(loadedRows ?? [], filters.search) : loadedRows ?? [], selected,
-    { propertyIds: filters.propertyIds, occupancy: selected === "rent-roll" || selected === "occupancy" ? occupancy : "all", readiness: selected === "occupancy" ? readiness : "all", listing: selected === "occupancy" ? listing : "all", balance: selected === "rent-roll" || selected === "delinquency" ? balance : "all", tenancyStatus: selected === "delinquency" ? tenancyStatus : "all" }),
-    [loadedRows, selected, filters.search, filters.propertyIds, occupancy, readiness, listing, balance, tenancyStatus]);
-  const view = useMemo(() => createReportViewModel(selected, visibleRows, snapshot), [selected, visibleRows, snapshot]);
-  // Property identity is provided by each section, and retained explicitly in CSV.
-  const activeColumns = useMemo(() => view.columns.filter(column => column.key !== "propertyName" && (column.curated !== false || extraColumns.includes(column.key))), [view.columns, extraColumns]);
+  const [applied, setApplied] = useState<ReportSetupState>();
+  // A new token on every explicit submission prevents a previously completed
+  // query from satisfying Run/Update from React Query's stale cache.
+  const [runToken, setRunToken] = useState(createReportRunToken);
+
+  useEffect(() => {
+    const normalized = normalizeReportSetup(selected, draft, directory);
+    if (!reportSetupEqual(normalized, draft)) setDraft(normalized);
+  }, [directory, selected]);
+
+  useEffect(() => {
+    const restoreFromLocation = () => {
+      const fallback = createInitialReportSetup(selected, filters, directory);
+      setDraft(reportSetupFromUrlValue(selected, new URLSearchParams(window.location.search).get(reportSetupUrlKey(selected)), fallback, directory));
+      setApplied(undefined);
+      setRunToken(createReportRunToken());
+    };
+    window.addEventListener("popstate", restoreFromLocation);
+    return () => window.removeEventListener("popstate", restoreFromLocation);
+  }, [directory, filters, selected]);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set(reportSetupUrlKey(selected), reportSetupToUrlValue(draft));
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [draft, selected]);
+
+  const draftError = validateReportSetup(selected, draft);
+  const dirty = !!applied && !reportSetupEqual(applied, draft);
+  const queryFilters = useMemo(() => applied ? reportSetupQueryFilters(selected, applied) : undefined, [applied, selected]);
+  const reportQuery = useQuery({
+    queryKey: queryFilters && !dirty ? [...reportQueryKey(selected, queryFilters, auth.user?.id ?? ""), runToken] : ["rent-ops-workspace", "report-setup", auth.user?.id ?? "", selected],
+    queryFn: ({ signal }) => loadRentOpsReport(selected, queryFilters!, signal),
+    enabled: auth.status === "authenticated" && Boolean(auth.user?.id) && Boolean(applied) && !dirty && !draftError,
+    staleTime: 30_000,
+    gcTime: 300_000,
+  });
+  const loadedRows = applied && !dirty && !draftError ? reportQuery.data : undefined;
+  const loading = !!applied && !dirty && !draftError && reportQuery.isFetching;
+  const error = draftError ?? (reportQuery.error instanceof Error ? reportQuery.error.message : reportQuery.error ? "The selected report could not be loaded." : undefined);
+  const submitted = applied ?? draft;
+  const visibleRows = useMemo(() => loadedRows ? applyReportSetupLocalFilters(loadedRows, selected, submitted) : [], [loadedRows, selected, submitted]);
+  const view = useMemo(() => createReportViewModel(selected, visibleRows, reportSnapshot), [selected, visibleRows, reportSnapshot]);
+  const [extraColumnKeys, setExtraColumnKeys] = useState<string[]>(() => readPreference(selected, "columns", []));
+  const [sort, setSort] = useState<{ key: string; direction: "asc" | "desc" }>(() => readPreference(selected, "sort", { key: "unitNumber", direction: "asc" }));
+  const [activeExportFormat, setExportFormat] = useState<"csv" | "print" | null>(null);
+  const activeColumns = useMemo(() => view.columns.filter(column => column.key !== "propertyName" && (column.curated !== false || extraColumnKeys.includes(column.key))), [view.columns, extraColumnKeys]);
   const optionalColumns = view.optionalColumns.filter(column => column.key !== "propertyName");
-  const groups = useMemo(() => groupReportRows(selected, view.displayRows, snapshot, sort), [selected, view.displayRows, snapshot, sort]);
+  const groups = useMemo(() => groupReportRows(selected, view.displayRows, reportSnapshot, sort), [selected, view.displayRows, reportSnapshot, sort]);
   const config = getReportConfig(selected);
-  const mode = REPORT_PERIODS[selected];
-  const readinessOptions = Array.from(new Set((loadedRows ?? []).map(row => readReportValue(row, "readiness")).filter((value): value is string => typeof value === "string"))).sort();
-  const listingOptions = Array.from(new Set((loadedRows ?? []).map(row => readReportValue(row, "listing")).filter((value): value is string => typeof value === "string"))).sort();
+  const localFilters = reportSetupLocalFilters(selected, submitted);
+  const search = reportSetupSearch(selected, submitted);
+  const changeColumns = (next: string[]) => { setExtraColumnKeys(next); savePreference(selected, "columns", next); };
+  const changeSort = (next: { key: string; direction: "asc" | "desc" }) => { setSort(next); savePreference(selected, "sort", next); };
+
+  const runReport = (next: ReportSetupState) => {
+    const submittedState = normalizeReportSetup(selected, allowAllScope ? next : { ...next, propertyScope: "active" }, directory);
+    setDraft(submittedState);
+    setApplied(submittedState);
+    setRunToken(createReportRunToken());
+  };
 
   return <section className="rm-report-workspace rm-clean-report" aria-label="Rent Operations reports">
     <div className="rm-report-view-tabs" aria-label="Report views">
       {primaryReports.map(key => <button key={key} type="button" aria-pressed={selected === key} className={selected === key ? "active" : ""} onClick={() => onSelect(key)}>{getReportConfig(key).label}</button>)}
-      <select aria-label="Other reports" value={core ? "" : selected} onChange={event => onSelect(event.target.value as ReportKey)}>
+      <select aria-label="Other reports" value={primaryReports.includes(selected) ? "" : selected} onChange={event => onSelect(event.target.value as ReportKey)}>
         <option value="" disabled>Other reports</option>
         {reportKeys().filter(key => !primaryReports.includes(key)).map(key => <option key={key} value={key}>{getReportConfig(key).label}</option>)}
       </select>
     </div>
-    <div className="rm-report-toolbar" aria-label="Report controls">
-      {(selected === "rent-roll" || selected === "occupancy") && <label>Occupancy<select value={occupancy} onChange={event => { setOccupancy(event.target.value); savePreference(selected, "occupancy", event.target.value); }}>
-        <option value="all">All units</option><option value="current">Occupied</option><option value="vacant">Vacant</option><option value="future_preleased">Future preleased</option><option value="unknown">Unverified occupancy</option>
-      </select></label>}
-      {selected === "occupancy" && <>
-        <label>Readiness<select value={readiness} onChange={event => { setReadiness(event.target.value); savePreference(selected, "readiness", event.target.value); }}><option value="all">All readiness</option>{readinessOptions.map(value => <option key={value} value={value}>{formatReportValue(value, "status")}</option>)}</select></label>
-        <label>Listing<select value={listing} onChange={event => { setListing(event.target.value); savePreference(selected, "listing", event.target.value); }}><option value="all">All listing states</option>{listingOptions.map(value => <option key={value} value={value}>{formatReportValue(value, "status")}</option>)}</select></label>
-      </>}
-      {(selected === "rent-roll" || selected === "delinquency") && <label>Balance<select value={balance} onChange={event => { setBalance(event.target.value as ReportBalanceFilter); savePreference(selected, "balance", event.target.value); }}>{balanceOptions.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>}
-      {isTenantStatusReport(selected) && <label>Tenant status<select value={tenancyStatus} onChange={event => { setTenancyStatus(event.target.value as NonNullable<ViewFilters["tenantStatus"]>); }}><option value="all">All tenants</option><option value="current">Current tenants</option><option value="former">Former tenants</option><option value="future">Future tenants</option><option value="unknown">Unverified status</option></select></label>}
-      {mode === "month" && <label>Month<input type="month" value={month} max={asOfDate.slice(0, 7)} onChange={event => setMonth(event.target.value)} /></label>}
-      {mode === "range" && <><label>From<input type="date" value={fromDate} max={asOfDate} onChange={event => setFromDate(event.target.value)} /></label><label>Through<input type="date" value={toDate} max={asOfDate} onChange={event => setToDate(event.target.value)} /></label></>}
-      <div className="rm-report-toolbar-actions">
-        {optionalColumns.length > 0 && <details className="rm-report-columns"><summary><SlidersHorizontal size={14} />Columns</summary><div className="rm-report-column-options">{optionalColumns.map(column => <label key={column.key}><input type="checkbox" checked={extraColumns.includes(column.key)} onChange={event => { const next = event.target.checked ? [...extraColumns, column.key] : extraColumns.filter(key => key !== column.key); setExtraColumns(next); savePreference(selected, "columns", next); }} />{column.label}</label>)}</div></details>}
-        <button className="rm-button" type="button" onClick={() => setExportFormat("csv")} disabled={!loadedRows}><Download size={14} />CSV</button>
-        <button className="rm-button" type="button" onClick={() => setExportFormat("print")} disabled={!loadedRows}><Printer size={14} />Print / PDF</button>
-      </div>
-    </div>
-    {exportFormat && <ReportExportDialog report={selected} snapshot={snapshot} queryFilters={queryFilters} format={exportFormat} onClose={() => setExportFormat(null)} search={filters.search} extraColumns={extraColumns} sort={sort} localFilters={{ occupancy: selected === "rent-roll" || selected === "occupancy" ? occupancy : "all", readiness: selected === "occupancy" ? readiness : "all", listing: selected === "occupancy" ? listing : "all", balance: selected === "rent-roll" || selected === "delinquency" ? balance : "all" }} />}
-    <header className="rm-report-print-title"><div className="rm-report-print-brand">5Central Capital</div><h2>{config.label}</h2><p>{filters.propertyIds?.length ? filters.propertyIds.map(id => snapshot.snapshot.properties.find(property => property.id === id)?.name ?? id).join(" · ") : filters.propertyId !== "all" ? snapshot.snapshot.properties.find(property => property.id === filters.propertyId)?.name ?? filters.propertyId : filters.propertyScope === "active" ? "Active portfolio" : "All properties"}</p><p>{reportPeriodLabel(selected, asOfDate, month, fromDate, toDate)}</p></header>
-    {error && <p className="rm-error" role="alert"><AlertCircle aria-hidden="true" />{error}</p>}
+    <ReportSetup report={selected} value={draft} directory={directory} allowAllScope={allowAllScope} hasAppliedRun={!!applied} onChange={next => setDraft(normalizeReportSetup(selected, next, directory))} onRun={runReport} />
+    {activeExportFormat && applied && !dirty && queryFilters && <ReportExportDialog report={selected} snapshot={reportSnapshot} queryFilters={queryFilters} format={activeExportFormat} onClose={() => setExportFormat(null)} localFilters={localFilters} search={search} extraColumns={extraColumnKeys} sort={sort} lockSelection />}
+    {applied && !dirty && <header className="rm-report-print-title"><div className="rm-report-print-brand">5Central Capital</div><h2>{config.label}</h2><p>{submitted.propertyIds.length ? submitted.propertyIds.map(id => directory.properties.find(property => property.id === id)?.name ?? id).join(" · ") : submitted.propertyScope === "active" ? "Active portfolio" : "All properties"}</p><p>{reportPeriodLabel(selected, submitted.asOfDate, submitted.month, submitted.fromDate, submitted.toDate)}</p></header>}
+    {error && applied && <p className="rm-error" role="alert"><AlertCircle aria-hidden="true" />{error}</p>}
     {loading && !loadedRows && <div className="rm-empty"><Loader2 className="rm-spin" aria-hidden="true" />{emptyReportMessage(false)}</div>}
-    {loadedRows && <div className="rm-report-table-scroll"><table className="rm-table rm-grouped-report-table" aria-label={config.label}>
-      <thead><tr>{activeColumns.map(column => <th key={column.key} className={column.align === "right" ? "rm-report-number" : undefined} aria-sort={sort.key === column.key ? sort.direction === "asc" ? "ascending" : "descending" : "none"}><button type="button" onClick={() => { const next = { key: column.key, direction: sort.key === column.key && sort.direction === "asc" ? "desc" as const : "asc" as const }; setSort(next); savePreference(selected, "sort", next); }}>{column.label}{sort.key === column.key && (sort.direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}</button></th>)}</tr></thead>
-      {groups.map(group => <tbody key={group.propertyId ?? group.label}>
-        <tr className="rm-report-property-heading"><th colSpan={activeColumns.length} scope="rowgroup"><RecordLink kind="property" recordId={group.propertyId} onOpen={onOpenProperty}>{group.label}</RecordLink></th></tr>
-        {group.rows.map(row => <tr key={reportRowKey(row)}>{activeColumns.map(column => <td key={column.key} className={column.align === "right" ? "rm-report-number" : undefined}>{renderReportCell({row,column,onOpenTenant,onOpenUnit,onOpenProperty})}</td>)}</tr>)}
-        <tr className="rm-report-property-total">{activeColumns.map((column, index) => <td key={column.key} className={column.align === "right" ? "rm-report-number" : undefined}>{index === 0 ? `Subtotal · ${group.count} ${selected === "delinquency" ? "accounts" : selected === "rent-roll" || selected === "occupancy" ? "units" : "rows"}` : column.subtotal ? formatReportValue(group.amounts[column.key], column.format) : ""}</td>)}</tr>
-      </tbody>)}
-    </table>{!groups.length && <div className="rm-empty">{emptyReportMessage(true)}</div>}</div>}
+    {applied && !dirty && <div data-report-results="true">
+      <div className="rm-report-toolbar rm-report-results-toolbar" aria-label="Report actions">
+        <div className="rm-report-toolbar-actions">
+          {optionalColumns.length > 0 && <details className="rm-report-columns"><summary><SlidersHorizontal size={14} />Columns</summary><div className="rm-report-column-options">{optionalColumns.map(column => <label key={column.key}><input type="checkbox" checked={extraColumnKeys.includes(column.key)} onChange={event => { const next = event.target.checked ? [...extraColumnKeys, column.key] : extraColumnKeys.filter(key => key !== column.key); changeColumns(next); }} />{column.label}</label>)}</div></details>}
+          <button className="rm-button" type="button" onClick={() => setExportFormat("csv")} disabled={!loadedRows}><Download size={14} />Export CSV</button>
+          <button className="rm-button" type="button" onClick={() => setExportFormat("print")} disabled={!loadedRows}><Printer size={14} />Print / PDF</button>
+        </div>
+      </div>
+      {loadedRows && <div className="rm-report-table-scroll"><table className="rm-table rm-grouped-report-table" aria-label={config.label}>
+        <thead><tr>{activeColumns.map(column => <th key={column.key} className={column.align === "right" ? "rm-report-number" : undefined} aria-sort={sort.key === column.key ? sort.direction === "asc" ? "ascending" : "descending" : "none"}><button type="button" onClick={() => { const next = { key: column.key, direction: sort.key === column.key && sort.direction === "asc" ? "desc" as const : "asc" as const }; changeSort(next); }}>{column.label}{sort.key === column.key && (sort.direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}</button></th>)}</tr></thead>
+        {groups.map(group => <tbody key={group.propertyId ?? group.label}>
+          <tr className="rm-report-property-heading"><th colSpan={activeColumns.length} scope="rowgroup"><RecordLink kind="property" recordId={group.propertyId} onOpen={onOpenProperty}>{group.label}</RecordLink></th></tr>
+          {group.rows.map(row => <tr key={reportRowKey(row)}>{activeColumns.map(column => <td key={column.key} className={column.align === "right" ? "rm-report-number" : undefined}>{renderReportCell({ row, column, onOpenTenant, onOpenUnit, onOpenProperty })}</td>)}</tr>)}
+          <tr className="rm-report-property-total">{activeColumns.map((column, index) => <td key={column.key} className={column.align === "right" ? "rm-report-number" : undefined}>{index === 0 ? `Subtotal · ${group.count} ${selected === "delinquency" ? "accounts" : selected === "rent-roll" || selected === "occupancy" ? "units" : "rows"}` : column.subtotal ? formatReportValue(group.amounts[column.key], column.format) : ""}</td>)}</tr>
+        </tbody>)}
+      </table>{!groups.length && <div className="rm-empty">{emptyReportMessage(true)}</div>}</div>}
+    </div>}
   </section>;
 }
+
 export default ReportsWorkspace;

@@ -31,7 +31,8 @@
     "company:demo": "NODE_ENV=development tsx scripts/company/demo.ts",
     "company:browser-smoke": "tsx scripts/company/browser-smoke.ts",
     "company:performance-smoke": "tsx scripts/company/performance-smoke.ts",
-    "company:navigation-smoke": "tsx scripts/company/navigation-browser-smoke.ts"
+    "company:navigation-smoke": "tsx scripts/company/navigation-browser-smoke.ts",
+    "company:report-setup-smoke": "tsx scripts/company/report-setup-browser-smoke.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

@@ -1,7 +1,14 @@
 import { z } from 'zod';
+import {
+  getReportFilterDefinition,
+  McpReportSchema,
+  ReportFilterDefinitionsSchema,
+  ReportFilterNameSchema,
+  ReportKeySchema,
+} from './report-filter-definitions';
 
-const ReportKeySchema = z.enum(['rent-roll', 'occupancy', 'scheduled-income', 'collected-income', 'scheduled-vs-collected', 'delinquency', 'tenant-ledger', 'lease-expiration', 'security-deposit', 'applicant-pipeline', 'hap']);
-const McpReportSchema = z.enum(['rent-roll', 'occupancy', 'scheduled-income', 'collected-income', 'scheduled-vs-collected', 'delinquency', 'tenant-ledger', 'lease-expirations', 'deposits', 'applicant-pipeline', 'hap']);
+export { McpReportSchema, ReportFilterDefinitionSchema, ReportFilterDefinitionsSchema, ReportFilterNameSchema, ReportKeySchema } from './report-filter-definitions';
+export type { McpReportKey, ReportFilterDefinition, ReportFilterName, ReportKey } from './report-filter-definitions';
 const EntrySchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]*$/),
   title: z.string().min(1),
@@ -11,11 +18,13 @@ const EntrySchema = z.object({
   source: z.enum(['rental', 'quickbooks', 'combined', 'company']),
   reportKey: ReportKeySchema.optional(),
   mcpReport: McpReportSchema.optional(),
+  /** Optional for parsing cached schema-v1 catalogs; current factory entries always include it. */
+  filters: ReportFilterDefinitionsSchema.optional(),
   reason: z.string().regex(/^[a-z][a-z0-9_]*$/).optional(),
   requiredSources: z.array(z.string().min(1)).min(1),
 }).strict().superRefine((entry, context) => {
   if (entry.availability === 'available' && (!entry.reportKey || !entry.mcpReport)) context.addIssue({ code: 'custom', message: 'Available reports require both transport mappings.' });
-  if (entry.availability === 'planned' && (entry.reportKey || entry.mcpReport || !entry.reason)) context.addIssue({ code: 'custom', message: 'Planned reports require a reason and cannot advertise executable mappings.' });
+  if (entry.availability === 'planned' && (entry.reportKey || entry.mcpReport || entry.filters || !entry.reason)) context.addIssue({ code: 'custom', message: 'Planned reports require a reason and cannot advertise executable mappings.' });
 });
 export const ReportCatalogSchema = z.object({ schemaVersion: z.literal(1), reports: z.array(EntrySchema) }).strict().superRefine((catalog, context) => {
   if (new Set(catalog.reports.map(report => report.id)).size !== catalog.reports.length) context.addIssue({ code: 'custom', message: 'Report IDs must be unique.' });
@@ -23,7 +32,7 @@ export const ReportCatalogSchema = z.object({ schemaVersion: z.literal(1), repor
 export type ReportCatalog = z.infer<typeof ReportCatalogSchema>;
 export type ReportCatalogEntry = ReportCatalog['reports'][number];
 
-const available = (id: z.infer<typeof ReportKeySchema>, title: string, period: ReportCatalogEntry['period'], mcpReport: z.infer<typeof McpReportSchema>): ReportCatalogEntry => ({ id, title, category: 'rental', period, availability: 'available', source: 'rental', reportKey: id, mcpReport, requiredSources: ['rental_operational_records'] });
+const available = (id: z.infer<typeof ReportKeySchema>, title: string, period: ReportCatalogEntry['period'], mcpReport: z.infer<typeof McpReportSchema>): ReportCatalogEntry => ({ id, title, category: 'rental', period, availability: 'available', source: 'rental', reportKey: id, mcpReport, filters: getReportFilterDefinition(id)!, requiredSources: ['rental_operational_records'] });
 const planned = (id: string, title: string, category: ReportCatalogEntry['category'], period: ReportCatalogEntry['period'], source: ReportCatalogEntry['source'], requiredSources: string[]): ReportCatalogEntry => ({ id, title, category, period, availability: 'planned', source, requiredSources, reason: 'report_not_implemented' });
 const financial = (id: string, title: string, period: ReportCatalogEntry['period'] = 'range', combined = false): ReportCatalogEntry => planned(id, title, 'financial', period, combined ? 'combined' : 'quickbooks', combined ? ['verified_quickbooks_books', 'approved_operational_mappings'] : ['verified_quickbooks_books']);
 const rental = (id: string, title: string, period: ReportCatalogEntry['period'] = 'as_of'): ReportCatalogEntry => planned(id, title, 'rental', period, 'rental', ['rental_operational_records']);
@@ -91,4 +100,10 @@ const catalog: ReportCatalog = {
 };
 
 /** Returns an independently validated copy; callers cannot mutate shared metadata. */
-export function getReportCatalog(): ReportCatalog { return ReportCatalogSchema.parse(catalog); }
+export function getReportCatalog(): ReportCatalog {
+  const parsed = ReportCatalogSchema.parse(catalog);
+  if (parsed.reports.some((report) => report.availability === 'available' && !report.filters?.length)) {
+    throw new Error('Available report catalog entries require filter definitions.');
+  }
+  return parsed;
+}

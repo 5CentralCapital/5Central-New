@@ -134,7 +134,7 @@ try {
       expect(await page.locator('.rops-topbar').evaluate(element => getComputedStyle(element).backdropFilter)).toBe('none');
       await page.reload(); await expect(page.locator('.rops-topbar')).toHaveAttribute('data-transparency', 'reduced');
       await setTransparency(page, 'System');
-      await page.goto(`${origin}/ops?section=dashboard`);
+      await page.goto(`${origin}/ops?section=dashboard&asOf=2026-08-15&scope=all`);
       await expect(page.locator('.rmd-top-grid > section')).toHaveCount(6);
       await expect(page.locator('.rm-main')).not.toContainText('Loading portfolio summary…');
       await expect(page.locator('.rmd-chart')).toHaveCount(3);

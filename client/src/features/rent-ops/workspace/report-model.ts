@@ -564,10 +564,11 @@ export function buildPropertySubtotals(key: ReportKey, rows: readonly ReportRow[
   for (const row of rows) {
     const id = propertyId(row);
     const nameValue = readReportValue(row, "propertyName", snapshot);
-    const label = typeof nameValue === "string" && nameValue.trim() ? nameValue : id && snapshot
+    const openingBalance = key === "tenant-ledger" && readRaw(row, "rowType") === "opening_balance" && !id;
+    const label = openingBalance ? "Account opening balances · selected report scope" : typeof nameValue === "string" && nameValue.trim() ? nameValue : id && snapshot
       ? snapshot.snapshot.properties.find((property) => property.id === id)?.name ?? "Needs review"
       : "Needs review";
-    const groupKey = id ?? `name:${label}`;
+    const groupKey = openingBalance ? "tenant-ledger:opening-balance" : id ?? `name:${label}`;
     const existing = groups.get(groupKey);
     if (existing) existing.rows.push(row);
     else groups.set(groupKey, { propertyId: id, label, rows: [row] });
@@ -773,13 +774,13 @@ export function groupReportRows(key: ReportKey, rows: readonly DisplayReportRow[
   const collator = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
   const grouped=new Map<string,DisplayReportRow[]>();
   for(const row of rows){
-    const id=propertyId(row.__source);const name=id?undefined:propertyName(row.__source,snapshot);
-    const groupKey=id ? `id:${id}` : `name:${typeof name==='string'&&name.trim()?name:'Needs review'}`;
+    const id=propertyId(row.__source);const openingBalance=key === "tenant-ledger" && readRaw(row.__source, "rowType") === "opening_balance" && !id;const name=id?undefined:propertyName(row.__source,snapshot);
+    const groupKey=openingBalance ? "tenant-ledger:opening-balance" : id ? `id:${id}` : `name:${typeof name==='string'&&name.trim()?name:'Needs review'}`;
     const group=grouped.get(groupKey)??[];group.push(row);grouped.set(groupKey,group);
   }
   return buildPropertySubtotals(key, rows.map(row => row.__source), snapshot).map(subtotal => ({
     ...subtotal,
-    rows: (grouped.get(subtotal.propertyId?`id:${subtotal.propertyId}`:`name:${subtotal.label}`)??[]).sort((left, right) => {
+    rows: (grouped.get(subtotal.propertyId ? `id:${subtotal.propertyId}` : subtotal.label === "Account opening balances · selected report scope" ? "tenant-ledger:opening-balance" : `name:${subtotal.label}`)??[]).sort((left, right) => {
       const column = sort?.key ?? "unitNumber";
       const a = left[column]; const b = right[column];
       const comparison = a == null ? b == null ? 0 : 1 : b == null ? -1 : typeof a === "number" && typeof b === "number" ? a - b : collator.compare(String(a), String(b));

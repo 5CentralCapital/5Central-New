@@ -259,6 +259,25 @@ test("grouping retains accounts with blank or missing property identity", () => 
   assert.equal(groups[0].rows.length, 2);
 });
 
+test("tenant-ledger opening balances have an explicit selected-scope group", () => {
+  const view = createReportViewModel("tenant-ledger", [
+    { rowType: "opening_balance", openingBalanceCents: 10000, transaction: { personId: "person:one" } },
+    { rowType: "opening_balance", openingBalanceCents: 5000, transaction: { personId: "person:two" } },
+  ] as any);
+  const groups = groupReportRows("tenant-ledger", view.displayRows);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].label, "Account opening balances · selected report scope");
+  assert.equal(groups[0].rows.length, 2);
+});
+
+test("report grouping resolves properties supplied by the unscoped report directory", () => {
+  const view = createReportViewModel("rent-roll", [{ propertyId: "inactive:p2", unitNumber: "201" }], {
+    snapshot: { properties: [{ id: "inactive:p2", name: "Inactive property", state: "inactive" }] },
+  } as any);
+  const groups = groupReportRows("rent-roll", view.displayRows, { snapshot: { properties: [{ id: "inactive:p2", name: "Inactive property", state: "inactive" }] } } as any);
+  assert.equal(groups[0].label, "Inactive property");
+});
+
 
 test("rent roll defaults occupied while vacancies defaults vacant", () => {
   assert.equal(defaultReportOccupancy("rent-roll"), "current");

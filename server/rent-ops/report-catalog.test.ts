@@ -3,7 +3,10 @@ import test from 'node:test';
 import express from 'express';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { getReportCatalog, ReportCatalogSchema } from '../../shared/report-catalog';
+import { getReportCatalog, ReportCatalogSchema, ReportFilterDefinitionsSchema } from '../../shared/report-catalog';
+import { getReportFilterDefinition } from '../../shared/report-filter-definitions';
+import type { FixedReportName, RentOpsFilters } from '../../shared/rent-ops-contracts';
+import { deriveFixedReport } from './domain/reports';
 import { registerRentOpsRoutes } from './routes';
 import { createSyntheticRentOpsRepository } from './fixtures/synthetic';
 import { RentOpsService } from './services/service';
@@ -30,6 +33,109 @@ test('catalog advertises exactly the existing rental capabilities and preserves 
   assert.equal(ReportCatalogSchema.safeParse({schemaVersion: 1, reports: [{...catalog.reports[0], reportKey: 'rent-roll', mcpReport: 'rent-roll'}]}).success, false);
   catalog.reports[0].title = 'Changed';
   assert.notEqual(getReportCatalog().reports[0].title, 'Changed');
+});
+
+test('available reports expose audited filter definitions, aliases, and explicit setup presets', () => {
+  const catalog = getReportCatalog();
+  const available = catalog.reports.filter(report => report.availability === 'available');
+  const expectedFields: Record<string, string[]> = {
+    'rent-roll': ['propertyScope', 'propertyIds', 'asOfDate', 'unitId', 'occupancy', 'readiness', 'listing', 'balanceStatus', 'search'],
+    occupancy: ['propertyScope', 'propertyIds', 'asOfDate', 'unitId', 'occupancy', 'readiness', 'listing'],
+    'scheduled-income': ['propertyScope', 'propertyIds', 'asOfDate', 'month', 'unitId', 'tenantStatus', 'search'],
+    'collected-income': ['propertyScope', 'propertyIds', 'asOfDate', 'month', 'fromDate', 'toDate', 'unitId', 'tenancyId', 'personId', 'tenantStatus', 'search'],
+    'scheduled-vs-collected': ['propertyScope', 'propertyIds', 'asOfDate', 'month', 'unitId', 'tenantStatus', 'search'],
+    delinquency: ['propertyScope', 'propertyIds', 'asOfDate', 'unitId', 'tenantStatus', 'balanceStatus', 'search'],
+    'tenant-ledger': ['propertyScope', 'propertyIds', 'asOfDate', 'fromDate', 'toDate', 'unitId', 'tenancyId', 'personId', 'tenantStatus'],
+    'lease-expiration': ['propertyScope', 'propertyIds', 'asOfDate', 'tenantStatus', 'status', 'search'],
+    'security-deposit': ['propertyScope', 'propertyIds', 'asOfDate', 'unitId', 'tenantStatus', 'search'],
+    'applicant-pipeline': ['propertyScope', 'propertyIds', 'asOfDate', 'status', 'search'],
+    hap: ['propertyScope', 'propertyIds', 'asOfDate', 'month', 'tenantStatus', 'status', 'search'],
+  };
+  for (const report of available) {
+    assert.ok(report.filters?.length, `${report.id} must expose filters`);
+    assert.deepEqual(report.filters?.map(filter => filter.name), expectedFields[report.reportKey!], report.id);
+    assert.deepEqual(report.filters, getReportFilterDefinition(report.reportKey!), report.id);
+    assert.equal(ReportFilterDefinitionsSchema.safeParse(report.filters).success, true, report.id);
+    assert.equal(new Set(report.filters!.map(filter => filter.name)).size, report.filters!.length, `${report.id} filter names must be unique`);
+    for (const filter of report.filters!) {
+      if (filter.default === undefined || !filter.options) continue;
+      const values = new Set(filter.options.map(option => option.value));
+      for (const value of Array.isArray(filter.default) ? filter.default : [filter.default]) assert.ok(values.has(value), `${report.id}.${filter.name} has an undeclared default`);
+    }
+  }
+  assert.deepEqual(getReportFilterDefinition('lease-expirations'), getReportFilterDefinition('lease-expiration'));
+  assert.deepEqual(getReportFilterDefinition('deposits'), getReportFilterDefinition('security-deposit'));
+  assert.equal(getReportFilterDefinition('current-tenants'), undefined);
+  assert.equal(getReportFilterDefinition('constructor'), undefined);
+  assert.equal(getReportFilterDefinition('toString'), undefined);
+  const rentRoll = available.find(report => report.id === 'rent-roll')!;
+  assert.deepEqual(rentRoll.filters?.find(filter => filter.name === 'propertyIds')?.acceptedAliases, ['propertyId']);
+  assert.deepEqual(rentRoll.filters?.find(filter => filter.name === 'propertyScope')?.default, 'active');
+  assert.deepEqual(rentRoll.filters?.find(filter => filter.name === 'occupancy')?.default, ['current']);
+  assert.deepEqual(available.find(report => report.id === 'occupancy')?.filters?.find(filter => filter.name === 'occupancy')?.default, ['vacant']);
+  assert.deepEqual(available.find(report => report.id === 'delinquency')?.filters?.find(filter => filter.name === 'balanceStatus')?.default, 'due');
+  assert.deepEqual(available.find(report => report.id === 'lease-expiration')?.filters?.find(filter => filter.name === 'asOfDate')?.dateSemantics, {mode: 'as_of', inclusive: true, lookaheadDays: 90});
+  assert.equal(available.find(report => report.id === 'hap')?.filters?.find(filter => filter.name === 'status')?.options?.some(option => option.value === 'pending'), false);
+  assert.equal(ReportFilterDefinitionsSchema.safeParse([...rentRoll.filters!, rentRoll.filters![0]]).success, false);
+  assert.equal(ReportCatalogSchema.safeParse({schemaVersion: 1, reports: [{...rentRoll, filters: []}]}).success, false);
+  const cachedV1 = {...rentRoll}; delete cachedV1.filters;
+  assert.equal(ReportCatalogSchema.safeParse({schemaVersion: 1, reports: [cachedV1]}).success, true, 'schema v1 remains readable without additive metadata');
+});
+
+test('advertised reference and status filters narrow real synthetic report rows', async () => {
+  const snapshot = await createSyntheticRentOpsRepository().getSnapshot();
+  const run = (report: FixedReportName, filters: RentOpsFilters) => deriveFixedReport(snapshot, report, filters) as Array<Record<string, unknown>>;
+  const asOf = {asOfDate: '2026-08-16' as const};
+  const month = {...asOf, month: '2026-08' as const};
+  const range = {...asOf, fromDate: '2026-08-01' as const, toDate: '2026-08-16' as const};
+
+  const allRentRoll = run('rent-roll', asOf);
+  const unitRentRoll = run('rent-roll', {...asOf, unitId: 'demo-unit-a-1'});
+  assert.equal(allRentRoll.length, 7);
+  assert.equal(unitRentRoll.length, 1);
+  assert.ok(unitRentRoll.every(row => row.unitId === 'demo-unit-a-1'));
+  const currentRentRoll = run('rent-roll', {...asOf, occupancy: ['current']});
+  assert.ok(currentRentRoll.length > 0 && currentRentRoll.length < allRentRoll.length);
+  assert.ok(currentRentRoll.every(row => row.occupancy === 'current'));
+  const notReadyRentRoll = run('rent-roll', {...asOf, readiness: ['not_ready']});
+  assert.equal(notReadyRentRoll.length, 1);
+  assert.ok(notReadyRentRoll.every(row => row.readiness === 'not_ready'));
+  const unlistedRentRoll = run('rent-roll', {...asOf, listing: ['unlisted']});
+  assert.equal(unlistedRentRoll.length, 2);
+  assert.ok(unlistedRentRoll.every(row => row.listing === 'unlisted'));
+  const creditRentRoll = run('rent-roll', {...asOf, balanceStatus: 'credit'});
+  assert.equal(creditRentRoll.length, 1);
+  assert.ok(creditRentRoll.every(row => row.operationalBalanceCents && (row.operationalBalanceCents as number) < 0));
+  const propertyBRoll = run('occupancy', {...asOf, propertyIds: ['demo-property-b']});
+  assert.equal(propertyBRoll.length, 2);
+  assert.ok(propertyBRoll.every(row => row.propertyId === 'demo-property-b'));
+  const scheduled = run('scheduled-income', {...month, unitId: 'demo-unit-a-1', tenantStatus: 'current', search: 'Tenant One'});
+  assert.equal(scheduled.length, 2);
+  assert.ok(scheduled.every(row => row.unitId === 'demo-unit-a-1' && row.tenantName === 'Tenant One'));
+  const collected = run('collected-income', {...range, unitId: 'demo-unit-a-1', tenancyId: 'demo-tenancy-1', personId: 'demo-person-1', tenantStatus: 'current', search: 'Tenant One'});
+  assert.equal(collected.length, 3);
+  assert.ok(collected.every(row => row.unitId === 'demo-unit-a-1' && row.tenancyId === 'demo-tenancy-1' && row.personId === 'demo-person-1'));
+  const scheduledVsCollected = run('scheduled-vs-collected', {...month, unitId: 'demo-unit-a-1', tenantStatus: 'current', search: 'Demo Harbor'});
+  assert.equal(scheduledVsCollected.length, 1);
+  assert.ok(scheduledVsCollected.every(row => row.propertyId === 'demo-property-a'));
+  const delinquency = run('delinquency', {...asOf, unitId: 'demo-unit-a-1', tenantStatus: 'current', balanceStatus: 'due', search: 'Tenant One'});
+  assert.equal(delinquency.length, 1);
+  assert.ok(delinquency.every(row => row.unitId === 'demo-unit-a-1' && row.tenancyStatus === 'current'));
+  const ledgerRows = run('tenant-ledger', {...range, unitId: 'demo-unit-a-1', tenancyId: 'demo-tenancy-1', personId: 'demo-person-1', tenantStatus: 'current'});
+  assert.equal(ledgerRows.length, 8);
+  assert.ok(ledgerRows.filter(row => row.rowType !== 'opening_balance').every(row => row.transaction && (row.transaction as {unitId?: string}).unitId === 'demo-unit-a-1'));
+  const expiring = run('lease-expiration', {...asOf, status: ['expiring'], tenantStatus: 'current', search: 'Tenant One'});
+  assert.equal(expiring.length, 1);
+  assert.ok(expiring.every(row => row.actionStatus === 'expiring'));
+  const deposits = run('security-deposit', {...asOf, unitId: 'demo-unit-a-1', tenantStatus: 'current', search: 'Tenant One'});
+  assert.equal(deposits.length, 1);
+  assert.ok(deposits.every(row => row.unitId === 'demo-unit-a-1'));
+  const applications = run('applicant-pipeline', {...asOf, status: ['submitted'], search: 'Applicant Four'});
+  assert.equal(applications.length, 1);
+  assert.ok(applications.every(row => row.status === 'submitted'));
+  const hap = run('hap', {...month, status: ['active'], tenantStatus: 'current', search: 'Tenant One'});
+  assert.equal(hap.length, 1);
+  assert.ok(hap.every(row => row.month === '2026-08'));
 });
 
 test('HTTP report catalog denies anonymous access and returns shared discovery metadata to an admin without reading records', async () => {

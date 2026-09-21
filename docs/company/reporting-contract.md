@@ -2,6 +2,8 @@
 
 This is the implementation contract for the reporting expansion. A shared discovery catalog and searchable library are implemented; new financial calculations, QBO reporting, immutable report runs and export jobs remain planned. It records Michael’s September 21, 2026 catalog clarification and extends the canonical R-ops Build Plan, section 9 and packets R01/R02. The supplied screenshots specify report depth and names; they do not request a copy of the blue, verbose interface. Only the labels explicitly supplied below are screenshot requirements; no clipped or unreadable screenshot details are inferred.
 
+The read-only Buildium reference review is recorded in [reporting-reference-review.md](reporting-reference-review.md) and copied into the canonical plan folder as `R-ops Reporting Reference Review.md`. It is a source of useful functionality patterns, not an exhaustive requirement list or a product-scope ceiling.
+
 ## Existing implementation to extend
 
 | Surface | Existing code and behavior |
@@ -139,6 +141,8 @@ The UI, REST and MCP enforce the same organization/entity/property/record and fi
 ## Interface
 
 Use a grouped searchable library with Financial, Rental, Tasks and appropriate Project/Investor/Forecast collections, short report titles and favorites. Choosing a report opens its scoped filters and result. Provide advanced columns, basis/mapping/completeness detail and drilldown through progressive disclosure. Keep financial tables opaque, readable and keyboard accessible. Use company charcoal, gold and cream with restrained controls; do not recreate the screenshot’s colors, dense navigation copy or explanatory blocks.
+
+Report setup is setup-first: selecting a report opens the audited, report-specific filter definition before Run report is available. The shared definition is the contract for the browser, REST, and Codex surfaces; dependent controls such as collected-income month versus activity range, lookup references, multi-select status arrays, and report-specific defaults are described by the same metadata. The current matrix is `docs/company/report-filter-matrix.md`. A catalog entry remains planned until its executable engine, validated server filters, and HTTP/Codex parity exist, so planned entries do not advertise runnable filters.
 
 Display material basis/scope/period and missing-data states where needed to interpret figures. Keep technical provenance and audit evidence in the service/details surface, outside authored deliverables. Preserve required third-party templates. Do not add decorative covers, footnotes, source tabs or commentary to exported deliverables unless requested. Favorites never bypass access checks. Export/download is separate from sending a communication.
 
