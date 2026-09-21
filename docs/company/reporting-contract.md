@@ -1,11 +1,13 @@
 # Reporting contract
 
-This is the implementation contract for the reporting expansion, not a claim that the report library or QBO financial reporting is implemented. It records Michael’s September 21, 2026 catalog clarification and extends the canonical R-ops Build Plan, section 9 and packets R01/R02. The supplied screenshots specify report depth and names; they do not request a copy of the blue, verbose interface. Only the labels explicitly supplied below are screenshot requirements; no clipped or unreadable screenshot details are inferred.
+This is the implementation contract for the reporting expansion. A shared discovery catalog and searchable library are implemented; new financial calculations, QBO reporting, immutable report runs and export jobs remain planned. It records Michael’s September 21, 2026 catalog clarification and extends the canonical R-ops Build Plan, section 9 and packets R01/R02. The supplied screenshots specify report depth and names; they do not request a copy of the blue, verbose interface. Only the labels explicitly supplied below are screenshot requirements; no clipped or unreadable screenshot details are inferred.
 
 ## Existing implementation to extend
 
 | Surface | Existing code and behavior |
 |---|---|
+| Shared discovery | `shared/report-catalog.ts` supplies 53 definitions: 11 available rental engines and 42 planned entries. Authenticated `GET /api/rent-ops/report-catalog` and read-scope MCP `get_report_catalog` return the same schema-validated metadata, including supported report keys and existing MCP aliases. Metadata contains no business rows; actual report authorization remains enforced at execution. Availability means an engine is implemented, not that any result is complete or QBO reconciled. |
+| Report library | `client/src/features/rent-ops/workspace/report-library.tsx`, reached through Reporting → Report library (`section=report-library`), reads that catalog and provides search, category/availability filters and per-user browser favorites. Available entries open existing reports with the current portfolio/date context; planned entries cannot run. |
 | Rental report calculations | `server/rent-ops/domain/reports.ts`, reached through the rental service’s `report` method. Preserve its operational balances, receipt allocations, opening balances and uncertainty semantics. |
 | Rental REST | `server/rent-ops/routes.ts`: authenticated `GET /api/rent-ops/reports/:report` returns the serialized report/filters/rows envelope; `GET /api/rent-ops/reports/:report/csv` returns CSV. These are fixed report routes, not a new catalog/job API. |
 | Rental transport | `server/rent-ops/presentation/reports.ts` and `shared/rent-ops-contracts`: allowlisted fields, report names and compatibility aliases. Client decoding lives in `client/src/features/rent-ops/api.ts`. |
@@ -14,7 +16,7 @@ This is the implementation contract for the reporting expansion, not a claim tha
 | Company/project API | `server/company/routes.ts` and `server/company/mcp.ts`: company context, paginated project lists, project detail and shared project commands. Project detail contains scope, approved budget history, tasks and draft costs. These are not completed company financial reports. |
 | QBO boundary | `server/integrations/quickbooks` contains transport work. As documented in `docs/company/project-workspace.md`, durable sync, verified company-to-realm persistence and accounting mirrors remain separate implementation packets. Project draft costs are not QBO posted actuals. |
 
-The current fixed rental report routes return rows without the proposed shared catalog, immutable report runs, cursor pages or export job lifecycle. Do not register duplicate rental report engines or advertise the proposed operations as callable today. The expansion must reuse the existing calculations and adapters, then move applicable presentation/filter behavior into a versioned shared service with compatibility tests.
+The current fixed rental report routes return rows without immutable report runs, cursor pages or an export job lifecycle. The discovery catalog now advertises their actual HTTP/MCP mappings. Do not register duplicate rental report engines or advertise the remaining proposed operations as callable today. The expansion must reuse the existing calculations and adapters, then move applicable presentation/filter behavior into a versioned shared service with compatibility tests.
 
 Existing UI period modes are: as-of for rent roll, occupancy, delinquency, lease expiration, security deposit and applicant pipeline; month for scheduled income, scheduled versus collected and HAP; inclusive date range for collected income and tenant ledger. Existing REST/presentation compatibility aliases include `lease-expirations`/`lease-expiration` and `deposits`/`security-deposit`. Preserve them. Canonical future catalog IDs below use `lease-expiration` and `security-deposit`; adapters resolve the existing aliases.
 
@@ -117,7 +119,7 @@ Unknown, unavailable, stale, partial, not applicable and verified zero are diffe
 
 ## One versioned service for UI, REST and Codex
 
-The following are required capabilities, not existing API route or MCP tool declarations. Implement them through one authenticated report service; choose transport names in the implementation packet and retain existing rental aliases.
+The following are required capabilities. Basic catalog discovery is implemented as described above; the richer run/page/drilldown/export/job contract remains planned. Implement those through one authenticated report service; choose transport names in the implementation packet and retain existing rental aliases.
 
 | Capability | Required contract |
 |---|---|
@@ -152,4 +154,4 @@ Display material basis/scope/period and missing-data states where needed to inte
 8. Reproducibility and operations: stable pages with no omitted/duplicate rows, snapshot repeatability, freshness invalidation, bounded memory/output, cancellation/retry/expiry and permission-safe job recovery. Meet canonical plan performance budgets at initial and 10× fixtures with concurrent/background load; local smoke timing alone is not launch acceptance.
 9. Usability: keyboard and screen-reader access, clear active filters, empty/error/loading states, mobile table scrolling and meaningful financial columns. No browser-only report logic that Codex cannot request through the same authorized service.
 
-Implement R01 only after its Q02/Q03 source and posting dependencies satisfy their evidence gates; R02 adds forecast calculations without replacing actuals. This document adds reporting requirements and traceability only. It does not create routes, schema migrations, QBO connections, background workers or live accounting changes.
+R01 financial acceptance still requires its Q02/Q03 source and posting evidence gates; the independently useful catalog does not satisfy them. R02 adds forecast calculations without replacing actuals. The catalog/library slice creates no schema migration, QBO connection, background worker or live accounting change. Future code must replace planned metadata only when the associated engine and parity tests actually work.

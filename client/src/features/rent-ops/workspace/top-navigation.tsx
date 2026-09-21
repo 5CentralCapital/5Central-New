@@ -45,13 +45,19 @@ export function TopNavigation({ route, onNavigate, transparency, onTransparency,
       <span>{activeGroup}</span>{mobileOpen ? <X size={18}/> : <Menu size={18}/>}
     </button>
     <nav id="rops-primary-navigation" className={`rops-primary-navigation${mobileOpen ? ' is-open' : ''}`} aria-label="Main navigation" onKeyDown={event => {
-      if (event.key === 'Escape' && !openGroup) { setMobileOpen(false); menuButton.current?.focus(); }
+      if (event.key === 'Escape') {
+        setOpenGroup(undefined);
+        if (window.matchMedia('(max-width: 1100px)').matches) {
+          returnFocusToToggle.current = Boolean(openGroup); setMobileOpen(false); menuButton.current?.focus();
+        }
+      }
     }}>
       {WORKSPACE_NAVIGATION.map(group => <Dropdown.Root key={group.label} modal={false} open={openGroup === group.label} onOpenChange={open => setOpenGroup(current => open ? group.label : current === group.label ? undefined : current)}>
         <Dropdown.Trigger className="rops-nav-trigger" aria-current={activeGroup === group.label ? 'true' : undefined}>
           {group.label}<ChevronDown size={12} aria-hidden="true"/>
         </Dropdown.Trigger>
         <Dropdown.Portal><Dropdown.Content className="rops-nav-menu" data-transparency={transparency} align="start" sideOffset={8} collisionPadding={16} loop onEscapeKeyDown={() => {
+          setOpenGroup(undefined);
           if (window.matchMedia('(max-width: 1100px)').matches) { returnFocusToToggle.current = true; setMobileOpen(false); }
         }} onCloseAutoFocus={event => {
           // Route effects and Radix dismissal can run in either order.

@@ -21,7 +21,7 @@ async function connect(scopes: string[], options: McpOperationalOptions = {}) {
 }
 test('MCP advertises annotated tools and prevents read-scope writes',async () => {
   const ctx=await connect([READ_SCOPE]); try {
-    const tools=await ctx.client.listTools(); assert.equal(tools.tools.length,26);
+    const tools=await ctx.client.listTools(); assert.equal(tools.tools.length,27);
     for(const tool of tools.tools) assert.equal(tool.annotations?.openWorldHint,false);
     const person=(await ctx.service.snapshot()).people[0];
     const result=await ctx.client.callTool({name:'update_tenant_contact',arguments:{id:person.id,revision:person.recordRevision ?? 1,patch:{phone:'555-0100'}}});
@@ -102,7 +102,7 @@ test('imported prospect names are discoverable and exact reads contain only cura
   }
   assert.equal((await client.callTool({name:'get_prospect',arguments:{id:'missing'}})).isError,true);
   assert.equal((await client.callTool({name:'fetch',arguments:{id:'tenant/prospect:rm:396'}})).isError,true);
-  const tools=await client.listTools();const tool=tools.tools.find(t=>t.name==='get_prospect')!;assert.equal(tool.annotations?.readOnlyHint,true);assert.equal(tools.tools.length,26);
+  const tools=await client.listTools();const tool=tools.tools.find(t=>t.name==='get_prospect')!;assert.equal(tool.annotations?.readOnlyHint,true);assert.equal(tools.tools.length,27);
  }finally{await client.close();await server.close();}
 });
 
@@ -172,7 +172,7 @@ test('optional account and billing adapters require write scopes and server-owne
  const readonly=await connect([READ_SCOPE],options);try{for(const [name,args]of writes)assert.equal((await readonly.client.callTool({name,arguments:args})).isError,true);assert.equal(calls.length,0);}finally{await readonly.close();}
  const ctx=await connect([READ_SCOPE,WRITE_SCOPE],options);try{
   const accounts=await ctx.client.callTool({name:'list_tenant_accounts',arguments:{}});assert.equal(JSON.stringify(accounts).includes('never-expose'),false);assert.equal(JSON.stringify(accounts).includes('/secret'),false);
-  const listed=await ctx.client.listTools();assert.equal(listed.tools.length,33);assert.equal(listed.tools.find(x=>x.name==='send_tenant_access_link')?.annotations?.openWorldHint,true);
+  const listed=await ctx.client.listTools();assert.equal(listed.tools.length,34);assert.equal(listed.tools.find(x=>x.name==='send_tenant_access_link')?.annotations?.openWorldHint,true);
   for(const [name,args]of writes)assert.notEqual((await ctx.client.callTool({name,arguments:args})).isError,true);
   for(const args of calls)assert.equal(args.at(-1).actorSubject??args[0].actorSubject,'oauth:admin');
   assert.equal((await ctx.client.callTool({name:'reissue_tenant_access',arguments:{id:'qa:account',credentialRevision:3}})).isError,true);

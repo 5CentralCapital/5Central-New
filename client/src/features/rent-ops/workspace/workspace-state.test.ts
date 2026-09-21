@@ -32,6 +32,15 @@ test('project subsection bookmarks survive reload and cannot leak into rental ro
   assert.equal(parseWorkspaceRoute('?section=projects&projectTab=unknown').projectTab, undefined);
   assert.equal(parseWorkspaceRoute('?section=tenants&projectTab=costs').projectTab, undefined);
 });
+
+test('report library bookmark retains portfolio context independently of legacy report bookmarks', () => {
+  const route = parseWorkspaceRoute('?section=report-library');
+  assert.equal(route.section, 'report-library');
+  const search = workspaceRouteSearch(route, filters);
+  assert.deepEqual(parseWorkspaceRoute(search), route);
+  assert.equal(new URLSearchParams(search).get('asOf'), filters.asOfDate);
+  assert.equal(parseWorkspaceRoute('?section=reports&report=rent-roll').report, 'rent-roll');
+});
 function bootstrap() { return decodeRentOpsWorkspaceBootstrap(serializeWorkspaceBootstrap(syntheticRentOpsSnapshot(),{asOfDate:filters.asOfDate})); }
 
 test('workspace links round-trip scoped records and tenant detail tabs without losing opaque IDs',()=>{

@@ -1,3 +1,4 @@
+import { getReportCatalog } from "../../shared/report-catalog";
 import { recurringChargeTermsInputSchema } from "../../shared/recurring-charge-terms";
 import { readChargeTerms, saveChargeTerms } from "./services/recurring-charge-terms";
 import { measureRentOps, rentOpsRequestTiming } from "./request-timing";
@@ -873,6 +874,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
       res.json(serializeAdminChargeDefinition(await service.patchChargeDefinition(req.params.id, parsed.data.expectedRevision, parsed.data.patch, {actorSubject, occurredAt: patchOccurredAt()})));
     } catch (error) { adminError(res, error); }
   });
+  adminRouter.get("/report-catalog", (_req, res) => { res.json(getReportCatalog()); });
   adminRouter.get("/reports/:report/csv", async (req, res) => {
     const report = reportAliases[req.params.report];
     if (!report) { res.status(404).json(errorBody("unknown_report")); return; }

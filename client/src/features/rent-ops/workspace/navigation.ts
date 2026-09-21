@@ -51,7 +51,7 @@ export const WORKSPACE_NAVIGATION: readonly WorkspaceNavigationGroup[] = [
   { label: 'Work Orders', items: planned('Open work orders', 'Schedule', 'Completed work') },
   { label: 'Investors', items: planned('Investor records', 'Investments', 'Activity', 'Agreements', 'Distributions') },
   { label: 'Reporting', items: [
-    { label: 'All rental reports', section: 'reports' },
+    { label: 'Report library', section: 'report-library' },
     report('Scheduled vs. collected', 'scheduled-vs-collected'),
     report('Collected income', 'collected-income'), report('Housing assistance', 'hap'),
     ...planned('Financial statements', 'Project reports', 'Investor reports', 'Debt & forecasts'),
@@ -83,5 +83,5 @@ export const WORKSPACE_LABELS: Record<WorkspaceSection, string> = {
   dashboard: 'Dashboard', tenants: 'Tenants', properties: 'Properties', projects: 'Projects',
   leases: 'Leases', applicants: 'Applications', recurring: 'Recurring charges',
   income: 'Payments & billing', banking: 'Banking', 'rent-roll': 'Rent roll',
-  reports: 'Reports', documents: 'Documents & activity',
+  reports: 'Reports', 'report-library': 'Reporting', documents: 'Documents & activity',
 };

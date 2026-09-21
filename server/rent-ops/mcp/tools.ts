@@ -1,3 +1,4 @@
+import { getReportCatalog } from '../../../shared/report-catalog';
 import type { TenantAccountAdminService } from '../tenant-portal/admin-service';
 import { registerCompanyMcpTools } from '../../company/mcp';
 import type { CompanyProjectPort } from '../../company/routes';
@@ -93,6 +94,7 @@ export function createRentOpsMcpServer(service: RentOpsService, principal: McpPr
   });
   for (const type of types) register(`get_${type}`, type==='prospect'?'Use this when reading a prospect by exact ID and revision. Historical prospects are read-only; answers and source payloads are omitted.':`Use this when reading one ${type} by exact ID including its current record revision before an edit.`, { id }, false, async ({id:target}) => readRecord(type,target));
   register('get_tenant_ledger', 'Use this when reading the ledger for an exact tenancy ID. Amounts are integer cents; posted, pending and settlement states remain separate.', { tenancyId:id }, false, async ({tenancyId}) => serializeReportRows('tenant-ledger',await service.report('tenant-ledger',{tenancyId})));
+  register('get_report_catalog', 'Discover rental and planned company reports, supported periods and existing report aliases. This returns metadata only; report execution retains its existing authorization and data coverage checks.', {}, false, async () => getReportCatalog());
   register('get_report', 'Use this when answering portfolio rent roll, occupancy, scheduled versus collected income, delinquency, lease expiration, deposit, applicant pipeline or HAP questions. Amounts remain cents and source uncertainty is retained.', { report:z.enum(['rent-roll','occupancy','scheduled-income','collected-income','scheduled-vs-collected','delinquency','tenant-ledger','lease-expirations','deposits','applicant-pipeline','hap']), filters:rentOpsFiltersSchema.strict().optional() }, false, async ({report,filters}) => serializeReportRows(report,await service.report(report,filters ?? {})));
   const context = () => ({ actorSubject:`oauth:${principal.subject}`, occurredAt:new Date().toISOString() });
   register('update_tenant_contact', 'Use this when the user explicitly asks to edit tenant contact information. First fetch the exact ID and revision; stale revisions are rejected.', { id,revision,patch:tenantPatch }, true, async ({id:target,revision:expected,patch}) => { await service.patchRecord('person',target,expected,patch,context()); return readRecord('tenant',target); });

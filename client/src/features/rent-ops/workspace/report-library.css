@@ -1,0 +1,29 @@
+.rops-modern .rops-report-library { min-width: 0; }
+.rops-report-library-toolbar { display: flex; gap: 12px; margin-bottom: 32px; flex-wrap: wrap; }
+.rops-modern .rops-report-library-search { position: relative; display: flex; flex: 1 1 280px; align-items: center; min-width: 220px; margin: 0; }
+.rops-report-library-search svg { position: absolute; left: 12px; color: #656568; }
+.rops-modern .rops-report-library-toolbar input,
+.rops-modern .rops-report-library-toolbar select { min-height: 44px; border: 1px solid var(--rm-line-strong); border-radius: 8px; padding: 8px 12px; background: white; color: var(--rm-ink); font: inherit; }
+.rops-modern .rops-report-library-toolbar input { padding-left: 40px; width: 100%; }
+.rops-modern .rops-report-library-toolbar select { width: auto; flex: 0 1 180px; }
+.rops-modern .rops-report-category { margin-bottom: 32px; }
+.rops-modern .rops-report-category h2 { margin: 0 0 12px; font-family: inherit; font-size: 18px; font-weight: 600; letter-spacing: -.015em; }
+.rops-report-category ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; list-style: none; padding: 8px 16px; margin: 0; background: white; border: 1px solid var(--rm-line); border-radius: 12px; }
+.rops-report-category li { display: flex; align-items: center; min-width: 0; border-bottom: 1px solid var(--rm-line); }
+.rops-report-category li:nth-last-child(-n + 2) { border-bottom: 0; }
+.rops-report-favorite { display: grid; flex: 0 0 44px; place-items: center; width: 44px; height: 52px; border: 0; border-radius: 8px; background: transparent; color: #656568; }
+.rops-report-favorite[aria-pressed="true"] { color: #80621e; }
+.rops-report-open { display: flex; min-width: 0; min-height: 52px; flex: 1; align-items: center; justify-content: space-between; gap: 12px; padding: 8px; background: transparent; border: 0; border-radius: 8px; color: var(--rm-ink); text-align: left; font: inherit; }
+.rops-report-open > svg { flex-shrink: 0; color: #656568; }
+.rops-modern .rops-report-open:disabled { color: #656568; cursor: default; opacity: 1; }
+.rops-report-favorite:hover, .rops-report-open:not(:disabled):hover { background: #faf9f6; }
+.rops-report-availability { flex: 0 0 auto; color: #656568; font-size: 12px; }
+@media (max-width: 800px) {
+  .rops-report-category ul { grid-template-columns: minmax(0, 1fr); padding-inline: 8px; }
+  .rops-report-category li:nth-last-child(2) { border-bottom: 1px solid var(--rm-line); }
+}
+@media (max-width: 480px) {
+  .rops-modern .rops-report-library-search { flex-basis: 100%; }
+  .rops-modern .rops-report-library-toolbar select { flex: 1; min-width: 0; }
+  .rops-report-open { flex-wrap: wrap; gap: 3px 12px; }
+}

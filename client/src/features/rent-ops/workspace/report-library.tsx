@@ -1,0 +1,76 @@
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { ArrowUpRight, Search, Star } from 'lucide-react';
+import { ReportCatalogSchema } from '@shared/report-catalog';
+import { rentOpsAuthClient } from '../auth';
+import { REPORT_KEYS, type ReportKey } from '../types';
+import './report-library.css';
+
+const groups = [
+  ['financial', 'Financial'], ['rental', 'Rental'], ['tasks', 'Tasks'],
+  ['projects', 'Projects'], ['investors', 'Investors'], ['forecast', 'Forecast'],
+] as const;
+
+export function ReportLibrary({ identity, onOpen }: { identity: string; onOpen: (key: ReportKey) => void }) {
+  const catalog = useQuery({
+    queryKey: ['rent-ops-workspace', 'report-catalog', identity],
+    queryFn: async ({ signal }) => {
+      const response = await rentOpsAuthClient.request('/api/rent-ops/report-catalog', { signal });
+      if (!response.ok) throw new Error('Reports could not be loaded.');
+      return ReportCatalogSchema.parse(await response.json());
+    }, staleTime: 300_000, retry: false,
+  });
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('all');
+  const [view, setView] = useState('all');
+  const favoriteKey = `rops:report-favorites:${identity}`;
+  const [favorites, setFavorites] = useState<string[]>(() => {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem(favoriteKey) ?? '[]');
+      return Array.isArray(saved) ? saved.filter((value): value is string => typeof value === 'string').slice(0, 100) : [];
+    } catch { return []; }
+  });
+  const toggleFavorite = (id: string) => {
+    const next = favorites.includes(id) ? favorites.filter(value => value !== id) : [...favorites, id];
+    setFavorites(next);
+    try { localStorage.setItem(favoriteKey, JSON.stringify(next)); } catch { /* Available until this session ends. */ }
+  };
+  const query = search.trim().toLocaleLowerCase();
+  const reports = catalog.data?.reports.filter(report =>
+    (category === 'all' || report.category === category) &&
+    (view === 'all' || view === 'available' && report.availability === 'available' || view === 'favorites' && favorites.includes(report.id)) &&
+    (!query || `${report.title} ${report.id}`.toLocaleLowerCase().includes(query)),
+  );
+  return <section className="rops-report-library" aria-label="Report library">
+    <div className="rops-report-library-toolbar">
+      <label className="rops-report-library-search"><Search size={17} aria-hidden="true"/><input aria-label="Search reports" placeholder="Search reports" value={search} onChange={event => setSearch(event.target.value)}/></label>
+      <select aria-label="Report category" value={category} onChange={event => setCategory(event.target.value)}>
+        <option value="all">All categories</option>{groups.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+      </select>
+      <select aria-label="Show reports" value={view} onChange={event => setView(event.target.value)}>
+        <option value="all">All reports</option><option value="available">Available</option><option value="favorites">Favorites</option>
+      </select>
+    </div>
+    {catalog.isPending && <div className="rm-empty" role="status">Loading reports…</div>}
+    {catalog.error && <div className="rm-error" role="alert">Reports could not be loaded.<button className="rm-button" onClick={() => void catalog.refetch()}>Try again</button></div>}
+    {catalog.data && reports?.length === 0 && <div className="rm-empty">No matching reports.</div>}
+    {groups.map(([key, label]) => {
+      const rows = reports?.filter(report => report.category === key);
+      if (!rows?.length) return null;
+      return <section className="rops-report-category" key={key} aria-label={`${label} reports`}>
+        <h2>{label}</h2><ul>{rows.map(report => {
+          const available = report.availability === 'available' && report.reportKey && REPORT_KEYS.includes(report.reportKey as ReportKey);
+          const isFavorite = favorites.includes(report.id);
+          return <li key={report.id} data-report-id={report.id}>
+            <button className="rops-report-favorite" type="button" aria-label={`${isFavorite ? 'Remove' : 'Add'} ${report.title} ${isFavorite ? 'from' : 'to'} favorites`} aria-pressed={isFavorite} onClick={() => toggleFavorite(report.id)}>
+              <Star size={17} fill={isFavorite ? 'currentColor' : 'none'} aria-hidden="true"/>
+            </button>
+            <button className="rops-report-open" type="button" disabled={!available} onClick={() => available && onOpen(report.reportKey as ReportKey)}>
+              <span>{report.title}</span>{available ? <ArrowUpRight size={16} aria-hidden="true"/> : <span className="rops-report-availability">{report.source === 'quickbooks' || report.source === 'combined' ? 'Awaiting integration' : 'Planned'}</span>}
+            </button>
+          </li>;
+        })}</ul>
+      </section>;
+    })}
+  </section>;
+}

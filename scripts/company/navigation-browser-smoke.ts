@@ -74,6 +74,36 @@ try {
       await navigate(page, 'Reporting', 'Housing assistance');
       await expect(page).toHaveURL(/report=hap/);
       await page.goBack(); await expect(page).toHaveURL(/section=banking/);
+      await navigate(page, 'Reporting', 'Report library');
+      await expect(page).toHaveURL(/section=report-library/);
+      const catalogResponse = await page.request.get(`${origin}/api/rent-ops/report-catalog`);
+      expect(catalogResponse.ok()).toBe(true);
+      const catalog = await catalogResponse.json();
+      const library = page.getByRole('region', { name: 'Report library', exact: true });
+      await expect(library.locator('[data-report-id]')).toHaveCount(catalog.reports.length);
+      expect(catalog.reports.filter((report: { availability: string }) => report.availability === 'available')).toHaveLength(11);
+      await library.getByRole('combobox', { name: 'Show reports' }).selectOption('available');
+      await expect(library.locator('[data-report-id]')).toHaveCount(11);
+      const rentRoll = library.locator('[data-report-id="rent-roll"]');
+      await rentRoll.getByRole('button', { name: /Add .* to favorites/ }).click();
+      await library.getByRole('combobox', { name: 'Show reports' }).selectOption('favorites');
+      await expect(library.locator('[data-report-id]')).toHaveCount(1);
+      await page.reload();
+      await library.getByRole('combobox', { name: 'Show reports' }).selectOption('favorites');
+      await expect(library.locator('[data-report-id]')).toHaveCount(1);
+      await rentRoll.locator('.rops-report-open').click();
+      await expect(page).toHaveURL(/report=rent-roll/);
+      await expect(page.getByRole('region', { name: 'Rent Operations reports' })).toBeVisible();
+      await page.goBack(); await expect(library).toBeVisible();
+      await library.getByRole('textbox', { name: 'Search reports' }).fill('income statement');
+      await expect(library.locator('[data-report-id]')).toHaveCount(4);
+      await expect(library.locator('[data-report-id="income-statement-by-unit"] .rops-report-open')).toBeDisabled();
+      await page.screenshot({ path: resolve(output, `report-library-${name}.png`), fullPage: true });
+      await library.getByRole('textbox', { name: 'Search reports' }).fill('');
+      await library.getByRole('combobox', { name: 'Report category' }).selectOption('tasks');
+      await expect(library.locator('[data-report-id]')).toHaveCount(6);
+      await library.getByRole('textbox', { name: 'Search reports' }).fill('does-not-exist');
+      await expect(library.getByText('No matching reports.', { exact: true })).toBeVisible();
       await openMenu(page, 'Investors');
       await expect(page.getByRole('menuitem', { name: 'Investor records Planned', exact: true })).toBeDisabled();
       await page.keyboard.press('Escape');
@@ -132,6 +162,10 @@ try {
       await expect(page.getByRole('button', { name: 'Open navigation', exact: true })).toBeFocused();
       await noOverflow(page);
       await page.screenshot({ path: resolve(output, `properties-mobile-${name}.png`), fullPage: true });
+      await navigate(page, 'Reporting', 'Report library');
+      await expect(page.getByRole('region', { name: 'Report library' }).locator('[data-report-id="rent-roll"]')).toBeVisible();
+      await noOverflow(page);
+      await page.screenshot({ path: resolve(output, `report-library-mobile-${name}.png`), fullPage: true });
       await navigate(page, 'Dashboard', 'Overview');
       await expect(page.locator('.rmd-top-grid > section')).toHaveCount(6);
       await page.screenshot({ path: resolve(output, `dashboard-mobile-${name}.png`), fullPage: true });
@@ -154,6 +188,10 @@ try {
       expect(errors).toEqual([]);
       results.push({ browser: name, passed: true, dashboardReadyMs, viewports, synthetic: true, pageErrors: errors });
     } catch (error) {
+      await writeFile(resolve(output, `failure-${name}.json`), JSON.stringify(await page.evaluate(() => ({
+        focus: document.activeElement?.outerHTML,
+        menus: Array.from(document.querySelectorAll('[role="menu"]')).map(element => ({ html: element.outerHTML, state: element.getAttribute('data-state'), rect: element.getBoundingClientRect().toJSON(), animation: getComputedStyle(element).animationName, opacity: getComputedStyle(element).opacity })),
+      })), null, 2));
       await page.screenshot({ path: resolve(output, `failure-${name}.png`), fullPage: true });
       throw error;
     } finally { await browser.close(); }
