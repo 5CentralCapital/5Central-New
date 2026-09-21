@@ -1,14 +1,7 @@
-import { defineConfig } from "drizzle-kit";
+// The R-ops reviewed SQL chain is the sole schema authority. A second Drizzle
+// push/generation path would silently diverge from its frozen checksums.
+throw new Error(
+  "Independent Drizzle schema changes are disabled. Verify the company migration registry and render the existing R-ops reviewed SQL artifacts instead.",
+);
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL, ensure the database is provisioned");
-}
-
-export default defineConfig({
-  out: "./migrations",
-  schema: "./shared/schema.ts",
-  dialect: "postgresql",
-  dbCredentials: {
-    url: process.env.DATABASE_URL,
-  },
-});
+export default {};

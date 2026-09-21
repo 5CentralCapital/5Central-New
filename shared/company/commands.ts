@@ -31,7 +31,7 @@ export const commandRoleSchema = z.enum(COMMAND_ROLES);
 export const idempotencyKeySchema = z.string()
   .min(1, "Idempotency key is required")
   .max(255, "Idempotency key is too long")
-  .refine((value) => value.trim() === value && !/[\r\n]/.test(value), "Idempotency key cannot have surrounding whitespace or newlines");
+  .refine((value) => value.trim() === value && !/[\u0000-\u001f\u007f]/.test(value), "Idempotency key cannot have surrounding whitespace or control characters");
 
 const sourceDocumentIdsSchema = z.array(documentReferenceIdSchema)
   .max(100)

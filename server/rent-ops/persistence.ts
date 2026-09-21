@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { COMPANY_APPLICATION_TABLES, COMPANY_ACCESS_TABLES } from "../company/tables";
 
-export const RENT_OPS_SCHEMA_VERSION = 30;
+export const RENT_OPS_SCHEMA_VERSION = 32;
 export const RENT_OPS_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V1_CHECKSUM__";
 export const RENT_OPS_V2_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V2_CHECKSUM__";
 export const RENT_OPS_V3_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V3_CHECKSUM__";
@@ -48,11 +49,15 @@ const RENT_OPS_MIGRATION_FILES = [
   "028_rent_ops_actual_move_out_audit.sql",
   "029_rent_ops_terminal_end_at_start.sql",
   "030_rent_ops_occupancy_confirmation.sql",
+  "031_company_foundation.sql",
+  "032_company_commands.sql",
 ] as const;
 
 export const RENT_OPS_SUPPORTED_SCHEMA_VERSIONS = RENT_OPS_MIGRATION_FILES.map((_, index) => index + 1);
 
 export const RENT_OPS_REQUIRED_TABLES = [
+  ...COMPANY_APPLICATION_TABLES,
+  ...COMPANY_ACCESS_TABLES,
   "rent_ops_schema_meta",
   "rent_ops_schema_migrations",
   "rent_ops_properties",

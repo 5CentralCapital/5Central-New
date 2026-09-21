@@ -1,6 +1,7 @@
 import { canonicalJson, sha256 } from "../export/hash";
 import { RENT_OPS_REQUIRED_TABLES } from "../persistence";
 import { RENT_OPS_APPLICATION_TABLES } from "../security/deployment-security";
+import { COMPANY_ACCESS_TABLES } from "../../company/tables";
 import type { RentOpsQueryExecutor } from "../repositories/postgres";
 
 export const RENT_OPS_TARGET_STATE_VERSION = "rent-ops-target-state/v1" as const;
@@ -11,7 +12,10 @@ const MAX_ROWS = 750_000;
 const MAX_CANONICAL_BYTES = 512 * 1024 * 1024;
 
 /** RM target tables only; application accounts, receipts and counters are outside importer access. */
-export const RENT_OPS_TARGET_STATE_TABLES = RENT_OPS_REQUIRED_TABLES.filter((table) => !SCHEMA_TABLES.has(table) && !(RENT_OPS_APPLICATION_TABLES as readonly string[]).includes(table));
+export const RENT_OPS_TARGET_STATE_TABLES = RENT_OPS_REQUIRED_TABLES.filter((table) =>
+  !SCHEMA_TABLES.has(table)
+  && !(RENT_OPS_APPLICATION_TABLES as readonly string[]).includes(table)
+  && !(COMPANY_ACCESS_TABLES as readonly string[]).includes(table));
 
 /**
  * The target-state query must order by the actual primary-key column of each

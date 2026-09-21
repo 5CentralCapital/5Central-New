@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": [
+    "../../shared/performance/**/*.ts",
+    "../../server/performance/**/*.ts",
+    "./*.ts"
+  ],
+  "exclude": ["**/*.test.ts"],
+  "compilerOptions": {
+    "target": "ES2022",
+    "tsBuildInfoFile": "../../node_modules/typescript/performance-tools.tsbuildinfo"
+  }
+}

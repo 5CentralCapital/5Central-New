@@ -7,11 +7,11 @@
     "dev": "NODE_ENV=development tsx server/index.ts",
     "build": "vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist && npm run rent-ops:migration:render:all",
     "start": "NODE_ENV=production node dist/index.js",
-    "check": "tsc",
-    "db:push": "drizzle-kit push",
+    "check": "tsc --incremental false && tsc -p scripts/performance/tsconfig.json --incremental false",
+    "db:push": "node scripts/company/block-direct-migration.mjs",
     "db:seed": "tsx server/seed.ts",
     "db:seed-investors": "tsx server/seed-investors.ts",
-    "db:migrate": "tsx server/migrate.ts",
+    "db:migrate": "node scripts/company/block-direct-migration.mjs",
     "test:rent-ops": "tsx --no-cache --test $(find server/rent-ops client/src/features -name '*.test.ts' -print) server/*.test.ts client/src/components/account-entry.test.ts",
     "rent-ops:demo": "NODE_ENV=development tsx server/rent-ops/demo-entry.ts",
     "rent-ops:demo:build": "VITE_RENT_OPS_DEMO=true VITE_RENT_OPS_APPLY_DEMO=true VITE_RENT_OPS_LOCAL_SYNTHETIC_BUILD=true npm run build",
@@ -20,7 +20,14 @@
     "rent-ops:migration:render:all": "tsx server/rent-ops/migrations/render.ts",
     "rent-ops:migration": "tsx server/rent-ops/import/restricted-migration-cli.ts",
     "photos:manifest": "node scripts/generate-photo-manifest.mjs",
-    "test:rent-ops:database": "tsx --no-cache --test server/rent-ops/migrations/schema-integration.test.ts"
+    "test:rent-ops:database": "tsx --no-cache --test server/rent-ops/migrations/schema-integration.test.ts",
+    "company:migrations:verify": "tsx server/company/migrations/registry.ts",
+    "test:company": "node scripts/test-suite.mjs company",
+    "test:all": "node scripts/test-suite.mjs all",
+    "verify:quick": "npm run check && npm run company:migrations:verify && npm run test:company && npm run test:performance",
+    "test:performance": "tsx --no-cache --test server/performance/evaluator.test.ts scripts/performance/cli.test.ts",
+    "performance:report": "tsx scripts/performance/report.ts",
+    "performance:check": "tsx scripts/performance/check.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -99,6 +106,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
+    "@playwright/test": "1.63.0",
     "@replit/vite-plugin-cartographer": "^0.2.8",
     "@replit/vite-plugin-runtime-error-modal": "^0.0.3",
     "@tailwindcss/typography": "^0.5.15",

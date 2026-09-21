@@ -116,8 +116,9 @@ test("security inventory matches all migration tables and repository runtime rea
     "rent_ops_application_history_blockers",
     "rent_ops_application_history_aggregates",
   ];
-  assert.deepEqual([...RENT_OPS_RUNTIME_TABLES].sort(), [...repositorySnapshotTables, ...RENT_OPS_APPLICATION_TABLES, "rent_ops_schema_migrations"].sort());
+  assert.deepEqual([...RENT_OPS_RUNTIME_TABLES].sort(), [...repositorySnapshotTables, ...RENT_OPS_APPLICATION_TABLES, "company_access_grants", "rent_ops_schema_migrations"].sort());
   assert.deepEqual([...RENT_OPS_RUNTIME_READ_ONLY_TABLES], [
+    "company_access_grants",
     "rent_ops_schema_migrations",
     "rent_ops_prospects",
     "rent_ops_application_history",
@@ -134,7 +135,7 @@ test("security inventory matches all migration tables and repository runtime rea
     "rent_ops_application_history_aggregates",
   ]);
   assert.deepEqual([...RENT_OPS_IMPORTER_READ_ONLY_TABLES], ["rent_ops_schema_meta", "rent_ops_schema_migrations", "rent_ops_record_changes"]);
-  assert.deepEqual([...RENT_OPS_APPEND_ONLY_TABLES], ["rent_ops_recurring_charge_schedules", "rent_ops_ledger_transactions", "rent_ops_payment_allocations", "rent_ops_activity_events", "rent_ops_record_changes", "rent_ops_payment_events", "rent_ops_billing_charges"]);
+  assert.deepEqual([...RENT_OPS_APPEND_ONLY_TABLES], ["company_external_identities", "rent_ops_recurring_charge_schedules", "rent_ops_ledger_transactions", "rent_ops_payment_allocations", "rent_ops_activity_events", "rent_ops_record_changes", "rent_ops_payment_events", "rent_ops_billing_charges"]);
   assert.deepEqual([...RENT_OPS_IMPORTER_INSERT_ONLY_TABLES], [
     "rent_ops_charge_definitions",
     "rent_ops_prospects",
@@ -229,6 +230,9 @@ test("verified staging plan grants normal tables and importer-only access to res
   assert.doesNotMatch(plan.sql, /GRANT [^;]*UPDATE[^;]* ON TABLE [^;]*rent_ops_source_payloads[^;]* TO "rent_ops_staging_importer"/);
   assert.doesNotMatch(plan.sql, /GRANT [^;]*rent_ops_source_payloads[^;]* TO "rent_ops_staging_web"/);
   assert.doesNotMatch(plan.sql, /ALL TABLES IN SCHEMA/);
+  assert.match(plan.sql, /GRANT SELECT ON TABLE [^;]*"public"\."company_access_grants"[^;]* TO "rent_ops_staging_web"/);
+  assert.doesNotMatch(plan.sql, /GRANT [^;]*(?:INSERT|UPDATE|DELETE)[^;]*company_access_grants[^;]* TO "rent_ops_staging_web"/);
+  assert.doesNotMatch(plan.sql, /GRANT [^;]*company_access_grants[^;]* TO "rent_ops_staging_importer"/);
   assert.doesNotMatch(plan.sql, /ALL SEQUENCES IN SCHEMA/);
   assert.match(plan.sql, /ALTER ROLE "rent_ops_staging_web" NOINHERIT/);
   assert.match(plan.sql, /ALTER ROLE "rent_ops_staging_importer" NOINHERIT/);

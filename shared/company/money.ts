@@ -21,7 +21,7 @@ export const LEGACY_SAFE_INTEGER_MAX = BigInt(Number.MAX_SAFE_INTEGER);
 const CANONICAL_CENTS = /^(0|-?[1-9]\d*)$/;
 
 export function isCanonicalCents(value: unknown): value is MoneyCents {
-  if (typeof value !== "string" || !CANONICAL_CENTS.test(value)) return false;
+  if (typeof value !== "string" || value.length > 20 || !CANONICAL_CENTS.test(value)) return false;
   const parsed = BigInt(value);
   return parsed >= POSTGRES_SIGNED_64_MIN && parsed <= POSTGRES_SIGNED_64_MAX;
 }

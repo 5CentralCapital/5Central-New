@@ -47,16 +47,16 @@ export function compareIsoDates(left: IsoDate | string, right: IsoDate | string)
   return left < right ? -1 : 1;
 }
 
-/** Effective dates describe business validity; they are not recorded times. */
+/** Business validity includes effectiveFrom and excludes effectiveTo. */
 export const effectivePeriodSchema = z.object({
   effectiveFrom: isoDateSchema,
   effectiveTo: isoDateSchema.optional(),
 }).strict().superRefine((value, context) => {
-  if (value.effectiveTo !== undefined && value.effectiveTo < value.effectiveFrom) {
+  if (value.effectiveTo !== undefined && value.effectiveTo <= value.effectiveFrom) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["effectiveTo"],
-      message: "effectiveTo cannot precede effectiveFrom",
+      message: "effectiveTo must follow effectiveFrom",
     });
   }
 });

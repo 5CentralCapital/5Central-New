@@ -1,5 +1,6 @@
 import { createEmailRecipientPolicy } from "../email/recipient-policy";
 import { resolveHostDatabaseUrl } from "../../host-database-config";
+import { COMPANY_APPLICATION_TABLES, COMPANY_ACCESS_TABLES } from "../../company/tables";
 /**
  * Render and validate the least-privilege role boundary for Rent Ops.
  *
@@ -189,6 +190,7 @@ export const RENT_OPS_AUDITOR_TABLES = [...RENT_OPS_RUNTIME_PRIVATE_TABLES, "ren
 
 /** Application-created accounts, receipts and counters are never imported from RM. */
 export const RENT_OPS_APPLICATION_TABLES = [
+  ...COMPANY_APPLICATION_TABLES,
   "rent_ops_tenant_accounts",
   "rent_ops_tenant_auth_limits",
   "rent_ops_tenant_payments",
@@ -206,6 +208,7 @@ export const RENT_OPS_RUNTIME_EPHEMERAL_TABLES = [
 
 /** All tables created by the current Rent Ops migration, including restricted tables. */
 export const RENT_OPS_ALL_TABLES = [
+  ...COMPANY_ACCESS_TABLES,
   "rent_ops_schema_meta",
   "rent_ops_schema_migrations",
   "rent_ops_properties",
@@ -278,6 +281,7 @@ export const RENT_OPS_RUNTIME_WRITABLE_TABLES = [
  * intentionally read-only for the web role; the importer owns their writes.
  */
 export const RENT_OPS_RUNTIME_READ_ONLY_TABLES = [
+  ...COMPANY_ACCESS_TABLES,
   "rent_ops_schema_migrations",
   "rent_ops_prospects",
   "rent_ops_application_history",
@@ -303,6 +307,7 @@ export const RENT_OPS_IMPORTER_READ_ONLY_TABLES = [
 
 /** Append-only tables use INSERT plus idempotency SELECT, never UPDATE/DELETE. */
 export const RENT_OPS_APPEND_ONLY_TABLES = [
+  "company_external_identities",
   "rent_ops_recurring_charge_schedules",
   "rent_ops_ledger_transactions",
   "rent_ops_payment_allocations",
@@ -341,6 +346,7 @@ export const RENT_OPS_RUNTIME_TABLES = [
 export const RENT_OPS_IMPORTER_TABLES = [
   ...RENT_OPS_RUNTIME_TABLES.filter((table) =>
     !(RENT_OPS_IMPORTER_READ_ONLY_TABLES as readonly string[]).includes(table)
+    && !(COMPANY_ACCESS_TABLES as readonly string[]).includes(table)
     && !(RENT_OPS_APPLICATION_TABLES as readonly string[]).includes(table)),
   "rent_ops_source_records",
   "rent_ops_import_runs",
@@ -832,6 +838,7 @@ function tableStatements(manifest: RentOpsSecurityManifest): string[] {
     `REVOKE ALL PRIVILEGES ON TABLE ${joinObjects(target.schemaName, RENT_OPS_RESTRICTED_TABLES, "table")} FROM PUBLIC;`,
     `REVOKE ALL PRIVILEGES ON TABLE ${joinObjects(target.schemaName, RENT_OPS_RUNTIME_PRIVATE_TABLES, "table")} FROM PUBLIC;`,
     `REVOKE ALL PRIVILEGES ON TABLE ${joinObjects(target.schemaName, RENT_OPS_APPLICATION_TABLES, "table")} FROM PUBLIC;`,
+    `REVOKE ALL PRIVILEGES ON TABLE ${joinObjects(target.schemaName, COMPANY_ACCESS_TABLES, "table")} FROM PUBLIC;`,
     ...(runtimeEphemeralTables.length > 0 ? [grant(["SELECT", "INSERT", "UPDATE", "DELETE"], "TABLE", joinObjects(target.schemaName, runtimeEphemeralTables, "table"), target.runtimeRole)] : []),
     ...(runtimeUpsertTables.length > 0 ? [grant(manifest.runtimeTablePrivileges, "TABLE", joinObjects(target.schemaName, runtimeUpsertTables, "table"), target.runtimeRole)] : []),
     ...(manifest.runtimeReadOnlyTables.length > 0 ? [grant(manifest.runtimeReadOnlyTablePrivileges, "TABLE", joinObjects(target.schemaName, manifest.runtimeReadOnlyTables, "table"), target.runtimeRole)] : []),

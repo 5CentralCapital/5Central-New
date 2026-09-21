@@ -1,0 +1,37 @@
+import { readdirSync, existsSync } from "node:fs";
+import { resolve, join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const suite = process.argv[2] ?? "all";
+const roots = suite === "company"
+  ? ["server/company", "shared/company"]
+  : suite === "all"
+    ? ["server", "shared", "client/src/features", "scripts", "client/src/components/account-entry.test.ts"]
+    : null;
+if (!roots) throw new Error("Unknown test suite; choose company or all");
+const tests = [];
+function discover(path) {
+  if (!existsSync(path)) return;
+  if (/\.test\.tsx?$/.test(path)) { tests.push(path); return; }
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    if (entry.isDirectory() && !["node_modules", "dist", "fixtures"].includes(entry.name)) discover(join(path, entry.name));
+    else if (entry.isFile() && /\.test\.tsx?$/.test(entry.name)) tests.push(join(path, entry.name));
+  }
+}
+for (const path of roots) discover(resolve(root, path));
+if (!tests.length) throw new Error("No tests discovered; refusing an empty pass");
+const env = { ...process.env, NODE_ENV: "test" };
+// Tests use synthetic repositories/PGlite. Never inherit live database or
+// service credentials into the default test runner.
+for (const key of Object.keys(env)) {
+  if (/(?:DATABASE_URL|API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|CLIENT_SECRET|WEBHOOK_SECRET|PRIVATE_KEY)$/.test(key)) delete env[key];
+}
+const concurrency = Number(process.env.ROPS_TEST_CONCURRENCY ?? 4);
+if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error("ROPS_TEST_CONCURRENCY must be an integer from 1 to 8");
+const result = spawnSync(process.execPath, [fileURLToPath(import.meta.resolve("tsx/cli")), "--no-cache", "--test", `--test-concurrency=${concurrency}`, ...tests.sort()], {
+  cwd: root, env, stdio: "inherit",
+});
+if (result.error) throw result.error;
+process.exitCode = result.status ?? 1;

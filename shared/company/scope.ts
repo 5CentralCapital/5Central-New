@@ -19,7 +19,10 @@ export const companyScopeSchema = z.object({
   organizationId: organizationIdSchema,
   legalEntityId: legalEntityIdSchema.optional(),
   propertyId: propertyReferenceIdSchema.optional(),
-}).strict();
+}).strict().refine(scope => scope.propertyId === undefined || scope.legalEntityId !== undefined, {
+  path: ["legalEntityId"],
+  message: "Property scope requires its legal entity",
+});
 
 export function parseCompanyScope(value: unknown): CompanyScope {
   return companyScopeSchema.parse(value);

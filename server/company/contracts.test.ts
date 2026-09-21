@@ -69,6 +69,7 @@ test("cents use canonical decimal strings and PostgreSQL signed BIGINT bounds", 
   assert.equal(isCanonicalCents("+1"), false);
   assert.equal(isCanonicalCents("9223372036854775808"), false);
   assert.equal(isCanonicalCents("-9223372036854775809"), false);
+  assert.equal(isCanonicalCents("9".repeat(100_000)), false);
   assert.equal(centsSchema.parse("-12"), "-12");
   assert.throws(() => parseCents(12), /canonical decimal string/);
 });
@@ -100,6 +101,11 @@ test("decimal text is exact and multiplication rounds signed half cents delibera
   assert.equal(multiplyDecimalToCents("-1", "0.005", "ceil"), "0");
   assert.equal(multiplyDecimalToCents("-1", "0.005", "toward_zero"), "0");
   assert.throws(() => decimalSchema.parse("1e2"));
+  const smallest = `0.${"0".repeat(999)}1`;
+  assert.equal(multiplyDecimalToCents(smallest, smallest), "0");
+  assert.equal(multiplyDecimalToCents(smallest, smallest, "ceil"), "1");
+  assert.equal(decimalSchema.safeParse("9".repeat(1_001)).success, false);
+  assert.throws(() => canonicalizeDecimal("9".repeat(100_000)), /length/);
 });
 
 test("deterministic cent allocation preserves signed totals and tie order", () => {
@@ -139,6 +145,7 @@ test("dates validate real leap days and separate effective periods from timestam
   assert.equal(isIsoTimestamp("2026-09-21T24:00:00Z"), false);
   assert.equal(effectivePeriodSchema.safeParse({ effectiveFrom: "2024-02-29", effectiveTo: "2024-03-01" }).success, true);
   assert.equal(effectivePeriodSchema.safeParse({ effectiveFrom: "2024-03-01", effectiveTo: "2024-02-29" }).success, false);
+  assert.equal(effectivePeriodSchema.safeParse({ effectiveFrom: "2024-03-01", effectiveTo: "2024-03-01" }).success, false);
 });
 
 test("new company IDs are strict UUIDs while legacy rental IDs retain their exact format", () => {
@@ -163,6 +170,7 @@ test("organization, legal-entity, and property scope are distinct and tenancy is
   assert.equal(companyScopeSchema.safeParse({ ...scope, propertyId: "legacy-property-7" }).success, true);
   assert.equal(companyScopeSchema.safeParse({ ...scope, tenancyId: "legacy-tenant-1" }).success, false);
   assert.equal(companyScopeSchema.safeParse({ organizationId: "legacy-org" }).success, false);
+  assert.equal(companyScopeSchema.safeParse({ organizationId: IDS.organizationId, propertyId: "legacy-property-7" }).success, false);
 });
 
 test("revision contracts expose optimistic concurrency conflicts", () => {
@@ -195,6 +203,7 @@ test("command envelope is typed, idempotent, scoped, and rejects actor identity 
   assert.equal(commandEnvelopeSchema(payloadSchema).safeParse({ ...envelopeInput, actorId: IDS.actorId }).success, false);
   assert.equal(commandEnvelopeSchema(payloadSchema).safeParse({ ...envelopeInput, userId: IDS.actorId }).success, false);
   assert.equal(commandEnvelopeSchema(payloadSchema).safeParse({ ...envelopeInput, idempotencyKey: "" }).success, false);
+  assert.equal(commandEnvelopeSchema(payloadSchema).safeParse({ ...envelopeInput, idempotencyKey: "key\u0000suffix" }).success, false);
 
   const actor = authenticatedActorSchema.parse({ actorId: "demo-admin", organizationId: IDS.organizationId, role: "admin" });
   const bound = bindAuthenticatedActor(parsed, actor);

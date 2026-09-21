@@ -31,6 +31,11 @@ test("complete immutable migration chain replays and enforces actual role bounda
         if (privilege === "SELECT") assert.equal(result.rows[0].runtime, true, `${table} runtime SELECT`);
       }
     }
+    for (const privilege of ["SELECT", "INSERT", "UPDATE", "DELETE"]) {
+      const access = await db.query<{ runtime: boolean; importer: boolean }>("SELECT has_table_privilege($1, 'company_access_grants', $3) AS runtime, has_table_privilege($2, 'company_access_grants', $3) AS importer", [manifest.target.runtimeRole, manifest.target.importerRole, privilege]);
+      assert.equal(access.rows[0].runtime, privilege === "SELECT", `company_access_grants runtime ${privilege}`);
+      assert.equal(access.rows[0].importer, false, `company_access_grants importer ${privilege}`);
+    }
     await db.exec("UPDATE rent_ops_schema_migrations SET checksum_sha256 = repeat('0',64) WHERE version = 13");
     await assert.rejects(() => ensureRentOpsSchema({ apply: true, query: sql => db.query(sql), executor: async statement => { await db.exec(statement); } }), /checksum_mismatch/);
   } finally { await db.close(); }

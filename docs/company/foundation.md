@@ -1,0 +1,19 @@
+# Company foundation
+
+The company system extends the existing R-ops migration chain. Versions 1–30 preserve the rental system; version 31 adds organizations, legal entities, shared contact profiles and roles, dated property accounting-entity assignments, and immutable external identities. Version 32 adds operator-provisioned access grants, command receipts and an outbox for durable queued work. Existing property and person IDs remain unchanged. No real company rows are seeded.
+
+`server/company/migrations/registry.json` freezes source checksums, ordering, predecessor and compatibility metadata. `npm run company:migrations:verify` verifies it without a database connection. The legacy Drizzle source fingerprints establish a code baseline only; the deployed database still requires a schema attestation and reconciliation before cutover. Never regenerate historical checksum entries to conceal a changed migration.
+
+`db:push` and `db:migrate` cannot apply an independent schema. The existing R-ops reviewed artifact workflow remains the only application path. Production startup stays free of migration. Schema review, target identity, backup/restore proof, role grants and explicit cutover gates still apply.
+
+The historical tenant-provisioning operator remains pinned to its reviewed schema-26 release and approval. It deliberately rejects this expanded checkout and cannot use an old approval to authorize schema 32. Its tests verify the frozen historical chain separately and prove that the current operator stops before identity reads. A replacement provisioning workflow is a distinct cutover task.
+
+Property accounting-entity periods use an inclusive start and exclusive end. One property can switch legal accounting entity on a date without overlapping assignments. This is distinct from investor beneficial ownership, which can have multiple participants. A no-op property update creates a tuple fence: a stale repeatable-read transaction must retry, and a fresh transaction sees committed periods before checking overlap. The embedded PostgreSQL tests exercise constraints and sequential conflicts. Real multi-connection contention testing is still required before production acceptance.
+
+Company records enforce organization/entity relationships with composite foreign keys. Names are editable labels, not join keys. Source mappings retain provider, source scope (such as QBO realm), source kind and external ID; a mapping cannot be overwritten or deleted. Correction workflows must preserve prior evidence.
+
+Company commands require an SQL transaction and fresh principal resolution inside that transaction, including on replay. Entity/property grant pairs remain intact. The strict envelope rejects caller-supplied actor and transport fields. Business writes, a durable operation receipt and any outbox event commit atomically; replay returns the recorded receipt without repeating the handler. MRA commands require an authenticated Codex transport capability. Domain handlers must still validate their payload, record scope, effective property/entity mapping, currency and optimistic revision.
+
+This slice introduces schema, shared contracts and the command foundation. It does not expose company data through new routes, connect QuickBooks, establish real investor balances, dispatch the outbox, or mark the full F01/F02 acceptance gates complete. Remaining work includes domain commands, scoped reads and manual/API/MCP adapters.
+
+Performance evidence tooling separates diagnostic reports from release acceptance. Release checking requires a separately supplied coverage inventory, approved sample/run floors and finite workload budgets. No browser, server, Mac or provider speed acceptance is established by its evaluator unit tests. The current original dashboard was separately smoke-tested in Chromium desktop and WebKit mobile with synthetic data.

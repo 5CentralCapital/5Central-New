@@ -9,6 +9,8 @@ export const DECIMAL_ROUNDING_MODES = ["half_away_from_zero", "half_even", "towa
 
 const DECIMAL_SYNTAX = /^(-?)(\d+)(?:\.(\d+))?$/;
 export const MAX_DECIMAL_SCALE = 1_000;
+export const MAX_DECIMAL_INTEGER_DIGITS = 1_000;
+const MAX_DECIMAL_TEXT_LENGTH = MAX_DECIMAL_INTEGER_DIGITS + MAX_DECIMAL_SCALE + 2;
 
 export interface DecimalParts {
   readonly sign: 1 | -1;
@@ -20,10 +22,12 @@ export interface DecimalParts {
 
 export function parseDecimalParts(value: unknown): DecimalParts {
   if (typeof value !== "string") throw new TypeError("Decimal values must be strings");
+  if (value.length > MAX_DECIMAL_TEXT_LENGTH) throw new RangeError("Decimal text exceeds the supported length");
   const match = DECIMAL_SYNTAX.exec(value);
   if (!match) throw new RangeError("Expected a plain decimal string");
 
   let integer = match[2];
+  if (integer.length > MAX_DECIMAL_INTEGER_DIGITS) throw new RangeError("Decimal integer exceeds the supported length");
   let fraction = match[3] ?? "";
   if (fraction.length > MAX_DECIMAL_SCALE) {
     throw new RangeError(`Decimal scale cannot exceed ${MAX_DECIMAL_SCALE} places`);
@@ -46,14 +50,15 @@ export function canonicalizeDecimal(value: string): DecimalString {
 
 export const decimalSchema = z.string()
   .refine((value) => {
+    if (value.length > MAX_DECIMAL_TEXT_LENGTH) return false;
     const match = DECIMAL_SYNTAX.exec(value);
-    return match !== null && (match[3] === undefined || match[3].length <= MAX_DECIMAL_SCALE);
+    return match !== null && match[2].length <= MAX_DECIMAL_INTEGER_DIGITS && (match[3] === undefined || match[3].length <= MAX_DECIMAL_SCALE);
   }, "Expected a plain decimal string within the supported scale")
   .transform((value) => canonicalizeDecimal(value));
 
 export function decimalPower10(scale: number): bigint {
-  if (!Number.isInteger(scale) || scale < 0 || scale > MAX_DECIMAL_SCALE) {
-    throw new RangeError(`Decimal scale must be an integer from 0 to ${MAX_DECIMAL_SCALE}`);
+  if (!Number.isInteger(scale) || scale < 0 || scale > MAX_DECIMAL_SCALE * 2) {
+    throw new RangeError(`Combined decimal scale must be an integer from 0 to ${MAX_DECIMAL_SCALE * 2}`);
   }
   return BigInt(`1${"0".repeat(scale)}`);
 }

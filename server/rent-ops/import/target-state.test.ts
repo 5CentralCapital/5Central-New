@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { RENT_OPS_REQUIRED_TABLES } from "../persistence";
 import { RENT_OPS_APPLICATION_TABLES } from "../security/deployment-security";
+import { COMPANY_ACCESS_TABLES } from "../../company/tables";
 import type { RentOpsQueryExecutor } from "../repositories/postgres";
 import {
   assertEmptyRentOpsTargetState,
@@ -37,8 +38,8 @@ test("target state covers RM tables and excludes migration ledgers and applicati
   assert.deepEqual(new Set(RENT_OPS_TARGET_STATE_TABLES), new Set(Object.keys(RENT_OPS_TARGET_STATE_IDENTITY_COLUMNS)));
   const state = await captureRentOpsTargetState(new FixtureExecutor(fixture()));
   assert.equal(state.rowCount, 0);
-  for (const table of RENT_OPS_APPLICATION_TABLES) assert.equal(state.tables.some(row => row.table === table), false);
-  assert.equal(state.tables.length, RENT_OPS_REQUIRED_TABLES.length - 2 - RENT_OPS_APPLICATION_TABLES.length);
+  for (const table of [...RENT_OPS_APPLICATION_TABLES, ...COMPANY_ACCESS_TABLES]) assert.equal(state.tables.some(row => row.table === table), false);
+  assert.equal(state.tables.length, RENT_OPS_REQUIRED_TABLES.length - 2 - RENT_OPS_APPLICATION_TABLES.length - COMPANY_ACCESS_TABLES.length);
   assert.equal(state.tables.some((table) => table.table === "rent_ops_schema_meta"), false);
   assert.equal(state.tables.some((table) => table.table === "rent_ops_schema_migrations"), false);
   assert.equal(RENT_OPS_TARGET_STATE_IDENTITY_COLUMNS.rent_ops_charge_definitions, "id");

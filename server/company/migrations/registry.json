@@ -1,0 +1,312 @@
+{
+  "schemaVersion": 1,
+  "authority": "server/rent-ops/persistence.ts",
+  "applicationMode": "reviewed_artifacts_only",
+  "legacyBaseline": {
+    "status": "source_fingerprints_only_database_attestation_pending",
+    "sources": [
+      {
+        "path": "shared/schema.ts",
+        "sha256": "e5b8cf6959e67f2fdd530eaee11ee4ab491ca337813af39828668b254aa0824d"
+      },
+      {
+        "path": "server/ensureSchema.ts",
+        "sha256": "005f1220f92d9ef200f8d6bfb6e3519b92bd5ae657808e09eca7541c36b5cdf4"
+      },
+      {
+        "path": "server/migrate.ts",
+        "sha256": "acd7bd8964b590ffc51330088492bffc121f15ac0adfe4b0d8b0df80044b4f72"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "version": 1,
+      "fileName": "001_rent_ops.sql",
+      "sha256": "11565d4cb4dc92e06f9e24a6e0dc2ab5c583ec1d4787d262712c71d158a8700b",
+      "predecessor": null,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 2,
+      "fileName": "002_rent_ops_fidelity.sql",
+      "sha256": "584e3b8ea33a75f8f4b06223bc4aea2019eed60dd0d7dbfd7ed13a8d74712ec5",
+      "predecessor": 1,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 3,
+      "fileName": "003_rent_ops_operational_fidelity.sql",
+      "sha256": "a2c452cba136abd913862cfad6df1fb55ecafbbad386783dc757b511d339d912",
+      "predecessor": 2,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 4,
+      "fileName": "004_rent_ops_verified_documents.sql",
+      "sha256": "dc7cc34b2b11b001deabc0b1db1a490566ffdc0b09c393a16a803fbf88cf0e11",
+      "predecessor": 3,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 5,
+      "fileName": "005_rent_ops_restricted_occurrences.sql",
+      "sha256": "fbae12050daac9b77ea68b5a39c012bbdf8330eb9f5757a4fc615535d38e6ad7",
+      "predecessor": 4,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 6,
+      "fileName": "006_rent_ops_hap_fidelity.sql",
+      "sha256": "b29e74a97842b9e345715c1d192927d7749e6fa830713990714eeeefa516e63a",
+      "predecessor": 5,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 7,
+      "fileName": "007_rent_ops_manual_patches.sql",
+      "sha256": "b124b72d04953c6e17e27951d8c1efe0fbf8fb1e95b85d453c5b57d697ca6fa6",
+      "predecessor": 6,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 8,
+      "fileName": "008_rent_ops_financial_truth.sql",
+      "sha256": "6d38f29b6f05946e8d22cc3273c3dee9cd2f4f05288ae7ede9cb052eb11c2fca",
+      "predecessor": 7,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 9,
+      "fileName": "009_rent_ops_application_history.sql",
+      "sha256": "d45c5e9a884ab57355156e938a1e0172019e3c966f05ca949698899f56fd6a0a",
+      "predecessor": 8,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 10,
+      "fileName": "010_rent_ops_tenant_accounts.sql",
+      "sha256": "182323001e17fd95c0d1c69a9f2f2a9a6a26ed256722489787f5c36914bdfb33",
+      "predecessor": 9,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 11,
+      "fileName": "011_rent_ops_payments.sql",
+      "sha256": "141a2eebb1b977d120c62ca2481e7aaaeb12c48d677c7a67ae5a5de62777aa8e",
+      "predecessor": 10,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 12,
+      "fileName": "012_rent_ops_recurring_billing.sql",
+      "sha256": "5d6b36b86c31a339f445c111af3082afbd3030c8886c7ad838525be6588c39b6",
+      "predecessor": 11,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 13,
+      "fileName": "013_rent_ops_public_rate_limits.sql",
+      "sha256": "8297d045adc12e2446c9df4f5550cd55e971999a3013775a887726bd411c5067",
+      "predecessor": 12,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 14,
+      "fileName": "014_rent_ops_application_source_states.sql",
+      "sha256": "d6f2f51b11147e45997a82c86124db533c6cffa37ae701fdb75180d6c25fd9e3",
+      "predecessor": 13,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 15,
+      "fileName": "015_rent_ops_deposit_source_balances.sql",
+      "sha256": "bc122f00290c165b7622344c5e871b13fb3b31ffeddb83b36e29422a4e3bbea8",
+      "predecessor": 14,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 16,
+      "fileName": "016_rent_ops_allocation_reversals.sql",
+      "sha256": "174a61c640253919ae335a91e36210d673b005df80b89987cf255e7154bf4872",
+      "predecessor": 15,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 17,
+      "fileName": "017_rent_ops_recurring_root_audit.sql",
+      "sha256": "4765ad7cfab299bf9d699eadca18e841e739be26142e799119feb24a3008f57e",
+      "predecessor": 16,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 18,
+      "fileName": "018_rent_ops_unknown_answer_type.sql",
+      "sha256": "3e49a9524199e9a88adf85cc417d2511bc1f808b158edeb5b656ec0c6d49270e",
+      "predecessor": 17,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 19,
+      "fileName": "019_rent_ops_household_account_parent.sql",
+      "sha256": "c34f091874bc0c5aeee92fb012194a9149eaef852f04d224d6d83c311e1d5c0c",
+      "predecessor": 18,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 20,
+      "fileName": "020_rent_ops_credit_allocations.sql",
+      "sha256": "796f5f13bbf297506901812682d898dccd359cd59ef976fd0866aa0ea24d8c26",
+      "predecessor": 19,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 21,
+      "fileName": "021_rent_ops_observed_tenancy_status_binding.sql",
+      "sha256": "46825b25f648539acece0e78758f897a862eaaedb4266de99c24c94d0ad4f011",
+      "predecessor": 20,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 22,
+      "fileName": "022_rent_ops_parity_collection_identity.sql",
+      "sha256": "0b50d661d5b14ae5f9e8037f74ab89adbba947e1a2e2c9a0d7ecfb84f9331174",
+      "predecessor": 21,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 23,
+      "fileName": "023_rent_ops_credit_source_scope.sql",
+      "sha256": "8833eac21bd630f927149aec35b941381f60328e84dba883924f2782f2b8e7cf",
+      "predecessor": 22,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 24,
+      "fileName": "024_rent_ops_admin_document_binding.sql",
+      "sha256": "6e98e86f875666b0db01c50fe07a2ef14bcbbe345071c1ce25d4ddcf0529d31c",
+      "predecessor": 23,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 25,
+      "fileName": "025_rent_ops_source_financial_readiness.sql",
+      "sha256": "0ee5edbec75e19f1b2276c48839de36375b7caab13d9b6c63e98e36bd55e2e34",
+      "predecessor": 24,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 26,
+      "fileName": "026_rent_ops_charge_definition_configuration.sql",
+      "sha256": "f6a2872ffc21150351d441759886fd778c076981e96435847a7f82f32dea0a96",
+      "predecessor": 25,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 27,
+      "fileName": "027_rent_ops_source_account_facts.sql",
+      "sha256": "7d351de46580cfb3638eaf778b8299a0ceb0c59033190a7c3f34f2b93a29cb2e",
+      "predecessor": 26,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 28,
+      "fileName": "028_rent_ops_actual_move_out_audit.sql",
+      "sha256": "4c8102f7ee5a8e266dbd1769bd5199c6bea7ab6995529b4bbee64971ba9b0f57",
+      "predecessor": 27,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 29,
+      "fileName": "029_rent_ops_terminal_end_at_start.sql",
+      "sha256": "5278f794c8fd7b15af64771e81cdbd1e397885d92d337388f4f6189096e34bef",
+      "predecessor": 28,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 30,
+      "fileName": "030_rent_ops_occupancy_confirmation.sql",
+      "sha256": "baa34474085bdf9fa07239f18c9764ca14f1d136085c9021803d25181b7806e0",
+      "predecessor": 29,
+      "minimumServerContract": 0,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 31,
+      "fileName": "031_company_foundation.sql",
+      "sha256": "3c8c346be8dcbaa07f8eb3c7908c8c8c8a6fdf27c33eb4b930b0c67cc284b0b5",
+      "predecessor": 30,
+      "minimumServerContract": 1,
+      "minimumClientContract": 0,
+      "recovery": "Keep existing rental history; use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 32,
+      "fileName": "032_company_commands.sql",
+      "sha256": "0c62b2a17155e7a713e4f978b08250f214c0c5e7f40d9c4b4cafb8fda2bb720f",
+      "predecessor": 31,
+      "minimumServerContract": 1,
+      "minimumClientContract": 0,
+      "recovery": "Keep receipts and outbox history; disable affected commands and use a reviewed forward repair. No automatic down migration."
+    }
+  ]
+}
