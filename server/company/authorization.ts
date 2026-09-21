@@ -287,6 +287,18 @@ function assertPrincipalScope(parsedPrincipal: AuthenticatedPrincipal, scope: Co
   }
 }
 
+/** Read services use the same paired grants and server-attested identity as commands. */
+export function authorizeCompanyRead(principal: AuthenticatedPrincipal, input: CompanyScope, allowedRoles: readonly CommandRole[]): void {
+  if (!principal || typeof principal !== 'object' || !trustedPrincipals.has(principal)) {
+    throw new ForbiddenCommandError('A trusted authenticated principal is required', { reason: 'principal_untrusted' });
+  }
+  const scope = companyScopeSchema.parse(input);
+  if (principal.organizationId !== scope.organizationId || !allowedRoles.includes(principal.role)) {
+    throw new ForbiddenCommandError('Requested company records are not authorized', { reason: 'read_scope' });
+  }
+  assertPrincipalScope(principal, scope);
+}
+
 /**
  * Recheck all principal and transport restrictions at the command boundary.
  * The command body has no channel or actor field; both values come from these

@@ -307,6 +307,15 @@
       "minimumServerContract": 1,
       "minimumClientContract": 0,
       "recovery": "Keep receipts and outbox history; disable affected commands and use a reviewed forward repair. No automatic down migration."
+    },
+    {
+      "version": 33,
+      "fileName": "033_company_projects.sql",
+      "sha256": "46ffa16b6887caffa3771b978eb5f6a5aadc47320f20f167badb4ddc88a98d4e",
+      "predecessor": 32,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Restore a verified backup or apply a reviewed forward repair; do not delete saved project operations or approved budget history."
     }
   ]
 }

@@ -200,10 +200,11 @@ export const RENT_OPS_APPLICATION_TABLES = [
   "rent_ops_public_rate_limits",
 ] as const;
 
-/** Hashed rate-limit counters alone require DELETE for bounded expiration cleanup. */
+/** Counters expire and the current dependency edge set is replaced atomically. */
 export const RENT_OPS_RUNTIME_EPHEMERAL_TABLES = [
   "rent_ops_tenant_auth_limits",
   "rent_ops_public_rate_limits",
+  "company_project_task_dependencies",
 ] as const;
 
 /** All tables created by the current Rent Ops migration, including restricted tables. */
@@ -273,7 +274,7 @@ export const RENT_OPS_RUNTIME_WRITABLE_TABLES = [
   "rent_ops_documents",
   "rent_ops_activity_events",
   "rent_ops_record_changes",
-  ...RENT_OPS_APPLICATION_TABLES,
+  ...RENT_OPS_APPLICATION_TABLES.filter(table => table !== "company_project_posted_actuals"),
 ] as const;
 
 /**
@@ -282,6 +283,7 @@ export const RENT_OPS_RUNTIME_WRITABLE_TABLES = [
  */
 export const RENT_OPS_RUNTIME_READ_ONLY_TABLES = [
   ...COMPANY_ACCESS_TABLES,
+  "company_project_posted_actuals",
   "rent_ops_schema_migrations",
   "rent_ops_prospects",
   "rent_ops_application_history",
@@ -308,6 +310,7 @@ export const RENT_OPS_IMPORTER_READ_ONLY_TABLES = [
 /** Append-only tables use INSERT plus idempotency SELECT, never UPDATE/DELETE. */
 export const RENT_OPS_APPEND_ONLY_TABLES = [
   "company_external_identities",
+  "company_project_budget_lines",
   "rent_ops_recurring_charge_schedules",
   "rent_ops_ledger_transactions",
   "rent_ops_payment_allocations",

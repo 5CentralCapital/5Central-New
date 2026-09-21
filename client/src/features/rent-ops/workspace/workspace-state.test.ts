@@ -7,6 +7,18 @@ import type { ViewFilters } from '../types';
 import { composeWorkspaceSnapshot, filterTenantDirectory, indexTenantViews, parseWorkspaceRoute, workspaceApiFilters, workspaceRouteSearch, workspaceRecordInScope, workspaceFiltersForRecord } from './workspace-state';
 
 const filters: ViewFilters = {propertyScope:'all',propertyId:'all',asOfDate:'2026-08-15',status:'all',search:''};
+
+test('project bookmarks retain their company and record without changing rental routing', () => {
+  const company = '10000000-0000-4000-8000-000000000001';
+  const project = '20000000-0000-4000-8000-000000000001';
+  const route = parseWorkspaceRoute(`?section=projects&company=${company}&record=${project}`);
+  assert.equal(route.section, 'projects'); assert.equal(route.organizationId, company); assert.equal(route.recordId, project);
+  assert.deepEqual(parseWorkspaceRoute(workspaceRouteSearch(route)), route);
+  const tenant = workspaceRouteSearch({ ...route, section: 'tenants', recordId: 'legacy-person' }, undefined, workspaceRouteSearch(route));
+  assert.equal(new URLSearchParams(tenant).has('company'), false);
+  assert.equal(parseWorkspaceRoute(tenant).recordId, 'legacy-person');
+  assert.equal(parseWorkspaceRoute('?section=projects&company=invalid').organizationId, undefined);
+});
 function bootstrap() { return decodeRentOpsWorkspaceBootstrap(serializeWorkspaceBootstrap(syntheticRentOpsSnapshot(),{asOfDate:filters.asOfDate})); }
 
 test('workspace links round-trip scoped records and tenant detail tabs without losing opaque IDs',()=>{

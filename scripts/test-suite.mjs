@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const suite = process.argv[2] ?? "all";
 const roots = suite === "company"
-  ? ["server/company", "shared/company"]
+  ? ["server/company", "shared/company", "server/projects", "shared/projects", "server/integrations/quickbooks", "shared/accounting/quickbooks", "client/src/features/projects"]
   : suite === "all"
     ? ["server", "shared", "client/src/features", "scripts", "client/src/components/account-entry.test.ts"]
     : null;

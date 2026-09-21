@@ -7,6 +7,7 @@ import { applicantPageSecurityHeaders } from "../applicant-page-security";
 export interface RentOpsDemoServerOptions {
   publicDir?: string;
   port?: number;
+  configureSyntheticRoutes?: (app: Express) => void;
 }
 
 /**
@@ -47,6 +48,7 @@ export function createRentOpsDemoApp(options: RentOpsDemoServerOptions = {}): Ex
     previewSource: "synthetic",
     exposeResumeToken: true,
   });
+  options.configureSyntheticRoutes?.(app);
   const publicDir = options.publicDir ?? path.resolve(process.cwd(), "dist/public");
   app.use(express.static(publicDir));
   // Serve the built SPA shell for the two Rent Operations entry points so the

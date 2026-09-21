@@ -119,6 +119,7 @@ test("security inventory matches all migration tables and repository runtime rea
   assert.deepEqual([...RENT_OPS_RUNTIME_TABLES].sort(), [...repositorySnapshotTables, ...RENT_OPS_APPLICATION_TABLES, "company_access_grants", "rent_ops_schema_migrations"].sort());
   assert.deepEqual([...RENT_OPS_RUNTIME_READ_ONLY_TABLES], [
     "company_access_grants",
+    "company_project_posted_actuals",
     "rent_ops_schema_migrations",
     "rent_ops_prospects",
     "rent_ops_application_history",
@@ -135,7 +136,7 @@ test("security inventory matches all migration tables and repository runtime rea
     "rent_ops_application_history_aggregates",
   ]);
   assert.deepEqual([...RENT_OPS_IMPORTER_READ_ONLY_TABLES], ["rent_ops_schema_meta", "rent_ops_schema_migrations", "rent_ops_record_changes"]);
-  assert.deepEqual([...RENT_OPS_APPEND_ONLY_TABLES], ["company_external_identities", "rent_ops_recurring_charge_schedules", "rent_ops_ledger_transactions", "rent_ops_payment_allocations", "rent_ops_activity_events", "rent_ops_record_changes", "rent_ops_payment_events", "rent_ops_billing_charges"]);
+  assert.deepEqual([...RENT_OPS_APPEND_ONLY_TABLES], ["company_external_identities", "company_project_budget_lines", "rent_ops_recurring_charge_schedules", "rent_ops_ledger_transactions", "rent_ops_payment_allocations", "rent_ops_activity_events", "rent_ops_record_changes", "rent_ops_payment_events", "rent_ops_billing_charges"]);
   assert.deepEqual([...RENT_OPS_IMPORTER_INSERT_ONLY_TABLES], [
     "rent_ops_charge_definitions",
     "rent_ops_prospects",
@@ -174,7 +175,7 @@ test("security inventory matches all migration tables and repository runtime rea
     "rent_ops_documents",
   ];
   assert.deepEqual(
-    [...new Set([...repositoryUpsertTables, ...RENT_OPS_APPEND_ONLY_TABLES, ...RENT_OPS_APPLICATION_TABLES])].sort(),
+    [...new Set([...repositoryUpsertTables, ...RENT_OPS_APPEND_ONLY_TABLES, ...RENT_OPS_APPLICATION_TABLES.filter(table => table !== 'company_project_posted_actuals')])].sort(),
     [...RENT_OPS_RUNTIME_WRITABLE_TABLES].sort(),
   );
 });
@@ -314,6 +315,7 @@ test("application account and receipt tables receive only their runtime grants",
     assert.equal(runtimeGrants.length, 1, `${table} has one runtime privilege class`);
     const grant = runtimeGrants[0];
     if ((RENT_OPS_RUNTIME_EPHEMERAL_TABLES as readonly string[]).includes(table)) assert.match(grant, /^GRANT SELECT, INSERT, UPDATE, DELETE /);
+    else if ((RENT_OPS_RUNTIME_READ_ONLY_TABLES as readonly string[]).includes(table)) assert.match(grant, /^GRANT SELECT ON /);
     else if ((RENT_OPS_APPEND_ONLY_TABLES as readonly string[]).includes(table)) assert.match(grant, /^GRANT SELECT, INSERT ON /);
     else assert.match(grant, /^GRANT SELECT, INSERT, UPDATE ON /);
     assert.equal(plan.statements.some((statement) => statement.startsWith("GRANT ") && /TO "rent_ops_staging_(importer|auditor)";$/.test(statement) && statement.includes(`"${table}"`)), false, `${table} excluded from importer/auditor`);

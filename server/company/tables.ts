@@ -8,6 +8,14 @@ export const COMPANY_APPLICATION_TABLES = [
   "company_external_identities",
   "company_command_receipts",
   "company_outbox",
+  "company_projects",
+  "company_project_scope_items",
+  "company_project_budget_versions",
+  "company_project_budget_lines",
+  "company_project_tasks",
+  "company_project_task_dependencies",
+  "company_project_draft_costs",
+  "company_project_posted_actuals",
 ] as const;
 
 /** Grants are provisioned by the operator, never by ordinary app mutations. */

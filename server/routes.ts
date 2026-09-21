@@ -1,4 +1,6 @@
 import { registerRentOpsMcpRoutes } from "./rent-ops/mcp/routes";
+import { registerCompanyRoutes } from './company/routes';
+import { createCompanyProjectPort } from './company/project-port';
 import { createTenantPaymentService, type TenantPaymentService } from "./rent-ops/payments/service";
 import { registerTenantPaymentRoutes } from "./rent-ops/payments/routes";
 import type { Express } from "express";
@@ -66,7 +68,9 @@ export async function registerRoutes(app: Express, options: { onTenantPaymentSer
 
   const tenantPortal = registerTenantPortalRoutes(app, { repository: rentOpsRepository, database: rentOpsRuntimeDatabase, requireAdmin: requireRentOpsAdmin, ...(rentOpsObjectStores ? { documentStorage: rentOpsObjectStores.documentStorage } : {}) });
   const recurringBillingService = new RecurringBillingService(new PostgresBillingStore(rentOpsRuntimeDatabase));
-  await registerRentOpsMcpRoutes(app, rentOpsRepository, process.env, { accountAdmin: tenantPortal.accountAdmin, billing: recurringBillingService });
+  const companyProjects = createCompanyProjectPort(rentOpsRuntimeDatabase);
+  registerCompanyRoutes(app, { executor: rentOpsRuntimeDatabase, requireAdmin: requireRentOpsAdmin, projects: companyProjects });
+  await registerRentOpsMcpRoutes(app, rentOpsRepository, process.env, { accountAdmin: tenantPortal.accountAdmin, billing: recurringBillingService, company: { executor: rentOpsRuntimeDatabase, projects: companyProjects } });
   const tenantPaymentService = createTenantPaymentService({ executor: rentOpsRuntimeDatabase, rentOpsRepository, env: process.env });
   options.onTenantPaymentService?.(tenantPaymentService);
   registerTenantPaymentRoutes(app, { service: tenantPaymentService, requireTenant: tenantPortal.requireTenant, getTenantIdentity: tenantPortal.getTenantIdentity });

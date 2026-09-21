@@ -1,4 +1,8 @@
 import type { TenantAccountAdminService } from '../tenant-portal/admin-service';
+import { registerCompanyMcpTools } from '../../company/mcp';
+import type { CompanyProjectPort } from '../../company/routes';
+import type { RentOpsQueryExecutor } from '../repositories/postgres';
+import { RentOpsRetryableConflict } from '../runtime-database';
 import type { RecurringBillingService } from '../billing/service';
 import { createChargeDefinitionSchema, patchChargeDefinitionSchema, manualPaymentSchema } from '../services/operational-inputs';
 import { z } from 'zod';
@@ -28,7 +32,7 @@ function applicationSummary(value: any) {
 function accountSummary(value: any) {
   return Object.fromEntries(['id','email','personId','tenancyId','status','createdAt','activatedAt','invitationExpiresAt','credentialRevision'].filter(key=>value[key]!==undefined).map(key=>[key,value[key]]));
 }
-export interface McpOperationalOptions { accountAdmin?: TenantAccountAdminService; billing?: RecurringBillingService }
+export interface McpOperationalOptions { accountAdmin?: TenantAccountAdminService; billing?: RecurringBillingService; company?: { executor: RentOpsQueryExecutor; projects: CompanyProjectPort } }
 export function createRentOpsMcpServer(service: RentOpsService, principal: McpPrincipal, resource: string, options: McpOperationalOptions = {}): McpServer {
   const server = new McpServer({ name: '5central-rent-operations', version: '1.0.0' });
   const descriptors: Array<any> = [];
@@ -67,7 +71,7 @@ export function createRentOpsMcpServer(service: RentOpsService, principal: McpPr
         return { structuredContent: { data }, content: [{ type:'text', text: JSON.stringify(data) }] };
       } catch (error) {
         const message = error instanceof Error ? error.message : '';
-        const code = /revision|conflict|stale|preview_changed/i.test(message) ? 'record_conflict_refetch_before_editing' : message === 'not_found' ? 'not_found' : 'operation_rejected';
+        const code = error instanceof RentOpsRetryableConflict ? 'retryable_conflict_retry_identical_command' : /revision|conflict|stale|preview_changed/i.test(message) ? 'record_conflict_refetch_before_editing' : message === 'not_found' ? 'not_found' : 'operation_rejected';
         return { isError: true, content: [{ type:'text', text:code }] };
       }
     });
@@ -119,6 +123,7 @@ export function createRentOpsMcpServer(service: RentOpsService, principal: McpPr
     for(const action of ['reissue','revoke'] as const)register(`${action}_tenant_access`,`${action==='revoke'?'Revoke tenant portal access and invalidate sessions':'Reissue tenant access and invalidate previous credentials'} only when explicitly requested. Read the account first and supply its exact credentialRevision; stale state is rejected. No email or token is returned.`,{id,credentialRevision:z.number().int().min(0)},true,async ({id:target,credentialRevision})=>({account:accountSummary((await (action==='revoke'?options.accountAdmin!.revokeForMcp(target,credentialRevision,context()):options.accountAdmin!.reissueForMcp(target,credentialRevision,context()))).account)}));
     register('send_tenant_access_link','Send an account invitation or password-reset email ONLY when the user explicitly authorizes that particular send. Current deployment permits configured controlled QA recipients only; never send to real tenants. Use exact account ID and stable requestId; replay never resends. Accepted means provider acceptance, not inbox delivery. Indeterminate must not be retried under a new request ID without reviewing delivery.',{id,requestId},true,async ({id:target,requestId})=>options.accountAdmin!.sendLinkForMcp(target,requestId,context()));
   }
+  if (options.company) registerCompanyMcpTools(register, { ...options.company, actorId: `oauth:${principal.subject}` });
   // Public lower-level handler preserves the Apps SDK security mirror on the wire.
   setListHandler(ListToolsRequestSchema, async () => ({tools:descriptors}));
   return server;

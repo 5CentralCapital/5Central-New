@@ -1,0 +1,248 @@
+import type {
+  QuickBooksOAuthClientConfig,
+  QuickBooksOAuthDiscoveryDocument,
+  QuickBooksOAuthTokenSet,
+  QuickBooksTransport,
+  QuickBooksTransportResponse,
+} from "../../../shared/accounting/quickbooks";
+import { QuickBooksIntegrationError } from "./errors";
+
+export const QUICKBOOKS_AUTHORIZATION_ENDPOINT = "https://appcenter.intuit.com/connect/oauth2";
+export const QUICKBOOKS_TOKEN_ENDPOINT = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer";
+export const QUICKBOOKS_REVOKE_ENDPOINT = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke";
+export const QUICKBOOKS_PRODUCTION_DISCOVERY_ENDPOINT = "https://developer.api.intuit.com/.well-known/openid_configuration";
+export const QUICKBOOKS_SANDBOX_DISCOVERY_ENDPOINT = "https://developer.api.intuit.com/.well-known/openid_sandbox_configuration";
+export const QUICKBOOKS_ACCOUNTING_SCOPE = "com.intuit.quickbooks.accounting";
+export const QUICKBOOKS_ALLOWED_OAUTH_SCOPES = [
+  QUICKBOOKS_ACCOUNTING_SCOPE,
+  "openid",
+  "profile",
+  "email",
+  "phone",
+  "address",
+] as const;
+
+const SAFE_OAUTH_VALUE = /^[A-Za-z0-9._:/+-]{1,240}$/;
+
+function assertNonEmpty(value: string, field: string, max = 512): void {
+  if (typeof value !== "string" || value.length === 0 || value.length > max || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new QuickBooksIntegrationError("quickbooks_validation", `${field} is invalid`);
+  }
+}
+
+function header(response: QuickBooksTransportResponse, name: string): string | undefined {
+  const value = response.headers
+    ? Object.entries(response.headers).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1]
+    : undefined;
+  return value?.trim() || undefined;
+}
+
+function parsedObject(body: string): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch {
+    // The provider's body is intentionally not included in errors.
+  }
+  return undefined;
+}
+
+function safeString(value: unknown, max = 240): string | undefined {
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+  return cleaned.length > 0 ? cleaned.slice(0, max) : undefined;
+}
+
+function positiveSeconds(value: unknown): number | undefined {
+  const parsed = typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : NaN;
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function oauthFailure(response: QuickBooksTransportResponse, operation: string): QuickBooksIntegrationError {
+  const body = parsedObject(response.body);
+  const code = safeString(body?.error) ?? safeString(body?.errorCode);
+  const transient = response.status === 408 || response.status === 429 || response.status >= 500;
+  return new QuickBooksIntegrationError("quickbooks_oauth", `QuickBooks OAuth ${operation} failed`, {
+    status: response.status,
+    retryable: transient,
+    intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid"),
+    // Keep the stable OAuth error code; provider descriptions can echo input
+    // values and must not cross the safe error boundary.
+    details: { error: code },
+  });
+}
+
+function tokenSetFromResponse(
+  response: QuickBooksTransportResponse,
+  now: Date,
+  fallbackRefreshToken?: string,
+  fallbackRefreshTokenExpiresAt?: string,
+): QuickBooksOAuthTokenSet {
+  const body = parsedObject(response.body);
+  const accessToken = safeString(body?.access_token, 4096);
+  const refreshToken = safeString(body?.refresh_token, 4096) ?? fallbackRefreshToken;
+  const accessSeconds = positiveSeconds(body?.expires_in);
+  if (!accessToken || !refreshToken || !accessSeconds) {
+    throw new QuickBooksIntegrationError("quickbooks_oauth", "QuickBooks OAuth returned an invalid token response", {
+      status: response.status,
+      intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid"),
+    });
+  }
+  const refreshSeconds = positiveSeconds(body?.x_refresh_token_expires_in);
+  return {
+    accessToken,
+    refreshToken,
+    tokenType: "bearer",
+    accessTokenExpiresAt: new Date(now.getTime() + accessSeconds * 1_000).toISOString(),
+    ...(refreshSeconds
+      ? { refreshTokenExpiresAt: new Date(now.getTime() + refreshSeconds * 1_000).toISOString() }
+      : fallbackRefreshTokenExpiresAt
+        ? { refreshTokenExpiresAt: fallbackRefreshTokenExpiresAt }
+        : {}),
+    ...(safeString(body?.id_token, 8192) ? { idToken: safeString(body?.id_token, 8192) } : {}),
+    ...(header(response, "intuit_tid") ?? header(response, "intuit-tid")
+      ? { intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") }
+      : {}),
+  };
+}
+
+function basicAuthorization(clientId: string, clientSecret: string): string {
+  return `Basic ${Buffer.from(`${clientId}:${clientSecret}`, "utf8").toString("base64")}`;
+}
+
+function discoveryEndpoint(environment: QuickBooksOAuthClientConfig["environment"]): string {
+  return environment === "sandbox" ? QUICKBOOKS_SANDBOX_DISCOVERY_ENDPOINT : QUICKBOOKS_PRODUCTION_DISCOVERY_ENDPOINT;
+}
+
+function requiredHttpsUrl(value: unknown, field: string): string {
+  if (typeof value !== "string") throw new QuickBooksIntegrationError("quickbooks_oauth", `QuickBooks discovery response is missing ${field}`);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new QuickBooksIntegrationError("quickbooks_oauth", `QuickBooks discovery response has an invalid ${field}`);
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.hash) {
+    throw new QuickBooksIntegrationError("quickbooks_oauth", `QuickBooks discovery response has an invalid ${field}`);
+  }
+  return url.toString();
+}
+
+function defaultTransport(): QuickBooksTransport {
+  throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks OAuth requires an injected transport");
+}
+
+export interface QuickBooksOAuthClient {
+  getAuthorizationUrl(state: string, scopes?: readonly string[]): string;
+  getDiscoveryDocument(): Promise<QuickBooksOAuthDiscoveryDocument>;
+  exchangeAuthorizationCode(code: string): Promise<QuickBooksOAuthTokenSet>;
+  refreshToken(refreshToken: string, previousRefreshTokenExpiresAt?: string): Promise<QuickBooksOAuthTokenSet>;
+  revokeToken(token: string): Promise<{ intuitTid?: string }>;
+}
+
+/**
+ * OAuth 2.0 client with no hidden retries and no token logging. All network
+ * calls use the injected transport so tests remain offline and deterministic.
+ */
+export function createQuickBooksOAuthClient(config: QuickBooksOAuthClientConfig): QuickBooksOAuthClient {
+  assertNonEmpty(config.clientId, "QuickBooks client ID");
+  assertNonEmpty(config.clientSecret, "QuickBooks client secret");
+  assertNonEmpty(config.redirectUri, "QuickBooks redirect URI");
+  if (config.redirectUri.length > 2048) throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks redirect URI is too long");
+  if (typeof config.transport !== "function") throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks OAuth transport is required");
+  const transport = config.transport ?? defaultTransport();
+  const now = config.now ?? (() => new Date());
+  const authorizationEndpoint = config.authorizationEndpoint ?? QUICKBOOKS_AUTHORIZATION_ENDPOINT;
+  const tokenEndpoint = config.tokenEndpoint ?? QUICKBOOKS_TOKEN_ENDPOINT;
+  const revokeEndpoint = config.revokeEndpoint ?? QUICKBOOKS_REVOKE_ENDPOINT;
+
+  return {
+    getAuthorizationUrl(state: string, scopes = [QUICKBOOKS_ACCOUNTING_SCOPE]): string {
+      assertNonEmpty(state, "QuickBooks OAuth state");
+      if (scopes.length === 0 || scopes.some(scope => typeof scope !== "string" || !SAFE_OAUTH_VALUE.test(scope) || !(QUICKBOOKS_ALLOWED_OAUTH_SCOPES as readonly string[]).includes(scope))) {
+        throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks OAuth scopes are invalid");
+      }
+      const url = new URL(authorizationEndpoint);
+      url.searchParams.set("client_id", config.clientId);
+      url.searchParams.set("response_type", "code");
+      url.searchParams.set("scope", scopes.join(" "));
+      url.searchParams.set("redirect_uri", config.redirectUri);
+      url.searchParams.set("state", state);
+      return url.toString();
+    },
+
+    async getDiscoveryDocument(): Promise<QuickBooksOAuthDiscoveryDocument> {
+      const response = await transport({
+        method: "GET",
+        url: discoveryEndpoint(config.environment),
+        headers: { Accept: "application/json" },
+      });
+      if (response.status < 200 || response.status >= 300) throw oauthFailure(response, "discovery");
+      const body = parsedObject(response.body);
+      return {
+        authorizationEndpoint: requiredHttpsUrl(body?.authorization_endpoint, "authorization_endpoint"),
+        tokenEndpoint: requiredHttpsUrl(body?.token_endpoint, "token_endpoint"),
+        revokeEndpoint: requiredHttpsUrl(body?.revocation_endpoint, "revocation_endpoint"),
+        ...(header(response, "intuit_tid") ?? header(response, "intuit-tid")
+          ? { intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") }
+          : {}),
+      };
+    },
+
+    async exchangeAuthorizationCode(code: string): Promise<QuickBooksOAuthTokenSet> {
+      assertNonEmpty(code, "QuickBooks authorization code");
+      const response = await transport({
+        method: "POST",
+        url: tokenEndpoint,
+        headers: {
+          Accept: "application/json",
+          Authorization: basicAuthorization(config.clientId, config.clientSecret),
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: config.redirectUri,
+        }).toString(),
+      });
+      if (response.status < 200 || response.status >= 300) throw oauthFailure(response, "code exchange");
+      return tokenSetFromResponse(response, now());
+    },
+
+    async refreshToken(refreshToken: string, previousRefreshTokenExpiresAt?: string): Promise<QuickBooksOAuthTokenSet> {
+      assertNonEmpty(refreshToken, "QuickBooks refresh token", 8192);
+      const response = await transport({
+        method: "POST",
+        url: tokenEndpoint,
+        headers: {
+          Accept: "application/json",
+          Authorization: basicAuthorization(config.clientId, config.clientSecret),
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+        }).toString(),
+      });
+      if (response.status < 200 || response.status >= 300) throw oauthFailure(response, "token refresh");
+      return tokenSetFromResponse(response, now(), refreshToken, previousRefreshTokenExpiresAt);
+    },
+
+    async revokeToken(token: string): Promise<{ intuitTid?: string }> {
+      assertNonEmpty(token, "QuickBooks token", 8192);
+      const response = await transport({
+        method: "POST",
+        url: revokeEndpoint,
+        headers: {
+          Accept: "application/json",
+          Authorization: basicAuthorization(config.clientId, config.clientSecret),
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({ token }).toString(),
+      });
+      if (response.status < 200 || response.status >= 300) throw oauthFailure(response, "token revocation");
+      const intuitTid = header(response, "intuit_tid") ?? header(response, "intuit-tid");
+      return intuitTid ? { intuitTid } : {};
+    },
+  };
+}

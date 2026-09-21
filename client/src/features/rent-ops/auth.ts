@@ -266,6 +266,13 @@ export class RentOpsAuthClient {
     this.assertCurrent(generation);
     const response = await this.fetch(input, { ...init, method, credentials: "include", headers });
     this.assertCurrent(generation);
+    // A denied company grant is not an expired rental session. The server
+    // emits this code only after the ordinary session/CSRF middleware passes.
+    if (response.status === 403) {
+      const payload = await jsonPayload(response.clone());
+      this.assertCurrent(generation);
+      if (payload?.code === 'company_forbidden') return response;
+    }
     if (response.status === 401 || response.status === 403) {
       this.expireSession();
       throw new RentOpsAuthError(response.status, "Your Rent Operations session has ended. Sign in again.");
