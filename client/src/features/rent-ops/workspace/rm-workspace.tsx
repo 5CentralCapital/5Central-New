@@ -5,7 +5,7 @@ import { selectWorkspaceToday, pinWorkspaceDate } from './workspace-date';
 import { useRecurringChargeTerms } from './use-recurring-charge-terms';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Building2, CalendarDays, ChevronLeft, FileText, Home, List, LogOut, Menu, Plus, RefreshCw, Search, Users, WalletCards, X } from 'lucide-react';
+import { ChevronLeft, Plus, RefreshCw, Search, X } from 'lucide-react';
 import { loadOperationalScheduleRegister, loadRentOpsPreviewContext } from '../api';
 import { rentOpsAuthClient } from '../auth';
 import { RentOpsAdminLogin, RentOpsAuthLoading, useRentOpsAuth } from '../auth-ui';
@@ -27,29 +27,16 @@ import { DocumentsWorkspace } from './documents-workspace';
 import { WorkspaceEditor } from './editor';
 import { DataGrid } from './grid';
 import { formatMoney, formatLabel } from './display';
-import { filterTenantDirectory, parseWorkspaceFilters, selectedWorkspaceProperties, workspacePropertyMatches, parseWorkspaceRoute, workspaceApiFilters, workspaceCollectionsFor, workspaceFiltersForRecord, workspaceRecordInScope, workspaceRouteSearch, type WorkspaceRoute, type WorkspaceSection } from './workspace-state';
+import { filterTenantDirectory, parseWorkspaceFilters, selectedWorkspaceProperties, workspacePropertyMatches, parseWorkspaceRoute, workspaceApiFilters, workspaceCollectionsFor, workspaceFiltersForRecord, workspaceRouteSearch, type WorkspaceRoute } from './workspace-state';
 import { recurringRegisterQueryKey, recurringRegisterViews, selectRecurringRegisterRows, type RecurringRegisterView } from './recurring-register-model';
 import { useWorkspaceData } from './use-workspace-data';
 import '../rent-ops.css';
 import './workspace.css';
+import './workspace-modern.css';
+import './dashboard-modern.css';
+import { TopNavigation, useWorkspaceAppearance } from './top-navigation';
+import { WORKSPACE_LABELS, type WorkspaceDestination } from './navigation';
 
-const destinations: Array<{section:WorkspaceSection;label:string;icon:typeof Home;group:string;kind?:'property'|'unit';report?:ReportKey}>=[
- {section:'dashboard',label:'Dashboard',icon:Home,group:'Home'},
- {section:'tenants',label:'Tenants',icon:Users,group:'Rental Info'},
- {section:'properties',label:'Properties',icon:Building2,group:'Rental Info',kind:'property'},
- {section:'properties',label:'Units',icon:List,group:'Rental Info',kind:'unit'},
- {section:'projects',label:'Projects',icon:List,group:'Rental Info'},
- {section:'leases',label:'Leases',icon:CalendarDays,group:'Rental Info'},
- {section:'applicants',label:'Applications',icon:Users,group:'Rental Info'},
- {section:'recurring',label:'Recurring charges',icon:CalendarDays,group:'Receivables'},
- {section:'income',label:'Payments & billing',icon:WalletCards,group:'Receivables'},
- {section:'banking',label:'Banking',icon:WalletCards,group:'Accounting'},
- {section:'rent-roll',label:'Rent roll',icon:List,group:'Reports'},
- {section:'reports',label:'Vacancies',icon:Home,group:'Reports',report:'occupancy'},
- {section:'reports',label:'Balances due',icon:WalletCards,group:'Reports',report:'delinquency'},
- {section:'reports',label:'Reports',icon:FileText,group:'Reports'},
- {section:'documents',label:'Documents & activity',icon:FileText,group:'Records'},
-];
 const tenantStatuses=[['current','Current'],['all','All tenants'],['future','Future'],['former','Former'],['contact','Account contacts'],['unknown','Status needs review']];
 const generalStatuses=[['all','All statuses'],['current','Current'],['future_preleased','Future preleased'],['vacant','Vacant'],['not_ready','Not ready'],['off_market','Off market']];
 const applicationStatuses=[['all','All applications'],['submitted','Submitted'],['missing_information','Missing information'],['under_review','Under review'],['approved','Approved'],['declined','Declined'],['withdrawn','Withdrawn'],['converted','Converted']];
@@ -110,32 +97,26 @@ function AuthenticatedWorkspace(){
  const [businessDate,setBusinessDate]=useState('');const [notice,setNotice]=useState('');
  const [manageMoves,setManageMoves]=useState<{personId?:string}>();
  const [editing,setEditing]=useState<{action:QuickAction;values:FormValues}>();
- const [sidebarCollapsed,setSidebarCollapsed]=useState(()=>window.matchMedia('(max-width: 768px)').matches);
- const [openRecords,setOpenRecords]=useState<WorkspaceRoute[]>([route]);
- const [recentRecords,setRecentRecords]=useState<WorkspaceRoute[]>([]);
+ const {transparency,changeTransparency}=useWorkspaceAppearance();
  const scrollPositions=useRef(new Map<string,number>());
  const navigationRef=useRef(route);
  const filtersRef=useRef(filters);filtersRef.current=filters;
  const captureScroll=()=>({window:window.scrollY,panels:Array.from(document.querySelectorAll('.rm-main,.rm-record-list-items,.rm-property-unit-list-items')).map(node=>node.scrollTop)});
  const pendingScroll=useRef<ReturnType<typeof captureScroll>>();
- useEffect(()=>{const viewport=window.matchMedia('(max-width: 768px)');const change=(event:MediaQueryListEvent)=>setSidebarCollapsed(event.matches);viewport.addEventListener('change',change);return()=>viewport.removeEventListener('change',change);},[]);
  const needed=useMemo(()=>workspaceCollectionsFor(route.section,manageMoves?'save-tenancy':editing?.action,incomeHistoryNeeded),[route.section,editing?.action,incomeHistoryNeeded,manageMoves]);
  const data=useWorkspaceData({enabled:auth.status==='authenticated'&&route.section!=='projects',identity:auth.user?.id??'',filters,collections:needed,summaryNeeded:route.section==='dashboard',personId:route.section==='tenants'?route.recordId:undefined});
  const snapshot=data.snapshot;
  const reconcileRecordScope=useCallback((next:WorkspaceRoute)=>{setFilters(current=>workspaceFiltersForRecord(next,data.bootstrap.data,current));},[data.bootstrap.data]);
  const go=useCallback((next:WorkspaceRoute,replace=false)=>{
   const previous=navigationRef.current;pendingScroll.current=undefined;
-  if(window.matchMedia('(max-width: 768px)').matches)setSidebarCollapsed(true);
   scrollPositions.current.set(routeKey(previous),window.scrollY);
   window.history.replaceState({...window.history.state,scroll:captureScroll()},'',window.location.href);
   navigationRef.current=next;setRoute(next);
   window.history[replace?'replaceState':'pushState'](replace?window.history.state:{returnTo:window.location.href},'',`${window.location.pathname}${workspaceRouteSearch(next,filtersRef.current,window.location.search)}`);
-  setOpenRecords(current=>{const key=routeKey(next);const base=replace&&previous.section===next.section&&!previous.recordId?current.filter(r=>routeKey(r)!==routeKey(previous)):current;const existing=base.findIndex(r=>routeKey(r)===key);return existing<0?[...base,next]:base.map((r,i)=>i===existing?next:r);});
-  setRecentRecords(current=>[next,...current.filter(r=>routeKey(r)!==routeKey(next))].slice(0,12));
  },[]);
  const activateRecord=useCallback((next:WorkspaceRoute,replace=false)=>{reconcileRecordScope(next);go(next,replace);},[go,reconcileRecordScope]);
  useEffect(()=>{if(data.bootstrap.data&&route.recordId)reconcileRecordScope(route);},[data.bootstrap.data,route,reconcileRecordScope]);
- useEffect(()=>{const listener=()=>{scrollPositions.current.set(routeKey(navigationRef.current),window.scrollY);const next=parseWorkspaceRoute(window.location.search);setFilters(parseWorkspaceFilters(window.location.search));setTenantStatus(new URLSearchParams(window.location.search).get('tenantStatus')??DEFAULT_TENANT_DIRECTORY_STATUS);pendingScroll.current=window.history.state?.scroll;navigationRef.current=next;setRoute(next);setOpenRecords(current=>current.some(r=>routeKey(r)===routeKey(next))?current:[...current,next]);};window.addEventListener('popstate',listener);return()=>window.removeEventListener('popstate',listener);},[]);
+ useEffect(()=>{const listener=()=>{scrollPositions.current.set(routeKey(navigationRef.current),window.scrollY);const next=parseWorkspaceRoute(window.location.search);setFilters(parseWorkspaceFilters(window.location.search));setTenantStatus(new URLSearchParams(window.location.search).get('tenantStatus')??DEFAULT_TENANT_DIRECTORY_STATUS);pendingScroll.current=window.history.state?.scroll;navigationRef.current=next;setRoute(next);};window.addEventListener('popstate',listener);return()=>window.removeEventListener('popstate',listener);},[]);
  useEffect(()=>{const search=workspaceRouteSearch(route,filters,window.location.search);const params=new URLSearchParams(search);params.set('tenantStatus',tenantStatus);window.history.replaceState(window.history.state,'',`${window.location.pathname}?${params}`);},[route,filters,tenantStatus]);
  useEffect(()=>{
   const saved=pendingScroll.current;let frame=0;
@@ -148,9 +129,8 @@ function AuthenticatedWorkspace(){
   return()=>{observer.disconnect();cancelAnimationFrame(frame);clearTimeout(timeout);window.removeEventListener('wheel',stop);window.removeEventListener('touchstart',stop);window.removeEventListener('keydown',stop);};
  },[route,data.bootstrap.data,data.tenant.data,data.collectionsReady]);
  useEffect(()=>{
-  if(auth.status!=='authenticated'){if(auth.status==='unauthenticated'){client.removeQueries({queryKey:['rent-ops-workspace']});setOpenRecords([]);setRecentRecords([]);}return;}
+  if(auth.status!=='authenticated'){if(auth.status==='unauthenticated'){client.removeQueries({queryKey:['rent-ops-workspace']});}return;}
   let active=true;setContextError(undefined);
-  setOpenRecords(current=>current.length?current:[navigationRef.current]);
   void loadRentOpsPreviewContext().then(context=>{if(!active)return;setSource(context.source);setBusinessDate(context.asOfDate);}).catch(error=>{if(active)setContextError(error);});
   return()=>{active=false;};
  },[auth.status,auth.user?.id,client,calendarDay]);
@@ -166,19 +146,22 @@ function AuthenticatedWorkspace(){
    go({...route,recordId},true);
   }
  }
- function navigate(section:WorkspaceSection,kind?:'property'|'unit',report?:ReportKey){
-  if(report){setFilters(current=>({...current,status:report==='occupancy'?'vacant':'all',search:''}));go({section:'reports',report,tab:'summary'});return;}
-  setFilters(current=>({...current,status:'all',search:''}));
-  const existing=[...openRecords].reverse().find(r=>r.section===section&&(section!=='properties'||r.kind===kind)&&workspaceRecordInScope(r,data.bootstrap.data,filters)&&(section!=='tenants'||directory.some(tenant=>tenant.person.id===r.recordId)));
+ function navigate(destination:WorkspaceDestination){
+  const {section,kind,report,projectTab}=destination;
+  if(!section)return;
+  const nextFilters={...filters,status:report==='occupancy'?'vacant':'all',search:''};
+  setFilters(nextFilters);filtersRef.current=nextFilters;
+  if(destination.tenantStatus)setTenantStatus(destination.tenantStatus);
   const propertyIds=new Set(snapshot?scopeProperties(snapshot,filters).map(p=>p.id):[]);
   const firstId=section==='properties'?(kind==='unit'?snapshot?.snapshot.units.find(u=>propertyIds.has(u.propertyId)&&workspacePropertyMatches(filters,u.propertyId))?.id:snapshot?.snapshot.properties.find(p=>propertyIds.has(p.id)&&workspacePropertyMatches(filters,p.id))?.id):undefined;
-  go(existing??{section,kind,recordId:firstId,tab:'summary',report:'rent-roll'});
+  const currentProject=section==='projects'&&route.section==='projects'?{organizationId:route.organizationId,recordId:route.recordId}:{};
+  go({section,kind,recordId:firstId,tab:'summary',report:report??'rent-roll',...currentProject,...(projectTab?{projectTab}:{})});
  }
  function labelFor(record:WorkspaceRoute){
   if(record.section==='tenants'&&record.recordId){const person=snapshot?.snapshot.people.find(p=>p.id===record.recordId);return person?`${person.firstName??''} ${person.lastName??''}`.trim():'Tenant';}
   if(record.section==='properties'&&record.recordId){return record.kind==='unit'?`Unit ${snapshot?.snapshot.units.find(u=>u.id===record.recordId)?.unitNumber??''}`:`${snapshot?.snapshot.properties.find(p=>p.id===record.recordId)?.name??'Property'}`;}
   if(record.section==='reports')return record.report==='rent-roll'?'Rent roll':record.report==='occupancy'?'Vacancies':record.report==='delinquency'?'Balances due':REPORT_LABELS[record.report];
-  return destinations.find(d=>d.section===record.section&&(record.section!=='properties'||d.kind===record.kind))?.label??'Workspace';
+  return record.section==='properties'&&record.kind==='unit'?'Units':WORKSPACE_LABELS[record.section];
  }
  function openTenant(id:string,tab:TenantTab='summary'){activateRecord({section:'tenants',recordId:id,tab,report:'rent-roll'});}
  function openUnit(id:string){activateRecord({section:'properties',kind:'unit',recordId:id,tab:'summary',report:'rent-roll'});}
@@ -201,13 +184,11 @@ function AuthenticatedWorkspace(){
  const occupancyStatus=['reports','rent-roll'].includes(route.section)&&isOccupancyReport(selectedReport);
  const statusOptions=route.section==='tenants'?tenantStatuses:route.section==='applicants'?applicationStatuses:occupancyStatus?occupancyReportStatusOptions:generalStatuses;
  const selectedStatus=route.section==='tenants'?tenantStatus:occupancyStatus&&!statusOptions.some(([value])=>value===filters.status)?'all':filters.status;
- return <EntityNavigationContext.Provider value={{onTenant:openTenant,onRecord:(kind,id)=>kind==='unit'?openUnit(id):openProperty(id)}}><main className={`rm-workspace${sidebarCollapsed?' is-sidebar-collapsed':''}`}>
-  <header className="rm-ribbon"><div className="rm-nav-group"><button type="button" aria-label={sidebarCollapsed?'Show navigation':'Collapse navigation'} onClick={()=>setSidebarCollapsed(v=>!v)}><Menu size={17}/><strong>5CENTRAL</strong></button></div>
-  {['Home','Rental Info','Receivables','Accounting','Reports','Records'].map(group=><nav key={group} className="rm-nav-group" aria-label={group}>{destinations.filter(d=>d.group===group).map(({section,label,icon:Icon,kind,report})=><button type="button" key={`${section}:${kind??''}:${report??''}`} aria-current={route.section===section&&(section!=='properties'||route.kind===kind)&&(report?route.report===report:section!=='reports'||!['occupancy','delinquency'].includes(route.report))?'page':undefined} onClick={()=>navigate(section,kind,report)}><Icon size={15}/>{label}</button>)}</nav>)}
-  <div className="rm-ribbon-spacer"/><button className="rm-button" aria-label="Sign out" onClick={()=>void rentOpsAuthClient.logout()}><LogOut size={15}/></button></header>
-  <div className="rm-open-tabs" aria-label="Open records">{openRecords.map(record=><div className={`rm-open-tab${routeKey(route)===routeKey(record)?' active':''}`} key={routeKey(record)}><button className="rm-open-tab-label" title={labelFor(record)} onClick={()=>activateRecord(record)} aria-current={routeKey(route)===routeKey(record)?'page':undefined}>{labelFor(record)}</button>{openRecords.length>1&&<button className="rm-open-tab-close" aria-label={`Close ${labelFor(record)}`} onClick={()=>{const remaining=openRecords.filter(r=>routeKey(r)!==routeKey(record));setOpenRecords(remaining);if(routeKey(route)===routeKey(record))activateRecord(remaining[remaining.length-1]);}}><X size={12}/></button>}</div>)}</div>
-  <div className="rm-body"><aside className={`rm-sidebar${sidebarCollapsed?' is-collapsed':''}`}><div className="rm-sidebar-heading">Frequently used</div>{destinations.filter(d=>['tenants','properties','recurring','rent-roll','income'].includes(d.section)).map(d=><button key={`${d.section}:${d.kind}`} className="rm-sidebar-link" aria-label={d.label} title={d.label} onClick={()=>navigate(d.section,d.kind)}><d.icon size={14}/><span>{d.label}</span></button>)}<div className="rm-sidebar-heading">Recent records</div>{recentRecords.slice(0,8).map(record=><button className="rm-sidebar-link" key={routeKey(record)} onClick={()=>activateRecord(record)} title={labelFor(record)}>{labelFor(record)}</button>)}<div className="rm-sidebar-footer"><span>{source==='synthetic'?'Synthetic development data':'Live operational data'}</span><a href="/ops?ui=classic">Classic workspace</a><a href="/">5Central website</a></div></aside>
-  <div className="rm-main">
+ return <EntityNavigationContext.Provider value={{onTenant:openTenant,onRecord:(kind,id)=>kind==='unit'?openUnit(id):openProperty(id)}}><div className="rm-workspace rops-modern" data-transparency={transparency}>
+  <a className="rops-skip-link" href="#rops-content">Skip to content</a>
+  <TopNavigation route={route} onNavigate={navigate} transparency={transparency} onTransparency={changeTransparency} source={source} onLogout={()=>void rentOpsAuthClient.logout()}/>
+  <div className="rm-body">
+  <main className="rm-main" id="rops-content" tabIndex={-1}>
    {route.section!=='projects'&&<header className="rm-page-heading rm-workspace-heading">{route.recordId&&window.history.state?.returnTo&&<button className="rm-button rm-button--icon" aria-label="Back to previous view" title="Back" onClick={()=>window.history.back()}><ChevronLeft size={17}/></button>}<h1>{route.section==='tenants'?'Tenants':labelFor({...route,recordId:undefined})}</h1></header>}
    {!['banking','projects'].includes(route.section)&&<div className="rm-toolbar rm-workspace-toolbar" aria-label="Workspace filters">
     <label>Portfolio<select aria-label="Portfolio scope" value={filters.propertyScope} onChange={e=>changeScope({propertyScope:e.target.value as 'active'|'all',propertyId:'all',propertyIds:[]})}><option value="active">Active portfolio</option><option value="all">All imported properties</option></select></label>
@@ -221,7 +202,7 @@ function AuthenticatedWorkspace(){
    </div>}
    {['rent-roll','reports','leases','income'].includes(route.section)&&<WorkspaceReportPreload selected={route.section==='income'?'scheduled-vs-collected':selectedReport} filters={filters} enabled={!snapshot}/>}
    {notice&&<div className="rm-notice" role="status">{notice}<button className="rm-button" aria-label="Dismiss notice" onClick={()=>setNotice('')}><X size={12}/></button></div>}
-   {route.section==='projects'?<ProjectEntry identity={auth.user?.id??''} organizationId={route.organizationId} projectId={route.recordId} onNavigate={(organizationId,recordId)=>go({...route,organizationId,recordId})}/>:contextError?<ErrorNotice error={contextError}/>:data.bootstrap.error?<ErrorNotice error={data.bootstrap.error} retry={()=>void data.bootstrap.refetch()}/>:!snapshot?<Busy label="Loading the workspace directory…"/>:<>
+   {route.section==='projects'?<ProjectEntry identity={auth.user?.id??''} organizationId={route.organizationId} projectId={route.recordId} projectTab={route.projectTab??'overview'} onTabChange={projectTab=>go({...route,projectTab})} onNavigate={(organizationId,recordId)=>go({...route,organizationId,recordId})}/>:contextError?<ErrorNotice error={contextError}/>:data.bootstrap.error?<ErrorNotice error={data.bootstrap.error} retry={()=>void data.bootstrap.refetch()}/>:!snapshot?<Busy label="Loading the workspace directory…"/>:<>
     {data.collectionError&&<ErrorNotice error={data.collectionError} retry={()=>void refresh()}/>}
     {route.section==='dashboard'&&<>{data.summary.error&&<ErrorNotice error={data.summary.error} retry={()=>void data.summary.refetch()}/>} {!data.summary.data?!data.summary.error&&<Busy label="Loading portfolio summary…"/>:<DashboardWorkspace onManageMoves={source==='live' && businessDate ? ()=>setManageMoves({}) : undefined} snapshot={snapshot} filters={filters} previews={data.summary.data.reports} refreshing={data.summary.isFetching} onReport={report=>go({section:'reports',report,tab:'summary'})} onOpenTenant={openTenant} onOpenUnit={openUnit} onOpenProperty={openProperty}/>}</>}
     {route.section==='tenants'&&<div className="rm-record-layout"><section className="rm-record-list"><div className="rm-toolbar"><strong>{directory.length} tenants</strong><button className="rm-button" onClick={()=>openEditor('save-person')}><Plus size={13}/>Add</button></div><div className="rm-record-list-items">{directory.map(tenant=>{const id=tenant.person.id;const index=data.bootstrap.data?.tenantIndex.find(row=>row.person.id===id);return <EntityLink personId={id} tab={route.tab} onOpen={()=>go({...route,recordId:id})} key={id??`${tenant.person.firstName}:${tenant.person.lastName}`} className={`rm-record-list-item${route.recordId===id?' active':''}`} ><strong className="rm-record-list-item-title">{tenant.person.lastName}{tenant.person.lastName?', ':''}{tenant.person.firstName}</strong><span className="rm-record-list-item-meta">{tenant.property?.name??'Account contact'}{tenant.unit?.unitNumber?` · ${tenant.unit.unitNumber}`:''}</span><small className="rm-record-list-item-meta">{formatLabel(index?.category??'unknown')}</small></EntityLink>;})}{!directory.length&&<div className="rm-empty">No tenants match these filters.</div>}</div></section><div className="rm-record-detail">{data.tenant.error?<ErrorNotice error={data.tenant.error} retry={()=>void data.tenant.refetch()}/>:fullTenant?<TenantRecord tenant={fullTenant} snapshot={snapshot} tab={route.tab} onTab={(tab:TenantTab)=>go({...route,tab},true)} onEdit={openEditor} onChanged={refresh} onMoveRefresh={refreshRequired} businessDate={businessDate} readOnly={source!=='live'} onManageMoves={()=>setManageMoves({personId:fullTenant.person.id})}/>:<Busy label={route.recordId?'Loading tenant details…':'Select a tenant to open the record.'}/>}</div></div>}
@@ -233,8 +214,8 @@ function AuthenticatedWorkspace(){
     {route.section==='banking'&&<RmBanking/>}
     {route.section==='documents'&&(data.collectionsReady?<DocumentsWorkspace snapshot={snapshot} filters={filters} onChanged={()=>void refresh()} onEdit={openEditor}/>:<Busy/>)}
    </>}
-  </div></div>
+  </main></div>
   {manageMoves&&source==='live'&&snapshot&&<div className="rm-dialog-backdrop"><section className="rm-dialog" role="dialog" aria-modal="true" aria-label="Move-in and move-out">{data.collectionsReady?<ManagerTenancyActions snapshot={snapshot} businessDate={businessDate} personId={manageMoves.personId} propertyId={filters.propertyId} onSaved={refreshRequired} onClose={()=>setManageMoves(undefined)}/>:<><Busy label="Loading tenancy records…"/>{data.collectionError&&<ErrorNotice error={data.collectionError} retry={()=>void refresh()}/>}<button className="rm-button" onClick={()=>setManageMoves(undefined)}>Cancel</button></>}</section></div>}
   {editing&&snapshot&&(data.collectionsReady?<WorkspaceEditor action={editing.action} snapshot={snapshot} initialValues={editing.values} onClose={()=>setEditing(undefined)} onSaved={finishEdit} onConflict={()=>{setEditing(undefined);setNotice('This record changed. The latest values are being loaded; review them before saving again.');void refresh();}}/>:<div className="rm-dialog-backdrop"><section className="rm-dialog" role="dialog" aria-modal="true" aria-label="Loading editor"><Busy label="Loading related records…"/>{data.collectionError&&<ErrorNotice error={data.collectionError}/>}<button className="rm-button" onClick={()=>setEditing(undefined)}>Cancel</button></section></div>)}
- </main></EntityNavigationContext.Provider>;
+ </div></EntityNavigationContext.Provider>;
 }

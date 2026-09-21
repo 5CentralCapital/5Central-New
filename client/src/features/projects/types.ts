@@ -49,12 +49,16 @@ export interface ProjectsApi {
   ): Promise<ProjectCommandResult>;
 }
 
+export type ProjectTab = "overview" | "scope" | "schedule" | "costs";
+
 export interface ProjectWorkspaceProps {
   readonly organizationId: string;
   readonly organizationName?: string;
   readonly entities?: readonly ProjectWorkspaceEntity[];
   readonly api?: ProjectsApi;
   readonly initialProjectId?: string;
+  readonly activeTab?: ProjectTab;
+  readonly onTabChange?: (tab: ProjectTab) => void;
   readonly onNavigate?: (projectId?: string) => void;
 }
 

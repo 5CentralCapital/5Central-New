@@ -19,6 +19,19 @@ test('project bookmarks retain their company and record without changing rental 
   assert.equal(parseWorkspaceRoute(tenant).recordId, 'legacy-person');
   assert.equal(parseWorkspaceRoute('?section=projects&company=invalid').organizationId, undefined);
 });
+
+test('project subsection bookmarks survive reload and cannot leak into rental routes', () => {
+  for (const projectTab of ['overview', 'scope', 'schedule', 'costs']) {
+    const route = parseWorkspaceRoute(`?section=projects&record=project:123&projectTab=${projectTab}`);
+    assert.equal(route.projectTab, projectTab);
+    assert.deepEqual(parseWorkspaceRoute(workspaceRouteSearch(route)), route);
+    const tenantSearch = workspaceRouteSearch({ ...route, section: 'tenants', tab: 'ledger' }, undefined, workspaceRouteSearch(route));
+    assert.equal(new URLSearchParams(tenantSearch).has('projectTab'), false);
+    assert.equal(parseWorkspaceRoute(tenantSearch).tab, 'ledger');
+  }
+  assert.equal(parseWorkspaceRoute('?section=projects&projectTab=unknown').projectTab, undefined);
+  assert.equal(parseWorkspaceRoute('?section=tenants&projectTab=costs').projectTab, undefined);
+});
 function bootstrap() { return decodeRentOpsWorkspaceBootstrap(serializeWorkspaceBootstrap(syntheticRentOpsSnapshot(),{asOfDate:filters.asOfDate})); }
 
 test('workspace links round-trip scoped records and tenant detail tabs without losing opaque IDs',()=>{

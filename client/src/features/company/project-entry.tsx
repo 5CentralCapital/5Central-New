@@ -1,12 +1,14 @@
 import { lazy, Suspense } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import type { ProjectTab } from '../projects/types';
 import type { CompanyContext } from '@shared/company/context';
 import { rentOpsAuthClient } from '../rent-ops/auth';
 
 const ProjectWorkspace = lazy(() => import('../projects/project-workspace').then(module => ({ default: module.ProjectWorkspace })));
 
-export function ProjectEntry({ identity, organizationId, projectId, onNavigate }: {
+export function ProjectEntry({ identity, organizationId, projectId, onNavigate, projectTab, onTabChange }: {
   identity: string; organizationId?: string; projectId?: string;
+  projectTab?: ProjectTab; onTabChange?: (tab: ProjectTab) => void;
   onNavigate: (organizationId: string, projectId?: string) => void;
 }) {
   const context = useQuery({
@@ -29,7 +31,7 @@ export function ProjectEntry({ identity, organizationId, projectId, onNavigate }
     </select></label></div>}
     {organization && <Suspense fallback={<div className="rm-empty" role="status">Loading projects…</div>}><ProjectWorkspace key={organization.id}
       organizationId={organization.id} organizationName={organization.name} entities={organization.entities}
-      initialProjectId={projectId} onNavigate={id => onNavigate(organization.id, id)}
+      initialProjectId={projectId} activeTab={projectTab} onTabChange={onTabChange} onNavigate={id => onNavigate(organization.id, id)}
     /></Suspense>}
   </>;
 }

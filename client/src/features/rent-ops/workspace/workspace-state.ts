@@ -1,3 +1,4 @@
+import type { ProjectTab } from '../../projects/types';
 import { workspaceToday } from './workspace-date';
 import type { AdminSnapshot, AdminSnapshotView, ApiFilters, DashboardSummary, ReportKey, SectionKey, TenantTab, TenantView, ViewFilters } from '../types';
 import { REPORT_KEYS } from '../types';
@@ -5,7 +6,7 @@ import { createWorkspaceReportDefinition, type RentOpsWorkspaceBootstrap, type W
 import type { QuickAction } from '../form-payload';
 
 export type WorkspaceSection = SectionKey | 'recurring' | 'banking' | 'projects';
-export interface WorkspaceRoute { section: WorkspaceSection; recordId?: string; organizationId?: string; kind?: 'property' | 'unit'; tab: TenantTab; report: ReportKey; }
+export interface WorkspaceRoute { section: WorkspaceSection; recordId?: string; organizationId?: string; projectTab?: ProjectTab; kind?: 'property' | 'unit'; tab: TenantTab; report: ReportKey; }
 const sections: WorkspaceSection[] = ['dashboard','tenants','properties','reports','rent-roll','leases','income','applicants','documents','recurring','banking','projects'];
 const tabs: TenantTab[] = ['summary','household','tenancy','charges','ledger','deposits','housing-assistance','documents','activity'];
 export function parseWorkspaceRoute(search: string): WorkspaceRoute {
@@ -14,15 +15,17 @@ export function parseWorkspaceRoute(search: string): WorkspaceRoute {
   const tab = params.get('tab') as TenantTab;
   const report = params.get('report') as ReportKey;
   const record = params.get('record');
+  const projectTab = params.get('projectTab') as ProjectTab;
   const organizationId = params.get('company');
-  return { section: sections.includes(section) ? section : 'dashboard', tab: tabs.includes(tab) ? tab : 'summary', report: REPORT_KEYS.includes(report) ? report : 'rent-roll', recordId: record && /^[A-Za-z0-9:_-]{1,160}$/.test(record) ? record : undefined, kind: params.get('kind') === 'unit' ? 'unit' : 'property', ...(section === 'projects' && organizationId && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(organizationId) ? { organizationId } : {}) };
+  return { section: sections.includes(section) ? section : 'dashboard', tab: tabs.includes(tab) ? tab : 'summary', report: REPORT_KEYS.includes(report) ? report : 'rent-roll', recordId: record && /^[A-Za-z0-9:_-]{1,160}$/.test(record) ? record : undefined, ...(section === 'projects' && ['overview', 'scope', 'schedule', 'costs'].includes(projectTab) ? { projectTab } : {}), kind: params.get('kind') === 'unit' ? 'unit' : 'property', ...(section === 'projects' && organizationId && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(organizationId) ? { organizationId } : {}) };
 }
 export function workspaceRouteSearch(route: WorkspaceRoute, filters?: ViewFilters, baseSearch = ""): string {
   const params = new URLSearchParams(baseSearch);
-  for (const key of ["section", "record", "kind", "tab", "report", "company"]) params.delete(key);
+  for (const key of ["section", "record", "kind", "tab", "report", "company", "projectTab"]) params.delete(key);
   params.set("section",route.section);
   if(route.recordId) params.set('record',route.recordId);
   if(route.section==='projects'&&route.organizationId) params.set('company',route.organizationId);
+  if(route.section==='projects'&&route.projectTab) params.set('projectTab',route.projectTab);
   if(route.section==='properties') params.set('kind',route.kind??'property');
   if(route.section==='tenants' && route.tab!=='summary') params.set('tab',route.tab);
   if(route.section==='reports') params.set('report',route.report);
