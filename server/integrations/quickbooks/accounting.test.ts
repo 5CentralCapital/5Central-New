@@ -37,7 +37,7 @@ test("Accounting read, query, create, and SyncToken update stay on the scoped sa
   assert.equal(updated.entity.SyncToken, "3");
 
   assert.equal(calls[0].method, "GET");
-  assert.match(calls[0].url, /^https:\/\/sandbox-quickbooks\.api\.intuit\.com\/v3\/company\/4620816365001234567\/Account\/1$/);
+  assert.match(calls[0].url, /^https:\/\/sandbox-quickbooks\.api\.intuit\.com\/v3\/company\/4620816365001234567\/account\/1\?minorversion=75$/);
   assert.equal(calls[0].headers.Authorization, "Bearer access-token");
   assert.equal(new URL(calls[1].url).searchParams.get("query"), "select * from Account");
   const createBody = JSON.parse(calls[2].body ?? "{}");

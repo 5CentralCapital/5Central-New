@@ -39,7 +39,7 @@ function createIntuitDouble() {
       }
       return json(200, { access_token: `access-${form?.get("code")}`, refresh_token: `refresh-${form?.get("code")}`, expires_in: 3_600, x_refresh_token_expires_in: 86_400 });
     }
-    if (url.pathname.includes("/companyinfo/") || url.pathname.includes("/CompanyInfo/")) {
+    if (url.pathname.includes("/companyinfo/")) {
       return json(200, { CompanyInfo: { Id: "1", CompanyName: "Sandbox Company_US_1", LegalName: "Sandbox Company", HomeCurrency: { value: "USD" }, MetaData: { LastUpdatedTime: "2026-09-01T00:00:00-07:00" } } });
     }
     if (url.pathname.endsWith("/query")) return json(200, { QueryResponse: {} });

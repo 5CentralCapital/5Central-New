@@ -14,7 +14,8 @@ import { parseJsonLosslessNumbers } from "./json-lossless";
 
 export const QUICKBOOKS_SANDBOX_ACCOUNTING_BASE_URL = "https://sandbox-quickbooks.api.intuit.com";
 export const QUICKBOOKS_PRODUCTION_ACCOUNTING_BASE_URL = "https://quickbooks.api.intuit.com";
-export const DEFAULT_QUICKBOOKS_MINOR_VERSION = undefined;
+/** Intuit retired minor versions below 75 on 2025-08-01; requests pin the supported baseline. */
+export const DEFAULT_QUICKBOOKS_MINOR_VERSION = "75";
 
 const BLOCKED_CAPABILITY_NAMES = new Set([
   "Project",
@@ -188,6 +189,11 @@ export interface QuickBooksAccountingClient {
   update<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(input: QuickBooksUpdateInput<TFields>): Promise<QuickBooksApiResponse<TResult>>;
 }
 
+/** QBO REST resource paths are lowercase (`companyinfo`, `vendor`); entity names in bodies stay PascalCase. */
+function entityPath(entity: string): string {
+  return encodeURIComponent(entity.toLowerCase());
+}
+
 function baseUrl(environment: QuickBooksAccountingClientConfig["scope"]["environment"]): string {
   return environment === "sandbox" ? QUICKBOOKS_SANDBOX_ACCOUNTING_BASE_URL : QUICKBOOKS_PRODUCTION_ACCOUNTING_BASE_URL;
 }
@@ -235,7 +241,7 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
     async read<T extends QuickBooksJsonObject = QuickBooksJsonObject>(entity: QuickBooksEntityName, id: string): Promise<QuickBooksApiResponse<T>> {
       assertEntity(entity);
       assertIdentifier(id, "entity ID");
-      const response = await call("GET", `${encodeURIComponent(entity)}/${encodeURIComponent(id)}`);
+      const response = await call("GET", `${entityPath(entity)}/${encodeURIComponent(id)}`);
       const parsed = entityFromEnvelope<T>(entity, response.body);
       if (!parsed) throw new QuickBooksIntegrationError("quickbooks_api", "QuickBooks read response could not be confirmed", { status: response.status });
       return { ...parsed, status: response.status, intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") };
@@ -254,7 +260,7 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
     async create<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(entity: QuickBooksEntityName, fields: TFields): Promise<QuickBooksApiResponse<TResult>> {
       assertEntity(entity);
       assertPlainObject(fields, "create fields");
-      const response = await call("POST", entity, fields);
+      const response = await call("POST", entityPath(entity), fields);
       const parsed = entityFromEnvelope<TResult>(entity, response.body);
       if (!parsed) throw new QuickBooksIntegrationError("quickbooks_ambiguous_write", "QuickBooks create response could not be confirmed; reconcile before retrying", { ambiguous: true, status: response.status });
       return { ...parsed, status: response.status, intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") };
@@ -266,7 +272,7 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
       assertIdentifier(input.syncToken, "SyncToken");
       assertPlainObject(input.fields, "update fields");
       const payload = { ...input.fields, Id: input.id, SyncToken: input.syncToken };
-      const response = await call("POST", input.entity, payload);
+      const response = await call("POST", entityPath(input.entity), payload);
       const parsed = entityFromEnvelope<TResult>(input.entity, response.body);
       if (!parsed) throw new QuickBooksIntegrationError("quickbooks_ambiguous_write", "QuickBooks update response could not be confirmed; reconcile before retrying", { ambiguous: true, status: response.status });
       return { ...parsed, status: response.status, intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") };

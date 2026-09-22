@@ -30,10 +30,10 @@ function sandboxDouble() {
     if (url.pathname.endsWith("/revoke")) return new Response("", { status: 200, headers: { intuit_tid: `tid-${++tid}` } });
     assert.equal(url.host, "sandbox-quickbooks.api.intuit.com");
     const [, , , , entity, id] = url.pathname.split("/");
-    if (entity === "companyinfo" || entity === "CompanyInfo") return json(200, { CompanyInfo: { Id: "1", CompanyName: "Sandbox Company_US_1", HomeCurrency: { value: "USD" }, MetaData: { LastUpdatedTime: "2026-09-01T00:00:00-07:00" } } });
+    if (entity === "companyinfo") return json(200, { CompanyInfo: { Id: "1", CompanyName: "Sandbox Company_US_1", HomeCurrency: { value: "USD" }, MetaData: { LastUpdatedTime: "2026-09-01T00:00:00-07:00" } } });
     if (entity === "query") return json(200, { QueryResponse: {} });
-    if (entity === "Vendor" && method === "GET") return vendors.has(id!) ? json(200, { Vendor: vendors.get(id!) }) : json(400, { Fault: { Error: [{ code: "610" }] } });
-    if (entity === "Vendor" && method === "POST") {
+    if (entity === "vendor" && method === "GET") return vendors.has(id!) ? json(200, { Vendor: vendors.get(id!) }) : json(400, { Fault: { Error: [{ code: "610" }] } });
+    if (entity === "vendor" && method === "POST") {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       if (!body.Id) { const created = { Id: String(vendors.size + 50), SyncToken: "0", DisplayName: body.DisplayName }; vendors.set(created.Id, created); return json(200, { Vendor: created }); }
       const current = vendors.get(String(body.Id))!;
