@@ -1,0 +1,585 @@
+/*
+ * R-ops design system — manager workspace only (.rm-workspace.rops-modern).
+ * Apple HIG (Liquid Glass, mid-2026) structure with 5Central's palette:
+ * charcoal ink, cream ground, gold reserved for focus, selection and the brand mark.
+ *
+ * Rules this file enforces:
+ * - One token set. Feature modules keep their own variable names, remapped here.
+ * - Content is opaque; only navigation chrome floats on glass.
+ * - Hierarchy comes from type and space, not boxes: hairlines, no stacked shadows.
+ * - One filled (primary) action per view; everything else is a quiet fill or plain text.
+ * - Numbers use tabular figures; money and dates never truncate.
+ * Loaded after every feature stylesheet; selectors are scoped two classes deep so they win
+ * over single-class feature rules without !important.
+ */
+
+.rm-workspace.rops-modern {
+  /* Type */
+  --ds-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter var", Inter, "Segoe UI", system-ui, sans-serif;
+  --ds-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter var", Inter, "Segoe UI", system-ui, sans-serif;
+  --ds-title: 600 28px/34px var(--ds-font-display);
+  --ds-title-2: 600 20px/25px var(--ds-font-display);
+  --ds-headline: 600 15px/20px var(--ds-font);
+  --ds-body: 400 14px/20px var(--ds-font);
+  --ds-callout: 500 13px/18px var(--ds-font);
+  --ds-caption: 400 12px/16px var(--ds-font);
+  --ds-overline: 600 11px/14px var(--ds-font);
+
+  /* Color — light */
+  --ds-bg: #f6f4ef;
+  --ds-surface: #ffffff;
+  --ds-surface-2: #fbfaf8;
+  --ds-fill: rgb(58 50 38 / 5.5%);
+  --ds-fill-hover: rgb(58 50 38 / 9%);
+  --ds-fill-press: rgb(58 50 38 / 13%);
+  --ds-ink: #1d1d1f;
+  --ds-ink-2: #3a3a3c;
+  --ds-muted: #6e6e73;
+  --ds-faint: #a1a1a6;
+  --ds-hairline: rgb(58 50 38 / 11%);
+  --ds-hairline-strong: rgb(58 50 38 / 20%);
+  --ds-gold: #d4a843;
+  --ds-gold-ink: #8a6716;
+  --ds-gold-wash: rgb(212 168 67 / 14%);
+  --ds-positive: #2d7a4f;
+  --ds-positive-wash: rgb(45 122 79 / 10%);
+  --ds-warning: #9a6a0f;
+  --ds-warning-wash: rgb(212 168 67 / 16%);
+  --ds-critical: #c0352b;
+  --ds-critical-wash: rgb(192 53 43 / 9%);
+  --ds-info: #36607e;
+  --ds-info-wash: rgb(54 96 126 / 9%);
+
+  /* Shape, depth, motion */
+  --ds-r-s: 8px;
+  --ds-r-m: 10px;
+  --ds-r-l: 14px;
+  --ds-r-xl: 20px;
+  --ds-control: 36px;
+  --ds-shadow-panel: 0 1px 2px rgb(28 25 20 / 4%);
+  --ds-shadow-float: 0 10px 34px rgb(28 25 20 / 10%), 0 1px 3px rgb(28 25 20 / 6%);
+  --ds-ease: cubic-bezier(.2, .8, .2, 1);
+  --ds-focus: 0 0 0 3px rgb(212 168 67 / 45%);
+
+  /* Remap existing module tokens onto the system */
+  --rm-charcoal: var(--ds-ink-2);
+  --rm-gold: var(--ds-gold);
+  --rm-cream: var(--ds-bg);
+  --rm-ink: var(--ds-ink);
+  --rm-surface: var(--ds-surface);
+  --rm-surface-subtle: var(--ds-surface-2);
+  --rm-surface-muted: #f3f2ee;
+  --rm-line: var(--ds-hairline);
+  --rm-line-strong: var(--ds-hairline-strong);
+  --rm-muted: var(--ds-muted);
+  --rm-faint: var(--ds-faint);
+  --rm-success: var(--ds-positive);
+  --rm-success-surface: var(--ds-positive-wash);
+  --rm-warning: var(--ds-warning);
+  --rm-warning-surface: var(--ds-warning-wash);
+  --rm-error: var(--ds-critical);
+  --rm-error-surface: var(--ds-critical-wash);
+  --rm-info: var(--ds-info);
+  --rm-info-surface: var(--ds-info-wash);
+  --rm-focus: var(--ds-gold-ink);
+  --rm-radius: var(--ds-r-l);
+  --rm-radius-small: var(--ds-r-m);
+  --rm-control-height: var(--ds-control);
+  --rm-section-gap: 20px;
+  --rmd-ink: var(--ds-ink);
+  --rmd-muted: var(--ds-muted);
+  --rmd-line: var(--ds-hairline);
+  --rmd-surface: var(--ds-surface);
+  --rmd-subtle: var(--ds-surface-2);
+  --rmd-cream: var(--ds-bg);
+
+  background: var(--ds-bg);
+  color: var(--ds-ink);
+  font: var(--ds-body);
+  letter-spacing: -.006em;
+}
+
+.rm-workspace.rops-modern :is(.investors-workspace, .investors-dialog) {
+  --investors-charcoal: var(--ds-ink-2); --investors-ink: var(--ds-ink); --investors-muted: var(--ds-muted);
+  --investors-faint: var(--ds-faint); --investors-line: var(--ds-hairline); --investors-line-strong: var(--ds-hairline-strong);
+  --investors-surface: var(--ds-surface); --investors-soft: var(--ds-surface-2); --investors-cream: var(--ds-bg);
+  --investors-gold: var(--ds-gold); --investors-positive: var(--ds-positive); --investors-warning: var(--ds-warning); --investors-error: var(--ds-critical);
+}
+.rm-workspace.rops-modern .accounting-workspace {
+  --accounting-ink: var(--ds-ink); --accounting-muted: var(--ds-muted); --accounting-line: var(--ds-hairline);
+  --accounting-surface: var(--ds-surface); --accounting-soft: var(--ds-surface-2); --accounting-positive: var(--ds-positive); --accounting-warning: var(--ds-warning);
+}
+.rm-workspace.rops-modern .time-workspace {
+  --time-ink: var(--ds-ink); --time-muted: var(--ds-muted); --time-line: var(--ds-hairline); --time-line-strong: var(--ds-hairline-strong);
+  --time-surface: var(--ds-surface); --time-soft: var(--ds-surface-2); --time-charcoal: var(--ds-ink-2); --time-gold: var(--ds-gold);
+  --time-positive: var(--ds-positive); --time-warning: var(--ds-warning); --time-error: var(--ds-critical);
+}
+
+/* One typeface everywhere in the manager, including modules that set their own. */
+.rm-workspace.rops-modern :is(.investors-workspace, .accounting-workspace, .time-workspace, .projects-workspace, .intake-workspace,
+  .reporting-workspace, .company-documents-workspace, .investors-dialog, .projects-dialog, .rm-dialog),
+.rm-workspace.rops-modern :is(button, input, select, textarea) { font-family: var(--ds-font); }
+.rm-workspace.rops-modern :is(td, .rm-amount, .rmd-dashboard table, [class*="-table"]) { font-variant-numeric: tabular-nums; }
+
+/* ── Navigation: a floating glass island; selection is a quiet fill, not a dark slab ── */
+.rm-workspace.rops-modern .rops-topbar {
+  top: 10px;
+  min-height: 56px;
+  margin: 10px 16px 8px;
+  padding: 8px 10px 8px 18px;
+  border: 1px solid rgb(255 255 255 / 70%);
+  border-radius: 18px;
+  box-shadow: 0 6px 24px rgb(28 25 20 / 7%), 0 0 0 1px var(--ds-hairline);
+}
+.rm-workspace.rops-modern .rops-wordmark { gap: 5px; color: var(--ds-ink); font: 700 14px/1 var(--ds-font-display); letter-spacing: .08em; }
+.rm-workspace.rops-modern .rops-wordmark > span { color: var(--ds-gold); }
+.rm-workspace.rops-modern .rops-nav-trigger {
+  min-height: 36px;
+  padding: 0 11px;
+  border-radius: 999px;
+  color: var(--ds-muted);
+  font: 500 13px/1 var(--ds-font);
+  letter-spacing: -.01em;
+  transition: background-color 160ms var(--ds-ease), color 160ms var(--ds-ease);
+}
+.rm-workspace.rops-modern .rops-nav-trigger svg { opacity: .45; width: 12px; height: 12px; }
+.rm-workspace.rops-modern .rops-nav-trigger:hover,
+.rm-workspace.rops-modern .rops-nav-trigger[data-state="open"] { background: var(--ds-fill); color: var(--ds-ink); }
+.rm-workspace.rops-modern .rops-nav-trigger[aria-current],
+.rm-workspace.rops-modern .rops-nav-trigger[aria-current]:hover,
+.rm-workspace.rops-modern .rops-nav-trigger[aria-current][data-state="open"] {
+  background: var(--ds-fill-hover);
+  color: var(--ds-ink);
+  font-weight: 600;
+  box-shadow: none;
+}
+.rops-nav-menu { padding: 6px; border-radius: 14px; border-color: var(--ds-hairline, rgb(58 50 38 / 11%)); box-shadow: 0 16px 44px rgb(28 25 20 / 14%), 0 1px 3px rgb(28 25 20 / 6%); }
+.rops-menu-item { min-height: 36px; padding: 8px 10px; border-radius: 8px; font-size: 13px; }
+.rops-menu-item[data-highlighted], .rops-menu-item[data-state="open"] { background: rgb(58 50 38 / 7%); }
+.rops-menu-label { font-size: 11px; font-weight: 600; letter-spacing: .02em; color: #8a8a8e; }
+
+/* ── Page frame ── */
+.rm-workspace.rops-modern .rm-main { padding: 20px var(--rm-page-inset) 48px; }
+.rm-workspace.rops-modern .rm-main > .rm-page-heading { min-height: 0; margin: 4px 0 18px; }
+.rm-workspace.rops-modern :is(.rm-main > .rm-page-heading h1, .projects-page-header h1, .investors-toolbar h1, .accounting-toolbar h1, .time-toolbar h1, .intake-toolbar h1) {
+  margin: 0;
+  color: var(--ds-ink);
+  font: var(--ds-title);
+  letter-spacing: -.022em;
+}
+
+/* Module headers become plain page headers on the ground, not white bars. */
+.rm-workspace.rops-modern :is(.investors-toolbar, .accounting-toolbar, .time-toolbar, .intake-toolbar) {
+  padding: 4px 0 20px;
+  border: 0;
+  background: transparent;
+}
+.rm-workspace.rops-modern :is(.investors-toolbar p, .accounting-toolbar p, .time-toolbar p) { margin-top: 4px; color: var(--ds-muted); font: var(--ds-caption); font-size: 13px; }
+.rm-workspace.rops-modern :is(.investors-eyebrow, .time-eyebrow) { color: var(--ds-muted); font: var(--ds-overline); letter-spacing: .04em; }
+
+/* ── Filter bar: labels collapse into the controls' rhythm ── */
+.rm-workspace.rops-modern .rm-workspace-toolbar { align-items: flex-end; gap: 10px; margin-bottom: 20px; }
+.rm-workspace.rops-modern .rm-workspace-toolbar > label { gap: 6px; color: var(--ds-muted); font: var(--ds-overline); letter-spacing: .02em; }
+
+/* ── Controls ── */
+.rm-workspace.rops-modern :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select, textarea, .rm-property-filter > summary) {
+  border: 1px solid transparent;
+  border-radius: var(--ds-r-m);
+  background-color: var(--ds-fill);
+  color: var(--ds-ink);
+  font-size: 14px;
+  box-shadow: none;
+  transition: background-color 140ms var(--ds-ease), box-shadow 140ms var(--ds-ease), border-color 140ms var(--ds-ease);
+}
+.rm-workspace.rops-modern :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select, .rm-property-filter > summary) { min-height: var(--ds-control); }
+.rm-workspace.rops-modern :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select, textarea):hover { background-color: var(--ds-fill-hover); }
+.rm-workspace.rops-modern :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"]), select, textarea):focus {
+  border-color: var(--ds-gold);
+  background-color: var(--ds-surface);
+  box-shadow: var(--ds-focus);
+  outline: none;
+}
+.rm-workspace.rops-modern :is(input, textarea)::placeholder { color: var(--ds-faint); }
+.rm-workspace.rops-modern select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath stroke='%236e6e73' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m1 1 4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  background-size: 10px 6px;
+}
+.rm-workspace.rops-modern .rm-search { border: 0; }
+.rm-workspace.rops-modern .rm-search input { padding-left: 34px; }
+.rm-workspace.rops-modern :is(input[type="checkbox"], input[type="radio"]) { accent-color: var(--ds-ink-2); }
+
+/* Buttons: quiet fill by default, charcoal for the one primary action, gold only as a pressed state. */
+.rm-workspace.rops-modern :is(.rm-button, .projects-button, .investors-button, .accounting-button, .time-button, .intake-button) {
+  min-height: var(--ds-control);
+  gap: 6px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--ds-r-m);
+  background: var(--ds-fill);
+  color: var(--ds-ink);
+  font: 500 13px/1 var(--ds-font);
+  letter-spacing: -.01em;
+  box-shadow: none;
+  transition: background-color 140ms var(--ds-ease), transform 140ms var(--ds-ease), opacity 140ms var(--ds-ease);
+}
+.rm-workspace.rops-modern :is(.rm-button, .projects-button, .investors-button, .accounting-button, .time-button, .intake-button):hover:not(:disabled) { background: var(--ds-fill-hover); border: 0; }
+.rm-workspace.rops-modern :is(.rm-button, .projects-button, .investors-button, .accounting-button, .time-button, .intake-button):active:not(:disabled) { background: var(--ds-fill-press); transform: scale(.98); }
+.rm-workspace.rops-modern :is(.rm-button, .projects-button, .investors-button, .accounting-button, .time-button, .intake-button):disabled { opacity: .42; }
+.rm-workspace.rops-modern :is(.rm-button-primary, .projects-button-primary, .investors-button-primary, .accounting-button-primary, .time-button-primary) {
+  background: var(--ds-ink-2);
+  color: #fff;
+  font-weight: 600;
+}
+.rm-workspace.rops-modern :is(.rm-button-primary, .projects-button-primary, .investors-button-primary, .accounting-button-primary, .time-button-primary):hover:not(:disabled) { background: var(--ds-ink); }
+.rm-workspace.rops-modern :is(.rm-button-danger, .projects-button-danger, .time-button-danger) { background: var(--ds-critical-wash); color: var(--ds-critical); }
+.rm-workspace.rops-modern :is(.rm-button-danger, .projects-button-danger, .time-button-danger):hover:not(:disabled) { background: rgb(192 53 43 / 15%); }
+.rm-workspace.rops-modern :is(.rm-button--ghost, .investors-button-quiet) { background: transparent; }
+.rm-workspace.rops-modern :is(.rm-button--ghost, .investors-button-quiet):hover:not(:disabled) { background: var(--ds-fill); }
+.rm-workspace.rops-modern :is(.rm-button--gold, .rm-button[aria-pressed="true"]) { background: var(--ds-gold-wash); color: var(--ds-gold-ink); font-weight: 600; }
+.rm-workspace.rops-modern :is(.rm-button--gold, .rm-button[aria-pressed="true"]):hover:not(:disabled) { background: rgb(212 168 67 / 22%); }
+.rm-workspace.rops-modern .rm-button--icon { width: var(--ds-control); min-width: var(--ds-control); padding: 0; border-radius: 50%; }
+.rm-workspace.rops-modern .rm-button--small { min-height: 28px; padding: 0 10px; border-radius: var(--ds-r-s); font-size: 12px; }
+.rm-workspace.rops-modern :is(.rm-button, [class$="-button"]) > svg { width: 15px; height: 15px; }
+.rm-workspace.rops-modern :is(button, a, summary, [tabindex]):focus-visible { outline: none; box-shadow: var(--ds-focus); }
+
+/* ── Surfaces: opaque content cards with a hairline edge ── */
+.rm-workspace.rops-modern :is(.rm-panel, .rmd-panel, .investors-card, .accounting-card, .time-card, .rm-tenant-panel, .rm-tenancy-card, .projects-layout, .investors-layout, .time-layout, .accounting-grid > section, .rm-record-list, .rm-report-setup) {
+  border: 0;
+  border-radius: var(--ds-r-l);
+  background: var(--ds-surface);
+  box-shadow: var(--ds-shadow-panel), 0 0 0 1px var(--ds-hairline);
+}
+.rm-workspace.rops-modern :is(.projects-layout, .investors-layout, .time-layout) { overflow: hidden; }
+.rm-workspace.rops-modern :is(.projects-list-pane, .investors-list-pane, .time-list-pane) { background: var(--ds-surface-2); border-color: var(--ds-hairline); }
+.rm-workspace.rops-modern :is(.investors-main, .time-main, .projects-detail) { background: var(--ds-surface); }
+
+/* Panel headers: title-weight text, no bar, no fill. */
+.rm-workspace.rops-modern :is(.rmd-panel-header, .rmd-trend-panel .rmd-panel-header) {
+  min-height: 48px;
+  padding: 14px 48px 10px 18px;
+  border-bottom: 0;
+  background: transparent;
+}
+.rm-workspace.rops-modern .rmd-panel-header h2 { font: var(--ds-headline); font-size: 14px; letter-spacing: -.012em; }
+.rm-workspace.rops-modern .rmd-panel-header > button { top: 8px; right: 8px; width: 32px; height: 32px; color: var(--ds-faint); }
+.rm-workspace.rops-modern .rmd-panel-header > button:hover { background: var(--ds-fill); color: var(--ds-ink); }
+.rm-workspace.rops-modern :is(.investors-card-header, .accounting-card-header, .time-card-header, .rm-panel-heading, .rm-card-heading) {
+  border-bottom: 0;
+  background: transparent;
+}
+.rm-workspace.rops-modern :is(.investors-card-header, .accounting-card-header, .time-card-header, .rm-panel-heading, .rm-card-heading) :is(h2, h3),
+.rm-workspace.rops-modern .rm-panel-title { font: var(--ds-headline); letter-spacing: -.012em; color: var(--ds-ink); }
+
+/* ── Tables: hairline rows, quiet sentence-case headers, no zebra ── */
+.rm-workspace.rops-modern :is(.rm-table, .ro-table, .rmd-dashboard table, .investors-table, .accounting-table, .rm-ledger-table, .rm-charge-table) { border-collapse: collapse; font-size: 13px; }
+.rm-workspace.rops-modern :is(.rm-table, .ro-table, .rmd-dashboard table, .investors-table, .accounting-table, .rm-ledger-table, .rm-charge-table) th {
+  height: 32px;
+  padding-block: 0;
+  border-bottom: 1px solid var(--ds-hairline);
+  background: transparent;
+  color: var(--ds-muted);
+  font: 500 12px/16px var(--ds-font);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.rm-workspace.rops-modern :is(.rm-table, .ro-table, .investors-table, .accounting-table, .rm-ledger-table, .rm-charge-table) :is(th, td) { padding-inline: 12px; }
+.rm-workspace.rops-modern :is(.rm-table, .ro-table, .rmd-dashboard table, .investors-table, .accounting-table, .rm-ledger-table, .rm-charge-table) td {
+  height: 40px;
+  border-bottom: 1px solid rgb(58 50 38 / 7%);
+  color: var(--ds-ink);
+}
+.rm-workspace.rops-modern .rmd-dashboard :is(th, td) { padding-inline: 10px; }
+.rm-workspace.rops-modern .rmd-dashboard :is(th, td):first-child { padding-left: 18px; }
+.rm-workspace.rops-modern .rmd-dashboard :is(th, td):last-child { padding-right: 18px; }
+.rm-workspace.rops-modern .rmd-dashboard th button { min-height: 32px; padding: 0; color: inherit; font: inherit; }
+.rm-workspace.rops-modern :is(.rm-table, .ro-table, .rmd-dashboard, .investors-table, .accounting-table, .rm-ledger-table) tbody tr:nth-child(even) { background: transparent; }
+.rm-workspace.rops-modern :is(.rm-table, .ro-table, .rmd-dashboard, .investors-table, .accounting-table, .rm-ledger-table) tbody tr:hover { background: rgb(58 50 38 / 3.5%); }
+.rm-workspace.rops-modern .rmd-dashboard tbody tr:last-child td { border-bottom: 0; }
+.rm-workspace.rops-modern .rmd-table-total {
+  min-height: 40px;
+  padding: 10px 18px;
+  border-top: 1px solid var(--ds-hairline);
+  background: transparent;
+  color: var(--ds-muted);
+  font: var(--ds-caption);
+}
+.rm-workspace.rops-modern .rmd-table-total strong { color: var(--ds-ink); font-weight: 600; font-size: 13px; }
+
+/* ── Tabs: underline segmented rail ── */
+.rm-workspace.rops-modern :is(.rm-tabs, .ro-tabs, .investors-tabs, .accounting-tabs) { gap: 2px; border-bottom: 1px solid var(--ds-hairline); }
+.rm-workspace.rops-modern .rm-tabs > :where(button, a) { min-height: 38px; padding: 0 12px; color: var(--ds-muted); font: 500 13px/1 var(--ds-font); }
+.rm-workspace.rops-modern .rm-tabs > :where(button, a):hover { color: var(--ds-ink); background: transparent; }
+.rm-workspace.rops-modern .rm-tabs > :where(button, a):is(.active, [aria-selected="true"], [aria-current="page"], [data-active="true"]) { color: var(--ds-ink); font-weight: 600; }
+.rm-workspace.rops-modern .rm-tabs > :where(button, a):is(.active, [aria-selected="true"], [aria-current="page"], [data-active="true"])::after { height: 2px; border-radius: 2px; background: var(--ds-ink-2); }
+
+/* ── Status: small tinted capsules; meaning never by color alone (labels stay). ── */
+.rm-workspace.rops-modern :is(.rm-status, .investors-status, .accounting-status, .time-badge) {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ds-fill);
+  color: var(--ds-ink-2);
+  font: 600 11px/1 var(--ds-font);
+  letter-spacing: .01em;
+  text-transform: none;
+}
+.rm-workspace.rops-modern :is(.rm-status--success, .rm-status-good) { background: var(--ds-positive-wash); color: var(--ds-positive); }
+.rm-workspace.rops-modern :is(.rm-status--warning, .rm-status-warning) { background: var(--ds-warning-wash); color: var(--ds-warning); }
+.rm-workspace.rops-modern .rm-status--error { background: var(--ds-critical-wash); color: var(--ds-critical); }
+.rm-workspace.rops-modern :is(.rm-status--unknown, .rm-status-muted) { background: var(--ds-fill); color: var(--ds-muted); }
+
+/* ── Record lists (tenants, projects, investors, time) ── */
+.rm-workspace.rops-modern .rm-record-list { overflow: hidden; }
+.rm-workspace.rops-modern :is(.rm-record-list-item, .investors-list-row, .time-list-row) {
+  position: relative;
+  margin: 2px 6px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: var(--ds-r-m);
+  transition: background-color 120ms var(--ds-ease);
+}
+.rm-workspace.rops-modern :is(.rm-record-list-item, .investors-list-row, .time-list-row):hover { background: var(--ds-fill); }
+.rm-workspace.rops-modern .rm-record-list-item.active,
+.rm-workspace.rops-modern :is(.investors-list-row, .time-list-row):is([aria-current], [aria-selected="true"], .active) {
+  background: var(--ds-fill-hover);
+  box-shadow: none;
+}
+.rm-workspace.rops-modern .rm-record-list-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--ds-gold);
+}
+.rm-workspace.rops-modern .rm-record-list-item-title { font: 600 13px/18px var(--ds-font); letter-spacing: -.01em; }
+.rm-workspace.rops-modern .rm-record-list-item-meta { color: var(--ds-muted); font: var(--ds-caption); }
+.rm-workspace.rops-modern .rm-record-list > .rm-toolbar { padding: 12px 12px 8px 18px; border: 0; background: transparent; }
+
+/* Record summary (tenant header) */
+.rm-workspace.rops-modern .rm-record-summary { border: 0; border-radius: var(--ds-r-l); background: var(--ds-surface); box-shadow: var(--ds-shadow-panel), 0 0 0 1px var(--ds-hairline); }
+.rm-workspace.rops-modern .rm-record-summary-main :is(h2, strong):first-child { font: var(--ds-title-2); letter-spacing: -.018em; }
+.rm-workspace.rops-modern :is(.rm-record-balance, .rm-record-as-of) span:first-child,
+.rm-workspace.rops-modern .rm-ribbon-label { color: var(--ds-muted); font: var(--ds-overline); letter-spacing: .03em; text-transform: none; }
+
+/* Fields read as label-over-value pairs with hairline rules */
+.rm-workspace.rops-modern :is(.rm-field-label, .rm-field > label, .rm-field > legend, .investors-form-label) { color: var(--ds-muted); font: 500 12px/16px var(--ds-font); }
+.rm-workspace.rops-modern .rm-detail-row { border-color: rgb(58 50 38 / 7%); }
+
+/* ── Dialogs: sheet-like, generous, soft ── */
+.rm-workspace.rops-modern :is(.rm-dialog-backdrop, .projects-dialog-overlay, .investors-dialog-backdrop) { background: rgb(20 18 14 / 28%); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.rm-workspace.rops-modern :is(.rm-dialog, .projects-dialog, .investors-dialog) { border: 0; border-radius: var(--ds-r-xl); box-shadow: 0 24px 80px rgb(20 18 14 / 22%), 0 0 0 1px var(--ds-hairline); }
+.rm-workspace.rops-modern :is(.rm-dialog-header, .projects-dialog-header) h2 { font: var(--ds-title-2); letter-spacing: -.018em; }
+.rm-workspace.rops-modern :is(.rm-dialog-footer, .projects-dialog-footer, .investors-dialog-footer) { border-top: 1px solid var(--ds-hairline); background: var(--ds-surface-2); }
+
+/* ── Messages & empty states ── */
+.rm-workspace.rops-modern :is(.rm-empty, .projects-empty, .investors-empty, .accounting-empty, .time-empty, .rmd-dashboard .rmd-empty) { color: var(--ds-muted); font: var(--ds-body); }
+.rm-workspace.rops-modern :is(.projects-empty, .investors-empty, .accounting-empty, .time-empty) :is(h2, h3, strong) { color: var(--ds-ink); font: var(--ds-headline); }
+.rm-workspace.rops-modern :is(.rm-empty, .projects-empty, .investors-empty, .accounting-empty, .time-empty) svg { color: var(--ds-faint); }
+.rm-workspace.rops-modern :is(.rm-error, .projects-error, .investors-error) { border: 0; border-radius: var(--ds-r-m); background: var(--ds-critical-wash); color: var(--ds-critical); }
+.rm-workspace.rops-modern .rm-notice { border: 0; border-radius: var(--ds-r-m); background: var(--ds-surface); box-shadow: var(--ds-shadow-float); }
+.rm-workspace.rops-modern .rmd-load-error { border: 0; background: var(--ds-warning-wash); }
+
+/* ── Dashboard ── */
+.rm-workspace.rops-modern .rmd-dashboard { gap: 14px; font-family: var(--ds-font); }
+.rm-workspace.rops-modern .rmd-top-grid,
+.rm-workspace.rops-modern :is(.rmd-trend-grid, .rmd-bottom-grid) { gap: 14px; }
+.rm-workspace.rops-modern .rmd-chart-filters { padding: 2px 14px 4px; }
+.rm-workspace.rops-modern .rmd-chart-filters select { min-height: 30px; padding-block: 0; border-radius: var(--ds-r-s); font-size: 12px; }
+.rm-workspace.rops-modern .rmd-chart-legend { padding: 0 18px; }
+.rm-workspace.rops-modern .rmd-chart-legend button { color: var(--ds-muted); }
+.rm-workspace.rops-modern .rmd-chart text { fill: var(--ds-muted); }
+.rm-workspace.rops-modern .rmd-chart-readout { padding: 10px 18px; border-color: var(--ds-hairline); }
+.rm-workspace.rops-modern .rmd-notes textarea { width: calc(100% - 28px); margin: 0 14px; border: 0; background: var(--ds-surface-2); box-shadow: inset 0 0 0 1px var(--ds-hairline); }
+.rm-workspace.rops-modern .rmd-note-actions { padding: 10px 14px 14px; }
+.rm-workspace.rops-modern .rmd-note-actions button { min-height: 30px; border: 0; background: var(--ds-fill); }
+.rm-workspace.rops-modern .rmd-note-actions button:first-of-type:not(:disabled) { background: var(--ds-ink-2); color: #fff; }
+
+/* KPI strip */
+.rm-workspace.rops-modern .rops-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.rm-workspace.rops-modern .rops-kpi {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  border-radius: var(--ds-r-l);
+  background: var(--ds-surface);
+  box-shadow: var(--ds-shadow-panel), 0 0 0 1px var(--ds-hairline);
+}
+.rm-workspace.rops-modern .rops-kpi-label { color: var(--ds-muted); font: 500 12px/16px var(--ds-font); }
+.rm-workspace.rops-modern .rops-kpi-value { color: var(--ds-ink); font: 600 26px/30px var(--ds-font-display); letter-spacing: -.024em; font-variant-numeric: tabular-nums; }
+.rm-workspace.rops-modern .rops-kpi-detail { color: var(--ds-muted); font: var(--ds-caption); }
+.rm-workspace.rops-modern .rops-kpi-meter { height: 4px; border-radius: 4px; background: var(--ds-fill-hover); overflow: hidden; }
+.rm-workspace.rops-modern .rops-kpi-meter > i { display: block; height: 100%; border-radius: inherit; background: var(--ds-ink-2); }
+.rm-workspace.rops-modern .rops-kpi[data-tone="attention"] .rops-kpi-value { color: var(--ds-critical); }
+
+/* ── Report library & setup ── */
+.rm-workspace.rops-modern .rm-report-setup { padding: 20px; }
+.rm-workspace.rops-modern .rm-report-setup-label { color: var(--ds-muted); font: 500 12px/16px var(--ds-font); }
+
+/* ── Small screens ── */
+@media (max-width: 650px) {
+  .rm-workspace.rops-modern { --ds-control: 44px; --ds-title: 600 26px/32px var(--ds-font-display); }
+  .rm-workspace.rops-modern .rops-topbar { top: 8px; margin: 8px 10px; border-radius: 16px; }
+  .rm-workspace.rops-modern .rm-main { padding: 12px 16px 40px; }
+  .rm-workspace.rops-modern .rops-kpis { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .rm-workspace.rops-modern .rops-kpi { padding: 14px; }
+  .rm-workspace.rops-modern .rops-kpi-value { font-size: 22px; line-height: 26px; }
+  .rm-workspace.rops-modern .rm-button--small { min-height: 36px; }
+  .rm-workspace.rops-modern .rmd-chart-filters select { min-height: 44px; }
+  .rm-workspace.rops-modern .rmd-note-actions button { min-height: 44px; }
+  .rm-workspace.rops-modern .rmd-panel-header > button { width: 44px; height: 44px; top: 2px; right: 2px; }
+}
+@media (pointer: coarse) {
+  .rm-workspace.rops-modern .rmd-chart-filters select, .rm-workspace.rops-modern .rmd-note-actions button { min-height: 44px; }
+}
+
+/* ── Accessibility preferences ── */
+@media (prefers-contrast: more) {
+  .rm-workspace.rops-modern {
+    --ds-hairline: rgb(58 50 38 / 38%);
+    --ds-hairline-strong: rgb(58 50 38 / 60%);
+    --ds-muted: #48484c;
+    --ds-fill: rgb(58 50 38 / 10%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rm-workspace.rops-modern * { transition: none !important; }
+  .rm-workspace.rops-modern :is(.rm-button, [class$="-button"]):active { transform: none !important; }
+}
+@media (forced-colors: active) {
+  .rm-workspace.rops-modern :is(.rm-button, [class$="-button"], .rm-status, input, select) { border: 1px solid ButtonText; }
+  .rm-workspace.rops-modern .rm-record-list-item.active::before { background: Highlight; }
+}
+@media print {
+  .rm-workspace.rops-modern { background: #fff; }
+  .rm-workspace.rops-modern :is(.rm-panel, .rmd-panel, .rops-kpi) { box-shadow: none; border: 1px solid #ccc; }
+}
+
+/* ── Refinements after visual review ── */
+.rm-workspace.rops-modern .rops-primary-navigation { justify-content: flex-start; gap: 2px; margin-left: 8px; }
+@media (min-width: 1101px) { .rm-workspace.rops-modern .rops-primary-navigation { justify-content: center; margin-left: 0; margin-right: 96px; } }
+.rm-workspace.rops-modern .rmd-dashboard .rmd-chart-filters select {
+  min-height: 30px;
+  border: 0;
+  background-color: var(--ds-fill);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath stroke='%236e6e73' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m1 1 4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 9px 5px;
+  padding: 0 26px 0 10px;
+}
+.rm-workspace.rops-modern .rmd-dashboard .rmd-note-actions button { border: 0; }
+.rm-workspace.rops-modern .rmd-dashboard td { height: 36px; padding-block: 6px; }
+.rm-workspace.rops-modern .rmd-dashboard :is(th, td) { padding-inline: 8px; }
+.rm-workspace.rops-modern .rmd-dashboard :is(th, td):first-child { padding-left: 18px; }
+.rm-workspace.rops-modern .rmd-dashboard :is(th, td):last-child { padding-right: 18px; }
+.rm-workspace.rops-modern .rmd-delinquency th:nth-child(5) { width: 124px; }
+.rm-workspace.rops-modern .rmd-occupancy-property th:nth-child(n+2) { width: 70px; }
+.rm-workspace.rops-modern .rmd-vacancy-property th:nth-child(2) { width: 62px; }
+.rm-workspace.rops-modern .rmd-vacancy-property th:nth-child(4) { width: 82px; }
+.rm-workspace.rops-modern .rmd-receipts th:nth-child(2) { width: 96px; }
+.rm-workspace.rops-modern .rmd-top-grid { grid-template-rows: 224px 224px; }
+.rm-workspace.rops-modern .rops-kpi[data-tone="review"] .rops-kpi-value { color: var(--ds-muted); font-size: 20px; line-height: 30px; font-weight: 500; letter-spacing: -.012em; }
+.rm-workspace.rops-modern .rm-workspace-toolbar > label > select { min-width: 176px; }
+
+/* Only the last filled action in a group stays filled; earlier ones step down to quiet. */
+.rm-workspace.rops-modern .rm-button-primary:has(~ .rm-button-primary) { background: var(--ds-fill); color: var(--ds-ink); font-weight: 500; }
+.rm-workspace.rops-modern .rm-button-primary:has(~ .rm-button-primary):hover:not(:disabled) { background: var(--ds-fill-hover); }
+
+/* Tenant portal admin card inside the manager record */
+.rm-workspace.rops-modern .tp-admin-accounts {
+  margin: 20px 0 0;
+  padding: 20px;
+  border: 0;
+  border-radius: var(--ds-r-l);
+  background: var(--ds-surface);
+  box-shadow: var(--ds-shadow-panel), 0 0 0 1px var(--ds-hairline);
+  font-family: var(--ds-font);
+}
+.rm-workspace.rops-modern .tp-admin-accounts h3 { font: var(--ds-headline); }
+.rm-workspace.rops-modern .tp-admin-accounts label { color: var(--ds-muted); font: 500 12px/16px var(--ds-font); }
+.rm-workspace.rops-modern .tp-admin-accounts :is(input, select) { padding: 0 12px; font-weight: 400; }
+.rm-workspace.rops-modern .tp-admin-accounts button { min-height: var(--ds-control); padding: 0 14px; border: 0; border-radius: var(--ds-r-m); background: var(--ds-fill); font: 500 13px/1 var(--ds-font); }
+.rm-workspace.rops-modern .tp-admin-accounts form > .tp-primary { align-self: flex-start; }
+.rm-workspace.rops-modern .tp-admin-accounts .tp-error { border: 0; border-radius: var(--ds-r-m); background: var(--ds-critical-wash); color: var(--ds-critical); }
+.rm-workspace.rops-modern .tp-admin-accounts .tp-notice { border: 0; border-radius: var(--ds-r-m); background: var(--ds-gold-wash); color: var(--ds-ink-2); }
+.rm-workspace.rops-modern .ro-phone-editor .rm-button, .rm-workspace.rops-modern .ro-phone-editor button { border: 0; background: var(--ds-fill); border-radius: var(--ds-r-m); min-height: var(--ds-control); font: 500 13px/1 var(--ds-font); padding: 0 14px; }
+.rm-workspace.rops-modern .rm-summary-grid .rm-panel > :is(h2, h3):first-child,
+.rm-workspace.rops-modern .rm-tenant-panel :is(h2, h3) { font: var(--ds-headline); letter-spacing: -.012em; margin-bottom: 8px; }
+.rm-workspace.rops-modern .rm-record-summary-meta :is(span, small, dt) { text-transform: none; letter-spacing: 0; font: 500 12px/16px var(--ds-font); color: var(--ds-muted); }
+
+/* Dashboard column fit: amounts and dates keep full width */
+.rm-workspace.rops-modern .rmd-top-grid { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 1.55fr) minmax(0, .85fr); }
+.rm-workspace.rops-modern .rmd-occupancy-property th:nth-child(n+2) { width: 80px; }
+.rm-workspace.rops-modern .rmd-receipts th:nth-child(2) { width: 100px; }
+.rm-workspace.rops-modern .rmd-receipts th:nth-child(3) { width: 104px; }
+
+/* Company modules: one card, filter row inside it, same header rhythm as rental pages */
+.rm-workspace.rops-modern .accounting-selectors { padding: 16px 20px; border: 0; border-radius: var(--ds-r-l) var(--ds-r-l) 0 0; background: var(--ds-surface); box-shadow: 0 0 0 1px var(--ds-hairline); }
+.rm-workspace.rops-modern .accounting-selectors label,
+.rm-workspace.rops-modern :is(.accounting-form, .investors-form, .time-form) label { color: var(--ds-muted); font: 500 12px/16px var(--ds-font); }
+.rm-workspace.rops-modern :is(.accounting-selectors, .accounting-form, .investors-filter, .investors-form, .time-form, .time-filter-bar, .time-selector-bar) :is(input, select, textarea) { border: 1px solid transparent; border-radius: var(--ds-r-m); background-color: var(--ds-fill); font-size: 14px; font-weight: 400; }
+.rm-workspace.rops-modern .accounting-grid { border-radius: 0 0 var(--ds-r-l) var(--ds-r-l); overflow: hidden; }
+.rm-workspace.rops-modern .accounting-sidebar { background: var(--ds-surface-2); border-color: var(--ds-hairline); }
+.rm-workspace.rops-modern .accounting-connection { margin: 8px; padding: 12px 14px; border: 0; border-radius: var(--ds-r-m); background: var(--ds-surface); box-shadow: 0 0 0 1px var(--ds-hairline); }
+.rm-workspace.rops-modern .accounting-message { margin: 0 0 14px; border: 0; background: var(--ds-positive-wash); }
+.rm-workspace.rops-modern .accounting-message.is-error { background: var(--ds-critical-wash); color: var(--ds-critical); }
+.rm-workspace.rops-modern :is(.investors-filter, .time-filter-bar) { padding: 14px; border-color: var(--ds-hairline); }
+.rm-workspace.rops-modern .investors-search { position: relative; display: block; }
+.rm-workspace.rops-modern .investors-search > svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--ds-faint); pointer-events: none; }
+.rm-workspace.rops-modern .investors-search > input { padding-left: 32px; }
+.rm-workspace.rops-modern :is(.investors-metrics, .time-metrics) > * { border: 0; border-radius: var(--ds-r-l); background: var(--ds-surface-2); box-shadow: 0 0 0 1px var(--ds-hairline); }
+.rm-workspace.rops-modern :is(.investors-detail-head, .time-detail-head, .projects-detail-header) h2 { font: var(--ds-title-2); letter-spacing: -.018em; }
+
+/* Banking */
+.rm-workspace.rops-modern .rmb { padding: 20px; border-radius: var(--ds-r-l); background: var(--ds-surface); box-shadow: var(--ds-shadow-panel), 0 0 0 1px var(--ds-hairline); color: var(--ds-ink); }
+.rm-workspace.rops-modern .rmb :is(h2, h3) { font: var(--ds-headline); letter-spacing: -.012em; }
+.rm-workspace.rops-modern .rmb :is(p, .rmb-status) { color: var(--ds-muted); }
+.rm-workspace.rops-modern .rmb button { min-height: var(--ds-control); padding: 0 14px; border: 0; border-radius: var(--ds-r-m); background: var(--ds-fill); color: var(--ds-ink); font: 500 13px/1 var(--ds-font); }
+.rm-workspace.rops-modern .rmb button:hover:not(:disabled) { background: var(--ds-fill-hover); }
+.rm-workspace.rops-modern .rmb select { border: 0; border-radius: var(--ds-r-m); background-color: var(--ds-fill); }
+.rm-workspace.rops-modern :is(.rmb-connection, .rmb-table) { border: 0; border-radius: var(--ds-r-l); box-shadow: 0 0 0 1px var(--ds-hairline); }
+.rm-workspace.rops-modern .rmb th { background: transparent; color: var(--ds-muted); font: 500 12px/16px var(--ds-font); }
+.rm-workspace.rops-modern .rmb :is(th, td) { border-color: rgb(58 50 38 / 7%); }
+
+/* Phone filter bar: dates pair with Today, search pairs with Refresh */
+@media (max-width: 650px) {
+  .rm-workspace.rops-modern .rm-workspace-toolbar { display: flex; flex-wrap: wrap; gap: 10px; }
+  .rm-workspace.rops-modern .rm-workspace-toolbar > :is(label, .rm-property-filter) { flex: 1 1 100%; max-width: none; }
+  .rm-workspace.rops-modern .rm-workspace-toolbar > label:has(input[type="date"]) { flex: 1 1 0; max-width: none; }
+  .rm-workspace.rops-modern .rm-workspace-toolbar > label:has(input[type="date"]) + .rm-button { flex: 0 0 auto; }
+  .rm-workspace.rops-modern .rm-workspace-toolbar > .rm-search { flex: 1 1 0; max-width: none; }
+  .rm-workspace.rops-modern .rm-workspace-toolbar-actions { flex: 0 0 auto; margin-left: 0; padding-left: 0; }
+  .rm-workspace.rops-modern .rm-workspace-toolbar > label:has([aria-label="Portfolio scope"]) { flex: 1 1 calc(50% - 5px); max-width: none; }
+  .rm-workspace.rops-modern .rm-workspace-toolbar > label:has([aria-label="Portfolio scope"]) + .rm-property-filter { flex: 1 1 calc(50% - 5px); align-self: flex-end; }
+}
+.rm-workspace.rops-modern { --rm-record-list-width: 248px; }
+
+/* Legacy rent-ops panels inside the manager */
+.rm-workspace.rops-modern .ro-panel { border: 0; border-radius: var(--ds-r-l); background: var(--ds-surface); box-shadow: var(--ds-shadow-panel), 0 0 0 1px var(--ds-hairline); }
+.rm-workspace.rops-modern .ro-panel-heading :is(h2, h3) { font: var(--ds-headline); letter-spacing: -.012em; }
+.rm-workspace.rops-modern .ro-panel button:not([class]) { min-height: var(--ds-control); padding: 0 14px; border: 0; border-radius: var(--ds-r-m); background: var(--ds-fill); color: var(--ds-ink); font: 500 13px/1 var(--ds-font); }
+.rm-workspace.rops-modern .ro-panel button:not([class]):hover:not(:disabled) { background: var(--ds-fill-hover); }
+@media (max-width: 650px), (pointer: coarse) {
+  .rm-workspace.rops-modern .rmd-dashboard th button { min-height: 44px; }
+}
+@media (max-width: 650px), (pointer: coarse) {
+  .rm-workspace.rops-modern .rmd-dashboard .rmd-chart-filters select { min-height: 44px; }
+}

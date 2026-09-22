@@ -39,6 +39,7 @@ import '../rent-ops.css';
 import './workspace.css';
 import './workspace-modern.css';
 import './dashboard-modern.css';
+import '../../../styles/rops-system.css';
 import { TopNavigation, useWorkspaceAppearance } from './top-navigation';
 import { WORKSPACE_LABELS, type WorkspaceDestination } from './navigation';
 

@@ -11,6 +11,7 @@ import { DashboardChart } from "./dashboard-chart";
 import { useReportSearch } from "./use-report-search";
 import { recentOnlineApplications, dashboardMovements } from "./dashboard-tiles";
 import { ApplicationCaseDetail } from "../application-case-detail";
+import { dashboardKpis } from "./dashboard-kpis";
 import "./rm-dashboard.css";
 
 type Row = Record<string, unknown>;
@@ -110,6 +111,7 @@ export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenU
   const cashReady = cash.data?.state === "ready" ? cash.data : undefined;
   return <section className="rm-dashboard-workspace rmd-dashboard" aria-label="Rent Operations dashboard">
     {errors.length > 0 && <div className="rmd-load-error" role="alert">Some tables could not be loaded. <button onClick={() => { requests.forEach(request => { if (request.error) void request.refetch(); }); }}>Retry</button></div>}
+    <ul className="rops-kpis" aria-label="Portfolio summary">{dashboardKpis({ propertyRows, dueRows, receipts, period: filters.asOfDate.slice(0, 7) }).map(kpi => <li key={kpi.key} className="rops-kpi" data-tone={kpi.tone}><span className="rops-kpi-label">{kpi.label}</span><strong className="rops-kpi-value">{kpi.value}</strong>{kpi.share !== undefined && <span className="rops-kpi-meter" aria-hidden="true"><i style={{ width: `${Math.round(kpi.share * 100)}%` }} /></span>}<span className="rops-kpi-detail">{kpi.detail}</span></li>)}</ul>
     <div className="rmd-top-grid">
       {cashReady ? <Panel title="Cash Account" className="rmd-cash"><Table rows={[cashReady]} columns={[{ key: "name", label: "Account", render: row => <>{text(row.name)} · {text(row.mask)}</> }, amountColumn("currentCents", "Balance")]} /><div className="rmd-cash-available"><span>Available</span><strong>{money(cashReady.availableCents)}</strong></div><div className="rmd-cash-date">Company cash · {new Date(cashReady.checkedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}<button type="button" title="Refresh cash balance" aria-label="Refresh cash balance" disabled={cash.isFetching} onClick={() => void cash.refetch()}><RefreshCw size={12} /></button></div></Panel>
       : <Panel title="Rent Roll by Property" className="rmd-cash" onOpen={() => onReport("rent-roll")}><Table rows={propertyRows} columns={[propertyColumn, { key: "rent", label: "Base rent", number: true, render: row => row.rentUnknown || row.unknown ? "Needs review" : money(row.rent) }]} footer={<><span>Occupied base rent</span><strong>{propertyRows?.some(row => row.rentUnknown || row.unknown) ? "Needs review" : money(total(propertyRows, "rent"))}</strong></>} /></Panel>}
