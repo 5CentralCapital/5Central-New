@@ -21,7 +21,7 @@ test('project bookmarks retain their company and record without changing rental 
 });
 
 test('project subsection bookmarks survive reload and cannot leak into rental routes', () => {
-  for (const projectTab of ['overview', 'scope', 'schedule', 'costs']) {
+  for (const projectTab of ['overview', 'scope', 'schedule', 'costs', 'execution']) {
     const route = parseWorkspaceRoute(`?section=projects&record=project:123&projectTab=${projectTab}`);
     assert.equal(route.projectTab, projectTab);
     assert.deepEqual(parseWorkspaceRoute(workspaceRouteSearch(route)), route);
@@ -40,6 +40,23 @@ test('report library bookmark retains portfolio context independently of legacy 
   assert.deepEqual(parseWorkspaceRoute(search), route);
   assert.equal(new URLSearchParams(search).get('asOf'), filters.asOfDate);
   assert.equal(parseWorkspaceRoute('?section=reports&report=rent-roll').report, 'rent-roll');
+});
+
+test('investor account bookmarks retain company and subsection through reload and clear unrelated tabs', () => {
+  const company = '10000000-0000-4000-8000-000000000001';
+  const account = '20000000-0000-4000-8000-000000000002';
+  for (const investorTab of ['overview', 'payments', 'contracts', 'debt', 'activity']) {
+    const route = parseWorkspaceRoute(`?section=investors&company=${company}&record=${account}&investorTab=${investorTab}`);
+    assert.equal(route.organizationId, company);
+    assert.equal(route.recordId, account);
+    assert.equal(route.investorTab, investorTab);
+    assert.deepEqual(parseWorkspaceRoute(workspaceRouteSearch(route)), route);
+    const project = workspaceRouteSearch({ ...route, section: 'projects', projectTab: 'execution' }, undefined, workspaceRouteSearch(route));
+    assert.equal(new URLSearchParams(project).has('investorTab'), false);
+    assert.equal(parseWorkspaceRoute(project).projectTab, 'execution');
+  }
+  assert.equal(parseWorkspaceRoute('?section=investors&investorTab=invalid').investorTab, undefined);
+  assert.equal(parseWorkspaceRoute('?section=tenants&investorTab=payments').investorTab, undefined);
 });
 function bootstrap() { return decodeRentOpsWorkspaceBootstrap(serializeWorkspaceBootstrap(syntheticRentOpsSnapshot(),{asOfDate:filters.asOfDate})); }
 
@@ -186,4 +203,28 @@ test('multi-property membership does not silently widen to all properties',async
   assert.equal(workspacePropertyMatches(scoped,'property:a'),true);
   assert.equal(workspacePropertyMatches(scoped,'property:c'),false);
   assert.equal(workspacePropertyMatches({...scoped,propertyIds:[]},'property:c'),true);
+});
+
+test('employee time keeps company scope without carrying investor or project tabs',()=>{
+  const company='11111111-1111-4111-8111-111111111111';
+  const route=parseWorkspaceRoute(`?section=time&company=${company}&projectTab=costs&investorTab=payments`);
+  assert.equal(route.section,'time');
+  assert.equal(route.organizationId,company);
+  assert.equal(route.projectTab,undefined);
+  assert.equal(route.investorTab,undefined);
+  const url=workspaceRouteSearch(route,undefined,'?section=investors&investorTab=payments');
+  assert.equal(parseWorkspaceRoute(url).organizationId,company);
+  assert.equal(new URLSearchParams(url).has('investorTab'),false);
+});
+
+test('company report bookmarks preserve report and company without changing legacy report URLs',()=>{
+  const company='11111111-1111-4111-8111-111111111111';
+  const route=parseWorkspaceRoute(`?section=company-reports&company=${company}&reportId=income-statement`);
+  assert.equal(route.section,'company-reports');
+  assert.equal(route.reportId,'income-statement');
+  assert.equal(parseWorkspaceRoute(workspaceRouteSearch(route)).organizationId,company);
+  const legacy=workspaceRouteSearch({...route,section:'reports',report:'rent-roll'});
+  assert.equal(parseWorkspaceRoute(legacy).report,'rent-roll');
+  assert.equal(new URLSearchParams(legacy).has('reportId'),false);
+  assert.equal(parseWorkspaceRoute('?section=company-reports&reportId=../../private').reportId,undefined);
 });

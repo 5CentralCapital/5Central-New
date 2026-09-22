@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { COMPANY_APPLICATION_TABLES, COMPANY_ACCESS_TABLES } from "../company/tables";
 
-export const RENT_OPS_SCHEMA_VERSION = 33;
+export const RENT_OPS_SCHEMA_VERSION = 39;
 export const RENT_OPS_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V1_CHECKSUM__";
 export const RENT_OPS_V2_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V2_CHECKSUM__";
 export const RENT_OPS_V3_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V3_CHECKSUM__";
@@ -52,6 +52,12 @@ const RENT_OPS_MIGRATION_FILES = [
   "031_company_foundation.sql",
   "032_company_commands.sql",
   "033_company_projects.sql",
+  "034_accounting_foundation.sql",
+  "035_company_project_execution.sql",
+  "036_company_employee_time.sql",
+  "037_company_investors.sql",
+  "038_company_reporting.sql",
+  "039_accounting_company_binding.sql",
 ] as const;
 
 export const RENT_OPS_SUPPORTED_SCHEMA_VERSIONS = RENT_OPS_MIGRATION_FILES.map((_, index) => index + 1);

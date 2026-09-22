@@ -106,3 +106,14 @@ test("production scope selects the production Accounting host", async () => {
   await client.read("Account", "1");
   assert.match(requested, /^https:\/\/quickbooks\.api\.intuit\.com\/v3\/company\//);
 });
+
+test("preserves large JSON monetary lexemes until the caller can validate them", async () => {
+  const client = createQuickBooksAccountingClient({
+    scope,
+    getAccessToken: async () => "access-token",
+    transport: async () => ({ status: 200, body: '{"Purchase":{"Id":9007199254740993,"SyncToken":17,"TotalAmt":90071992547409.93}}' }),
+  });
+  const result = await client.read("Purchase", "9007199254740993");
+  assert.equal(result.entity.Id, "9007199254740993");
+  assert.equal(result.entity.TotalAmt, "90071992547409.93");
+});

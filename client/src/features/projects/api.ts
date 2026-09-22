@@ -1,11 +1,13 @@
 import { operationIdSchema } from "@shared/company/identifiers";
 import { operationReceiptSchema } from "@shared/company/commands";
-import { projectDetailSchema, projectListResponseSchema, type ProjectCommandKind } from "@shared/projects";
+import { projectDetailSchema, projectExecutionDetailSchema, projectListResponseSchema, type ProjectCommandKind, type ProjectExecutionCommandKind } from "@shared/projects";
 import { rentOpsAuthClient } from "../rent-ops/auth";
 import type {
   ProjectCommandEnvelope,
   ProjectCommandResult,
   ProjectDetail,
+  ProjectExecutionCommandEnvelope,
+  ProjectExecutionDetail,
   ProjectListFilters,
   ProjectListPage,
   ProjectsApi,
@@ -82,6 +84,15 @@ function projectPath(organizationId: string, projectId: string): string {
   return `${basePath(organizationId)}/${encodeURIComponent(projectId)}`;
 }
 
+function executionPath(organizationId: string, projectId: string): string {
+  return `${projectPath(organizationId, projectId)}/execution`;
+}
+
+function executionCommandPath(organizationId: string, kind: ProjectExecutionCommandKind): string {
+  assertId(organizationId, "Company");
+  return `${basePath(organizationId).replace(/\/projects$/, "")}/project-execution-commands/${encodeURIComponent(kind)}`;
+}
+
 export function createProjectCommandEnvelope<TPayload>(
   scope: ProjectCommandEnvelope["scope"],
   payload: TPayload,
@@ -134,9 +145,29 @@ function createApi(): ProjectsApi {
     return projectDetailSchema.parse(projectValue);
   },
 
+  async getProjectExecution(organizationId, projectId, scope = {}, signal): Promise<ProjectExecutionDetail> {
+    const params = new URLSearchParams();
+    if (scope.legalEntityId) params.set("legalEntityId", scope.legalEntityId);
+    if (scope.propertyId) params.set("propertyId", scope.propertyId);
+    const query = params.toString();
+    const payload = await requestJson(`${executionPath(organizationId, projectId)}${query ? `?${query}` : ""}`, { signal });
+    const root = isRecord(payload) && isRecord(payload.data) ? payload.data : payload;
+    const executionValue = isRecord(root) && root.execution !== undefined ? root.execution : root;
+    return projectExecutionDetailSchema.parse(executionValue);
+  },
+
   async sendCommand(organizationId, kind: ProjectCommandKind, envelope) {
     assertId(organizationId, "Company");
     const payload = await requestJson(`${basePath(organizationId).replace(/\/projects$/, "")}/project-commands/${encodeURIComponent(kind)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(envelope),
+    });
+    return commandResult(payload);
+  },
+
+  async sendExecutionCommand(organizationId, kind, envelope) {
+    const payload = await requestJson(executionCommandPath(organizationId, kind), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(envelope),

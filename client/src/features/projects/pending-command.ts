@@ -1,4 +1,4 @@
-import type { ProjectCommandKind } from "@shared/projects";
+import type { ProjectCommandKind, ProjectExecutionCommandKind } from "@shared/projects";
 import type { CompanyScope } from "@shared/company/scope";
 import { createProjectCommandEnvelope } from "./api";
 import type { ProjectCommandEnvelope } from "./types";
@@ -15,12 +15,14 @@ export class PendingProjectCommandError extends Error {
 }
 
 export interface PendingProjectCommand {
-  readonly kind: ProjectCommandKind;
+  readonly kind: ProjectCommandKind | ProjectExecutionCommandKind;
   readonly envelope: PendingEnvelope;
 }
 
+export type ProjectWriteCommandKind = ProjectCommandKind | ProjectExecutionCommandKind;
+
 function commandFingerprint<TPayload>(
-  kind: ProjectCommandKind,
+  kind: ProjectWriteCommandKind,
   scope: CompanyScope,
   payload: TPayload,
   expectedRevision?: number,
@@ -34,10 +36,10 @@ function commandFingerprint<TPayload>(
  * idempotency key to the server.
  */
 export class PendingProjectCommandStore {
-  private pending?: { fingerprint: string; kind: ProjectCommandKind; envelope: PendingEnvelope };
+  private pending?: { fingerprint: string; kind: ProjectWriteCommandKind; envelope: PendingEnvelope };
 
   getOrCreate<TPayload>(
-    kind: ProjectCommandKind,
+    kind: ProjectWriteCommandKind,
     scope: CompanyScope,
     payload: TPayload,
     expectedRevision?: number,

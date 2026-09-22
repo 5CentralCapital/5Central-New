@@ -21,15 +21,20 @@ export async function registerRentOpsMcpRoutes(app: Express, repository: RentOps
     if (origin && origin !== new URL(config.resource).origin) { res.status(403).json({error:'invalid_origin'}); return; }
     const match = /^Bearer ([^\s]+)$/.exec(req.get('authorization') ?? '');
     let principal;
+    let companyActorId: string;
     try {
       principal = await verifyOAuthToken(match?.[1] ?? '',config);
       {
         const admin = await storage.getUserByEmail(env.RENT_OPS_ADMIN_EMAIL!.trim().toLowerCase());
         if (!admin || admin.role !== 'admin') throw new Error('invalid_token');
+        companyActorId = admin.id;
       }
     }
     catch { res.set('WWW-Authenticate',challenge).status(401).json({error:'invalid_token'}); return; }
-    const server = createRentOpsMcpServer(new RentOpsService(repository),principal,config.resource,options);
+    // This deployment explicitly maps its allowlisted OAuth subjects to the
+    // configured administrator. Company records and private presets therefore
+    // keep the same owner in the browser and Codex.
+    const server = createRentOpsMcpServer(new RentOpsService(repository),principal,config.resource,{ ...options, companyActorId });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator:undefined,enableJsonResponse:true });
     res.on('close',() => { void transport.close(); void server.close(); });
     try { await server.connect(transport); await transport.handleRequest(req,res,req.body); }

@@ -1,14 +1,17 @@
 import type { ReportKey } from '../types';
 import type { WorkspaceRoute, WorkspaceSection } from './workspace-state';
 import type { ProjectTab } from '../../projects/types';
+import type { InvestorTab } from '../../investors/types';
 
 export interface WorkspaceDestination {
   label: string;
   section?: WorkspaceSection;
   kind?: 'property' | 'unit';
   report?: ReportKey;
+  reportId?: string;
   tenantStatus?: 'current' | 'future' | 'former' | 'all';
   projectTab?: ProjectTab;
+  investorTab?: InvestorTab;
 }
 export interface WorkspaceNavigationGroup { label: string; items: readonly WorkspaceDestination[]; }
 const planned = (...labels: string[]): WorkspaceDestination[] => labels.map(label => ({ label }));
@@ -34,6 +37,7 @@ export const WORKSPACE_NAVIGATION: readonly WorkspaceNavigationGroup[] = [
     report('Availability & occupancy', 'occupancy'),
   ] },
   { label: 'Accounting', items: [
+    { label: 'QuickBooks', section: 'accounting' },
     { label: 'Cash & banking', section: 'banking' },
     { label: 'Payments & billing', section: 'income' },
     { label: 'Recurring charges', section: 'recurring' },
@@ -46,19 +50,30 @@ export const WORKSPACE_NAVIGATION: readonly WorkspaceNavigationGroup[] = [
     { label: 'Scope & budget', section: 'projects', projectTab: 'scope' },
     { label: 'Schedule', section: 'projects', projectTab: 'schedule' },
     { label: 'Costs', section: 'projects', projectTab: 'costs' },
+    { label: 'Execution', section: 'projects', projectTab: 'execution' },
     ...planned('Files'),
   ] },
   { label: 'Work Orders', items: planned('Open work orders', 'Schedule', 'Completed work') },
-  { label: 'Investors', items: planned('Investor records', 'Investments', 'Activity', 'Agreements', 'Distributions') },
+  { label: 'Investors', items: [
+    { label: 'Investor accounts', section: 'investors', investorTab: 'overview' },
+    { label: 'Monthly payments', section: 'investors', investorTab: 'payments' },
+    { label: 'Contracts', section: 'investors', investorTab: 'contracts' },
+    { label: 'Debt', section: 'investors', investorTab: 'debt' },
+    { label: 'Activity', section: 'investors', investorTab: 'activity' },
+  ] },
   { label: 'Reporting', items: [
     { label: 'Report library', section: 'report-library' },
     report('Scheduled vs. collected', 'scheduled-vs-collected'),
     report('Collected income', 'collected-income'), report('Housing assistance', 'hap'),
-    ...planned('Financial statements', 'Project reports', 'Investor reports', 'Debt & forecasts'),
+    { label: 'Financial statements', section: 'company-reports', reportId: 'income-statement' },
+    { label: 'Project reports', section: 'company-reports', reportId: 'project-performance' },
+    { label: 'Investor reports', section: 'company-reports', reportId: 'investor-owner-activity' },
+    ...planned('Debt & forecasts'),
   ] },
   { label: 'Company', items: [
     { label: 'Documents & activity', section: 'documents' },
-    ...planned('Entities', 'Contacts & contractors', 'Employees & time', 'Administration'),
+    { label: 'Employees & time', section: 'time' },
+    ...planned('Entities', 'Contacts & contractors', 'Administration'),
   ] },
 ];
 
@@ -67,9 +82,10 @@ export function activeNavigationGroup(route: WorkspaceRoute): string {
     case 'dashboard': return 'Dashboard';
     case 'properties': return route.kind === 'unit' ? 'Units' : 'Properties';
     case 'tenants': case 'leases': case 'applicants': return 'Tenants';
-    case 'income': case 'recurring': case 'banking': return 'Accounting';
+    case 'income': case 'recurring': case 'banking': case 'accounting': return 'Accounting';
     case 'projects': return 'Projects';
-    case 'documents': return 'Company';
+    case 'investors': return 'Investors';
+    case 'documents': case 'time': return 'Company';
     case 'rent-roll': return 'Properties';
     case 'reports':
       if (route.report === 'occupancy') return 'Units';
@@ -80,8 +96,8 @@ export function activeNavigationGroup(route: WorkspaceRoute): string {
 }
 
 export const WORKSPACE_LABELS: Record<WorkspaceSection, string> = {
-  dashboard: 'Dashboard', tenants: 'Tenants', properties: 'Properties', projects: 'Projects',
+  dashboard: 'Dashboard', tenants: 'Tenants', properties: 'Properties', projects: 'Projects', investors: 'Investors',
   leases: 'Leases', applicants: 'Applications', recurring: 'Recurring charges',
-  income: 'Payments & billing', banking: 'Banking', 'rent-roll': 'Rent roll',
-  reports: 'Reports', 'report-library': 'Reporting', documents: 'Documents & activity',
+  income: 'Payments & billing', banking: 'Banking', accounting: 'Accounting', 'rent-roll': 'Rent roll',
+  reports: 'Reports', 'report-library': 'Reporting', 'company-reports': 'Reports', documents: 'Documents & activity', time: 'Employee time',
 };

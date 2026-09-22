@@ -20,7 +20,7 @@ export async function readCompanyContext(executor: RentOpsQueryExecutor, actorId
     LEFT JOIN company_legal_entities e ON e.organization_id = o.id AND e.archived_at IS NULL
       AND (g.legal_entity_id IS NULL OR g.legal_entity_id = e.id)
     LEFT JOIN company_property_entity_periods m ON m.organization_id = o.id AND m.legal_entity_id = e.id
-      AND m.effective_from <= CURRENT_DATE AND (m.effective_until IS NULL OR m.effective_until > CURRENT_DATE)
+      AND m.effective_from <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/New_York')::date AND (m.effective_until IS NULL OR m.effective_until > (CURRENT_TIMESTAMP AT TIME ZONE 'America/New_York')::date)
       AND (g.property_id IS NULL OR g.property_id = m.property_id)
     LEFT JOIN rent_ops_properties p ON p.id = m.property_id
     LEFT JOIN rent_ops_units u ON u.property_id = p.id

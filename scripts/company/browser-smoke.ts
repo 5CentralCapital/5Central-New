@@ -6,7 +6,7 @@ import { createCompanyDemoApp } from '../../server/company/demo';
 
 const output = resolve(process.env.ROPS_EVIDENCE_DIR ?? '/tmp/rops-project-browser-evidence');
 await mkdir(output, { recursive: true });
-const demo = await createCompanyDemoApp();
+const demo = await createCompanyDemoApp({ publicDir: process.env.ROPS_PUBLIC_DIR });
 const listener = demo.app.listen(0, '127.0.0.1');
 await new Promise<void>(done => listener.once('listening', done));
 const origin = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;

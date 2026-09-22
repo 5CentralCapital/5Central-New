@@ -57,6 +57,10 @@ export interface QuickBooksTokenRepository {
     token: QuickBooksOAuthTokenSet,
     expectedVersion?: number,
   ): Promise<QuickBooksStoredToken>;
+  /** Explicit reconnect path. It may clear a revoked tombstone; refresh never calls it. */
+  saveNewConnection?(scope: QuickBooksConnectionKey, token: QuickBooksOAuthTokenSet): Promise<QuickBooksStoredToken>;
+  /** Refresh save fenced by the current database lease owner. */
+  saveWithLease?(scope: QuickBooksConnectionKey, token: QuickBooksOAuthTokenSet, expectedVersion: number, leaseOwnerId: string): Promise<QuickBooksStoredToken>;
   revoke(scope: QuickBooksConnectionKey): Promise<void>;
 }
 

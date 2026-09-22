@@ -316,6 +316,60 @@
       "minimumServerContract": 1,
       "minimumClientContract": 1,
       "recovery": "Restore a verified backup or apply a reviewed forward repair; do not delete saved project operations or approved budget history."
+    },
+    {
+      "version": 34,
+      "fileName": "034_accounting_foundation.sql",
+      "sha256": "9b2ded878ec04f2b5695178ec07b632edb8590fb3224b9b503a26c5e9d2c7c77",
+      "predecessor": 33,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Disable affected sync and posting commands; preserve provider revisions and allocation history and apply a reviewed forward repair."
+    },
+    {
+      "version": 35,
+      "fileName": "035_company_project_execution.sql",
+      "sha256": "c44430f5411c4e952afc073728ff05f16a385f9a990f4665f7110f6141082c72",
+      "predecessor": 34,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Disable affected project execution commands and apply a reviewed forward repair; preserve contracts, draws and financial source allocations."
+    },
+    {
+      "version": 36,
+      "fileName": "036_company_employee_time.sql",
+      "sha256": "d217c813db0c5cc1f0f9728370cc3de02ff9ea831147155db931d9e57eaa93e5",
+      "predecessor": 35,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Disable time sync and affected review commands; preserve source revisions, corrections and labor evidence, then apply a reviewed forward repair."
+    },
+    {
+      "version": 37,
+      "fileName": "037_company_investors.sql",
+      "sha256": "0a38fbf95364a153c4272eaac4ee9a892388d00940a1797ab824c92ec23b5de1",
+      "predecessor": 36,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Disable affected investor commands; preserve contracts, payment evidence and monthly history, then apply a reviewed forward repair."
+    },
+    {
+      "version": 38,
+      "fileName": "038_company_reporting.sql",
+      "sha256": "a6cf80af5e92b5a3e05ffa71b9a4df9e650a8378639f6a893fd952085bef1b2e",
+      "predecessor": 37,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Disable affected report generation; retain immutable runs and preset/package revisions, then apply a reviewed forward repair."
+    },
+    {
+      "version": 39,
+      "fileName": "039_accounting_company_binding.sql",
+      "sha256": "acb67f093140f23d975acc695e8c1580adfe44e7bae46b3ae8bf7a80775c4552",
+      "predecessor": 38,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Disable affected QuickBooks connection commands; retain immutable company bindings and confirmation evidence, then apply a reviewed forward repair."
     }
   ]
 }

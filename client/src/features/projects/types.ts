@@ -2,6 +2,9 @@ import type { CommandEnvelope, OperationReceipt } from "@shared/company/commands
 import type { CompanyContextEntity, CompanyContextProperty } from "@shared/company/context";
 import type {
   ProjectCommandKind,
+  ProjectExecutionCommandKind,
+  ProjectExecutionDetail as SharedProjectExecutionDetail,
+  ProjectExecutionCommandPayload,
   ProjectDetail as SharedProjectDetail,
   ProjectDraftCost,
   ProjectScopeItem,
@@ -19,7 +22,8 @@ export type ProjectDetail = SharedProjectDetail;
 export type ProjectScopeLine = ProjectScopeItem;
 export type ProjectTask = SharedProjectTask;
 export type ProjectCostControl = ProjectDraftCost;
-export type { ProjectCommandKind, ProjectStatus, ProjectTaskStatus, ProjectType };
+export type ProjectExecutionDetail = SharedProjectExecutionDetail;
+export type { ProjectCommandKind, ProjectExecutionCommandKind, ProjectExecutionCommandPayload, ProjectStatus, ProjectTaskStatus, ProjectType };
 
 export interface ProjectListFilters {
   readonly status?: ProjectStatus | "all";
@@ -33,6 +37,7 @@ export interface ProjectListPage {
 }
 
 export type ProjectCommandEnvelope<TPayload = unknown> = CommandEnvelope<TPayload>;
+export type ProjectExecutionCommandEnvelope<TPayload = unknown> = CommandEnvelope<TPayload>;
 
 export interface ProjectCommandResult {
   readonly receipt?: OperationReceipt;
@@ -42,14 +47,21 @@ export interface ProjectCommandResult {
 export interface ProjectsApi {
   listProjects(organizationId: string, filters?: ProjectListFilters, signal?: AbortSignal): Promise<ProjectListPage>;
   getProject(organizationId: string, projectId: string, signal?: AbortSignal): Promise<ProjectDetail>;
+  getProjectExecution(organizationId: string, projectId: string, scope?: { legalEntityId?: string; propertyId?: string }, signal?: AbortSignal): Promise<ProjectExecutionDetail>;
   sendCommand<TPayload = unknown>(
     organizationId: string,
     kind: ProjectCommandKind,
     envelope: ProjectCommandEnvelope<TPayload>,
   ): Promise<ProjectCommandResult>;
+  sendExecutionCommand<TPayload = unknown>(
+    organizationId: string,
+    kind: ProjectExecutionCommandKind,
+    envelope: ProjectExecutionCommandEnvelope<TPayload>,
+  ): Promise<ProjectCommandResult>;
 }
 
-export type ProjectTab = "overview" | "scope" | "schedule" | "costs";
+export const PROJECT_TABS = ["overview", "scope", "schedule", "costs", "execution"] as const;
+export type ProjectTab = (typeof PROJECT_TABS)[number];
 
 export interface ProjectWorkspaceProps {
   readonly organizationId: string;

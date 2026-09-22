@@ -6,7 +6,16 @@ import { spawnSync } from "node:child_process";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const suite = process.argv[2] ?? "all";
 const roots = suite === "company"
-  ? ["server/company", "shared/company", "server/projects", "shared/projects", "server/integrations/quickbooks", "shared/accounting/quickbooks", "client/src/features/projects"]
+  ? [
+    "server/company", "shared/company", "client/src/features/company",
+    "server/accounting", "shared/accounting", "server/integrations/quickbooks",
+    "server/projects", "shared/projects", "client/src/features/projects",
+    "server/investors", "shared/investors", "client/src/features/investors",
+    "server/company-documents", "shared/company-documents", "client/src/features/company-documents",
+    "server/intake", "shared/intake", "server/time", "shared/time", "client/src/features/time",
+    "server/reporting", "shared/reporting", "client/src/features/reporting",
+    "server/work-orders", "shared/work-orders", "client/src/features/work-orders",
+  ]
   : suite === "all"
     ? ["server", "shared", "client/src/features", "scripts", "client/src/components/account-entry.test.ts"]
     : null;
@@ -26,7 +35,7 @@ const env = { ...process.env, NODE_ENV: "test" };
 // Tests use synthetic repositories/PGlite. Never inherit live database or
 // service credentials into the default test runner.
 for (const key of Object.keys(env)) {
-  if (/(?:DATABASE_URL|API_KEY|ACCESS_TOKEN|REFRESH_TOKEN|CLIENT_SECRET|WEBHOOK_SECRET|PRIVATE_KEY)$/.test(key)) delete env[key];
+  if (/(?:DATABASE_URL|API_KEY|TOKEN|SECRET|PRIVATE_KEY|ENCRYPTION_KEY)$/.test(key)) delete env[key];
 }
 const concurrency = Number(process.env.ROPS_TEST_CONCURRENCY ?? 4);
 if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error("ROPS_TEST_CONCURRENCY must be an integer from 1 to 8");

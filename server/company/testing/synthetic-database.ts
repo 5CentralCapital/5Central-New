@@ -1,6 +1,8 @@
 import { PGlite } from '@electric-sql/pglite';
 import { ensureRentOpsSchema } from '../../rent-ops/persistence';
 import type { RentOpsQueryExecutor } from '../../rent-ops/repositories/postgres';
+import { createRentOpsSecurityManifest, renderRentOpsSecuritySql } from '../../rent-ops/security/deployment-security';
+import { rentOpsMigrationDefinitions } from '../../rent-ops/persistence';
 
 export const SYNTHETIC_COMPANY = {
   organizationId: '10000000-0000-4000-8000-000000000001',
@@ -14,6 +16,34 @@ export function pgliteExecutor(connection: Pick<PGlite, 'query' | 'transaction'>
   return {
     query: (text, values) => connection.query(text, values),
     transaction: work => connection.transaction(tx => work({ query: (text, values) => tx.query(text, values) })),
+  };
+}
+
+/** Exercise the real runtime grants against this disposable, in-memory database. */
+export async function createSyntheticRuntimeExecutor(db: PGlite): Promise<RentOpsQueryExecutor> {
+  if (process.env.NODE_ENV === 'production') throw new Error('Synthetic runtime roles are unavailable in production');
+  const manifest = createRentOpsSecurityManifest('staging', {
+    gates: {
+      backupVerified: true, backupAttestation: 'disposable-in-memory-fixture',
+      independentAuditVerified: true, independentAuditAttestation: 'disposable-in-memory-fixture',
+      schemaChecksumSha256: rentOpsMigrationDefinitions().at(-1)!.checksum,
+    },
+    roleAttestation: {
+      runtimeRoleIsNotRestrictedTableOwner: true, runtimeRoleNoInherit: true,
+      importerRoleIsDistinct: true, auditorRoleIsDistinct: true, auditorRoleNoInherit: true,
+    },
+  });
+  for (const role of [manifest.target.runtimeRole, manifest.target.importerRole, manifest.target.auditorRole]) {
+    await db.exec(`CREATE ROLE "${role}" NOLOGIN NOINHERIT`);
+  }
+  await db.exec(renderRentOpsSecuritySql(manifest, { mode: 'apply' }).sql);
+  const inRuntime = <T>(work: (executor: RentOpsQueryExecutor) => Promise<T>) => db.transaction(async transaction => {
+    await transaction.exec(`SET LOCAL ROLE "${manifest.target.runtimeRole}"`);
+    return work({ query: (sql, values) => transaction.query(sql, values) });
+  });
+  return {
+    query: (sql, values) => inRuntime(executor => executor.query(sql, values)),
+    transaction: work => inRuntime(work),
   };
 }
 

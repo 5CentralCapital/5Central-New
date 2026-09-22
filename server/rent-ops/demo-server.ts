@@ -1,5 +1,6 @@
 import express, { type Express } from "express";
 import path from "node:path";
+import type { RentOpsRepository } from "../../shared/rent-ops-contracts";
 import { createSyntheticRentOpsRepository } from "./fixtures/synthetic";
 import { registerRentOpsRoutes } from "./routes";
 import { applicantPageSecurityHeaders } from "../applicant-page-security";
@@ -7,6 +8,13 @@ import { applicantPageSecurityHeaders } from "../applicant-page-security";
 export interface RentOpsDemoServerOptions {
   publicDir?: string;
   port?: number;
+  /**
+   * Optional explicitly seeded repository for the shared company demo.
+   * Keeping this injectable lets the company fixture use one Postgres-backed
+   * snapshot while the standalone Rent Operations demo keeps its in-memory
+   * fixture by default.
+   */
+  syntheticRepository?: RentOpsRepository;
   configureSyntheticRoutes?: (app: Express) => void;
 }
 
@@ -19,7 +27,7 @@ export interface RentOpsDemoServerOptions {
 export function createRentOpsDemoApp(options: RentOpsDemoServerOptions = {}): Express {
   if (process.env.NODE_ENV === "production") throw new Error("Rent Operations demo server cannot run in production");
   const app = express();
-  const repository = createSyntheticRentOpsRepository();
+  const repository = options.syntheticRepository ?? createSyntheticRentOpsRepository();
   const demoAdmin = {
     id: "demo-admin",
     email: "demo-admin@example.test",

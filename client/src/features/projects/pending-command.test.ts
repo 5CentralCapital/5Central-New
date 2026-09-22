@@ -38,3 +38,12 @@ test("an unresolved command blocks a changed payload until the original is resol
     PendingProjectCommandError,
   );
 });
+
+test("execution commands keep one envelope for a retry", () => {
+  const store = new PendingProjectCommandStore();
+  const scope = { organizationId: "org-1", legalEntityId: "entity-1", propertyId: "property-1" } as never;
+  const first = store.getOrCreate("project.assignment.update", scope, { assignmentId: "assignment-1", status: "accepted" }, 7);
+  const retry = store.getOrCreate("project.assignment.update", scope, { assignmentId: "assignment-1", status: "accepted" }, 7);
+  assert.equal(retry.operationId, first.operationId);
+  assert.equal(retry.idempotencyKey, first.idempotencyKey);
+});

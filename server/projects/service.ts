@@ -16,6 +16,7 @@ import {
   type ProjectBudgetLine,
 } from "../../shared/projects";
 import {
+  centsFromBigInt,
   companyScopeSchema,
   type CompanyScope,
 } from "../../shared/company";
@@ -37,6 +38,7 @@ import {
   encodeProjectCursor,
   resolveEffectiveDate,
 } from "./helpers";
+import { legalEntityIdSchema } from "../../shared/company";
 import {
   budgetLineIdSchema,
   budgetVersionIdSchema,
@@ -50,6 +52,11 @@ import { z } from "zod";
 import { executeProjectCommand, type ProjectCommandExecutionOptions } from "./commands";
 import type { OperationReceipt } from "../../shared/company";
 import type { ProjectCommandKind } from "../../shared/projects";
+import {
+  projectFinanceCoverageSchema,
+  type ProjectFinanceActual,
+  type ProjectFinanceReadPort,
+} from "../../shared/projects";
 
 interface ProjectSummaryRow extends Record<string, unknown> {}
 
@@ -166,6 +173,28 @@ function mapPostedActual(row: Record<string, unknown>): ReturnType<typeof projec
   });
 }
 
+function mapFinanceActual(actual: ProjectFinanceActual): ReturnType<typeof projectPostedActualSchema.parse> {
+  const sourceScope = JSON.stringify({ environment: actual.source.environment, legalEntityId: actual.source.legalEntityId, realmId: actual.source.realmId });
+  const externalId = [actual.source.objectType, actual.source.objectId, actual.source.lineId ?? "*", actual.source.version].join(":");
+  return projectPostedActualSchema.parse({
+    id: postedActualIdSchema.parse(actual.id),
+    projectId: projectIdSchema.parse(actual.projectId),
+    scopeItemId: actual.scopeItemId === null ? null : scopeItemIdSchema.parse(actual.scopeItemId),
+    provider: "qbo",
+    sourceScope,
+    externalId,
+    description: actual.description,
+    amountCents: actual.amountCents,
+    currency: actual.currency,
+    postedOn: actual.postedOn,
+    createdAt: new Date(`${actual.postedOn}T00:00:00.000Z`).toISOString(),
+  });
+}
+
+function sumActuals(actuals: readonly ProjectFinanceActual[]): ReturnType<typeof centsFromBigInt> {
+  return centsFromBigInt(actuals.reduce((total, actual) => total + BigInt(actual.amountCents), BigInt(0)));
+}
+
 const summarySelect = `
   SELECT p.id, p.organization_id, p.legal_entity_id, p.property_id, p.unit_id,
          p.name, p.description, p.project_type, p.status, p.currency, p.start_on, p.target_on,
@@ -240,10 +269,16 @@ function scopeWhere(scope: CompanyScope, asOf?: string, projectId?: string): { s
 
 export interface ProjectReadServiceOptions {
   readonly executor: RentOpsQueryExecutor;
+  /** Optional verified central finance source. When omitted, legacy manual actual reads remain available. */
+  readonly finance?: ProjectFinanceReadPort;
 }
 
 export class ProjectReadService {
-  constructor(protected readonly executor: RentOpsQueryExecutor) {}
+  private readonly finance: ProjectFinanceReadPort | null;
+
+  constructor(protected readonly executor: RentOpsQueryExecutor, finance: ProjectFinanceReadPort | null = null) {
+    this.finance = finance;
+  }
 
   async list(principal: AuthenticatedPrincipal, input: ProjectListQuery): Promise<ProjectListResponse> {
     const query = projectListQuerySchema.parse(input);
@@ -265,7 +300,24 @@ export class ProjectReadService {
     );
     const hasMore = result.rows.length > query.limit;
     const rows = hasMore ? result.rows.slice(0, query.limit) : result.rows;
-    const items = rows.map(mapProjectSummary);
+    let items = rows.map(mapProjectSummary);
+    if (this.finance !== null) {
+      items = await Promise.all(rows.map(async (row, index) => {
+        const projectId = projectIdSchema.parse(dbString(row.id, "id"));
+        const result = await this.finance!.getProjectActuals({
+          organizationId: dbString(row.organization_id, "organization_id"),
+          legalEntityId: legalEntityIdSchema.parse(dbString(row.legal_entity_id, "legal_entity_id")),
+          projectId,
+          asOf,
+        });
+        const coverage = projectFinanceCoverageSchema.parse(result.coverage);
+        return projectSummarySchema.parse({
+          ...items[index],
+          postedActualCents: coverage === "unavailable" ? null : sumActuals(result.actuals),
+          postedActualCoverage: coverage,
+        });
+      }));
+    }
     const nextCursor = hasMore && items.at(-1) ? encodeProjectCursor(items.at(-1)!.updatedAt, items.at(-1)!.id) : null;
     return projectListResponseSchema.parse({ items, nextCursor });
   }
@@ -279,7 +331,7 @@ export class ProjectReadService {
     const summaryResult = await this.executor.query<ProjectSummaryRow>(`${summarySelect} WHERE ${where.sql}`, where.values);
     const summaryRow = summaryResult.rows[0];
     if (!summaryRow) throw new ValidationCommandError("Project was not found in the requested company scope", { reason: "project_not_found" });
-    const summary = mapProjectSummary(summaryRow);
+    let summary = mapProjectSummary(summaryRow);
     const projectValues = [scope.organizationId, projectId];
 
     const [scopeItemsResult, budgetVersionsResult, budgetLinesResult, tasksResult, dependenciesResult, draftCostsResult, postedActualsResult] = await Promise.all([
@@ -368,7 +420,23 @@ export class ProjectReadService {
     }
     const tasks = tasksResult.rows.map((row) => mapTask(row, dependencies.get(dbString(row.id, "task_id")) ?? []));
     const draftCosts = draftCostsResult.rows.map(mapDraftCost);
-    const postedActuals = postedActualsResult.rows.map(mapPostedActual);
+    let postedActuals = postedActualsResult.rows.map(mapPostedActual);
+    if (this.finance !== null) {
+      const financeResult = await this.finance.getProjectActuals({
+        organizationId: scope.organizationId,
+        legalEntityId: scope.legalEntityId ?? legalEntityIdSchema.parse(summary.legalEntityId),
+        projectId,
+        asOf,
+      });
+      const coverage = projectFinanceCoverageSchema.parse(financeResult.coverage);
+      const actuals = financeResult.actuals;
+      postedActuals = actuals.map(mapFinanceActual);
+      summary = projectSummarySchema.parse({
+        ...summary,
+        postedActualCents: coverage === "unavailable" ? null : sumActuals(actuals),
+        postedActualCoverage: coverage,
+      });
+    }
     return projectDetailSchema.parse({ ...summary, scopeItems, budgetVersions, tasks, draftCosts, postedActuals });
   }
 }
@@ -383,4 +451,4 @@ export class ProjectService extends ProjectReadService {
   }
 }
 
-export const projectReadService = (executor: RentOpsQueryExecutor): ProjectReadService => new ProjectReadService(executor);
+export const projectReadService = (executor: RentOpsQueryExecutor, finance?: ProjectFinanceReadPort): ProjectReadService => new ProjectReadService(executor, finance ?? null);

@@ -2,13 +2,18 @@ import { cloneElement, isValidElement, useCallback, useEffect, useMemo, useRef, 
 import { Archive, CalendarDays, Check, CircleAlert, FolderKanban, ListChecks, LoaderCircle, Pencil, Plus, Search, WalletCards, X } from "lucide-react";
 import { createProjectsApi, ProjectRevisionConflictError } from "./api";
 import { formatInputValue, formatMoney, parseMoneyInput } from "./money";
-import { PendingProjectCommandError, PendingProjectCommandStore } from "./pending-command";
+import { PendingProjectCommandError, PendingProjectCommandStore, type ProjectWriteCommandKind } from "./pending-command";
+import { ProjectExecutionWorkspace, type ProjectExecutionActions } from "./execution-workspace";
 import type {
   CostControlFormValues,
   ProjectCommandKind,
   ProjectCommandEnvelope,
   ProjectCostControl,
   ProjectDetail,
+  ProjectExecutionCommandKind,
+  ProjectExecutionCommandEnvelope,
+  ProjectExecutionCommandPayload,
+  ProjectExecutionDetail,
   ProjectFormValues,
   ProjectListFilters,
   ProjectScopeLine,
@@ -24,7 +29,7 @@ import type {
   ScopeLineFormValues,
   TaskFormValues,
 } from "./types";
-import { PROJECT_STATUSES, PROJECT_TASK_STATUSES, PROJECT_TYPES } from "@shared/projects";
+import { PROJECT_STATUSES, PROJECT_TASK_STATUSES, PROJECT_TYPES, projectExecutionCommandKinds } from "@shared/projects";
 import type { CompanyScope } from "@shared/company/scope";
 import { Dialog } from "@/components/ui/dialog";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
@@ -54,6 +59,7 @@ function propertyName(entities: readonly ProjectWorkspaceEntity[], entityId: str
 function entityFor(entities: readonly ProjectWorkspaceEntity[], id: string): ProjectWorkspaceEntity | undefined { return entities.find((entity) => entity.id === id); }
 function propertyFor(entities: readonly ProjectWorkspaceEntity[], entityId: string, id: string): ProjectWorkspaceEntity["properties"][number] | undefined { return entityFor(entities, entityId)?.properties.find((property) => property.id === id); }
 function scopeForProject(organizationId: string, project: Pick<ProjectSummary, "legalEntityId" | "propertyId">): CompanyScope { return { organizationId: organizationId as CompanyScope["organizationId"], legalEntityId: project.legalEntityId, propertyId: project.propertyId }; }
+function isProjectExecutionCommand(kind: ProjectWriteCommandKind): kind is ProjectExecutionCommandKind { return (projectExecutionCommandKinds as readonly string[]).includes(kind); }
 function parseNonNegativeMoney(value: string, label: string): string | undefined { const parsed = value.trim() ? parseMoneyInput(value, label).cents : undefined; if (parsed !== undefined && BigInt(parsed) < BigInt(0)) throw new Error(`${label} cannot be negative.`); return parsed; }
 function parseRequiredNonNegativeMoney(value: string, label: string): string { const parsed = parseNonNegativeMoney(value, label); if (parsed === undefined) throw new Error(`${label} is required.`); return parsed; }
 
@@ -110,7 +116,7 @@ function CostEditor({ cost, project, error, saving, onClose, onSave, onReload, o
 }
 
 function MetricStrip({ project }: { project: ProjectDetail }) {
-  const remaining = project.approvedBudgetCents !== null && project.postedActualCents !== null && project.postedActualCents !== undefined ? (BigInt(project.approvedBudgetCents) - BigInt(project.postedActualCents)).toString() : undefined;
+  const remaining = project.postedActualCoverage === "complete" && project.approvedBudgetCents !== null && project.postedActualCents !== null && project.postedActualCents !== undefined ? (BigInt(project.approvedBudgetCents) - BigInt(project.postedActualCents)).toString() : undefined;
   return <div className="projects-metrics"><div><span>Approved budget</span><strong>{formatMoney(project.approvedBudgetCents ?? undefined, project.currency)}</strong></div><div><span>QBO actual</span><strong>{formatMoney(project.postedActualCents ?? undefined, project.currency)}</strong></div><div><span>Remaining</span><strong>{formatMoney(remaining, project.currency)}</strong></div><div><span>Draft costs</span><strong>{formatMoney(project.draftCostCents, project.currency)}</strong></div></div>;
 }
 
@@ -135,10 +141,54 @@ function CostsTable({ project, onAdd, onEdit, onArchive, readOnly }: { project: 
   return <section className="projects-panel"><div className="projects-panel-heading"><h3>Costs</h3><div className="projects-panel-actions">{!readOnly && <button className="projects-button projects-button-secondary" onClick={onAdd}><Plus size={16} />Add draft cost</button>}{readOnly && <span className="projects-readonly-label">Read-only</span>}</div></div>{costs.length === 0 ? <EmptyState title="No draft costs" action={readOnly ? undefined : "Add draft cost"} onAction={readOnly ? undefined : onAdd} /> : <div className="projects-table-wrap"><table className="projects-table"><thead><tr><th>Description</th><th>Vendor</th><th>Incurred</th><th>Scope item</th><th className="projects-number">Draft amount</th>{!readOnly && <th><span className="projects-sr-only">Actions</span></th>}</tr></thead><tbody>{costs.map((cost) => <tr key={cost.id}><td><strong>{cost.description}</strong></td><td>{cost.vendorName || "—"}</td><td>{dateLabel(cost.incurredOn)}</td><td>{project.scopeItems.find((item) => item.id === cost.scopeItemId)?.description ?? "Unassigned"}</td><td className="projects-number">{formatMoney(cost.amountCents, project.currency)}</td>{!readOnly && <td className="projects-row-actions"><button className="projects-link-button" onClick={() => onEdit(cost)}>Edit</button><button className="projects-link-button projects-link-danger" onClick={() => onArchive(cost)}>Archive</button></td>}</tr>)}</tbody></table></div>}</section>;
 }
 
-function DetailView({ project, entities, tab, onTab, onEdit, onArchive, onAddScope, onEditScope, onArchiveScope, onApproveBudget, onAddTask, onEditTask, onArchiveTask, onAddCost, onEditCost, onArchiveCost }: { project: ProjectDetail; entities: readonly ProjectWorkspaceEntity[]; tab: Tab; onTab: (tab: Tab) => void; onEdit: () => void; onArchive: () => void; onAddScope: () => void; onEditScope: (line: ProjectScopeLine) => void; onArchiveScope: (line: ProjectScopeLine) => void; onApproveBudget: () => void; onAddTask: () => void; onEditTask: (task: ProjectTask) => void; onArchiveTask: (task: ProjectTask) => void; onAddCost: () => void; onEditCost: (cost: ProjectCostControl) => void; onArchiveCost: (cost: ProjectCostControl) => void }) {
-  const tabs: [Tab, string][] = [["overview", "Overview"], ["scope", "Scope & Budget"], ["schedule", "Schedule"], ["costs", "Costs"]];
+function DetailView({
+  project,
+  entities,
+  tab,
+  onTab,
+  onEdit,
+  onArchive,
+  onAddScope,
+  onEditScope,
+  onArchiveScope,
+  onApproveBudget,
+  onAddTask,
+  onEditTask,
+  onArchiveTask,
+  onAddCost,
+  onEditCost,
+  onArchiveCost,
+  execution,
+  executionLoading,
+  executionError,
+  onRetryExecution,
+  executionActions,
+}: {
+  project: ProjectDetail;
+  entities: readonly ProjectWorkspaceEntity[];
+  tab: Tab;
+  onTab: (tab: Tab) => void;
+  onEdit: () => void;
+  onArchive: () => void;
+  onAddScope: () => void;
+  onEditScope: (line: ProjectScopeLine) => void;
+  onArchiveScope: (line: ProjectScopeLine) => void;
+  onApproveBudget: () => void;
+  onAddTask: () => void;
+  onEditTask: (task: ProjectTask) => void;
+  onArchiveTask: (task: ProjectTask) => void;
+  onAddCost: () => void;
+  onEditCost: (cost: ProjectCostControl) => void;
+  onArchiveCost: (cost: ProjectCostControl) => void;
+  execution?: ProjectExecutionDetail;
+  executionLoading: boolean;
+  executionError?: string;
+  onRetryExecution: () => void;
+  executionActions: ProjectExecutionActions;
+}) {
+  const tabs: [Tab, string][] = [["overview", "Overview"], ["scope", "Scope & Budget"], ["schedule", "Schedule"], ["costs", "Costs"], ["execution", "Execution"]];
   const readOnly = project.status === "archived";
-  return <div className="projects-detail"><header className="projects-detail-header"><div><span className="projects-eyebrow">{propertyName(entities, project.legalEntityId, project.propertyId)}</span><h2>{project.name}</h2><div className="projects-detail-meta"><StatusBadge status={project.status} /><span>{TYPE_LABELS[project.projectType]}</span><span>{entityName(entities, project.legalEntityId)}</span><span>{project.currency}</span></div></div><div className="projects-detail-actions"><button className="projects-button projects-button-secondary" onClick={onEdit} disabled={readOnly}><Pencil size={16} />Edit</button>{!readOnly && <button className="projects-button projects-button-danger" onClick={onArchive}><Archive size={16} />Archive</button>}</div></header><MetricStrip project={project} /><nav className="projects-tabs" aria-label="Project sections">{tabs.map(([value, label]) => <button key={value} className={tab === value ? "is-active" : ""} aria-current={tab === value ? "page" : undefined} onClick={() => onTab(value)}>{label}</button>)}</nav>{tab === "overview" && <div className="projects-overview-grid"><section className="projects-panel"><div className="projects-panel-heading"><div><h3>Project overview</h3></div></div><dl className="projects-definition-list"><div><dt>Start date</dt><dd>{dateLabel(project.startOn)}</dd></div><div><dt>Target date</dt><dd>{dateLabel(project.targetOn)}</dd></div><div><dt>Last updated</dt><dd>{dateLabel(project.updatedAt)}</dd></div><div><dt>Unit</dt><dd>{project.unitId ? entities.find((entity) => entity.id === project.legalEntityId)?.properties.find((property) => property.id === project.propertyId)?.units.find((unit) => unit.id === project.unitId)?.unitNumber ?? "Unit unavailable" : "Whole property"}</dd></div></dl>{project.description && <p className="projects-description">{project.description}</p>}</section><section className="projects-panel"><div className="projects-panel-heading"><div><h3>Work at a glance</h3></div></div><div className="projects-glance-list"><div><ListChecks size={18} /><span>Tasks</span><strong>{project.taskCount}</strong></div><div><CalendarDays size={18} /><span>Target</span><strong>{dateLabel(project.targetOn)}</strong></div><div><WalletCards size={18} /><span>Draft costs</span><strong>{project.draftCosts.length}</strong></div></div></section></div>}{tab === "scope" && <ScopeTable project={project} readOnly={readOnly} onAdd={onAddScope} onEdit={onEditScope} onArchive={onArchiveScope} onApprove={onApproveBudget} />}{tab === "schedule" && <ScheduleTable project={project} readOnly={readOnly} onAdd={onAddTask} onEdit={onEditTask} onArchive={onArchiveTask} />}{tab === "costs" && <CostsTable project={project} readOnly={readOnly} onAdd={onAddCost} onEdit={onEditCost} onArchive={onArchiveCost} />}</div>;
+  return <div className="projects-detail"><header className="projects-detail-header"><div><span className="projects-eyebrow">{propertyName(entities, project.legalEntityId, project.propertyId)}</span><h2>{project.name}</h2><div className="projects-detail-meta"><StatusBadge status={project.status} /><span>{TYPE_LABELS[project.projectType]}</span><span>{entityName(entities, project.legalEntityId)}</span><span>{project.currency}</span></div></div><div className="projects-detail-actions"><button className="projects-button projects-button-secondary" onClick={onEdit} disabled={readOnly}><Pencil size={16} />Edit</button>{!readOnly && <button className="projects-button projects-button-danger" onClick={onArchive}><Archive size={16} />Archive</button>}</div></header><MetricStrip project={project} /><nav className="projects-tabs" aria-label="Project sections">{tabs.map(([value, label]) => <button type="button" key={value} className={tab === value ? "is-active" : ""} aria-current={tab === value ? "page" : undefined} onClick={() => onTab(value)}>{label}</button>)}</nav>{tab === "overview" && <div className="projects-overview-grid"><section className="projects-panel"><div className="projects-panel-heading"><div><h3>Project overview</h3></div></div><dl className="projects-definition-list"><div><dt>Start date</dt><dd>{dateLabel(project.startOn)}</dd></div><div><dt>Target date</dt><dd>{dateLabel(project.targetOn)}</dd></div><div><dt>Last updated</dt><dd>{dateLabel(project.updatedAt)}</dd></div><div><dt>Unit</dt><dd>{project.unitId ? entities.find((entity) => entity.id === project.legalEntityId)?.properties.find((property) => property.id === project.propertyId)?.units.find((unit) => unit.id === project.unitId)?.unitNumber ?? "Unit unavailable" : "Whole property"}</dd></div></dl>{project.description && <p className="projects-description">{project.description}</p>}</section><section className="projects-panel"><div className="projects-panel-heading"><div><h3>Work at a glance</h3></div></div><div className="projects-glance-list"><div><ListChecks size={18} /><span>Tasks</span><strong>{project.taskCount}</strong></div><div><CalendarDays size={18} /><span>Target</span><strong>{dateLabel(project.targetOn)}</strong></div><div><WalletCards size={18} /><span>Draft costs</span><strong>{project.draftCosts.length}</strong></div></div></section></div>}{tab === "scope" && <ScopeTable project={project} readOnly={readOnly} onAdd={onAddScope} onEdit={onEditScope} onArchive={onArchiveScope} onApprove={onApproveBudget} />}{tab === "schedule" && <ScheduleTable project={project} readOnly={readOnly} onAdd={onAddTask} onEdit={onEditTask} onArchive={onArchiveTask} />}{tab === "costs" && <CostsTable project={project} readOnly={readOnly} onAdd={onAddCost} onEdit={onEditCost} onArchive={onArchiveCost} />}{tab === "execution" && executionLoading && <LoadingState label="Loading execution…" />}{tab === "execution" && !executionLoading && executionError && <ErrorState message={executionError} onRetry={onRetryExecution} />}{tab === "execution" && !executionLoading && !executionError && execution && <ProjectExecutionWorkspace detail={execution} readOnly={readOnly} {...executionActions} />}{tab === "execution" && !executionLoading && !executionError && !execution && <EmptyState title="Execution data is unavailable" action="Reload" onAction={onRetryExecution} />}</div>;
 }
 
 export function ProjectWorkspace({ organizationId, organizationName, entities = [], api: apiProp, initialProjectId, onNavigate, activeTab, onTabChange }: ProjectWorkspaceProps) {
@@ -154,6 +204,9 @@ export function ProjectWorkspace({ organizationId, organizationName, entities = 
   const [project, setProject] = useState<ProjectDetail>();
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string>();
+  const [execution, setExecution] = useState<ProjectExecutionDetail>();
+  const [executionLoading, setExecutionLoading] = useState(false);
+  const [executionError, setExecutionError] = useState<string>();
   const [localTab, setLocalTab] = useState<Tab>("overview");
   const tab = activeTab ?? localTab;
   const setTab = (next: Tab) => { setLocalTab(next); onTabChange?.(next); };
@@ -169,8 +222,11 @@ export function ProjectWorkspace({ organizationId, organizationName, entities = 
   currentListScope.current = listScope;
   const listGeneration = useRef(0);
   const detailGeneration = useRef(0);
+  const executionGeneration = useRef(0);
   const currentSelection = useRef(selectedId);
   currentSelection.current = selectedId;
+  const currentProject = useRef(project);
+  currentProject.current = project;
 
   const loadProjects = useCallback(async (signal?: AbortSignal) => {
     if (currentListScope.current !== listScope) return;
@@ -220,21 +276,56 @@ export function ProjectWorkspace({ organizationId, organizationName, entities = 
       return undefined;
     } finally { if (current()) setDetailLoading(false); }
   }, [api, organizationId]);
-  useEffect(() => { if (!selectedId || !organizationId) { setProject(undefined); return; } const controller = new AbortController(); void loadProject(selectedId, controller.signal); return () => controller.abort(); }, [loadProject, organizationId, selectedId]);
+  const loadExecution = useCallback(async (id: string, signal?: AbortSignal): Promise<ProjectExecutionDetail | undefined> => {
+    if (currentSelection.current !== id) return undefined;
+    const generation = ++executionGeneration.current;
+    const current = () => !signal?.aborted && generation === executionGeneration.current && currentSelection.current === id;
+    const selectedProject = currentProject.current;
+    if (!selectedProject || selectedProject.id !== id) return undefined;
+    setExecutionLoading(true); setExecutionError(undefined);
+    try {
+      const nextExecution = await api.getProjectExecution(organizationId, id, { legalEntityId: selectedProject.legalEntityId, propertyId: selectedProject.propertyId }, signal);
+      if (!current()) return undefined;
+      setExecution(nextExecution); return nextExecution;
+    } catch (error) {
+      if (!current()) return undefined;
+      setExecution(undefined); setExecutionError(error instanceof Error ? error.message : "Project execution could not be loaded.");
+      return undefined;
+    } finally { if (current()) setExecutionLoading(false); }
+  }, [api, organizationId]);
+  useEffect(() => { if (!selectedId || !organizationId) { setProject(undefined); setExecution(undefined); setExecutionError(undefined); return; } const controller = new AbortController(); void loadProject(selectedId, controller.signal); return () => controller.abort(); }, [loadProject, organizationId, selectedId]);
+  useEffect(() => { if (tab !== "execution" || !selectedId || !organizationId || !project || project.id !== selectedId) return; const controller = new AbortController(); void loadExecution(selectedId, controller.signal); return () => controller.abort(); }, [loadExecution, organizationId, project, selectedId, tab]);
 
-  const selectProject = (id: string) => { setSelectedId(id); setLocalTab("overview"); setNotice(undefined); onNavigate?.(id); };
-  const clearSelection = () => { setSelectedId(undefined); setProject(undefined); onNavigate?.(); };
+  const selectProject = (id: string) => {
+    if (id !== selectedId) {
+      setSelectedId(id);
+      setProject(undefined);
+      setExecution(undefined);
+      setExecutionError(undefined);
+    } else if (!project && !detailLoading) {
+      void loadProject(id);
+    }
+    setLocalTab("overview");
+    setNotice(undefined);
+    onNavigate?.(id);
+  };
+  const clearSelection = () => { setSelectedId(undefined); setProject(undefined); setExecution(undefined); setExecutionError(undefined); onNavigate?.(); };
   const closeEditor = () => { setEditor(undefined); setMutationError(undefined); };
-  const executeCommand = async (kind: ProjectCommandKind, envelope: ProjectCommandEnvelope<unknown>) => {
+  const executeCommand = async (kind: ProjectWriteCommandKind, envelope: ProjectCommandEnvelope<unknown>) => {
     if (saving) return undefined;
     setSaving(true);
     setMutationError(undefined);
     setNotice(undefined);
     try {
-      const result = await api.sendCommand(organizationId, kind, envelope);
+      const result = isProjectExecutionCommand(kind)
+        ? await api.sendExecutionCommand(organizationId, kind, envelope as ProjectExecutionCommandEnvelope<unknown>)
+        : await api.sendCommand(organizationId, kind, envelope);
       pendingCommandsRef.current!.resolve();
       await refreshCurrentList.current();
-      if (currentSelection.current) await loadProject(currentSelection.current);
+      if (currentSelection.current) {
+        const refreshed = await loadProject(currentSelection.current);
+        if (refreshed && (tab === "execution" || execution !== undefined)) await loadExecution(currentSelection.current);
+      }
       return result;
     } catch (error) {
       pendingCommandsRef.current!.clearForError(error);
@@ -245,7 +336,7 @@ export function ProjectWorkspace({ organizationId, organizationName, entities = 
       setSaving(false);
     }
   };
-  const runCommand = async <TPayload,>(kind: ProjectCommandKind, scope: CompanyScope, payload: TPayload, expectedRevision?: number) => {
+  const runCommand = async <TPayload,>(kind: ProjectWriteCommandKind, scope: CompanyScope, payload: TPayload, expectedRevision?: number) => {
     if (saving) return undefined;
     let envelope: ProjectCommandEnvelope<TPayload>;
     try {
@@ -256,6 +347,10 @@ export function ProjectWorkspace({ organizationId, organizationName, entities = 
       return undefined;
     }
     return executeCommand(kind, envelope);
+  };
+  const runExecutionCommand = async <K extends ProjectExecutionCommandKind>(kind: K, payload: ProjectExecutionCommandPayload[K]) => {
+    if (!project) return undefined;
+    return runCommand(kind, scopeForProject(organizationId, project), payload, project.recordRevision);
   };
   const retryPendingCommand = async () => {
     const pending = pendingCommandsRef.current!.getPending();
@@ -278,9 +373,33 @@ export function ProjectWorkspace({ organizationId, organizationName, entities = 
   const saveCost = async (values: CostControlFormValues) => { if (editor?.kind !== "cost" || !project) return; const scope = scopeForProject(organizationId, project); const base = { scopeItemId: values.scopeItemId || null, vendorName: values.vendorName.trim() || null, description: values.description.trim(), amountCents: parseRequiredNonNegativeMoney(values.amount, "Amount"), incurredOn: values.incurredOn }; const create = editor.mode === "create"; const payload = create ? { projectId: project.id, ...base } : { draftCostId: editor.cost!.id, ...base }; const result = await runCommand(create ? "project.draft_cost.create" : "project.draft_cost.update", scope, payload, project.recordRevision); if (result !== undefined) { setEditor(undefined); setMutationError(undefined); setNotice("Draft cost saved."); } };
   const approveBudget = async () => { if (!project || project.status === "archived") return; if (typeof window !== "undefined" && !window.confirm("Approve a new budget version from the current scope?")) return; const scope = scopeForProject(organizationId, project); const result = await runCommand("project.budget.approve", scope, { projectId: project.id, notes: null }, project.recordRevision); if (result !== undefined) { setMutationError(undefined); setNotice("Budget version approved."); } };
   const archive = async (kind: "project.archive" | "project.scope_item.archive" | "project.task.archive" | "project.draft_cost.archive", record: ProjectDetail | ProjectScopeLine | ProjectTask | ProjectCostControl) => { if (!project) return; if (typeof window !== "undefined" && !window.confirm("Archive this record?")) return; const scope = scopeForProject(organizationId, project); const payload = kind === "project.archive" ? { projectId: project.id } : kind === "project.scope_item.archive" ? { scopeItemId: record.id } : kind === "project.task.archive" ? { taskId: record.id } : { draftCostId: record.id }; const result = await runCommand(kind, scope, payload, project.recordRevision); if (result !== undefined) { setMutationError(undefined); setNotice(kind === "project.archive" ? "Project archived." : "Record archived."); if (kind === "project.archive") clearSelection(); } };
+  const executionActions: ProjectExecutionActions = {
+    onCreateAssignment: (payload) => { void runExecutionCommand("project.assignment.create", payload); },
+    onUpdateAssignment: (payload) => { void runExecutionCommand("project.assignment.update", payload); },
+    onCreateMilestone: (payload) => { void runExecutionCommand("project.milestone.create", payload); },
+    onUpdateMilestone: (payload) => { void runExecutionCommand("project.milestone.update", payload); },
+    onCreateInspection: (payload) => { void runExecutionCommand("project.inspection.create", payload); },
+    onUpdateInspection: (payload) => { void runExecutionCommand("project.inspection.update", payload); },
+    onCreatePunchItem: (payload) => { void runExecutionCommand("project.punch_item.create", payload); },
+    onUpdatePunchItem: (payload) => { void runExecutionCommand("project.punch_item.update", payload); },
+    onCreateBid: (payload) => { void runExecutionCommand("project.bid.create", payload); },
+    onUpdateBid: (payload) => { void runExecutionCommand("project.bid.update", payload); },
+    onCreateCommitment: (payload) => { void runExecutionCommand("project.commitment.create", payload); },
+    onUpdateCommitment: (payload) => { void runExecutionCommand("project.commitment.update", payload); },
+    onCreateChangeOrder: (payload) => { void runExecutionCommand("project.change_order.create", payload); },
+    onUpdateChangeOrder: (payload) => { void runExecutionCommand("project.change_order.update", payload); },
+    onCreatePurchaseOrder: (payload) => { void runExecutionCommand("project.purchase_order.create", payload); },
+    onUpdatePurchaseOrder: (payload) => { void runExecutionCommand("project.purchase_order.update", payload); },
+    onCreateVendor: (payload) => { void runExecutionCommand("project.vendor.create", payload); },
+    onUpdateVendor: (payload) => { void runExecutionCommand("project.vendor.update", payload); },
+    onCreateDrawRequest: (payload) => { void runExecutionCommand("project.draw_request.create", payload); },
+    onUpdateDrawRequest: (payload) => { void runExecutionCommand("project.draw_request.update", payload); },
+    onCreateDrawItem: (payload) => { void runExecutionCommand("project.draw_request.item.create", payload); },
+    onUpdateDrawItem: (payload) => { void runExecutionCommand("project.draw_request.item.update", payload); },
+  };
 
   if (!organizationId) return <section className="projects-workspace"><EmptyState title="Company access is not configured." /></section>;
-  return <section className="projects-workspace" aria-label="Projects workspace"><header className="projects-page-header"><h1>Projects</h1><button className="projects-button projects-button-primary" onClick={() => { setMutationError(undefined); setEditor({ kind: "project", mode: "create" }); }} disabled={!entities.length}><Plus size={17} />New project</button></header><div className="projects-layout"><aside className="projects-list-pane" aria-label="Project list"><div className="projects-list-toolbar"><label className="projects-search"><Search size={16} /><span className="projects-sr-only">Search projects</span><input value={searchInput} placeholder="Search projects" onChange={(event) => { const next = event.currentTarget.value; setSearchInput(next); setFilters((current) => ({ ...current, search: next })); }} /></label><label className="projects-filter"><span className="projects-sr-only">Project status</span><select value={filters.status ?? "all"} onChange={(event) => { const status = event.currentTarget.value as ProjectListFilters["status"]; setFilters((current) => ({ ...current, status })); }}><option value="all">All projects</option><option value="planning">Planning</option><option value="active">Active</option><option value="on_hold">On hold</option><option value="completed">Completed</option><option value="archived">Archived</option></select></label></div>{listLoading ? <LoadingState /> : listError ? <ErrorState message={listError} onRetry={() => void loadProjects()} /> : projects.length === 0 ? <EmptyState title={filters.search ? "No matching projects" : "No projects"} action={filters.search ? "Clear search" : entities.length ? "New project" : undefined} onAction={filters.search ? () => { setSearchInput(""); setFilters((current) => ({ ...current, search: "" })); } : entities.length ? () => setEditor({ kind: "project", mode: "create" }) : undefined} /> : <div className="projects-list" role="list">{projects.map((item) => <button role="listitem" key={item.id} className={`projects-list-row ${selectedId === item.id ? "is-selected" : ""}`} onClick={() => selectProject(item.id)}><span className="projects-list-row-main"><strong>{item.name}</strong><small>{propertyName(entities, item.legalEntityId, item.propertyId)}</small></span><span className="projects-list-row-side"><StatusBadge status={item.status} /><small>{dateLabel(item.targetOn)}</small></span></button>)}{nextCursor && <button className="projects-load-more" type="button" onClick={() => void loadMoreProjects()} disabled={loadingMore}>{loadingMore ? "Loading…" : "Load more projects"}</button>}</div>}</aside><div className="projects-main" aria-live="polite">{notice && <div className="projects-notice" role="status"><Check size={16} />{notice}<button className="projects-icon-button" onClick={() => setNotice(undefined)} aria-label="Dismiss"><X size={15} /></button></div>}{!saving && pendingCommandsRef.current!.getPending() && <div className="projects-pending-notice" role="alert"><CircleAlert size={16} /><span>A save has an unknown outcome.</span><button className="projects-button projects-button-secondary" type="button" onClick={() => void retryPendingCommand()} disabled={saving}>Retry pending save</button></div>}{mutationError !== undefined && !editor && <MutationError error={mutationError} fallback="Project could not be saved." onRetryPending={pendingCommandsRef.current!.getPending() ? () => void retryPendingCommand() : undefined} />}{detailLoading ? <LoadingState label="Loading project…" /> : detailError ? <ErrorState message={detailError} onRetry={() => selectedId && void loadProject(selectedId)} /> : project ? <DetailView project={project} entities={entities} tab={tab} onTab={setTab} onEdit={() => { setMutationError(undefined); setEditor({ kind: "project", mode: "edit", project }); }} onArchive={() => void archive("project.archive", project)} onAddScope={() => { setMutationError(undefined); setEditor({ kind: "scope", mode: "create" }); }} onEditScope={(line) => { setMutationError(undefined); setEditor({ kind: "scope", mode: "edit", line }); }} onArchiveScope={(line) => void archive("project.scope_item.archive", line)} onAddTask={() => { setMutationError(undefined); setEditor({ kind: "task", mode: "create" }); }} onEditTask={(task) => { setMutationError(undefined); setEditor({ kind: "task", mode: "edit", task }); }} onArchiveTask={(task) => void archive("project.task.archive", task)} onApproveBudget={() => void approveBudget()} onAddCost={() => { setMutationError(undefined); setEditor({ kind: "cost", mode: "create" }); }} onEditCost={(cost) => { setMutationError(undefined); setEditor({ kind: "cost", mode: "edit", cost }); }} onArchiveCost={(cost) => void archive("project.draft_cost.archive", cost)} /> : selectedId ? <EmptyState title="Project unavailable" action="Refresh" onAction={() => { void loadProjects(); if (selectedId) void loadProject(selectedId); }} /> : <div className="projects-main-empty"><FolderKanban size={30} /><h2>Select a project</h2><p>Choose a project from the list to review work, costs and completion.</p></div>}</div></div>{editor?.kind === "project" && <ProjectEditor mode={editor.mode} project={editor.project} entities={entities} error={mutationError} saving={saving} onClose={closeEditor} onSave={(values) => void saveProject(values)} onReload={async () => { const latest = editor.project ? await loadProject(editor.project.id) : undefined; if (latest) setEditor((current) => current?.kind === "project" ? { ...current, project: latest } : current); setMutationError(undefined); }} onRetryPending={pendingCommandsRef.current!.getPending() ? () => void retryPendingCommand() : undefined} />}{editor?.kind === "scope" && project && <ScopeEditor line={editor.line} project={project} error={mutationError} saving={saving} onClose={closeEditor} onSave={(values) => void saveScope(values)} onReload={async () => { await loadProject(project.id); setMutationError(undefined); }} onRetryPending={pendingCommandsRef.current!.getPending() ? () => void retryPendingCommand() : undefined} />}{editor?.kind === "task" && project && <TaskEditor task={editor.task} project={project} error={mutationError} saving={saving} onClose={closeEditor} onSave={(values) => void saveTask(values)} onReload={async () => { await loadProject(project.id); setMutationError(undefined); }} onRetryPending={pendingCommandsRef.current!.getPending() ? () => void retryPendingCommand() : undefined} />}{editor?.kind === "cost" && project && <CostEditor cost={editor.cost} project={project} error={mutationError} saving={saving} onClose={closeEditor} onSave={(values) => void saveCost(values)} onReload={async () => { await loadProject(project.id); setMutationError(undefined); }} onRetryPending={pendingCommandsRef.current!.getPending() ? () => void retryPendingCommand() : undefined} />}</section>;
+  return <section className="projects-workspace" aria-label="Projects workspace"><header className="projects-page-header"><h1>Projects</h1><button className="projects-button projects-button-primary" onClick={() => { setMutationError(undefined); setEditor({ kind: "project", mode: "create" }); }} disabled={!entities.length}><Plus size={17} />New project</button></header><div className="projects-layout"><aside className="projects-list-pane" aria-label="Project list"><div className="projects-list-toolbar"><label className="projects-search"><Search size={16} /><span className="projects-sr-only">Search projects</span><input value={searchInput} placeholder="Search projects" onChange={(event) => { const next = event.currentTarget.value; setSearchInput(next); setFilters((current) => ({ ...current, search: next })); }} /></label><label className="projects-filter"><span className="projects-sr-only">Project status</span><select value={filters.status ?? "all"} onChange={(event) => { const status = event.currentTarget.value as ProjectListFilters["status"]; setFilters((current) => ({ ...current, status })); }}><option value="all">All projects</option><option value="planning">Planning</option><option value="active">Active</option><option value="on_hold">On hold</option><option value="completed">Completed</option><option value="archived">Archived</option></select></label></div>{listLoading ? <LoadingState /> : listError ? <ErrorState message={listError} onRetry={() => void loadProjects()} /> : projects.length === 0 ? <EmptyState title={filters.search ? "No matching projects" : "No projects"} action={filters.search ? "Clear search" : entities.length ? "New project" : undefined} onAction={filters.search ? () => { setSearchInput(""); setFilters((current) => ({ ...current, search: "" })); } : entities.length ? () => setEditor({ kind: "project", mode: "create" }) : undefined} /> : <div className="projects-list" role="list">{projects.map((item) => <button role="listitem" key={item.id} className={`projects-list-row ${selectedId === item.id ? "is-selected" : ""}`} onClick={() => selectProject(item.id)}><span className="projects-list-row-main"><strong>{item.name}</strong><small>{propertyName(entities, item.legalEntityId, item.propertyId)}</small></span><span className="projects-list-row-side"><StatusBadge status={item.status} /><small>{dateLabel(item.targetOn)}</small></span></button>)}{nextCursor && <button className="projects-load-more" type="button" onClick={() => void loadMoreProjects()} disabled={loadingMore}>{loadingMore ? "Loading…" : "Load more projects"}</button>}</div>}</aside><div className="projects-main" aria-live="polite">{notice && <div className="projects-notice" role="status"><Check size={16} />{notice}<button className="projects-icon-button" onClick={() => setNotice(undefined)} aria-label="Dismiss"><X size={15} /></button></div>}{!saving && pendingCommandsRef.current!.getPending() && <div className="projects-pending-notice" role="alert"><CircleAlert size={16} /><span>A save has an unknown outcome.</span><button className="projects-button projects-button-secondary" type="button" onClick={() => void retryPendingCommand()} disabled={saving}>Retry pending save</button></div>}{mutationError !== undefined && !editor && <MutationError error={mutationError} fallback="Project could not be saved." onRetryPending={pendingCommandsRef.current!.getPending() ? () => void retryPendingCommand() : undefined} />}{detailLoading ? <LoadingState label="Loading project…" /> : detailError ? <ErrorState message={detailError} onRetry={() => selectedId && void loadProject(selectedId)} /> : project ? <DetailView project={project} entities={entities} tab={tab} onTab={setTab} onEdit={() => { setMutationError(undefined); setEditor({ kind: "project", mode: "edit", project }); }} onArchive={() => void archive("project.archive", project)} onAddScope={() => { setMutationError(undefined); setEditor({ kind: "scope", mode: "create" }); }} onEditScope={(line) => { setMutationError(undefined); setEditor({ kind: "scope", mode: "edit", line }); }} onArchiveScope={(line) => void archive("project.scope_item.archive", line)} onAddTask={() => { setMutationError(undefined); setEditor({ kind: "task", mode: "create" }); }} onEditTask={(task) => { setMutationError(undefined); setEditor({ kind: "task", mode: "edit", task }); }} onArchiveTask={(task) => void archive("project.task.archive", task)} onApproveBudget={() => void approveBudget()} onAddCost={() => { setMutationError(undefined); setEditor({ kind: "cost", mode: "create" }); }} onEditCost={(cost) => { setMutationError(undefined); setEditor({ kind: "cost", mode: "edit", cost }); }} onArchiveCost={(cost) => void archive("project.draft_cost.archive", cost)} execution={execution} executionLoading={executionLoading} executionError={executionError} onRetryExecution={() => { if (selectedId) void loadExecution(selectedId); }} executionActions={executionActions} /> : selectedId ? <EmptyState title="Project unavailable" action="Refresh" onAction={() => { void loadProjects(); if (selectedId) void loadProject(selectedId); }} /> : <div className="projects-main-empty"><FolderKanban size={30} /><h2>Select a project</h2><p>Choose a project from the list to review work, costs and completion.</p></div>}</div></div>{editor?.kind === "project" && <ProjectEditor mode={editor.mode} project={editor.project} entities={entities} error={mutationError} saving={saving} onClose={closeEditor} onSave={(values) => void saveProject(values)} onReload={async () => { const latest = editor.project ? await loadProject(editor.project.id) : undefined; if (latest) setEditor((current) => current?.kind === "project" ? { ...current, project: latest } : current); setMutationError(undefined); }} onRetryPending={pendingCommandsRef.current!.getPending() ? () => void retryPendingCommand() : undefined} />}{editor?.kind === "scope" && project && <ScopeEditor line={editor.line} project={project} error={mutationError} saving={saving} onClose={closeEditor} onSave={(values) => void saveScope(values)} onReload={async () => { await loadProject(project.id); setMutationError(undefined); }} onRetryPending={pendingCommandsRef.current!.getPending() ? () => void retryPendingCommand() : undefined} />}{editor?.kind === "task" && project && <TaskEditor task={editor.task} project={project} error={mutationError} saving={saving} onClose={closeEditor} onSave={(values) => void saveTask(values)} onReload={async () => { await loadProject(project.id); setMutationError(undefined); }} onRetryPending={pendingCommandsRef.current!.getPending() ? () => void retryPendingCommand() : undefined} />}{editor?.kind === "cost" && project && <CostEditor cost={editor.cost} project={project} error={mutationError} saving={saving} onClose={closeEditor} onSave={(values) => void saveCost(values)} onReload={async () => { await loadProject(project.id); setMutationError(undefined); }} onRetryPending={pendingCommandsRef.current!.getPending() ? () => void retryPendingCommand() : undefined} />}</section>;
 }
 
 export default ProjectWorkspace;

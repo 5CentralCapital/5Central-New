@@ -2,11 +2,16 @@ import type { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { CompanyCommandError } from './commands/errors';
 import { RentOpsRetryableConflict } from '../rent-ops/runtime-database';
+import { publicFinancialError } from './financial-errors';
 
 /** Keep storage errors and provider credentials out of public error responses. */
 export function companyHttpError(error: unknown, res: Response): void {
-  if (error instanceof RentOpsRetryableConflict) {
-    res.status(409).json({ code: 'company_retryable_conflict', message: 'Records changed during this save. Reload the project before trying again.' });
+  const financial = publicFinancialError(error);
+  if (financial) {
+    const { status, ...body } = financial;
+    res.status(status).json(body);
+  } else if (error instanceof RentOpsRetryableConflict) {
+    res.status(409).json({ code: 'company_retryable_conflict', message: 'Records changed during this save. Reload the record before trying again.' });
   } else if (error instanceof CompanyCommandError) {
     res.status(error.status).json({ code: `company_${error.code}`, message: error.message });
   } else if (error instanceof ZodError) {

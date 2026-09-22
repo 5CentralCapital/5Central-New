@@ -200,11 +200,15 @@ export const RENT_OPS_APPLICATION_TABLES = [
   "rent_ops_public_rate_limits",
 ] as const;
 
-/** Counters expire and the current dependency edge set is replaced atomically. */
+/** Ephemeral coordination and current projections; historical evidence is retained separately. */
 export const RENT_OPS_RUNTIME_EPHEMERAL_TABLES = [
   "rent_ops_tenant_auth_limits",
   "rent_ops_public_rate_limits",
   "company_project_task_dependencies",
+  "accounting_qbo_refresh_leases",
+  "accounting_qbo_coverage_gaps",
+  "accounting_qbo_source_line_allocations",
+  "time_refresh_leases",
 ] as const;
 
 /** All tables created by the current Rent Ops migration, including restricted tables. */
@@ -309,8 +313,23 @@ export const RENT_OPS_IMPORTER_READ_ONLY_TABLES = [
 
 /** Append-only tables use INSERT plus idempotency SELECT, never UPDATE/DELETE. */
 export const RENT_OPS_APPEND_ONLY_TABLES = [
+  "accounting_qbo_binding_confirmations",
+  "accounting_qbo_realm_bindings",
   "company_external_identities",
   "company_project_budget_lines",
+  "company_investor_payment_sources",
+  "company_investor_payment_allocations",
+  "time_timesheet_revisions",
+  "time_timesheet_deletion_tombstones",
+  "time_timesheet_corrections",
+  "time_review_events",
+  "company_report_runs",
+  "company_report_run_rows",
+  "company_report_run_drilldowns",
+  "company_report_exports",
+  "company_report_preset_revisions",
+  "company_report_package_revisions",
+  "company_report_package_runs",
   "rent_ops_recurring_charge_schedules",
   "rent_ops_ledger_transactions",
   "rent_ops_payment_allocations",

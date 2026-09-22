@@ -1,0 +1,96 @@
+.investors-workspace, .investors-dialog {
+  --investors-charcoal: #3a3a3c;
+  --investors-ink: #292927;
+  --investors-muted: #77736d;
+  --investors-faint: #aaa49c;
+  --investors-line: #e7e1d8;
+  --investors-line-strong: #d1c9bd;
+  --investors-surface: #fffdfa;
+  --investors-soft: #f7f2eb;
+  --investors-cream: #f5f0e8;
+  --investors-gold: #d4a843;
+  --investors-positive: #347152;
+  --investors-warning: #956d15;
+  --investors-error: #a3453e;
+  color: var(--investors-ink);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+}
+.investors-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 28px; border-bottom: 1px solid var(--investors-line); background: var(--investors-surface); }
+.investors-toolbar h1 { margin: 0; font-size: 22px; font-weight: 650; letter-spacing: -.02em; }
+.investors-toolbar p { margin: 4px 0 0; color: var(--investors-muted); font-size: 12px; }
+.investors-toolbar-actions, .investors-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.investors-button { display: inline-flex; min-height: 36px; align-items: center; justify-content: center; gap: 7px; padding: 0 13px; border: 1px solid transparent; border-radius: 8px; font-size: 12px; font-weight: 650; cursor: pointer; }
+.investors-button:disabled { cursor: wait; opacity: .55; }
+.investors-button-primary { background: var(--investors-charcoal); color: white; }
+.investors-button-secondary { border-color: var(--investors-line-strong); background: var(--investors-surface); color: var(--investors-charcoal); }
+.investors-button-quiet { background: transparent; color: var(--investors-muted); }
+.investors-layout { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); min-height: 650px; border-bottom: 1px solid var(--investors-line); background: var(--investors-surface); }
+.investors-list-pane { min-width: 0; border-right: 1px solid var(--investors-line); background: var(--investors-soft); }
+.investors-filter { display: grid; gap: 9px; padding: 16px; border-bottom: 1px solid var(--investors-line); }
+.investors-filter input, .investors-form input, .investors-form select, .investors-form textarea { width: 100%; min-height: 38px; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--investors-line-strong); border-radius: 8px; background: var(--investors-surface); color: var(--investors-ink); font: inherit; font-size: 13px; }
+.investors-filter label, .investors-form label, .investors-form-field { display: grid; gap: 5px; color: var(--investors-muted); font-size: 11px; font-weight: 650; }
+.investors-form-label { display: block; }
+.investors-list { display: grid; max-height: 590px; overflow-y: auto; }
+.investors-list-row { display: grid; gap: 5px; width: 100%; padding: 15px 16px; border: 0; border-bottom: 1px solid var(--investors-line); background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.investors-list-row:hover, .investors-list-row.is-selected { background: var(--investors-surface); }
+.investors-list-row strong { font-size: 13px; font-weight: 650; }
+.investors-list-row small { color: var(--investors-muted); font-size: 11px; }
+.investors-list-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.investors-main { min-width: 0; padding: 25px 30px 44px; background: var(--investors-surface); }
+.investors-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 20px; border-bottom: 1px solid var(--investors-line); }
+.investors-detail-head h2 { margin: 0; font-size: 26px; font-weight: 650; letter-spacing: -.025em; }
+.investors-eyebrow { display: block; margin-bottom: 7px; color: var(--investors-muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.investors-detail-head p { margin: 6px 0 0; color: var(--investors-muted); font-size: 13px; }
+.investors-status { display: inline-flex; min-height: 24px; align-items: center; padding: 0 8px; border-radius: 999px; background: #eeeae4; color: var(--investors-muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.investors-status.is-positive { background: #e6f1e9; color: var(--investors-positive); }
+.investors-status.is-warning { background: #f8efd5; color: var(--investors-warning); }
+.investors-status.is-muted { background: #eeeae4; color: var(--investors-faint); }
+.investors-tabs { display: flex; gap: 18px; overflow-x: auto; border-bottom: 1px solid var(--investors-line); }
+.investors-tabs button { min-height: 44px; padding: 0 2px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--investors-muted); font-size: 12px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.investors-tabs button.is-active { border-bottom-color: var(--investors-gold); color: var(--investors-ink); }
+.investors-panel { display: grid; gap: 18px; padding-top: 22px; }
+.investors-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--investors-line); }
+.investors-metrics > div { min-height: 92px; padding: 15px 16px; background: var(--investors-surface); }
+.investors-metrics span { display: block; color: var(--investors-muted); font-size: 11px; }
+.investors-metrics strong { display: block; margin-top: 7px; font-size: 20px; font-variant-numeric: tabular-nums; }
+.investors-card { min-width: 0; border: 1px solid var(--investors-line); border-radius: 10px; background: var(--investors-surface); }
+.investors-card-header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px; border-bottom: 1px solid var(--investors-line); }
+.investors-card-header h3 { margin: 0; font-size: 14px; font-weight: 650; }
+.investors-card-body { padding: 16px; }
+.investors-table-wrap { overflow-x: auto; }
+.investors-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.investors-table th { color: var(--investors-muted); font-size: 10px; font-weight: 700; letter-spacing: .05em; text-align: left; text-transform: uppercase; }
+.investors-table th, .investors-table td { padding: 11px 10px; border-bottom: 1px solid var(--investors-line); vertical-align: top; }
+.investors-table td.amount { text-align: right; font-variant-numeric: tabular-nums; }
+.investors-table tr:last-child td { border-bottom: 0; }
+.investors-stack { display: grid; gap: 2px; }
+.investors-stack strong { font-weight: 650; }
+.investors-stack small { color: var(--investors-muted); font-size: 11px; }
+.investors-empty { display: grid; min-height: 220px; place-items: center; gap: 8px; color: var(--investors-muted); text-align: center; }
+.investors-state { display: flex; min-height: 220px; align-items: center; justify-content: center; gap: 8px; color: var(--investors-muted); }
+.investors-error { display: flex; align-items: center; gap: 9px; padding: 12px; border: 1px solid #e7b9b6; border-radius: 8px; background: #fff4f2; color: var(--investors-error); font-size: 12px; }
+.investors-error span { flex: 1; }
+.investors-form { display: grid; gap: 15px; }
+.investors-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.investors-form-wide { grid-column: 1 / -1; }
+.investors-field-note { color: var(--investors-faint); font-size: 10px; font-weight: 500; line-height: 1.35; }
+.investors-form-sections { display: grid; gap: 10px; grid-column: 1 / -1; }
+.investors-form-section { border: 1px solid var(--investors-line); border-radius: 9px; background: var(--investors-soft); }
+.investors-form-section summary { padding: 11px 13px; color: var(--investors-ink); cursor: pointer; font-size: 12px; font-weight: 700; list-style-position: inside; }
+.investors-form-section[open] summary { border-bottom: 1px solid var(--investors-line); }
+.investors-form-section > .investors-form { padding: 14px; }
+.investors-form-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 3px; }
+.investors-checkbox-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.investors-checkbox { display: flex !important; grid-template-columns: none !important; align-items: center; gap: 7px !important; color: var(--investors-ink) !important; font-weight: 500 !important; }
+.investors-checkbox input { width: auto; min-height: 0; }
+.investors-dialog-backdrop { position: fixed; z-index: 50; inset: 0; background: rgb(28 28 30 / 35%); }
+.investors-dialog { position: fixed; z-index: 51; top: 50%; left: 50%; width: min(720px, calc(100% - 40px)); max-height: calc(100vh - 40px); overflow: auto; transform: translate(-50%, -50%); border: 1px solid var(--investors-line-strong); border-radius: 15px; background: var(--investors-surface); box-shadow: 0 18px 60px rgb(28 28 30 / 20%); }
+.investors-dialog header { display: flex; justify-content: space-between; gap: 12px; padding: 20px 22px; border-bottom: 1px solid var(--investors-line); }
+.investors-dialog header h2 { margin: 0; font-size: 20px; font-weight: 650; }
+.investors-dialog-body { padding: 20px 22px; }
+.investors-dialog-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px; border-top: 1px solid var(--investors-line); background: var(--investors-soft); }
+.investors-note { margin: 0; color: var(--investors-muted); font-size: 12px; line-height: 1.45; }
+.investors-spin { animation: investors-spin 900ms linear infinite; }
+@keyframes investors-spin { to { transform: rotate(360deg); } }
+@media (max-width: 940px) { .investors-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 740px) { .investors-toolbar { align-items: flex-start; flex-direction: column; padding: 18px 16px; } .investors-layout { display: block; } .investors-list-pane { border-right: 0; border-bottom: 1px solid var(--investors-line); } .investors-list { max-height: 250px; } .investors-main { padding: 20px 16px 34px; } .investors-detail-head { align-items: flex-start; flex-direction: column; } .investors-form-grid, .investors-checkbox-grid { grid-template-columns: 1fr; } .investors-dialog { top: auto; bottom: 0; left: 0; width: 100%; max-height: 92vh; transform: none; border-radius: 15px 15px 0 0; } }

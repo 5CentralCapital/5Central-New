@@ -8,6 +8,7 @@ import type {
 import { quickBooksConnectionKey } from "../../../shared/accounting/quickbooks";
 import { QuickBooksIntegrationError, isQuickBooksIntegrationError } from "./errors";
 import type { QuickBooksOAuthClient } from "./oauth";
+import type { QuickBooksRefreshLease } from "../../accounting/refresh-lease";
 
 const DEFAULT_EXPIRY_SKEW_MS = 60_000;
 
@@ -16,10 +17,16 @@ export interface QuickBooksTokenManagerOptions {
   readonly repository: QuickBooksTokenRepository;
   readonly now?: () => Date;
   readonly expirySkewMs?: number;
+  /** Optional database lease for refresh coordination across workers. */
+  readonly refreshLease?: QuickBooksRefreshLease;
+  readonly refreshLeaseOwnerId?: string;
+  readonly refreshLeaseTtlMs?: number;
 }
 
 export interface QuickBooksTokenManager extends QuickBooksTokenProvider {
   saveTokens(scope: QuickBooksConnectionScope, token: QuickBooksOAuthTokenSet, expectedVersion?: number): Promise<QuickBooksStoredToken>;
+  /** Explicit OAuth reconnect path; refreshes continue to use compare-and-save. */
+  saveNewConnection?(scope: QuickBooksConnectionScope, token: QuickBooksOAuthTokenSet): Promise<QuickBooksStoredToken>;
   disconnect(scope: QuickBooksConnectionScope): Promise<void>;
 }
 
@@ -51,6 +58,12 @@ export function createQuickBooksTokenManager(options: QuickBooksTokenManagerOpti
   const now = options.now ?? (() => new Date());
   const expirySkewMs = options.expirySkewMs ?? DEFAULT_EXPIRY_SKEW_MS;
   validateSkew(expirySkewMs);
+  if (options.refreshLeaseTtlMs !== undefined && (!Number.isSafeInteger(options.refreshLeaseTtlMs) || options.refreshLeaseTtlMs < 1_000 || options.refreshLeaseTtlMs > 600_000)) {
+    throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks refresh lease TTL is invalid");
+  }
+  if (options.refreshLease && (!options.refreshLeaseOwnerId || !/^[A-Za-z0-9_.:-]{1,160}$/.test(options.refreshLeaseOwnerId))) {
+    throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks refresh lease owner is invalid");
+  }
   const locks = new Map<string, Promise<unknown>>();
 
   async function serialized<T>(scope: QuickBooksConnectionScope, work: () => Promise<T>): Promise<T> {
@@ -76,6 +89,17 @@ export function createQuickBooksTokenManager(options: QuickBooksTokenManagerOpti
       });
     },
 
+    async saveNewConnection(scope, token): Promise<QuickBooksStoredToken> {
+      return serialized(scope, async () => {
+        try {
+          if (options.repository.saveNewConnection) return await options.repository.saveNewConnection(scope, token);
+          return await options.repository.save(scope, token);
+        } catch (error) {
+          throw tokenStoreFailure("QuickBooks connection could not be saved", error);
+        }
+      });
+    },
+
     async getAccessToken(scope): Promise<string> {
       return serialized(scope, async () => {
         let stored: QuickBooksStoredToken | null | undefined;
@@ -90,22 +114,68 @@ export function createQuickBooksTokenManager(options: QuickBooksTokenManagerOpti
         if (stored.refreshTokenExpiresAt && !validUntil(stored.refreshTokenExpiresAt, current, 0)) {
           throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks refresh token has expired; reconnect is required");
         }
-        const rotated = await options.oauth.refreshToken(stored.refreshToken, stored.refreshTokenExpiresAt);
-        let saved: QuickBooksStoredToken;
-        try {
-          saved = await options.repository.save(scope, rotated, stored.version);
-        } catch (error) {
-          // A second worker may have won the rotation. Re-read once and use it
-          // only when it is already valid; never overwrite it blindly.
+        let leaseHeld = false;
+        if (options.refreshLease) {
           try {
-            const winner = await options.repository.load(scope);
-            if (winner && validUntil(winner.accessTokenExpiresAt, now(), expirySkewMs)) return winner.accessToken;
-          } catch {
-            // Preserve the original safe token-store failure below.
+            leaseHeld = await options.refreshLease.acquire(scope, options.refreshLeaseOwnerId!, options.refreshLeaseTtlMs ?? 120_000);
+          } catch (error) {
+            throw tokenStoreFailure("QuickBooks refresh lease could not be acquired", error);
           }
-          throw tokenStoreFailure("QuickBooks token rotation could not be committed", error);
+          if (!leaseHeld) {
+            // Another worker owns the lease. Use its committed token if it has
+            // already won; do not refresh with a stale refresh token.
+            try {
+              const winner = await options.repository.load(scope);
+              if (winner && validUntil(winner.accessTokenExpiresAt, now(), expirySkewMs)) return winner.accessToken;
+            } catch (error) {
+              throw tokenStoreFailure("QuickBooks token could not be re-read after a refresh lease conflict", error);
+            }
+            throw new QuickBooksIntegrationError("quickbooks_token_store", "QuickBooks token refresh is already in progress", { retryable: true });
+          }
         }
-        return saved.accessToken;
+        try {
+          // A lease winner must re-read after acquisition. The other worker may
+          // have committed just before this worker acquired an expired lease.
+          if (options.refreshLease) {
+            try {
+              const latest = await options.repository.load(scope);
+              if (latest && validUntil(latest.accessTokenExpiresAt, now(), expirySkewMs)) return latest.accessToken;
+              if (latest && latest.version !== undefined) stored = latest;
+            } catch (error) {
+              throw tokenStoreFailure("QuickBooks token could not be re-read after acquiring a refresh lease", error);
+            }
+          }
+          const rotated = await options.oauth.refreshToken(stored.refreshToken, stored.refreshTokenExpiresAt);
+          let saved: QuickBooksStoredToken;
+          try {
+            if (options.refreshLease && options.repository.saveWithLease) {
+              if (stored.version === undefined) throw new QuickBooksIntegrationError("quickbooks_token_store", "QuickBooks token version is unavailable for a fenced refresh");
+              saved = await options.repository.saveWithLease(scope, rotated, stored.version, options.refreshLeaseOwnerId!);
+            } else {
+              saved = await options.repository.save(scope, rotated, stored.version);
+            }
+          } catch (error) {
+            // A second worker may have won the rotation. Re-read once and use it
+            // only when it is already valid; never overwrite it blindly.
+            try {
+              const winner = await options.repository.load(scope);
+              if (winner && validUntil(winner.accessTokenExpiresAt, now(), expirySkewMs)) return winner.accessToken;
+            } catch {
+              // Preserve the original safe token-store failure below.
+            }
+            throw tokenStoreFailure("QuickBooks token rotation could not be committed", error);
+          }
+          return saved.accessToken;
+        } finally {
+          if (leaseHeld) {
+            try {
+              await options.refreshLease!.release(scope, options.refreshLeaseOwnerId!);
+            } catch {
+              // The committed token remains usable; a lease expiry recovers a
+              // worker that could not release cleanly.
+            }
+          }
+        }
       });
     },
 

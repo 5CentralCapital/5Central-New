@@ -10,6 +10,7 @@ import type {
   QuickBooksUpdateInput,
 } from "../../../shared/accounting/quickbooks";
 import { QuickBooksIntegrationError, isQuickBooksIntegrationError } from "./errors";
+import { parseJsonLosslessNumbers } from "./json-lossless";
 
 export const QUICKBOOKS_SANDBOX_ACCOUNTING_BASE_URL = "https://sandbox-quickbooks.api.intuit.com";
 export const QUICKBOOKS_PRODUCTION_ACCOUNTING_BASE_URL = "https://quickbooks.api.intuit.com";
@@ -60,7 +61,7 @@ function header(response: QuickBooksTransportResponse, name: string): string | u
 
 function parseObject(body: string): QuickBooksJsonObject | undefined {
   try {
-    const value: unknown = JSON.parse(body);
+    const value: unknown = parseJsonLosslessNumbers(body);
     return value && typeof value === "object" && !Array.isArray(value) ? value as QuickBooksJsonObject : undefined;
   } catch {
     return undefined;
