@@ -20,6 +20,9 @@ const NotFound = lazy(() => import("@/pages/not-found"));
 const RentOpsPage = lazy(() => import("@/pages/rent-ops"));
 const RentOpsApplyPage = lazy(() => import("@/pages/rent-ops-apply"));
 const TenantPortalPage = lazy(() => import("@/pages/tenant-portal"));
+const EndUserLicenseAgreement = lazy(() => import("@/pages/legal/eula"));
+const PrivacyPolicy = lazy(() => import("@/pages/legal/privacy"));
+const QuickBooksDisconnected = lazy(() => import("@/pages/quickbooks-disconnected"));
 
 function Router() {
   return (
@@ -50,6 +53,9 @@ function Router() {
       <Route path={ACCOUNT_ENTRY_ROUTES.resident} component={TenantPortalPage} />
       <Route path="/apply" component={RentOpsApplyPage} />
       <Route path="/apply/:propertySlug" component={RentOpsApplyPage} />
+      <Route path="/legal/eula" component={EndUserLicenseAgreement} />
+      <Route path="/legal/privacy" component={PrivacyPolicy} />
+      <Route path="/quickbooks/disconnected" component={QuickBooksDisconnected} />
       <Route component={NotFound} />
     </Switch>
   );
