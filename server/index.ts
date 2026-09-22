@@ -13,12 +13,14 @@ import { ensureSchema } from "./ensureSchema";
 import { publicRequestError } from "./request-errors";
 import { sanitizeApiPathForLogging } from "./request-logging";
 import { applicantPageSecurityHeaders } from "./applicant-page-security";
+import { securityHeaders } from "./security-headers";
 import {
   assertRentOpsProductionConfiguration,
   createRentOpsReadinessGate,
 } from "./rent-ops/security/deployment-security";
 
 const app = express();
+app.disable("x-powered-by");
 const isProduction = process.env.NODE_ENV === "production";
 const sessionSecret = process.env.RENT_OPS_SESSION_SECRET || process.env.SESSION_SECRET;
 const readiness = createRentOpsReadinessGate();
@@ -43,6 +45,7 @@ if (isProduction) {
 
 // Trust proxy for Replit (behind reverse proxy)
 app.set("trust proxy", 1);
+app.use(securityHeaders({ production: isProduction }));
 
 let tenantPaymentService: TenantPaymentService | undefined;
 // Signature verification must receive the original bytes before any JSON parser.

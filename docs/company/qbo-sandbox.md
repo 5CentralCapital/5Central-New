@@ -17,7 +17,7 @@ private company data, tenant records, or production realm is involved.
 | `QBO_REDIRECT_URI` | `http://localhost:4178/api/accounting/qbo/callback` |
 | `QBO_TOKEN_ENCRYPTION_KEY` | Optional here. When absent the harness generates an ephemeral in-memory key. Production requires a 32-byte `base64:` key. |
 | `ROPS_SANDBOX_PORT` | Optional, default `4178` |
-| `ROPS_EVIDENCE_DIR` | Optional, default `/root/shots/qbo-sandbox/` |
+| `ROPS_EVIDENCE_DIR` | Optional. Defaults to `~/.local/state/r-ops/qbo-sandbox/` on the current machine. |
 
 Export the credentials in your shell. Never write them into a file in the repository.
 
@@ -44,8 +44,14 @@ and runs the same shared handler. Don't register it with Intuit.
 | End-user license agreement | `https://5-central-new.replit.app/legal/eula` |
 | Privacy policy | `https://5-central-new.replit.app/legal/privacy` |
 
-The disconnect, EULA, and privacy pages are not in the client yet. They must be
-published before the production key review.
+The active build contains the disconnect, EULA, privacy, and OAuth callback
+routes. As of 2026-09-22, the published disconnect and legal URLs above render
+the public site's 404 page (the SPA returns HTTP 200, so status alone is
+misleading), and the published callback returns an `API route not found`
+response. The current deployment therefore cannot complete this app's OAuth
+flow or satisfy its listed app-detail URLs. Deploy the build that contains
+these routes, then verify the actual page content and callback behavior before
+the production key review.
 
 ## Run it
 

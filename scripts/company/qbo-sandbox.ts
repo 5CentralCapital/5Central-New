@@ -12,6 +12,7 @@
  */
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import { pathToFileURL } from "node:url";
@@ -25,7 +26,7 @@ import type { ConfiguredAccountingQboServices } from "../../server/accounting";
 import type { QuickBooksConnectionScope, QuickBooksJsonObject } from "../../shared/accounting/quickbooks";
 
 export const DEFAULT_SANDBOX_PORT = 4178;
-export const DEFAULT_EVIDENCE_DIR = "/root/shots/qbo-sandbox/";
+export const DEFAULT_EVIDENCE_DIR = path.join(homedir(), ".local", "state", "r-ops", "qbo-sandbox");
 const SESSION_COOKIE = "rops_sandbox_sid";
 const REQUIRED_VARIABLES = ["QBO_CLIENT_ID", "QBO_CLIENT_SECRET", "QBO_REDIRECT_URI", "QBO_ENVIRONMENT"] as const;
 
