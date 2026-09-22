@@ -16,6 +16,9 @@ export function publicFinancialError(error: unknown): PublicFinancialError | und
   if (error instanceof QuickBooksIntegrationError && error.ambiguous || code === 'quickbooks_ambiguous_write') {
     return { status: 409, code: 'quickbooks_ambiguous_write', message: 'Check the existing QuickBooks operation before trying another save.', retryable: false, recovery: 'reconcile_operation' };
   }
+  if (error instanceof AccountingError && code === 'accounting_unavailable' && error.details.reason === 'qbo_disconnect_unconfirmed') {
+    return { status: 503, code: 'accounting_disconnect_unconfirmed', message: 'QuickBooks did not confirm the disconnect. The connection was kept; try again.', retryable: true, recovery: 'retry_same_operation' };
+  }
   if (code.endsWith('_configuration')) return { status: 503, code, message: 'QuickBooks connection setup is required.', retryable: false, recovery: 'configure_connection' };
   if (code === 'quickbooks_oauth' || code === 'quickbooks_unauthorized' || code === 'quickbooks_token_store') return { status: 503, code, message: 'Reconnect QuickBooks to continue.', retryable: false, recovery: 'reconnect' };
   if (code === 'accounting_capability_disabled' || code === 'quickbooks_unsupported_capability') return { status: 403, code, message: 'This QuickBooks feature is not enabled for the selected company.', retryable: false, recovery: 'review_capability' };

@@ -66,6 +66,7 @@ export interface AccountingApi {
   getPendingBinding(organizationId: string, legalEntityId: string, pendingId: string, signal?: AbortSignal): Promise<AccountingPendingBinding | null>;
   confirmConnection(organizationId: string, legalEntityId: string, pendingId: string, signal?: AbortSignal): Promise<void>;
   sync(organizationId: string, scope: AccountingScope, signal?: AbortSignal): Promise<{ readonly status: "complete" | "partial"; readonly streams: readonly unknown[] }>;
+  disconnect(organizationId: string, scope: AccountingScope, signal?: AbortSignal): Promise<{ readonly providerOutcome: "revoked" | "already_revoked" }>;
 }
 
 export interface AccountingWorkspaceEntity extends CompanyContextEntity {}

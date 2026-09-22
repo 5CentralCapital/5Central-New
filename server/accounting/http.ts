@@ -1,4 +1,4 @@
-import type { Express, RequestHandler } from "express";
+import type { Express, Request, RequestHandler, Response } from "express";
 import { z } from "zod";
 import { legalEntityIdSchema, organizationIdSchema } from "../../shared/company";
 import type { FinancialSourceReadPort } from "../../shared/accounting";
@@ -14,6 +14,7 @@ import { hashQuickBooksSessionBinding } from "./oauth-state";
 const environmentSchema = z.enum(["sandbox", "production"]);
 const realmSchema = z.string().regex(/^\d{1,32}$/);
 const mirrorKindSchema = z.enum(["accounts", "vendors", "customers", "employees"]);
+const callbackQuerySchema = z.object({ state: z.string(), code: z.string().optional(), realmId: realmSchema.optional(), error: z.string().optional(), error_description: z.string().max(2_000).optional() }).strict();
 
 function browserSessionBinding(request: unknown): string {
   const sessionId = (request as { readonly sessionID?: unknown }).sessionID;
@@ -82,6 +83,29 @@ export interface AccountingHttpRouteOptions {
 /** Root wiring owns the route prefix; this adapter only supplies authenticated handlers. */
 export function registerAccountingHttpRoutes(app: Express, options: AccountingHttpRouteOptions): void {
   const { executor, requireAdmin, services } = options;
+  /**
+   * Intuit sends only state/code/realmId/error. Recover the bound organization
+   * and legal entity from the server-side state, then re-check the current
+   * actor, session, and grant before consuming the state or persisting any
+   * provider credentials. `expectedOrganizationId` is null for the static
+   * organization-free redirect URI.
+   */
+  const completeCallback = async (request: Request, response: Response, expectedOrganizationId: string | null): Promise<void> => {
+    const query = callbackQuerySchema.parse(request.query);
+    if (services.qbo.status !== "configured") throw new AccountingError("accounting_configuration", "QuickBooks is not configured");
+    const pending = await services.qbo.oauthConnection.peek(query.state);
+    if (!pending || (expectedOrganizationId !== null && pending.organizationId !== expectedOrganizationId)) throw new AccountingError("accounting_conflict", "QuickBooks OAuth state is invalid, expired, or already used");
+    const actorId = companyWebActor(request);
+    if (pending.actorId !== actorId) throw new AccountingError("accounting_conflict", "QuickBooks OAuth callback actor does not match the initiating session");
+    await authorizedScope(executor, request, pending.organizationId, pending.legalEntityId, MUTATION_ROLES);
+    const result = await services.qbo.oauthConnection.complete({ state: query.state, actorId, sessionBinding: browserSessionBinding(request), code: query.code, callbackRealmId: query.realmId, providerError: query.error });
+    if (result.status === "pending_confirmation") {
+      const search = new URLSearchParams({ section: "accounting", company: pending.organizationId, qboPending: result.pendingId, qboEntity: result.scope.legalEntityId });
+      response.redirect(303, `/ops?${search.toString()}`);
+      return;
+    }
+    response.json(result);
+  };
   app.get("/api/company/:organizationId/accounting/qbo/configuration", requireAdmin, companyReadHandler(async (request, response) => {
     const organizationId = organizationIdSchema.parse(request.params.organizationId);
     const query = z.object({ legalEntityId: legalEntityIdSchema }).strict().parse(request.query);
@@ -200,32 +224,23 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
     if (services.qbo.status !== "configured") throw new AccountingError("accounting_configuration", "QuickBooks is not configured");
     response.json(await services.qbo.oauthConnection.begin({ actorId, sessionBinding: browserSessionBinding(request), organizationId, legalEntityId: body.legalEntityId, environment: services.qbo.environment, expectedRealmId: body.expectedRealmId }));
   }));
-  app.get("/api/company/:organizationId/accounting/qbo/callback", requireAdmin, companyReadHandler(async (request, response) => {
-    const organizationId = organizationIdSchema.parse(request.params.organizationId);
-    const query = z.object({ state: z.string(), code: z.string().optional(), realmId: realmSchema.optional(), error: z.string().optional() }).strict().parse(request.query);
-    if (services.qbo.status !== "configured") throw new AccountingError("accounting_configuration", "QuickBooks is not configured");
-    // Intuit sends only state/code/realmId/error. Recover the bound entity from
-    // the server-side state, then re-check the current grant before consuming
-    // the state or persisting any provider credentials.
-    const pending = await services.qbo.oauthConnection.peek(query.state);
-    if (!pending || pending.organizationId !== organizationId) throw new AccountingError("accounting_conflict", "QuickBooks OAuth state is invalid, expired, or already used");
-    const actorId = companyWebActor(request as Parameters<typeof companyWebActor>[0]);
-    if (pending.actorId !== actorId) throw new AccountingError("accounting_conflict", "QuickBooks OAuth callback actor does not match the initiating session");
-    await authorizedScope(executor, request, pending.organizationId, pending.legalEntityId, MUTATION_ROLES);
-    const result = await services.qbo.oauthConnection.complete({ state: query.state, actorId, sessionBinding: browserSessionBinding(request), code: query.code, callbackRealmId: query.realmId, providerError: query.error });
-    if (result.status === "pending_confirmation") {
-      const search = new URLSearchParams({ section: "accounting", company: organizationId, qboPending: result.pendingId, qboEntity: result.scope.legalEntityId });
-      response.redirect(303, `/ops?${search.toString()}`);
-      return;
-    }
-    response.json(result);
-  }));
+  // Intuit redirect URIs must match exactly, so the organization-free route is
+  // the one registered with Intuit. Both routes share one completion path.
+  app.get("/api/accounting/qbo/callback", requireAdmin, companyReadHandler((request, response) => completeCallback(request, response, null)));
+  app.get("/api/company/:organizationId/accounting/qbo/callback", requireAdmin, companyReadHandler((request, response) => completeCallback(request, response, organizationIdSchema.parse(request.params.organizationId))));
   app.post("/api/company/:organizationId/accounting/qbo/confirm", requireAdmin, companyReadHandler(async (request, response) => {
     const organizationId = organizationIdSchema.parse(request.params.organizationId);
     const body = z.object({ legalEntityId: legalEntityIdSchema, pendingId: z.string().uuid(), confirmRealmBinding: z.literal(true) }).strict().parse(request.body);
     const { actorId } = await authorizedScope(executor, request, organizationId, body.legalEntityId, MUTATION_ROLES);
     if (services.qbo.status !== "configured") throw new AccountingError("accounting_configuration", "QuickBooks is not configured");
     response.json(await services.qbo.oauthConnection.confirm({ pendingId: body.pendingId, actorId, sessionBinding: browserSessionBinding(request), organizationId, legalEntityId: body.legalEntityId }));
+  }));
+  app.post("/api/company/:organizationId/accounting/qbo/disconnect", requireAdmin, companyReadHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const body = z.object({ legalEntityId: legalEntityIdSchema, realmId: realmSchema }).strict().parse(request.body);
+    const { actorId } = await authorizedScope(executor, request, organizationId, body.legalEntityId, MUTATION_ROLES);
+    if (services.qbo.status !== "configured") throw new AccountingError("accounting_configuration", "QuickBooks is not configured");
+    response.json(await services.qbo.disconnect({ actorId, channel: "web", scope: { organizationId, legalEntityId: body.legalEntityId, environment: services.qbo.environment, realmId: body.realmId } }));
   }));
 }
 

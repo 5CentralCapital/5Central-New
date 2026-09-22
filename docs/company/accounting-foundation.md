@@ -58,6 +58,16 @@ realm fence, the encrypted connection, and the audit record. A failed save
 leaves the handoff available for a safe retry. Existing bindings still require
 an exact CompanyInfo identity match. MCP cannot complete a browser OAuth state;
 its connect tool returns a scoped in-app setup link for the browser flow.
+The static organization-free redirect URI `GET /api/accounting/qbo/callback`
+is the one registered with Intuit. It shares the same handler as the
+organization-scoped callback.
+
+`POST /api/company/:organizationId/accounting/qbo/disconnect` (and the
+`disconnect_quickbooks` MCP tool) revokes the latest refresh token at Intuit.
+It clears the connection, disables its capabilities, and writes an audit
+receipt only after the provider accepts, or after the provider reports that the
+grant is already invalid. An uncertain revoke keeps the connection for retry.
+See [qbo-sandbox.md](qbo-sandbox.md) for the sandbox harness.
 
 QBO access and refresh credentials are encrypted separately with AES-256-GCM.
 The exact company/entity/environment/realm scope is authenticated data, the

@@ -40,5 +40,19 @@
 .accounting-confirmation { display: grid; gap: 3px; padding: 10px 11px; border: 1px solid var(--accounting-line); border-radius: 8px; background: var(--accounting-soft); }
 .accounting-confirmation span, .accounting-confirmation small { color: var(--accounting-muted); font-size: 10px; }
 .accounting-confirmation strong { color: var(--accounting-ink); font-size: 13px; }
+.accounting-button-danger { border-color: #e4b4b1; background: #fff4f2; color: #a3453e; }
+.accounting-environment { display: inline-flex; width: fit-content; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 999px; font-size: 10px; font-weight: 750; letter-spacing: .03em; text-transform: uppercase; }
+.accounting-environment.is-sandbox { background: #f8efd9; color: var(--accounting-warning); }
+.accounting-environment.is-production { background: #e6f1e9; color: var(--accounting-positive); }
+.accounting-actions .accounting-environment { align-self: center; }
+.accounting-dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgb(20 18 14 / 28%); }
+.accounting-dialog { width: min(480px, 100%); max-height: 90vh; overflow: auto; border-radius: 12px; background: var(--accounting-surface, #fffdfa); color: var(--accounting-ink, #292927); box-shadow: 0 24px 80px rgb(20 18 14 / 22%); }
+.accounting-dialog-header { padding: 16px 18px; border-bottom: 1px solid var(--accounting-line, #e7e1d8); }
+.accounting-dialog-header h2 { margin: 0; font-size: 17px; font-weight: 650; }
+.accounting-dialog-body { display: grid; gap: 10px; padding: 16px 18px; font-size: 13px; line-height: 1.45; }
+.accounting-dialog-body p, .accounting-dialog-body ul { margin: 0; }
+.accounting-dialog-body ul { display: grid; gap: 6px; padding-left: 18px; color: var(--accounting-muted, #77736d); }
+.accounting-dialog-body .accounting-message { margin: 0; }
+.accounting-dialog-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--accounting-line, #e7e1d8); background: var(--accounting-soft, #f7f2eb); }
 @media (max-width: 900px) { .accounting-selectors { grid-template-columns: 1fr 1fr; } .accounting-grid { display: block; } .accounting-sidebar { border-right: 0; border-bottom: 1px solid var(--accounting-line); } }
 @media (max-width: 640px) { .accounting-toolbar { flex-direction: column; padding: 18px 16px; } .accounting-selectors { grid-template-columns: 1fr; padding: 14px 16px; } .accounting-main { padding: 20px 16px 34px; } .accounting-card { margin: 12px; } }

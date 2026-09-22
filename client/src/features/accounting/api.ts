@@ -118,6 +118,11 @@ const api: AccountingApi = {
     const value = record(await requestJson(`${basePath(organizationId)}/sync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legalEntityId: scope.legalEntityId, environment: scope.environment, realmId: scope.realmId }), signal }));
     return { status: value.status === "partial" ? "partial" : "complete", streams: Array.isArray(value.streams) ? value.streams : [] };
   },
+  async disconnect(organizationId, scope, signal) {
+    const value = record(await requestJson(`${basePath(organizationId)}/disconnect`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legalEntityId: scope.legalEntityId, realmId: scope.realmId }), signal }));
+    if (value.status !== "disconnected") throw new AccountingApiError("QuickBooks did not confirm the disconnect. The connection was kept; try again.", 0, "accounting_disconnect_unconfirmed");
+    return { providerOutcome: value.providerOutcome === "already_revoked" ? "already_revoked" : "revoked" };
+  },
 };
 
 export const accountingApi: AccountingApi = api;

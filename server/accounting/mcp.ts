@@ -65,6 +65,14 @@ export function registerAccountingMcpTools(register: AccountingToolRegistrar, op
     await sync.bootstrapRead();
     return sync.catchUp({ maxPages: args.maxPages });
   });
+  register("disconnect_quickbooks", "Revoke an authorized QBO connection at Intuit, then clear its local credentials and disable its capabilities. A failed or uncertain revoke keeps the connection for retry. Reconnect requires the browser flow.", { scope: scopeInput }, true, async (args) => {
+    const scope = scopeInput.parse(args.scope);
+    const principal = await principalFor(scope.organizationId);
+    authorizeCompanyRead(principal, { organizationId: scope.organizationId, legalEntityId: scope.legalEntityId }, ["owner", "admin", "finance"]);
+    if (options.services.qbo.status !== "configured") throw new AccountingError("accounting_configuration", "QuickBooks is not configured");
+    if (scope.environment !== options.services.qbo.environment) throw new AccountingError("accounting_conflict", "The requested QuickBooks environment is not configured for this server");
+    return options.services.qbo.disconnect({ actorId: options.actorId, channel: "codex_mcp", scope: { organizationId: scope.organizationId, legalEntityId: scope.legalEntityId, environment: scope.environment, realmId: scope.realmId } });
+  });
   register("begin_quickbooks_connect", "Return a scoped browser setup link for QuickBooks. OAuth state is created only by the authenticated browser session, so an MCP actor cannot complete a browser callback directly.", { organizationId: organizationIdSchema, legalEntityId: legalEntityIdSchema, expectedRealmId: z.string().regex(/^\d{1,32}$/).optional() }, true, async (args) => {
     const organizationId = organizationIdSchema.parse(args.organizationId);
     const legalEntityId = legalEntityIdSchema.parse(args.legalEntityId);

@@ -8,7 +8,8 @@ import { createQuickBooksOAuthClient, type QuickBooksOAuthClient } from "../inte
 import { createQuickBooksReportsClient, type QuickBooksReportsClient } from "../integrations/quickbooks/reports";
 import { createQuickBooksFetchTransport, type QuickBooksFetchTransportOptions } from "../integrations/quickbooks/transport";
 import { createQuickBooksTokenManager, type QuickBooksTokenManager } from "../integrations/quickbooks/token-manager";
-import { createQuickBooksCapabilityGate, PostgresQuickBooksCapabilityStore, type QuickBooksCapabilityGate } from "./capabilities";
+import { createQuickBooksCapabilityGate, PostgresQuickBooksCapabilityStore, type QuickBooksCapabilityGate, type QuickBooksCapabilityStore } from "./capabilities";
+import { disconnectQuickBooksConnection, type QuickBooksDisconnectInput, type QuickBooksDisconnectResult } from "./disconnect";
 import { createQuickBooksOAuthConnectionService, PostgresQuickBooksOAuthStateStore, type QuickBooksOAuthConnectionService } from "./oauth-state";
 import { createQboAccountingMirrorStore, type QboAccountingMirrorStore } from "./mirror-store";
 import type { AccountingPurposeMappingPort } from "./purpose";
@@ -50,7 +51,12 @@ export interface ConfiguredAccountingQboServices {
   readonly tokenManager: QuickBooksTokenManager;
   readonly tokenRepository: PostgresQuickBooksTokenRepository;
   readonly capabilityGate: QuickBooksCapabilityGate;
+  /** Evidence store behind the gate. Enabling requires live provider read-back. */
+  readonly capabilityStore: QuickBooksCapabilityStore;
   readonly oauthConnection: QuickBooksOAuthConnectionService;
+  /** Revoke at Intuit, then clear the local connection, disable its
+   * capabilities, and audit. Shared by HTTP and MCP adapters. */
+  disconnect(input: QuickBooksDisconnectInput): Promise<QuickBooksDisconnectResult>;
   previewPendingBinding(input: {
     readonly executor: RentOpsQueryExecutor;
     readonly pendingId: string;
@@ -361,7 +367,7 @@ export function createAccountingServices(executor: RentOpsQueryExecutor, options
       readonly organizationId: string;
       readonly legalEntityId: string;
     }): Promise<QuickBooksPendingBindingPreview | null> => new PostgresQuickBooksPendingBindingStore(input.executor, cipher).preview(input.pendingId, input.actorId, input.sessionBindingHash, { organizationId: input.organizationId, legalEntityId: input.legalEntityId });
-    return { financialSourceReadPort: mirror, financialSourceAllocationPort: mirror, financialProviderPaymentContextPort: mirror, financialProviderCostContextPort: mirror, purposeMappings, mirror, qbo: { status: "configured", environment: config.environment, oauth, tokenManager, tokenRepository, capabilityGate, oauthConnection, previewPendingBinding, createAccountingClient: createClient, createReportsClient: createReports, createProviderSync: createProvider } };
+    return { financialSourceReadPort: mirror, financialSourceAllocationPort: mirror, financialProviderPaymentContextPort: mirror, financialProviderCostContextPort: mirror, purposeMappings, mirror, qbo: { status: "configured", environment: config.environment, oauth, tokenManager, tokenRepository, capabilityGate, capabilityStore, oauthConnection, disconnect: input => disconnectQuickBooksConnection({ executor, cipher, oauth, now: config.now }, input), previewPendingBinding, createAccountingClient: createClient, createReportsClient: createReports, createProviderSync: createProvider } };
   } catch (error) {
     if ((error instanceof AccountingError && error.code === "accounting_configuration") || (isQuickBooksIntegrationError(error) && error.code === "quickbooks_configuration")) return { financialSourceReadPort: mirror, financialSourceAllocationPort: mirror, financialProviderPaymentContextPort: mirror, financialProviderCostContextPort: mirror, purposeMappings, mirror, qbo: { status: "unconfigured", reason: "invalid_configuration" } };
     throw error;
@@ -381,3 +387,4 @@ export * from "./token-crypto";
 export * from "./http";
 export * from "./mcp";
 export * from "./provider-sync";
+export * from "./disconnect";
