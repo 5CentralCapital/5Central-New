@@ -86,7 +86,7 @@ function queryFor(entity: string, startPosition: number, sinceWatermark: string 
   const where = overlap && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(overlap)
     ? ` WHERE MetaData.LastUpdatedTime >= '${overlap}'`
     : "";
-  return `SELECT * FROM ${entity}${where} ORDERBY MetaData.LastUpdatedTime ASC, Id ASC STARTPOSITION ${startPosition} MAXRESULTS ${PAGE_SIZE}`;
+  return `SELECT * FROM ${entity}${where} ORDERBY MetaData.LastUpdatedTime ASC STARTPOSITION ${startPosition} MAXRESULTS ${PAGE_SIZE}`;
 }
 
 function accountObject(input: QuickBooksJsonObject): { objectId: string; version: string; providerUpdatedAt: string; providerBody: QuickBooksJsonObject } | null {

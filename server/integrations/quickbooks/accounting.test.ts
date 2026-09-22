@@ -80,6 +80,31 @@ test("write uncertainty is explicit and never retried, while definitive validati
   });
 });
 
+test("classifies 2xx Fault envelopes from reads and queries without exposing provider text", async () => {
+  const body = {
+    Fault: {
+      Error: [{ code: "6000", Message: "Sensitive name from request", Detail: "secret@example.test" }],
+    },
+  };
+  const client = createQuickBooksAccountingClient({
+    scope,
+    getAccessToken: async () => "access-token",
+    transport: async () => response(200, body, { intuit_tid: "tid-fault" }),
+  });
+
+  for (const operation of [() => client.read("Account", "1"), () => client.query("SELECT * FROM Account")]) {
+    await assert.rejects(operation, (error: unknown) => {
+      assert.ok(error instanceof QuickBooksIntegrationError);
+      assert.equal(error.code, "quickbooks_api");
+      assert.equal(error.status, 200);
+      assert.equal(error.details.providerCode, "6000");
+      assert.equal(error.intuitTid, "tid-fault");
+      assert.doesNotMatch(`${error.message}\n${JSON.stringify(error.details)}\n${JSON.stringify(error)}`, /Sensitive name|secret@example\.test/);
+      return true;
+    });
+  }
+});
+
 test("premium or unsupported project entities stay disabled", async () => {
   assert.equal(isQuickBooksAdapterCapabilityImplemented("accounting.read"), true);
   assert.equal(isQuickBooksCapabilityEnabled("accounting.read"), false);

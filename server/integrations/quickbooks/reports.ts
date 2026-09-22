@@ -8,7 +8,7 @@ import type {
   QuickBooksTransportResponse,
 } from "../../../shared/accounting/quickbooks";
 import { QuickBooksIntegrationError } from "./errors";
-import { QUICKBOOKS_PRODUCTION_ACCOUNTING_BASE_URL, QUICKBOOKS_SANDBOX_ACCOUNTING_BASE_URL } from "./accounting";
+import { DEFAULT_QUICKBOOKS_MINOR_VERSION, QUICKBOOKS_PRODUCTION_ACCOUNTING_BASE_URL, QUICKBOOKS_SANDBOX_ACCOUNTING_BASE_URL, quickBooksProviderFaultError } from "./accounting";
 import { parseJsonLosslessNumbers } from "./json-lossless";
 
 export type QuickBooksReportAccountingMethod = "Cash" | "Accrual";
@@ -179,6 +179,7 @@ function apiError(response: QuickBooksTransportResponse): QuickBooksIntegrationE
 
 export function createQuickBooksReportsClient(config: QuickBooksAccountingClientConfig): QuickBooksReportsClient {
   const scope = config.scope;
+  const minorVersion = config.minorVersion ?? DEFAULT_QUICKBOOKS_MINOR_VERSION;
   if (typeof config.getAccessToken !== "function" || typeof config.transport !== "function") throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks Reports client requires token and transport providers");
   return {
     async getReport(reportName, request = {}) {
@@ -199,15 +200,15 @@ export function createQuickBooksReportsClient(config: QuickBooksAccountingClient
       if (request.department !== undefined) params.department = request.department;
       if (request.vendor !== undefined) params.vendor = request.vendor;
       if (request.reportDate !== undefined) params.report_date = String(request.reportDate);
-      if (config.minorVersion !== undefined) {
-        if (!/^\d{1,4}$/.test(config.minorVersion)) throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks minor version is invalid");
-        params.minorversion = config.minorVersion;
-      }
+      if (!/^\d{1,4}$/.test(minorVersion)) throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks minor version is invalid");
+      params.minorversion = minorVersion;
       for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
       const token = await config.getAccessToken();
       if (!token) throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks access token is unavailable");
       const response = await config.transport({ method: "GET", url: url.toString(), headers: { Accept: "application/json", Authorization: `Bearer ${token}` } });
       if (response.status < 200 || response.status >= 300) throw apiError(response);
+      const fault = quickBooksProviderFaultError(response);
+      if (fault) throw fault;
       const raw = parseObject(response.body);
       if (!raw) throw new QuickBooksIntegrationError("quickbooks_api", "QuickBooks report response could not be confirmed", { status: response.status });
       const context = assertHeaderContext(raw, request);

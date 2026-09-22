@@ -83,14 +83,16 @@ function retryAfterMs(response: QuickBooksTransportResponse): number | undefined
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
 }
 
-function providerFault(body: string): { code?: string } {
+function providerFault(body: string): { isFault: boolean; code?: string } {
   const parsed = parseObject(body);
   const fault = parsed?.Fault;
-  if (!fault || typeof fault !== "object" || Array.isArray(fault)) return {};
+  if (!fault || typeof fault !== "object" || Array.isArray(fault)) return { isFault: false };
   const errors = (fault as Record<string, unknown>).Error;
   const first = Array.isArray(errors) && errors[0] && typeof errors[0] === "object" ? errors[0] as Record<string, unknown> : undefined;
+  const code = safeString(first?.code ?? first?.Code);
   return {
-    code: safeString(first?.code ?? first?.Code),
+    isFault: true,
+    ...(code ? { code } : {}),
   };
 }
 
@@ -126,6 +128,11 @@ function responseError(response: QuickBooksTransportResponse, method: "GET" | "P
     retryAfterMs: retryAfterMs(response),
     details,
   });
+}
+
+/** Converts a QBO Fault envelope into the same safe API error used for HTTP failures. */
+export function quickBooksProviderFaultError(response: QuickBooksTransportResponse): QuickBooksIntegrationError | null {
+  return providerFault(response.body).isFault ? responseError(response, "GET") : null;
 }
 
 function entityFromEnvelope<T extends QuickBooksJsonObject>(entity: string, body: string): { entity: T; raw: QuickBooksEntityEnvelope<T> } | undefined {
@@ -242,6 +249,8 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
       assertEntity(entity);
       assertIdentifier(id, "entity ID");
       const response = await call("GET", `${entityPath(entity)}/${encodeURIComponent(id)}`);
+      const fault = quickBooksProviderFaultError(response);
+      if (fault) throw fault;
       const parsed = entityFromEnvelope<T>(entity, response.body);
       if (!parsed) throw new QuickBooksIntegrationError("quickbooks_api", "QuickBooks read response could not be confirmed", { status: response.status });
       return { ...parsed, status: response.status, intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") };
@@ -252,6 +261,8 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
         throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks query is invalid");
       }
       const response = await call("GET", `query?query=${encodeURIComponent(query)}`);
+      const fault = quickBooksProviderFaultError(response);
+      if (fault) throw fault;
       const parsed = queryFromEnvelope<T>(response.body);
       if (!parsed) throw new QuickBooksIntegrationError("quickbooks_api", "QuickBooks query response could not be confirmed", { status: response.status });
       return { ...parsed, status: response.status, intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") };

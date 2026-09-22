@@ -100,3 +100,75 @@ test("bootstrap probe enables read and provider catch-up mirrors exact QBO Purch
     await synthetic.close();
   }
 });
+
+test("provider sync orders only by LastUpdatedTime and preserves overlap pagination deduplication", async () => {
+  const synthetic = await createSyntheticCompanyDatabase();
+  try {
+    const mirror = createQboAccountingMirrorStore(synthetic.executor);
+    const queries: string[] = [];
+    const phase: { value: "seed" | "overlap" } = { value: "seed" };
+    const purchase = {
+      Id: "101", SyncToken: "0", TxnDate: "2026-09-20", CurrencyRef: { value: "USD" }, PaymentType: "Check",
+      EntityRef: { value: "vendor-1" }, AccountRef: { value: "bank-1" }, MetaData: { LastUpdatedTime: updated },
+      Line: [{ Id: "1", Amount: "125.40", AccountBasedExpenseLineDetail: { AccountRef: { value: "expense-1" } }, Description: "Materials" }],
+    } as QuickBooksJsonObject;
+    const unsupported = { MetaData: { LastUpdatedTime: updated } } as QuickBooksJsonObject;
+    const client = {
+      read: async () => ({ entity: { Id: "1", CompanyName: "Synthetic QBO" }, raw: {}, status: 200 }),
+      query: async (query: string) => {
+        queries.push(query);
+        const entity = /FROM (Purchase|BillPayment|Bill|Deposit|Account)\b/.exec(query)?.[1];
+        const startPosition = Number(/STARTPOSITION (\d+)/.exec(query)?.[1] ?? "1");
+        let entities: QuickBooksJsonObject[] = [];
+        if (entity === "Purchase") {
+          if (phase.value === "seed" && startPosition === 1) entities = [purchase];
+          if (phase.value === "overlap" && startPosition === 1) entities = [...Array.from({ length: 499 }, () => unsupported), purchase];
+          if (phase.value === "overlap" && startPosition === 501) entities = [purchase];
+        }
+        return { entities, raw: { QueryResponse: {} }, status: 200 };
+      },
+      create: async () => { throw new Error("unused"); },
+      update: async () => { throw new Error("unused"); },
+    } as unknown as QuickBooksAccountingClient;
+    const sync = createQboProviderSync({
+      executor: synthetic.executor,
+      client,
+      scope,
+      mirror,
+      capabilityStore: new PostgresQuickBooksCapabilityStore(synthetic.executor),
+      now: () => new Date("2026-09-21T15:00:00Z"),
+    });
+
+    await sync.bootstrapRead();
+    assert.equal((await sync.catchUp()).status, "complete");
+    phase.value = "overlap";
+    const overlapped = await sync.catchUp();
+
+    const purchaseQueries = queries.filter(query => /FROM Purchase\b/.test(query));
+    assert.equal(purchaseQueries.length, 3);
+    for (const query of purchaseQueries) {
+      const orderBy = /\bORDERBY\s+(.+?)\s+STARTPOSITION\b/i.exec(query)?.[1];
+      assert.equal(orderBy, "MetaData.LastUpdatedTime ASC");
+      assert.doesNotMatch(orderBy ?? "", /\bId\b/i);
+    }
+    const overlapQueries = purchaseQueries.slice(1);
+    assert.match(overlapQueries[0]!, /WHERE MetaData\.LastUpdatedTime >= '2026-09-21T13:59:59\.000Z'/);
+    assert.match(overlapQueries[0]!, /STARTPOSITION 1 MAXRESULTS 500$/);
+    assert.match(overlapQueries[1]!, /STARTPOSITION 501 MAXRESULTS 500$/);
+    assert.equal(overlapped.streams.find(stream => stream.stream === "transactions.purchase")?.result.pagesFetched, 2);
+
+    const coverage = await mirror.readCoverage({ provider: "qbo", ...scope }, "transactions.purchase");
+    assert.equal(coverage.objectCount, 1);
+    assert.equal(coverage.transactionCount, 1);
+    assert.equal(coverage.lineCount, 1);
+    const persisted = await synthetic.executor.query<{ count: string | number }>(
+      `SELECT COUNT(*) AS count FROM accounting_qbo_source_objects
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
+          AND object_type=$5 AND object_id=$6 AND object_version=$7`,
+      [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId, "Purchase", "101", "0"],
+    );
+    assert.equal(Number(persisted.rows[0]?.count), 1);
+  } finally {
+    await synthetic.close();
+  }
+});
