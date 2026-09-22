@@ -48,10 +48,11 @@ function parseConnection(value: unknown): AccountingConnection {
   return {
     scope: { organizationId: String(scope.organizationId), legalEntityId: String(scope.legalEntityId), environment, realmId: String(scope.realmId) },
     name: typeof root.name === "string" ? root.name : "QuickBooks Online",
-    status: root.status === "ready" ? "ready" : "connected",
+    status: root.status === "ready" || root.status === "needs_reconnect" ? root.status : "connected",
     version: Number(root.version ?? 0),
     accessTokenExpiresAt: String(root.accessTokenExpiresAt ?? ""),
     refreshTokenExpiresAt: root.refreshTokenExpiresAt === null || root.refreshTokenExpiresAt === undefined ? null : String(root.refreshTokenExpiresAt),
+    refreshTokenHardExpiresAt: root.refreshTokenHardExpiresAt === null || root.refreshTokenHardExpiresAt === undefined ? null : String(root.refreshTokenHardExpiresAt),
     updatedAt: String(root.updatedAt ?? ""),
   };
 }

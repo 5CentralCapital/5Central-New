@@ -17,14 +17,15 @@ type RevokeBehavior = "ok" | "server_error" | "network_error" | "invalid_grant";
 
 /** Offline Intuit double. Records method/host/path and form grant types only. */
 function createIntuitDouble() {
-  const calls: { method: string; host: string; path: string; grantType?: string; revokedToken?: string }[] = [];
+  const calls: { method: string; host: string; path: string; grantType?: string; revokedToken?: string; hardExpiryOptIn?: string }[] = [];
   let refreshCounter = 0;
-  const state = { revoke: "ok" as RevokeBehavior };
+  const state = { revoke: "ok" as RevokeBehavior, refresh: "ok" as "ok" | "invalid_grant" };
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     const method = init?.method ?? "GET";
     const form = typeof init?.body === "string" && url.host !== "sandbox-quickbooks.api.intuit.com" ? new URLSearchParams(init.body) : null;
-    calls.push({ method, host: url.host, path: url.pathname, ...(form?.get("grant_type") ? { grantType: form.get("grant_type")! } : {}), ...(url.pathname.endsWith("/revoke") ? { revokedToken: form?.get("token") ?? "" } : {}) });
+    const headers = new Headers(init?.headers);
+    calls.push({ method, host: url.host, path: url.pathname, ...(form?.get("grant_type") ? { grantType: form.get("grant_type")! } : {}), ...(url.pathname.endsWith("/revoke") ? { revokedToken: form?.get("token") ?? "" } : {}), ...(headers.get("x-include-refresh-token-hard-expires-in") ? { hardExpiryOptIn: headers.get("x-include-refresh-token-hard-expires-in")! } : {}) });
     const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", intuit_tid: `tid-${calls.length}` } });
     if (url.pathname.endsWith("/revoke")) {
       if (state.revoke === "network_error") throw new TypeError("socket hang up");
@@ -35,9 +36,10 @@ function createIntuitDouble() {
     if (url.pathname.endsWith("/tokens/bearer")) {
       if (form?.get("grant_type") === "refresh_token") {
         refreshCounter += 1;
-        return json(200, { access_token: `access-refreshed-${refreshCounter}`, refresh_token: `refresh-rotated-${refreshCounter}`, expires_in: 3_600, x_refresh_token_expires_in: 86_400 });
+        if (state.refresh === "invalid_grant") return json(400, { error: "invalid_grant", error_description: "sensitive-provider-detail-do-not-store" });
+        return json(200, { access_token: `access-refreshed-${refreshCounter}`, refresh_token: `refresh-rotated-${refreshCounter}`, expires_in: 3_600, x_refresh_token_expires_in: 86_400, x_refresh_token_hard_expires_in: 15_768_000 });
       }
-      return json(200, { access_token: `access-${form?.get("code")}`, refresh_token: `refresh-${form?.get("code")}`, expires_in: 3_600, x_refresh_token_expires_in: 86_400 });
+      return json(200, { access_token: `access-${form?.get("code")}`, refresh_token: `refresh-${form?.get("code")}`, expires_in: 3_600, x_refresh_token_expires_in: 86_400, x_refresh_token_hard_expires_in: 15_768_000 });
     }
     if (url.pathname.includes("/companyinfo/")) {
       return json(200, { CompanyInfo: { Id: "1", CompanyName: "Sandbox Company_US_1", LegalName: "Sandbox Company", HomeCurrency: { value: "USD" }, MetaData: { LastUpdatedTime: "2026-09-01T00:00:00-07:00" } } });
@@ -112,8 +114,53 @@ test("organization-free callback completes a valid state through the shared conf
   try {
     await harness.connect("code-1");
     assert.equal(tokenExchanges(harness.intuit.calls), 1);
-    const items = await harness.listConnections() as { scope: { realmId: string; environment: string } }[];
+    assert.equal(harness.intuit.calls.filter(call => call.grantType === "authorization_code" || call.grantType === "refresh_token").every(call => call.hardExpiryOptIn === "true"), true);
+    const items = await harness.listConnections() as { scope: { realmId: string; environment: string }; refreshTokenHardExpiresAt: string | null }[];
     assert.deepEqual(items.map(item => [item.scope.environment, item.scope.realmId]), [["sandbox", realmId]]);
+    assert.ok(items[0]?.refreshTokenHardExpiresAt);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("invalid_grant disables accounting access, records a safe reconnect event, stops refresh attempts, and reconnects", async () => {
+  const harness = await startHarness();
+  try {
+    await harness.connect("code-1");
+    await harness.qbo.createProviderSync(scope).bootstrapRead();
+    assert.equal(await harness.qbo.capabilityGate.isEnabled(scope, "accounting.read"), true);
+    await harness.demo.database.db.query("UPDATE accounting_qbo_connections SET access_token_expires_at=now() - interval '1 minute'");
+    harness.intuit.state.refresh = "invalid_grant";
+    const refreshCallsBefore = harness.intuit.calls.filter(call => call.grantType === "refresh_token").length;
+    await assert.rejects(() => harness.qbo.tokenManager.getAccessToken(scope), /needs to be reconnected/);
+    const refreshCallsAfterTransition = harness.intuit.calls.filter(call => call.grantType === "refresh_token").length;
+    assert.equal(refreshCallsAfterTransition, refreshCallsBefore + 1);
+    assert.equal(await harness.qbo.capabilityGate.isEnabled(scope, "accounting.read"), false);
+    const items = await harness.listConnections() as { status: string }[];
+    assert.deepEqual(items.map(item => item.status), ["needs_reconnect"]);
+    const event = await harness.demo.database.db.query<{ event_type: string; reason_code: string; provider_trace_id: string }>("SELECT event_type,reason_code,provider_trace_id FROM accounting_qbo_connection_events");
+    assert.equal(event.rows.length, 1);
+    assert.equal(event.rows[0]?.event_type, "needs_reconnect");
+    assert.equal(event.rows[0]?.reason_code, "invalid_grant");
+    assert.match(event.rows[0]?.provider_trace_id ?? "", /^tid-/);
+    const stored = await harness.demo.database.db.query<{ status: string; encrypted_access_token: unknown; encrypted_refresh_token: unknown; intuit_tid: string | null }>("SELECT status,encrypted_access_token,encrypted_refresh_token,intuit_tid FROM accounting_qbo_connections");
+    assert.deepEqual(stored.rows, [{ status: "needs_reconnect", encrypted_access_token: null, encrypted_refresh_token: null, intuit_tid: event.rows[0]?.provider_trace_id }]);
+    assert.doesNotMatch(JSON.stringify({ event: event.rows, stored: stored.rows }), /sensitive-provider-detail-do-not-store|refresh-code-1|access-code-1/);
+
+    await assert.rejects(() => harness.qbo.tokenManager.getAccessToken(scope), /not authorized/);
+    assert.equal(harness.intuit.calls.filter(call => call.grantType === "refresh_token").length, refreshCallsAfterTransition, "later calls must not retry the invalid grant");
+    const beforeSync = harness.intuit.calls.length;
+    const sync = await harness.post("/sync", { legalEntityId, environment: "sandbox", realmId });
+    assert.equal(sync.status, 503);
+    assert.equal((await sync.json() as { recovery: string }).recovery, "reconnect");
+    assert.equal(harness.intuit.calls.length, beforeSync);
+
+    harness.intuit.state.refresh = "ok";
+    await harness.connect("code-2");
+    assert.equal(await harness.qbo.tokenManager.getAccessToken(scope), "access-code-2");
+    const reconnected = await harness.demo.database.db.query<{ status: string; refresh_token_hard_expires_at: Date | string | null }>("SELECT status,refresh_token_hard_expires_at FROM accounting_qbo_connections");
+    assert.equal(reconnected.rows[0]?.status, "active");
+    assert.ok(reconnected.rows[0]?.refresh_token_hard_expires_at);
   } finally {
     await harness.close();
   }

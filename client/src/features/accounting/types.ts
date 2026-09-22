@@ -13,10 +13,11 @@ export interface AccountingScope {
 export interface AccountingConnection {
   readonly scope: AccountingScope;
   readonly name: string;
-  readonly status: "connected" | "ready";
+  readonly status: "connected" | "ready" | "needs_reconnect";
   readonly version: number;
   readonly accessTokenExpiresAt: string;
   readonly refreshTokenExpiresAt: string | null;
+  readonly refreshTokenHardExpiresAt: string | null;
   readonly updatedAt: string;
 }
 

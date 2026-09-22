@@ -17,6 +17,7 @@ export const COMPANY_APPLICATION_TABLES = [
   "company_project_draft_costs",
   "company_project_posted_actuals",
   "accounting_qbo_connections",
+  "accounting_qbo_connection_events",
   "accounting_qbo_oauth_states",
   "accounting_qbo_pending_bindings",
   "accounting_qbo_binding_confirmations",

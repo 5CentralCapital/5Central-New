@@ -46,6 +46,13 @@ function tokenStoreFailure(message: string, cause?: unknown): QuickBooksIntegrat
   return new QuickBooksIntegrationError("quickbooks_token_store", message, { cause });
 }
 
+function isInvalidGrant(error: unknown): error is QuickBooksIntegrationError {
+  return isQuickBooksIntegrationError(error)
+    && error.code === "quickbooks_oauth"
+    && (error.status === 400 || error.status === 401)
+    && error.details.error === "invalid_grant";
+}
+
 /**
  * Adds refresh-token rotation and per-connection serialization around the
  * injected persistence contract. A stale concurrent refresh can never replace
@@ -65,6 +72,10 @@ export function createQuickBooksTokenManager(options: QuickBooksTokenManagerOpti
     throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks refresh lease owner is invalid");
   }
   const locks = new Map<string, Promise<unknown>>();
+  // A database outage while recording a reconnect transition must not cause
+  // this worker to call Intuit with the same rejected grant on every request.
+  // A later, versioned reconnect from another worker clears the local block.
+  const reconnectRequiredAtVersion = new Map<string, number | undefined>();
 
   async function serialized<T>(scope: QuickBooksConnectionScope, work: () => Promise<T>): Promise<T> {
     const key = quickBooksConnectionKey(scope);
@@ -76,6 +87,26 @@ export function createQuickBooksTokenManager(options: QuickBooksTokenManagerOpti
     } finally {
       if (locks.get(key) === current) locks.delete(key);
     }
+  }
+
+  async function requireReconnect(
+    scope: QuickBooksConnectionScope,
+    stored: QuickBooksStoredToken,
+    reason: "invalid_grant" | "refresh_token_expired" | "refresh_token_hard_expired",
+    intuitTid?: string,
+  ): Promise<never> {
+    const key = quickBooksConnectionKey(scope);
+    reconnectRequiredAtVersion.set(key, stored.version);
+    try {
+      await options.repository.markNeedsReconnect(scope, { reason, ...(intuitTid ? { intuitTid } : {}) });
+    } catch {
+      // Do not attach provider or storage details that could contain secrets.
+      throw new QuickBooksIntegrationError("quickbooks_token_store", "QuickBooks reconnect state could not be safely recorded", { retryable: true });
+    }
+    throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks connection needs to be reconnected", {
+      ...(intuitTid ? { intuitTid } : {}),
+      details: { reason: "needs_reconnect" },
+    });
   }
 
   return {
@@ -92,8 +123,11 @@ export function createQuickBooksTokenManager(options: QuickBooksTokenManagerOpti
     async saveNewConnection(scope, token): Promise<QuickBooksStoredToken> {
       return serialized(scope, async () => {
         try {
-          if (options.repository.saveNewConnection) return await options.repository.saveNewConnection(scope, token);
-          return await options.repository.save(scope, token);
+          const saved = options.repository.saveNewConnection
+            ? await options.repository.saveNewConnection(scope, token)
+            : await options.repository.save(scope, token);
+          reconnectRequiredAtVersion.delete(quickBooksConnectionKey(scope));
+          return saved;
         } catch (error) {
           throw tokenStoreFailure("QuickBooks connection could not be saved", error);
         }
@@ -102,6 +136,7 @@ export function createQuickBooksTokenManager(options: QuickBooksTokenManagerOpti
 
     async getAccessToken(scope): Promise<string> {
       return serialized(scope, async () => {
+        const key = quickBooksConnectionKey(scope);
         let stored: QuickBooksStoredToken | null | undefined;
         try {
           stored = await options.repository.load(scope);
@@ -109,10 +144,21 @@ export function createQuickBooksTokenManager(options: QuickBooksTokenManagerOpti
           throw tokenStoreFailure("QuickBooks token could not be loaded", error);
         }
         if (!stored) throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks connection is not authorized");
+        if (reconnectRequiredAtVersion.has(key)) {
+          const blockedVersion = reconnectRequiredAtVersion.get(key);
+          if (blockedVersion !== undefined && stored.version !== undefined && stored.version > blockedVersion) {
+            reconnectRequiredAtVersion.delete(key);
+          } else {
+            throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks connection needs to be reconnected", { details: { reason: "needs_reconnect" } });
+          }
+        }
         const current = now();
         if (validUntil(stored.accessTokenExpiresAt, current, expirySkewMs)) return stored.accessToken;
+        if (stored.refreshTokenHardExpiresAt && !validUntil(stored.refreshTokenHardExpiresAt, current, 0)) {
+          return requireReconnect(scope, stored, "refresh_token_hard_expired", stored.intuitTid);
+        }
         if (stored.refreshTokenExpiresAt && !validUntil(stored.refreshTokenExpiresAt, current, 0)) {
-          throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks refresh token has expired; reconnect is required");
+          return requireReconnect(scope, stored, "refresh_token_expired", stored.intuitTid);
         }
         let leaseHeld = false;
         if (options.refreshLease) {
@@ -145,7 +191,13 @@ export function createQuickBooksTokenManager(options: QuickBooksTokenManagerOpti
               throw tokenStoreFailure("QuickBooks token could not be re-read after acquiring a refresh lease", error);
             }
           }
-          const rotated = await options.oauth.refreshToken(stored.refreshToken, stored.refreshTokenExpiresAt);
+          let rotated: QuickBooksOAuthTokenSet;
+          try {
+            rotated = await options.oauth.refreshToken(stored.refreshToken, stored.refreshTokenExpiresAt, stored.refreshTokenHardExpiresAt);
+          } catch (error) {
+            if (isInvalidGrant(error)) return requireReconnect(scope, stored, "invalid_grant", error.intuitTid);
+            throw error;
+          }
           let saved: QuickBooksStoredToken;
           try {
             if (options.refreshLease && options.repository.saveWithLease) {

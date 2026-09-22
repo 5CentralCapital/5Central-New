@@ -125,12 +125,14 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
         version: unknown;
         access_token_expires_at: unknown;
         refresh_token_expires_at: unknown;
+        refresh_token_hard_expires_at: unknown;
+        status: unknown;
         updated_at: unknown;
         company_name: unknown;
         read_enabled: unknown;
       }>(
         `SELECT c.legal_entity_id, c.environment, c.realm_id, c.version,
-                c.access_token_expires_at, c.refresh_token_expires_at, c.updated_at,
+                c.access_token_expires_at, c.refresh_token_expires_at, c.refresh_token_hard_expires_at, c.status, c.updated_at,
                 info.provider_body->>'CompanyName' AS company_name,
                 EXISTS (
                   SELECT 1 FROM accounting_qbo_capabilities cap
@@ -146,17 +148,18 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
                 AND environment=c.environment AND realm_id=c.realm_id AND object_type='CompanyInfo' AND deleted_at IS NULL
               ORDER BY received_at DESC LIMIT 1
            ) info ON true
-          WHERE c.organization_id=$1 AND c.legal_entity_id=$2 AND c.environment=$3 AND c.revoked_at IS NULL
+          WHERE c.organization_id=$1 AND c.legal_entity_id=$2 AND c.environment=$3 AND c.status IN ('active','needs_reconnect')
           ORDER BY c.realm_id`,
         [organizationId, query.legalEntityId, query.environment],
       );
       return rows.rows.map(row => ({
         scope: { provider: "qbo" as const, organizationId, legalEntityId: query.legalEntityId, environment: environmentSchema.parse(row.environment), realmId: realmSchema.parse(String(row.realm_id)) },
         name: typeof row.company_name === "string" && row.company_name.trim() ? row.company_name.trim() : "QuickBooks Online",
-        status: row.read_enabled === true || row.read_enabled === "true" ? "ready" as const : "connected" as const,
+        status: row.status === "needs_reconnect" ? "needs_reconnect" as const : row.read_enabled === true || row.read_enabled === "true" ? "ready" as const : "connected" as const,
         version: Number(row.version),
         accessTokenExpiresAt: row.access_token_expires_at instanceof Date ? row.access_token_expires_at.toISOString() : String(row.access_token_expires_at),
         refreshTokenExpiresAt: row.refresh_token_expires_at === null || row.refresh_token_expires_at === undefined ? null : row.refresh_token_expires_at instanceof Date ? row.refresh_token_expires_at.toISOString() : String(row.refresh_token_expires_at),
+        refreshTokenHardExpiresAt: row.refresh_token_hard_expires_at === null || row.refresh_token_hard_expires_at === undefined ? null : row.refresh_token_hard_expires_at instanceof Date ? row.refresh_token_hard_expires_at.toISOString() : String(row.refresh_token_hard_expires_at),
         updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
       }));
     });

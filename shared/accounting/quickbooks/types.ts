@@ -35,6 +35,8 @@ export interface QuickBooksOAuthTokenSet {
   readonly tokenType: QuickBooksTokenType;
   readonly accessTokenExpiresAt: string;
   readonly refreshTokenExpiresAt?: string;
+  /** Absolute five-year refresh-token lifetime reported by Intuit when opted in. */
+  readonly refreshTokenHardExpiresAt?: string;
   readonly idToken?: string;
   /** Safe Intuit trace ID for support/audit correlation; never a credential. */
   readonly intuitTid?: string;
@@ -61,6 +63,11 @@ export interface QuickBooksTokenRepository {
   saveNewConnection?(scope: QuickBooksConnectionKey, token: QuickBooksOAuthTokenSet): Promise<QuickBooksStoredToken>;
   /** Refresh save fenced by the current database lease owner. */
   saveWithLease?(scope: QuickBooksConnectionKey, token: QuickBooksOAuthTokenSet, expectedVersion: number, leaseOwnerId: string): Promise<QuickBooksStoredToken>;
+  /** Durably stop refreshes, disable scoped capabilities, and record a safe lifecycle event. */
+  markNeedsReconnect(
+    scope: QuickBooksConnectionKey,
+    details: { readonly reason: "invalid_grant" | "refresh_token_expired" | "refresh_token_hard_expired"; readonly intuitTid?: string },
+  ): Promise<void>;
   revoke(scope: QuickBooksConnectionKey): Promise<void>;
 }
 

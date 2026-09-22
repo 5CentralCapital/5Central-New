@@ -21,6 +21,7 @@ export const QUICKBOOKS_ALLOWED_OAUTH_SCOPES = [
   "phone",
   "address",
 ] as const;
+const REFRESH_TOKEN_HARD_EXPIRY_HEADER = "x-include-refresh-token-hard-expires-in";
 
 const SAFE_OAUTH_VALUE = /^[A-Za-z0-9._:/+-]{1,240}$/;
 
@@ -77,6 +78,7 @@ function tokenSetFromResponse(
   now: Date,
   fallbackRefreshToken?: string,
   fallbackRefreshTokenExpiresAt?: string,
+  fallbackRefreshTokenHardExpiresAt?: string,
 ): QuickBooksOAuthTokenSet {
   const body = parsedObject(response.body);
   const accessToken = safeString(body?.access_token, 4096);
@@ -89,6 +91,7 @@ function tokenSetFromResponse(
     });
   }
   const refreshSeconds = positiveSeconds(body?.x_refresh_token_expires_in);
+  const refreshHardSeconds = positiveSeconds(body?.x_refresh_token_hard_expires_in);
   return {
     accessToken,
     refreshToken,
@@ -98,6 +101,11 @@ function tokenSetFromResponse(
       ? { refreshTokenExpiresAt: new Date(now.getTime() + refreshSeconds * 1_000).toISOString() }
       : fallbackRefreshTokenExpiresAt
         ? { refreshTokenExpiresAt: fallbackRefreshTokenExpiresAt }
+        : {}),
+    ...(refreshHardSeconds
+      ? { refreshTokenHardExpiresAt: new Date(now.getTime() + refreshHardSeconds * 1_000).toISOString() }
+      : fallbackRefreshTokenHardExpiresAt
+        ? { refreshTokenHardExpiresAt: fallbackRefreshTokenHardExpiresAt }
         : {}),
     ...(safeString(body?.id_token, 8192) ? { idToken: safeString(body?.id_token, 8192) } : {}),
     ...(header(response, "intuit_tid") ?? header(response, "intuit-tid")
@@ -136,7 +144,7 @@ export interface QuickBooksOAuthClient {
   getAuthorizationUrl(state: string, scopes?: readonly string[]): string;
   getDiscoveryDocument(): Promise<QuickBooksOAuthDiscoveryDocument>;
   exchangeAuthorizationCode(code: string): Promise<QuickBooksOAuthTokenSet>;
-  refreshToken(refreshToken: string, previousRefreshTokenExpiresAt?: string): Promise<QuickBooksOAuthTokenSet>;
+  refreshToken(refreshToken: string, previousRefreshTokenExpiresAt?: string, previousRefreshTokenHardExpiresAt?: string): Promise<QuickBooksOAuthTokenSet>;
   revokeToken(token: string): Promise<{ intuitTid?: string }>;
 }
 
@@ -198,6 +206,7 @@ export function createQuickBooksOAuthClient(config: QuickBooksOAuthClientConfig)
           Accept: "application/json",
           Authorization: basicAuthorization(config.clientId, config.clientSecret),
           "Content-Type": "application/x-www-form-urlencoded",
+          [REFRESH_TOKEN_HARD_EXPIRY_HEADER]: "true",
         },
         body: new URLSearchParams({
           grant_type: "authorization_code",
@@ -209,7 +218,7 @@ export function createQuickBooksOAuthClient(config: QuickBooksOAuthClientConfig)
       return tokenSetFromResponse(response, now());
     },
 
-    async refreshToken(refreshToken: string, previousRefreshTokenExpiresAt?: string): Promise<QuickBooksOAuthTokenSet> {
+    async refreshToken(refreshToken: string, previousRefreshTokenExpiresAt?: string, previousRefreshTokenHardExpiresAt?: string): Promise<QuickBooksOAuthTokenSet> {
       assertNonEmpty(refreshToken, "QuickBooks refresh token", 8192);
       const response = await transport({
         method: "POST",
@@ -218,6 +227,7 @@ export function createQuickBooksOAuthClient(config: QuickBooksOAuthClientConfig)
           Accept: "application/json",
           Authorization: basicAuthorization(config.clientId, config.clientSecret),
           "Content-Type": "application/x-www-form-urlencoded",
+          [REFRESH_TOKEN_HARD_EXPIRY_HEADER]: "true",
         },
         body: new URLSearchParams({
           grant_type: "refresh_token",
@@ -225,7 +235,7 @@ export function createQuickBooksOAuthClient(config: QuickBooksOAuthClientConfig)
         }).toString(),
       });
       if (response.status < 200 || response.status >= 300) throw oauthFailure(response, "token refresh");
-      return tokenSetFromResponse(response, now(), refreshToken, previousRefreshTokenExpiresAt);
+      return tokenSetFromResponse(response, now(), refreshToken, previousRefreshTokenExpiresAt, previousRefreshTokenHardExpiresAt);
     },
 
     async revokeToken(token: string): Promise<{ intuitTid?: string }> {

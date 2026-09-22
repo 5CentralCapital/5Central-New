@@ -77,6 +77,7 @@ interface PendingBindingRow {
   id_token_auth_tag: unknown;
   access_token_expires_at: unknown;
   refresh_token_expires_at: unknown;
+  refresh_token_hard_expires_at: unknown;
   intuit_tid: unknown;
   expires_at: unknown;
 }
@@ -117,6 +118,7 @@ function mapPending(row: PendingBindingRow, cipher: QboTokenCipher): PendingQuic
     tokenType: "bearer",
     accessTokenExpiresAt: timestamp(row.access_token_expires_at, "access-token expiry"),
     ...(row.refresh_token_expires_at === null || row.refresh_token_expires_at === undefined ? {} : { refreshTokenExpiresAt: timestamp(row.refresh_token_expires_at, "refresh-token expiry") }),
+    ...(row.refresh_token_hard_expires_at === null || row.refresh_token_hard_expires_at === undefined ? {} : { refreshTokenHardExpiresAt: timestamp(row.refresh_token_hard_expires_at, "hard refresh-token expiry") }),
     ...(idToken ? { idToken: cipher.decrypt(scope, idToken) } : {}),
     ...(row.intuit_tid === null || row.intuit_tid === undefined ? {} : { intuitTid: text(row.intuit_tid, "Intuit trace ID", 255) }),
   };
@@ -162,7 +164,7 @@ const columns = `pending_id, actor_id, session_binding_hash, organization_id, le
   encrypted_access_token, access_token_iv, access_token_auth_tag,
   encrypted_refresh_token, refresh_token_iv, refresh_token_auth_tag,
   encrypted_id_token, id_token_iv, id_token_auth_tag,
-  access_token_expires_at, refresh_token_expires_at, intuit_tid, expires_at`;
+  access_token_expires_at, refresh_token_expires_at, refresh_token_hard_expires_at, intuit_tid, expires_at`;
 
 /** Durable, encrypted handoff between OAuth callback and administrator binding confirmation. */
 export class PostgresQuickBooksPendingBindingStore implements QuickBooksPendingBindingStore {
@@ -177,11 +179,11 @@ export class PostgresQuickBooksPendingBindingStore implements QuickBooksPendingB
     await this.executor.query(
       `INSERT INTO accounting_qbo_pending_bindings
         (${columns})
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)`,
       [pendingId, input.actorId, input.sessionBindingHash, scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId,
         input.proof.providerCompanyId, input.proof.providerCompanyName, input.proof.providerLegalName, input.proof.homeCurrency, input.proof.evidenceVersion, input.proof.companyInfoHash,
         access.ciphertext, access.iv, access.authTag, refresh.ciphertext, refresh.iv, refresh.authTag, idToken?.ciphertext ?? null, idToken?.iv ?? null, idToken?.authTag ?? null,
-        input.token.accessTokenExpiresAt, input.token.refreshTokenExpiresAt ?? null, input.token.intuitTid ?? null, input.expiresAt],
+        input.token.accessTokenExpiresAt, input.token.refreshTokenExpiresAt ?? null, input.token.refreshTokenHardExpiresAt ?? null, input.token.intuitTid ?? null, input.expiresAt],
     );
     return { pendingId, expiresAt: input.expiresAt };
   }

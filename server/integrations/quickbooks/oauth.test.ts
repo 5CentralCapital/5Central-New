@@ -25,7 +25,7 @@ test("OAuth code exchange, refresh rotation, and revoke use Intuit's documented 
   const calls: QuickBooksTransportRequest[] = [];
   const transport = async (request: QuickBooksTransportRequest): Promise<QuickBooksTransportResponse> => {
     calls.push(request);
-    if (calls.length === 1) return response(200, { access_token: "access-1", refresh_token: "refresh-1", token_type: "bearer", expires_in: 3600, x_refresh_token_expires_in: 8_726_400 });
+    if (calls.length === 1) return response(200, { access_token: "access-1", refresh_token: "refresh-1", token_type: "bearer", expires_in: 3600, x_refresh_token_expires_in: 8_726_400, x_refresh_token_hard_expires_in: 2_592_000 });
     if (calls.length === 2) return response(200, { access_token: "access-2", refresh_token: "refresh-2", token_type: "bearer", expires_in: "3600", x_refresh_token_expires_in: "8726400" });
     return response(200, {});
   };
@@ -39,17 +39,21 @@ test("OAuth code exchange, refresh rotation, and revoke use Intuit's documented 
   assert.equal(exchanged.accessToken, "access-1");
   assert.equal(exchanged.refreshToken, "refresh-1");
   assert.equal(exchanged.accessTokenExpiresAt, "2026-09-21T13:00:00.000Z");
-  const refreshed = await client.refreshToken(exchanged.refreshToken, exchanged.refreshTokenExpiresAt);
+  assert.equal(exchanged.refreshTokenHardExpiresAt, "2026-10-21T12:00:00.000Z");
+  const refreshed = await client.refreshToken(exchanged.refreshToken, exchanged.refreshTokenExpiresAt, exchanged.refreshTokenHardExpiresAt);
   assert.equal(refreshed.accessToken, "access-2");
   assert.equal(refreshed.refreshToken, "refresh-2");
+  assert.equal(refreshed.refreshTokenHardExpiresAt, exchanged.refreshTokenHardExpiresAt, "rotation without hard-expiry metadata preserves Intuit's prior hard expiry");
   const revoked = await client.revokeToken(refreshed.refreshToken);
 
   assert.equal(calls[0].url, QUICKBOOKS_TOKEN_ENDPOINT);
   assert.match(calls[0].headers.Authorization, /^Basic /);
+  assert.equal(calls[0].headers["x-include-refresh-token-hard-expires-in"], "true");
   assert.match(calls[0].body ?? "", /grant_type=authorization_code/);
   assert.match(calls[0].body ?? "", /code=authorization-code/);
   assert.match(calls[1].body ?? "", /grant_type=refresh_token/);
   assert.match(calls[1].body ?? "", /refresh_token=refresh-1/);
+  assert.equal(calls[1].headers["x-include-refresh-token-hard-expires-in"], "true");
   assert.equal(calls[2].url, QUICKBOOKS_REVOKE_ENDPOINT);
   assert.match(calls[2].body ?? "", /token=refresh-2/);
 });

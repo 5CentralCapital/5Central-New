@@ -379,6 +379,15 @@
       "minimumServerContract": 1,
       "minimumClientContract": 1,
       "recovery": "Disable affected work order commands; retain work orders and their append-only status history, then apply a reviewed forward repair."
+    },
+    {
+      "version": 41,
+      "fileName": "041_qbo_token_lifecycle.sql",
+      "sha256": "6fe5dee4f1d65a0dc868fab2750f2d6b2ecc2632c83c275119d2e5fae8657fd1",
+      "predecessor": 40,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Disable affected QuickBooks access and reconnect commands; preserve scoped lifecycle events and apply a reviewed forward repair."
     }
   ]
 }
