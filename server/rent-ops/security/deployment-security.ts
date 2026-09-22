@@ -314,6 +314,7 @@ export const RENT_OPS_IMPORTER_READ_ONLY_TABLES = [
 /** Append-only tables use INSERT plus idempotency SELECT, never UPDATE/DELETE. */
 export const RENT_OPS_APPEND_ONLY_TABLES = [
   "accounting_qbo_binding_confirmations",
+  "accounting_qbo_connection_events",
   "accounting_qbo_realm_bindings",
   "company_external_identities",
   "company_project_budget_lines",
