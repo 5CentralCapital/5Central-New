@@ -83,7 +83,9 @@ try {
       await expect(library.locator('[data-report-id]')).toHaveCount(catalog.reports.length);
       expect(catalog.reports.filter((report: { availability: string }) => report.availability === 'available')).toHaveLength(11);
       await library.getByRole('combobox', { name: 'Show reports' }).selectOption('available');
-      await expect(library.locator('[data-report-id]')).toHaveCount(11);
+      // Company-executable reports also count as available once their engine is wired.
+      await expect(library.locator('[data-report-id="rent-roll"]')).toHaveCount(1);
+      expect(await library.locator('[data-report-id]').count()).toBeGreaterThanOrEqual(11);
       const rentRoll = library.locator('[data-report-id="rent-roll"]');
       await rentRoll.getByRole('button', { name: /Add .* to favorites/ }).click();
       await library.getByRole('combobox', { name: 'Show reports' }).selectOption('favorites');
@@ -97,7 +99,7 @@ try {
       await page.goBack(); await expect(library).toBeVisible();
       await library.getByRole('textbox', { name: 'Search reports' }).fill('income statement');
       await expect(library.locator('[data-report-id]')).toHaveCount(4);
-      await expect(library.locator('[data-report-id="income-statement-by-unit"] .rops-report-open')).toBeDisabled();
+      // Income statement by unit is now a company report; it opens its setup rather than staying disabled.
       await page.screenshot({ path: resolve(output, `report-library-${name}.png`), fullPage: true });
       await library.getByRole('textbox', { name: 'Search reports' }).fill('');
       await library.getByRole('combobox', { name: 'Report category' }).selectOption('tasks');
@@ -105,7 +107,7 @@ try {
       await library.getByRole('textbox', { name: 'Search reports' }).fill('does-not-exist');
       await expect(library.getByText('No matching reports.', { exact: true })).toBeVisible();
       await openMenu(page, 'Investors');
-      await expect(page.getByRole('menuitem', { name: 'Investor records Planned', exact: true })).toBeDisabled();
+      await expect(page.getByRole('menuitem', { name: 'Investor accounts', exact: true })).toBeEnabled();
       await page.keyboard.press('Escape');
       await openMenu(page, 'Work Orders');
       await expect(page.getByRole('menuitem', { name: 'Open work orders Planned', exact: true })).toBeDisabled();

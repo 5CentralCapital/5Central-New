@@ -721,7 +721,7 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       }
     }
     const purposeMapping = resolution.accountObjectId && resolution.postedOn
-      ? await this.purposeMappings.readPurposeMapping({ scope: source, providerAccountId: resolution.accountObjectId, postedOn: resolution.postedOn })
+      ? await this.purposeMappings.readPurposeMapping({ scope: { provider: source.provider, organizationId: source.organizationId, legalEntityId: source.legalEntityId, environment: source.environment, realmId: source.realmId }, providerAccountId: resolution.accountObjectId, postedOn: resolution.postedOn })
       : null;
     const providerUpdatedAt = object.rows[0]?.provider_updated_at;
     const updated = providerUpdatedAt instanceof Date ? providerUpdatedAt.toISOString() : typeof providerUpdatedAt === "string" ? providerUpdatedAt : resolution.watermark.observedAt;
