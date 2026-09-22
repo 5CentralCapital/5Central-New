@@ -5,7 +5,7 @@ import { legacySchemaFingerprints, loadCompanyMigrationRegistry, verifyCompanyMi
 
 test("one frozen migration registry covers the rental chain and additive company schema", () => {
   const registry = verifyCompanyMigrationRegistry();
-  assert.equal(registry.migrations.at(-1)?.version, 39);
+  assert.equal(registry.migrations.at(-1)?.version, 40);
   assert.equal(registry.applicationMode, "reviewed_artifacts_only");
   assert.equal(registry.legacyBaseline.status, "source_fingerprints_only_database_attestation_pending");
 });

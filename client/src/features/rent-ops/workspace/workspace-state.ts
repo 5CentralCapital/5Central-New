@@ -1,14 +1,15 @@
 import { PROJECT_TABS, type ProjectTab } from '../../projects/types';
 import { INVESTOR_TABS, type InvestorTab } from '../../investors/types';
+import { isWorkOrderView, type WorkOrderView } from '../../work-orders/types';
 import { workspaceToday } from './workspace-date';
 import type { AdminSnapshot, AdminSnapshotView, ApiFilters, DashboardSummary, ReportKey, SectionKey, TenantTab, TenantView, ViewFilters } from '../types';
 import { REPORT_KEYS } from '../types';
 import { createWorkspaceReportDefinition, type RentOpsWorkspaceBootstrap, type WorkspaceCollection } from '../api';
 import type { QuickAction } from '../form-payload';
 
-export type WorkspaceSection = SectionKey | 'recurring' | 'banking' | 'accounting' | 'projects' | 'investors' | 'time' | 'company-reports' | 'report-library';
-export interface WorkspaceRoute { section: WorkspaceSection; recordId?: string; organizationId?: string; projectTab?: ProjectTab; investorTab?: InvestorTab; reportId?: string; kind?: 'property' | 'unit'; tab: TenantTab; report: ReportKey; }
-const sections: WorkspaceSection[] = ['dashboard','tenants','properties','reports','rent-roll','leases','income','applicants','documents','recurring','banking','accounting','projects','investors','time','company-reports','report-library'];
+export type WorkspaceSection = SectionKey | 'recurring' | 'banking' | 'accounting' | 'projects' | 'investors' | 'time' | 'work-orders' | 'company-reports' | 'report-library';
+export interface WorkspaceRoute { section: WorkspaceSection; recordId?: string; organizationId?: string; projectTab?: ProjectTab; investorTab?: InvestorTab; workOrderView?: WorkOrderView; reportId?: string; kind?: 'property' | 'unit'; tab: TenantTab; report: ReportKey; }
+const sections: WorkspaceSection[] = ['dashboard','tenants','properties','reports','rent-roll','leases','income','applicants','documents','recurring','banking','accounting','projects','investors','time','work-orders','company-reports','report-library'];
 const tabs: TenantTab[] = ['summary','household','tenancy','charges','ledger','deposits','housing-assistance','documents','activity'];
 export function parseWorkspaceRoute(search: string): WorkspaceRoute {
   const params = new URLSearchParams(search);
@@ -20,14 +21,16 @@ export function parseWorkspaceRoute(search: string): WorkspaceRoute {
   const investorTab = params.get('investorTab') as InvestorTab;
   const organizationId = params.get('company');
   const reportId = params.get('reportId');
-  return { ...(section === 'company-reports' && reportId && /^[a-z][a-z0-9-]{1,119}$/.test(reportId) ? { reportId } : {}), section: sections.includes(section) ? section : 'dashboard', tab: tabs.includes(tab) ? tab : 'summary', report: REPORT_KEYS.includes(report) ? report : 'rent-roll', recordId: record && /^[A-Za-z0-9:_-]{1,160}$/.test(record) ? record : undefined, ...(section === 'projects' && PROJECT_TABS.includes(projectTab) ? { projectTab } : {}), ...(section === 'investors' && INVESTOR_TABS.includes(investorTab) ? { investorTab } : {}), kind: params.get('kind') === 'unit' ? 'unit' : 'property', ...(['projects', 'investors', 'time', 'accounting', 'company-reports', 'report-library'].includes(section) && organizationId && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(organizationId) ? { organizationId } : {}) };
+  const workOrderView = params.get('woView');
+  return { ...(section === 'company-reports' && reportId && /^[a-z][a-z0-9-]{1,119}$/.test(reportId) ? { reportId } : {}), section: sections.includes(section) ? section : 'dashboard', tab: tabs.includes(tab) ? tab : 'summary', report: REPORT_KEYS.includes(report) ? report : 'rent-roll', recordId: record && /^[A-Za-z0-9:_-]{1,160}$/.test(record) ? record : undefined, ...(section === 'projects' && PROJECT_TABS.includes(projectTab) ? { projectTab } : {}), ...(section === 'investors' && INVESTOR_TABS.includes(investorTab) ? { investorTab } : {}), ...(section === 'work-orders' && isWorkOrderView(workOrderView) ? { workOrderView } : {}), kind: params.get('kind') === 'unit' ? 'unit' : 'property', ...(['projects', 'investors', 'time', 'work-orders', 'accounting', 'company-reports', 'report-library'].includes(section) && organizationId && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(organizationId) ? { organizationId } : {}) };
 }
 export function workspaceRouteSearch(route: WorkspaceRoute, filters?: ViewFilters, baseSearch = ""): string {
   const params = new URLSearchParams(baseSearch);
-  for (const key of ["section", "record", "kind", "tab", "report", "company", "projectTab", "investorTab", "reportId"]) params.delete(key);
+  for (const key of ["section", "record", "kind", "tab", "report", "company", "projectTab", "investorTab", "woView", "reportId"]) params.delete(key);
   params.set("section",route.section);
   if(route.recordId) params.set('record',route.recordId);
-  if(['projects','investors','time','accounting','company-reports','report-library'].includes(route.section)&&route.organizationId) params.set('company',route.organizationId);
+  if(['projects','investors','time','work-orders','accounting','company-reports','report-library'].includes(route.section)&&route.organizationId) params.set('company',route.organizationId);
+  if(route.section==='work-orders'&&route.workOrderView&&route.workOrderView!=='open') params.set('woView',route.workOrderView);
   if(route.section==='projects'&&route.projectTab) params.set('projectTab',route.projectTab);
   if(route.section==='investors'&&route.investorTab) params.set('investorTab',route.investorTab);
   if(route.section==='properties') params.set('kind',route.kind??'property');

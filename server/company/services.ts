@@ -8,6 +8,7 @@ import { createProjectFinanceBindingStore } from '../projects/execution-store';
 import { createTimeServices, type TimeServices, type TimeServicesOptions } from '../time/service';
 import { createCompanyReportingPort } from './reporting-runtime';
 import type { ReportingPort } from '../reporting';
+import { createWorkOrderPort, type WorkOrderPort } from '../work-orders/port';
 
 /** The browser and Codex share these services and the same company database. */
 export interface CompanyServices {
@@ -17,6 +18,7 @@ export interface CompanyServices {
   readonly investors: InvestorPort;
   readonly time: TimeServices;
   readonly reporting: ReportingPort;
+  readonly workOrders: WorkOrderPort;
 }
 
 export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
@@ -43,5 +45,6 @@ export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
     },
   });
   const reporting = createCompanyReportingPort(executor, accounting);
-  return { executor, accounting, investors, projects, time, reporting };
+  const workOrders = createWorkOrderPort(executor);
+  return { executor, accounting, investors, projects, time, reporting, workOrders };
 }

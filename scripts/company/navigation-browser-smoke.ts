@@ -110,7 +110,8 @@ try {
       await expect(page.getByRole('menuitem', { name: 'Investor accounts', exact: true })).toBeEnabled();
       await page.keyboard.press('Escape');
       await openMenu(page, 'Work Orders');
-      await expect(page.getByRole('menuitem', { name: 'Open work orders Planned', exact: true })).toBeDisabled();
+      await expect(page.getByRole('menuitem', { name: 'Open work orders', exact: true })).toBeEnabled();
+      await expect(page.getByRole('menuitem', { name: 'Vendors Planned', exact: true })).toBeDisabled();
       await page.keyboard.press('Escape');
 
       await navigate(page, 'Projects', 'Costs');

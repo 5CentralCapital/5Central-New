@@ -15,6 +15,8 @@ import { registerInvestorRoutes, type InvestorPort } from '../investors';
 import { registerTimeHttpRoutes } from '../time/http';
 import type { TimeServices } from '../time/service';
 import { registerReportingHttpRoutes, type ReportingPort } from '../reporting';
+import { registerWorkOrderRoutes } from '../work-orders/http';
+import type { WorkOrderPort } from '../work-orders/port';
 
 export interface CompanyProjectPort {
   list(principal: AuthenticatedPrincipal, query: ProjectListQuery): Promise<unknown>;
@@ -48,8 +50,10 @@ export function registerCompanyRoutes(app: Express, options: {
   investors?: InvestorPort;
   time?: TimeServices;
   reporting?: ReportingPort;
+  workOrders?: WorkOrderPort;
 }): void {
   const { executor, requireAdmin, projects } = options;
+  if (options.workOrders) registerWorkOrderRoutes(app, { executor, requireAdmin, workOrders: options.workOrders });
   if (options.accounting) registerAccountingHttpRoutes(app, { executor, requireAdmin, services: options.accounting });
   if (options.investors) registerInvestorRoutes(app, { executor, requireAdmin, investors: options.investors });
   if (options.time) registerTimeHttpRoutes(app, { executor, requireAdmin, services: options.time });

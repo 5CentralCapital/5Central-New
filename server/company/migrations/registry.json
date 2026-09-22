@@ -370,6 +370,15 @@
       "minimumServerContract": 1,
       "minimumClientContract": 1,
       "recovery": "Disable affected QuickBooks connection commands; retain immutable company bindings and confirmation evidence, then apply a reviewed forward repair."
+    },
+    {
+      "version": 40,
+      "fileName": "040_company_work_orders.sql",
+      "sha256": "616fbb0628f77bcbffc10b077cbd4407a4f2e4ddb0f8622ccd4b3b569fb95567",
+      "predecessor": 39,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Disable affected work order commands; retain work orders and their append-only status history, then apply a reviewed forward repair."
     }
   ]
 }

@@ -6,6 +6,7 @@ import { registerCompanyRoutes } from './routes';
 import { createCompanyServices } from './services';
 import { seedRentalDemo } from './testing/seed-rental-demo';
 import { PostgresRentOpsRepository } from '../rent-ops/repositories/postgres';
+import { seedWorkOrderDemo } from './testing/seed-work-orders';
 
 /** Disposable local browser/test app; all company data is in memory. */
 export async function createCompanyDemoApp(options: Pick<RentOpsDemoServerOptions, 'publicDir'> = {}) {
@@ -20,6 +21,7 @@ export async function createCompanyDemoApp(options: Pick<RentOpsDemoServerOption
     next();
   };
   const company = createCompanyServices(database.executor, { accounting: { environment: {} }, time: { env: {} } });
+  await seedWorkOrderDemo(database.executor, company.workOrders);
   const app = createRentOpsDemoApp({ ...options,
     syntheticRepository: new PostgresRentOpsRepository(database.executor),
     configureSyntheticRoutes: app => registerCompanyRoutes(app, {

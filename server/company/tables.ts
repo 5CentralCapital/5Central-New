@@ -87,6 +87,8 @@ export const COMPANY_APPLICATION_TABLES = [
   "company_report_packages",
   "company_report_package_revisions",
   "company_report_package_runs",
+  "company_work_orders",
+  "company_work_order_events",
 ] as const;
 
 /** Grants are provisioned by the operator, never by ordinary app mutations. */

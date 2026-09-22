@@ -35,7 +35,7 @@ function applicationSummary(value: any) {
 function accountSummary(value: any) {
   return Object.fromEntries(['id','email','personId','tenancyId','status','createdAt','activatedAt','invitationExpiresAt','credentialRevision'].filter(key=>value[key]!==undefined).map(key=>[key,value[key]]));
 }
-export interface McpOperationalOptions { accountAdmin?: TenantAccountAdminService; billing?: RecurringBillingService; /** Trusted server-side mapping after OAuth and administrator verification. Never a tool argument. */ companyActorId?: string; company?: { executor: RentOpsQueryExecutor; projects: CompanyProjectPort; accounting?: import('../../accounting').AccountingServices; investors?: import('../../investors').InvestorPort; time?: import('../../time/service').TimeServices; reporting?: import('../../reporting').ReportingPort } }
+export interface McpOperationalOptions { accountAdmin?: TenantAccountAdminService; billing?: RecurringBillingService; /** Trusted server-side mapping after OAuth and administrator verification. Never a tool argument. */ companyActorId?: string; company?: { executor: RentOpsQueryExecutor; projects: CompanyProjectPort; accounting?: import('../../accounting').AccountingServices; investors?: import('../../investors').InvestorPort; time?: import('../../time/service').TimeServices; reporting?: import('../../reporting').ReportingPort; workOrders?: import('../../work-orders/port').WorkOrderPort } }
 export function createRentOpsMcpServer(service: RentOpsService, principal: McpPrincipal, resource: string, options: McpOperationalOptions = {}): McpServer {
   const server = new McpServer({ name: '5central-rent-operations', version: '1.0.0' });
   const descriptors: Array<any> = [];

@@ -2,6 +2,7 @@ import type { ReportKey } from '../types';
 import type { WorkspaceRoute, WorkspaceSection } from './workspace-state';
 import type { ProjectTab } from '../../projects/types';
 import type { InvestorTab } from '../../investors/types';
+import type { WorkOrderView } from '../../work-orders/types';
 
 export interface WorkspaceDestination {
   label: string;
@@ -12,6 +13,9 @@ export interface WorkspaceDestination {
   tenantStatus?: 'current' | 'future' | 'former' | 'all';
   projectTab?: ProjectTab;
   investorTab?: InvestorTab;
+  workOrderView?: WorkOrderView;
+  /** Opens the new work order form after navigating. */
+  workOrderCreate?: boolean;
 }
 export interface WorkspaceNavigationGroup { label: string; items: readonly WorkspaceDestination[]; }
 const planned = (...labels: string[]): WorkspaceDestination[] => labels.map(label => ({ label }));
@@ -53,7 +57,13 @@ export const WORKSPACE_NAVIGATION: readonly WorkspaceNavigationGroup[] = [
     { label: 'Execution', section: 'projects', projectTab: 'execution' },
     ...planned('Files'),
   ] },
-  { label: 'Work Orders', items: planned('Open work orders', 'Schedule', 'Completed work') },
+  { label: 'Work Orders', items: [
+    { label: 'Open work orders', section: 'work-orders', workOrderView: 'open' },
+    { label: 'All work orders', section: 'work-orders', workOrderView: 'all' },
+    { label: 'Completed work', section: 'work-orders', workOrderView: 'completed' },
+    { label: 'New work order', section: 'work-orders', workOrderCreate: true },
+    ...planned('Schedule calendar', 'Vendors', 'Preventive maintenance'),
+  ] },
   { label: 'Investors', items: [
     { label: 'Investor accounts', section: 'investors', investorTab: 'overview' },
     { label: 'Monthly payments', section: 'investors', investorTab: 'payments' },
@@ -85,6 +95,7 @@ export function activeNavigationGroup(route: WorkspaceRoute): string {
     case 'income': case 'recurring': case 'banking': case 'accounting': return 'Accounting';
     case 'projects': return 'Projects';
     case 'investors': return 'Investors';
+    case 'work-orders': return 'Work Orders';
     case 'documents': case 'time': return 'Company';
     case 'rent-roll': return 'Properties';
     case 'reports':
@@ -99,5 +110,5 @@ export const WORKSPACE_LABELS: Record<WorkspaceSection, string> = {
   dashboard: 'Dashboard', tenants: 'Tenants', properties: 'Properties', projects: 'Projects', investors: 'Investors',
   leases: 'Leases', applicants: 'Applications', recurring: 'Recurring charges',
   income: 'Payments & billing', banking: 'Banking', accounting: 'Accounting', 'rent-roll': 'Rent roll',
-  reports: 'Reports', 'report-library': 'Reporting', 'company-reports': 'Reports', documents: 'Documents & activity', time: 'Employee time',
+  reports: 'Reports', 'report-library': 'Reporting', 'company-reports': 'Reports', documents: 'Documents & activity', time: 'Employee time', 'work-orders': 'Work orders',
 };
