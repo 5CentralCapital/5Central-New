@@ -1,0 +1,107 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { PGlite } from "@electric-sql/pglite";
+import { ensureRentOpsSchema } from "../persistence";
+import { TenantAccountAdminService } from "./admin-service";
+import { SyntheticRentOpsRepository } from "../repositories/synthetic";
+import { syntheticRentOpsSnapshot } from "../fixtures/synthetic";
+import { PostgresTenantAccountStore } from "./store";
+
+test("audited account changes commit together, reject stale revisions, and roll back on audit failure",async()=>{
+ const db=new PGlite();
+ try {
+  await ensureRentOpsSchema({apply:true,query:sql=>db.query(sql),executor:async sql=>{await db.exec(sql);}});
+  await db.exec(`INSERT INTO rent_ops_properties(id,slug) VALUES('p','p');INSERT INTO rent_ops_units(id,property_id,property_link_knowledge)VALUES('u','p','manual');INSERT INTO rent_ops_people(id)VALUES('person');INSERT INTO rent_ops_tenancies(id,property_id,unit_id,primary_person_id,status,created_at,property_link_knowledge,unit_link_knowledge,primary_person_link_knowledge,status_knowledge)VALUES('t','p','u','person','current',NOW(),'manual','manual','manual','manual');`);
+  const store=new PostgresTenantAccountStore(db);
+  const base={id:"qa-account",actorSubject:"verified-manager",now:"2026-09-08T00:00:00Z"};
+  const created=(await store.auditedMutation({...base,action:"grant",email:"qa@example.test",personId:"person",tenancyId:"t",tokenHash:"a".repeat(64),expiresAt:"2026-09-09T00:00:00Z"}))!;
+  assert.equal(created.sessionVersion,1);
+  assert.equal((await db.query("SELECT * FROM rent_ops_activity_events")).rows.length,1);
+  assert.equal(await store.auditedMutation({...base,action:"revoke",expectedCredentialRevision:2}),undefined);
+  assert.equal((await store.getById(base.id))!.status,"pending");
+  await db.exec("ALTER TABLE rent_ops_activity_events ADD CONSTRAINT synthetic_reject_audit CHECK (actor <> 'reject-audit')");
+  await assert.rejects(store.auditedMutation({...base,action:"revoke",expectedCredentialRevision:1,actorSubject:"reject-audit"}));
+  assert.equal((await store.getById(base.id))!.sessionVersion,1);
+  assert.equal((await store.getById(base.id))!.status,"pending");
+  const revoked=(await store.auditedMutation({...base,action:"revoke",expectedCredentialRevision:1}))!;
+  assert.equal(revoked.status,"revoked");assert.equal(revoked.sessionVersion,2);
+  const audits=(await db.query<{actor:string;metadata:unknown}>("SELECT actor,metadata FROM rent_ops_activity_events")).rows;
+  assert.equal(audits.length,2);assert.ok(audits.every(row=>row.actor==="verified-manager"));
+  assert.doesNotMatch(JSON.stringify(audits),/activation|password|tokenHash|aaaaaaaa/);
+  await db.exec("INSERT INTO rent_ops_people(id) VALUES ('other-person');UPDATE rent_ops_tenancies SET primary_person_id='other-person' WHERE id='t';");
+  const beforeBindingRace=await store.getById(base.id);
+  assert.equal(await store.auditedMutation({...base,action:"reissue",personId:"person",tenancyId:"t",expectedCredentialRevision:2,tokenHash:"b".repeat(64),expiresAt:"2026-09-09T00:00:00Z"}),undefined);
+  assert.deepEqual(await store.getById(base.id),beforeBindingRace);
+  assert.equal((await db.query("SELECT * FROM rent_ops_activity_events")).rows.length,2);
+  await db.exec("UPDATE rent_ops_tenancies SET status='cancelled' WHERE id='t';");
+  assert.equal(await store.auditedMutation({id:"cancelled-account",actorSubject:"verified-manager",now:base.now,action:"grant",email:"cancelled@example.test",personId:"other-person",tenancyId:"t",tokenHash:"c".repeat(64),expiresAt:"2026-09-09T00:00:00Z"}),undefined);
+  assert.equal((await store.getById("cancelled-account")),undefined);
+  await db.exec(`INSERT INTO rent_ops_properties(id,slug) VALUES('demo-property-a','demo-a');INSERT INTO rent_ops_units(id,property_id,property_link_knowledge)VALUES('demo-unit-a-1','demo-property-a','manual'),('demo-unit-a-2','demo-property-a','manual'),('demo-unit-a-3','demo-property-a','manual'),('demo-unit-a-4','demo-property-a','exact');INSERT INTO rent_ops_people(id)VALUES('demo-person-1'),('demo-person-2');INSERT INTO rent_ops_tenancies(id,property_id,unit_id,primary_person_id,status,created_at,property_link_knowledge,unit_link_knowledge,primary_person_link_knowledge,status_knowledge)VALUES('demo-tenancy-1','demo-property-a','demo-unit-a-1','demo-person-1','current',NOW(),'manual','manual','manual','manual'),('demo-tenancy-2','demo-property-a','demo-unit-a-2','demo-person-2','future',NOW(),'manual','manual','manual','manual');`);
+  let deliveries=0;let fail=false;
+  const service=new TenantAccountAdminService({store,repository:new SyntheticRentOpsRepository(syntheticRentOpsSnapshot()),now:()=>new Date(base.now),notifier:async()=>{deliveries++;if(fail)throw new Error("response lost");}});
+  const context={actorSubject:"verified-manager"};
+  const managerContext={actorSubject:"http-admin"};
+  const managerGranted=await service.grant({email:"qa-http@example.test",personId:"demo-person-2",tenancyId:"demo-tenancy-2"},managerContext);
+  const managerReissued=await service.reissue(managerGranted.account.id,managerGranted.account.credentialRevision,managerContext);
+  assert.equal(managerReissued.account.status,"pending");
+  const managerRevoked=await service.revoke(managerGranted.account.id,managerReissued.account.credentialRevision,managerContext);
+  assert.equal(managerRevoked.account.status,"revoked");
+  assert.equal(deliveries,0);
+  const managerAudits=(await db.query<{actor:string;summary:string;metadata:unknown}>("SELECT actor,summary,metadata FROM rent_ops_activity_events WHERE actor='http-admin' ORDER BY occurred_at,id")).rows;
+  assert.equal(managerAudits.length,3);
+  assert.doesNotMatch(JSON.stringify(managerAudits),/token|password|secret|aaaaaaaa/);
+  await db.query(`INSERT INTO rent_ops_tenancies(id,property_id,unit_id,primary_person_id,status,created_at,property_link_knowledge,unit_link_knowledge,primary_person_link_knowledge,status_knowledge)
+    VALUES($1,$2,$3,$4,'past',NOW(),'manual','manual','manual','manual')`,["demo-tenancy-former","demo-property-a","demo-unit-a-3","demo-person-2"]);
+  await db.query(`INSERT INTO rent_ops_tenant_accounts(id,email,person_id,tenancy_id,status,activation_token_hash,invitation_expires_at)
+    VALUES($1,$2,$3,$4,'pending',$5,$6)`,["former-account","former@example.test","demo-person-2","demo-tenancy-former","d".repeat(64),"2026-09-09T00:00:00Z"]);
+  const formerSource=structuredClone(syntheticRentOpsSnapshot());
+  formerSource.tenancies.push({id:"demo-tenancy-former",propertyId:"demo-property-a",unitId:"demo-unit-a-3",primaryPersonId:"demo-person-2",status:"past",createdAt:"2026-01-01T00:00:00Z"});
+  const formerService=new TenantAccountAdminService({store,repository:new SyntheticRentOpsRepository(formerSource),now:()=>new Date(base.now),notifier:async()=>{}});
+  const formerReissued=await formerService.reissue("former-account",1,{actorSubject:"former-admin"});
+  assert.equal(formerReissued.account.status,"pending");
+  assert.equal(formerReissued.account.credentialRevision,2);
+  await db.exec("UPDATE rent_ops_tenancies SET status='cancelled' WHERE id='demo-tenancy-former'");
+  await assert.rejects(formerService.reissue("former-account",2,{actorSubject:"former-admin"}),/Account access changed/);
+  assert.equal((await store.getById("former-account"))!.sessionVersion,2);
+  const formerAudits=(await db.query("SELECT id FROM rent_ops_activity_events WHERE actor='former-admin'")).rows;
+  assert.equal(formerAudits.length,1);
+  await db.exec("CREATE ROLE rent_ops_staging_importer; GRANT SELECT,INSERT,UPDATE ON ALL TABLES IN SCHEMA public TO rent_ops_staging_importer; SET ROLE rent_ops_staging_importer");
+  await db.query(`INSERT INTO rent_ops_tenancies(id,property_id,unit_id,primary_person_id,status,status_knowledge,source_system,source_id,created_at,property_link_knowledge,unit_link_knowledge,primary_person_link_knowledge)
+    VALUES($1,$2,$3,$4,NULL,'unknown','rent_manager',$5,NOW(),'exact','exact','exact')`,["demo-tenancy-unknown","demo-property-a","demo-unit-a-4","demo-person-2","unknown-tenancy"]);
+  await db.exec("RESET ROLE");
+  await db.query(`INSERT INTO rent_ops_tenant_accounts(id,email,person_id,tenancy_id,status,activation_token_hash,invitation_expires_at)
+    VALUES($1,$2,$3,$4,'pending',$5,$6)`,["unknown-account","unknown@example.test","demo-person-2","demo-tenancy-unknown","e".repeat(64),"2026-09-09T00:00:00Z"]);
+  const unknownSource=structuredClone(syntheticRentOpsSnapshot());
+  const unknownTenancy={id:"demo-tenancy-unknown",propertyId:"demo-property-a",unitId:"demo-unit-a-4",primaryPersonId:"demo-person-2",status:null,statusKnowledge:"unknown",propertyLinkKnowledge:"exact",unitLinkKnowledge:"exact",primaryPersonLinkKnowledge:"exact",createdAt:"2026-01-01T00:00:00Z",source:{system:"rent_manager",entityType:"tenancy",sourceId:"unknown-tenancy"}} as unknown as (typeof unknownSource.tenancies)[number];
+  unknownSource.tenancies.push(unknownTenancy);
+  const unknownService=new TenantAccountAdminService({store,repository:new SyntheticRentOpsRepository(unknownSource),now:()=>new Date(base.now),notifier:async()=>{}});
+  const unknownReissued=await unknownService.reissue("unknown-account",1,{actorSubject:"unknown-admin"});
+  assert.equal(unknownReissued.account.credentialRevision,2);
+  await db.exec("UPDATE rent_ops_tenancies SET status='cancelled' WHERE id='demo-tenancy-unknown'");
+  await assert.rejects(unknownService.reissue("unknown-account",2,{actorSubject:"unknown-admin"}),/Account access changed/);
+  assert.equal((await store.getById("unknown-account"))!.sessionVersion,2);
+  assert.equal((await db.query("SELECT id FROM rent_ops_activity_events WHERE actor='unknown-admin'")).rows.length,1);
+  const grantInput={requestId:"request-one",email:"qa2@example.test",personId:"demo-person-1",tenancyId:"demo-tenancy-1"};
+  const granted=await service.grantForMcp(grantInput,context);
+  assert.deepEqual(await service.grantForMcp(grantInput,context),granted);
+  await assert.rejects(service.grantForMcp({...grantInput,email:"other@example.test"},context),/already belongs/);
+  assert.doesNotMatch(JSON.stringify(granted),/activationPath|token|passwordHash/);
+  assert.equal(deliveries,0);
+  const beforeIssue=(await store.getById(granted.account.id))!.activationTokenHash;
+  await assert.rejects(store.issueAuditedDelivery({commandId:"rejected-command",accountId:granted.account.id,actorSubject:"reject-audit",tokenHash:"b".repeat(64),expiresAt:"2026-09-09T00:00:00Z",now:base.now}));
+  assert.equal((await store.getById(granted.account.id))!.activationTokenHash,beforeIssue);
+  const sent=await service.sendLinkForMcp(granted.account.id,"delivery-one",context);
+  assert.equal(sent.delivery,"accepted");assert.equal(deliveries,1);
+  assert.deepEqual(await service.sendLinkForMcp(granted.account.id,"delivery-one",context),{delivery:"accepted",replayed:true});
+  assert.equal(deliveries,1);
+  fail=true;
+  assert.equal((await service.sendLinkForMcp(granted.account.id,"delivery-two",context)).delivery,"indeterminate");
+  assert.equal((await service.sendLinkForMcp(granted.account.id,"delivery-two",context)).delivery,"indeterminate");
+  assert.equal(deliveries,2);assert.equal((await store.getById(granted.account.id))!.activationTokenHash,null);
+  const reissued=await service.reissueForMcp(granted.account.id,granted.account.credentialRevision,context);
+  assert.equal(reissued.account.credentialRevision,2);
+  await assert.rejects(service.revokeForMcp(granted.account.id,1,context),/changed/);
+  assert.equal((await service.revokeForMcp(granted.account.id,2,context)).account.status,"revoked");
+
+ } finally {await db.close();}
+});

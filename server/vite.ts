@@ -5,6 +5,7 @@ import { createServer as createViteServer, createLogger } from "vite";
 import { type Server } from "http";
 import viteConfig from "../vite.config";
 import { nanoid } from "nanoid";
+import { isPrivatePortalPath, privatePortalHtml } from "./applicant-page-security";
 
 const viteLogger = createLogger();
 
@@ -59,6 +60,7 @@ export async function setupVite(app: Express, server: Server) {
 
       // always reload the index.html file from disk incase it changes
       let template = await fs.promises.readFile(clientTemplate, "utf-8");
+      template = privatePortalHtml(template, url);
       template = template.replace(
         `src="/src/main.tsx"`,
         `src="/src/main.tsx?v=${nanoid()}"`,
@@ -88,6 +90,10 @@ export function serveStatic(app: Express) {
   app.use("*", (req, res) => {
     if (req.originalUrl.startsWith("/api/")) {
       return res.status(404).json({ error: "API route not found" });
+    }
+    if (isPrivatePortalPath(req.originalUrl)) {
+      res.type("html").send(privatePortalHtml(fs.readFileSync(path.resolve(distPath, "index.html"), "utf8"), req.originalUrl));
+      return;
     }
     res.sendFile(path.resolve(distPath, "index.html"));
   });

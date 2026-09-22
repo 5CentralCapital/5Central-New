@@ -1,0 +1,10 @@
+import { z } from "zod";
+const id = z.string().trim().min(1).max(160);
+const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(value => !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0,10) === value);
+const cents = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+export const createChargeDefinitionSchema = z.object({ id, displayName: z.string().trim().min(1).max(240), category: z.enum(["base_rent", "recurring_fee", "one_time_fee", "subsidy", "security_deposit", "refundable_pet_deposit", "move_in_funds", "unapplied_cash", "other"]), active: z.boolean() }).strict();
+export const patchChargeDefinitionSchema = z.object({ displayName: z.string().trim().min(1).max(240).optional(), active: z.boolean().optional() }).strict().refine(value => Object.keys(value).length > 0);
+export const manualPaymentSchema = z.object({ id, tenancyId: id, amountCents: cents, postedOn: date, paymentMethod: z.enum(["ach", "cash", "check", "money_order", "zelle", "other"]), description: z.string().trim().min(1).max(240), category: z.enum(["base_rent", "recurring_fee", "one_time_fee", "unapplied_cash", "other"]), allocations: z.array(z.object({ chargeTransactionId: id, amountCents: cents }).strict()).max(200) }).strict();
+export type ManualPaymentInput = z.infer<typeof manualPaymentSchema>;
+export type CreateChargeDefinitionInput = z.infer<typeof createChargeDefinitionSchema>;
+export type PatchChargeDefinitionInput = z.infer<typeof patchChargeDefinitionSchema>;
