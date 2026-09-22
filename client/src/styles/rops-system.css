@@ -29,9 +29,13 @@
   --ds-bg: #f6f4ef;
   --ds-surface: #ffffff;
   --ds-surface-2: #fbfaf8;
+  --ds-surface-muted: #f3f2ee;
   --ds-fill: rgb(58 50 38 / 5.5%);
   --ds-fill-hover: rgb(58 50 38 / 9%);
   --ds-fill-press: rgb(58 50 38 / 13%);
+  --ds-menu-highlight: rgb(58 50 38 / 7%);
+  --ds-row-hover: rgb(58 50 38 / 3.5%);
+  --ds-table-hairline: rgb(58 50 38 / 7%);
   --ds-ink: #1d1d1f;
   --ds-ink-2: #3a3a3c;
   --ds-muted: #6e6e73;
@@ -49,6 +53,10 @@
   --ds-critical-wash: rgb(192 53 43 / 9%);
   --ds-info: #36607e;
   --ds-info-wash: rgb(54 96 126 / 9%);
+  --ds-primary-bg: var(--ds-ink-2);
+  --ds-primary-fg: #ffffff;
+  --ds-primary-hover: var(--ds-ink);
+  --ds-focus-color: var(--ds-gold-ink);
 
   /* Shape, depth, motion */
   --ds-r-s: 8px;
@@ -68,7 +76,7 @@
   --rm-ink: var(--ds-ink);
   --rm-surface: var(--ds-surface);
   --rm-surface-subtle: var(--ds-surface-2);
-  --rm-surface-muted: #f3f2ee;
+  --rm-surface-muted: var(--ds-surface-muted);
   --rm-line: var(--ds-hairline);
   --rm-line-strong: var(--ds-hairline-strong);
   --rm-muted: var(--ds-muted);
@@ -92,6 +100,7 @@
   --rmd-surface: var(--ds-surface);
   --rmd-subtle: var(--ds-surface-2);
   --rmd-cream: var(--ds-bg);
+  color-scheme: light;
 
   background: var(--ds-bg);
   color: var(--ds-ink);
@@ -155,8 +164,8 @@
 }
 .rops-nav-menu { padding: 6px; border-radius: 14px; border-color: var(--ds-hairline, rgb(58 50 38 / 11%)); box-shadow: 0 16px 44px rgb(28 25 20 / 14%), 0 1px 3px rgb(28 25 20 / 6%); }
 .rops-menu-item { min-height: 36px; padding: 8px 10px; border-radius: 8px; font-size: 13px; }
-.rops-menu-item[data-highlighted], .rops-menu-item[data-state="open"] { background: rgb(58 50 38 / 7%); }
-.rops-menu-label { font-size: 11px; font-weight: 600; letter-spacing: .02em; color: #8a8a8e; }
+.rops-menu-item[data-highlighted], .rops-menu-item[data-state="open"] { background: var(--ds-menu-highlight, rgb(58 50 38 / 7%)); }
+.rops-menu-label { font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--ds-muted, #8a8a8e); }
 
 /* ── Page frame ── */
 .rm-workspace.rops-modern .rm-main { padding: 20px var(--rm-page-inset) 48px; }
@@ -231,11 +240,11 @@
 .rm-workspace.rops-modern :is(.rm-button, .projects-button, .investors-button, .accounting-button, .time-button, .intake-button):active:not(:disabled) { background: var(--ds-fill-press); transform: scale(.98); }
 .rm-workspace.rops-modern :is(.rm-button, .projects-button, .investors-button, .accounting-button, .time-button, .intake-button):disabled { opacity: .42; }
 .rm-workspace.rops-modern :is(.rm-button-primary, .projects-button-primary, .investors-button-primary, .accounting-button-primary, .time-button-primary) {
-  background: var(--ds-ink-2);
-  color: #fff;
+  background: var(--ds-primary-bg);
+  color: var(--ds-primary-fg);
   font-weight: 600;
 }
-.rm-workspace.rops-modern :is(.rm-button-primary, .projects-button-primary, .investors-button-primary, .accounting-button-primary, .time-button-primary):hover:not(:disabled) { background: var(--ds-ink); }
+.rm-workspace.rops-modern :is(.rm-button-primary, .projects-button-primary, .investors-button-primary, .accounting-button-primary, .time-button-primary):hover:not(:disabled) { background: var(--ds-primary-hover); }
 .rm-workspace.rops-modern :is(.rm-button-danger, .projects-button-danger, .time-button-danger) { background: var(--ds-critical-wash); color: var(--ds-critical); }
 .rm-workspace.rops-modern :is(.rm-button-danger, .projects-button-danger, .time-button-danger):hover:not(:disabled) { background: rgb(192 53 43 / 15%); }
 .rm-workspace.rops-modern :is(.rm-button--ghost, .investors-button-quiet) { background: transparent; }
@@ -280,7 +289,7 @@
 .rm-workspace.rops-modern :is(.rm-table, .ro-table, .rmd-dashboard table, .investors-table, .accounting-table, .rm-ledger-table, .rm-charge-table) th {
   height: 32px;
   padding-block: 0;
-  border-bottom: 1px solid var(--ds-hairline);
+  border-bottom: 1px solid var(--ds-table-hairline);
   background: transparent;
   color: var(--ds-muted);
   font: 500 12px/16px var(--ds-font);
@@ -290,7 +299,7 @@
 .rm-workspace.rops-modern :is(.rm-table, .ro-table, .investors-table, .accounting-table, .rm-ledger-table, .rm-charge-table) :is(th, td) { padding-inline: 12px; }
 .rm-workspace.rops-modern :is(.rm-table, .ro-table, .rmd-dashboard table, .investors-table, .accounting-table, .rm-ledger-table, .rm-charge-table) td {
   height: 40px;
-  border-bottom: 1px solid rgb(58 50 38 / 7%);
+  border-bottom: 1px solid var(--ds-hairline);
   color: var(--ds-ink);
 }
 .rm-workspace.rops-modern .rmd-dashboard :is(th, td) { padding-inline: 10px; }
@@ -298,7 +307,7 @@
 .rm-workspace.rops-modern .rmd-dashboard :is(th, td):last-child { padding-right: 18px; }
 .rm-workspace.rops-modern .rmd-dashboard th button { min-height: 32px; padding: 0; color: inherit; font: inherit; }
 .rm-workspace.rops-modern :is(.rm-table, .ro-table, .rmd-dashboard, .investors-table, .accounting-table, .rm-ledger-table) tbody tr:nth-child(even) { background: transparent; }
-.rm-workspace.rops-modern :is(.rm-table, .ro-table, .rmd-dashboard, .investors-table, .accounting-table, .rm-ledger-table) tbody tr:hover { background: rgb(58 50 38 / 3.5%); }
+.rm-workspace.rops-modern :is(.rm-table, .ro-table, .rmd-dashboard, .investors-table, .accounting-table, .rm-ledger-table) tbody tr:hover { background: var(--ds-row-hover); }
 .rm-workspace.rops-modern .rmd-dashboard tbody tr:last-child td { border-bottom: 0; }
 .rm-workspace.rops-modern .rmd-table-total {
   min-height: 40px;
@@ -374,7 +383,7 @@
 
 /* Fields read as label-over-value pairs with hairline rules */
 .rm-workspace.rops-modern :is(.rm-field-label, .rm-field > label, .rm-field > legend, .investors-form-label) { color: var(--ds-muted); font: 500 12px/16px var(--ds-font); }
-.rm-workspace.rops-modern .rm-detail-row { border-color: rgb(58 50 38 / 7%); }
+.rm-workspace.rops-modern .rm-detail-row { border-color: var(--ds-table-hairline); }
 
 /* ── Dialogs: sheet-like, generous, soft ── */
 .rm-workspace.rops-modern :is(.rm-dialog-backdrop, .projects-dialog-overlay, .investors-dialog-backdrop) { background: rgb(20 18 14 / 28%); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
@@ -403,7 +412,7 @@
 .rm-workspace.rops-modern .rmd-notes textarea { width: calc(100% - 28px); margin: 0 14px; border: 0; background: var(--ds-surface-2); box-shadow: inset 0 0 0 1px var(--ds-hairline); }
 .rm-workspace.rops-modern .rmd-note-actions { padding: 10px 14px 14px; }
 .rm-workspace.rops-modern .rmd-note-actions button { min-height: 30px; border: 0; background: var(--ds-fill); }
-.rm-workspace.rops-modern .rmd-note-actions button:first-of-type:not(:disabled) { background: var(--ds-ink-2); color: #fff; }
+.rm-workspace.rops-modern .rmd-note-actions button:first-of-type:not(:disabled) { background: var(--ds-primary-bg); color: var(--ds-primary-fg); }
 
 /* KPI strip */
 .rm-workspace.rops-modern .rops-kpis {
@@ -582,4 +591,331 @@
 }
 @media (max-width: 650px), (pointer: coarse) {
   .rm-workspace.rops-modern .rmd-dashboard .rmd-chart-filters select { min-height: 44px; }
+}
+
+/* Follow the operating system appearance in the manager only. Financial and
+   record surfaces stay opaque; only the navigation island uses translucency. */
+@media screen and (prefers-color-scheme: dark) {
+  .rm-workspace.rops-modern,
+  .rops-nav-menu {
+    --ds-bg: #1e1e1c;
+    --ds-surface: #292826;
+    --ds-surface-2: #302f2c;
+    --ds-surface-muted: var(--ds-surface-2);
+    --ds-fill: rgb(245 240 232 / 7%);
+    --ds-fill-hover: rgb(245 240 232 / 12%);
+    --ds-fill-press: rgb(245 240 232 / 18%);
+    --ds-menu-highlight: var(--ds-fill-hover);
+    --ds-row-hover: var(--ds-fill-hover);
+    --ds-table-hairline: rgb(245 240 232 / 12%);
+    --ds-ink: #f5f0e8;
+    --ds-ink-2: #d8d3c9;
+    --ds-muted: #b9b3a8;
+    --ds-faint: #a59f94;
+    --ds-hairline: rgb(245 240 232 / 12%);
+    --ds-hairline-strong: rgb(245 240 232 / 24%);
+    --ds-gold: #d4a843;
+    --ds-gold-ink: #edc768;
+    --ds-gold-wash: rgb(212 168 67 / 20%);
+    --ds-positive: #83d09c;
+    --ds-positive-wash: rgb(65 145 97 / 22%);
+    --ds-warning: #f0c66d;
+    --ds-warning-wash: rgb(212 168 67 / 20%);
+    --ds-critical: #f09187;
+    --ds-critical-wash: rgb(192 53 43 / 21%);
+    --ds-info: #94c9e4;
+    --ds-info-wash: rgb(54 96 126 / 22%);
+    --ds-primary-bg: #d8d3c9;
+    --ds-primary-fg: #252423;
+    --ds-primary-hover: #f0ebe1;
+    --ds-focus-color: #edc768;
+    --ds-shadow-panel: 0 1px 2px rgb(0 0 0 / 20%);
+    --ds-shadow-float: 0 12px 36px rgb(0 0 0 / 35%), 0 1px 3px rgb(0 0 0 / 24%);
+    --ds-focus: 0 0 0 3px rgb(237 199 104 / 62%);
+    --ds-nav-surface: rgb(41 40 38 / 88%);
+    --ds-menu-surface: #2b2a28;
+  }
+
+  .rm-workspace.rops-modern {
+    color-scheme: dark;
+    --rm-surface-muted: var(--ds-surface-2);
+    --rm-focus: var(--ds-focus-color);
+  }
+
+  .rm-workspace.rops-modern .rops-topbar {
+    color-scheme: dark;
+    color: var(--ds-ink);
+    background: var(--ds-nav-surface);
+    border-color: var(--ds-hairline);
+    box-shadow: 0 8px 28px rgb(0 0 0 / 32%), 0 0 0 1px var(--ds-hairline);
+  }
+  .rm-workspace.rops-modern .rops-primary-navigation.is-open {
+    color: var(--ds-ink);
+    background: var(--ds-surface);
+    border-color: var(--ds-hairline-strong);
+    box-shadow: var(--ds-shadow-float);
+  }
+  .rm-workspace.rops-modern .rops-wordmark { color: var(--ds-ink); }
+  .rm-workspace.rops-modern .rops-wordmark > span { color: var(--ds-gold-ink); }
+  .rm-workspace.rops-modern .rops-nav-trigger,
+  .rm-workspace.rops-modern .rops-mobile-toggle { color: var(--ds-muted); }
+  .rm-workspace.rops-modern .rops-nav-trigger:hover,
+  .rm-workspace.rops-modern .rops-nav-trigger[data-state="open"],
+  .rm-workspace.rops-modern .rops-nav-trigger[aria-current] { background: var(--ds-fill-hover); color: var(--ds-ink); }
+  .rm-workspace.rops-modern .rops-nav-trigger[aria-current]:hover,
+  .rm-workspace.rops-modern .rops-nav-trigger[aria-current][data-state="open"] { background: var(--ds-fill-press); color: var(--ds-ink); }
+  .rops-nav-menu {
+    color-scheme: dark;
+    color: var(--ds-ink);
+    background: var(--ds-menu-surface);
+    border-color: var(--ds-hairline-strong);
+    box-shadow: 0 18px 48px rgb(0 0 0 / 48%), 0 1px 3px rgb(0 0 0 / 28%);
+  }
+  .rops-nav-menu .rops-menu-item[data-highlighted],
+  .rops-nav-menu .rops-menu-item[data-state="open"] { background: var(--ds-fill-hover); color: var(--ds-ink); }
+  .rops-nav-menu .rops-menu-label,
+  .rops-nav-menu .rops-menu-status { color: var(--ds-muted); }
+  .rops-nav-menu .rops-menu-separator { background: var(--ds-hairline); }
+  .rops-nav-menu .rops-menu-item:focus-visible { outline-color: var(--ds-focus-color); }
+
+  .rm-workspace.rops-modern .rops-topbar[data-transparency="reduced"],
+  .rops-nav-menu[data-transparency="reduced"] { background: var(--ds-surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .rm-workspace.rops-modern :is(.rops-topbar, .rops-nav-menu) { border-color: var(--ds-hairline-strong); }
+  .rm-workspace.rops-modern .rops-skip-link { background: var(--ds-primary-bg); color: var(--ds-primary-fg); }
+  .rm-workspace.rops-modern :is(.company-documents-button.is-primary, .reporting-primary, .reporting-result-toolbar button, .reporting-saved-actions button, .reporting-saved-toggle) {
+    border-color: var(--ds-primary-bg);
+    background: var(--ds-primary-bg);
+    color: var(--ds-primary-fg);
+  }
+  .rm-workspace.rops-modern :is(.company-documents-button.is-primary, .reporting-primary, .reporting-result-toolbar button, .reporting-saved-actions button, .reporting-saved-toggle):hover:not(:disabled) {
+    border-color: var(--ds-primary-hover);
+    background: var(--ds-primary-hover);
+    color: var(--ds-primary-fg);
+  }
+  .rm-workspace.rops-modern .rm-export-submit { background: var(--ds-primary-bg) !important; color: var(--ds-primary-fg) !important; }
+
+  /* Feature modules keep their existing token names while drawing from the
+     manager palette. */
+  .rm-workspace.rops-modern :is(.projects-workspace, .projects-dialog) {
+    --projects-charcoal: var(--ds-ink-2);
+    --projects-gold: var(--ds-gold);
+    --projects-cream: var(--ds-bg);
+    --projects-ink: var(--ds-ink);
+    --projects-muted: var(--ds-muted);
+    --projects-faint: var(--ds-faint);
+    --projects-line: var(--ds-hairline);
+    --projects-line-strong: var(--ds-hairline-strong);
+    --projects-surface: var(--ds-surface);
+    --projects-soft: var(--ds-surface-2);
+    --projects-error: var(--ds-critical);
+    --projects-error-surface: var(--ds-critical-wash);
+    --projects-warning: var(--ds-warning);
+    --projects-warning-surface: var(--ds-warning-wash);
+    --projects-success: var(--ds-positive);
+    --projects-success-surface: var(--ds-positive-wash);
+  }
+  .rm-workspace.rops-modern .intake-workspace {
+    --intake-ink: var(--ds-ink);
+    --intake-muted: var(--ds-muted);
+    --intake-faint: var(--ds-faint);
+    --intake-line: var(--ds-hairline);
+    --intake-surface: var(--ds-surface);
+    --intake-soft: var(--ds-surface-2);
+    --intake-gold: var(--ds-gold);
+  }
+  .rm-workspace.rops-modern .company-documents-workspace {
+    --docs-ink: var(--ds-ink);
+    --docs-muted: var(--ds-muted);
+    --docs-line: var(--ds-hairline);
+    --docs-surface: var(--ds-surface);
+    --docs-soft: var(--ds-surface-2);
+  }
+  .rm-workspace.rops-modern .rm-tenant-record {
+    --rm-charcoal: var(--ds-ink-2);
+    --rm-gold: var(--ds-gold);
+    --rm-cream: var(--ds-bg);
+    --rm-ink: var(--ds-ink);
+    --rm-muted: var(--ds-muted);
+    --rm-border: var(--ds-hairline-strong);
+    --rm-panel-bg: var(--ds-surface);
+  }
+  .rm-workspace.rops-modern .rmd-dashboard {
+    --rmd-ink: var(--ds-ink);
+    --rmd-muted: var(--ds-muted);
+    --rmd-line: var(--ds-hairline);
+    --rmd-surface: var(--ds-surface);
+    --rmd-subtle: var(--ds-surface-2);
+    --rmd-cream: var(--ds-bg);
+  }
+
+  /* Dashboard and rental report tables keep their existing structure while
+     their rows, headers and totals follow the opaque dark surfaces. */
+  .rm-workspace.rops-modern :is(.rmd-dashboard, .rm-table, .ro-table, .rm-ledger-table, .rm-charge-table, .rm-occupancy-table, .rm-grouped-report-table) {
+    color: var(--ds-ink);
+    background-color: var(--ds-surface);
+  }
+  .rm-workspace.rops-modern :is(.rmd-dashboard, .rm-table, .ro-table, .rm-ledger-table, .rm-charge-table, .rm-occupancy-table, .rm-grouped-report-table) :is(th, td) {
+    color: var(--ds-ink);
+    border-color: var(--ds-hairline);
+  }
+  .rm-workspace.rops-modern :is(.rmd-dashboard, .rm-table, .ro-table, .rm-ledger-table, .rm-charge-table, .rm-occupancy-table, .rm-grouped-report-table) th {
+    background: var(--ds-surface-2);
+    color: var(--ds-muted);
+  }
+  .rm-workspace.rops-modern .rmd-dashboard tbody tr:nth-child(even) { background: var(--ds-surface); }
+  .rm-workspace.rops-modern .rmd-dashboard tbody tr:hover,
+  .rm-workspace.rops-modern .rm-grouped-report-table tbody tr:hover { background: var(--ds-fill-hover); }
+  .rm-workspace.rops-modern .rmd-table-total,
+  .rm-workspace.rops-modern .rmd-cash-available,
+  .rm-workspace.rops-modern .rm-report-property-total td { background: var(--ds-surface-2); color: var(--ds-ink); }
+  .rm-workspace.rops-modern .rmd-chart text { fill: var(--ds-muted); }
+  .rm-workspace.rops-modern .rmd-table-scroll { scrollbar-color: #77736d transparent; }
+  .rm-workspace.rops-modern .rmd-dashboard :is(button, a, select, textarea):focus-visible { outline-color: var(--ds-focus-color); }
+
+  .rm-workspace.rops-modern :is(.rm-occupancy-table-scroll, .rm-report-table-wrap) { border-color: var(--ds-hairline-strong); background: var(--ds-surface); }
+  .rm-workspace.rops-modern :is(.rm-occupancy-unverified, .rm-occupancy-lease-history summary, .rm-occupancy-lease-history li > small, .rm-occupancy-empty) { color: var(--ds-muted); }
+  .rm-workspace.rops-modern .rm-occupancy-group h4 { color: var(--ds-ink-2); }
+  .rm-workspace.rops-modern .rm-occupancy-group h4 span { color: var(--ds-muted); }
+  .rm-workspace.rops-modern .rm-occupancy-lease-history li { border-color: var(--ds-hairline-strong); }
+  .rm-workspace.rops-modern .rm-property-unit-unverified { color: var(--ds-warning); }
+  .rm-workspace.rops-modern .rm-property-unit-tab-panel > .rm-warning {
+    border-color: var(--ds-hairline-strong);
+    background: var(--ds-warning-wash);
+    color: var(--ds-warning);
+  }
+  .rm-workspace.rops-modern .rm-property-unit-list-row.selected { background: var(--ds-fill-hover); }
+  .rm-workspace.rops-modern .rm-record-balance-warning strong,
+  .rm-workspace.rops-modern .rm-warning-copy,
+  .rm-workspace.rops-modern .rm-credit,
+  .rm-workspace.rops-modern .rm-stat-warn strong { color: var(--ds-warning); }
+  .rm-workspace.rops-modern .rm-row-open { background: var(--ds-fill); }
+  .rm-workspace.rops-modern .rm-report-view-tabs,
+  .rm-workspace.rops-modern .rm-report-toolbar,
+  .rm-workspace.rops-modern .rm-report-setup,
+  .rm-workspace.rops-modern .rm-report-columns,
+  .rm-workspace.rops-modern .rm-report-subtotals { border-color: var(--ds-hairline); }
+  .rm-workspace.rops-modern .rm-report-view-tabs > :is(button, select),
+  .rm-workspace.rops-modern .rm-clean-report .rm-report-toolbar > label { color: var(--ds-muted); }
+  .rm-workspace.rops-modern .rm-report-view-tabs > button.active,
+  .rm-workspace.rops-modern .rm-grouped-report-table .rm-report-property-heading th,
+  .rm-workspace.rops-modern .rm-grouped-report-table .rm-report-property-total td { color: var(--ds-ink); }
+  .rm-workspace.rops-modern .rm-grouped-report-table thead th { background: var(--ds-surface-2); color: var(--ds-muted); }
+  .rm-workspace.rops-modern .rm-grouped-report-table .rm-report-property-heading th { background: var(--ds-surface); }
+  .rm-workspace.rops-modern .rm-grouped-report-table .rm-report-property-total td { background: var(--ds-surface-2); }
+  .rm-workspace.rops-modern :is(.rm-error, .rm-report-error) { background: var(--ds-critical-wash); color: var(--ds-critical); }
+  .rm-workspace.rops-modern .rm-warning { border-color: var(--ds-hairline-strong); background: var(--ds-warning-wash); color: var(--ds-warning); }
+
+  /* Dialogs, pickers and export controls remain opaque and readable. */
+  .rm-workspace.rops-modern :is(.rm-dialog, .rops-payment-dialog, .rm-export-dialog, .rm-report-setup-picker-menu, .rm-property-filter-options, .rm-report-column-options) {
+    color: var(--ds-ink);
+    background: var(--ds-surface);
+    border-color: var(--ds-hairline-strong);
+  }
+  .rm-workspace.rops-modern :is(.rm-dialog-backdrop, .rm-export-dialog-backdrop) { background: rgb(0 0 0 / 68%); }
+  .rm-workspace.rops-modern :is(.rm-dialog-header, .rm-dialog-footer, .rm-dialog header, .rm-export-properties) {
+    background: var(--ds-surface-2);
+    border-color: var(--ds-hairline);
+  }
+  .rm-workspace.rops-modern :is(.rm-dialog-error, .rm-dialog-discard, .rm-dialog-field-error, .rops-payment-error, .rm-report-setup-error) {
+    background: var(--ds-critical-wash);
+    color: var(--ds-critical);
+  }
+  .rm-workspace.rops-modern .rm-dialog-error,
+  .rm-workspace.rops-modern .rm-dialog-discard { border-color: var(--ds-hairline); }
+  .rm-workspace.rops-modern .rops-proration { border-color: var(--ds-hairline-strong); background: var(--ds-surface-2); }
+  .rm-workspace.rops-modern .rops-payment-dialog details p,
+  .rm-workspace.rops-modern .rops-proration :is(small, p) { color: var(--ds-muted); }
+  .rm-workspace.rops-modern .rm-editable-payment:hover,
+  .rm-workspace.rops-modern .rm-report-setup-picker-menu label:hover,
+  .rm-workspace.rops-modern .rops-report-favorite:hover,
+  .rm-workspace.rops-modern .rops-report-open:not(:disabled):hover { background: var(--ds-fill-hover); }
+  .rm-workspace.rops-modern .rm-report-setup-picker-menu label { color: var(--ds-ink); }
+  .rm-workspace.rops-modern .rm-report-setup-picker-menu :is(input, select) { color-scheme: dark; }
+  .rm-workspace.rops-modern .rm-report-setup-run:focus-visible,
+  .rm-workspace.rops-modern .rm-report-setup-picker :focus-visible { outline-color: var(--ds-focus-color); }
+  .rm-workspace.rops-modern .rm-report-setup-picker[open] > summary { border-color: var(--ds-gold); }
+  .rm-workspace.rops-modern .rm-report-setup-picker-menu input { accent-color: var(--ds-gold); }
+  .rm-workspace.rops-modern :is(.rops-report-library-search svg, .rops-report-favorite, .rops-report-open > svg, .rops-report-availability) { color: var(--ds-muted); }
+  .rm-workspace.rops-modern .rops-report-favorite[aria-pressed="true"] { color: var(--ds-gold-ink); }
+
+  /* Company workflows use the same semantic status colors as rental records. */
+  .rm-workspace.rops-modern :is(.accounting-status, .time-badge, .investors-status, .intake-state) { background: var(--ds-fill); color: var(--ds-muted); }
+  .rm-workspace.rops-modern :is(.accounting-status:not(.is-muted), .accounting-environment.is-production, .time-badge.is-positive, .investors-status.is-positive, .intake-state.is-applied, .intake-state.is-matched, .projects-status.is-positive) {
+    border-color: var(--ds-positive);
+    background: var(--ds-positive-wash);
+    color: var(--ds-positive);
+  }
+  .rm-workspace.rops-modern :is(.time-badge.is-warning, .investors-status.is-warning, .intake-state.is-held, .intake-state.is-held_missing_identity, .intake-state.is-held_ambiguous_identity, .intake-state.is-apply_failed, .intake-state.is-held_unsupported, .projects-status.is-warning, .accounting-environment.is-sandbox, .intake-warning) {
+    border-color: var(--ds-warning);
+    background: var(--ds-warning-wash);
+    color: var(--ds-warning);
+  }
+  .rm-workspace.rops-modern .intake-state:is(.is-failed, .is-overlap) {
+    border-color: var(--ds-critical);
+    background: var(--ds-critical-wash);
+    color: var(--ds-critical);
+  }
+  .rm-workspace.rops-modern .projects-status.is-positive { border-color: var(--ds-positive); }
+  .rm-workspace.rops-modern .projects-status.is-warning { border-color: var(--ds-warning); }
+  .rm-workspace.rops-modern :is(.accounting-message, .time-message, .projects-notice) { border-color: var(--ds-hairline); background: var(--ds-positive-wash); color: var(--ds-positive); }
+  .rm-workspace.rops-modern :is(.accounting-message.is-error, .time-message.is-error, .investors-error, .intake-message, .company-documents-message.is-error, .projects-error) {
+    border-color: var(--ds-hairline-strong);
+    background: var(--ds-critical-wash);
+    color: var(--ds-critical);
+  }
+  .rm-workspace.rops-modern .accounting-status.is-muted,
+  .rm-workspace.rops-modern .time-badge.is-muted,
+  .rm-workspace.rops-modern .investors-status.is-muted,
+  .rm-workspace.rops-modern .projects-status.is-muted,
+  .rm-workspace.rops-modern .projects-execution-coverage.is-muted { border-color: var(--ds-hairline); background: var(--ds-fill); color: var(--ds-muted); }
+  .rm-workspace.rops-modern :is(.accounting-tab.is-selected, .investors-tabs button.is-active, .time-tabs button.is-active, .projects-tabs button.is-active, .projects-execution-tabs button.is-active) { border-color: var(--ds-gold); color: var(--ds-ink); }
+  .rm-workspace.rops-modern .projects-pending-notice,
+  .rm-workspace.rops-modern .projects-conflict { border-color: var(--ds-hairline-strong); background: var(--ds-warning-wash); color: var(--ds-warning); }
+  .rm-workspace.rops-modern .projects-list-row:hover,
+  .rm-workspace.rops-modern .projects-list-row.is-selected,
+  .rm-workspace.rops-modern .projects-table tbody tr:hover,
+  .rm-workspace.rops-modern :is(.projects-icon-button, .projects-dialog-close):hover,
+  .rm-workspace.rops-modern .projects-button-secondary:hover { background: var(--ds-fill-hover); }
+  .rm-workspace.rops-modern .reporting-workspace { background: var(--ds-surface); color: var(--ds-ink); border-color: var(--ds-hairline-strong); }
+  .rm-workspace.rops-modern .reporting-library { background: var(--ds-surface-2); border-color: var(--ds-hairline); }
+  .rm-workspace.rops-modern .reporting-library :is(input, select),
+  .rm-workspace.rops-modern .reporting-setup :is(input, select),
+  .rm-workspace.rops-modern .reporting-saved :is(input, select) { background: var(--ds-surface); color: var(--ds-ink); border-color: var(--ds-hairline-strong); }
+  .rm-workspace.rops-modern .reporting-list button { color: var(--ds-ink-2); }
+  .rm-workspace.rops-modern .reporting-list button:hover,
+  .rm-workspace.rops-modern .reporting-list button.is-selected { background: var(--ds-fill-hover); color: var(--ds-ink); }
+  .rm-workspace.rops-modern :is(.reporting-heading, .reporting-setup, .reporting-saved) { border-color: var(--ds-hairline); }
+  .rm-workspace.rops-modern :is(.reporting-status, .reporting-unavailable, .reporting-filter-unavailable, .reporting-result-toolbar, .reporting-saved li span:last-child) { color: var(--ds-muted); }
+  .rm-workspace.rops-modern .reporting-status.is-ready,
+  .rm-workspace.rops-modern .reporting-saved li button { color: var(--ds-gold-ink); }
+  .rm-workspace.rops-modern .reporting-kicker { color: var(--ds-gold-ink); }
+  .rm-workspace.rops-modern .reporting-table-wrap { background: var(--ds-surface); border-color: var(--ds-hairline-strong); }
+  .rm-workspace.rops-modern .reporting-table-wrap :is(th, td) { border-color: var(--ds-hairline); }
+  .rm-workspace.rops-modern .reporting-table-wrap th { background: var(--ds-surface-2); color: var(--ds-muted); }
+  .rm-workspace.rops-modern :is(.reporting-notice, .reporting-empty, .reporting-state) { background: var(--ds-surface-2); color: var(--ds-ink-2); }
+  .rm-workspace.rops-modern .reporting-error { background: var(--ds-critical-wash); color: var(--ds-critical); }
+  .rm-workspace.rops-modern .company-documents-message.is-error { border-color: var(--ds-hairline-strong); }
+}
+
+@media screen and (prefers-color-scheme: dark) and (prefers-reduced-transparency: reduce),
+       screen and (prefers-color-scheme: dark) and (prefers-contrast: more) {
+  .rm-workspace.rops-modern .rops-topbar,
+  .rops-nav-menu { background: var(--ds-surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+
+@media screen and (prefers-color-scheme: dark) and (prefers-contrast: more) {
+  .rm-workspace.rops-modern,
+  .rops-nav-menu {
+    --ds-hairline: rgb(245 240 232 / 24%);
+    --ds-hairline-strong: rgb(245 240 232 / 42%);
+    --ds-muted: #d0cabe;
+    --ds-faint: #c0b9ad;
+    --ds-fill: rgb(245 240 232 / 12%);
+    --ds-fill-hover: rgb(245 240 232 / 18%);
+    --ds-table-hairline: rgb(245 240 232 / 24%);
+  }
+  .rm-workspace.rops-modern .rops-topbar,
+  .rops-nav-menu { border-color: var(--ds-hairline-strong); }
+  .rm-workspace.rops-modern :is(.rm-button, [class$="-button"], .rm-status, input, select) { border: 1px solid var(--ds-hairline-strong); }
+  .rm-workspace.rops-modern :is(.rm-record-list-item, .projects-list-row, .investors-list-row, .time-list-row):focus-visible { outline: 2px solid var(--ds-focus-color); outline-offset: 2px; }
 }

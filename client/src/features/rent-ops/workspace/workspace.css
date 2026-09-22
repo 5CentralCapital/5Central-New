@@ -7,32 +7,32 @@
  */
 
 .rm-workspace {
-  --rm-charcoal: #3a3a3c;
-  --rm-gold: #d4a843;
-  --rm-cream: #f5f0e8;
-  --rm-ink: #1c1c1e;
+  --rm-charcoal: var(--ds-ink-2, #3a3a3c);
+  --rm-gold: var(--ds-gold, #d4a843);
+  --rm-cream: var(--ds-bg, #f5f0e8);
+  --rm-ink: var(--ds-ink, #1c1c1e);
   --rm-white: #ffffff;
-  --rm-surface: #ffffff;
-  --rm-surface-subtle: #fafaf9;
-  --rm-surface-muted: #f3f3f2;
-  --rm-line: #e5e5e3;
-  --rm-line-strong: #c7c7c5;
-  --rm-muted: #656568;
-  --rm-faint: #8b8b8e;
-  --rm-success: #2e6650;
-  --rm-success-surface: #e9f3ed;
+  --rm-surface: var(--ds-surface, #ffffff);
+  --rm-surface-subtle: var(--ds-surface-2, #fafaf9);
+  --rm-surface-muted: var(--ds-surface-muted, #f3f3f2);
+  --rm-line: var(--ds-hairline, #e5e5e3);
+  --rm-line-strong: var(--ds-hairline-strong, #c7c7c5);
+  --rm-muted: var(--ds-muted, #656568);
+  --rm-faint: var(--ds-faint, #8b8b8e);
+  --rm-success: var(--ds-positive, #2e6650);
+  --rm-success-surface: var(--ds-positive-wash, #e9f3ed);
   /* Older record modules share these names; keep surfaces neutral and
      retain green only where the component means a positive status. */
   --rm-paper: var(--rm-surface);
   --rm-wash: var(--rm-surface-subtle);
   --rm-green: var(--rm-success);
-  --rm-warning: #805d09;
-  --rm-warning-surface: #fff4d8;
-  --rm-error: #9f302b;
-  --rm-error-surface: #fceceb;
-  --rm-info: #385b74;
-  --rm-info-surface: #edf3f7;
-  --rm-focus: #b07f09;
+  --rm-warning: var(--ds-warning, #805d09);
+  --rm-warning-surface: var(--ds-warning-wash, #fff4d8);
+  --rm-error: var(--ds-critical, #9f302b);
+  --rm-error-surface: var(--ds-critical-wash, #fceceb);
+  --rm-info: var(--ds-info, #385b74);
+  --rm-info-surface: var(--ds-info-wash, #edf3f7);
+  --rm-focus: var(--ds-focus-color, #b07f09);
   --rm-ribbon-height: 60px;
   --rm-open-tabs-height: 44px;
   --rm-outer-nav-width: 192px;
