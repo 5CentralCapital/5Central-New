@@ -7,7 +7,7 @@ import type { AdminSnapshot, ViewFilters } from "../rent-ops/types";
 import { EntityLink, RecordLink } from "../rent-ops/workspace/entity-link";
 import { DataGrid, type GridColumn } from "../rent-ops/workspace/grid";
 import { selectedWorkspaceProperties } from "../rent-ops/workspace/workspace-state";
-import { centsSortValue, formatCentsText, formatIsoDate, formatMonth, humanize, sumCentsTexts } from "./format";
+import { centsSortValue, formatCentsText, formatIsoDate, formatMeasure, formatMonth, humanize, sumCentsTexts } from "./format";
 import { ErrorState, Loading, Section } from "./page";
 import { matchesSearch, rentalRows, useRentalReport } from "./rental-reports";
 import { balancesDue, legacyCents, receiptsByPayment, type RentalRow } from "./models";
@@ -60,11 +60,11 @@ export function Collections({ identity, snapshot, filters, businessDate, readOnl
     {panel === "billing" && (selected.length > 1
       ? <p className="ws-note" role="status">Select one property to post its recurring charges.</p>
       : <RecurringBillingPanel businessDate={businessDate} propertyId={filters.propertyId === "all" ? undefined : filters.propertyId} onPosted={onSaved} />)}
-    <Section title="Balances due" id="collections-due" count={dueRows ? `${dueRows.length} · ${dueTotal!.complete ? formatCentsText(dueTotal!.total) : `at least ${formatCentsText(dueTotal!.total)}`}` : undefined}>
+    <Section title="Balances due" id="collections-due" count={dueRows ? `${dueRows.length} · ${formatMeasure(dueTotal!.total, dueTotal!.complete)}` : undefined}>
       {delinquency.error ? <ErrorState error={delinquency.error} onRetry={() => void delinquency.refetch()} /> : !dueRows ? <Loading label="Loading balances…" />
         : <DataGrid<RentalRow> rows={dueRows} columns={dueColumns} getRowKey={(row, index) => `${row.personId}:${index}`} emptyMessage="No balances due." storageKey="ws-collections-due" />}
     </Section>
-    <Section title={`Receipts · ${formatMonth(month)} to date`} id="collections-receipts" count={receipts ? `${receipts.length} · ${receiptTotal!.complete ? formatCentsText(receiptTotal!.total) : `at least ${formatCentsText(receiptTotal!.total)}`}` : undefined}>
+    <Section title={`Receipts · ${formatMonth(month)} to date`} id="collections-receipts" count={receipts ? `${receipts.length} · ${formatMeasure(receiptTotal!.total, receiptTotal!.complete)}` : undefined}>
       {collected.error ? <ErrorState error={collected.error} onRetry={() => void collected.refetch()} /> : !receipts ? <Loading label="Loading receipts…" />
         : <DataGrid<RentalRow> rows={receipts} columns={receiptColumns} getRowKey={(row, index) => `${row.paymentTransactionId}:${index}`} emptyMessage="No receipts applied this month." storageKey="ws-collections-receipts" />}
     </Section>

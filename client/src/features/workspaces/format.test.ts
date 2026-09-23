@@ -32,6 +32,9 @@ test("sums of exact cents flag unknown contributors instead of treating them as 
   assert.deepEqual(sumCentsTexts(["100", null]), { total: "100", complete: false });
   assert.deepEqual(sumCentsTexts([null]), { total: null, complete: false });
   assert.deepEqual(sumCentsTexts([]), { total: "0", complete: true });
+  // Section totals render through formatMeasure: all-unknown is "Unknown", never "At least Unknown".
+  assert.equal(formatMeasure(sumCentsTexts([null, null]).total, false), "Unknown");
+  assert.equal(formatMeasure(sumCentsTexts(["2500", null]).total, false), "At least $25.00");
 });
 
 test("only PDFs and raster images open in a tab; other document types download", () => {
