@@ -154,6 +154,13 @@ test('owner statements, property statements and work orders run through real gra
     const workOrders = await port.run({ principal: admin }, reportRunRequestSchema.parse({ reportId: 'work-orders', definitionVersion: '1', scope: { ...scope, legalEntityIds: [] }, filters: {}, period: { mode: 'custom', asOfDate: '2026-09-03' }, basis: 'operational', currency: null }));
     assert.equal(workOrders.page.totalRows, 2);
     assert.equal(workOrders.page.totals[0]?.amountCents, '15000');
+    // Packages persist their item runs and are labeled incomplete when any item is partial or failed.
+    const packageItem = (reportId: string, period: unknown, basis = 'mixed') => ({ reportId, definitionVersion: '1', scope: { ...scope, propertyIds: [], unitIds: [], tenantIds: [], tenancyIds: [], ownerIds: [], investorIds: [], projectIds: [], vendorIds: [], staffIds: [] }, filters: {}, period, basis, currency: null, consolidation: null, forecast: null, columns: [], sort: [] });
+    const pkg = await port.savePackage({ principal: admin }, { name: 'Month-end package', items: [packageItem('rental-owner-statement', { mode: 'range', fromDate: '2026-07-01', toDate: '2026-08-31' }) as never, packageItem('rental-owner-ending-balances', { mode: 'as_of', asOfDate: '2026-12-31' }) as never, packageItem('work-sessions', { mode: 'range', fromDate: '2026-07-01', toDate: '2026-08-31' }, 'operational') as never] });
+    const pkgRun = await port.runPackage({ principal: admin }, pkg.id);
+    assert.equal(pkgRun.completeness, 'incomplete');
+    assert.deepEqual(pkgRun.itemRuns.map(item => [item.reportId, item.state, item.completeness]), [['rental-owner-statement', 'ready', 'complete'], ['rental-owner-ending-balances', 'ready', 'incomplete'], ['work-sessions', 'failed', 'incomplete']]);
+    assert.deepEqual(await port.getPackageRun({ principal: admin }, pkgRun.id), pkgRun);
     await assert.rejects(() => port.run({ principal: restricted }, reportRunRequestSchema.parse({ reportId: 'work-orders', definitionVersion: '1', scope: { ...scope, legalEntityIds: [] }, filters: {}, period: { mode: 'custom', asOfDate: '2026-09-03' }, basis: 'operational', currency: null })), /Choose the legal entities or properties you can access/);
     const restrictedOrders = await port.run({ principal: restricted }, reportRunRequestSchema.parse({ reportId: 'work-orders', definitionVersion: '1', scope: { ...scope, propertyIds: [fixture.propertyId] }, filters: { status: ['new'] }, period: { mode: 'custom', asOfDate: '2026-09-03' }, basis: 'operational', currency: null }));
     assert.deepEqual(restrictedOrders.page.rows.map(row => row.values.title), ['Leak']);
