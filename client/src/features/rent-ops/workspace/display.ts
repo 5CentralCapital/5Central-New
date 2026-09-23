@@ -1,11 +1,16 @@
 import { usdCurrencyFormatter, utcCalendarDateFormatter } from '../../../lib/rent-ops-formatters';
+import { reviewLabelForCodes, UNKNOWN_AMOUNT_LABEL, UNVERIFIED_LABEL } from '@shared/review-cases/reasons';
 /**
  * Display helpers used by the manager workspace.  Values arrive from the
  * browser API as presentation data, so an absent value must remain visibly
  * absent instead of being turned into a plausible zero or date.
  */
 
-const NEEDS_REVIEW = "Needs review";
+/**
+ * An absent amount is "Unknown" (never zero). Other absent values are
+ * "Unverified" unless uncertainty codes name a specific reason; see
+ * formatReviewStatus.
+ */
 
 function integerCents(value: unknown): number | undefined {
   if (typeof value === "number") {
@@ -25,7 +30,7 @@ function integerCents(value: unknown): number | undefined {
 /** Format an integer amount in cents as US dollars. */
 export function formatMoney(value: unknown): string {
   const cents = integerCents(value);
-  if (cents === undefined) return NEEDS_REVIEW;
+  if (cents === undefined) return UNKNOWN_AMOUNT_LABEL;
 
   // Avoid displaying a negative sign for the otherwise equivalent -0 value.
   const normalizedCents = Object.is(cents, -0) ? 0 : cents;
@@ -69,7 +74,7 @@ function dateFromValue(value: unknown): Date | undefined {
 /** Format an API date as a readable, timezone-stable calendar date. */
 export function formatDate(value: unknown): string {
   const date = dateFromValue(value);
-  if (!date) return NEEDS_REVIEW;
+  if (!date) return UNVERIFIED_LABEL;
 
   return utcCalendarDateFormatter.format(date);
 }
@@ -81,14 +86,14 @@ function titleWord(word: string): string {
 
 /** Turn API enum/camel-case values into readable labels. */
 export function formatLabel(value: unknown): string {
-  if (value === null || value === undefined || value === "") return NEEDS_REVIEW;
+  if (value === null || value === undefined || value === "") return UNVERIFIED_LABEL;
   if (typeof value === "boolean") return value ? "Yes" : "No";
 
   if (Array.isArray(value)) {
-    return value.length ? value.map(formatLabel).join(", ") : NEEDS_REVIEW;
+    return value.length ? value.map(formatLabel).join(", ") : UNVERIFIED_LABEL;
   }
 
-  if (typeof value !== "string") return NEEDS_REVIEW;
+  if (typeof value !== "string") return UNVERIFIED_LABEL;
   if (value.trim().toLowerCase() === "unlisted") return "Not listed";
   const normalized = value
     .trim()
@@ -97,5 +102,10 @@ export function formatLabel(value: unknown): string {
     .replace(/[\s_-]+/g, " ")
     .trim();
 
-  return normalized ? normalized.split(" ").map(titleWord).join(" ") : NEEDS_REVIEW;
+  return normalized ? normalized.split(" ").map(titleWord).join(" ") : UNVERIFIED_LABEL;
+}
+
+/** Short, specific review status for uncertainty codes (for example "Lease missing"). */
+export function formatReviewStatus(codes: readonly string[] | null | undefined): string {
+  return reviewLabelForCodes(codes);
 }

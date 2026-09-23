@@ -14,6 +14,7 @@ CREATE TABLE company_review_cases (
   reason_code varchar(80) NOT NULL CHECK (reason_code ~ '^[a-z][a-z0-9_]{1,79}$'),
   cause_key varchar(255) NOT NULL CHECK (length(btrim(cause_key)) > 0),
   scope_key varchar(255) NOT NULL CHECK (length(btrim(scope_key)) > 0),
+  scope_label text CHECK (scope_label IS NULL OR length(btrim(scope_label)) BETWEEN 1 AND 240),
   state text NOT NULL CHECK (state IN ('open','researching','proposed','applied','verified','blocked')),
   materiality text NOT NULL CHECK (materiality IN ('high','medium','low','unknown')),
   as_of date NOT NULL,

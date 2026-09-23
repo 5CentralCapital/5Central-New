@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { formatDate, formatLabel, formatMoney } from "./display";
+import { reviewLabelForCodes, UNVERIFIED_LABEL } from "@shared/review-cases/reasons";
 import {
   clampGridPage,
   DEFAULT_GRID_PAGE_SIZE,
@@ -15,7 +16,13 @@ import {
 
 export type { GridColumn } from "./grid-model";
 
-const NEEDS_REVIEW = "Needs review";
+/** Specific review label from the row's uncertainty codes; "Unverified" only when no code explains it. */
+function reviewLabelForRow(row: object | undefined): string {
+  const record = (row ?? {}) as Record<string, unknown>;
+  const codes = [record.balanceUncertaintyCodes, record.exceptionCodes, record.uncertaintyCodes]
+    .flatMap(value => Array.isArray(value) ? value.filter((code): code is string => typeof code === "string") : []);
+  return reviewLabelForCodes(codes);
+}
 
 export interface DataGridProps<T extends object> {
   rows: T[];
@@ -116,22 +123,23 @@ function labelColumn(key: string): boolean {
 }
 
 function knowledgeCellValue(value: unknown): string | undefined {
-  if (value === "unknown" || value === "ambiguous" || value === "inferred") return NEEDS_REVIEW;
+  if (value === "unknown" || value === "ambiguous" || value === "inferred") return UNVERIFIED_LABEL;
   if (value === "manual") return "Entered manually";
   if (value === "source" || value === "exact" || value === "confirmed" || value === "known") return "Known";
   return undefined;
 }
 
-function defaultCellValue(key: string, value: unknown): ReactNode {
-  if (identifierColumn(key)) return NEEDS_REVIEW;
+function defaultCellValue(key: string, value: unknown, row?: object): ReactNode {
+  // Technical identifiers belong in detail views, not in grid cells.
+  if (identifierColumn(key)) return "—";
   if (moneyColumn(key)) return formatMoney(value);
   if (dateColumn(key)) return formatDate(value);
-  if (value === null || value === undefined || value === "") return NEEDS_REVIEW;
+  if (value === null || value === undefined || value === "") return reviewLabelForRow(row);
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (/knowledge$/i.test(key)) return knowledgeCellValue(value) ?? formatLabel(value);
   if (labelColumn(key)) return formatLabel(value);
-  if (Array.isArray(value)) return value.length ? value.map(formatLabel).join(", ") : NEEDS_REVIEW;
-  if (typeof value === "object") return NEEDS_REVIEW;
+  if (Array.isArray(value)) return value.length ? value.map(formatLabel).join(", ") : "—";
+  if (typeof value === "object") return UNVERIFIED_LABEL;
   return String(value);
 }
 
@@ -345,7 +353,7 @@ export function DataGrid<T extends object>({
                         className={column.align === "right" || moneyColumn(column.key) ? "rm-amount" : undefined}
                         style={{ width: widthStyle(column.width), textAlign: column.align }}
                       >
-                        {column.render ? column.render(row) : defaultCellValue(column.key, value)}
+                        {column.render ? column.render(row) : defaultCellValue(column.key, value, row)}
                       </td>
                     );
                   })}
