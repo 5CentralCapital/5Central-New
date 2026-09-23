@@ -461,7 +461,7 @@ function validateApplicationHistoryStatusCrosswalk(
     seen.set(key, targetStatus as ApplicationStatus);
     normalized.push({ artifactSha256, sourceCollection, sourceField: sourceField as ValidatedApplicationStatusCrosswalkEntry["sourceField"], sourceValue, targetStatus: targetStatus as ApplicationStatus });
   }
-  normalized.sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
+  normalized.sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right), "en-US"));
   return normalized;
 }
 
@@ -1035,15 +1035,15 @@ export function buildRestrictedSupplement(request: RestrictedSupplementRequest):
     const baseRows = target.filter((row) => !isRecord(row) || typeof row.supplementRowId !== "string");
     const supplementedRows = target
       .filter((row): row is Record<string, unknown> => isRecord(row) && typeof row.supplementRowId === "string")
-      .sort((left, right) => String(left.supplementRowId).localeCompare(String(right.supplementRowId)));
+      .sort((left, right) => String(left.supplementRowId).localeCompare(String(right.supplementRowId), "en-US"));
     (derivative.payload as Record<string, unknown>)[outputKey] = [...baseRows, ...supplementedRows];
   }
-  derivative.documentBinaries.sort((left, right) => left.sourceId.localeCompare(right.sourceId));
+  derivative.documentBinaries.sort((left, right) => left.sourceId.localeCompare(right.sourceId, "en-US"));
   const payloadBinaries = (derivative.payload as Record<string, unknown>).documentBinaries;
-  if (Array.isArray(payloadBinaries)) payloadBinaries.sort((left, right) => String((left as DocumentBinaryDescriptor).sourceId).localeCompare(String((right as DocumentBinaryDescriptor).sourceId)));
+  if (Array.isArray(payloadBinaries)) payloadBinaries.sort((left, right) => String((left as DocumentBinaryDescriptor).sourceId).localeCompare(String((right as DocumentBinaryDescriptor).sourceId), "en-US"));
 
   for (const kind of RESTRICTED_SUPPLEMENT_KINDS) {
-    addedRows[kind].sort((left, right) => left.rowId.localeCompare(right.rowId));
+    addedRows[kind].sort((left, right) => left.rowId.localeCompare(right.rowId, "en-US"));
   }
   const applicationHistoryStatusCrosswalkRowHashes = applicationHistoryStatusCrosswalk
     .map(applicationHistoryStatusCrosswalkRowHash)

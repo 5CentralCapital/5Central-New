@@ -1,13 +1,15 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createRentManagerApiGetAdapter, RentManagerAdapterError } from "./adapter";
 import { createRentManagerDocumentBinaryFetcher } from "./binary-fetcher";
 import { createMemoryArchive, createRestrictedArchive, MemoryCheckpointStore } from "./archive";
 import { assertNoCredentialShapedFields, assertReadOnlyRequest, InvalidInlineDocumentBinaryError, RentManagerExportCollector, RestrictedCredentialFieldError } from "./collector";
-import { hashRecord } from "./hash";
+import { canonicalJson, hashRecord } from "./hash";
 import { normalizeRmRecord } from "./normalize";
 import { createApplicationAnswerAttestation, normalizeHapStatusValue, normalizeRentManagerExport } from "./normalizer";
 import { parseRentManagerExportCliArgs, redactedCliSummary } from "./cli";
@@ -1011,6 +1013,18 @@ test("missing and duplicate explicit RM IDs make required coverage incomplete", 
   assert.equal(result.manifest.complete, false);
   assert.ok(result.manifest.exceptions.some((exception) => exception.code === "missing_source_id"));
   assert.ok(result.manifest.exceptions.some((exception) => exception.code === "duplicate_source_id"));
+});
+
+test("canonical JSON key order does not depend on the host locale", () => {
+  // Danish collation sorts "aa" last and Lithuanian sorts "y" before "k";
+  // a reviewed digest must be identical on every operator machine.
+  const sample = { aa: 1, b: 2, k: 3, y: 4, Amount: 5, amount: 6 };
+  const expected = canonicalJson(sample);
+  const hashModule = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "hash.ts")).href;
+  for (const locale of ["da_DK.UTF-8", "lt_LT.UTF-8"]) {
+    const output = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `const { canonicalJson } = await import(${JSON.stringify(hashModule)}); process.stdout.write(canonicalJson(${JSON.stringify(sample)}));`], { env: { ...process.env, LANG: locale, LC_ALL: locale }, encoding: "utf8" });
+    assert.equal(output, expected, locale);
+  }
 });
 
 test("hashes are deterministic and source hashes are not double-hashed during redaction", () => {

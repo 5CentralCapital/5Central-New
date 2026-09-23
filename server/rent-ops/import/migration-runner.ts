@@ -304,7 +304,7 @@ export async function verifyRestrictedArchiveBinaries(rootInput: string, envelop
   let verifiedCount = 0;
   const descriptorDigests: string[] = [];
   const verifiedBinaries: RestrictedVerifiedArchiveBinary[] = [];
-  for (const descriptor of Array.from(bySource.values()).sort((left, right) => left.sourceId.localeCompare(right.sourceId))) {
+  for (const descriptor of Array.from(bySource.values()).sort((left, right) => left.sourceId.localeCompare(right.sourceId, "en-US"))) {
     const archivePath = safeBinaryRelativePath(descriptor.archivePath);
     const candidatePath = resolve(root, ...archivePath.split("/"));
     await assertRestrictedPathChain(root, candidatePath);

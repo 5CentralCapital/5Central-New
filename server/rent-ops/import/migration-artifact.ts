@@ -99,7 +99,7 @@ function recordCounts(value: Record<string, unknown>): Record<string, number> {
     Object.entries(value)
       .filter((entry): entry is [string, unknown[]] => Array.isArray(entry[1]))
       .map(([key, rows]) => [key, rows.length])
-      .sort(([left], [right]) => String(left).localeCompare(String(right))),
+      .sort(([left], [right]) => String(left).localeCompare(String(right), "en-US")),
   );
 }
 

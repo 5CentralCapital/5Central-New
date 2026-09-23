@@ -643,7 +643,7 @@ export class RentManagerExportCollector {
       const id = sourceId(record, parentDefinition);
       if (id) ids.add(id);
     }
-    state.parentIds = Array.from(ids).sort((left, right) => left.localeCompare(right));
+    state.parentIds = Array.from(ids).sort((left, right) => left.localeCompare(right, "en-US"));
     return state.parentIds;
   }
 
@@ -896,7 +896,7 @@ export class RentManagerExportCollector {
     // performs the single, deterministic activity union; concatenating here
     // would duplicate history and communication facts on the second pass.
     this.purgePacketDocumentDescriptors();
-    payload.documentBinaries = Array.from(this.documentBinaries.values()).sort((left, right) => left.sourceId.localeCompare(right.sourceId));
+    payload.documentBinaries = Array.from(this.documentBinaries.values()).sort((left, right) => left.sourceId.localeCompare(right.sourceId, "en-US"));
     const envelope: ExportEnvelope = { version: "rm-export/v2", runId: this.checkpoint.runId, source: { system: "rent_manager", transport: "injected", readOnly: true }, createdAt: this.checkpoint.startedAt, payload, documentBinaries: payload.documentBinaries };
     const envelopeHash = await this.archive.writeEnvelope(envelope);
     const coverage = this.registry.map((definition) => this.finalCoverage(definition));

@@ -326,7 +326,7 @@ export function binaryDescriptors(envelope: ExportEnvelope): DocumentBinaryDescr
     if (prior && (prior.sha256 !== descriptor.sha256 || prior.sizeBytes !== descriptor.sizeBytes)) throw new RestrictedSupplementDerivativeArchiveError(["restricted_derivative_binary_conflict"]);
     if (!prior) byPath.set(path, descriptor);
   }
-  return Array.from(byPath.values()).sort((left, right) => String(left.archivePath).localeCompare(String(right.archivePath)));
+  return Array.from(byPath.values()).sort((left, right) => String(left.archivePath).localeCompare(String(right.archivePath), "en-US"));
 }
 
 function validateApproval(value: unknown, attestation: RestrictedSupplementOperatorAttestation): RestrictedSupplementApproval {

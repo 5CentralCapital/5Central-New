@@ -76,7 +76,7 @@ function directArrayCollections(input: RestrictedSourcePayloadPersistenceContext
   if (isRecord(input) && Array.isArray(input.documentBinaries) && !rows.some(([name]) => name === "documentBinaries")) {
     rows.push(["documentBinaries", input.documentBinaries]);
   }
-  return rows.sort(([left], [right]) => left.localeCompare(right));
+  return rows.sort(([left], [right]) => left.localeCompare(right, "en-US"));
 }
 
 function sourcePayloadRows(context: RestrictedSourcePayloadPersistenceContext): SourcePayloadRow[] {
@@ -111,7 +111,7 @@ function sourcePayloadRows(context: RestrictedSourcePayloadPersistenceContext): 
       });
     }
   }
-  return rows.sort((left, right) => `${left.sourceCollection}\u0000${left.sourceId}\u0000${left.checksumSha256}`.localeCompare(`${right.sourceCollection}\u0000${right.sourceId}\u0000${right.checksumSha256}`));
+  return rows.sort((left, right) => `${left.sourceCollection}\u0000${left.sourceId}\u0000${left.checksumSha256}`.localeCompare(`${right.sourceCollection}\u0000${right.sourceId}\u0000${right.checksumSha256}`, "en-US"));
 }
 
 /** Internal importer seam: expose only version bindings, never a report or
@@ -169,7 +169,7 @@ function sourceBinaryRows(context: RestrictedSourcePayloadPersistenceContext): S
     }
     rows.set(versionKey, prior ?? row);
   }
-  return Array.from(rows.values()).sort((left, right) => left.id.localeCompare(right.id));
+  return Array.from(rows.values()).sort((left, right) => left.id.localeCompare(right.id, "en-US"));
 }
 
 // Both limits bound parameters and outbound JSON per query. An individual
@@ -300,7 +300,7 @@ export function restrictedSourcePayloadControlSummary(context: RestrictedSourceP
   const ambiguous = Array.from(versionsByIdentity.entries())
     .filter(([, versions]) => versions.size > 1)
     .map(([identity, versions]) => ({ identitySha256: sha256(identity), versionChecksums: Array.from(versions).sort() }))
-    .sort((left, right) => left.identitySha256.localeCompare(right.identitySha256));
+    .sort((left, right) => left.identitySha256.localeCompare(right.identitySha256, "en-US"));
   const ambiguousVersionCount = ambiguous.reduce((total, item) => total + item.versionChecksums.length, 0);
   return {
     payloadCount: payloads.length,

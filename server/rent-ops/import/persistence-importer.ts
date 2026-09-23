@@ -351,7 +351,7 @@ export function approvedRestrictedRowsSha256(value: RentManagerExportEnvelope): 
   const payload = (record.payload ?? record.input ?? {}) as Record<string, unknown>;
   const collections = Object.entries(payload)
     .filter((entry): entry is [string, unknown[]] => Array.isArray(entry[1]))
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => left.localeCompare(right, "en-US"))
     .map(([name, rows]) => ({ name, rows }));
   const documentBinaries = Array.isArray(record.documentBinaries)
     ? record.documentBinaries

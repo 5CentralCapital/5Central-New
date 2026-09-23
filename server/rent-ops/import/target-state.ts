@@ -137,7 +137,7 @@ function cents(value: unknown): bigint {
 function tableState(table: string, rawRows: readonly unknown[]): RentOpsTargetTableState {
   const identityColumn = RENT_OPS_TARGET_STATE_IDENTITY_COLUMNS[table as keyof typeof RENT_OPS_TARGET_STATE_IDENTITY_COLUMNS];
   if (!identityColumn) throw new RentOpsTargetStateError(["target_state_identity_column_missing"]);
-  const rows = rawRows.map(rowObject).sort((left, right) => rowId(left, identityColumn).localeCompare(rowId(right, identityColumn)));
+  const rows = rawRows.map(rowObject).sort((left, right) => rowId(left, identityColumn).localeCompare(rowId(right, identityColumn), "en-US"));
   for (let index = 1; index < rows.length; index += 1) {
     if (rowId(rows[index - 1], identityColumn) === rowId(rows[index], identityColumn)) throw new RentOpsTargetStateError(["target_row_identity_duplicate"]);
   }

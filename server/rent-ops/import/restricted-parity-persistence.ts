@@ -279,7 +279,7 @@ function sourceCollectionDigest(values: readonly RestrictedParityCollectionOccur
     rowCount: value.rowCount,
     orderedRowsSha256: value.orderedRowsSha256,
     sourceIdentityRowsSha256: value.sourceIdentityRowsSha256,
-  })).sort((left, right) => left.path.localeCompare(right.path))));
+  })).sort((left, right) => left.path.localeCompare(right.path, "en-US"))));
 }
 
 function rowIdentityControl(value: Pick<RestrictedParityRowOccurrence, "system" | "sourceCollection" | "sourceId" | "checksumSha256">): Record<string, string> {

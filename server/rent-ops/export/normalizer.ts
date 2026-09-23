@@ -274,7 +274,7 @@ function selectMarketRent(candidates: readonly Raw[], asOf?: string): { row?: Ra
   if (!asOf) {
     const current = candidates.filter((row) => marketRentExplicitCurrent(row));
     const pool = current.length > 0 ? current : candidates;
-    const sorted = [...pool].sort((left, right) => `${dateKey(text(right, "FromDate", "EffectiveFrom", "StartDate")) ?? ""}|${text(right, "MarketRentID", "RentID", "sourceId") ?? ""}`.localeCompare(`${dateKey(text(left, "FromDate", "EffectiveFrom", "StartDate")) ?? ""}|${text(left, "MarketRentID", "RentID", "sourceId") ?? ""}`));
+    const sorted = [...pool].sort((left, right) => `${dateKey(text(right, "FromDate", "EffectiveFrom", "StartDate")) ?? ""}|${text(right, "MarketRentID", "RentID", "sourceId") ?? ""}`.localeCompare(`${dateKey(text(left, "FromDate", "EffectiveFrom", "StartDate")) ?? ""}|${text(left, "MarketRentID", "RentID", "sourceId") ?? ""}`, "en-US"));
     return { row: sorted[0], ambiguous: false, excludedFutureOrExpired: false };
   }
   const asOfKey = dateKey(asOf ?? new Date().toISOString().slice(0, 10));
@@ -288,7 +288,7 @@ function selectMarketRent(candidates: readonly Raw[], asOf?: string): { row?: Ra
   if (candidatesForSelection.length === 1) return { row: candidatesForSelection[0].row, ambiguous: false, excludedFutureOrExpired };
   const amounts = new Set(candidatesForSelection.map(({ row }) => String(marketRentAmount(row) ?? "")));
   if (amounts.size > 1) return { ambiguous: true, excludedFutureOrExpired };
-  const sorted = [...candidatesForSelection].sort((left, right) => `${right.start ?? ""}|${text(right.row, "MarketRentID", "RentID", "sourceId") ?? ""}`.localeCompare(`${left.start ?? ""}|${text(left.row, "MarketRentID", "RentID", "sourceId") ?? ""}`));
+  const sorted = [...candidatesForSelection].sort((left, right) => `${right.start ?? ""}|${text(right.row, "MarketRentID", "RentID", "sourceId") ?? ""}`.localeCompare(`${left.start ?? ""}|${text(left.row, "MarketRentID", "RentID", "sourceId") ?? ""}`, "en-US"));
   return { row: sorted[0].row, ambiguous: false, excludedFutureOrExpired };
 }
 
@@ -322,7 +322,7 @@ function chooseLeaseFor(leases: readonly Raw[], tenantId?: string, unitId?: stri
     if (start && start > asOfKey) return false;
     if (end && end < asOfKey) return false;
     return true;
-  }).sort((left, right) => `${dateKey(leaseDate(right)) ?? ""}|${text(right, "LeaseID", "leaseId") ?? ""}`.localeCompare(`${dateKey(leaseDate(left)) ?? ""}|${text(left, "LeaseID", "leaseId") ?? ""}`));
+  }).sort((left, right) => `${dateKey(leaseDate(right)) ?? ""}|${text(right, "LeaseID", "leaseId") ?? ""}`.localeCompare(`${dateKey(leaseDate(left)) ?? ""}|${text(left, "LeaseID", "leaseId") ?? ""}`, "en-US"));
   if (candidates.length === 1) return { row: candidates[0], ambiguous: false };
   if (candidates.length > 1) return { ambiguous: true };
   return { ambiguous: false };
@@ -1144,7 +1144,7 @@ function canonicalAnswerEvidence(valueToCanonicalize: unknown): unknown {
     const source = valueToCanonicalize as Record<string, unknown>;
     return Object.fromEntries(Object.entries(source)
       .filter(([key]) => !["attestation", "answerAttestation", "evidenceAttestation"].includes(key))
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => left.localeCompare(right, "en-US"))
       .map(([key, child]) => [key, canonicalAnswerEvidence(child)]));
   }
   return valueToCanonicalize;

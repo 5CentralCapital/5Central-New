@@ -389,7 +389,7 @@ function safeMetadata(record: RawRecord): Record<string, unknown> {
 function canonicalize(value: unknown): unknown {
   if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.toISOString() : null;
   if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, child]) => [key, canonicalize(child)]));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right, "en-US")).map(([key, child]) => [key, canonicalize(child)]));
   return value;
 }
 
