@@ -6,7 +6,7 @@ import { deriveFixedReport } from "../rent-ops/domain/reports";
 import { userDraftCostPredicate } from "../projects/helpers";
 import { RECORD_LIMIT, centsOf, monthBounds } from "./period";
 import type { ProjectFinanceReadPort } from "../../shared/projects";
-import { centsText, centsValue, dateText, type PropertyEntityMapping, type WorkspaceReadContext } from "./access";
+import { centsText, centsValue, dateText, grantCovers, type PropertyEntityMapping, type WorkspaceReadContext } from "./access";
 import { readProjectPostings, readWorkspaceProjects, type ProjectPostings } from "./project-postings";
 
 /**
@@ -142,8 +142,11 @@ export async function readCompanyPropertyRows(
   context: WorkspaceReadContext, mapping: PropertyEntityMapping, from: string, to: string, through: string, finance: ProjectFinanceReadPort,
 ): Promise<CompanyPropertyRows> {
   const organizationId = context.principal.organizationId;
+  // A property can carry records from an earlier owning entity; only rows the
+  // principal's grants cover for that entity are included (as for postings).
+  const covered = (row: Record<string, unknown>) => grantCovers(context.principal, String(row.legal_entity_id), mapping.propertyId);
   const settlements = await context.executor.query<Record<string, unknown>>(
-    `SELECT id, manager_name, period_start::text AS period_start, period_end::text AS period_end, currency, gross_collections_cents,
+    `SELECT id, legal_entity_id, manager_name, period_start::text AS period_start, period_end::text AS period_end, currency, gross_collections_cents,
             pm_fees_cents, pm_expenses_cents, other_deductions_cents, owner_remittance_cents, closing_held_cents, state,
             exception_reason, bank_settled_on::text AS bank_settled_on, bank_observation_reference, qbo_references
        FROM accounting_pm_settlements
@@ -154,14 +157,14 @@ export async function readCompanyPropertyRows(
   const projects = await readWorkspaceProjects(context, [mapping.propertyId]);
   const postings = await readProjectPostings(context, finance, projects.projects, { from, through, incomplete: projects.truncated || projects.uncovered > 0 });
   const drafts = await context.executor.query<Record<string, unknown>>(
-    `SELECT d.id, d.project_id, p.name AS project_name, d.description, d.vendor_name, d.amount_cents, d.currency, d.incurred_on::text AS incurred_on
+    `SELECT d.id, d.project_id, p.legal_entity_id, p.name AS project_name, d.description, d.vendor_name, d.amount_cents, d.currency, d.incurred_on::text AS incurred_on
        FROM company_project_draft_costs d
        JOIN company_projects p ON p.organization_id = d.organization_id AND p.id = d.project_id
       WHERE d.organization_id = $1 AND p.property_id = $2 AND d.archived_at IS NULL AND ${userDraftCostPredicate("d")} AND d.incurred_on BETWEEN $3::date AND $4::date
       ORDER BY d.incurred_on, d.id LIMIT 500`,
     [organizationId, mapping.propertyId, from, to],
   );
-  return { mapping, settlements: settlements.rows, postings, drafts: drafts.rows };
+  return { mapping, settlements: settlements.rows.filter(covered), postings, drafts: drafts.rows.filter(covered) };
 }
 
 const COMPANY_MEASURES: ReadonlyArray<[FinancialMeasureKey, string, FinancialMeasure["group"], string]> = [

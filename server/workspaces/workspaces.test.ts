@@ -206,6 +206,36 @@ test("company reads are denied without a grant and narrowed by property grants",
   } finally { await context.close(); }
 });
 
+test("property financials omit PM statements and draft costs of an entity the reader's grant does not cover", async () => {
+  const context = await fixture();
+  try {
+    const formerEntityId = "20000000-0000-4000-8000-000000000002";
+    await context.db.query("INSERT INTO company_legal_entities(id,organization_id,name,entity_type,currency) VALUES ($1,$2,'Former Owner LLC','llc','USD')", [formerEntityId, company.organizationId]);
+    await context.db.query("INSERT INTO company_property_entity_periods(id,organization_id,legal_entity_id,property_id,effective_from,effective_until) VALUES ($1,$2,$3,$4,'2019-01-01','2020-01-01')",
+      [randomUUID(), company.organizationId, formerEntityId, company.propertyId]);
+    await context.db.query(`INSERT INTO accounting_pm_settlements (id, organization_id, legal_entity_id, property_id, manager_name, period_start, period_end, currency,
+        opening_held_cents, gross_collections_cents, pm_fees_cents, pm_expenses_cents, other_deductions_cents, owner_remittance_cents, closing_held_cents,
+        qbo_references, state, bank_settled_on, source_fingerprint)
+      VALUES ($1,$2,$3,$4,'Former Management','2026-08-01','2026-08-31','USD', 0, 1000, 80, 20, 0, 900, 0, '[]'::jsonb, 'reconciled', '2026-09-02', $5)`,
+      [randomUUID(), company.organizationId, formerEntityId, company.propertyId, "b".repeat(64)]);
+    const formerProject = randomUUID();
+    await context.db.query(`INSERT INTO company_projects (id, organization_id, legal_entity_id, property_id, name, project_type, status, currency)
+      VALUES ($1,$2,$3,$4,'Former owner roof','rehab','active','USD')`, [formerProject, company.organizationId, formerEntityId, company.propertyId]);
+    await context.db.query(`INSERT INTO company_project_draft_costs (id, organization_id, project_id, vendor_name, description, amount_cents, currency, incurred_on)
+      VALUES ($1,$2,$3,NULL,'Former owner dumpster',4400,'USD','2026-08-05')`, [randomUUID(), company.organizationId, formerProject]);
+    const reader = "property-a-reader";
+    await context.db.query("INSERT INTO company_access_grants(id,organization_id,actor_id,role,legal_entity_id,property_id) VALUES ($1,$2,$3,'admin',$4,$5)",
+      [randomUUID(), company.organizationId, reader, company.entityId, company.propertyId]);
+    const path = `/api/workspaces/properties/${company.propertyId}/financials?month=${MONTH}&asOf=${AS_OF}&company=${company.organizationId}`;
+    const scoped = propertyFinancialsSchema.parse(await (await context.get(path, reader)).json());
+    assert.equal(scoped.company?.legalEntityId, company.entityId);
+    assert.equal(measure(scoped.measures, "pm_fees").state, "unavailable", "the former owner's PM statement is not the reader's");
+    assert.equal(measure(scoped.measures, "project_costs_recorded").recordCount, 0);
+    const orgWide = propertyFinancialsSchema.parse(await (await context.get(path)).json());
+    assert.equal(measure(orgWide.measures, "project_costs_recorded").amountCents, "4400", "an organization-wide reader still sees every entity's rows");
+  } finally { await context.close(); }
+});
+
 test("property performance uses report derivations and marks unmapped company figures unknown", async () => {
   const context = await fixture();
   try {
