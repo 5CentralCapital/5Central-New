@@ -31,22 +31,36 @@ async function mappedProperties(executor: RentOpsQueryExecutor, organizationId: 
   return result.rows.map(row => row.property_id);
 }
 
-async function depositsHeld(executor: RentOpsQueryExecutor, properties: readonly string[], asOf: string): Promise<ForecastOpeningItem> {
+/** Held at the cutoff: still held, or disposed only after it. */
+const HELD_AT_CUTOFF = "(disposition_status = 'held' OR disposed_on > $2::date)";
+
+export async function depositsHeld(executor: RentOpsQueryExecutor, properties: readonly string[], asOf: string): Promise<ForecastOpeningItem> {
   if (!properties.length) return unknownItem("deposits_held", "No properties are mapped to this company at the cutoff");
-  const result = await executor.query<{ held: string | null; partial: string; count: string }>(
-    `SELECT sum(amount_held_cents) FILTER (WHERE disposition_status = 'held' OR disposed_on > $2::date)::text AS held,
-            count(*) FILTER (WHERE disposition_status = 'partially_disposed' AND disposed_on <= $2::date)::text AS partial,
-            count(*)::text AS count
+  // Imported deposits can lack a receipt date or a held amount (a negative
+  // source balance). Those are excluded and flagged, never counted as zero.
+  const result = await executor.query<{ held: string | null; partial: string; undated: string; unknown_amount: string; count: string }>(
+    `SELECT sum(amount_held_cents) FILTER (WHERE received_on <= $2::date AND ${HELD_AT_CUTOFF})::text AS held,
+            count(*) FILTER (WHERE received_on <= $2::date AND disposition_status = 'partially_disposed' AND disposed_on <= $2::date)::text AS partial,
+            count(*) FILTER (WHERE received_on IS NULL AND ${HELD_AT_CUTOFF})::text AS undated,
+            count(*) FILTER (WHERE amount_held_cents IS NULL AND received_on <= $2::date AND ${HELD_AT_CUTOFF})::text AS unknown_amount,
+            count(*) FILTER (WHERE received_on <= $2::date)::text AS count
        FROM rent_ops_security_deposits
-      WHERE property_id = ANY($1::varchar[]) AND received_on <= $2::date`,
+      WHERE property_id = ANY($1::varchar[])`,
     [properties, asOf],
   );
   const row = result.rows[0];
   const partial = Number(row?.partial ?? 0);
+  const undated = Number(row?.undated ?? 0);
+  const unknownAmount = Number(row?.unknown_amount ?? 0);
+  const notes = [
+    partial > 0 ? `${partial} partially disposed deposit(s) have no remaining amount recorded and are excluded.` : null,
+    undated > 0 ? `${undated} held deposit(s) have no receipt date and are excluded.` : null,
+    unknownAmount > 0 ? `${unknownAmount} deposit(s) have no held amount recorded and are excluded.` : null,
+  ].filter((note): note is string => note !== null);
   return {
-    key: "deposits_held", label: OPENING_ITEM_LABELS.deposits_held, amountCents: row?.held ?? "0", asOf, state: partial > 0 ? "partial" : "sourced",
+    key: "deposits_held", label: OPENING_ITEM_LABELS.deposits_held, amountCents: row?.held ?? "0", asOf, state: notes.length ? "partial" : "sourced",
     source: "Rental security deposit records", sourceIds: [`rent_ops_security_deposits:${row?.count ?? 0}`],
-    ...(partial > 0 ? { note: `${partial} partially disposed deposit(s) have no remaining amount recorded and are excluded.` } : {}),
+    ...(notes.length ? { note: notes.join(" ") } : {}),
   };
 }
 
