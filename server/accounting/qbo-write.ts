@@ -159,7 +159,23 @@ export type QboWriteOutcome =
   | { readonly status: "confirmed"; readonly providerEntityId: string | null; readonly providerVersion: string | null; readonly intuitTid: string | null }
   | { readonly status: "held"; readonly reason: string }
   | { readonly status: "conflict"; readonly reason: "stale_sync_token" | "rejected" | "readback_mismatch" | "operation_key_reused"; readonly recovery: "reread_and_resubmit" | "review_provider_record" }
-  | { readonly status: "ambiguous"; readonly recovery: "reconcile_by_readback" };
+  | { readonly status: "ambiguous"; readonly recovery: "reconcile_by_readback" }
+  /**
+   * The outcome of an earlier attempt is unknown and this create has no
+   * natural key to read it back by (e.g. Bill, JournalEntry). It is never
+   * re-posted: an operator checks QuickBooks and records the result.
+   */
+  | { readonly status: "ambiguous"; readonly recovery: "manual_review"; readonly reason: "no_readback_key" };
+
+/** Why a write would be held before reaching QuickBooks, or null when it may be queued. */
+export function qboWriteHeldReason(request: QboWriteRequest, policy: QboWritePolicy): string | null {
+  const held = heldReason(request, policy);
+  if (held) return held;
+  if (QBO_RENTAL_RECEIVABLE_ENTITIES.has(request.entity) && !request.rentalPosting) {
+    return `A QuickBooks ${request.entity} posts rental activity; submit it with its rental posting method and date.`;
+  }
+  return null;
+}
 
 function heldReason(request: QboWriteRequest, policy: QboWritePolicy): string | null {
   const supported = QBO_WRITE_SUPPORT[request.entity] ?? [];
@@ -172,7 +188,7 @@ function heldReason(request: QboWriteRequest, policy: QboWritePolicy): string | 
   return null;
 }
 
-function assertFields(request: QboWriteRequest): void {
+export function assertQboWriteFields(request: QboWriteRequest): void {
   const fields = request.fields;
   if (!fields || typeof fields !== "object" || Array.isArray(fields)) throw new AccountingError("accounting_validation", "QuickBooks write fields must be a JSON object");
   if ("Id" in fields || "SyncToken" in fields || "sparse" in fields) throw new AccountingError("accounting_validation", "Pass the QuickBooks Id and SyncToken separately from the fields");
@@ -182,6 +198,11 @@ function assertFields(request: QboWriteRequest): void {
     if (!request.entityId || !/^[A-Za-z0-9_.:-]{1,160}$/.test(request.entityId)) throw new AccountingError("accounting_validation", "An update needs the QuickBooks record Id");
     if (!request.syncToken || !/^[A-Za-z0-9_.:-]{1,160}$/.test(request.syncToken)) throw new AccountingError("accounting_validation", "An update needs the SyncToken that was read");
   }
+}
+
+function hasCreateReadbackKey(request: QboWriteRequest): boolean {
+  const key = CREATE_READBACK_KEYS[request.entity];
+  return key !== undefined && typeof request.fields[key] === "string";
 }
 
 function escapeQueryValue(value: string): string {
@@ -218,7 +239,7 @@ export function createQboWriteService(options: {
           throw error;
         }
       }
-      assertFields(request);
+      assertQboWriteFields(request);
       const journal = new PostgresQuickBooksWriteJournal(options.executor, request.scope, { entity: request.entity, operation: request.operation }, options.now);
       const requestShape: QuickBooksJsonObject = { ...request.fields };
       const requestIdentity: QuickBooksJsonObject = { entity: request.entity, operation: request.operation, entityId: request.entityId ?? null, syncToken: request.syncToken ?? null, fields: requestShape };
@@ -228,6 +249,13 @@ export function createQboWriteService(options: {
         return { status: "conflict", reason: "operation_key_reused", recovery: "review_provider_record" };
       }
       if (existing?.state === "failed") return { status: "conflict", reason: "rejected", recovery: "reread_and_resubmit" };
+      // An earlier create may have reached QuickBooks. Without a provider Id
+      // or a natural key there is no way to read it back, and a resend would
+      // rely on Intuit's requestid de-duplication alone, so hold it instead.
+      if (existing && (existing.state === "started" || existing.state === "ambiguous") && request.operation === "create"
+        && !existing.provider_entity_id && !hasCreateReadbackKey(request)) {
+        return { status: "ambiguous", recovery: "manual_review", reason: "no_readback_key" };
+      }
       if (!existing) await journal.save({ operationKey: request.operationKey, requestHash, state: "prepared" });
       if (!existing || existing.state === "prepared") await journal.save({ operationKey: request.operationKey, requestHash, state: "validated" });
 
@@ -246,8 +274,8 @@ export function createQboWriteService(options: {
         }
         const key = CREATE_READBACK_KEYS[request.entity];
         const value = key ? request.fields[key] : undefined;
-        // Without a natural key, "not found" lets the reconciler resend under
-        // the same requestid, which Intuit de-duplicates to the original object.
+        // Without a natural key the write stays unconfirmed (ambiguous); the
+        // next attempt holds it for manual review rather than resending.
         if (!key || typeof value !== "string") return { exists: false };
         const found = await client.query(`SELECT * FROM ${request.entity} WHERE ${key} = '${escapeQueryValue(value)}'`);
         const entity = found.entities[0];

@@ -429,6 +429,13 @@ export interface QboDeletionResult {
   readonly blockedAllocatedCents: MoneyCents;
 }
 
+export interface QboDeletionWindow {
+  /** Inclusive lower bound on detection time. */
+  readonly detectedFrom?: string;
+  /** Exclusive upper bound on detection time. */
+  readonly detectedBefore?: string;
+}
+
 export interface QboDeletionState {
   readonly deleted: boolean;
   readonly detectedVia: QboDeletionDetection;
@@ -468,7 +475,12 @@ export interface QboAccountingMirrorStore extends FinancialSourceReadPort, Finan
    * same revision again. Explicit webhook/CDC deletions are never undone here.
    */
   restoreInferredDeletion(scope: QuickBooksConnectionScope, objectType: string, objectId: string, version: string): Promise<boolean>;
-  countActiveTombstones(scope: QuickBooksConnectionScope): Promise<number>;
+  /**
+   * Objects still deleted whose deletion was detected inside the window
+   * (all time when the window is open). Health uses a recent window and the
+   * close checklist the period, so old reviewed deletions do not linger.
+   */
+  countActiveTombstones(scope: QuickBooksConnectionScope, window?: QboDeletionWindow): Promise<number>;
 }
 
 interface ProviderSourceObjectRow {
@@ -988,13 +1000,29 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       return sourceDeletedAt !== null && updated !== null && updated > sourceDeletedAt;
     });
     if (newerLive) return { applied: false, tombstoneCreated: false, retiredLineCount: 0, blockedAllocationCount: 0, blockedAllocatedCents: centsFromBigInt(BigInt(0)) };
-    const tombstone = await this.executor.query(
-      `INSERT INTO accounting_qbo_deletion_tombstones
-        (organization_id, legal_entity_id, environment, realm_id, object_type, object_id, last_known_version, source_deleted_at, detected_via, detected_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       ON CONFLICT DO NOTHING RETURNING object_id`,
-      [...identity, lastKnownVersion, sourceDeletedAt, input.detectedVia, observedAt],
+    // Tombstones are append-only. Add a row when there is none, when explicit
+    // provider evidence follows an inferred (full-replay) deletion, or when
+    // the object was live again (restored or re-created) before this
+    // deletion; otherwise the notice repeats the current tombstone.
+    const latest = await this.executor.query<{ tombstone_seq: unknown; detected_via: string }>(
+      `SELECT tombstone_seq, detected_via FROM accounting_qbo_deletion_tombstones
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6
+        ORDER BY tombstone_seq DESC LIMIT 1`,
+      identity,
     );
+    const current = latest.rows[0];
+    const currentSeq = current ? Number(current.tombstone_seq) : 0;
+    const supersedesInferred = current !== undefined && current.detected_via === "full_replay" && input.detectedVia !== "full_replay";
+    const deletedAgain = current !== undefined && liveRows.rows.length > 0;
+    const tombstone = current === undefined || supersedesInferred || deletedAgain
+      ? await this.executor.query(
+        `INSERT INTO accounting_qbo_deletion_tombstones
+          (organization_id, legal_entity_id, environment, realm_id, object_type, object_id, last_known_version, source_deleted_at, detected_via, detected_at, tombstone_seq)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT DO NOTHING RETURNING object_id`,
+        [...identity, lastKnownVersion, sourceDeletedAt, input.detectedVia, observedAt, currentSeq + 1],
+      )
+      : { rows: [] };
     await this.executor.query(
       `UPDATE accounting_qbo_source_objects SET deleted_at = $7
         WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6 AND deleted_at IS NULL`,
@@ -1047,7 +1075,8 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
                    AND o.realm_id=t.realm_id AND o.object_type=t.object_type AND o.object_id=t.object_id AND o.deleted_at IS NULL
               ) AS deleted
          FROM accounting_qbo_deletion_tombstones t
-        WHERE t.organization_id=$1 AND t.legal_entity_id=$2 AND t.environment=$3 AND t.realm_id=$4 AND t.object_type=$5 AND t.object_id=$6`,
+        WHERE t.organization_id=$1 AND t.legal_entity_id=$2 AND t.environment=$3 AND t.realm_id=$4 AND t.object_type=$5 AND t.object_id=$6
+        ORDER BY t.tombstone_seq DESC LIMIT 1`,
       [...scopeParts(scope), objectType, objectId],
     );
     const row = result.rows[0];
@@ -1087,16 +1116,20 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
     return true;
   }
 
-  async countActiveTombstones(scopeInput: QuickBooksConnectionScope): Promise<number> {
+  async countActiveTombstones(scopeInput: QuickBooksConnectionScope, window: QboDeletionWindow = {}): Promise<number> {
     const scope = scopeOf(scopeInput);
+    const since = window.detectedFrom === undefined ? null : isoTimestampSchema.parse(new Date(window.detectedFrom).toISOString());
+    const before = window.detectedBefore === undefined ? null : isoTimestampSchema.parse(new Date(window.detectedBefore).toISOString());
     const result = await this.executor.query<{ count: unknown }>(
-      `SELECT COUNT(*) AS count FROM accounting_qbo_deletion_tombstones t
+      `SELECT COUNT(DISTINCT (t.object_type, t.object_id)) AS count FROM accounting_qbo_deletion_tombstones t
         WHERE t.organization_id=$1 AND t.legal_entity_id=$2 AND t.environment=$3 AND t.realm_id=$4
+          AND ($5::timestamptz IS NULL OR t.detected_at >= $5::timestamptz)
+          AND ($6::timestamptz IS NULL OR t.detected_at < $6::timestamptz)
           AND NOT EXISTS (
             SELECT 1 FROM accounting_qbo_source_objects o
              WHERE o.organization_id=t.organization_id AND o.legal_entity_id=t.legal_entity_id AND o.environment=t.environment
                AND o.realm_id=t.realm_id AND o.object_type=t.object_type AND o.object_id=t.object_id AND o.deleted_at IS NULL)`,
-      scopeParts(scope),
+      [...scopeParts(scope), since, before],
     );
     return Number(result.rows[0]?.count ?? 0);
   }

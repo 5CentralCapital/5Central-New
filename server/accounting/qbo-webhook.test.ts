@@ -5,7 +5,7 @@ import { createSyntheticCompanyDatabase, createSyntheticRuntimeExecutor, SYNTHET
 import { quickBooksWebhookSignature } from "../integrations/quickbooks/webhook";
 import { PostgresJobQueue } from "../jobs/queue";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
-import { ingestQuickBooksWebhookDelivery, QBO_SYNC_TOPIC, QBO_WEBHOOK_EVENT_TOPIC } from "./webhook-ingest";
+import { ingestQuickBooksWebhookDelivery, mergeWebhookObjectPayload, QBO_SYNC_TOPIC, QBO_WEBHOOK_EVENT_TOPIC } from "./webhook-ingest";
 import { registerQuickBooksWebhookRoute } from "./webhook-route";
 import { createAccountingJobHandlers } from "./worker-handlers";
 import type { AccountingServices } from "./index";
@@ -191,4 +191,20 @@ test("the object job applies the change through the scoped provider sync and mar
   } finally {
     await h.close();
   }
+});
+
+test("merging notices keeps every event ref, lets the latest notice decide, and prefers a deletion on a tie", () => {
+  const pending = { objectType: "Bill", objectId: "7", operation: "deleted", occurredAt: "2026-09-23T10:00:00.000Z", events: [{ source: "s", id: "e1" }] };
+  const olderUpdate = mergeWebhookObjectPayload(pending, { ref: { source: "s", id: "e0" }, operation: "updated", occurredAt: "2026-09-23T09:59:00.000Z" });
+  assert.equal(olderUpdate.operation, "deleted", "an older update never overwrites a newer deletion");
+  assert.deepEqual(olderUpdate.events, [{ source: "s", id: "e1" }, { source: "s", id: "e0" }]);
+  const tiedUpdate = mergeWebhookObjectPayload(pending, { ref: { source: "s", id: "e2" }, operation: "updated", occurredAt: "2026-09-23T10:00:00.000Z" });
+  assert.equal(tiedUpdate.operation, "deleted", "a deletion wins a same-instant tie");
+  const tiedDelete = mergeWebhookObjectPayload({ ...pending, operation: "updated" }, { ref: { source: "s", id: "e3" }, operation: "deleted", occurredAt: "2026-09-23T03:00:00.000-07:00" });
+  assert.equal(tiedDelete.operation, "deleted");
+  assert.equal(tiedDelete.occurredAt, "2026-09-23T10:00:00.000Z");
+  const newer = mergeWebhookObjectPayload(pending, { ref: { source: "s", id: "e4" }, operation: "updated", occurredAt: "2026-09-23T10:00:01.000Z" });
+  assert.equal(newer.operation, "updated", "a later update (the object came back) decides");
+  const duplicate = mergeWebhookObjectPayload(pending, { ref: { source: "s", id: "e1" }, operation: "deleted", occurredAt: "2026-09-23T10:00:00.000Z" });
+  assert.deepEqual(duplicate.events, [{ source: "s", id: "e1" }]);
 });

@@ -248,3 +248,64 @@ test("job errors are redacted to a stable code and a bounded message", () => {
   assert.equal(redactJobText("client_secret: abc123 ok"), "client_secret: [redacted] ok");
   assert.equal(redactJobError("plain").code, "job_failed");
 });
+
+test("a job released at shutdown on its last attempt stays claimable and does not spend the attempt", async () => {
+  await withDatabase(async executor => {
+    const time = clock();
+    const queue = new PostgresJobQueue(executor, { now: time.now });
+    const { job } = await queue.enqueue({ jobKey: "release-last", topic: "demo.work", payload: {}, organizationId: ORG, maxAttempts: 1 });
+    const [claimed] = await queue.claim({ workerId: "w1", topics: ["demo.work"] });
+    assert.equal(claimed?.attempts, 1);
+    assert.equal(await queue.release(job.id, "w1"), true);
+    const released = await queue.get(job.id);
+    assert.equal(released?.state, "retry");
+    assert.equal(released?.attempts, 0, "a release refunds the attempt");
+    assert.equal(released?.lastErrorCode, "worker_shutdown");
+    const history = await executor.query<{ attempt: number; outcome: string | null }>("SELECT attempt, outcome FROM company_job_attempts WHERE job_id = $1", [job.id]);
+    assert.deepEqual(history.rows.map(row => [row.attempt, row.outcome]), [[1, "cancelled"]]);
+
+    time.advance(1_000);
+    assert.deepEqual(await queue.reapExpiredLeases(), { retried: 0, dead: 0 }, "a released job with budget left is not dead-lettered");
+    const [again] = await queue.claim({ workerId: "w2", topics: ["demo.work"] });
+    assert.equal(again?.id, job.id, "the released job is claimed again");
+    assert.equal(again?.attempts, 1);
+    assert.equal(await queue.complete(job.id, "w2", { ok: true }), true);
+    const final = await executor.query<{ attempt: number; outcome: string | null; lease_owner: string }>("SELECT attempt, outcome, lease_owner FROM company_job_attempts WHERE job_id = $1", [job.id]);
+    assert.deepEqual(final.rows.map(row => [row.attempt, row.outcome, row.lease_owner]), [[1, "succeeded", "w2"]]);
+    assert.equal(await queue.release(job.id, "w2"), false, "a finished job cannot be released");
+  });
+});
+
+test("the reaper dead-letters a pending job whose attempt budget is already spent", async () => {
+  await withDatabase(async (executor, synthetic) => {
+    const time = clock();
+    const queue = new PostgresJobQueue(executor, { now: time.now });
+    const stuck = randomUUID();
+    // A row left by the earlier release behaviour: pending, but attempts = max_attempts.
+    await synthetic.executor.query(`INSERT INTO company_jobs (id, organization_id, job_key, topic, payload, state, attempts, max_attempts, last_error_code, last_error_message)
+      VALUES ($1,$2,'legacy-stuck','demo.work','{}'::jsonb,'retry',1,1,'worker_shutdown','The worker stopped before this attempt finished')`, [stuck, ORG]);
+    assert.deepEqual(await queue.claim({ workerId: "w1", topics: ["demo.work"] }), [], "claim never picks an exhausted job");
+    assert.deepEqual(await queue.reapExpiredLeases(), { retried: 0, dead: 1 });
+    const dead = await queue.get(stuck);
+    assert.equal(dead?.state, "dead");
+    assert.ok(dead?.finishedAt);
+    assert.equal(dead?.lastErrorCode, "worker_shutdown");
+    const requeued = await queue.requeue(stuck, ORG, 1);
+    assert.equal(requeued?.state, "queued", "an operator can recover it");
+    assert.equal((await queue.claim({ workerId: "w1", topics: ["demo.work"] }))[0]?.id, stuck);
+  });
+});
+
+test("coalescing locks the pending job for its read-merge-write", async () => {
+  await withDatabase(async executor => {
+    const statements: string[] = [];
+    const spy: RentOpsQueryExecutor = { query: (text, values) => { statements.push(text); return executor.query(text, values); } };
+    const queue = new PostgresJobQueue(spy);
+    await queue.enqueue({ jobKey: "lock-1", topic: "demo.fetch", payload: { events: [1] }, organizationId: ORG, coalesceKey: "object-1" });
+    statements.length = 0;
+    const merged = await queue.enqueue({ jobKey: "lock-2", topic: "demo.fetch", payload: { events: [2] }, organizationId: ORG, coalesceKey: "object-1", merge: existing => ({ ...existing, events: [...(existing.events as number[]), 2] }) });
+    assert.equal(merged.coalesced, true);
+    assert.deepEqual(merged.job.payload.events, [1, 2]);
+    assert.match(statements[0] ?? "", /payload->>'coalesceKey' = \$2[\s\S]*FOR UPDATE\s*$/, "the pending job is read FOR UPDATE");
+  });
+});

@@ -47,6 +47,31 @@ function eventRef(event: QuickBooksCloudEvent) {
   return { source: event.source, id: event.id };
 }
 
+function isDeleteOperation(operation: unknown): boolean {
+  return typeof operation === "string" && /^delete(d)?$/i.test(operation);
+}
+
+/**
+ * Fold one more notice into a pending object-fetch job. Every event ref is
+ * kept (so each event is marked processed when the job finishes); the latest
+ * notice decides whether the job fetches or tombstones, and on a tie a
+ * deletion wins, so an update can never mask a deletion reported at the same
+ * instant.
+ */
+export function mergeWebhookObjectPayload(
+  existing: Record<string, unknown>,
+  incoming: { readonly ref: { readonly source: string; readonly id: string }; readonly operation: string; readonly occurredAt: string },
+): Record<string, unknown> {
+  const refs = Array.isArray(existing.events) ? existing.events as { source: string; id: string }[] : [];
+  const events = [...refs, incoming.ref].filter((ref, index, all) => all.findIndex(other => other.source === ref.source && other.id === ref.id) === index).slice(-MAX_EVENT_REFS);
+  const existingAt = typeof existing.occurredAt === "string" ? Date.parse(existing.occurredAt) : Number.NaN;
+  const incomingAt = Date.parse(incoming.occurredAt);
+  const replace = !Number.isFinite(existingAt)
+    || incomingAt > existingAt
+    || (incomingAt === existingAt && (isDeleteOperation(incoming.operation) || !isDeleteOperation(existing.operation)));
+  return { ...existing, events, ...(replace ? { operation: incoming.operation, occurredAt: new Date(incomingAt).toISOString() } : {}) };
+}
+
 /**
  * Verify, persist and route one Intuit CloudEvents delivery. Nothing is
  * stored unless the signature over the exact bytes verifies. Each event is
@@ -128,13 +153,7 @@ export async function ingestQuickBooksWebhookDelivery(input: {
               organizationId: scope.organizationId,
               coalesceKey: identity,
               payload: { ...scope, objectType, objectId, operation, occurredAt: new Date(event.time).toISOString(), events: [eventRef(event)] },
-              merge: existing => {
-                const refs = Array.isArray(existing.events) ? existing.events as { source: string; id: string }[] : [];
-                const merged = [...refs, eventRef(event)].filter((ref, index, all) => all.findIndex(other => other.source === ref.source && other.id === ref.id) === index).slice(-MAX_EVENT_REFS);
-                // The newest notice decides whether the job fetches or tombstones.
-                const newer = typeof existing.occurredAt !== "string" || new Date(event.time).getTime() >= Date.parse(existing.occurredAt);
-                return { ...existing, events: merged, ...(newer ? { operation, occurredAt: new Date(event.time).toISOString() } : {}) };
-              },
+              merge: existing => mergeWebhookObjectPayload(existing, { ref: eventRef(event), operation, occurredAt: new Date(event.time).toISOString() }),
               maxAttempts: 8,
             });
             if (result.created) jobs += 1;

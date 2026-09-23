@@ -274,10 +274,15 @@ export class PostgresJobQueue {
     if (!Number.isFinite(runAfter.getTime())) throw new JobQueueError("job_validation", "Job run-after time is invalid");
 
     if (coalesceKey !== undefined) {
+      // Lock the pending job for the read-merge-write: a concurrent merge
+      // waits (or, under REPEATABLE READ, fails and is retried) instead of
+      // overwriting this one's payload with a stale copy. Callers that merge
+      // should run inside a transaction so the lock spans the update.
       const pending = await this.executor.query<Record<string, unknown>>(
         `SELECT ${columns} FROM company_jobs
           WHERE topic = $1 AND state IN ('queued','retry') AND payload->>'coalesceKey' = $2
-          ORDER BY created_at, id LIMIT 1`,
+          ORDER BY created_at, id LIMIT 1
+          FOR UPDATE`,
         [topic, coalesceKey],
       );
       const existing = pending.rows[0] ? mapJobRow(pending.rows[0]) : null;
@@ -338,8 +343,13 @@ export class PostgresJobQueue {
                    j.lease_owner, j.lease_until, j.checkpoint, j.last_error_code, j.last_error_message, j.result, j.outbox_event_id,
                    j.created_at, j.updated_at, j.started_at, j.finished_at
        ), logged AS (
+         -- A released attempt (outcome 'cancelled' by release()) did not count,
+         -- so its number is reused by the next claim.
          INSERT INTO company_job_attempts (job_id, attempt, lease_owner, started_at)
          SELECT id, attempts, lease_owner, $1 FROM claimed
+         ON CONFLICT (job_id, attempt) DO UPDATE
+           SET lease_owner = EXCLUDED.lease_owner, started_at = EXCLUDED.started_at, finished_at = NULL, outcome = NULL, error_code = NULL
+           WHERE company_job_attempts.outcome = 'cancelled' AND company_job_attempts.error_code = 'worker_shutdown'
          RETURNING job_id
        )
        SELECT claimed.* FROM claimed ORDER BY priority, run_after, created_at, id`,
@@ -431,18 +441,25 @@ export class PostgresJobQueue {
     return dead ? { state: "dead" } : { state: "retry", runAfter };
   }
 
-  /** Graceful shutdown: hand an unfinished job back without waiting for lease expiry. */
+  /**
+   * Graceful shutdown: hand an unfinished job back without waiting for lease
+   * expiry. A release does not consume an attempt (the worker chose to stop,
+   * the job did not fail), so a job released on its last attempt stays
+   * claimable. The released attempt row is marked `cancelled`; the next claim
+   * reuses that attempt number.
+   */
   async release(jobId: string, owner: string): Promise<boolean> {
     const now = this.now().toISOString();
     const updated = await this.executor.query(
       `WITH target AS (
          UPDATE company_jobs SET state = 'retry', run_after = $3, lease_owner = NULL, lease_until = NULL,
+                attempts = GREATEST(attempts - 1, 0),
                 last_error_code = 'worker_shutdown', last_error_message = 'The worker stopped before this attempt finished', updated_at = $3
           WHERE id = $1 AND state = 'running' AND lease_owner = $2
-         RETURNING id, attempts
+         RETURNING id, attempts + 1 AS released_attempt
        ), logged AS (
-         UPDATE company_job_attempts a SET finished_at = $3, outcome = 'retry', error_code = 'worker_shutdown'
-           FROM target WHERE a.job_id = target.id AND a.attempt = target.attempts
+         UPDATE company_job_attempts a SET finished_at = $3, outcome = 'cancelled', error_code = 'worker_shutdown'
+           FROM target WHERE a.job_id = target.id AND a.attempt = target.released_attempt
          RETURNING a.job_id
        )
        SELECT id FROM target`,
@@ -486,6 +503,25 @@ export class PostgresJobQueue {
       );
       if (updated.rows.length === 1) { if (toDead) dead += 1; else retried += 1; }
     }
+    // A pending job whose attempt budget is already spent can never be
+    // claimed (claim requires attempts < max_attempts). Dead-letter it so an
+    // operator sees it and can requeue it, instead of it waiting forever.
+    const exhausted = await this.executor.query(
+      `WITH picked AS (
+         SELECT id FROM company_jobs
+          WHERE state IN ('queued','retry') AND attempts >= max_attempts
+          ORDER BY updated_at, id LIMIT $2
+          FOR UPDATE SKIP LOCKED
+       )
+       UPDATE company_jobs j
+          SET state = 'dead', finished_at = $1, updated_at = $1,
+              last_error_code = COALESCE(j.last_error_code, 'attempts_exhausted'),
+              last_error_message = COALESCE(j.last_error_message, 'The job has no attempts left')
+         FROM picked WHERE j.id = picked.id AND j.state IN ('queued','retry') AND j.attempts >= j.max_attempts
+       RETURNING j.id`,
+      [now.toISOString(), limit],
+    );
+    dead += exhausted.rows.length;
     return { retried, dead };
   }
 

@@ -14,6 +14,8 @@ import { ACCOUNTING_READ_ROLES } from "./posting-policy";
 import { QBO_CHANGE_STREAM } from "./provider-sync";
 
 const STALE_AFTER_SECONDS = 2 * 60 * 60;
+/** Health reports deletions detected in this recent window, not every tombstone ever recorded. */
+export const RECENT_DELETION_WINDOW_MS = 30 * 24 * 60 * 60_000;
 const WORKER_ALIVE_MS = 2 * 60_000;
 
 function iso(value: unknown): string | null {
@@ -37,8 +39,8 @@ interface ConnectionRow {
 
 /**
  * Per-binding connector health for the operator: connection state, sync and
- * change-capture freshness, coverage, open exceptions, active deletion
- * tombstones, job backlog and failures, last webhook and 429 cooldown.
+ * change-capture freshness, coverage, open exceptions, deletions detected
+ * in the last 30 days that are still in effect, job backlog and failures, last webhook and 429 cooldown.
  */
 export async function readConnectorHealth(executor: RentOpsQueryExecutor, principal: AuthenticatedPrincipal, input: { readonly organizationId: string; readonly legalEntityId?: string }, now: () => Date = () => new Date()): Promise<ConnectorHealthResponse> {
   const organizationId = organizationIdSchema.parse(input.organizationId);
@@ -80,7 +82,7 @@ export async function readConnectorHealth(executor: RentOpsQueryExecutor, princi
     const lagSeconds = lastChangeSyncAt ? Math.max(0, Math.floor((current.getTime() - Date.parse(lastChangeSyncAt)) / 1000)) : null;
     const coverage = await mirror.readCoverage({ provider: "qbo", ...scope } as never);
     const openSyncExceptions = (await mirror.listOpenSyncExceptions(scope)).length;
-    const activeTombstones = await mirror.countActiveTombstones(scope);
+    const activeTombstones = await mirror.countActiveTombstones(scope, { detectedFrom: new Date(current.getTime() - RECENT_DELETION_WINDOW_MS).toISOString() });
     const jobs = await executor.query<{ state: string; count: unknown }>(
       `SELECT state, COUNT(*) AS count FROM company_jobs
         WHERE organization_id = $1 AND topic LIKE 'accounting.qbo.%' AND state IN ('queued','running','retry','dead')
@@ -191,8 +193,13 @@ export async function readPeriodCloseChecklist(executor: RentOpsQueryExecutor, p
       : byState("draft") > 0
         ? { code: "pm_settlements_reconciled", label: "PM settlements", state: "attention", detail: `${byState("draft")} of ${total} statements are not reconciled.` }
         : { code: "pm_settlements_reconciled", label: "PM settlements", state: "complete", detail: `${total} statement${total === 1 ? "" : "s"} reconciled.` });
-  const tombstones = health.items.reduce((sum, item) => sum + item.activeTombstones, 0);
-  items.push({ code: "deletions_reviewed", label: "QuickBooks deletions", state: tombstones === 0 ? "complete" : "attention", detail: tombstones === 0 ? "No deleted source records affect the mirror." : `${tombstones} deleted QuickBooks record${tombstones === 1 ? "" : "s"} to review.` });
+  // Only deletions detected during this period are part of its close;
+  // older ones were reviewed in (or belong to) earlier periods.
+  const periodWindow = { detectedFrom: `${periodStart}T00:00:00.000Z`, detectedBefore: new Date(Date.parse(`${periodEnd}T00:00:00.000Z`) + 24 * 60 * 60_000).toISOString() };
+  const closeMirror = createQboAccountingMirrorStore(executor, now);
+  let tombstones = 0;
+  for (const item of health.items) tombstones += await closeMirror.countActiveTombstones(item.scope, periodWindow);
+  items.push({ code: "deletions_reviewed", label: "QuickBooks deletions", state: tombstones === 0 ? "complete" : "attention", detail: tombstones === 0 ? "No QuickBooks deletions detected in this period affect the mirror." : `${tombstones} QuickBooks record${tombstones === 1 ? "" : "s"} deleted in this period to review.` });
   return periodCloseChecklistSchema.parse({
     organizationId, legalEntityId, periodStart, periodEnd, items,
     completeCount: items.filter(item => item.state === "complete" || item.state === "not_applicable").length,

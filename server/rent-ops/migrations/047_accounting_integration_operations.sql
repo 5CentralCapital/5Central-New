@@ -38,9 +38,16 @@ CREATE TABLE accounting_qbo_deletion_tombstones (
   source_deleted_at timestamptz,
   detected_via text NOT NULL CHECK (detected_via IN ('webhook','cdc','full_replay')),
   detected_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (organization_id, legal_entity_id, environment, realm_id, object_type, object_id),
+  -- Append-only history per object: 1 for the first deletion, then one more
+  -- row when explicit provider evidence (webhook/CDC) follows an inferred
+  -- full-replay deletion, or when an object that came back is deleted again.
+  -- The highest sequence is the object's current deletion state.
+  tombstone_seq integer NOT NULL DEFAULT 1 CHECK (tombstone_seq > 0),
+  PRIMARY KEY (organization_id, legal_entity_id, environment, realm_id, object_type, object_id, tombstone_seq),
   FOREIGN KEY (organization_id, legal_entity_id) REFERENCES company_legal_entities(organization_id, id)
 );
+CREATE INDEX accounting_qbo_deletion_tombstones_detected
+  ON accounting_qbo_deletion_tombstones (organization_id, legal_entity_id, environment, realm_id, detected_at);
 
 CREATE TABLE accounting_rental_posting_policies (
   id uuid PRIMARY KEY,

@@ -212,3 +212,76 @@ test("webhook object fetches apply updates, tombstone deletes and report objects
     await h.close();
   }
 });
+
+test("the CDC watermark compares instants, not strings, when Intuit reports a local offset", async () => {
+  const h = await harness({}, "2026-09-20T00:00:00Z");
+  const checkpoints = new PostgresQboCheckpointStore(h.executor);
+  try {
+    await h.sync.syncChanges();
+    h.advance(DAY);
+    // 2026-09-20T18:00-07:00 is 2026-09-21T01:00Z: later, although it sorts lower as a string.
+    h.cdc.queue.push(cdcResponse({}, "2026-09-20T18:00:00-07:00"));
+    const advanced = await h.sync.syncChanges();
+    assert.equal(advanced.mode, "cdc");
+    assert.equal(advanced.watermark, "2026-09-21T01:00:00.000Z");
+    assert.equal((await checkpoints.load(scope, QBO_CHANGE_STREAM))?.watermark, "2026-09-21T01:00:00.000Z", "stored as UTC ISO");
+
+    h.advance(60 * 60_000);
+    // 2026-09-21T02:00+05:00 is 2026-09-20T21:00Z: earlier, although it sorts higher as a string.
+    h.cdc.queue.push(cdcResponse({}, "2026-09-21T02:00:00+05:00"));
+    const older = await h.sync.syncChanges();
+    assert.equal(older.watermark, "2026-09-21T01:00:00.000Z", "an earlier provider time never moves the watermark back");
+    assert.equal((await checkpoints.load(scope, QBO_CHANGE_STREAM))?.watermark, "2026-09-21T01:00:00.000Z");
+    assert.equal(h.cdc.calls.at(-1), "2026-09-21T00:55:00.000Z", "the next change window starts from the parsed instant");
+  } finally {
+    await h.close();
+  }
+});
+
+test("an explicit deletion after an inferred one is recorded, so a racing fetch of the same revision cannot restore it", async () => {
+  const store: Store = { Bill: [bill("30", "0", "2026-09-10T10:00:00Z"), bill("31", "0", "2026-09-10T10:00:01Z")] };
+  const h = await harness(store, "2026-09-20T00:00:00Z");
+  try {
+    await h.sync.syncChanges();
+    const kept = store.Bill![1]!;
+    store.Bill = [store.Bill![0]!];
+    await h.sync.syncChanges({ forceFullReplay: true });
+    const explicit = await h.sync.applyObject({ objectType: "Bill", objectId: "31", operation: "deleted", occurredAt: "2026-09-20T00:30:00Z" });
+    assert.equal(explicit.status, "deleted");
+    const rows = await h.executor.query<{ detected_via: string; tombstone_seq: number }>("SELECT detected_via, tombstone_seq FROM accounting_qbo_deletion_tombstones WHERE object_id = '31' ORDER BY tombstone_seq");
+    assert.deepEqual(rows.rows.map(row => [row.detected_via, Number(row.tombstone_seq)]), [["full_replay", 1], ["webhook", 2]], "the inferred row is kept; the explicit one is appended");
+    assert.equal((await h.mirror.readDeletionState(scope, "Bill", "31"))?.detectedVia, "webhook");
+    assert.equal(await h.mirror.countActiveTombstones(scope), 1, "one deleted object, however many tombstone rows");
+
+    store.Bill = [store.Bill[0]!, kept];
+    const raced = await h.sync.applyObject({ objectType: "Bill", objectId: "31", operation: "updated" });
+    assert.equal(raced.status, "stale", "the same revision no longer undoes an explicit deletion");
+    assert.equal(await h.mirror.resolveLine({ scope: sourceScope, objectType: "Bill", objectId: "31", lineId: "1" }), null);
+    const again = await h.mirror.recordDeletion({ scope, objectType: "Bill", objectId: "31", detectedVia: "cdc", observedAt: new Date().toISOString() });
+    assert.equal(again.tombstoneCreated, false, "a repeated explicit notice is idempotent");
+  } finally {
+    await h.close();
+  }
+});
+
+test("an object deleted again after it came back gets a new tombstone with its newer revision", async () => {
+  const store: Store = { Bill: [bill("50", "0", "2026-09-10T10:00:00Z")] };
+  const h = await harness(store, "2026-09-20T00:00:00Z");
+  try {
+    await h.sync.syncChanges();
+    assert.equal((await h.sync.applyObject({ objectType: "Bill", objectId: "50", operation: "deleted", occurredAt: "2026-09-20T01:00:00Z" })).status, "deleted");
+    store.Bill = [bill("50", "1", "2026-09-20T02:00:00Z", 300)];
+    assert.equal((await h.sync.applyObject({ objectType: "Bill", objectId: "50", operation: "updated" })).status, "applied");
+    const second = await h.sync.applyObject({ objectType: "Bill", objectId: "50", operation: "deleted", occurredAt: "2026-09-20T03:00:00Z" });
+    assert.equal(second.status, "deleted");
+    const state = await h.mirror.readDeletionState(scope, "Bill", "50");
+    assert.equal(state?.lastKnownVersion, "1");
+    assert.equal(state?.sourceDeletedAt, "2026-09-20T03:00:00.000Z");
+    // A fetch of revision 1 that raced the second deletion cannot resurrect it.
+    const raced = await h.sync.applyObject({ objectType: "Bill", objectId: "50", operation: "updated" });
+    assert.equal(raced.status, "stale");
+    assert.equal(await h.mirror.resolveLine({ scope: sourceScope, objectType: "Bill", objectId: "50", lineId: "1" }), null);
+  } finally {
+    await h.close();
+  }
+});

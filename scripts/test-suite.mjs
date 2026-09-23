@@ -22,6 +22,8 @@ const roots = suite === "company"
     // lane-c-review
     "server/review-cases", "shared/review-cases", "client/src/features/review-cases", "client/src/features/intake",
     "server/rent-ops/domain/review-detector.test.ts",
+    // lane-a-accounting: /mcp body limit through the real Express parser stack
+    "server/request-body-parsers.test.ts",
   ]
   : suite === "all"
     ? ["server", "shared", "client/src/features", "scripts", "client/src/components/account-entry.test.ts"]

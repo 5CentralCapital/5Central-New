@@ -437,7 +437,7 @@
     {
       "version": 47,
       "fileName": "047_accounting_integration_operations.sql",
-      "sha256": "16f51fc659638906cdd5c9b23093df633978912287e95b81685342019c23c283",
+      "sha256": "ddd41615b17afe41cbdbcd5d73603a1bf2f38487eb61eb0195dc9fea0bee4dbc",
       "predecessor": 46,
       "minimumServerContract": 1,
       "minimumClientContract": 1,

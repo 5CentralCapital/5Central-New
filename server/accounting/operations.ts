@@ -3,6 +3,7 @@ import { companyScopeSchema, legalEntityIdSchema, organizationIdSchema, recordRe
 import {
   PM_SETTLEMENT_COMMAND_KINDS,
   QBO_SYNC_REQUEST_COMMAND_KIND,
+  QBO_WRITE_SUBMIT_COMMAND_KIND,
   RENTAL_POSTING_COMMAND_KINDS,
   requestQboSyncPayloadSchema,
   type AccountingOperationCommandKind,
@@ -27,6 +28,8 @@ import { readConnectorHealth, readPeriodCloseChecklist } from "./connector-healt
 import { listAccountingPayables } from "./payables-read";
 import { executePmSettlementCommand, getPmSettlement, listPmSettlements } from "./pm-settlements";
 import { executeRentalPostingCommand, listRentalPostingPolicies, parseEnvelope, type AccountingCommandAccess } from "./posting-policy";
+import { QBO_WRITES_DISABLED, type QboWritePolicy } from "./qbo-write";
+import { executeQboWriteSubmit } from "./qbo-write-command";
 import { previewRentalBridge, rentalBridgePreviewCsv } from "./rental-bridge";
 import { qboScopeKeyPart, QBO_SYNC_TOPIC } from "./webhook-ingest";
 
@@ -90,8 +93,10 @@ export async function executeQboSyncRequest(executor: RentOpsQueryExecutor, rawE
   return runCompanyCommand(executor, { envelope, principal: access.principal, resolvePrincipal: access.resolvePrincipal, transport: access.transport, policy: QBO_SYNC_REQUEST_POLICY, handler: handleSyncRequest });
 }
 
-export function createAccountingOperationsPort(executor: RentOpsQueryExecutor, options: { readonly now?: () => Date } = {}): AccountingOperationsPort {
+export function createAccountingOperationsPort(executor: RentOpsQueryExecutor, options: { readonly now?: () => Date; readonly writePolicy?: QboWritePolicy } = {}): AccountingOperationsPort {
   const now = options.now ?? (() => new Date());
+  // Writes stay off unless the caller passes the server's configured policy.
+  const writePolicy = options.writePolicy ?? QBO_WRITES_DISABLED;
   async function read<T>(principal: AuthenticatedPrincipal, work: (transaction: RentOpsQueryExecutor, fresh: AuthenticatedPrincipal) => Promise<T>): Promise<T> {
     if (!executor.transaction) throw new ValidationCommandError("Accounting reads require transaction support", { reason: "transaction_required" });
     return executor.transaction(async transaction => {
@@ -119,6 +124,7 @@ export function createAccountingOperationsPort(executor: RentOpsQueryExecutor, o
       if ((RENTAL_POSTING_COMMAND_KINDS as readonly string[]).includes(kind)) return executeRentalPostingCommand(executor, kind as RentalPostingCommandKind, envelope, access);
       if ((PM_SETTLEMENT_COMMAND_KINDS as readonly string[]).includes(kind)) return executePmSettlementCommand(executor, kind as PmSettlementCommandKind, envelope, access);
       if (kind === QBO_SYNC_REQUEST_COMMAND_KIND) return executeQboSyncRequest(executor, envelope, access);
+      if (kind === QBO_WRITE_SUBMIT_COMMAND_KIND) return executeQboWriteSubmit(executor, envelope, access, writePolicy);
       throw new ValidationCommandError("Unknown accounting command", { reason: "unknown_command" });
     },
   };

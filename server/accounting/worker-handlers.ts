@@ -132,6 +132,10 @@ export function createAccountingJobHandlers(options: AccountingJobHandlerOptions
         const writer = createQboWriteService({ executor, clientFor: target => qbo.createAccountingClient(target), policy: writePolicy });
         try {
           const outcome = await writer.execute({ scope, operationKey: payload.operationKey, entity: payload.entity, operation: payload.operation, fields: payload.fields as never, ...(payload.entityId ? { entityId: payload.entityId } : {}), ...(payload.syncToken ? { syncToken: payload.syncToken } : {}), ...(payload.rentalPosting ? { rentalPosting: payload.rentalPosting } : {}) });
+          // Changed policy since the command queued it (writes off, type removed, posting method): stop, do not post.
+          if (outcome.status === "held") throw new PermanentJobError("qbo_write_held", outcome.reason);
+          // No natural readback key: never resend; an operator checks QuickBooks.
+          if (outcome.status === "ambiguous" && outcome.recovery === "manual_review") throw new PermanentJobError("qbo_write_ambiguous_manual_review", "QuickBooks may have recorded this write, and it cannot be read back without a QuickBooks Id. Check QuickBooks before submitting it again.");
           // An unknown outcome is retried; the next attempt reads back before any resend.
           if (outcome.status === "ambiguous") throw new RetryLaterJobError("quickbooks_ambiguous_write", "QuickBooks write outcome is unknown; the next attempt reconciles by readback", 60_000);
           if (outcome.status === "conflict") throw new PermanentJobError(`qbo_write_${outcome.reason}`, "QuickBooks refused the write; reread the record and submit a new operation");
