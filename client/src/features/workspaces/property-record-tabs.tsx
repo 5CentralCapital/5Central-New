@@ -93,7 +93,7 @@ export function PropertyWorkOrdersTab({ identity, propertyId, organizationId, on
 export function PropertyDocumentsTab({ identity, propertyId, organizationId, snapshot, asOfDate }: { identity: string; propertyId: string; organizationId?: string; snapshot: AdminSnapshot; asOfDate: string }) {
   const company = usePropertyCompany(identity, propertyId, organizationId);
   const rental = useQuery({
-    queryKey: ["rent-ops-workspace", "collection", "documents", identity, "property", propertyId],
+    queryKey: ["rent-ops-workspace", "collection", "documents", identity, "property", propertyId, asOfDate],
     queryFn: ({ signal }) => loadRentOpsWorkspaceCollection("documents", { propertyScope: "all", propertyId, asOfDate }, signal),
     staleTime: 60_000, retry: false,
   });
