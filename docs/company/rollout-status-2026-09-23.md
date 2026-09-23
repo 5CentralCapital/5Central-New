@@ -27,7 +27,7 @@ Audit findings that shaped the build:
 | U02 Review inventory | Built | `get_review_inventory` (HTTP, MCP, `scripts/company/review-inventory.ts`): counts by reason, materiality, state and affected-record overlap, with the remaining cases' missing evidence and next action. Live counts require the production database. |
 | U03 Review resolution | Built | 23 reason codes with short labels; a deduplicating detector (one cause across many tenants is one case); persistent cases with append-only history; reopen on evidence change; guarded commands (research, evidence, propose, block, apply through the existing guarded writers with before-hash checks, verify by re-detection). Financial corrections are routed to Accounting, never applied from a case. Daily detection runs in the worker. Every generic "Needs review" label in the app was replaced with a specific status. |
 | U04 Company activation | Partial | Grants, dated property/entity periods and realm bindings exist and are enforced. Bootstrapping the real organization, entities and grants needs verified ownership records and production access. |
-| U05 QBO transport | Built | Postgres job queue (SKIP LOCKED leases, backoff, dead letters, checkpoints, operator requeue/cancel), outbox dispatcher, separate worker process (`npm run worker`, Render `type: worker`), CloudEvents webhook route with signature verification, per-event dedupe and multi-realm fan-out, CDC with 30-day window and scoped full replay plus deletion tombstones, connector health read. Tested against fakes only. |
+| U05 QBO transport | Built | QBO writes are submitted with `submit_qbo_write` (command `accounting.qbo_write.submit`), which is gated by `QBO_WRITES_ENABLED`, `QBO_WRITE_TYPES` and, for production, `QBO_PRODUCTION_WRITES`. Postgres job queue (SKIP LOCKED leases, backoff, dead letters, checkpoints, operator requeue/cancel), outbox dispatcher, separate worker process (`npm run worker`, Render `type: worker`), CloudEvents webhook route with signature verification, per-event dedupe and multi-realm fan-out, CDC with 30-day window and scoped full replay plus deletion tombstones, connector health read. Tested against fakes only. |
 | U06 Accounting bridge | Built | One rental posting method per entity and period (overlap rejected in code and database; native receivables requires confirmed invoice-delivery settings), summary-bridge preview with control totals, PM settlements with gross-to-net conservation ($1,000 collected / $100 costs / $900 remitted, never $1,900 income), durable write journal with prepare → validate → submit → readback. Production writes stay off by default. |
 | U07 Navigation | Built | Ten categories, Dashboard as a direct link, one-level menus with only working destinations, toolbar actions, tenant status as a Directory filter, account menu, narrow-screen section selector, legacy-link aliases, browser smoke passing in Chromium. |
 | U08 Connected views | Built | Property record tabs (Overview, Rent roll, Financials, Projects, Work orders, Documents); Financials shows distinct measures with basis and drilldowns, computed from the report derivation (tested equal to report totals); new pages for Performance, Collections, Leases & renewals, Move-ins & move-outs, Make-ready, Listings, Entities & ownership, People & vendors, Settings, Cost library. |
@@ -40,13 +40,31 @@ Audit findings that shaped the build:
 | U15 Forecast engine | Built | Deterministic double-entry engine: daily events, weekly and monthly buckets without double counting, linked income statement, balance sheet and cash flow with no plug, 13-week treasury view, scenarios, immutable assumption versions and reproducible snapshots, and invariant checks on every run. |
 | U16 Forecast UI | Built | Reporting → Forecasting with Cash, Income, Balance sheet, Debt, Scenarios and Assumptions; charts drill to contributing events; unknown opening balances are shown as unknown. |
 | U17 Packages/exports | Built | Presets, packages, immutable runs, exports matching on-screen totals. |
-| U18 Agent parity | Built | Server name `5central-ops` with instructions, `get_ops_capabilities` discovery tool, per-operation annotations, bounded rental reads, generated `mcp-inventory.md` (232 tools) with a drift test, and `agent-setup.md` for Codex and Claude Code. Real client runs are not done. |
+| U18 Agent parity | Built | Server name `5central-ops` with instructions, `get_ops_capabilities` discovery tool, per-operation annotations, bounded rental reads, generated `mcp-inventory.md` (233 tools) with a drift test, and `agent-setup.md` for Codex and Claude Code. Real client runs are not done. |
 | U19 Company cutover | Not started | Excel/Airtable migration needs the source workbooks and tables. |
 | U20 Release proof | Not started | Needs the prerequisites below. |
 
+## Audit and fix round
+
+A self-audit of this build, followed by a fix round, landed on the same branch. The fix round also implemented the code items (K1–K7, L1, L2) from the Codex *Needs Review Resolution Log 2026-09-23* and added guarded tooling for its owner-attested data corrections. Those corrections were **not applied**. `handoff-2026-09-23.md` lists every fix by area, the correction runbook (`docs/rent-ops/owner-corrections.md`), the Replit publishing notes and the open items.
+
 ## Verification on this branch
 
-On the final commit: typecheck clean; migration registry valid (48); `test:company` 426 passed, 3 skipped (they need a real PostgreSQL URL); `test:rent-ops` 1,264 passed, 3 skipped; `test:performance` and the QBO sandbox harness tests pass; production build succeeds; the navigation browser smoke passes in Chromium (WebKit is not installed in this environment). The report-setup browser smoke has one failure that also occurs on the untouched baseline: the demo tenant ledger returns no rows when filtered to current tenants, because the synthetic tenancy's status is evaluated against today's date.
+Results at the branch tip (`3acd561` plus these documentation updates):
+
+| Check | Result |
+|---|---|
+| `npm run check` (typecheck, including the performance scripts) | Clean |
+| `npm run company:migrations:verify` | Valid; 48 migrations, latest 48 |
+| `npm run test:company` | 497 tests: 494 passed, 0 failed, 3 skipped |
+| `npm run test:rent-ops` | 1,326 tests: 1,323 passed, 0 failed, 3 skipped |
+| `npm run test:performance` | 16 passed |
+| `npm run build` | Succeeds; produces `dist/index.js` and `dist/worker.js` |
+| `company:navigation-smoke` | Passes in Chromium |
+| `company:report-setup-smoke` | Passes in Chromium. This is the first time on this branch; the failure present on the untouched baseline is fixed. |
+| MCP inventory | 233 tools; the drift test passes |
+
+WebKit is not installed in this environment, so the browser smokes ran only in Chromium. Set `ROPS_BROWSERS=chromium` and `ROPS_CHROMIUM_EXECUTABLE` to run them the same way. The migration chain was also run end to end on real PostgreSQL 16 during the audit. The skipped tests are opt-in real-PostgreSQL and benchmark tests. The company ones need `ROPS_PROJECT_TEST_DATABASE_URL`; the rental ones need a real PostgreSQL connection or `RENT_OPS_BENCHMARK=1`.
 
 ## Prerequisites that remain outside the code
 
@@ -57,4 +75,6 @@ On the final commit: typecheck clean; migration registry valid (48); `test:compa
 - The real investor agreements, the forecast workbooks and verified ownership dates.
 - The QuickBooks Time subscription and employee mappings.
 - Real Codex and Claude Code connections against the deployed endpoint, using the checklist in `agent-setup.md`.
+- `RENT_OPS_MCP_MRA_CLIENT_IDS` set to the Codex OAuth client ID, which enables the MRA mutation tools.
+- A decision on how the worker runs where the app is hosted. Replit autoscale runs only the web process.
 - The Intuit app profile name, which should be updated to "5Central Ops" to match the legal pages (they note the former name).
