@@ -209,6 +209,16 @@ export function createTenantAccountApplyPort(options: TenantAccountApplyAdapterO
       const unit = scoped.unit;
       const propertyId = mapping.propertyId ?? unit?.propertyId ?? tenancy?.propertyId ?? (mapping.localTargetKind === "property_account" ? mapping.localTargetId : undefined);
       if (!propertyId) throw packetError("mra_property_required", "An exact property or tenant account is required before apply.");
+      // Rental records are not organization-scoped; the target property must
+      // belong to the packet's company (and legal entity) when the money was received.
+      const owned = await context.executor.query(
+        `SELECT 1 FROM company_property_entity_periods
+          WHERE organization_id = $1 AND property_id = $2 AND ($3::uuid IS NULL OR legal_entity_id = $3)
+            AND effective_from <= $4::date AND (effective_until IS NULL OR effective_until > $4::date)
+          LIMIT 1`,
+        [context.packet.scope.organizationId, propertyId, context.packet.scope.legalEntityId ?? null, context.sourceLine.postedOn],
+      );
+      if (!owned.rows.length) throw packetError("mra_mapping_scope_mismatch", "The mapped tenancy, unit, or property is outside the packet's company scope.");
       if (context.sourceLine.payer === "hap") throw packetError("mra_hap_allocation_requires_review", "HAP receipts require a compatible subsidy allocation command before they can be applied.");
       if (payer === "tenant" && (category === "base_rent" || category === "one_time_fee" || category === "other" || category === "unapplied_cash") && tenancy) {
         const saved = await service.recordManualPayment({

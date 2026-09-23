@@ -212,6 +212,27 @@ test("a packet cannot be staged from a document in a legal entity the stager can
   } finally { await fixture.close(); }
 });
 
+test("apply refuses a mapping to a tenancy at a property outside the packet's company", async () => {
+  const { fixture, db, intake, principalFor, access } = await setup();
+  try {
+    await db.exec(`
+      INSERT INTO rent_ops_properties(id,name,slug) VALUES ('foreign-property','Foreign property','foreign-property');
+      INSERT INTO rent_ops_people(id,first_name,last_name) VALUES ('foreign-person','Foreign','Payer');
+      INSERT INTO rent_ops_units(id,property_id,unit_number,property_link_knowledge) VALUES ('foreign-unit','foreign-property','F1','manual');
+      INSERT INTO rent_ops_tenancies(id,property_id,unit_id,primary_person_id,status,created_at,property_link_knowledge,unit_link_knowledge,primary_person_link_knowledge,status_knowledge,actual_move_in_on,actual_move_in_knowledge)
+        VALUES ('foreign-tenancy','foreign-property','foreign-unit','foreign-person','current',NOW(),'manual','manual','manual','manual','2026-01-01','manual');`);
+    const staged = await intake.stage(envelope({ action: "stage", fileName: "foreign.json", declaredContentType: "application/json" }), { bytes: packetBytes([line("tx-f1", "acct-1", "50.00")]) }, await access());
+    const packetId = String(staged.affectedRecordIds[0]);
+    const packet = await intake.get(await principalFor(), { scope, packetId });
+    await intake.execute("map", envelope({ action: "map", packetId, mappings: [{ sourceLineKey: packet.lines[0]!.sourceLineKey, outcome: "exact", localTargetKind: "tenant_account", localTargetId: "foreign-tenancy" }] }), await access());
+    await intake.execute("preview", envelope({ action: "preview", packetId }), await access());
+    const applied = await intake.execute("apply", envelope({ action: "apply", packetId }), await access());
+    assert.match(applied.validationOutcomes[0]!.message, /0 lines applied, 1 failed/, JSON.stringify(applied.validationOutcomes));
+    const payments = await db.query<{ count: number }>("SELECT count(*)::int AS count FROM rent_ops_ledger_transactions WHERE tenancy_id = 'foreign-tenancy'");
+    assert.equal(payments.rows[0]?.count, 0);
+  } finally { await fixture.close(); }
+});
+
 async function stageMapPreview(intake: Awaited<ReturnType<typeof setup>>["intake"], access: Awaited<ReturnType<typeof setup>>["access"], principalFor: Awaited<ReturnType<typeof setup>>["principalFor"], bytes: Uint8Array, fileName: string) {
   const staged = await intake.stage(envelope({ action: "stage", fileName, declaredContentType: "application/json" }), { bytes }, await access());
   const packetId = String(staged.affectedRecordIds[0]);
