@@ -19,7 +19,7 @@ import { PostgresQuickBooksRefreshLease, newQuickBooksRefreshLeaseOwner, type Qu
 import { createConfiguredQboTokenCipher, type QboTokenCipher } from "./token-crypto";
 import { createQuickBooksTokenRepository, PostgresQuickBooksTokenRepository } from "./connection-store";
 import { AccountingError } from "./errors";
-import { isQuickBooksIntegrationError } from "../integrations/quickbooks/errors";
+import { isQuickBooksIntegrationError, markQuickBooksRequestNotSent } from "../integrations/quickbooks/errors";
 import { authorizeCompanyRead, loadAuthenticatedPrincipal } from "../company/authorization";
 import { createAccountingOperationsPort, type AccountingOperationsPort } from "./operations";
 import { qboWritePolicyFromEnv } from "./qbo-write";
@@ -359,8 +359,9 @@ export function createAccountingServices(executor: RentOpsQueryExecutor, options
         read: (...args) => client.read(...args),
         query: (...args) => client.query(...args),
         cdc: (...args) => client.cdc(...args),
-        create: (...args) => capabilityGate.requireEnabled(scope, "accounting.create").then(() => client.create(...args)),
-        update: (...args) => capabilityGate.requireEnabled(scope, "accounting.update").then(() => client.update(...args)),
+        // A write refused by its capability gate never reached Intuit.
+        create: (...args) => capabilityGate.requireEnabled(scope, "accounting.create").catch(error => { throw markQuickBooksRequestNotSent(error); }).then(() => client.create(...args)),
+        update: (...args) => capabilityGate.requireEnabled(scope, "accounting.update").catch(error => { throw markQuickBooksRequestNotSent(error); }).then(() => client.update(...args)),
       } as QuickBooksAccountingClient;
     };
     const createProvider = (scope: QuickBooksConnectionScope): QboProviderSync => createQboProviderSync({

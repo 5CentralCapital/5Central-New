@@ -10,7 +10,7 @@ import type {
   QuickBooksUpdateInput,
 } from "../../../shared/accounting/quickbooks";
 import { randomUUID } from "node:crypto";
-import { QuickBooksIntegrationError, isQuickBooksIntegrationError } from "./errors";
+import { QuickBooksIntegrationError, isQuickBooksIntegrationError, markQuickBooksRequestNotSent } from "./errors";
 import { parseJsonLosslessNumbers } from "./json-lossless";
 
 export const QUICKBOOKS_SANDBOX_ACCOUNTING_BASE_URL = "https://sandbox-quickbooks.api.intuit.com";
@@ -257,6 +257,15 @@ function wrapUnknownWriteError(error: unknown, requestId: string): QuickBooksInt
   });
 }
 
+/** Run write validation that happens before any request is sent. */
+function beforeSend<T>(work: () => T): T {
+  try {
+    return work();
+  } catch (error) {
+    throw markQuickBooksRequestNotSent(error);
+  }
+}
+
 function writeRequestId(options: QuickBooksWriteOptions | undefined): string {
   if (options?.requestId === undefined) return randomUUID();
   if (typeof options.requestId !== "string" || !REQUEST_ID_PATTERN.test(options.requestId)) {
@@ -320,10 +329,16 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
   }
 
   async function call(method: "GET" | "POST", path: string, body?: QuickBooksJsonObject, requestId?: string): Promise<QuickBooksTransportResponse> {
-    assertNotCoolingDown();
-    const accessToken = await config.getAccessToken();
-    if (typeof accessToken !== "string" || accessToken.length === 0) {
-      throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks access token is unavailable");
+    let accessToken: string;
+    try {
+      assertNotCoolingDown();
+      accessToken = await config.getAccessToken();
+      if (typeof accessToken !== "string" || accessToken.length === 0) {
+        throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks access token is unavailable");
+      }
+    } catch (error) {
+      // Nothing reached Intuit: a write journal may treat this as definitive.
+      throw markQuickBooksRequestNotSent(error);
     }
     try {
       const response = await config.transport({
@@ -391,9 +406,11 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
     },
 
     async create<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(entity: QuickBooksEntityName, fields: TFields, options?: QuickBooksWriteOptions): Promise<QuickBooksApiResponse<TResult>> {
-      assertEntity(entity);
-      assertPlainObject(fields, "create fields");
-      const requestId = writeRequestId(options);
+      const requestId = beforeSend(() => {
+        assertEntity(entity);
+        assertPlainObject(fields, "create fields");
+        return writeRequestId(options);
+      });
       const response = await call("POST", entityPath(entity), fields, requestId);
       const parsed = entityFromEnvelope<TResult>(entity, response.body);
       if (!parsed) throw new QuickBooksIntegrationError("quickbooks_ambiguous_write", "QuickBooks create response could not be confirmed; reconcile before retrying", { ambiguous: true, status: response.status, details: { requestId } });
@@ -401,11 +418,13 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
     },
 
     async update<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(input: QuickBooksUpdateInput<TFields>, options?: QuickBooksWriteOptions): Promise<QuickBooksApiResponse<TResult>> {
-      assertEntity(input.entity);
-      assertIdentifier(input.id, "entity ID");
-      assertIdentifier(input.syncToken, "SyncToken");
-      assertPlainObject(input.fields, "update fields");
-      const requestId = writeRequestId(options);
+      const requestId = beforeSend(() => {
+        assertEntity(input.entity);
+        assertIdentifier(input.id, "entity ID");
+        assertIdentifier(input.syncToken, "SyncToken");
+        assertPlainObject(input.fields, "update fields");
+        return writeRequestId(options);
+      });
       const payload = { ...input.fields, Id: input.id, SyncToken: input.syncToken };
       const response = await call("POST", entityPath(input.entity), payload, requestId);
       const parsed = entityFromEnvelope<TResult>(input.entity, response.body);

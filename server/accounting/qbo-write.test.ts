@@ -155,3 +155,41 @@ test("rental postings are held unless the entity's posting policy allows that me
     await synthetic.close();
   }
 });
+
+test("a write refused before it is sent (token, cooldown, capability) returns to validated and is retried, not held as possibly recorded", async () => {
+  const { synthetic, executor } = await database();
+  try {
+    const posts: string[] = [];
+    let bill: Record<string, unknown> | null = null;
+    let tokenAvailable = false;
+    const transport = async (request: QuickBooksTransportRequest): Promise<QuickBooksTransportResponse> => {
+      if (request.method === "POST") {
+        posts.push(new URL(request.url).searchParams.get("requestid") ?? "");
+        bill = { Id: "77", SyncToken: "0", ...(JSON.parse(request.body ?? "{}") as Record<string, unknown>) };
+        return { status: 200, body: JSON.stringify({ Bill: bill }), headers: {} };
+      }
+      return bill ? { status: 200, body: JSON.stringify({ Bill: bill }), headers: {} } : { status: 400, body: JSON.stringify({ Fault: { Error: [{ code: "610" }] } }), headers: {} };
+    };
+    const client = createQuickBooksAccountingClient({
+      scope,
+      getAccessToken: async () => {
+        if (!tokenAvailable) throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks connection needs to be reconnected");
+        return "access-token";
+      },
+      transport,
+    });
+    const writer = createQboWriteService({ executor, clientFor: () => client, policy: qboWritePolicyFromEnv({ QBO_WRITES_ENABLED: "on", QBO_WRITE_TYPES: "Bill:create" }) });
+    const request = { scope, operationKey: "bill-create-1", entity: "Bill", operation: "create" as const, fields: { VendorRef: { value: "41" }, Line: [{ Amount: 25, DetailType: "AccountBasedExpenseLineDetail" }] } };
+    await assert.rejects(() => writer.execute(request), (error: unknown) => error instanceof QuickBooksIntegrationError && error.code === "quickbooks_unauthorized");
+    assert.equal(posts.length, 0);
+    assert.equal((await journalState(executor, "bill-create-1"))?.state, "validated", "an unsent write is not journaled as ambiguous");
+
+    tokenAvailable = true;
+    const retried = await writer.execute(request);
+    assert.equal(retried.status, "confirmed", "the retry sends the write instead of holding it for manual review");
+    assert.equal(posts.length, 1);
+    assert.equal((await journalState(executor, "bill-create-1"))?.state, "confirmed");
+  } finally {
+    await synthetic.close();
+  }
+});

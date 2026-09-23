@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { QuickBooksApiResponse, QuickBooksJsonObject } from "../../../shared/accounting/quickbooks";
 import { canonicalJsonSha256 } from "../../company/commands/fingerprint";
-import { QuickBooksIntegrationError } from "./errors";
+import { QuickBooksIntegrationError, isQuickBooksRequestNotSent } from "./errors";
 
 /**
  * prepared → validated → started → confirmed | ambiguous | failed. `prepared`
@@ -175,10 +175,12 @@ export function createQuickBooksWriteReconciler(journal: QuickBooksWriteJournal)
       // provider attempt starts here.
       try { await journal.save({ operationKey: key, requestHash, state: "started" }); }
       catch (error) { throw new QuickBooksIntegrationError("quickbooks_token_store", "QuickBooks write journal could not be started", { cause: error }); }
+      let responded = false;
       try {
         // A retry after a "not found" readback reuses the same requestid, so
         // an original write that Intuit did commit is returned, not duplicated.
         const response = await input.write({ requestId });
+        responded = true;
         // Provider success is not enough: a separate read proves the request
         // was committed under the expected identity and fields.
         let readback: QuickBooksReadbackResult;
@@ -195,6 +197,16 @@ export function createQuickBooksWriteReconciler(journal: QuickBooksWriteJournal)
         try { await journal.save(confirmed); } catch (error) { await saveAmbiguous(journal, { ...confirmed, state: "ambiguous" }); throw unresolvedWriteError(error, confirmed.intuitTid); }
         return { status: "confirmed", ...(confirmed.providerEntityId ? { providerEntityId: confirmed.providerEntityId } : {}), ...(confirmed.providerVersion ? { providerVersion: confirmed.providerVersion } : {}), ...(confirmed.intuitTid ? { intuitTid: confirmed.intuitTid } : {}) };
       } catch (error) {
+        if (!responded && isQuickBooksRequestNotSent(error)) {
+          // The request never left this process (capability gate, 429
+          // cooldown, token failure, validation). Return the journal to the
+          // state it had before this attempt so the next attempt is not held
+          // as a possibly recorded write. If that cannot be saved, it stays
+          // "started" and is treated as unknown.
+          const before: QuickBooksWriteJournalEntry = existing && (existing.state === "ambiguous" || existing.state === "failed") ? existing : { operationKey: key, requestHash, state: "validated" };
+          try { await journal.save(before); } catch { /* fail closed */ }
+          throw error;
+        }
         const intuitTid = error instanceof QuickBooksIntegrationError ? error.intuitTid : undefined;
         if (isDefinitiveRejection(error)) {
           // Intuit answered and refused the request, so nothing was committed.

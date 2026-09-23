@@ -84,7 +84,8 @@ const CREATE_READBACK_KEYS: Readonly<Record<string, string>> = { Vendor: "Displa
 const TRANSITIONS: Readonly<Record<QuickBooksWriteJournalState, readonly QuickBooksWriteJournalState[]>> = {
   prepared: ["prepared", "validated", "started"],
   validated: ["validated", "started"],
-  started: ["started", "ambiguous", "confirmed", "failed"],
+  // started → validated only when the write provably never reached Intuit.
+  started: ["started", "validated", "ambiguous", "confirmed", "failed"],
   ambiguous: ["ambiguous", "started", "confirmed", "failed"],
   failed: ["failed", "started", "ambiguous", "confirmed"],
   confirmed: ["confirmed"],
