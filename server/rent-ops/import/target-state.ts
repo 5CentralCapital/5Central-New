@@ -7,6 +7,8 @@ import type { RentOpsQueryExecutor } from "../repositories/postgres";
 export const RENT_OPS_TARGET_STATE_VERSION = "rent-ops-target-state/v1" as const;
 
 const SCHEMA_TABLES = new Set(["rent_ops_schema_meta", "rent_ops_schema_migrations"]);
+/** Operator storage records (append-only, keyed by document and sequence), not RM target state. */
+const OPERATOR_TABLES = new Set(["rent_ops_document_object_relocations"]);
 const SAFE_CODE = /^[A-Za-z0-9_.:-]{1,160}$/;
 const MAX_ROWS = 750_000;
 const MAX_CANONICAL_BYTES = 512 * 1024 * 1024;
@@ -14,6 +16,7 @@ const MAX_CANONICAL_BYTES = 512 * 1024 * 1024;
 /** RM target tables only; application accounts, receipts and counters are outside importer access. */
 export const RENT_OPS_TARGET_STATE_TABLES = RENT_OPS_REQUIRED_TABLES.filter((table) =>
   !SCHEMA_TABLES.has(table)
+  && !OPERATOR_TABLES.has(table)
   && !(RENT_OPS_APPLICATION_TABLES as readonly string[]).includes(table)
   && !(COMPANY_ACCESS_TABLES as readonly string[]).includes(table));
 
