@@ -184,13 +184,17 @@ export function buildAmortizationSchedule(input: AmortizationInput): Amortizatio
   let amortizedCount = 0;
   let computedBalloon: bigint | null = null;
   for (let index = 0; index < maxPeriods && balance > ZERO; index += 1) {
-    const periodMonth = addMonths(firstDue, index * interval);
-    if (maturityMonth !== null && periodMonth > maturityMonth) break;
+    let periodMonth = addMonths(firstDue, index * interval);
+    // Maturity between two scheduled due dates: the loan still ends on its
+    // maturity date, with interest from the previous due date and the whole
+    // remaining balance as the balloon.
+    const offCycleMaturity = maturityMonth !== null && periodMonth > maturityMonth;
+    if (offCycleMaturity) periodMonth = maturityMonth!;
     const isMaturity = maturityMonth !== null && periodMonth === maturityMonth;
     const dueOn = isMaturity && input.maturityOn ? input.maturityOn : dueDateForMonth(periodMonth, input.paymentDay, input.monthEndRule);
     const opening = balance;
     const interest = periodInterestCents(opening, input.annualRate, input.dayCount, previousDue, dueOn);
-    const amortizing = amortizationStart !== null && amortizingPeriods !== null && periodMonth >= amortizationStart;
+    const amortizing = !offCycleMaturity && amortizationStart !== null && amortizingPeriods !== null && periodMonth >= amortizationStart;
     let principalPart = ZERO;
     if (amortizing) {
       if (level === null) level = levelPaymentCents(opening, input.annualRate, amortizingPeriods!, interval);
@@ -206,6 +210,7 @@ export function buildAmortizationSchedule(input: AmortizationInput): Amortizatio
     totalPrincipal += principalPart + balloon;
     rows.push({ periodMonth, dueOn, phase: isMaturity ? "maturity" : amortizing ? "amortizing" : "interest_only", openingCents: out(opening), interestCents: out(interest), principalCents: out(principalPart), balloonCents: out(balloon), paymentCents: out(interest + principalPart + balloon), closingCents: out(balance) });
     previousDue = dueOn;
+    if (isMaturity) break;
   }
   if (balance > ZERO && maturityMonth === null) warnings.push("No maturity date; the schedule stops at the projection horizon.");
   return finalize(rows, principal, level, computedBalloon, totalInterest, totalPrincipal, input, warnings);

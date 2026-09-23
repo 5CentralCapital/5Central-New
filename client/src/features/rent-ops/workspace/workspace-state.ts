@@ -30,7 +30,7 @@ export type WorkspaceSection = (typeof WORKSPACE_SECTIONS)[number];
 /** Project workspace tabs as named in navigation (Lane F owns the workspace). */
 export const PROJECT_NAV_TABS = ['overview', 'schedule', 'budget', 'commitments', 'draws'] as const;
 export type ProjectNavTab = (typeof PROJECT_NAV_TABS)[number];
-export const INVESTOR_NAV_TABS = ['overview', 'payments', 'capital', 'debt', 'contracts'] as const;
+export const INVESTOR_NAV_TABS = ['overview', 'payments', 'capital', 'debt', 'contracts', 'activity'] as const;
 export type InvestorNavTab = (typeof INVESTOR_NAV_TABS)[number];
 export const ACCOUNTING_VIEWS = ['overview', 'transactions', 'bills', 'banking', 'pm-settlements', 'close'] as const;
 export type AccountingView = (typeof ACCOUNTING_VIEWS)[number];
@@ -68,7 +68,8 @@ export const LEGACY_SECTION_ALIASES: Readonly<Record<string, Partial<WorkspaceRo
   documents: { section: 'property-documents' },
 });
 export const LEGACY_PROJECT_TAB_ALIASES: Readonly<Record<string, ProjectNavTab>> = Object.freeze({ scope: 'budget', costs: 'budget', execution: 'commitments' });
-export const LEGACY_INVESTOR_TAB_ALIASES: Readonly<Record<string, InvestorNavTab>> = Object.freeze({ activity: 'capital' });
+/** Activity is its own investor tab (payment history), so no investor tab is aliased today. */
+export const LEGACY_INVESTOR_TAB_ALIASES: Readonly<Record<string, InvestorNavTab>> = Object.freeze({});
 
 /** Sections whose data is owned by a company (organization) rather than the rental snapshot. */
 export const COMPANY_SECTIONS: readonly WorkspaceSection[] = [
@@ -97,9 +98,9 @@ export function parseWorkspaceRoute(search: string): WorkspaceRoute {
   const reportId = params.get('reportId');
   const presetId = params.get('preset');
   const rawProjectTab = params.get('projectTab') ?? '';
-  const projectTab = includes(PROJECT_NAV_TABS, rawProjectTab) ? rawProjectTab : LEGACY_PROJECT_TAB_ALIASES[rawProjectTab];
+  const projectTab = includes(PROJECT_NAV_TABS, rawProjectTab) ? rawProjectTab : Object.hasOwn(LEGACY_PROJECT_TAB_ALIASES, rawProjectTab) ? LEGACY_PROJECT_TAB_ALIASES[rawProjectTab] : undefined;
   const rawInvestorTab = params.get('investorTab') ?? '';
-  const investorTab = includes(INVESTOR_NAV_TABS, rawInvestorTab) ? rawInvestorTab : LEGACY_INVESTOR_TAB_ALIASES[rawInvestorTab];
+  const investorTab = includes(INVESTOR_NAV_TABS, rawInvestorTab) ? rawInvestorTab : Object.hasOwn(LEGACY_INVESTOR_TAB_ALIASES, rawInvestorTab) ? LEGACY_INVESTOR_TAB_ALIASES[rawInvestorTab] : undefined;
   const workOrderView = params.get('woView');
   const accountingView = params.get('acctView');
   const tenantStatus = params.get('tenantStatus');

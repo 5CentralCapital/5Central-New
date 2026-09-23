@@ -9,6 +9,7 @@ import { accountInitials, destinationHref } from './top-navigation';
 import { parseWorkspaceRoute, workspaceRouteSearch, WORKSPACE_SECTIONS, type WorkspaceRoute } from './workspace-state';
 import { hasWorkspaceView, investorTabForWorkspace, investorTabFromWorkspace, projectTabForWorkspace, projectTabFromWorkspace, WORKSPACE_VIEWS } from '../../workspaces/views';
 import { canonicalPropertyTab, PROPERTY_RECORD_TABS } from '../../workspaces/property-record-model';
+import { INVESTOR_TABS } from '../../investors/types';
 
 const company = '10000000-0000-4000-8000-000000000001';
 const parse = (href: string) => parseWorkspaceRoute(new URL(href, 'https://app.example.test').search);
@@ -84,7 +85,8 @@ const LEGACY_LINKS: ReadonlyArray<[string, Partial<WorkspaceRoute>]> = [
   ['/ops?section=investors&investorTab=payments', { section: 'investors', investorTab: 'payments' }],
   ['/ops?section=investors&investorTab=contracts', { section: 'investors', investorTab: 'contracts' }],
   ['/ops?section=investors&investorTab=debt', { section: 'investors', investorTab: 'debt' }],
-  ['/ops?section=investors&investorTab=activity', { section: 'investors', investorTab: 'capital' }],
+  ['/ops?section=investors&investorTab=activity', { section: 'investors', investorTab: 'activity' }],
+  ['/ops?section=investors&investorTab=capital', { section: 'investors', investorTab: 'capital' }],
   ['/ops?section=work-orders', { section: 'work-orders' }],
   ['/ops?section=work-orders&woView=all', { section: 'work-orders', workOrderView: 'all' }],
   ['/ops?section=work-orders&woView=completed', { section: 'work-orders', workOrderView: 'completed' }],
@@ -154,7 +156,22 @@ test('new project and investor tabs fall back to the nearest existing tab until 
   assert.equal(projectTabFromWorkspace('execution'), 'commitments');
   assert.equal(investorTabForWorkspace('capital', ['overview', 'payments', 'contracts', 'debt', 'activity']), 'activity');
   assert.equal(investorTabForWorkspace('capital', ['overview', 'payments', 'capital', 'debt', 'contracts']), 'capital');
-  assert.equal(investorTabFromWorkspace('activity'), 'capital');
+  assert.equal(investorTabFromWorkspace('capital'), 'capital');
+});
+
+test('every investor tab the workspace renders is a live navigation tab that round-trips', () => {
+  for (const tab of INVESTOR_TABS) {
+    const nav = investorTabFromWorkspace(tab);
+    assert.equal(nav, tab, `${tab} is a canonical navigation tab`);
+    assert.equal(investorTabForWorkspace(nav), tab, `${tab} opens itself, not another tab`);
+    const route = parse(`/ops?section=investors&investorTab=${tab}`);
+    assert.equal(route.investorTab, tab);
+    assert.equal(parse(`/ops${workspaceRouteSearch(route)}`).investorTab, tab, `${tab} survives serialization`);
+  }
+  assert.equal(investorTabFromWorkspace('activity'), 'activity', 'Activity is not redirected to Contributions & distributions');
+  assert.equal(investorTabFromWorkspace('constructor'), 'overview', 'unknown tabs never resolve through prototype keys');
+  assert.equal(parse('/ops?section=investors&investorTab=constructor').investorTab, undefined);
+  assert.equal(parse('/ops?section=projects&projectTab=toString').projectTab, undefined);
 });
 
 test('account initials never expose more than two characters', () => {

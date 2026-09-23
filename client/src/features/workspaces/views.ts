@@ -1,7 +1,7 @@
 import { PROJECT_TABS } from "../projects/types";
 import { INVESTOR_TABS } from "../investors/types";
 import {
-  LEGACY_INVESTOR_TAB_ALIASES, LEGACY_PROJECT_TAB_ALIASES, WORKSPACE_SECTIONS,
+  INVESTOR_NAV_TABS, LEGACY_INVESTOR_TAB_ALIASES, LEGACY_PROJECT_TAB_ALIASES, WORKSPACE_SECTIONS,
   type InvestorNavTab, type ProjectNavTab, type WorkspaceSection,
 } from "../rent-ops/workspace/workspace-state";
 
@@ -71,13 +71,13 @@ export function projectTabForWorkspace(tab: ProjectNavTab, supported: readonly s
   return supported.includes(tab) ? tab : PROJECT_TAB_FALLBACKS[tab];
 }
 export function projectTabFromWorkspace(tab: string): ProjectNavTab {
-  return (["overview", "schedule", "budget", "commitments", "draws"] as const).find(value => value === tab) ?? LEGACY_PROJECT_TAB_ALIASES[tab] ?? "overview";
+  return (["overview", "schedule", "budget", "commitments", "draws"] as const).find(value => value === tab) ?? (Object.hasOwn(LEGACY_PROJECT_TAB_ALIASES, tab) ? LEGACY_PROJECT_TAB_ALIASES[tab] : undefined) ?? "overview";
 }
 
-const INVESTOR_TAB_FALLBACKS: Record<InvestorNavTab, string> = { overview: "overview", payments: "payments", capital: "activity", debt: "debt", contracts: "contracts" };
+const INVESTOR_TAB_FALLBACKS: Record<InvestorNavTab, string> = { overview: "overview", payments: "payments", capital: "activity", debt: "debt", contracts: "contracts", activity: "activity" };
 export function investorTabForWorkspace(tab: InvestorNavTab, supported: readonly string[] = INVESTOR_TABS): string {
   return supported.includes(tab) ? tab : INVESTOR_TAB_FALLBACKS[tab];
 }
 export function investorTabFromWorkspace(tab: string): InvestorNavTab {
-  return (["overview", "payments", "capital", "debt", "contracts"] as const).find(value => value === tab) ?? LEGACY_INVESTOR_TAB_ALIASES[tab] ?? "overview";
+  return INVESTOR_NAV_TABS.find(value => value === tab) ?? (Object.hasOwn(LEGACY_INVESTOR_TAB_ALIASES, tab) ? LEGACY_INVESTOR_TAB_ALIASES[tab] : undefined) ?? "overview";
 }
