@@ -410,7 +410,7 @@
     {
       "version": 44,
       "fileName": "044_company_documents.sql",
-      "sha256": "8440e58d3f085cd9ad4d86c4c7c143388a333a0728125bc0eaa643915e3338d0",
+      "sha256": "b9da56409ed3e9ee7b52f403a9ae1d8ec630ea3db9b68175b3966ce4d848a203",
       "predecessor": 43,
       "minimumServerContract": 1,
       "minimumClientContract": 1,
@@ -419,7 +419,7 @@
     {
       "version": 45,
       "fileName": "045_company_review_cases.sql",
-      "sha256": "744828ed0095fa616a96492ca77bce6dbde7f7b270459e0c98bdcddb2a67e286",
+      "sha256": "4e9e61a276cfdba2f1ec1443fe93080dd174ac9f390b1fa2fa796c9a839aa7bf",
       "predecessor": 44,
       "minimumServerContract": 1,
       "minimumClientContract": 1,

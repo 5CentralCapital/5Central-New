@@ -64,10 +64,13 @@ CREATE TABLE company_document_links (
   linked_label text NOT NULL CHECK (length(btrim(linked_label)) BETWEEN 1 AND 240),
   linked_version_id varchar(160) NOT NULL DEFAULT '',
   created_at timestamptz NOT NULL DEFAULT now(),
+  -- The runtime role cannot DELETE; unlinking marks the row and relinking clears it.
+  removed_at timestamptz,
   PRIMARY KEY (document_id, link_kind, linked_id, linked_version_id)
 );
 CREATE INDEX company_document_links_target
-  ON company_document_links (link_kind, linked_id, document_id);
+  ON company_document_links (link_kind, linked_id, document_id)
+  WHERE removed_at IS NULL;
 
 -- A staged upload is the server-owned handoff between verified bytes and the
 -- durable company command. It is bound to the authenticated actor, company
