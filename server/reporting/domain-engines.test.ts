@@ -4,6 +4,7 @@ import { getReportingDefinition, reportRunRequestSchema } from "../../shared/rep
 import type { ProjectDetail } from "../../shared/projects";
 import { canonicalSourceValue } from "./source-engine-utils";
 import { createProjectReportingEngine } from "./project-engine";
+import { createTaskReportingEngine } from "./task-engine";
 import { createCombinedFinancialReportingEngine, type CombinedFinancialReadResult } from "./combined-financial-engine";
 import { createForecastReportingEngine, type ForecastReportingReadResult, type ForecastWeek } from "./forecast-engine";
 
@@ -175,4 +176,39 @@ test("13-week forecast requires continuous reconciled weeks and an actual bounda
   await assert.rejects(() => shortEngine.run(ctx), /exactly 13/);
   const badEngine = createForecastReportingEngine({ async read() { return { ...source, weeks: forecastWeeks(true) }; } });
   await assert.rejects(() => badEngine.run(ctx), /does not reconcile/);
+});
+
+test("project performance totals never add a missing budget or unavailable actuals as zero", async () => {
+  const withoutBudget = { ...projectFixture(), id: "56565656-5656-4565-8565-565656565656", name: "No budget", budgetVersions: [], postedActualCoverage: "unavailable" } as unknown as ProjectDetail;
+  const partial = { ...projectFixture(), postedActualCoverage: "partial" } as unknown as ProjectDetail;
+  const scope = { ...emptyScope, projectIds: [] };
+  const run = async (projects: ProjectDetail[]) => createProjectReportingEngine({ async read() { return { projects, coverage: { state: "complete", evidence: "synthetic", watermark: null, reason: null } }; } })
+    .run(context("project-performance", { mode: "range", fromDate: "2026-09-01", toDate: "2026-09-30" }, { scope }));
+  const mixed = await run([projectFixture(), withoutBudget]);
+  const budget = mixed.totals?.find(item => item.key === "approved_budget");
+  const actual = mixed.totals?.find(item => item.key === "posted_actuals");
+  assert.deepEqual([budget?.amountCents, budget?.state], [null, "unknown"]);
+  assert.deepEqual([actual?.amountCents, actual?.state], [null, "unknown"]);
+  const partialRun = await run([partial]);
+  const partialActual = partialRun.totals?.find(item => item.key === "posted_actuals");
+  assert.deepEqual([partialActual?.amountCents, partialActual?.state], ["20", "partial"]);
+  const otherCurrency = { ...projectFixture(), id: "57575757-5757-4575-8575-575757575757", currency: "CAD" } as unknown as ProjectDetail;
+  const currencies = await run([projectFixture(), otherCurrency]);
+  assert.deepEqual(currencies.totals, []);
+  assert.ok(currencies.missingData?.some(item => item.code === "project_multiple_currencies"));
+});
+
+test("contractor exposure keeps vendors with the same name apart and vendor details keep full names", async () => {
+  const project = projectFixture();
+  const commitments = [
+    { id: "c1", projectId, vendorId: "v-1", vendorName: "Smith Construction", committedCents: "1000", status: "approved", currency: "USD", committedOn: "2026-09-01" },
+    { id: "c2", projectId, vendorId: "v-2", vendorName: "Smith Construction", committedCents: "2500", status: "approved", currency: "USD", committedOn: "2026-09-02" },
+  ];
+  const engine = createProjectReportingEngine({ async read() { return { projects: [project], commitments, coverage: { state: "complete", evidence: "synthetic", watermark: null, reason: null } }; } });
+  const exposure = await engine.run(context("contractor-exposure", { mode: "as_of", asOfDate: "2026-09-30" }));
+  assert.deepEqual(exposure.rows.map(row => [row.values.vendorName, row.values.committedCents]), [["Smith Construction", "1000"], ["Smith Construction", "2500"]]);
+  const withCosts = { ...project, draftCosts: [{ id: "d1", projectId, scopeItemId: null, vendorName: "Acme: Plumbing & Heating", description: "Rough-in", amountCents: "700", currency: "USD", incurredOn: "2026-09-05", recordRevision: 1, updatedAt: "2026-09-05T00:00:00.000Z", archivedAt: null }] } as unknown as ProjectDetail;
+  const tasks = createTaskReportingEngine({ async read() { return { projects: [withCosts], coverage: { state: "complete", evidence: "synthetic", watermark: null, reason: null } }; } });
+  const vendors = await tasks.run(context("vendor-details", { mode: "custom", fromDate: "2026-09-01", toDate: "2026-09-30" }, { basis: "operational" }));
+  assert.deepEqual(vendors.rows.map(row => [row.values.vendorName, row.values.draftCostCents]), [["Acme: Plumbing & Heating", "700"]]);
 });

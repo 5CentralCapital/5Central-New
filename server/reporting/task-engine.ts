@@ -67,15 +67,15 @@ export function createTaskReportingEngine(read: ProjectReportingReadPort): Repor
           return { projectId: project.id, projectName: project.name, propertyId: project.propertyId, taskCount: tasks.length, completedCount: completed.length, openCount: tasks.filter(task => ["not_started", "in_progress"].includes(task.status)).length, blockedCount: blocked.length, averageCompletionDays: durations.length ? durations.reduce((total, value) => total + value, 0) / durations.length : null, overdueOpenCount: tasks.filter(task => task.status !== "completed" && task.dueOn !== null && task.dueOn < (periodBounds(context).through ?? "9999-12-31")).length };
         });
       } else {
-        const groups = new Map<string, { projectIds: Set<string>; amount: bigint; currency: string | null; recordCount: number }>();
+        const groups = new Map<string, { vendorName: string; projectIds: Set<string>; amount: bigint; currency: string | null; recordCount: number }>();
         const search = typeof context.request.filters.search === "string" ? context.request.filters.search.trim().toLocaleLowerCase() : "";
         for (const project of projects) for (const cost of project.draftCosts.filter(cost => inPeriod(cost.incurredOn, context) && (!search || `${project.name} ${cost.vendorName ?? ""} ${cost.description}`.toLocaleLowerCase().includes(search)))) {
           const vendor = cost.vendorName ?? "unknown";
-          const key = `${vendor}:${cost.currency}`;
-          const current = groups.get(key) ?? { projectIds: new Set<string>(), amount: BigInt(0), currency: cost.currency, recordCount: 0 };
+          const key = JSON.stringify([vendor, cost.currency]);
+          const current = groups.get(key) ?? { vendorName: vendor, projectIds: new Set<string>(), amount: BigInt(0), currency: cost.currency, recordCount: 0 };
           current.projectIds.add(String(project.id)); current.amount += BigInt(cost.amountCents); current.recordCount += 1; groups.set(key, current);
         }
-        rows = Array.from(groups.entries()).map(([key, group]) => ({ vendorName: key.split(":")[0], currency: group.currency, projectCount: group.projectIds.size, projectIds: Array.from(group.projectIds), draftCostCents: group.amount.toString(), recordCount: group.recordCount, vendorSource: "project_draft_costs" }));
+        rows = Array.from(groups.values()).map(group => ({ vendorName: group.vendorName, currency: group.currency, projectCount: group.projectIds.size, projectIds: Array.from(group.projectIds), draftCostCents: group.amount.toString(), recordCount: group.recordCount, vendorSource: "project_draft_costs" }));
         missing.push({ code: "vendor_accounting_details_unavailable", state: "partial", message: "Vendor details include project draft costs; provider account identity and verified QBO liability history are not registered." });
       }
       const columns = reportId === "tasks-performance"

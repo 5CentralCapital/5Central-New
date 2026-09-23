@@ -139,9 +139,13 @@ export function createProjectReportingEngine(read: ProjectReportingReadPort): Re
       const reportId = context.definition.id as ProjectReportId;
       const missing: ReportMissingData[] = [];
       const records: unknown[] = [];
-      let totalBudget: bigint | null = BigInt(0);
-      let totalActual: bigint | null = BigInt(0);
       if (reportId === "project-performance") {
+        // A total is unknown when any project's figure is unknown, and partial
+        // when any contributing figure is partial; a missing budget is never
+        // added as zero.
+        let totalBudget: bigint | null = BigInt(0);
+        let totalActual: bigint | null = BigInt(0);
+        let actualPartial = source.coverage.state !== "complete";
         for (const project of projects) {
           const budget = latestApprovedBudget(project, context);
           const actualSelection = selectedActuals(project, context);
@@ -149,12 +153,18 @@ export function createProjectReportingEngine(read: ProjectReportingReadPort): Re
           if (!budget) missing.push({ code: "project_budget_unavailable", state: "unknown", message: `Project ${project.name} has no budget version approved by the report date.`, scope: String(project.id) });
           if (actual === null) missing.push({ code: "project_actuals_unavailable", state: "unavailable", message: `Posted actuals for ${project.name} are not covered by a verified accounting source.`, scope: String(project.id) });
           else if (actualSelection.state === "partial") missing.push({ code: "project_actuals_partial", state: "partial", message: `Posted actuals for ${project.name} are only partially covered by the accounting source.`, scope: String(project.id) });
-          if (budget) totalBudget = totalBudget === null ? null : totalBudget + centsToBigInt(budget.totalEstimatedCents);
-          if (actual === null) totalActual = null;
-          else if (totalActual !== null) totalActual += centsToBigInt(actual);
+          totalBudget = budget && totalBudget !== null ? totalBudget + centsToBigInt(budget.totalEstimatedCents) : null;
+          totalActual = actual !== null && totalActual !== null ? totalActual + centsToBigInt(actual) : null;
+          if (actualSelection.state === "partial") actualPartial = true;
           records.push({ projectId: project.id, projectName: project.name, projectType: project.projectType, status: project.status, legalEntityId: project.legalEntityId, propertyId: project.propertyId, unitId: project.unitId, startOn: project.startOn, targetOn: project.targetOn, approvedBudgetCents: budget?.totalEstimatedCents ?? null, budgetScope: "approved_lifetime", postedActualCents: actual, actualScope: cumulativeThroughAsOf(context) ? "cumulative_through_as_of" : "requested_period", actualCoverage: project.postedActualCoverage, varianceCents: budget && actual !== null ? centsFromBigInt(centsToBigInt(actual) - centsToBigInt(budget.totalEstimatedCents)) : null });
         }
-        const result = resultFromRecords(context, records, { source: "company_projects", basis: "mixed", missingData: missing, totals: [totals("approved_budget", totalBudget, projects[0]?.currency ?? null, totalBudget === null ? "partial" : "complete"), totals("posted_actuals", totalActual, projects[0]?.currency ?? null, totalActual === null ? "partial" : "complete")], columns: reportColumns([
+        const currencies = Array.from(new Set(projects.map(project => project.currency)));
+        if (currencies.length > 1) missing.push({ code: "project_multiple_currencies", state: "partial", message: "Projects use more than one currency, so no totals are shown." });
+        const projectTotals = currencies.length === 1 ? [
+          totals("approved_budget", totalBudget, currencies[0]!, totalBudget === null ? "unknown" : "complete"),
+          totals("posted_actuals", totalActual, currencies[0]!, totalActual === null ? "unknown" : actualPartial ? "partial" : "complete"),
+        ] : [];
+        const result = resultFromRecords(context, records, { source: "company_projects", basis: "mixed", missingData: missing, totals: projectTotals, columns: reportColumns([
           { id: "projectName", label: "Project", type: "text" }, { id: "projectType", label: "Type", type: "status" }, { id: "status", label: "Status", type: "status" }, { id: "startOn", label: "Start", type: "date" }, { id: "targetOn", label: "Target", type: "date" }, { id: "approvedBudgetCents", label: "Approved budget", type: "money" }, { id: "budgetScope", label: "Budget scope", type: "status" }, { id: "postedActualCents", label: "Posted actuals", type: "money" }, { id: "actualScope", label: "Actual scope", type: "status" }, { id: "actualCoverage", label: "Actual coverage", type: "status" }, { id: "varianceCents", label: "Variance", type: "money" },
         ]) });
         return { ...result, coverage: [coverage(context, source, result.rows.length, "Project budgets are 5Central Ops records; posted actuals remain partial until the accounting mirror verifies every binding.")] };
@@ -162,7 +172,8 @@ export function createProjectReportingEngine(read: ProjectReportingReadPort): Re
       if (reportId === "contractor-exposure") {
         const commitments = source.commitments ?? [];
         if (!source.commitments) missing.push({ code: "project_commitments_unavailable", state: "unavailable", message: "Approved commitment and purchase-order records are not registered for this report." });
-        const grouped = new Map<string, { projectIds: Set<string>; amount: bigint; currency: string }>();
+        // Grouped by vendor identity; two vendors with the same display name stay separate.
+        const grouped = new Map<string, { vendorName: string; projectIds: Set<string>; amount: bigint; currency: string }>();
         const allowedProjectIds = new Set(projects.map(project => String(project.id)));
         for (const commitment of commitments) {
           if (!allowedProjectIds.has(commitment.projectId)) continue;
@@ -174,11 +185,11 @@ export function createProjectReportingEngine(read: ProjectReportingReadPort): Re
           // Exposure as of a date is cumulative: every approved commitment
           // recorded on or before the report date.
           if (!actualInScope(commitment.committedOn, context)) continue;
-          const key = `${commitment.vendorName ?? "unknown"}:${commitment.currency}`;
-          const prior = grouped.get(key) ?? { projectIds: new Set<string>(), amount: BigInt(0), currency: commitment.currency };
+          const key = JSON.stringify([commitment.vendorId ? `id:${commitment.vendorId}` : `name:${commitment.vendorName ?? ""}`, commitment.currency]);
+          const prior = grouped.get(key) ?? { vendorName: commitment.vendorName ?? "unknown", projectIds: new Set<string>(), amount: BigInt(0), currency: commitment.currency };
           prior.projectIds.add(commitment.projectId); prior.amount += centsToBigInt(commitment.committedCents); grouped.set(key, prior);
         }
-        for (const [key, value] of Array.from(grouped.entries())) records.push({ vendorName: key.slice(0, key.lastIndexOf(":")), currency: value.currency, projectCount: value.projectIds.size, projectIds: Array.from(value.projectIds), committedCents: centsFromBigInt(value.amount), exposureState: source.commitments ? "approved_commitments" : "unavailable" });
+        for (const value of Array.from(grouped.values())) records.push({ vendorName: value.vendorName, currency: value.currency, projectCount: value.projectIds.size, projectIds: Array.from(value.projectIds), committedCents: centsFromBigInt(value.amount), exposureState: source.commitments ? "approved_commitments" : "unavailable" });
         const exposureCurrencies = Array.from(grouped.values()).map(value => value.currency).filter((value, index, all) => all.indexOf(value) === index);
         const exposureTotals = exposureCurrencies.length === 1 && source.commitments ? [totals("committed", Array.from(grouped.values()).reduce((sum, value) => sum + value.amount, BigInt(0)), exposureCurrencies[0]!, source.coverage.state === "complete" && !missing.length ? "complete" : "partial")] : [];
         const result = resultFromRecords(context, records, { source: "company_project_commitments", basis: "mixed", missingData: missing, totals: exposureTotals, columns: reportColumns([{ id: "vendorName", label: "Vendor", type: "text" }, { id: "currency", label: "Currency", type: "text" }, { id: "projectCount", label: "Projects", type: "integer" }, { id: "committedCents", label: "Committed", type: "money" }, { id: "exposureState", label: "Coverage", type: "status" }]) });
