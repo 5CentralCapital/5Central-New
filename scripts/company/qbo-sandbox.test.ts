@@ -4,7 +4,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
-import { createQboSandboxHarness, sandboxEnvironmentProblems } from "./qbo-sandbox";
+import type { QboProviderSyncResult } from "../../server/accounting/provider-sync";
+import { createQboSandboxHarness, qboProviderSyncAcceptance, sandboxEnvironmentProblems } from "./qbo-sandbox";
 
 const env = {
   QBO_CLIENT_ID: "sandbox-client-id",
@@ -12,6 +13,36 @@ const env = {
   QBO_REDIRECT_URI: "http://localhost:4178/api/accounting/qbo/callback",
   QBO_ENVIRONMENT: "sandbox",
 } as NodeJS.ProcessEnv;
+
+test("sandbox provider sync acceptance requires complete coverage for every stream", () => {
+  const stream = {
+    stream: "transactions.purchase",
+    result: { status: "complete", checkpoint: null, pagesFetched: 1, itemsApplied: 2 },
+    unsupportedCount: 0,
+    coverageStatus: "complete",
+  } as const;
+  const complete: QboProviderSyncResult = { status: "complete", streams: [stream] };
+  assert.deepEqual(qboProviderSyncAcceptance(complete), {
+    pass: true,
+    notes: ["status=complete", "transactions.purchase: complete, coverage=complete, unsupported=0"],
+  });
+
+  const partialCoverage: QboProviderSyncResult = {
+    status: "partial",
+    streams: [{ ...stream, unsupportedCount: 10, coverageStatus: "partial" }],
+  };
+  const partial = qboProviderSyncAcceptance(partialCoverage);
+  assert.equal(partial.pass, false);
+  assert.deepEqual(partial.notes, ["status=partial", "transactions.purchase: complete, coverage=partial, unsupported=10"]);
+
+  const failedStream: QboProviderSyncResult = {
+    status: "partial",
+    streams: [{ ...stream, result: { ...stream.result, status: "failed" }, coverageStatus: "partial" }],
+  };
+  const failed = qboProviderSyncAcceptance(failedStream);
+  assert.equal(failed.pass, false);
+  assert.deepEqual(failed.notes, ["status=partial", "transactions.purchase: failed, coverage=partial, unsupported=0"]);
+});
 
 /** Offline sandbox double with Vendor create/read/sparse-update/stale semantics. */
 function sandboxDouble() {

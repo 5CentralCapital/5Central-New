@@ -20,6 +20,7 @@ import express, { type Request, type RequestHandler, type Response } from "expre
 import { createCompanyDemoApp, COMPANY_DEMO_CSRF_TOKEN } from "../../server/company/demo";
 import { SYNTHETIC_COMPANY } from "../../server/company/testing/synthetic-database";
 import { AccountingError } from "../../server/accounting/errors";
+import type { QboProviderSyncResult } from "../../server/accounting/provider-sync";
 import { isQuickBooksIntegrationError } from "../../server/integrations/quickbooks/errors";
 import { QUICKBOOKS_ACCOUNTING_SCOPE } from "../../server/integrations/quickbooks/oauth";
 import type { ConfiguredAccountingQboServices } from "../../server/accounting";
@@ -123,6 +124,20 @@ function safeError(error: unknown): string {
   if (error instanceof AccountingError) return `${error.code}: ${error.message}`;
   if (error instanceof Error) return `${error.name}: ${error.message.slice(0, 240)}`;
   return "unknown error";
+}
+
+/** A sandbox sync is accepted only when every required mirror stream has
+ * complete coverage and no source objects or lines were left unsupported. */
+export function qboProviderSyncAcceptance(result: QboProviderSyncResult): { pass: boolean; notes: string[] } {
+  const pass = result.status === "complete"
+    && result.streams.length > 0
+    && result.streams.every(stream => stream.result.status === "complete"
+      && stream.coverageStatus === "complete"
+      && stream.unsupportedCount === 0);
+  return {
+    pass,
+    notes: [`status=${result.status}`, ...result.streams.map(stream => `${stream.stream}: ${stream.result.status}, coverage=${stream.coverageStatus}, unsupported=${stream.unsupportedCount}`)],
+  };
 }
 
 interface EvidenceStep {
@@ -286,8 +301,7 @@ export async function createQboSandboxHarness(options: QboSandboxHarnessOptions)
     });
     await step("provider_sync_catch_up", async () => {
       const result = await qbo.createProviderSync(scope).catchUp({ maxPages });
-      const failed = result.streams.filter(stream => stream.result.status === "failed");
-      return { pass: failed.length === 0, notes: [`status=${result.status}`, ...result.streams.map(stream => `${stream.stream}: ${stream.result.status}, coverage=${stream.coverageStatus}, unsupported=${stream.unsupportedCount}`)] };
+      return qboProviderSyncAcceptance(result);
     });
     await step("accounting_query", async () => {
       const result = await client.query<QuickBooksJsonObject>("SELECT * FROM Vendor MAXRESULTS 5");

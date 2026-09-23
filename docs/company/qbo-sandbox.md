@@ -78,16 +78,30 @@ the acceptance step below with the same browser cookie, or use the
 ### Headless or remote browser (callback replay)
 
 If you complete the Intuit sign-in in a browser on another machine, its redirect
-to `localhost` never reaches this server. Use one cookie jar for every call:
+to `localhost` never reaches this server. Keep the same cookie jar for every
+call. The callback URL contains a short-lived authorization code and OAuth
+state: do not paste it into a shell command, save it in a file, or print it in
+terminal output. The hidden prompt below keeps it out of shell history and
+terminal echo. The authorization URL is opened directly without printing it.
 
 ```sh
-J=/tmp/qbo-sandbox.jar; H=http://localhost:4178
-curl -s -c $J -b $J $H/__sandbox/status
-curl -s -c $J -b $J -X POST $H/__sandbox/connect-url      # open authorizationUrl, sign in
-# copy the full URL the browser was redirected to (it fails to load; that is expected)
-curl -s -c $J -b $J -G $H/__sandbox/replay --data-urlencode "url=<redirected URL>"
-curl -s -c $J -b $J -X POST -H 'content-type: application/json' -d '{}' $H/__sandbox/confirm
-curl -s -c $J -b $J -X POST -H 'content-type: application/json' -d '{}' $H/__sandbox/acceptance
+umask 077
+J="$(mktemp)"; H=http://localhost:4178
+curl -fsS -c "$J" -b "$J" "$H/__sandbox/status" >/dev/null
+auth_url="$(curl -fsS -c "$J" -b "$J" -X POST "$H/__sandbox/connect-url" | python3 -c 'import json,sys; print(json.load(sys.stdin)["authorizationUrl"])')"
+open "$auth_url"
+unset auth_url
+# Sign in to the sandbox company. If the remote browser cannot load localhost,
+# copy its final callback URL, then paste it at this hidden prompt.
+printf 'Paste redirected callback URL (input hidden): '
+IFS= read -r -s callback_url
+printf '\n'
+curl -fsS -c "$J" -b "$J" -G "$H/__sandbox/replay" --data-urlencode "url=$callback_url" \
+  | python3 -c 'import json,sys; result=json.load(sys.stdin); print(result.get("status", "unknown"))'
+unset callback_url
+curl -fsS -c "$J" -b "$J" -X POST -H 'content-type: application/json' -d '{}' "$H/__sandbox/confirm"
+curl -fsS -c "$J" -b "$J" -X POST -H 'content-type: application/json' -d '{}' "$H/__sandbox/acceptance"
+rm -f "$J"
 ```
 
 The OAuth state expires after 10 minutes and works only once.
@@ -132,6 +146,22 @@ follow-up:
 - Reconnect after the disconnect. Run connect-url, authorize, replay, and confirm again, then repeat the acceptance run.
 - The OAuth and API failure matrices, which mocked tests cover.
 - A real signed webhook, which needs a public HTTPS endpoint.
+
+### Sandbox verification recorded on 2026-09-22
+
+The run recorded ten acceptance steps in `~/.local/state/r-ops/qbo-sandbox/`
+(the evidence files are mode `0600`). The earlier acceptance criterion counted
+the provider sync as a pass when no stream outright failed. Review of the saved
+evidence found partial mirror coverage: 10 BillPayment and 9 Deposit entries
+were reported as unsupported. This run therefore does not establish full QBO
+mirror coverage; the acceptance gate now requires complete status and coverage
+for every stream, with zero unsupported entries.
+
+The forced OAuth refresh succeeded and the stored refresh token matched the
+latest value returned by Intuit, but the value's hash matched the token stored
+before refresh. The evidence does not establish why the value stayed the same.
+The disconnect and provider revoke succeeded. These results do not change the
+production deployment and live-key review blockers described above.
 
 ## Disconnect behavior (all environments)
 
