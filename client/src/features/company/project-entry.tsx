@@ -4,7 +4,7 @@ import type { ProjectTab } from '../projects/types';
 import type { CompanyContext } from '@shared/company/context';
 import { rentOpsAuthClient } from '../rent-ops/auth';
 
-const ProjectWorkspace = lazy(() => import('../projects/project-workspace').then(module => ({ default: module.ProjectWorkspace })));
+const ProjectWorkspace = lazy(() => import('../projects/workspace').then(module => ({ default: module.ProjectWorkspace })));
 
 export function ProjectEntry({ identity, organizationId, projectId, onNavigate, projectTab, onTabChange }: {
   identity: string; organizationId?: string; projectId?: string;
