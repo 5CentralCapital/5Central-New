@@ -55,6 +55,11 @@ Writes stay off.
 - `server/accounting/provider-sync.ts`: list queries include inactive records (item 14).
 - `server/accounting/qbo-write.ts`: record-only Invoice guard and post-save verification (item 22).
 - `scripts/company/qbo-production-preflight.ts`: explicit `off` write switches read as intended.
+- Code audit (same day, `code-audit-2026-09-23.md`): a write refused before it reaches Intuit
+  (capability, 429 pause, token failure) returns to a retryable state instead of manual review
+  (items 20, 26); read-back compares numbers as decimals (`200` = `200.0`); a full replay tolerates
+  provider-rendered names and balances that change without a new SyncToken (item 16); the Reports
+  client honors and sets the per-company 429 pause (item 11).
 - Hosting (Codex's `render.yaml`, verified): all `QBO_*` values in the shared group attached to
   both the web service (OAuth callback, webhooks) and the worker (sync, CDC, fetches); both write
   switches pinned `off` on both services.
