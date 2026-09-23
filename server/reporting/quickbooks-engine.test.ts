@@ -28,6 +28,7 @@ test("native QBO engine uses typed provider columns and preserves summary rows",
   assert.equal(result.rows.find(row => row.values.rowKind === "detail")?.values.accountId, "account-100");
   assert.equal(result.rows.find(row => row.values.rowKind === "detail")?.values.totalCents, "1025");
   assert.equal(result.rows.find(row => row.values.rowKind === "summary")?.values.totalCents, "1025");
+  assert.deepEqual(result.rows.map(row => row.values.rowKind), ["section", "detail", "summary"], "a section's total follows its detail rows");
 });
 
 test("native QBO engine refuses an unmarked empty provider result", async () => {

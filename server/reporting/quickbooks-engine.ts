@@ -109,14 +109,16 @@ function rowsOf(raw: QuickBooksJsonObject): unknown[] {
         addCells(values, (header as QuickBooksJsonObject).ColData, columns, "section");
       }
       if (Array.isArray(cells)) addCells(values, cells, columns);
-      if (summary && typeof summary === "object" && !Array.isArray(summary)) {
-        if (header) output.push(values);
+      const hasSummary = Boolean(summary && typeof summary === "object" && !Array.isArray(summary));
+      // Statement order: section header, its detail rows, then its total.
+      if (header || (Array.isArray(cells) && !hasSummary)) output.push(values);
+      const nested = object.Rows;
+      if (nested && typeof nested === "object" && !Array.isArray(nested)) visit(nested as QuickBooksJsonObject, `${path}.${index}`);
+      if (hasSummary) {
         const summaryValues: Record<string, unknown> = { providerPath: `${base}.summary`, rowKind: "summary" };
         addCells(summaryValues, (summary as QuickBooksJsonObject).ColData, columns);
         output.push(summaryValues);
-      } else if (Array.isArray(cells) || header) output.push(values);
-      const nested = object.Rows;
-      if (nested && typeof nested === "object" && !Array.isArray(nested)) visit(nested as QuickBooksJsonObject, `${path}.${index}`);
+      }
     });
   };
   visit(rows as QuickBooksJsonObject, "rows");
