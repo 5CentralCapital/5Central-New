@@ -20,9 +20,9 @@ import {
 import { FORECAST_MODEL_VERSION, type ForecastResult, type ForecastResultView } from "../../shared/forecasting/result";
 import { authorizeCompanyRead, type AuthenticatedPrincipal } from "../company/authorization";
 import { canonicalJsonSha256 } from "../company/commands/fingerprint";
-import { ValidationCommandError } from "../company/commands/errors";
+import { ConflictCommandError, ValidationCommandError } from "../company/commands/errors";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
-import { ForecastInputError, runForecast } from "./engine";
+import { ForecastInputError, runForecast, type ForecastSourceData } from "./engine";
 import { compareForecasts, explainForecastLine, resultView } from "./explain";
 import type { ForecastSourceReader } from "./sources";
 import { forecastStore, type ScenarioRow } from "./store";
@@ -78,21 +78,44 @@ export function parseForecastAssumptions(document: unknown): ForecastAssumptions
 }
 
 /** Read sources, run the deterministic engine and fingerprint inputs and output. */
-export async function computeForecast(executor: RentOpsQueryExecutor, runtime: ForecastRuntime, scenario: ScenarioRow, assumptions: ForecastAssumptions): Promise<{ result: ForecastResult; sourceFingerprint: string; resultSha256: string }> {
+export async function computeForecast(executor: RentOpsQueryExecutor, runtime: ForecastRuntime, scenario: ScenarioRow, assumptions: ForecastAssumptions): Promise<{ result: ForecastResult; sources: ForecastSourceData; sourceFingerprint: string; resultSha256: string }> {
   const debtIds = Array.from(new Set(assumptions.loans.flatMap(loan => (loan.sourceDebtId ? [loan.sourceDebtId] : [])))).sort();
   const sources = await runtime.sources(executor).read({ organizationId: scenario.organizationId, asOf: assumptions.actualsCutoff, debtIds, today: runtime.today() });
   const sourceFingerprint = canonicalJsonSha256({ modelVersion: FORECAST_MODEL_VERSION, asOf: assumptions.actualsCutoff, sources });
-  let result: ForecastResult;
+  const result = runEngine({
+    scenario: { name: scenario.name, kind: scenario.kind, startDate: scenario.startDate, horizonWeeks: scenario.horizonWeeks, horizonMonths: scenario.horizonMonths, reserveFloorCents: scenario.reserveFloorCents, currency: scenario.currency },
+    assumptions, sources,
+  });
+  return { result, sources, sourceFingerprint, resultSha256: canonicalJsonSha256(result) };
+}
+
+function runEngine(input: Parameters<typeof runForecast>[0]): ForecastResult {
   try {
-    result = runForecast({
-      scenario: { name: scenario.name, kind: scenario.kind, startDate: scenario.startDate, horizonWeeks: scenario.horizonWeeks, horizonMonths: scenario.horizonMonths, reserveFloorCents: scenario.reserveFloorCents, currency: scenario.currency },
-      assumptions, sources,
-    });
+    return runForecast(input);
   } catch (error) {
     if (error instanceof ForecastInputError) throw new ValidationCommandError(error.message, { reason: error.code, ...(error.path ? { path: error.path } : {}) });
     throw error;
   }
-  return { result, sourceFingerprint, resultSha256: canonicalJsonSha256(result) };
+}
+
+/**
+ * Regenerate a snapshot's full result (with its event calendar) from the
+ * immutable assumption version and the stored source data, and prove it
+ * reproduces the recorded hashes exactly.
+ */
+export function replaySnapshot(meta: ForecastSnapshotMeta, view: ForecastResultView, sources: ForecastSourceData, assumptions: ForecastAssumptions): ForecastResult {
+  if (meta.modelVersion !== FORECAST_MODEL_VERSION) {
+    throw new ConflictCommandError(`This snapshot was made with model ${meta.modelVersion}; its statements remain readable but event drilldown needs that model.`, { reason: "forecast_model_unavailable" });
+  }
+  const fingerprint = canonicalJsonSha256({ modelVersion: meta.modelVersion, asOf: assumptions.actualsCutoff, sources });
+  const result = runEngine({
+    scenario: { ...view.scenario, currency: view.currency },
+    assumptions, sources,
+  });
+  if (fingerprint !== meta.sourceFingerprint || canonicalJsonSha256(result) !== meta.resultSha256) {
+    throw new ConflictCommandError("This snapshot could not be reproduced from its recorded inputs.", { reason: "forecast_snapshot_not_reproducible" });
+  }
+  return result;
 }
 
 /** Scoped forecast reads shared by the browser, HTTP API and MCP tools. */
@@ -159,7 +182,7 @@ export class ForecastReadService {
     const scope = this.authorize(principal, input.scope);
     const stored = await forecastStore.getSnapshot(this.executor, scope.organizationId, forecastSnapshotIdSchema.parse(input.snapshotId));
     if (!stored) throw new ValidationCommandError("Forecast snapshot was not found", { reason: "forecast_snapshot_not_found" });
-    return { snapshot: stored.meta, result: resultView(stored.result) };
+    return { snapshot: stored.meta, result: stored.view };
   }
 
   /** Full result (with events) for a snapshot or a fresh unsaved run. */
@@ -167,8 +190,8 @@ export class ForecastReadService {
     if ("snapshotId" in source) {
       const stored = await forecastStore.getSnapshot(this.executor, organizationId, source.snapshotId);
       if (!stored) throw new ValidationCommandError("Forecast snapshot was not found", { reason: "forecast_snapshot_not_found" });
-      const doc = await forecastStore.getAssumptionVersion(this.executor, organizationId, stored.meta.scenarioId, stored.meta.assumptionVersion);
-      return { result: stored.result, assumptions: doc ? parseForecastAssumptions(doc.assumptions) : null, meta: stored.meta };
+      const assumptions = await this.assumptionsFor(organizationId, stored.meta.scenarioId, stored.meta.assumptionVersion);
+      return { result: replaySnapshot(stored.meta, stored.view, stored.sources, assumptions), assumptions, meta: stored.meta };
     }
     const scenario = await this.scenario(organizationId, source.scenarioId);
     const version = source.assumptionVersion ?? scenario.currentAssumptionVersion;
@@ -191,14 +214,14 @@ export class ForecastReadService {
       const stored = await forecastStore.getSnapshot(this.executor, scope.organizationId, snapshotId);
       if (!stored) throw new ValidationCommandError("Forecast snapshot was not found", { reason: "forecast_snapshot_not_found" });
       const scenario = await this.scenario(scope.organizationId, stored.meta.scenarioId);
-      const doc = await forecastStore.getAssumptionVersion(this.executor, scope.organizationId, stored.meta.scenarioId, stored.meta.assumptionVersion);
-      return { meta: { ...stored.meta, scenarioName: scenario.name, scenarioKind: scenario.kind }, result: stored.result, assumptions: doc?.assumptions ?? null };
+      const assumptions = await this.assumptionsFor(scope.organizationId, stored.meta.scenarioId, stored.meta.assumptionVersion);
+      return { meta: { ...stored.meta, scenarioName: scenario.name, scenarioKind: scenario.kind }, result: replaySnapshot(stored.meta, stored.view, stored.sources, assumptions), assumptions };
     };
     return compareForecasts(await side(query.snapshotA), await side(query.snapshotB), query.limit);
   }
 
   /** Resolve a snapshot for report runs: an explicit snapshot ID, or the latest snapshot of an assumption version. */
-  async reportSnapshot(principal: AuthenticatedPrincipal, input: { organizationId: string; scenarioId: string; inputVersion: string; modelVersion: string }): Promise<{ meta: ForecastSnapshotMeta; result: ForecastResult } | null> {
+  async reportSnapshot(principal: AuthenticatedPrincipal, input: { organizationId: string; scenarioId: string; inputVersion: string; modelVersion: string }): Promise<{ meta: ForecastSnapshotMeta; result: ForecastResultView } | null> {
     const scope = this.authorize(principal, { organizationId: input.organizationId });
     const scenarioId = forecastScenarioIdSchema.parse(input.scenarioId);
     let snapshotId: string | null;
@@ -210,6 +233,6 @@ export class ForecastReadService {
     if (!snapshotId) return null;
     const stored = await forecastStore.getSnapshot(this.executor, scope.organizationId, snapshotId);
     if (!stored || stored.meta.scenarioId !== scenarioId || stored.meta.modelVersion !== input.modelVersion) return null;
-    return stored;
+    return { meta: stored.meta, result: stored.view };
   }
 }

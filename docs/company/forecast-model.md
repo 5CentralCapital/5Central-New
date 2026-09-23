@@ -54,6 +54,8 @@ Approved time actuals dated after the cutoff replace estimated labor for the sam
 
 ## Scenarios, versions, snapshots and commands
 
+A snapshot stores the statement views (weeks, months, debt, capital, opening position, checks) and the exact source data the run read, with the source fingerprint and the hash of the full result. The dated event calendar is not stored: explain and compare regenerate it from the immutable assumption version and the stored sources, and refuse (`forecast_snapshot_not_reproducible`) unless the regenerated result reproduces the recorded hash exactly. A 200-unit, ten-year scenario stores about 0.3 MB instead of about 30 MB, and every drilldown re-proves reproducibility. Snapshots made by an earlier model version keep their statements readable; event drilldown for them needs that model.
+
 Forecasts are company-wide: reads need an organization-level grant for owner, admin, finance or read-only reviewer; writes need owner, admin or finance; approval needs owner or admin. All commands go through the shared command runner (idempotency key, expected revision, fresh grants inside the transaction).
 
 | Command | Effect |

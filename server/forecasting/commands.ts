@@ -20,6 +20,7 @@ import { ConflictCommandError, ValidationCommandError } from "../company/command
 import { runCompanyCommand, type CommandHandlerContext, type CommandHandlerResult } from "../company/commands/runner";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { computeForecast, parseForecastAssumptions, type ForecastRuntime } from "./service";
+import { resultView } from "./explain";
 import { forecastStore, type ScenarioRow } from "./store";
 
 type Context = CommandHandlerContext<Record<string, unknown>>;
@@ -229,7 +230,8 @@ const handlersFor = (runtime: ForecastRuntime): Readonly<Record<ForecastCommandK
     const id = newRecordId();
     await forecastStore.insertSnapshot(context.executor, {
       id, organizationId: scenario.organizationId, scenarioId: scenario.id, assumptionVersion: version, modelVersion: FORECAST_MODEL_VERSION,
-      actualsCutoff: assumptions.actualsCutoff, sourceFingerprint: run.sourceFingerprint, resultSha256: run.resultSha256, result: run.result,
+      actualsCutoff: assumptions.actualsCutoff, sourceFingerprint: run.sourceFingerprint, resultSha256: run.resultSha256,
+      stored: { ...resultView(run.result), replay: { sources: run.sources } },
       label: payload.label ?? null, createdBy: context.principal.actorId,
     });
     const failed = run.result.checks.filter(check => !check.passed);

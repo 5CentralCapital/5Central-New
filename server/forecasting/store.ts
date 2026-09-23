@@ -1,7 +1,16 @@
 import type { ForecastAssumptions } from "../../shared/forecasting/assumptions";
 import type { ForecastAssumptionVersionMeta, ForecastScenarioState, ForecastScenarioSummary, ForecastSnapshotMeta } from "../../shared/forecasting/contracts";
 import { forecastAssumptionVersionMetaSchema, forecastScenarioSummarySchema, forecastSnapshotMetaSchema } from "../../shared/forecasting/contracts";
-import type { ForecastResult } from "../../shared/forecasting/result";
+import type { ForecastResultView } from "../../shared/forecasting/result";
+import type { ForecastSourceData } from "./engine";
+
+/**
+ * Stored snapshot body: the statement views plus the exact source data the
+ * run read. The event calendar is not stored; it is regenerated from the
+ * immutable assumption version and these sources and must reproduce the
+ * recorded result hash exactly.
+ */
+export type StoredForecastSnapshot = ForecastResultView & { readonly replay: { readonly sources: ForecastSourceData } };
 import { ValidationCommandError } from "../company/commands/errors";
 import { dbNullableString, dbRevision, dbString, dbTimestamp, dbNullableTimestamp } from "../projects/helpers";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
@@ -206,11 +215,11 @@ export const forecastStore = {
     }));
   },
 
-  async insertSnapshot(executor: RentOpsQueryExecutor, input: { id: string; organizationId: string; scenarioId: string; assumptionVersion: number; modelVersion: string; actualsCutoff: string; sourceFingerprint: string; resultSha256: string; result: ForecastResult; label: string | null; createdBy: string }): Promise<void> {
+  async insertSnapshot(executor: RentOpsQueryExecutor, input: { id: string; organizationId: string; scenarioId: string; assumptionVersion: number; modelVersion: string; actualsCutoff: string; sourceFingerprint: string; resultSha256: string; stored: StoredForecastSnapshot; label: string | null; createdBy: string }): Promise<void> {
     await executor.query(
       `INSERT INTO company_forecast_snapshots (id, organization_id, scenario_id, assumption_version, model_version, actuals_cutoff, source_fingerprint, result_sha256, result, label, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11)`,
-      [input.id, input.organizationId, input.scenarioId, input.assumptionVersion, input.modelVersion, input.actualsCutoff, input.sourceFingerprint, input.resultSha256, JSON.stringify(input.result), input.label, input.createdBy],
+      [input.id, input.organizationId, input.scenarioId, input.assumptionVersion, input.modelVersion, input.actualsCutoff, input.sourceFingerprint, input.resultSha256, JSON.stringify(input.stored), input.label, input.createdBy],
     );
   },
 
@@ -227,12 +236,13 @@ export const forecastStore = {
     return result.rows[0] ? snapshotMeta(result.rows[0]) : null;
   },
 
-  async getSnapshot(executor: RentOpsQueryExecutor, organizationId: string, snapshotId: string): Promise<{ meta: ForecastSnapshotMeta; result: ForecastResult } | null> {
+  async getSnapshot(executor: RentOpsQueryExecutor, organizationId: string, snapshotId: string): Promise<{ meta: ForecastSnapshotMeta; view: ForecastResultView; sources: ForecastSourceData } | null> {
     const result = await executor.query<Record<string, unknown>>(`SELECT ${SNAPSHOT_META_COLUMNS}, n.result FROM company_forecast_snapshots n WHERE n.organization_id = $1 AND n.id = $2`, [organizationId, snapshotId]);
     const row = result.rows[0];
     if (!row) return null;
-    const stored = typeof row.result === "string" ? JSON.parse(row.result) : row.result;
-    return { meta: snapshotMeta(row), result: stored as ForecastResult };
+    const stored = (typeof row.result === "string" ? JSON.parse(row.result) : row.result) as StoredForecastSnapshot;
+    const { replay, ...view } = stored;
+    return { meta: snapshotMeta(row), view, sources: replay.sources };
   },
 
   async latestSnapshotFor(executor: RentOpsQueryExecutor, organizationId: string, scenarioId: string, assumptionVersion: number, modelVersion: string): Promise<string | null> {

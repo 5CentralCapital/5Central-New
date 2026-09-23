@@ -1,5 +1,5 @@
 import { forecastReportInputVersionPattern, forecastScenarioIdSchema } from "../../shared/forecasting/contracts";
-import type { ForecastResult } from "../../shared/forecasting/result";
+import type { ForecastResultView } from "../../shared/forecasting/result";
 import type { ForecastSnapshotMeta } from "../../shared/forecasting/contracts";
 import { ZodError } from "zod";
 import type { AuthenticatedPrincipal } from "../company/authorization";
@@ -28,7 +28,7 @@ function bpsToFraction(bps: number): string {
 }
 
 /** Map an immutable snapshot to the report engine's forecast read shape. */
-export function forecastReportRows(meta: ForecastSnapshotMeta, result: ForecastResult): ForecastReportingReadResult {
+export function forecastReportRows(meta: ForecastSnapshotMeta, result: ForecastResultView): ForecastReportingReadResult {
   const snapshotRef = `forecast_snapshot:${meta.id}`;
   const weeks: ForecastWeek[] = result.weeks.slice(0, 13).map(week => ({
     weekStart: week.start, inflowsCents: week.inflowsCents, outflowsCents: week.outflowsCents, currency: result.currency,
@@ -104,7 +104,7 @@ export function createForecastReportingReadPort(executorOrPort: RentOpsQueryExec
       if (!forecastReportInputVersionPattern.test(inputVersion)) throw new ReportingError("report_validation", "Forecast input version must be a snapshot ID or an assumption version such as v3.", 400);
       const organizationId = context.request.scope.organizationId;
       const request = { organizationId, scenarioId, inputVersion, modelVersion };
-      let stored: { meta: ForecastSnapshotMeta; result: ForecastResult } | null;
+      let stored: { meta: ForecastSnapshotMeta; result: ForecastResultView } | null;
       try {
         if (isPort(executorOrPort)) {
           if (!options.principal) throw new ReportingError("report_forbidden", "Report access is required.", 403);
@@ -116,8 +116,8 @@ export function createForecastReportingReadPort(executorOrPort: RentOpsQueryExec
           const snapshotId = /^v?\d+$/.test(inputVersion)
             ? await forecastStore.latestSnapshotFor(executorOrPort, organizationId, scenarioId, Number(inputVersion.replace(/^v/, "")), modelVersion)
             : inputVersion;
-          stored = snapshotId ? await forecastStore.getSnapshot(executorOrPort, organizationId, snapshotId) : null;
-          if (stored && (stored.meta.scenarioId !== scenarioId || stored.meta.modelVersion !== modelVersion)) stored = null;
+          const found = snapshotId ? await forecastStore.getSnapshot(executorOrPort, organizationId, snapshotId) : null;
+          stored = found && found.meta.scenarioId === scenarioId && found.meta.modelVersion === modelVersion ? { meta: found.meta, result: found.view } : null;
         }
       } catch (error) {
         if (error instanceof ReportingError) throw error;

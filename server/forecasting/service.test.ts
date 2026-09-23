@@ -13,6 +13,8 @@ import { ReportingError } from "../reporting/errors";
 import { createForecastingPort } from "./port";
 import { createForecastReportingReadPort } from "./reporting-port";
 import { forecastStore } from "./store";
+import { replaySnapshot } from "./service";
+import { forecastAssumptionsSchema } from "../../shared/forecasting/assumptions";
 import { syntheticForecastAssumptionsInput, SYNTHETIC_FORECAST_START } from "./testing/fixture";
 
 const { organizationId, entityId, actorId, propertyId, unitId } = SYNTHETIC_COMPANY;
@@ -90,8 +92,23 @@ test("scenario lifecycle: create, snapshot, reproduce, version, approve", async 
     const again = await port.snapshot(access.principal, { scope, snapshotId: String(second.affectedRecordIds[0]) });
     assert.equal(again.snapshot.resultSha256, view.snapshot.resultSha256);
     assert.equal(again.snapshot.sourceFingerprint, view.snapshot.sourceFingerprint);
+    // The stored body keeps statements and sources only; the event calendar is
+    // regenerated from the immutable inputs and must reproduce the recorded hash.
     const stored = await forecastStore.getSnapshot(fixture.executor, organizationId, snapshotId);
-    assert.equal(canonicalJsonSha256(stored!.result), view.snapshot.resultSha256, "stored JSON re-hashes to the recorded hash");
+    assert.ok(!("events" in stored!.view));
+    const replayed = replaySnapshot(stored!.meta, stored!.view, stored!.sources, forecastAssumptionsSchema.parse(syntheticForecastAssumptionsInput()));
+    assert.equal(canonicalJsonSha256(replayed), view.snapshot.resultSha256);
+    const { events: _events, ...replayedView } = replayed;
+    assert.deepEqual(JSON.parse(JSON.stringify(replayedView)), JSON.parse(JSON.stringify(stored!.view)));
+    // A stored body whose recorded inputs no longer reproduce its hash is refused.
+    const tamperedSources = { ...stored!.sources, items: stored!.sources.items.map(item => item.key === "deposits_held" ? { ...item, amountCents: "1" } : item) };
+    await fixture.db.query(
+      `INSERT INTO company_forecast_snapshots (id, organization_id, scenario_id, assumption_version, model_version, actuals_cutoff, source_fingerprint, result_sha256, result, created_by)
+       SELECT '99999999-9999-4999-8999-999999999999', organization_id, scenario_id, assumption_version, model_version, actuals_cutoff, source_fingerprint, result_sha256,
+              jsonb_set(result, '{replay,sources}', $2::jsonb), created_by FROM company_forecast_snapshots WHERE id = $1`,
+      [snapshotId, JSON.stringify(tamperedSources)],
+    );
+    await rejectsWith(port.explain(access.principal, { scope, source: { snapshotId: "99999999-9999-4999-8999-999999999999" }, line: "cash.closing", period: view.result.weeks[0]!.key }), "conflict", "forecast_snapshot_not_reproducible");
 
     // Approve requires the current version's snapshot and owner/admin role.
     detail = await port.get(access.principal, { scope, scenarioId });
