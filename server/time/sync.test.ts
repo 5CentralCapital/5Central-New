@@ -47,3 +47,27 @@ test("Time sync isolates an invalid provider object and preserves valid objects 
     await database.close();
   }
 });
+
+test("a Time sync with no provider changes keeps each stream's modified-since checkpoint", async () => {
+  const database = await createSyntheticCompanyDatabase();
+  try {
+    let userPages: Record<string, Record<string, unknown>> = { one: { id: "employee-1", first_name: "Valid", last_name: "Employee", active: true, last_modified: "2026-09-21T12:00:00.000Z" } };
+    const requestedSince: (string | undefined)[] = [];
+    const client: QuickBooksTimeClient = {
+      async getPage(resource, request) {
+        if (resource === "users") { requestedSince.push(request.modifiedSince); return { more: false, results: userPages }; }
+        return { more: false, results: {} };
+      },
+    };
+    const service = createTimeSyncService({ executor: database.executor, client, getAccessToken: async () => "synthetic-access-token", now: () => new Date("2026-09-21T13:00:00.000Z") });
+    await service.sync(scope, { maxPages: 2 });
+    userPages = {};
+    await service.sync(scope, { maxPages: 2 });
+    const checkpoint = await createTimeStore(database.executor).readCheckpoint(scope, "users");
+    assert.equal(checkpoint?.modifiedSince, "2026-09-21T12:00:00.000Z");
+    await service.sync(scope, { maxPages: 2 });
+    assert.deepEqual(requestedSince, [undefined, "2026-09-21T11:59:59.000Z", "2026-09-21T11:59:59.000Z"]);
+  } finally {
+    await database.close();
+  }
+});

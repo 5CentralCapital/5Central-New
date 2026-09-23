@@ -48,7 +48,8 @@ async function fetchAll(client: QuickBooksTimeClient, stream: Stream, accessToke
     const response: TimeProviderPage = await client.getPage(stream, { accessToken, page, limit: 200, modifiedSince: since ?? undefined });
     items.push(...Object.values(response.results)); more = response.more; page += 1;
   } while (more);
-  return { stream, items, deleted: stream === "timesheets_deleted" ? items : [], watermark: maxModified(items), modifiedSince: since, complete: !more && reason === null, reason };
+  // An empty page keeps the prior checkpoint; a null watermark would restart the stream from the beginning.
+  return { stream, items, deleted: stream === "timesheets_deleted" ? items : [], watermark: maxModified(items) ?? checkpoint?.modifiedSince ?? null, modifiedSince: since, complete: !more && reason === null, reason };
 }
 
 export interface TimeSyncService extends TimeSyncPort {
