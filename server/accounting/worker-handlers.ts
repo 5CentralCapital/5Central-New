@@ -30,6 +30,7 @@ const writePayloadSchema = scopeSchema.extend({
   fields: z.record(z.string(), z.unknown()),
   entityId: z.string().optional(),
   syncToken: z.string().optional(),
+  rentalPosting: z.object({ activityDate: z.string().date(), method: z.enum(["native_receivables", "summary_bridge"]) }).strict().optional(),
 }).strict();
 
 function parse<T extends z.ZodTypeAny>(schema: T, value: unknown): z.output<T> {
@@ -130,7 +131,7 @@ export function createAccountingJobHandlers(options: AccountingJobHandlerOptions
         const qbo = configured(services, scope);
         const writer = createQboWriteService({ executor, clientFor: target => qbo.createAccountingClient(target), policy: writePolicy });
         try {
-          const outcome = await writer.execute({ scope, operationKey: payload.operationKey, entity: payload.entity, operation: payload.operation, fields: payload.fields as never, ...(payload.entityId ? { entityId: payload.entityId } : {}), ...(payload.syncToken ? { syncToken: payload.syncToken } : {}) });
+          const outcome = await writer.execute({ scope, operationKey: payload.operationKey, entity: payload.entity, operation: payload.operation, fields: payload.fields as never, ...(payload.entityId ? { entityId: payload.entityId } : {}), ...(payload.syncToken ? { syncToken: payload.syncToken } : {}), ...(payload.rentalPosting ? { rentalPosting: payload.rentalPosting } : {}) });
           // An unknown outcome is retried; the next attempt reads back before any resend.
           if (outcome.status === "ambiguous") throw new RetryLaterJobError("quickbooks_ambiguous_write", "QuickBooks write outcome is unknown; the next attempt reconciles by readback", 60_000);
           if (outcome.status === "conflict") throw new PermanentJobError(`qbo_write_${outcome.reason}`, "QuickBooks refused the write; reread the record and submit a new operation");

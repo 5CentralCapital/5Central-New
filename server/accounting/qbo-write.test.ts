@@ -129,3 +129,26 @@ test("a stale SyncToken is a definitive rejection that requires a reread, not a 
     await synthetic.close();
   }
 });
+
+test("rental postings are held unless the entity's posting policy allows that method on that date", async () => {
+  const { synthetic, executor } = await database();
+  try {
+    const p = provider();
+    const policy = qboWritePolicyFromEnv({ QBO_WRITES_ENABLED: "on", QBO_WRITE_TYPES: "JournalEntry:create" });
+    const writer = createQboWriteService({ executor, clientFor: () => p.client, policy });
+    const entry = { scope, operationKey: "bridge-2026-08", entity: "JournalEntry", operation: "create" as const, fields: { TxnDate: "2026-08-31" } };
+    const missing = await writer.execute({ ...entry, rentalPosting: { activityDate: "2026-08-31", method: "summary_bridge" } });
+    assert.equal(missing.status, "held");
+    assert.match((missing as { reason: string }).reason, /Set the rental accounting method/);
+    await synthetic.executor.query(`INSERT INTO accounting_rental_posting_policies (id, organization_id, legal_entity_id, method, effective_from, cutoff_date, invoice_delivery_verified, approved_by, reason)
+      VALUES ('60000000-0000-4000-8000-000000000001',$1,$2,'native_receivables','2026-01-01','2026-01-01',true,'demo-admin','native')`, [scope.organizationId, scope.legalEntityId]);
+    const conflict = await writer.execute({ ...entry, rentalPosting: { activityDate: "2026-08-31", method: "summary_bridge" } });
+    assert.match((conflict as { reason: string }).reason, /double count/);
+    const invoice = await createQboWriteService({ executor, clientFor: () => p.client, policy: qboWritePolicyFromEnv({ QBO_WRITES_ENABLED: "on", QBO_WRITE_TYPES: "Invoice:create" }) }).execute({ scope, operationKey: "inv-1", entity: "Invoice", operation: "create", fields: {} });
+    assert.equal(invoice.status, "held");
+    assert.equal(p.posts.length, 0);
+    assert.equal((await executor.query("SELECT 1 FROM accounting_qbo_write_attempts")).rows.length, 0);
+  } finally {
+    await synthetic.close();
+  }
+});

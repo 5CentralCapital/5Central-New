@@ -12,6 +12,8 @@ import {
 } from "../integrations/quickbooks/write-reconciliation";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { AccountingError } from "./errors";
+import { CompanyCommandError } from "../company/commands/errors";
+import { assertRentalPostingMethod } from "./posting-policy";
 
 export type QboWriteOperation = "create" | "update" | "void" | "delete";
 
@@ -22,6 +24,9 @@ export const QBO_WRITE_SUPPORT: Readonly<Record<string, readonly QboWriteOperati
   Bill: ["create", "update"],
   JournalEntry: ["create"],
 });
+
+/** QBO entities that carry tenant receivables; writing them is rental posting. */
+export const QBO_RENTAL_RECEIVABLE_ENTITIES: ReadonlySet<string> = new Set(["Invoice", "Payment", "CreditMemo", "SalesReceipt", "RefundReceipt"]);
 
 /** Natural keys used to find a created object when the provider response was lost. */
 const CREATE_READBACK_KEYS: Readonly<Record<string, string>> = { Vendor: "DisplayName", Customer: "DisplayName" };
@@ -142,6 +147,12 @@ export interface QboWriteRequest {
   readonly fields: QuickBooksJsonObject;
   readonly entityId?: string;
   readonly syncToken?: string;
+  /**
+   * Set when the write posts rental activity (receivables or a summary
+   * bridge entry). The entity's rental posting policy must allow exactly
+   * this method on this date, or the write is held.
+   */
+  readonly rentalPosting?: { readonly activityDate: string; readonly method: "native_receivables" | "summary_bridge" };
 }
 
 export type QboWriteOutcome =
@@ -196,6 +207,17 @@ export function createQboWriteService(options: {
     async execute(request: QboWriteRequest): Promise<QboWriteOutcome> {
       const held = heldReason(request, policy);
       if (held) return { status: "held", reason: held };
+      if (QBO_RENTAL_RECEIVABLE_ENTITIES.has(request.entity) && !request.rentalPosting) {
+        return { status: "held", reason: `A QuickBooks ${request.entity} posts rental activity; submit it with its rental posting method and date.` };
+      }
+      if (request.rentalPosting) {
+        try {
+          await assertRentalPostingMethod(options.executor, { organizationId: request.scope.organizationId, legalEntityId: request.scope.legalEntityId, activityDate: request.rentalPosting.activityDate, method: request.rentalPosting.method });
+        } catch (error) {
+          if (error instanceof CompanyCommandError) return { status: "held", reason: error.message };
+          throw error;
+        }
+      }
       assertFields(request);
       const journal = new PostgresQuickBooksWriteJournal(options.executor, request.scope, { entity: request.entity, operation: request.operation }, options.now);
       const requestShape: QuickBooksJsonObject = { ...request.fields };
