@@ -6,6 +6,7 @@ import type { RentOpsQueryExecutor } from "../../rent-ops/repositories/postgres"
 import type { CombinedFinancialReadPort, CombinedFinancialReadResult, CombinedFinancialReportId, FinancialReportingElimination, FinancialReportingLine } from "../combined-financial-engine";
 import { ReportingError } from "../errors";
 import type { ReportingEngineProbeResult } from "../registry";
+import { centsToDecimalString } from "../../../shared/reporting/format";
 import { periodBounds } from "../source-engine-utils";
 import { REPORT_READ_ROLES } from "./scope";
 
@@ -65,6 +66,28 @@ function incomeClass(account: AccountInfo | undefined): "income" | "expense" | n
   return null;
 }
 
+/**
+ * Splits `amount` across `weights` in proportion, exactly: shares are
+ * floored and the leftover cents go to the largest remainders (ties to the
+ * earlier weight), so the shares always sum to `amount`.
+ */
+export function allocateProRata(amount: bigint, weights: readonly bigint[]): bigint[] {
+  const zero = BigInt(0);
+  const total = weights.reduce((sum, weight) => sum + weight, zero);
+  if (total <= zero || weights.some(weight => weight < zero)) throw new RangeError("Pro-rata weights must be non-negative with a positive total.");
+  const negative = amount < zero;
+  const magnitude = negative ? -amount : amount;
+  const shares = weights.map(weight => magnitude * weight / total);
+  let remainder = magnitude - shares.reduce((sum, share) => sum + share, zero);
+  const order = weights.map((weight, index) => ({ index, rest: magnitude * weight % total })).sort((left, right) => (left.rest === right.rest ? left.index - right.index : left.rest > right.rest ? -1 : 1));
+  for (let position = 0; remainder > zero; position += 1, remainder -= BigInt(1)) shares[order[position % order.length]!.index]! += BigInt(1);
+  return negative ? shares.map(share => -share) : shares;
+}
+
+const BILL_LINK = /^linked:Bill:(.+)$/;
+
+interface MirroredBillLine { readonly lineId: string; readonly accountObjectId: string | null; readonly amountCents: bigint; readonly currency: string; readonly posted: boolean }
+
 function bodyText(body: Record<string, unknown>, ...keys: string[]): string | null {
   for (const key of keys) { const value = body[key]; if (typeof value === "string" && value.trim()) return value.trim(); }
   return null;
@@ -114,7 +137,7 @@ export function createMirrorCombinedFinancialReadPort(options: MirrorFinancialPo
   }
 
   /** The one property mapped to an entity for the whole period, if exactly one. */
-  async function soleProperty(organizationId: string, legalEntityId: string, from: string, through: string): Promise<{ propertyId: string | null; mappingCount: number; fingerprint: string }> {
+  async function soleProperty(organizationId: string, legalEntityId: string, from: string, through: string): Promise<{ propertyId: string | null; properties: readonly string[]; mappingCount: number; fingerprint: string }> {
     const result = await options.executor.query<{ property_id: string; effective_from: unknown; effective_until: unknown; covers: boolean }>(
       `SELECT property_id, effective_from, effective_until, effective_from <= $3::date AND (effective_until IS NULL OR effective_until > $4::date) AS covers
          FROM company_property_entity_periods
@@ -125,7 +148,56 @@ export function createMirrorCombinedFinancialReadPort(options: MirrorFinancialPo
     const fingerprint = createHash("sha256").update(JSON.stringify(result.rows.map(row => [row.property_id, String(row.effective_from), String(row.effective_until)]))).digest("hex").slice(0, 16);
     const properties = Array.from(new Set(result.rows.map(row => String(row.property_id))));
     const propertyId = properties.length === 1 && result.rows.every(row => row.covers === true) ? properties[0]! : null;
-    return { propertyId, mappingCount: properties.length, fingerprint };
+    return { propertyId, properties, mappingCount: properties.length, fingerprint };
+  }
+
+  /** Current mirrored lines of the given bills, for cash-basis attribution of their payments. */
+  async function billLinesFor(scope: FinancialSourceScope, billIds: readonly string[]): Promise<Map<string, MirroredBillLine[]>> {
+    const bills = new Map<string, MirroredBillLine[]>();
+    if (!billIds.length) return bills;
+    const result = await options.executor.query<{ object_id: string; line_id: string; account_object_id: string | null; amount_cents: string; currency: string; posting_state: string }>(
+      `SELECT l.object_id, l.source_line_id AS line_id, l.account_object_id, l.amount_cents::text AS amount_cents, l.currency, l.posting_state
+         FROM accounting_qbo_source_line_balances b JOIN accounting_qbo_transaction_lines l
+           ON l.organization_id=b.organization_id AND l.legal_entity_id=b.legal_entity_id AND l.environment=b.environment AND l.realm_id=b.realm_id
+          AND l.object_type=b.object_type AND l.object_id=b.object_id AND l.source_line_id=b.line_id AND l.source_version=b.latest_version
+        WHERE b.organization_id=$1 AND b.legal_entity_id=$2 AND b.environment=$3 AND b.realm_id=$4 AND b.is_current=true
+          AND b.object_type='Bill' AND b.object_id = ANY($5::varchar[])
+        ORDER BY l.object_id, l.source_line_id`,
+      [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId, billIds],
+    );
+    for (const row of result.rows) {
+      const list = bills.get(String(row.object_id)) ?? [];
+      list.push({ lineId: String(row.line_id), accountObjectId: row.account_object_id === null ? null : String(row.account_object_id), amountCents: BigInt(String(row.amount_cents)), currency: String(row.currency), posted: row.posting_state === "posted" });
+      bills.set(String(row.object_id), list);
+    }
+    return bills;
+  }
+
+  /**
+   * Cash-basis expense for a bill payment: the cash paid is attributed to the
+   * paid bill's lines in proportion to their amounts. `null` when the bill's
+   * lines are not in the mirror (or are not all posted in the same currency),
+   * so the payment cannot be attributed.
+   */
+  function attributeBillPayment(reportId: CombinedFinancialReportId, line: FinancialSourceLineResolution, bills: Map<string, MirroredBillLine[]>, accounts: Map<string, AccountInfo>, legalEntityId: string, realmId: string, propertyId: string | null): FinancialReportingLine[] | null {
+    const billId = BILL_LINK.exec(line.source.lineId ?? "")?.[1];
+    const billLines = billId ? bills.get(billId) : undefined;
+    if (!billId || !billLines?.length || billLines.some(item => !item.posted || item.currency !== line.currency)) return null;
+    const weights = billLines.map(item => item.amountCents);
+    if (weights.reduce((sum, weight) => sum + weight, BigInt(0)) <= BigInt(0)) return null;
+    const shares = allocateProRata(BigInt(line.amountCents), weights);
+    const sourceId = `${line.source.objectType}:${line.source.objectId}:${line.source.lineId ?? "*"}:${line.source.version}`;
+    const result: FinancialReportingLine[] = [];
+    billLines.forEach((billLine, index) => {
+      if (!billLine.accountObjectId) return;
+      const account = accounts.get(billLine.accountObjectId);
+      const category = incomeClass(account);
+      if (!category) return;
+      const share = shares[index]!;
+      const id = `${sourceId}>Bill:${billId}:${billLine.lineId}`;
+      result.push({ id, sourceId: id, legalEntityId, propertyId, unitId: null, date: line.postedOn!, month: line.postedOn!.slice(0, 7), currency: line.currency, sourceRealmId: realmId, basis: "cash", accountId: billLine.accountObjectId, accountName: account?.name ?? null, amountCents: (category === "expense" ? share : -share).toString(), category, statement: statementFor(reportId) });
+    });
+    return result;
   }
 
   async function listLines(scope: FinancialSourceScope, from: string | undefined, through: string): Promise<{ items: FinancialSourceLineResolution[]; coverage: FinancialSourceCoverage | null }> {
@@ -168,7 +240,8 @@ export function createMirrorCombinedFinancialReadPort(options: MirrorFinancialPo
     }
     // Income-statement semantics: a Deposit credits its offset account; a
     // Purchase or Bill debits its expense account. Bills are recognized on
-    // the accrual basis only; bill payments move cash, not expense.
+    // the accrual basis only; on the cash basis their payments are attributed
+    // to the paid bill's lines by attributeBillPayment.
     if (type === "BillPayment") return null;
     if (basis === "cash" && type === "Bill") return null;
     const category = incomeClass(account);
@@ -207,6 +280,12 @@ export function createMirrorCombinedFinancialReadPort(options: MirrorFinancialPo
       const fingerprints: string[] = [];
       let covered = 0;
       let complete = true;
+      const attributedProperties = new Set<string>();
+      const unknownProperties = new Set<string>();
+      let unattributedLineCount = 0;
+      const cashBillAttribution = basis === "cash" && reportId !== "accounts-payable" && reportId !== "general-ledger-consolidated";
+      let excludedBillPayments = 0;
+      let excludedBillPaymentCents = BigInt(0);
       for (const entity of legalEntityIds) {
         const legalEntityId = legalEntityIdSchema.parse(entity) as LegalEntityId;
         if (!propertyIds.length) authorizeCompanyRead(options.principal, { organizationId: context.request.scope.organizationId, legalEntityId }, REPORT_READ_ROLES);
@@ -231,19 +310,47 @@ export function createMirrorCombinedFinancialReadPort(options: MirrorFinancialPo
         fingerprints.push(`${legalEntityId}:${property.fingerprint}`);
         const accounts = new Map(Array.from(accountBodies.entries()).map(([id, body]) => [id, { name: bodyText(body, "FullyQualifiedName", "Name"), classification: bodyText(body, "Classification"), accountType: bodyText(body, "AccountType") } satisfies AccountInfo]));
         const vendors = new Map(Array.from(vendorBodies.entries()).map(([id, body]) => [id, bodyText(body, "DisplayName", "CompanyName")]));
+        if (property.propertyId) attributedProperties.add(property.propertyId);
         const { items } = await listLines(scope, from, through);
-        for (const item of items) {
-          const mapped = mapLine(reportId, basis, item, accounts, vendors, legalEntityId, realmId, property.propertyId);
-          if (!mapped) continue;
-          if (selectedAccounts.size && !selectedAccounts.has(mapped.accountId)) continue;
+        let entityUnattributed = 0;
+        const accept = (mapped: FinancialReportingLine) => {
+          if (selectedAccounts.size && !selectedAccounts.has(mapped.accountId)) return;
+          if (!mapped.propertyId) entityUnattributed += 1;
           if (propertyIds.length) {
-            if (!mapped.propertyId || !propertyIds.includes(mapped.propertyId)) continue;
+            if (!mapped.propertyId || !propertyIds.includes(mapped.propertyId)) return;
             authorizeCompanyRead(options.principal, { organizationId: context.request.scope.organizationId, legalEntityId, propertyId: propertyReferenceIdSchema.parse(mapped.propertyId) }, REPORT_READ_ROLES);
           }
           lines.push(mapped);
+        };
+        const isCashBillPayment = (item: FinancialSourceLineResolution) => cashBillAttribution && item.transactionType === "BillPayment" && item.lineRole === "payment_source" && item.postingState === "posted" && Boolean(item.postedOn);
+        const bills = cashBillAttribution
+          ? await billLinesFor(scope, Array.from(new Set(items.filter(isCashBillPayment).map(item => BILL_LINK.exec(item.source.lineId ?? "")?.[1]).filter((id): id is string => Boolean(id)))))
+          : new Map<string, MirroredBillLine[]>();
+        for (const item of items) {
+          if (isCashBillPayment(item)) {
+            const attributed = attributeBillPayment(reportId, item, bills, accounts, legalEntityId, realmId, property.propertyId);
+            if (attributed === null) { excludedBillPayments += 1; excludedBillPaymentCents += BigInt(item.amountCents); continue; }
+            attributed.forEach(accept);
+            continue;
+          }
+          const mapped = mapLine(reportId, basis, item, accounts, vendors, legalEntityId, realmId, property.propertyId);
+          if (mapped) accept(mapped);
+        }
+        if (entityUnattributed) {
+          // Any property mapped to this entity may own these lines, so its
+          // actuals by property are unknown rather than the attributed sum.
+          unattributedLineCount += entityUnattributed;
+          for (const propertyId of property.properties) unknownProperties.add(propertyId);
+          if (propertyIds.length) reasons.push("Some QuickBooks lines have no single dated property mapping and are excluded from the property view.");
         }
       }
       if (!covered) return unavailable(reasons.slice(1).join(" ") || "No selected legal entity has QuickBooks data.");
+      if (excludedBillPayments) {
+        complete = false;
+        // Entity-wide amounts are named only to principals reading whole entities.
+        const amount = propertyIds.length ? "" : ` (${centsToDecimalString(excludedBillPaymentCents.toString())})`;
+        reasons.splice(1, 0, `${excludedBillPayments} bill payment line${excludedBillPayments === 1 ? "" : "s"}${amount} ${excludedBillPayments === 1 ? "is" : "are"} excluded from this cash-basis statement because the paid bill is not in the QuickBooks mirror.`);
+      } else if (cashBillAttribution) reasons.splice(1, 0, "Bill payments are attributed to the paid bill's accounts in proportion to its lines.");
       let consolidated: Partial<CombinedFinancialReadResult> = {};
       if (reportId.endsWith("-consolidated")) {
         const policy = context.request.consolidation;
@@ -260,6 +367,11 @@ export function createMirrorCombinedFinancialReadPort(options: MirrorFinancialPo
       return {
         lines,
         ...consolidated,
+        propertyAttribution: {
+          attributedPropertyIds: Array.from(attributedProperties).filter(id => !unknownProperties.has(id)).sort(),
+          unknownPropertyIds: Array.from(unknownProperties).sort(),
+          unattributedLineCount,
+        },
         propertyMappingVersion: fingerprints.length ? `company_property_entity_periods:${createHash("sha256").update(fingerprints.sort().join("|")).digest("hex").slice(0, 16)}` : null,
         coverage: {
           state: "partial",

@@ -36,3 +36,19 @@ export function packageRunSummary(run: ReportPackageRun): { readonly complete: b
   const parts = [failed ? `${failed} failed` : null, incomplete ? `${incomplete} incomplete` : null].filter(Boolean);
   return { complete, label: `Package incomplete: ${parts.join(", ") || "completeness not recorded"}` };
 }
+
+/** The part of `window.open` the print action needs. */
+export type OpenWindow = (url: string, target: string) => { opener: unknown } | null;
+
+/**
+ * Opens the printable export in a new tab. `noopener` would make
+ * `window.open` return null even on success, so the tab is opened normally
+ * and its opener is cleared. Returns false only when the tab was blocked,
+ * which is the one case that should fall back to a download.
+ */
+export function openPrintView(open: OpenWindow, url: string): boolean {
+  const view = open(url, "_blank");
+  if (!view) return false;
+  try { view.opener = null; } catch { /* cross-origin view; opener already unreachable */ }
+  return true;
+}

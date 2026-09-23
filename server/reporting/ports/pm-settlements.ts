@@ -20,7 +20,11 @@ function centsText(value: unknown, field: string): string {
 }
 
 /**
- * Read-only port over accounting PM settlements (migration 047). Rows are
+ * Read-only port over accounting PM settlements (migration 047). With a
+ * `from` date it returns every settlement overlapping [from, through],
+ * including ones that start before or end after the period so the engine can
+ * flag them; without one it returns settlements ending on or before
+ * `through` (known balances as of that date). Rows are
  * limited to the request's dated entity/property scopes and the principal's
  * grants; the SQL never widens an empty scope to the organization.
  */
@@ -43,7 +47,8 @@ export function createPostgresPmSettlementReadPort(deps: { readonly executor: Re
                 s.closing_held_cents::text AS closing_held_cents, s.state, s.exception_reason, s.bank_settled_on, s.updated_at
            FROM accounting_pm_settlements s
            JOIN rent_ops_properties p ON p.id = s.property_id
-          WHERE s.organization_id=$1 AND s.period_end <= $2::date AND ($3::date IS NULL OR s.period_end >= $3::date)
+          WHERE s.organization_id=$1
+            AND (CASE WHEN $3::date IS NULL THEN s.period_end <= $2::date ELSE s.period_start <= $2::date AND s.period_end >= $3::date END)
             AND ${predicate}
           ORDER BY s.legal_entity_id, s.property_id, s.manager_name, s.period_start, s.id
           LIMIT $${values.length}`,

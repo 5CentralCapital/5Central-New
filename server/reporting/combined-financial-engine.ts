@@ -99,6 +99,19 @@ export interface CombinedFinancialReadResult {
   readonly unitAllocationVersion?: string | null;
   readonly ownershipMappingVersion?: string | null;
   readonly translationVersion?: string | null;
+  /**
+   * Property attribution evidence. `attributedPropertyIds` are properties
+   * whose lines are fully attributed (the sole property of a covered entity
+   * for the whole period); `unknownPropertyIds` are properties mapped to an
+   * entity that returned lines without a property, so their actuals by
+   * property are unknown. Lines without a property are dropped from a
+   * property-filtered read and counted in `unattributedLineCount`.
+   */
+  readonly propertyAttribution?: {
+    readonly attributedPropertyIds: readonly string[];
+    readonly unknownPropertyIds: readonly string[];
+    readonly unattributedLineCount: number;
+  };
   readonly coverage: {
     readonly state: ReportSourceCoverage["state"];
     readonly evidence: ReportSourceCoverage["evidence"];
@@ -353,7 +366,7 @@ export function createCombinedFinancialReportingEngine(read: CombinedFinancialRe
       } else if (reportId === "property-t12") {
         if (!source.propertyMappingVersion) throw new ReportingError("report_unavailable", "Property T12 requires an approved dated property mapping version.", 409, { dependency: "effective_property_entity_mapping" });
         const unallocated = lines.filter(line => !line.propertyId);
-        if (unallocated.length) missingData.push(missing("property_allocation_missing", "Some T12 lines have no verified dated property mapping.", "partial"));
+        if (unallocated.length || source.propertyAttribution?.unattributedLineCount) missingData.push(missing("property_allocation_missing", "Some T12 lines have no verified dated property mapping.", "partial"));
         rows = aggregate(lines.filter(line => line.propertyId), line => `${line.propertyId}:${accountKey(line, false)}:${line.month ?? line.date.slice(0, 7)}`, line => ({ propertyId: line.propertyId, accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null, month: line.month ?? line.date.slice(0, 7), category: line.category ?? null }));
       } else if (reportId === "accounts-receivable") {
         const receivable = lines.filter(line => line.category === "accounts_receivable" || line.category === "receivable");

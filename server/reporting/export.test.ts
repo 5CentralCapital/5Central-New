@@ -93,3 +93,22 @@ test("export totals match the API run totals and the on-screen formatter", async
   assert.ok(html.includes("<title>Work orders</title>"));
   assert.equal(exportReportCsv({ ...result.run, totals: [] }).includes("Total,Amount"), false);
 });
+
+test("CSV keeps signed integer, decimal and percent values numeric and still neutralizes text in those columns", () => {
+  const run = {
+    reportId: "operating-growth-plan", definitionVersion: "1", totals: [],
+    columns: [
+      { id: "value", label: "Value", type: "decimal", sortable: true, filterable: true, sensitive: false },
+      { id: "ageDays", label: "Age", type: "integer", sortable: true, filterable: true, sensitive: false },
+      { id: "share", label: "Share", type: "percent", sortable: true, filterable: true, sensitive: false },
+      { id: "note", label: "Note", type: "text", sortable: true, filterable: true, sensitive: false },
+    ],
+    rows: [
+      { rowId: "r1", values: { value: "-3154.40", ageDays: -2, share: "-12.5", note: "-3154.40" } },
+      { rowId: "r2", values: { value: "=1+1", ageDays: "-2+3", share: "@x", note: "ok" } },
+    ],
+  } as unknown as Parameters<typeof exportReportCsv>[0];
+  const rows = parseCsv(exportReportCsv(run));
+  assert.deepEqual(rows[1], ["r1", "-3154.40", "-2", "-12.5", "'-3154.40"]);
+  assert.deepEqual(rows[2], ["r2", "'=1+1", "'-2+3", "'@x", "ok"]);
+});

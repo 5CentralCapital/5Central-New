@@ -44,6 +44,7 @@ export function createPropertyStatementReadPort(options: PropertyStatementPortOp
       let bookActuals: PropertyStatementReadResult["bookActuals"] = null;
       let bookReason: string | null = "QuickBooks actuals are not connected for these properties.";
       let bookState: "unavailable" | "partial" | "complete" = "unavailable";
+      let bookUnknownPropertyIds: string[] = [];
       if (options.financial && scope.legalEntityIds.length && (context.request.basis === "cash" || context.request.basis === "accrual")) {
         const financialContext: ReportingEngineContext = { ...context, request: { ...context.request } };
         try {
@@ -51,8 +52,13 @@ export function createPropertyStatementReadPort(options: PropertyStatementPortOp
           if (book.coverage.state !== "unavailable") {
             bookActuals = book.lines.filter(line => line.propertyId && (line.category === "income" || line.category === "expense") && line.date >= from && line.date <= through).map(line => ({ propertyId: line.propertyId!, category: line.category as "income" | "expense", amountCents: line.amountCents, currency: line.currency }));
             bookState = book.coverage.state;
+            // Only a property whose lines are fully attributed has known book
+            // actuals; without attribution evidence none do.
+            const attributed = new Set(book.propertyAttribution?.attributedPropertyIds ?? []);
+            bookUnknownPropertyIds = properties.map(item => item.propertyId).filter(id => !attributed.has(id));
           }
           bookReason = book.coverage.reason ?? null;
+          if (bookUnknownPropertyIds.length) bookReason = ["QuickBooks lines are not attributed to every selected property by a single dated property mapping, so book actuals for those properties are unknown.", bookReason].filter(Boolean).join(" ").slice(0, 500);
         } catch (error) {
           bookReason = error instanceof ReportingError ? error.message : "QuickBooks actuals could not be read.";
         }
@@ -68,6 +74,7 @@ export function createPropertyStatementReadPort(options: PropertyStatementPortOp
         settlements,
         settlementCoverage: { state: settlements.length ? settlementResult.coverage.state : "unavailable", reason: settlements.length ? settlementResult.coverage.reason ?? null : "No PM settlements fall within this period." },
         bookActuals,
+        bookUnknownPropertyIds,
         bookCoverage: { state: bookState, reason: bookReason },
       };
     },

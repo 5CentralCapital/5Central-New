@@ -47,7 +47,7 @@ export function createFrozenRunLenderPackageReadPort(deps: { readonly executor: 
         return parsed.success ? [{ run: parsed.data, rowCount: Number(row.row_count) }] : [];
       });
       const sections = LENDER_PACKAGE_TEMPLATE.map(template => {
-        const candidates = runs.filter(({ run }) => {
+        const matching = runs.filter(({ run }) => {
           if (run.reportId !== template.reportId) return false;
           const period = reportPeriodSchema.parse(run.period);
           const periodMatches = template.period === "as_of"
@@ -57,11 +57,16 @@ export function createFrozenRunLenderPackageReadPort(deps: { readonly executor: 
           const entityMatches = runEntities.length > 0 && runEntities.every(id => entities.has(id));
           return periodMatches && entityMatches;
         });
-        const selected = candidates[0];
-        if (!selected) return { section: template.section, title: template.title, reportId: template.reportId, runId: "", rowCount: 0, state: "unavailable" as const, reason: `Run ${template.title} for this period and these entities first.` };
-        const coveredEntities = new Set(candidates.flatMap(candidate => candidate.run.scope.legalEntityIds.map(String)));
-        const complete = reportRunCompleteness(selected.run) === "complete" && Array.from(entities).every(id => coveredEntities.has(id));
-        const reason = complete ? null : Array.from(entities).some(id => !coveredEntities.has(id)) ? `${template.title} does not cover every selected entity.` : `${template.title} has incomplete source coverage.`;
+        // A section is a whole-entity statement: a run limited to properties
+        // or units is not the entity section.
+        const candidates = matching.filter(({ run }) => run.scope.propertyIds.length === 0 && run.scope.unitIds.length === 0);
+        // The linked run is the one judged: the newest single run that covers
+        // every selected entity, else the newest partial-scope run.
+        const covering = candidates.find(({ run }) => Array.from(entities).every(id => run.scope.legalEntityIds.map(String).includes(id)));
+        const selected = covering ?? candidates[0];
+        if (!selected) return { section: template.section, title: template.title, reportId: template.reportId, runId: "", rowCount: 0, state: "unavailable" as const, reason: matching.length ? `${template.title} is saved only for selected properties; run it for the whole entities first.` : `Run ${template.title} for this period and these entities first.` };
+        const complete = covering !== undefined && reportRunCompleteness(selected.run) === "complete";
+        const reason = complete ? null : !covering ? `No single ${template.title} run covers every selected entity.` : `${template.title} has incomplete source coverage.`;
         return { section: template.section, title: template.title, reportId: template.reportId, runId: selected.run.id, rowCount: selected.rowCount, state: complete ? "ready" as const : "partial" as const, reason };
       });
       const ready = sections.filter(section => section.state === "ready").length;

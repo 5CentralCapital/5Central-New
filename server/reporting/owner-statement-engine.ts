@@ -49,7 +49,11 @@ export interface PmSettlementReadResult {
 }
 
 export interface PmSettlementReadPort {
-  /** Settlements whose period ends on or before `through` and (when given) ends on or after `from`. */
+  /**
+   * With `from`: settlements whose period overlaps [from, through], including
+   * ones that start before `from` or end after `through`. Without `from`:
+   * settlements whose period ends on or before `through`.
+   */
   read(input: { readonly context: ReportingEngineContext; readonly from: string | null; readonly through: string }): Promise<PmSettlementReadResult>;
   /** Organization-level presence check for the catalog. */
   hasSettlements?(organizationId: string): Promise<boolean>;
@@ -117,7 +121,7 @@ export function createOwnerStatementReportingEngine(read: PmSettlementReadPort):
       if (!through) throw new ReportingError("report_validation", "Choose a report date.", 400);
       const source = await read.read({ context, from: reportId === "rental-owner-statement" ? bounds.from : null, through });
       if (source.coverage.state === "unavailable") throw new ReportingError("report_unavailable", source.coverage.reason ?? "Property-manager settlements are unavailable.", 409, { dependency: "pm_settlements" });
-      const settlements = scoped(context, source.settlements).sort((left, right) => chainKey(left).localeCompare(chainKey(right)) || left.periodStart.localeCompare(right.periodStart));
+      const settlements = scoped(context, source.settlements).filter(item => reportId === "rental-owner-statement" || item.periodEnd <= through).sort((left, right) => chainKey(left).localeCompare(chainKey(right)) || left.periodStart.localeCompare(right.periodStart));
       const missing: ReportMissingData[] = [];
       for (const settlement of settlements) {
         if (!settlementIdentityHolds(settlement)) missing.push({ code: "pm_settlement_identity_failed", state: "partial", message: `The ${settlement.managerName} settlement for ${settlement.periodStart} to ${settlement.periodEnd} does not reconcile opening, activity and closing balances.`, scope: settlement.id });
@@ -148,9 +152,11 @@ export function createOwnerStatementReportingEngine(read: PmSettlementReadPort):
         ]) });
         return { ...result, coverage: [sourceCoverage(context, { source: "pm_settlements", state: incomplete ? "partial" : source.coverage.state, evidence: source.coverage.evidence, basis: "mixed", watermark: source.coverage.watermark ?? null, rowCount: result.rows.length, reason: source.coverage.reason ?? null })] };
       }
-      const inRange = settlements.filter(item => !bounds.from || item.periodStart >= bounds.from);
-      const straddling = settlements.filter(item => bounds.from && item.periodStart < bounds.from && item.periodEnd >= bounds.from);
-      if (straddling.length) missing.push({ code: "pm_settlement_straddles_period", state: "partial", message: `${straddling.length} settlement${straddling.length === 1 ? " starts" : "s start"} before the report period and ${straddling.length === 1 ? "is" : "are"} excluded.`, count: straddling.length });
+      const inRange = settlements.filter(item => (!bounds.from || item.periodStart >= bounds.from) && item.periodEnd <= through);
+      const startsBefore = settlements.filter(item => bounds.from && item.periodStart < bounds.from && item.periodEnd >= bounds.from);
+      const endsAfter = settlements.filter(item => item.periodEnd > through && (!bounds.from || item.periodStart >= bounds.from));
+      if (startsBefore.length) missing.push({ code: "pm_settlement_straddles_period", state: "partial", message: `${startsBefore.length} settlement${startsBefore.length === 1 ? " starts" : "s start"} before the report period and ${startsBefore.length === 1 ? "is" : "are"} excluded.`, count: startsBefore.length });
+      if (endsAfter.length) missing.push({ code: "pm_settlement_extends_past_period", state: "partial", message: `${endsAfter.length} settlement${endsAfter.length === 1 ? " ends" : "s end"} after the report period and ${endsAfter.length === 1 ? "is" : "are"} excluded.`, count: endsAfter.length });
       if (!inRange.length) throw new ReportingError("report_unavailable", "No property-manager settlements fall within the selected period and scope.", 409, { dependency: "pm_settlements" });
       const records = inRange.map(item => ({
         settlementId: item.id, propertyId: item.propertyId, propertyName: item.propertyName, managerName: item.managerName, periodStart: item.periodStart, periodEnd: item.periodEnd,
