@@ -24,6 +24,10 @@ const roots = suite === "company"
     "server/rent-ops/domain/review-detector.test.ts",
     // lane-a-accounting: /mcp body limit through the real Express parser stack
     "server/request-body-parsers.test.ts",
+    // Mac app shell: config and navigation-policy contract
+    "scripts/company/desktop-config.test.ts",
+    // shared production entry point (web / worker role)
+    "scripts/deploy/start.test.ts",
   ]
   : suite === "all"
     ? ["server", "shared", "client/src/features", "scripts", "client/src/components/account-entry.test.ts"]
