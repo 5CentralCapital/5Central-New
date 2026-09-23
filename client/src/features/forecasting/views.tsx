@@ -227,9 +227,20 @@ export function BalanceView({ result, onDrill }: { result: ForecastResultView; o
 // ------------------------------------------------------------------ Debt
 export function DebtView({ result, onDrill }: { result: ForecastResultView; onDrill: Drill }) {
   const { debt, capital, currency } = result;
+  const [year, setYear] = useState<string | null>(null);
   if (!debt.loans.length && !capital.refinances.length && !capital.sales.length) return <EmptyState title="No debt in this scenario" message="Add loans in Assumptions to see maturities and coverage." />;
+  const payments = year ? debt.loans.flatMap(loan => loan.payments.filter(row => row.date.startsWith(year)).map(row => ({ ...row, loan: loan.label }))).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)) : [];
+  const kindLabel = { scheduled: "Payment", balloon: "Balloon", payoff: "Payoff", draw: "Funding" } as const;
   return <div className="fc-view">
-    {debt.ladder.length > 0 && <LadderChart title="Maturity ladder" rows={debt.ladder} />}
+    {debt.ladder.length > 0 && <LadderChart title="Maturity ladder" rows={debt.ladder} onSelect={setYear} selectedYear={year ?? undefined} />}
+    {year && <div className="fc-scroll" role="region" aria-label={`Loan payments in ${year}`} tabIndex={0}>
+      <table className="rm-table fc-table fc-table--compact">
+        <caption className="fc-table-caption">Loan payments in {year} <button type="button" className="rm-button rm-button--small rm-button--ghost" onClick={() => setYear(null)}>Close</button></caption>
+        <thead><tr><th scope="col">Date</th><th scope="col">Loan</th><th scope="col">Type</th><th scope="col" className="fc-num">Interest</th><th scope="col" className="fc-num">Principal</th><th scope="col" className="fc-num">Balance after</th></tr></thead>
+        <tbody>{payments.map(row => <tr key={`${row.loan}-${row.date}-${row.kind}`}><td>{dateLabel(row.date, "long")}</td><td>{row.loan}</td><td>{kindLabel[row.kind]}</td>
+          <td className="fc-num">{money(row.interestCents, currency)}</td><td className="fc-num">{money(row.principalCents.replace(/^-/, ""), currency)}</td><td className="fc-num">{money(row.balanceCents, currency)}</td></tr>)}</tbody>
+      </table>
+    </div>}
     <Scroll label="Loans">
       <table className="rm-table fc-table">
         <caption className="fc-table-caption">Loans</caption>

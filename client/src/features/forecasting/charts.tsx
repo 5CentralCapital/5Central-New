@@ -180,7 +180,7 @@ export function BarLineChart({ title, months, bars, barLabel, line, lineLabel, o
 }
 
 /** Debt maturity ladder: balloons maturing by year and scheduled principal. */
-export function LadderChart({ title, rows }: { title: string; rows: readonly { year: string; maturingCents: string; scheduledPrincipalCents: string }[] }) {
+export function LadderChart({ title, rows, onSelect, selectedYear }: { title: string; rows: readonly { year: string; maturingCents: string; scheduledPrincipalCents: string }[]; onSelect?: (year: string) => void; selectedYear?: string }) {
   const titleId = useId();
   const scale = niceScale(rows.map(row => chartDollars(row.maturingCents) + chartDollars(row.scheduledPrincipalCents)), TOP, BOTTOM);
   const slot = (WIDTH - LEFT - RIGHT) / Math.max(1, rows.length);
@@ -193,7 +193,10 @@ export function LadderChart({ title, rows }: { title: string; rows: readonly { y
         const maturing = chartDollars(row.maturingCents);
         const left = LEFT + index * slot + slot * 0.2;
         const width = slot * 0.6;
-        return <g key={row.year}>
+        const handler = onSelect ? () => onSelect(row.year) : undefined;
+        return <g key={row.year} className={row.year === selectedYear ? "fc-ladder is-selected" : "fc-ladder"}>
+          {handler && <rect className="fc-hit" x={left - slot * 0.1} y={TOP} width={width + slot * 0.2} height={BOTTOM - TOP} role="button" tabIndex={0}
+            aria-label={`${row.year}: show loan payments`} onClick={handler} onKeyDown={activate(handler)} />}
           <rect className="fc-stack fc-stack--muted" x={left} y={scale.y(scheduled)} width={width} height={Math.max(0, scale.y(0) - scale.y(scheduled))} />
           <rect className="fc-stack fc-stack--ink" x={left} y={scale.y(scheduled + maturing)} width={width} height={Math.max(0, scale.y(scheduled) - scale.y(scheduled + maturing))} />
           <text className="fc-axis-label" x={left + width / 2} y={BOTTOM + 18} textAnchor="middle" aria-hidden="true">{row.year}</text>

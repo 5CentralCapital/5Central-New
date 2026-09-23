@@ -205,7 +205,7 @@ const handlersFor = (runtime: ForecastRuntime): Readonly<Record<ForecastCommandK
     let overrides: ForecastOverride[];
     let reason: string;
     if (payload.override) {
-      const stamped = { ...payload.override, reason: payload.reason, author: context.principal.actorId, setOn: context.envelope.effectiveDate ?? addDays(current.assumptions.actualsCutoff, 1) } as unknown as ForecastOverride;
+      const stamped = { ...payload.override, reason: payload.reason, author: context.principal.actorId, setOn: context.envelope.effectiveDate ?? runtime.today() } as unknown as ForecastOverride;
       overrides = [...current.assumptions.overrides.filter(item => item.id !== stamped.id), stamped];
       reason = `Override ${stamped.id}: ${payload.reason}`;
     } else {
