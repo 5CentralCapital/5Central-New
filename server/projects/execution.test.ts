@@ -189,8 +189,8 @@ test("execution totals preserve snapshots and do not double count commitment act
   assert.equal(totals.commitmentCents, "80000");
   assert.equal(totals.linkedActualCents, "10000");
   assert.equal(totals.actualCents, "15000");
-  assert.equal(totals.unspentCommitmentCents, "70000");
-  assert.equal(totals.remainingCents, "33000");
+  assert.equal(totals.unspentCommitmentCents, "50000", "a closed commitment releases its unbilled balance");
+  assert.equal(totals.remainingCents, "53000");
   const partial = calculateProjectExecutionTotals({
     currency: "USD",
     budgets: BUDGETS,
