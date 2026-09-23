@@ -123,7 +123,9 @@ Production web:
 - `RENT_OPS_EMAIL_ALLOWED_RECIPIENTS`, `RENT_OPS_GMAIL_FROM`,
   `RENT_OPS_GMAIL_CLIENT_ID`, `RENT_OPS_GMAIL_CLIENT_SECRET`, and
   `RENT_OPS_GMAIL_REFRESH_TOKEN`: Gmail delivery allowlist, sender, and OAuth
-  credentials.
+  credentials. Production uses `RENT_OPS_EMAIL_ALLOWED_RECIPIENTS=*` (any single
+  well-formed mailbox, approved September 23); a comma-separated list restricts
+  delivery to those addresses.
 - `RENT_OPS_MCP_MRA_CLIENT_IDS`: only the reviewed Codex OAuth client IDs
   allowed to use MRA ingestion tools.
 

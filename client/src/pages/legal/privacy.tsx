@@ -64,7 +64,7 @@ export default function PrivacyPolicy() {
         <p>We rely on service providers that process information on our behalf, including:</p>
         <ul className="list-disc pl-6 space-y-2">
           <li>Intuit (QuickBooks Online), for accounting data the administrator connects;</li>
-          <li>Replit, for application hosting and database services;</li>
+          <li>Render, for application hosting; Neon, for database services; and Amazon Web Services (S3), for private document storage;</li>
           <li>Auth0 and Google, for manager sign-in;</li>
           <li>Stripe, for hosted card and ACH payments;</li>
           <li>Plaid, for bank-account data;</li>

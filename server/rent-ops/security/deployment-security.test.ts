@@ -346,10 +346,11 @@ test("managed Gmail startup does not require an unused webhook receiver or manua
  assert.ok(disabled.blockingReasons.includes("production_email_delivery_disabled"));
 });
 
-test("pre-launch production email requires an exact recipient allowlist when enabled", () => {
+test("production email requires an explicit recipient setting when enabled: a list or '*' for every tenant", () => {
   const validate = (allowed?: string) => validateRentOpsProductionConfiguration({ NODE_ENV: "production", RENT_OPS_TENANT_EMAIL_ENABLED: "true", RENT_OPS_EMAIL_ALLOWED_RECIPIENTS: allowed }).blockingReasons;
   assert.ok(validate().includes("production_email_recipient_allowlist_required"));
-  assert.ok(validate("*").includes("production_email_recipient_allowlist_invalid"));
+  assert.ok(validate("*,qa@example.test").includes("production_email_recipient_allowlist_invalid"));
+  assert.equal(validate("*").some(reason => reason.startsWith("production_email_recipient_allowlist_")), false);
   assert.equal(validate("qa@example.test").some(reason => reason.startsWith("production_email_recipient_allowlist_")), false);
 });
 

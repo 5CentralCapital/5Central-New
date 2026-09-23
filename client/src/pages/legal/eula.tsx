@@ -56,7 +56,7 @@ export default function EndUserLicenseAgreement() {
       <LegalSection title="7. Third-party services">
         <p>
           The App works with third-party services, including Intuit QuickBooks Online, Stripe, Plaid, Auth0, Google,
-          Replit, and OpenAI. Your use of those services is governed by their own terms. Intuit and QuickBooks are
+          Render, Neon, Amazon Web Services and OpenAI. Your use of those services is governed by their own terms. Intuit and QuickBooks are
           trademarks of Intuit Inc. Intuit is not a party to this Agreement and is not responsible for the App.
         </p>
       </LegalSection>

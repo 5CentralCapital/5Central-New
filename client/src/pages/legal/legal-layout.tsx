@@ -1,6 +1,6 @@
 import React, { type ReactNode } from "react";
 
-export const LEGAL_EFFECTIVE_DATE = "September 22, 2026";
+export const LEGAL_EFFECTIVE_DATE = "September 23, 2026";
 export const LEGAL_CONTACT_EMAIL = "michael@5central.capital";
 
 export function LegalSection({ title, children }: { readonly title: string; readonly children: ReactNode }) {

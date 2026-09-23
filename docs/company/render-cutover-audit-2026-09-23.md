@@ -71,10 +71,10 @@ by Codex; not re-verified here).
      audience string for the cutover); Plaid (`PLAID_CLIENT_ID`, `PLAID_SECRET`,
      `PLAID_ACCESS_TOKENS`, `PLAID_ENV=production`) if bank feeds must keep working;
      `QBO_WEBHOOK_VERIFIER_TOKEN_PRODUCTION` after the webhook is registered.
-   - Gmail sender credentials are saved. The production recipient allowlist holds only
-     `michael@5central.capital`, so tenant magic-link and notice emails to anyone else are refused
-     until the allowlist is widened deliberately (the Replit allowlist was broader and was not
-     copied). Decide before DNS moves.
+   - Gmail sender credentials are saved. Michael approved email to all tenants (September 23):
+     set `RENT_OPS_EMAIL_ALLOWED_RECIPIENTS=*` in `5central-ops-production-web` (the app accepts
+     `*` alone as "any single well-formed mailbox"; header injection and multiple recipients are
+     still refused).
 6. **Render billing** (card entered by Michael) so the staging Blueprint can be applied; then the
    staging checks in `docs/RENDER_DEPLOYMENT.md`, including the app's own S3 startup probe against
    the staging bucket. Session secrets are already copied from Replit.
