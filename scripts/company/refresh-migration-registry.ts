@@ -1,7 +1,13 @@
 /**
  * Integrator tool: refresh registry.json sha256 values for migrations that are
  * not yet released (version > RELEASED_THROUGH). Released entries are frozen and
- * verified, never rewritten. Usage: npx tsx scripts/company/refresh-migration-registry.ts
+ * verified, never rewritten: the script refuses to run if a released
+ * migration's file or checksum no longer matches its frozen entry.
+ * Usage: npx tsx scripts/company/refresh-migration-registry.ts
+ *
+ * Release step: when migrations above RELEASED_THROUGH ship to production,
+ * raise RELEASED_THROUGH to the highest shipped version in the same change, so
+ * those entries become frozen too.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { rentOpsMigrationDefinitions } from "../../server/rent-ops/persistence";
@@ -18,6 +24,17 @@ const RECOVERY: Record<number, string> = {
 const path = new URL("../../server/company/migrations/registry.json", import.meta.url);
 const registry = JSON.parse(readFileSync(path, "utf8"));
 const definitions = rentOpsMigrationDefinitions();
+const drift: string[] = [];
+for (const definition of definitions) {
+  if (definition.version > RELEASED_THROUGH) continue;
+  const frozen = registry.migrations.find((entry: { version: number }) => entry.version === definition.version);
+  if (!frozen) drift.push(`${definition.version}: missing from the registry`);
+  else if (frozen.sha256 !== definition.checksum || frozen.fileName !== definition.fileName) drift.push(`${definition.version}: ${definition.fileName} differs from its frozen entry`);
+}
+if (drift.length) {
+  console.error(`Released migrations changed; they are frozen and must not be edited:\n${drift.join("\n")}`);
+  process.exit(1);
+}
 registry.migrations = registry.migrations.filter((entry: { version: number }) => entry.version <= RELEASED_THROUGH);
 for (const definition of definitions) {
   if (definition.version <= RELEASED_THROUGH) continue;

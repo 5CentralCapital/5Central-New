@@ -3,13 +3,14 @@ import type { TenantAccountAdminService } from '../tenant-portal/admin-service';
 import { registerCompanyMcpTools } from '../../company/mcp';
 import { readOpsCapabilities } from '../../company/capabilities';
 import { publicFinancialError } from '../../company/financial-errors';
+import { CompanyCommandError } from '../../company/commands/errors';
 import { ReportingError } from '../../reporting/errors';
 import type { CompanyProjectPort } from '../../company/routes';
 import type { RentOpsQueryExecutor } from '../repositories/postgres';
 import { RentOpsRetryableConflict } from '../runtime-database';
 import type { RecurringBillingService } from '../billing/service';
 import { createChargeDefinitionSchema, patchChargeDefinitionSchema, manualPaymentSchema } from '../services/operational-inputs';
-import { z } from 'zod';
+import { z, ZodError } from 'zod';
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -60,18 +61,41 @@ export function pageRows<T>(rows: readonly T[], limit = 200, cursor?: string) {
   return { rows: items, page: { limit, offset, totalRows: rows.length, nextCursor: next < rows.length ? String(next) : null } };
 }
 
-const DESTRUCTIVE_TOOL = /(^|_)(archive|revoke|reverse|disconnect|delete|remove|cancel|void|unlink|release|end|close|reissue|requeue)(_|$)/;
+const DESTRUCTIVE_TOOL = /(^|_)(archive|revoke|reverse|disconnect|delete|remove|cancel|void|unlink|release|end|close|reissue)(_|$)/;
+/**
+ * Map a tool failure to an MCP error result. Only reviewed, user-facing reasons
+ * are returned; storage errors and provider details stay generic.
+ */
+export function mcpToolError(error: unknown): CallToolResult {
+  const structured = (failure: Record<string, unknown>): CallToolResult => ({ isError: true, structuredContent: { data: { error: failure } }, content: [{ type: 'text', text: JSON.stringify(failure) }] });
+  if (error instanceof ReportingError) return structured({ code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) });
+  const financial = publicFinancialError(error);
+  if (financial) { const { status: _status, ...failure } = financial; return structured(failure); }
+  // Company command refusals carry the same reason the HTTP API returns, so an
+  // agent can correct the call instead of guessing.
+  if (error instanceof CompanyCommandError) return structured({ code: `company_${error.code}`, message: error.message });
+  if (error instanceof ZodError) return structured({ code: 'invalid_input', message: 'Check the supplied fields and try again.', fields: error.issues.slice(0, 20).map(issue => ({ path: issue.path.join('.'), message: issue.message })) });
+  const message = error instanceof Error ? error.message : '';
+  const code = error instanceof RentOpsRetryableConflict ? 'retryable_conflict_retry_identical_command' : /revision|conflict|stale|preview_changed/i.test(message) ? 'record_conflict_refetch_before_editing' : message === 'not_found' ? 'not_found' : 'operation_rejected';
+  return { isError: true, content: [{ type: 'text', text: code }] };
+}
+
+const SNAPSHOT_RECORDING_READ = new Set(['run_company_report', 'run_company_report_package', 'export_company_report']);
 const OPEN_WORLD_TOOL = /(quickbooks|qbo|sync_accounting|accounting_source|send_tenant_access_link|time_sync|sync_time|connect_)/;
 
 /**
  * Per-operation MCP annotations. Reads are read-only and idempotent. Writes are
  * idempotent when a replay key makes retries safe (company command envelopes,
  * request IDs, preview tokens, stable create IDs). Only operations that retire,
- * reverse or revoke something are destructive. Tools that reach Intuit or send
+ * reverse or revoke something are destructive; requeueing a job is not. Tools that reach Intuit or send
  * messages are open-world.
  */
 export function toolAnnotations(name: string, schema: z.ZodRawShape, write: boolean) {
   const openWorldHint = OPEN_WORLD_TOOL.test(name);
+  // Reads that store an immutable run or export record. They need only the read
+  // scope and change no business record, but each call adds a stored record, so
+  // they are not advertised as read-only or idempotent.
+  if (!write && SNAPSHOT_RECORDING_READ.has(name)) return { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint };
   if (!write) return { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint };
   const keys = Object.keys(schema);
   const replayKey = keys.some(key => ['command', 'requestId', 'previewToken', 'operationId', 'idempotencyKey'].includes(key))
@@ -116,18 +140,7 @@ export function createRentOpsMcpServer(service: RentOpsService, principal: McpPr
         const data = await handler(args);
         return { structuredContent: { data }, content: [{ type:'text', text: JSON.stringify(data) }] };
       } catch (error) {
-        if (error instanceof ReportingError) {
-          const failure = { code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) };
-          return { isError: true, structuredContent: { data: { error: failure } }, content: [{ type: 'text', text: JSON.stringify(failure) }] };
-        }
-        const financial = publicFinancialError(error);
-        if (financial) {
-          const { status: _status, ...failure } = financial;
-          return { isError: true, structuredContent: { data: { error: failure } }, content: [{ type: 'text', text: JSON.stringify(failure) }] };
-        }
-        const message = error instanceof Error ? error.message : '';
-        const code = error instanceof RentOpsRetryableConflict ? 'retryable_conflict_retry_identical_command' : /revision|conflict|stale|preview_changed/i.test(message) ? 'record_conflict_refetch_before_editing' : message === 'not_found' ? 'not_found' : 'operation_rejected';
-        return { isError: true, content: [{ type:'text', text:code }] };
+        return mcpToolError(error);
       }
     });
   }

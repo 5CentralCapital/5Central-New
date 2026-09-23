@@ -17,6 +17,7 @@ export const OPS_WORKFLOW_GUIDE = [
   { intent: 'Company and financial reports, presets, packages', tools: ['list_company_reports', 'list_company_report_references', 'run_company_report', 'get_company_report_page', 'export_company_report'] },
   { intent: 'Resolve data exceptions', tools: ['list_review_cases', 'get_review_case', 'run_review_detection', 'get_review_inventory'] },
   { intent: 'QuickBooks connection, sync and health', tools: ['get_accounting_connector_health', 'sync_accounting_source', 'get_accounting_coverage'] },
+  { intent: 'QuickBooks writes and background jobs', tools: ['submit_qbo_write', 'get_job', 'list_jobs', 'requeue_job', 'cancel_job'] },
   { intent: 'PM statements and settlements', tools: ['list_pm_settlements', 'get_pm_settlement'] },
   { intent: 'MRA owner packets (Codex only)', tools: ['stage_mra_packet', 'map_mra_packet', 'preview_mra_packet', 'apply_mra_packet', 'get_mra_packet'] },
   { intent: 'Projects, budgets, commitments and draws', tools: ['list_projects', 'get_project', 'get_project_execution', 'get_project_cost_report'] },

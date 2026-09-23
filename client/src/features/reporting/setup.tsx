@@ -158,7 +158,9 @@ export function ReportSetup({ entry, organization, onRun, running, initialReques
     <div className="reporting-setup-grid">
       <fieldset>
         <legend>Scope</legend>
-        {entry.setup.entityScope === "exactly_one"
+        {!entry.scopes.includes("legal_entity")
+          ? <p className="reporting-scope-note">Whole company. Forecasts cover every entity in the approved scenario.</p>
+          : entry.setup.entityScope === "exactly_one"
           ? <Field label="Legal entity" error={errorFor("legalEntityIds")}>{id => <select id={id} value={state.entityIds[0] ?? ""} onChange={event => setState(current => withEntities(current, organization, event.currentTarget.value ? [event.currentTarget.value] : []))}><option value="">Choose a legal entity</option>{entityOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>}</Field>
           : <Field label="Legal entities" error={errorFor("legalEntityIds")}>{id => <ChoiceList id={id} label="Legal entities" options={entityOptions} selected={state.entityIds} emptyLabel={entry.setup.entityScope === "optional" ? "All authorized" : "Choose"} onChange={values => setState(current => withEntities(current, organization, values))} />}</Field>}
         {entry.setup.propertyScope && <Field label="Properties">{id => <ChoiceList id={id} label="Properties" options={availableProperties(organization, state.entityIds)} selected={state.propertyIds} emptyLabel="All in scope" reason="No properties for these entities" onChange={values => setState(current => withProperties(current, organization, values))} />}</Field>}
