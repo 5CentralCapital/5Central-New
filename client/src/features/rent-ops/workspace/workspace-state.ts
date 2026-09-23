@@ -54,6 +54,8 @@ export interface WorkspaceRoute {
   scenarioId?: string;
   legalEntityId?: string;
   reportId?: string;
+  /** Saved report setup to apply when opening Company reports. */
+  presetId?: string;
   kind?: 'property' | 'unit';
   tab: TenantTab;
   report: ReportKey;
@@ -93,6 +95,7 @@ export function parseWorkspaceRoute(search: string): WorkspaceRoute {
   const record = params.get('record');
   const organizationId = params.get('company');
   const reportId = params.get('reportId');
+  const presetId = params.get('preset');
   const rawProjectTab = params.get('projectTab') ?? '';
   const projectTab = includes(PROJECT_NAV_TABS, rawProjectTab) ? rawProjectTab : LEGACY_PROJECT_TAB_ALIASES[rawProjectTab];
   const rawInvestorTab = params.get('investorTab') ?? '';
@@ -104,6 +107,7 @@ export function parseWorkspaceRoute(search: string): WorkspaceRoute {
   const legalEntityId = params.get('entity');
   return {
     ...(section === 'company-reports' && reportId && /^[a-z][a-z0-9-]{1,119}$/.test(reportId) ? { reportId } : {}),
+    ...(section === 'company-reports' && presetId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(presetId) ? { presetId } : {}),
     section,
     tab: section === 'tenants' && includes(tabs, rawTab) ? rawTab : 'summary',
     report: includes(REPORT_KEYS, report) ? report : 'rent-roll',
@@ -121,7 +125,7 @@ export function parseWorkspaceRoute(search: string): WorkspaceRoute {
   };
 }
 
-const ROUTE_KEYS = ['section', 'record', 'kind', 'tab', 'report', 'company', 'projectTab', 'investorTab', 'woView', 'reportId', 'acctView', 'tenantStatus', 'scenario', 'entity'];
+const ROUTE_KEYS = ['section', 'record', 'kind', 'tab', 'report', 'company', 'projectTab', 'investorTab', 'woView', 'reportId', 'preset', 'acctView', 'tenantStatus', 'scenario', 'entity'];
 
 export function workspaceRouteSearch(route: WorkspaceRoute, filters?: ViewFilters, baseSearch = ""): string {
   const params = new URLSearchParams(baseSearch);
@@ -144,6 +148,7 @@ export function workspaceRouteSearch(route: WorkspaceRoute, filters?: ViewFilter
   if(route.section==='forecasting' && route.legalEntityId) params.set('entity',route.legalEntityId);
   if(route.section==='reports') params.set('report',route.report);
   if(route.section==='company-reports'&&route.reportId) params.set('reportId',route.reportId);
+  if(route.section==='company-reports'&&route.presetId) params.set('preset',route.presetId);
   if(filters) {
     params.set("scope",filters.propertyScope); params.delete("property");
     for(const id of selectedWorkspaceProperties(filters)) params.append("property",id);

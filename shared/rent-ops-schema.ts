@@ -16,7 +16,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 /**
- * PostgreSQL tables for the bounded Rent Operations module. The module keeps
+ * PostgreSQL tables for the bounded 5Central Ops module. The module keeps
  * posted financial facts append-only at the service boundary; the table
  * definitions intentionally expose reversal links instead of delete helpers.
  * Amounts are integer cents to avoid decimal arithmetic in the domain/API.

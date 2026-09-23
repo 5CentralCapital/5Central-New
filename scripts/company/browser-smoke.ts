@@ -37,7 +37,7 @@ try {
       await expect(page.getByRole('heading', { name: `Synthetic ${name} renovation`, exact: true })).toBeVisible();
       await page.locator('.projects-detail-actions').getByRole('button', { name: 'Edit', exact: true }).click();
       dialog = page.getByRole('dialog');
-      await dialog.getByLabel('Description', { exact: true }).fill('Edited in the existing R-ops workspace');
+      await dialog.getByLabel('Description', { exact: true }).fill('Edited in the existing 5Central Ops workspace');
       await dialog.getByRole('button', { name: 'Save project', exact: true }).click();
       await expect(page.getByRole('dialog')).toHaveCount(0);
       await page.getByRole('button', { name: 'Scope & Budget', exact: true }).click();

@@ -109,7 +109,7 @@ function requireOwner(options: SeedRentalDemoOptions): void {
 }
 
 /**
- * Seed the complete synthetic Rent Operations snapshot and dated mappings for
+ * Seed the complete synthetic 5Central Ops snapshot and dated mappings for
  * both demo properties. The operation is deliberately owner-only and should
  * be called once while creating the disposable company fixture; a second run
  * with the same IDs fails rather than replacing posted or immutable rows.

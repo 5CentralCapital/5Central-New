@@ -2,7 +2,7 @@
  * Performance acceptance contracts shared by the runtime evaluator and the
  * release evidence tools.
  *
- * The values in this file are copied from the approved R-ops performance
+ * The values in this file are copied from the approved 5Central Ops performance
  * contract.  They are deliberately explicit: a measured result cannot pass
  * by inventing a budget at collection time.
  */

@@ -16,7 +16,7 @@ const scopeSchema = z.object({ propertyId: z.string().trim().min(1).optional(), 
 const postSchema = z.object({ month: z.string(), scope: scopeSchema.optional(), previewToken: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 
 export function registerRentOpsBillingRoutes(app: Express, options: RentOpsBillingRouteOptions, mountPath = "/api/rent-ops/billing"): Router {
-  if (!options.service && !options.executor) throw new Error("Rent Operations billing requires its dedicated database executor");
+  if (!options.service && !options.executor) throw new Error("5Central Ops billing requires its dedicated database executor");
   const service = options.service ?? new RecurringBillingService(new PostgresBillingStore(options.executor!));
   const router = Router();
   router.use(options.requireAdmin);

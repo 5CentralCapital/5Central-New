@@ -574,7 +574,7 @@ export class PersistenceImportPreconditionError extends Error {
 
   constructor(reasons: string[]) {
     const safeReasons = Array.from(new Set(reasons.map(safeCode)));
-    super(`Rent Operations import is blocked: ${safeReasons.join("; ")}`);
+    super(`5Central Ops import is blocked: ${safeReasons.join("; ")}`);
     this.name = "PersistenceImportPreconditionError";
     this.reasons = safeReasons;
   }
@@ -584,7 +584,7 @@ export class PersistenceImportTransactionError extends Error {
   readonly code = "transaction_failed";
 
   constructor() {
-    super("Rent Operations import transaction failed and was rolled back");
+    super("5Central Ops import transaction failed and was rolled back");
     this.name = "PersistenceImportTransactionError";
   }
 }

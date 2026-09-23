@@ -60,7 +60,7 @@ export function registerCompanyMcpTools(register: CompanyToolRegistrar, options:
       });
   }
   for (const kind of PROJECT_COMMAND_KINDS) {
-    register(kind.replaceAll('.', '_'), `Save ${kind.replaceAll('.', ' ')} in R-ops. Supply a stable operationId/idempotencyKey and exact current revision. Retry an uncertain response with the identical envelope. This does not post to QuickBooks or transfer funds.`,
+    register(kind.replaceAll('.', '_'), `Save ${kind.replaceAll('.', ' ')} in 5Central Ops. Supply a stable operationId/idempotencyKey and exact current revision. Retry an uncertain response with the identical envelope. This does not post to QuickBooks or transfer funds.`,
       { command: commandEnvelopeSchema(projectCommandPayloadSchemas[kind]) }, true, async ({ command }) => {
         const organizationId = organizationIdSchema.parse(command.scope.organizationId);
         const principal = await principalFor(organizationId);

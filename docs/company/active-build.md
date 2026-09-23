@@ -40,7 +40,7 @@ Reviewed agreement structures require these additional cases. Keep private sourc
 
 Up to three Luna Max workers implement independent file sets. Astra owns contracts, migration registration, cross-domain wiring, review and release gates. Later tracks start as a worker becomes available; shared dependencies are integrated before acceptance. No partial module is counted as a completed reporting engine merely because a screen renders.
 
-The current employee-time implementation assumption is native QuickBooks Time/Workforce clock-in with review, corrections, mapping and project costing in R-ops. Its provider connection is separate from QBO accounting configuration. Estimated labor and posted payroll expense remain distinct. This assumption activates no subscription or employee access.
+The current employee-time implementation assumption is native QuickBooks Time/Workforce clock-in with review, corrections, mapping and project costing in 5Central Ops. Its provider connection is separate from QBO accounting configuration. Estimated labor and posted payroll expense remain distinct. This assumption activates no subscription or employee access.
 
 ## Validation
 

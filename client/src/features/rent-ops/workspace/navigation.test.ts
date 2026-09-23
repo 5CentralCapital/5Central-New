@@ -29,7 +29,7 @@ test('ten categories; Dashboard opens directly; menus hold only working destinat
   for (const item of destinations) {
     assert.ok((WORKSPACE_SECTIONS as readonly string[]).includes(item.section), `${item.id} names a canonical section`);
     assert.ok(hasWorkspaceView(item.section), `${item.id} maps to an implemented view`);
-    assert.doesNotMatch(item.label, /planned|coming soon|R-ops|Rent Op/i, `${item.id} label`);
+    assert.doesNotMatch(item.label, /planned|coming soon|5Central Ops|Rent Op/i, `${item.id} label`);
     assert.doesNotMatch(item.label, /^(New|Record|Add|Post) /, `${item.id} is a destination, not an action`);
   }
 });

@@ -1,6 +1,6 @@
 # Private document storage core
 
-This module is the integration seam for verified Rent Operations document
+This module is the integration seam for verified 5Central Ops document
 binaries. It has no Rent Manager, database, or vendor object-store dependency.
 
 `createLocalStagingStore` accepts an existing absolute directory that is

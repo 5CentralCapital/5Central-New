@@ -1,6 +1,6 @@
-# Rent Operations
+# 5Central Ops
 
-Rent Operations is the bounded replacement for the small part of Rent Manager used by 5Central: property/unit records, people and tenant profiles, lease terms, recurring charges, append-only tenant ledger, deposits, housing assistance, applications, documents/activity, fixed reports, and a read-only RM import boundary. It includes tenant password accounts, Stripe-hosted payment checkout, verified payment-event reconciliation, and recurring-charge preview/post controls. It does not implement general ledger, AP, work orders, screening, e-signature, or multi-admin permissions.
+5Central Ops is the bounded replacement for the small part of Rent Manager used by 5Central: property/unit records, people and tenant profiles, lease terms, recurring charges, append-only tenant ledger, deposits, housing assistance, applications, documents/activity, fixed reports, and a read-only RM import boundary. It includes tenant password accounts, Stripe-hosted payment checkout, verified payment-event reconciliation, and recurring-charge preview/post controls. It does not implement general ledger, AP, work orders, screening, e-signature, or multi-admin permissions.
 
 ## Domain conventions
 

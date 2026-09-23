@@ -201,7 +201,7 @@ function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTena
     setRunToken(createReportRunToken());
   };
 
-  return <section className="rm-report-workspace rm-clean-report" aria-label="Rent Operations reports">
+  return <section className="rm-report-workspace rm-clean-report" aria-label="5Central Ops reports">
     <div className="rm-report-view-tabs" aria-label="Report views">
       {primaryReports.map(key => <button key={key} type="button" aria-pressed={selected === key} className={selected === key ? "active" : ""} onClick={() => onSelect(key)}>{getReportConfig(key).label}</button>)}
       <select aria-label="Other reports" value={primaryReports.includes(selected) ? "" : selected} onChange={event => onSelect(event.target.value as ReportKey)}>

@@ -2,7 +2,7 @@
 
 Reporting uses one versioned service for the browser and Codex. The service receives an authenticated principal, a versioned report request, and injected read ports. It validates the report-specific setup filters, reloads authorization when the root request wrapper provides a refresh hook, executes one registered engine, and stores an immutable run snapshot.
 
-The shared catalog exposes all 53 canonical report definitions: 11 accepted Rent Operations reports and 42 planned reports. Planned definitions remain discoverable with their required source and dependency names. An entry becomes executable only when its registry engine is ready. The first engines are:
+The shared catalog exposes all 53 canonical report definitions: 11 accepted 5Central Ops reports and 42 planned reports. Planned definitions remain discoverable with their required source and dependency names. An entry becomes executable only when its registry engine is ready. The first engines are:
 
 - `rental.operational`: the 11 existing rental reports, with legacy aliases retained by the existing adapter. Legacy numeric `*Cents` fields become canonical decimal strings at the reporting boundary.
 - `quickbooks.native-reports`: native QuickBooks Online balance sheet, cash-flow, general ledger, income statement, detailed income statement, and trial balance requests. It requires one explicit legal entity, one verified connection, an explicit cash or accrual basis, and an explicit currency. Consolidation, property allocation, and cash-from-accrual inference are unavailable without their approved policies and mappings.
@@ -15,7 +15,7 @@ Presets are private or shared and carry an immutable revision history. Updates r
 
 `server/reporting/schema.sql` is an additive schema candidate for migration 38. It creates immutable run headers, paged run rows, drilldowns, exports, preset/package current records and revision history, and package runs. Organization and parent-record foreign keys, payload identity checks, bounded state/visibility/format checks, nonnegative row indexes, positive revisions, and an organization/actor/request unique index protect replay and mixed-company writes. The company migration coordinator owns registration and rollout; this module does not auto-apply the schema.
 
-The root company runtime supplies a transaction-scoped `ReportingPort`, current principal, dated property-to-entity mapping, Rent Operations reader, and QuickBooks connection factory. `registerReportingHttpRoutes` and `registerReportingMcpTools` accept that port, so web and Codex share authorization and execution behavior. The reporting persistence candidate is registered as migration 38; `server/reporting/schema.sql` is retained as historical design context and is not applied by this module.
+The root company runtime supplies a transaction-scoped `ReportingPort`, current principal, dated property-to-entity mapping, 5Central Ops reader, and QuickBooks connection factory. `registerReportingHttpRoutes` and `registerReportingMcpTools` accept that port, so web and Codex share authorization and execution behavior. The reporting persistence candidate is registered as migration 38; `server/reporting/schema.sql` is retained as historical design context and is not applied by this module.
 
 ## Planned report execution matrix
 
@@ -24,7 +24,7 @@ The 42 planned definitions remain discoverable in the single library. A report i
 | Definition IDs | Current status | Source gap or execution seam |
 | --- | --- | --- |
 | `balance-sheet`, `cash-flow-statement`, `general-ledger`, `income-statement`, `income-statement-detailed`, `trial-balance` | Executable when QuickBooks is configured | Native QBO adapter, one verified entity connection and provider-shaped report response; unconfigured credentials return source-unavailable. |
-| `current-tenants`, `rent-paid`, `renters-insurance`, `tenant-vehicles`, `unit-listings` | Domain engines executable; insurance and vehicles partial | Transaction-bound R-Ops snapshot and dated property/entity scope. Insurance has expiry only; vehicles come from application records and do not prove current status. |
+| `current-tenants`, `rent-paid`, `renters-insurance`, `tenant-vehicles`, `unit-listings` | Domain engines executable; insurance and vehicles partial | Transaction-bound 5Central Ops snapshot and dated property/entity scope. Insurance has expiry only; vehicles come from application records and do not prove current status. |
 | `project-performance`, `rehab-benchmark` | Domain engines executable with project read port | Project service supplies budgets/tasks/actuals. Posted actuals and scope links retain partial or unavailable coverage. Budget selection is latest version approved by the requested as-of date. |
 | `contractor-exposure` | Executable only with dated commitment read port | Approved commitment rows need vendor identity, approval/commitment date, currency and project scope. Missing dates remain unavailable for the requested period. |
 | `completed-tasks`, `open-tasks`, `tasks-performance`, `vendor-details` | Domain engines executable with project read port | Project tasks and draft costs are available; vendor/account identity and task assignment filters remain explicit gaps. |

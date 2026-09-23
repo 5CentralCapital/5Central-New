@@ -1,6 +1,6 @@
 # Tenant account deployment
 
-Provision host tables and reviewed Rent Ops migrations before starting the application. Set `RENT_OPS_ADMIN_EMAIL` to the exact intended staff email. Bootstrap that account with `npx tsx server/admin-bootstrap.ts`, supplying its password through protected standard input and its database URL through the deployment's secret environment. The tool requires 16–128 characters, stores the host scrypt hash, and refuses an existing email without updating credentials or role. It never prints a password. Production test seeding is forbidden.
+Provision host tables and reviewed 5Central Ops migrations before starting the application. Set `RENT_OPS_ADMIN_EMAIL` to the exact intended staff email. Bootstrap that account with `npx tsx server/admin-bootstrap.ts`, supplying its password through protected standard input and its database URL through the deployment's secret environment. The tool requires 16–128 characters, stores the host scrypt hash, and refuses an existing email without updating credentials or role. It never prints a password. Production test seeding is forbidden.
 
 Tenant email requires explicit `RENT_OPS_TENANT_EMAIL_ENABLED=true` after the existing HTTPS receiver has been updated and tested for `tenant.access.v1`. It uses `RENT_OPS_MAGIC_LINK_WEBHOOK_URL`, `RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET`, and `RENT_OPS_PUBLIC_APP_URL`. Webhook-only configuration alone does not enable tenant email.
 

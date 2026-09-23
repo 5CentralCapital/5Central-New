@@ -3,7 +3,7 @@ import test from "node:test";
 import type { AddressInfo } from "node:net";
 import { createRentOpsDemoApp } from "./demo-server";
 
-test("synthetic demo exposes the dedicated Rent Ops session contract without credentials", async () => {
+test("synthetic demo exposes the dedicated 5Central Ops session contract without credentials", async () => {
   const server = createRentOpsDemoApp({ publicDir: process.cwd() }).listen(0);
   await new Promise<void>((resolve) => server.once("listening", resolve));
   try {

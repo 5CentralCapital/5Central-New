@@ -2,7 +2,7 @@ import { createEmailRecipientPolicy } from "../email/recipient-policy";
 import { resolveHostDatabaseUrl } from "../../host-database-config";
 import { COMPANY_APPLICATION_TABLES, COMPANY_ACCESS_TABLES } from "../../company/tables";
 /**
- * Render and validate the least-privilege role boundary for Rent Ops.
+ * Render and validate the least-privilege role boundary for 5Central Ops.
  *
  * This module is deliberately a pure artifact builder. It never reads an
  * environment variable, opens a database connection, or executes SQL. The
@@ -212,7 +212,7 @@ export const RENT_OPS_RUNTIME_EPHEMERAL_TABLES = [
   "company_worker_heartbeats",
 ] as const;
 
-/** All tables created by the current Rent Ops migration, including restricted tables. */
+/** All tables created by the current 5Central Ops migration, including restricted tables. */
 export const RENT_OPS_ALL_TABLES = [
   ...COMPANY_ACCESS_TABLES,
   "rent_ops_schema_meta",
@@ -888,7 +888,7 @@ function tableStatements(manifest: RentOpsSecurityManifest): string[] {
 function sequenceStatements(manifest: RentOpsSecurityManifest): string[] {
   const { target } = manifest;
   const allSequences = uniqueStrings(Array.from(manifest.runtimeSequences).concat(Array.from(manifest.importerSequences)));
-  if (allSequences.length === 0) return ["-- No Rent Ops sequences are currently defined; no sequence privileges are granted."];
+  if (allSequences.length === 0) return ["-- No 5Central Ops sequences are currently defined; no sequence privileges are granted."];
   return [
     revokeAll("SEQUENCE", joinObjects(target.schemaName, allSequences, "sequence"), target.runtimeRole),
     revokeAll("SEQUENCE", joinObjects(target.schemaName, allSequences, "sequence"), target.importerRole),

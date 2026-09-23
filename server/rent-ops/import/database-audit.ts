@@ -1749,7 +1749,7 @@ export class DatabaseAuditError extends Error {
   readonly reasons: string[];
 
   constructor(reasons: string[]) {
-    super(`Rent Operations database audit failed: ${reasons.join(", ")}`);
+    super(`5Central Ops database audit failed: ${reasons.join(", ")}`);
     this.name = "DatabaseAuditError";
     this.reasons = reasons;
   }

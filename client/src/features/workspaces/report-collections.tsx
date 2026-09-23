@@ -6,7 +6,7 @@ import { formatIsoDate, humanize } from "./format";
 import { CompanyGate, ErrorState, Loading, StatePanel } from "./page";
 import { packageRunSummary } from "./models";
 
-interface Props { identity: string; organizationId?: string; onOrganization: (organizationId: string) => void; onOpenReport: (organizationId: string, reportId: string) => void; onOpenLibrary: () => void }
+interface Props { identity: string; organizationId?: string; onOrganization: (organizationId: string) => void; onOpenReport: (organizationId: string, reportId: string, presetId?: string) => void; onOpenLibrary: () => void }
 
 /** Reporting › Saved reports: saved report setups, opening their report. */
 export function SavedReports(props: Props) {
@@ -27,7 +27,7 @@ function Presets({ identity, organizationId, selector, onOpenReport, onOpenLibra
       : <table className="ws-table">
         <thead><tr><th scope="col">Name</th><th scope="col">Report</th><th scope="col">Shared</th><th scope="col">Updated</th></tr></thead>
         <tbody>{presets.data.map(preset => <tr key={preset.id}>
-          <td><button type="button" className="ws-link" onClick={() => onOpenReport(organizationId, preset.reportId)}>{preset.name}</button>{preset.description && <div className="ws-note">{preset.description}</div>}</td>
+          <td><button type="button" className="ws-link" onClick={() => onOpenReport(organizationId, preset.reportId, preset.id)}>{preset.name}</button>{preset.description && <div className="ws-note">{preset.description}</div>}</td>
           <td>{titles.get(preset.reportId) ?? humanize(preset.reportId)}</td>
           <td>{preset.visibility === "private" ? "Only me" : humanize(preset.visibility)}</td>
           <td>{formatIsoDate(preset.updatedAt)}</td>

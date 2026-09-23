@@ -68,7 +68,7 @@ function parseUser(value: unknown): RentOpsAdminUser {
     || typeof value.firstName !== "string"
     || typeof value.lastName !== "string"
     || "password" in value) {
-    throw new Error("Rent Operations returned an invalid administrator session.");
+    throw new Error("5Central Ops returned an invalid administrator session.");
   }
   return {
     id: value.id,
@@ -82,7 +82,7 @@ function parseUser(value: unknown): RentOpsAdminUser {
 
 function parseCsrfToken(value: unknown): string {
   if (!isRecord(value) || typeof value.csrfToken !== "string" || value.csrfToken.length < 32 || value.csrfToken.length > 256) {
-    throw new Error("Rent Operations returned an invalid security token.");
+    throw new Error("5Central Ops returned an invalid security token.");
   }
   return value.csrfToken;
 }
@@ -92,7 +92,7 @@ function isMutation(method: string): boolean {
 }
 
 /**
- * Browser-only Rent Ops session client. Credentials remain in the server
+ * Browser-only 5Central Ops session client. Credentials remain in the server
  * session cookie; the CSRF token is retained only in this module's memory.
  */
 export class RentOpsAuthClient {
@@ -130,7 +130,7 @@ export class RentOpsAuthClient {
   }
 
   private assertCurrent(generation: number): void {
-    if (generation !== this.generation) throw new RentOpsAuthError(0, "This request belongs to an earlier Rent Operations session.");
+    if (generation !== this.generation) throw new RentOpsAuthError(0, "This request belongs to an earlier 5Central Ops session.");
   }
 
   private beginSessionChange(): number {
@@ -146,7 +146,7 @@ export class RentOpsAuthClient {
 
   /** Clear memory state after a 401/403 without attempting generic auth. */
   expireSession(): void {
-    this.clearSession("Your Rent Operations session has ended. Sign in again.");
+    this.clearSession("Your 5Central Ops session has ended. Sign in again.");
   }
 
   /** Share startup restoration between the entry module and the mounted page.
@@ -174,8 +174,8 @@ export class RentOpsAuthClient {
         return false;
       }
       if (!response.ok) {
-        this.clearSession("Rent Operations sign-in is unavailable right now.");
-        throw new RentOpsAuthError(response.status, safeMessage(payload, "Rent Operations sign-in is unavailable right now."));
+        this.clearSession("5Central Ops sign-in is unavailable right now.");
+        throw new RentOpsAuthError(response.status, safeMessage(payload, "5Central Ops sign-in is unavailable right now."));
       }
       const user = parseUser(payload.user);
       // The authenticated session response already carries this session's
@@ -190,8 +190,8 @@ export class RentOpsAuthClient {
         if (this.snapshot.status !== "unauthenticated") this.clearSession(error.message);
         throw error;
       }
-      this.clearSession("Rent Operations sign-in is unavailable right now.");
-      throw new RentOpsAuthError(0, "Rent Operations sign-in is unavailable right now.");
+      this.clearSession("5Central Ops sign-in is unavailable right now.");
+      throw new RentOpsAuthError(0, "5Central Ops sign-in is unavailable right now.");
     }
   }
 
@@ -209,7 +209,7 @@ export class RentOpsAuthClient {
       if (!response.ok) {
         this.clearSession(response.status === 401 || response.status === 403
           ? "The dedicated administrator sign-in was not accepted."
-          : "Rent Operations sign-in is unavailable right now.");
+          : "5Central Ops sign-in is unavailable right now.");
         throw new RentOpsAuthError(response.status, safeMessage(payload, "The dedicated administrator sign-in was not accepted."));
       }
       const user = parseUser(payload.user);
@@ -223,8 +223,8 @@ export class RentOpsAuthClient {
         if (this.snapshot.status !== "unauthenticated") this.clearSession(error.message);
         throw error;
       }
-      this.clearSession("Rent Operations sign-in is unavailable right now.");
-      throw new RentOpsAuthError(0, "Rent Operations sign-in is unavailable right now.");
+      this.clearSession("5Central Ops sign-in is unavailable right now.");
+      throw new RentOpsAuthError(0, "5Central Ops sign-in is unavailable right now.");
     }
   }
 
@@ -241,9 +241,9 @@ export class RentOpsAuthClient {
       this.assertCurrent(generation);
       if (response.status === 401 || response.status === 403) {
         this.expireSession();
-        throw new RentOpsAuthError(response.status, "Your Rent Operations session has ended. Sign in again.");
+        throw new RentOpsAuthError(response.status, "Your 5Central Ops session has ended. Sign in again.");
       }
-      if (!response.ok) throw new RentOpsAuthError(response.status, safeMessage(payload, "Rent Operations security could not be established."));
+      if (!response.ok) throw new RentOpsAuthError(response.status, safeMessage(payload, "5Central Ops security could not be established."));
       const token = parseCsrfToken(payload);
       this.csrfToken = token;
       return token;
@@ -256,7 +256,7 @@ export class RentOpsAuthClient {
     }
   }
 
-  /** Same-origin Rent Ops request with an in-memory CSRF header on mutations. */
+  /** Same-origin 5Central Ops request with an in-memory CSRF header on mutations. */
   async request(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
     const generation = this.generation;
     const method = (init.method ?? "GET").toString().toUpperCase();
@@ -275,7 +275,7 @@ export class RentOpsAuthClient {
     }
     if (response.status === 401 || response.status === 403) {
       this.expireSession();
-      throw new RentOpsAuthError(response.status, "Your Rent Operations session has ended. Sign in again.");
+      throw new RentOpsAuthError(response.status, "Your 5Central Ops session has ended. Sign in again.");
     }
     return response;
   }

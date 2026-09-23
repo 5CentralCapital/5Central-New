@@ -41,7 +41,7 @@ export async function registerRoutes(app: Express, options: { onTenantPaymentSer
   // Auth routes
   registerAuthRoutes(app);
 
-  // Rent Operations uses its own bounded repository and fails clearly when
+  // 5Central Ops uses its own bounded repository and fails clearly when
   // the explicitly-reviewed v1 tables are absent. It never runs a migration
   // or falls back to demo data in this production application.
   // Development/test may explicitly share the host pool. Production always

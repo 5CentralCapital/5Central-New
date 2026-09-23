@@ -1,10 +1,10 @@
 # Company foundation
 
-The company system extends the existing R-ops migration chain. Versions 1–30 preserve the rental system; version 31 adds organizations, legal entities, shared contact profiles and roles, dated property accounting-entity assignments, and immutable external identities. Version 32 adds operator-provisioned access grants, command receipts and an outbox for durable queued work. Existing property and person IDs remain unchanged. No real company rows are seeded.
+The company system extends the existing 5Central Ops migration chain. Versions 1–30 preserve the rental system; version 31 adds organizations, legal entities, shared contact profiles and roles, dated property accounting-entity assignments, and immutable external identities. Version 32 adds operator-provisioned access grants, command receipts and an outbox for durable queued work. Existing property and person IDs remain unchanged. No real company rows are seeded.
 
 `server/company/migrations/registry.json` freezes source checksums, ordering, predecessor and compatibility metadata. `npm run company:migrations:verify` verifies it without a database connection. The legacy Drizzle source fingerprints establish a code baseline only; the deployed database still requires a schema attestation and reconciliation before cutover. Never regenerate historical checksum entries to conceal a changed migration.
 
-`db:push` and `db:migrate` cannot apply an independent schema. The existing R-ops reviewed artifact workflow remains the only application path. Production startup stays free of migration. Schema review, target identity, backup/restore proof, role grants and explicit cutover gates still apply.
+`db:push` and `db:migrate` cannot apply an independent schema. The existing 5Central Ops reviewed artifact workflow remains the only application path. Production startup stays free of migration. Schema review, target identity, backup/restore proof, role grants and explicit cutover gates still apply.
 
 The historical tenant-provisioning operator remains pinned to its reviewed schema-26 release and approval. It deliberately rejects this expanded checkout and cannot use an old approval to authorize schema 32. Its tests verify the frozen historical chain separately and prove that the current operator stops before identity reads. A replacement provisioning workflow is a distinct cutover task.
 

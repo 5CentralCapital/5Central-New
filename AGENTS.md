@@ -1,4 +1,4 @@
-# R-ops implementation
+# 5Central Ops implementation
 
 Use the approved company-system plan and its current execution manifest. Implement dependency-ready packets and keep partial work distinct from accepted features. Preserve existing rental and payment behavior, source IDs and historical migrations.
 

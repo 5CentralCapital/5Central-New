@@ -68,7 +68,7 @@ export class RentOpsTablesMissingError extends Error {
   readonly missingTables: string[];
 
   constructor(missingTables: string[]) {
-    super(`Rent Operations tables are missing: ${missingTables.join(", ")}. Run the explicit v1 migration before enabling production routes.`);
+    super(`5Central Ops tables are missing: ${missingTables.join(", ")}. Run the explicit v1 migration before enabling production routes.`);
     this.name = "RentOpsTablesMissingError";
     this.missingTables = missingTables;
   }
@@ -76,7 +76,7 @@ export class RentOpsTablesMissingError extends Error {
 
 export class RentOpsRuntimePrivilegeError extends Error {
   constructor() {
-    super("Rent Operations runtime role has a forbidden table privilege");
+    super("5Central Ops runtime role has a forbidden table privilege");
     this.name = "RentOpsRuntimePrivilegeError";
   }
 }
@@ -955,7 +955,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
         throw error;
       }
     }
-    if (!this.client.transaction) throw new RentOpsInvariantError("Rent Operations database executor does not support atomic transactions");
+    if (!this.client.transaction) throw new RentOpsInvariantError("5Central Ops database executor does not support atomic transactions");
     await this.assertReady();
     return this.client.transaction(async (executor) => {
       const repository = new PostgresRentOpsRepository(executor, true);
@@ -1042,7 +1042,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
 
     if (options.lockRecord) {
       const table = patchTables[options.lockRecord.entityType];
-      if (!table) throw new RentOpsInvariantError("Unknown Rent Operations patch target");
+      if (!table) throw new RentOpsInvariantError("Unknown 5Central Ops patch target");
       if (options.lockTenancySiblings) {
         const requestedUnitIds = Array.from(new Set(options.lockTenancyUnitIds ?? [])).filter((id) => id.length > 0).sort();
         await this.client.query(
@@ -1100,7 +1100,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
   }
 
   private async rows(tableName: string, executor: RentOpsQueryExecutor = this.client): Promise<Record<string, unknown>[]> {
-    if (!tableNames.has(tableName)) throw new Error(`Unsafe Rent Operations table name: ${tableName}`);
+    if (!tableNames.has(tableName)) throw new Error(`Unsafe 5Central Ops table name: ${tableName}`);
     const result = await executor.query<Record<string, unknown>>(`SELECT * FROM ${tableName}`);
     return result.rows;
   }
@@ -1235,7 +1235,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     const rows = (table: string) => {
       if (selectedTable && selectedTable !== table) return Promise.resolve([]);
       if (batch) {
-        if (!Object.prototype.hasOwnProperty.call(batch, table)) throw new RentOpsInvariantError("Incomplete Rent Operations table batch");
+        if (!Object.prototype.hasOwnProperty.call(batch, table)) throw new RentOpsInvariantError("Incomplete 5Central Ops table batch");
         return Promise.resolve(batch[table]);
       }
       return this.rows(table, executor);
@@ -1333,7 +1333,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
   }
 
   private async upsert(tableName: string, columns: string[], values: unknown[], updateColumns = columns.slice(1)): Promise<void> {
-    if (!tableNames.has(tableName)) throw new Error(`Unsafe Rent Operations table name: ${tableName}`);
+    if (!tableNames.has(tableName)) throw new Error(`Unsafe 5Central Ops table name: ${tableName}`);
     if (runtimeCreateOnlyTables.has(tableName)) {
       await this.insertOnlyCreate(tableName, columns, values);
       return;
@@ -1362,7 +1362,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
   }
 
   private async insertOnlyCreate(tableName: string, columns: string[], values: unknown[]): Promise<void> {
-    if (!tableNames.has(tableName)) throw new Error(`Unsafe Rent Operations table name: ${tableName}`);
+    if (!tableNames.has(tableName)) throw new Error(`Unsafe 5Central Ops table name: ${tableName}`);
     await this.assertReady();
     const placeholders = columns.map((_, index) => `$${index + 1}`).join(", ");
     const inserted = await this.client.query<Record<string, unknown>>(`INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders}) ON CONFLICT (id) DO NOTHING RETURNING id`, values);
@@ -1371,7 +1371,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
   }
 
   private async insertOnly(tableName: string, columns: string[], values: unknown[]): Promise<void> {
-    if (!tableNames.has(tableName)) throw new Error(`Unsafe Rent Operations table name: ${tableName}`);
+    if (!tableNames.has(tableName)) throw new Error(`Unsafe 5Central Ops table name: ${tableName}`);
     await this.assertReady();
     const placeholders = columns.map((_, index) => `$${index + 1}`).join(", ");
     const inserted = await this.client.query<Record<string, unknown>>(`INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders}) ON CONFLICT (id) DO NOTHING RETURNING id`, values);
@@ -1413,7 +1413,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
 
   async applyRecordPatch(update: RentOpsRecordPatchUpdate): Promise<void> {
     const table = patchTables[update.entityType];
-    if (!table) throw new RentOpsInvariantError("Unknown Rent Operations patch target");
+    if (!table) throw new RentOpsInvariantError("Unknown 5Central Ops patch target");
     const allowed = patchColumns[update.entityType];
     const entries = Object.entries(update.values).filter(([column]) => allowed.has(column));
     if (entries.length !== Object.keys(update.values).length) throw new RentOpsInvariantError("Patch contains a field outside the positive allowlist");
@@ -1428,8 +1428,8 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     );
     if (result.rows.length > 0) return;
     const current = await this.client.query<{ id?: string; record_revision?: number }>(`SELECT id, record_revision FROM ${table} WHERE id = $1 LIMIT 1`, [update.targetId]);
-    if (current.rows.length === 0) throw new RentOpsInvariantError("Rent Operations record not found");
-    throw new RentOpsInvariantError("Rent Operations record revision is stale");
+    if (current.rows.length === 0) throw new RentOpsInvariantError("5Central Ops record not found");
+    throw new RentOpsInvariantError("5Central Ops record revision is stale");
   }
 
   async saveRecordChange(change: RentOpsRecordChange): Promise<void> {
@@ -1567,7 +1567,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       await this.writeApplicationHistory(this.client, history);
       return;
     }
-    if (!this.client.transaction) throw new RentOpsInvariantError("Rent Operations database executor does not support atomic application history writes");
+    if (!this.client.transaction) throw new RentOpsInvariantError("5Central Ops database executor does not support atomic application history writes");
     await this.client.transaction(async (executor) => {
       const repository = new PostgresRentOpsRepository(executor, true);
       repository.ready = true;

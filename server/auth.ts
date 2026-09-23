@@ -24,7 +24,7 @@ function passwordKey(password: string, salt: string): Promise<Buffer> {
 declare module "express-session" {
   interface SessionData {
     userId?: string;
-    /** Dedicated Rent Ops admin identity; never treated as a generic user session. */
+    /** Dedicated 5Central Ops admin identity; never treated as a generic user session. */
     rentOpsAdminUserId?: string;
     rentOpsCsrfToken?: string;
   }
@@ -222,30 +222,30 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
 }
 
 /**
- * Rent Ops deliberately does not accept the generic userId session, investor
+ * 5Central Ops deliberately does not accept the generic userId session, investor
  * sessions, or any legacy API-key header. The dedicated marker is set only by
- * the Rent Ops admin login and every mutating request also needs its CSRF
- * token. This middleware is injected into the Rent Ops router only.
+ * the 5Central Ops admin login and every mutating request also needs its CSRF
+ * token. This middleware is injected into the 5Central Ops router only.
  */
-/** True when the browser still carries the dedicated Rent Ops admin session marker. */
+/** True when the browser still carries the dedicated 5Central Ops admin session marker. */
 export function hasRentOpsAdminSession(req: Request): boolean {
   return Boolean(req.session?.rentOpsAdminUserId);
 }
 
 export async function requireRentOpsAdmin(req: Request, res: Response, next: NextFunction) {
   if (extractApiKey(req) || !req.session?.rentOpsAdminUserId) {
-    res.status(401).json({ message: "Rent Ops administrator authentication required" });
+    res.status(401).json({ message: "5Central Ops administrator authentication required" });
     return;
   }
   try {
     if (req.session.rentOpsOAuthSubject && !managerOAuthAllowed(process.env, req.session.rentOpsOAuthSubject)) {
-      res.status(403).json({ message: "Rent Ops administrator access required" });
+      res.status(403).json({ message: "5Central Ops administrator access required" });
       return;
     }
     const user = await storage.getUser(req.session.rentOpsAdminUserId);
     const configuredEmail = normalizedEmail(process.env.RENT_OPS_ADMIN_EMAIL);
     if (!user || user.role !== "admin" || (configuredEmail && normalizedEmail(user.email) !== configuredEmail)) {
-      res.status(403).json({ message: "Rent Ops administrator access required" });
+      res.status(403).json({ message: "5Central Ops administrator access required" });
       return;
     }
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && !rentOpsSessionHasCsrf(req)) {
@@ -255,7 +255,7 @@ export async function requireRentOpsAdmin(req: Request, res: Response, next: Nex
     req.rentOpsAdminUser = user;
     next();
   } catch {
-    res.status(503).json({ message: "Rent Ops administrator authentication unavailable" });
+    res.status(503).json({ message: "5Central Ops administrator authentication unavailable" });
   }
 }
 
@@ -299,8 +299,8 @@ export function registerAuthRoutes(app: Express) {
     }
     next();
   };
-  // Dedicated Rent Ops admin login. It never populates the generic userId
-  // session, so investor/user logins cannot access Rent Ops admin routes.
+  // Dedicated 5Central Ops admin login. It never populates the generic userId
+  // session, so investor/user logins cannot access 5Central Ops admin routes.
   app.post("/api/rent-ops/auth/login", loginRateLimit, async (req: Request, res: Response) => {
     try {
       const credentials = loginCredentials(req.body);
@@ -340,7 +340,7 @@ export function registerAuthRoutes(app: Express) {
     // the safe user shape and an in-memory CSRF token; the session cookie
     // remains the only persisted credential.
     if (!req.rentOpsAdminUser) {
-      res.status(401).json({ message: "Rent Ops administrator authentication required" });
+      res.status(401).json({ message: "5Central Ops administrator authentication required" });
       return;
     }
     if (!req.session.rentOpsCsrfToken) req.session.rentOpsCsrfToken = createRentOpsCsrfToken();

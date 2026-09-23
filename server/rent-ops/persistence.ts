@@ -178,7 +178,7 @@ export function rentOpsMigrationSql(): string {
 
 export function rentOpsMigrationSqlForVersion(version: number): string {
   const fileName = Number.isInteger(version) ? RENT_OPS_MIGRATION_FILES[version - 1] : undefined;
-  if (!fileName) throw new Error(`Unknown Rent Operations migration version ${version}`);
+  if (!fileName) throw new Error(`Unknown 5Central Ops migration version ${version}`);
   return readFileSync(fileURLToPath(new URL(`./migrations/${fileName}`, import.meta.url)), "utf8");
 }
 
@@ -192,9 +192,9 @@ export function rentOpsMigrationChecksum(sql = rentOpsMigrationSql()): string {
 }
 
 function migrationSqlWithChecksum(sql: string, checksum: string, version = 1): string {
-  if (!RENT_OPS_SUPPORTED_SCHEMA_VERSIONS.includes(version)) throw new Error(`Unknown Rent Operations migration version ${version}`);
+  if (!RENT_OPS_SUPPORTED_SCHEMA_VERSIONS.includes(version)) throw new Error(`Unknown 5Central Ops migration version ${version}`);
   const token = `__RENT_OPS_V${version}_CHECKSUM__`;
-  if (!sql.includes(token)) throw new Error(`Rent Operations migration is missing ${token}`);
+  if (!sql.includes(token)) throw new Error(`5Central Ops migration is missing ${token}`);
   let rendered = sql.replaceAll(token, checksum);
   for (const priorVersion of RENT_OPS_SUPPORTED_SCHEMA_VERSIONS) {
     if (priorVersion >= version) break;
@@ -341,7 +341,7 @@ export async function ensureRentOpsSchema(options: { executor?: RentOpsSqlExecut
       statementCount: commands.length,
       checksum,
       migrationChecksums: Object.fromEntries(migrations.map((migration) => [migration.version, migration.checksum])),
-      message: "Rent Operations schema is not applied. Wire an explicit executor and apply:true after backup/approval.",
+      message: "5Central Ops schema is not applied. Wire an explicit executor and apply:true after backup/approval.",
     };
   }
   if (process.env.NODE_ENV === "production" && !options.query) throw new Error("rent_ops_migration_query_executor_required");
@@ -385,6 +385,6 @@ export async function ensureRentOpsSchema(options: { executor?: RentOpsSqlExecut
     statementCount: appliedCommands.length,
     checksum,
     migrationChecksums: Object.fromEntries(migrations.map((migration) => [migration.version, migration.checksum])),
-    message: "Rent Operations schema migration applied explicitly inside a transaction.",
+    message: "5Central Ops schema migration applied explicitly inside a transaction.",
   };
 }

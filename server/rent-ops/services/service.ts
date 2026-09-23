@@ -1206,9 +1206,9 @@ export class RentOpsService {
     if (!this.repository.applyRecordPatch || !this.repository.saveRecordChange) throw new RentOpsInvariantError("Record patch persistence is unavailable");
     const snapshot = await this.snapshot();
     const existing = patchRow(snapshot, entityType, targetId);
-    if (!existing) throw new RentOpsInvariantError("Rent Operations record not found");
+    if (!existing) throw new RentOpsInvariantError("5Central Ops record not found");
     const currentRevision = typeof existing.recordRevision === "number" ? existing.recordRevision : 1;
-    if (currentRevision !== expectedRevision) throw new RentOpsInvariantError("Rent Operations record revision is stale");
+    if (currentRevision !== expectedRevision) throw new RentOpsInvariantError("5Central Ops record revision is stale");
     const next = { ...existing } as Record<string, unknown>;
     const changedFields: string[] = [];
     const knowledgeFields = new Map<string, string>();
@@ -1266,7 +1266,7 @@ export class RentOpsService {
     const violationKey = (violation: { code: string; entityId?: string; message: string }): string => `${violation.code}|${violation.entityId ?? ""}|${violation.message}`;
     const baselineViolations = new Set(validateSnapshot(snapshot).map(violationKey));
     const introducedViolations = validateSnapshot(candidate).filter((violation) => !baselineViolations.has(violationKey(violation)));
-    if (introducedViolations.length > 0) throw new RentOpsInvariantError("Patch would violate Rent Operations relationship or sibling invariants", introducedViolations);
+    if (introducedViolations.length > 0) throw new RentOpsInvariantError("Patch would violate 5Central Ops relationship or sibling invariants", introducedViolations);
     if (entityType === "application" && existing.status !== next.status && typeof existing.status === "string" && typeof next.status === "string") assertApplicationStatusTransition(existing.status as RentOpsApplication["status"], next.status as RentOpsApplication["status"]);
     if (entityType === "application" && (existing.propertyId !== next.propertyId || existing.unitId !== next.unitId)) {
       if (existing.status === "converted" || existing.convertedTenancyId) throw new RentOpsInvariantError("Converted application assignment cannot change");

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, FileDown, Printer, Search, Trash2 } from "lucide-react";
 import type { CompanyContextOrganization } from "@shared/company/context";
@@ -169,7 +169,7 @@ function SavedReports({ organizationId, entries, latestRequest, onApply, onOpenR
   </section>;
 }
 
-export function ReportingWorkspace({ identity, organization, initialReportId, onNavigate, onOpenLegacy: _onOpenLegacy }: { identity: string; organization: CompanyContextOrganization; initialReportId?: string; onNavigate?: (organizationId: string, reportId?: string) => void; onOpenLegacy?: (reportId: string) => void }) {
+export function ReportingWorkspace({ identity, organization, initialReportId, initialPresetId, onNavigate, onOpenLegacy: _onOpenLegacy }: { identity: string; organization: CompanyContextOrganization; initialReportId?: string; initialPresetId?: string; onNavigate?: (organizationId: string, reportId?: string) => void; onOpenLegacy?: (reportId: string) => void }) {
   const catalog = useQuery({ queryKey: ["company-reporting", "catalog", identity, organization.id], queryFn: ({ signal }) => reportingApi.catalog(organization.id, signal), staleTime: 30_000, retry: false });
   const entries = catalog.data ?? [];
   const [selectedId, setSelectedId] = useState(initialReportId ?? "");
@@ -196,6 +196,15 @@ export function ReportingWorkspace({ identity, organization, initialReportId, on
     } catch (nextError) { setError(nextError); } finally { setRunning(false); }
   };
   const applySavedRequest = (request: ReportRunRequest) => { setSelectedId(request.reportId); setLastRequest(request); setSetupRevision(value => value + 1); setPage(undefined); setError(undefined); onNavigate?.(organization.id, request.reportId); };
+  // A saved setup opened from Reporting › Saved reports is applied once, exactly as saved.
+  const initialPreset = useQuery({ queryKey: ["company-reporting", "presets", organization.id], queryFn: ({ signal }) => reportingApi.listPresets(organization.id, signal), staleTime: 5_000, retry: false, enabled: Boolean(initialPresetId) });
+  const appliedPreset = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!initialPresetId || appliedPreset.current === initialPresetId || !initialPreset.data) return;
+    const preset = initialPreset.data.find(item => item.id === initialPresetId);
+    appliedPreset.current = initialPresetId;
+    if (preset) applySavedRequest(requestFromPreset(preset));
+  }, [initialPresetId, initialPreset.data]);
   const openRun = async (runId: string, title: string) => {
     setError(undefined);
     try { setPage({ page: await reportingApi.page(organization.id, runId), applied: [], title }); } catch (nextError) { setError(nextError); }

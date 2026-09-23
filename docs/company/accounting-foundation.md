@@ -1,6 +1,6 @@
 # Accounting foundation
 
-R-Ops treats QuickBooks Online as the authority for accounting facts. Local
+5Central Ops treats QuickBooks Online as the authority for accounting facts. Local
 records may carry workflow intent and attribution, but a raw QBO ID, a posted
 accrual transaction, a prepared write, or a sync watermark does not establish
 payment or bank settlement.
@@ -52,7 +52,7 @@ hashed state, binds the flow to the authenticated browser session ID, reloads
 the current entity grant, and reads CompanyInfo with the exchanged short-lived
 token. A first connection is held in an encrypted, expiring pending handoff;
 the browser returns to the Accounting workspace, which shows the provider
-company name and legal name beside the selected R-Ops legal entity. Only the
+company name and legal name beside the selected 5Central Ops legal entity. Only the
 administrator's explicit confirmation saves the durable environment-scoped
 realm fence, the encrypted connection, and the audit record. A failed save
 leaves the handoff available for a safe retry. Existing bindings still require

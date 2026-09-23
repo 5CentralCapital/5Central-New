@@ -12,7 +12,7 @@ export interface RegisterVerifiedRentOpsDocumentInput {
 
 function legacyDocumentType(_document: CompanyDocument): RentOpsDocument["type"] { return "other"; }
 
-/** Bridge a verified company file into the existing Rent Operations document
+/** Bridge a verified company file into the existing 5Central Ops document
  * and immutable object-binding tables inside the caller's transaction. */
 export async function registerVerifiedRentOpsDocument(input: RegisterVerifiedRentOpsDocumentInput): Promise<void> {
   const documentId = input.legacyDocumentId ?? input.document.id;
@@ -36,7 +36,7 @@ export async function registerVerifiedRentOpsDocument(input: RegisterVerifiedRen
   const repository = new PostgresRentOpsRepository(input.executor, true);
   await repository.assertReady();
   await repository.saveDocument(document);
-  if (!repository.saveDocumentObjectBinding) throw new Error("Verified Rent Operations document binding is unavailable.");
+  if (!repository.saveDocumentObjectBinding) throw new Error("Verified 5Central Ops document binding is unavailable.");
   await repository.saveDocumentObjectBinding({ ...input.binding, documentId });
 
   const contractLink = input.document.links.find(link => link.kind === "investor_contract");

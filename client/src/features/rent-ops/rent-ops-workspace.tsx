@@ -490,7 +490,7 @@ export default function RentOpsWorkspace() {
     }).catch((cause) => {
       if (cancelled) return;
       setLoading(false);
-      setError(cause instanceof Error ? cause.message : "Rent Operations preview context could not be loaded.");
+      setError(cause instanceof Error ? cause.message : "5Central Ops preview context could not be loaded.");
     });
     return () => { cancelled = true; };
   }, [auth.status]);
@@ -505,7 +505,7 @@ export default function RentOpsWorkspace() {
       setSnapshot({ ...result.snapshot, chargeDefinitions });
       setWarning(result.warning);
     }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Rent Operations could not be loaded."); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "5Central Ops could not be loaded."); }
     finally { setLoading(false); }
   }, [filters.propertyScope, filters.propertyId, filters.asOfDate]);
   useEffect(() => {
@@ -529,8 +529,8 @@ export default function RentOpsWorkspace() {
 
   if (auth.status === "unknown") return <RentOpsAuthLoading />;
   if (auth.status === "unauthenticated") return <RentOpsAdminLogin message={auth.message} />;
-  if (loading && !snapshot) return <main className="ro-loading"><Loader2 className="spin" /><h1>Loading Rent Operations</h1><p>Building the current rent roll and tenant records…</p></main>;
-  if (error && !snapshot) return <main className="ro-loading error"><AlertCircle /><h1>Rent Operations is unavailable</h1><p>{error}</p><button className="primary" onClick={() => void load()}>Try again</button></main>;
+  if (loading && !snapshot) return <main className="ro-loading"><Loader2 className="spin" /><h1>Loading 5Central Ops</h1><p>Building the current rent roll and tenant records…</p></main>;
+  if (error && !snapshot) return <main className="ro-loading error"><AlertCircle /><h1>5Central Ops is unavailable</h1><p>{error}</p><button className="primary" onClick={() => void load()}>Try again</button></main>;
   if (!snapshot) return null;
 
   const summary = snapshot.summary;
@@ -540,7 +540,7 @@ export default function RentOpsWorkspace() {
   const sectionReport: Partial<Record<SectionKey, ReportKey>> = { "rent-roll": "rent-roll", leases: "lease-expiration", income: "scheduled-vs-collected" };
   const scopeLabel = filters.propertyId !== "all" ? "Selected property" : filters.propertyScope === "all" ? "All imported properties" : "Active portfolio";
   return <main className="rent-ops-shell">
-    <aside className="ro-sidebar"><div className="ro-brand"><span>5C</span><div><strong>Rent Operations</strong><small>Single-admin workspace</small></div></div><a className="ro-back-link" href="https://5central.capital">← 5Central website</a><nav>{SECTIONS.map(({ key, label, icon: Icon }) => <button key={key} className={section === key ? "active" : ""} onClick={() => setSection(key)}><Icon />{label}</button>)}</nav><div className="ro-source"><span className={source === "live" ? "live" : "demo"} />{source === "live" ? "Live operational data" : "Synthetic development data"}<small>Updated {new Date(snapshot.generatedAt).toLocaleString()}</small><button className="ro-logout" type="button" onClick={() => { void rentOpsAuthClient.logout(); }}><LogOut /> Sign out</button></div></aside>
+    <aside className="ro-sidebar"><div className="ro-brand"><span>5C</span><div><strong>5Central Ops</strong><small>Single-admin workspace</small></div></div><a className="ro-back-link" href="https://5central.capital">← 5Central website</a><nav>{SECTIONS.map(({ key, label, icon: Icon }) => <button key={key} className={section === key ? "active" : ""} onClick={() => setSection(key)}><Icon />{label}</button>)}</nav><div className="ro-source"><span className={source === "live" ? "live" : "demo"} />{source === "live" ? "Live operational data" : "Synthetic development data"}<small>Updated {new Date(snapshot.generatedAt).toLocaleString()}</small><button className="ro-logout" type="button" onClick={() => { void rentOpsAuthClient.logout(); }}><LogOut /> Sign out</button></div></aside>
     <div className="ro-main"><header className="ro-topbar"><div><span className="eyebrow">{scopeLabel} · {summary.propertyCount} propert{summary.propertyCount === 1 ? "y" : "ies"} · {summary.unitCount} units</span><h1>{SECTIONS.find((item) => item.key === section)?.label}</h1></div>{createAction && <button className="primary" onClick={() => openAction(createAction.action)}><Plus /> {createAction.label}</button>}{section === "applicants" && <a className="primary" href="/apply">Open application form</a>}</header>
       {(warning || notice || error) && <div className={`ro-banner ${error ? "error" : ""}`}><AlertCircle />{error ?? notice ?? warning}<button onClick={() => { setNotice(undefined); setError(undefined); }} aria-label="Dismiss"><X /></button></div>}
       <FilterBar filters={filters} snapshot={snapshot} onChange={setFilters} onRefresh={() => void load()} refreshing={loading} />

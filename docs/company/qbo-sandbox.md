@@ -23,7 +23,7 @@ Export the credentials in your shell. Never write them into a file in the reposi
 
 ## Redirect URIs to register with Intuit
 
-Intuit matches redirect URIs exactly, so R-ops has one static,
+Intuit matches redirect URIs exactly, so 5Central Ops has one static,
 organization-free callback, `GET /api/accounting/qbo/callback`. The callback
 recovers the organization and legal entity from the server-side OAuth state.
 
@@ -157,7 +157,7 @@ For the confirmed connection, `/__sandbox/acceptance` runs these steps:
 3. Runs `syncChanges()` twice (`change_data_capture`). The first run anchors the change chain (a scoped full replay when no watermark exists); the second must use change data capture (`/cdc`) since that watermark. Added 2026-09-23; not yet run against the live sandbox.
 4. Runs one Accounting query (`SELECT * FROM Vendor MAXRESULTS 5`).
 5. Enables `accounting.create` and `accounting.update` for this sandbox realm only, using the existing capability store with the CompanyInfo read-back evidence. Only the harness does this.
-6. Creates a disposable Vendor named `R-ops sandbox test <timestamp>` and reads it back.
+6. Creates a disposable Vendor named `5Central Ops sandbox test <timestamp>` and reads it back.
 7. Makes a sparse update of `CompanyName` with `Id` and `SyncToken`, then reads it back and confirms that `SyncToken` went up.
 8. Sends an update with the old `SyncToken`. Intuit must reject it after exactly one POST with no retry, and the record must be unchanged.
 9. Marks the access token expired in the repository, then reads. Expected: exactly one refresh, and the refresh token Intuit returned is the one persisted. The check compares hashes internally; the token is never printed.

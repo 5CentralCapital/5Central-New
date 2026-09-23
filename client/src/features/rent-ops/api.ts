@@ -64,7 +64,7 @@ import { rentOpsAuthClient } from "./auth";
 
 /**
  * The browser is an adapter, not a second reporting engine. All financial and
- * occupancy calculations happen in the Rent Operations domain service. The
+ * occupancy calculations happen in the 5Central Ops domain service. The
  * client only fetches those rows, normalizes response envelopes, and applies
  * display-only filters/sorts.
  */
@@ -79,7 +79,7 @@ const DEMO_ALLOWED = Boolean(
 
 type JsonRecord = Record<string, unknown>;
 
-const INVALID_RESPONSE_MESSAGE = "Rent Operations API returned an invalid response.";
+const INVALID_RESPONSE_MESSAGE = "5Central Ops API returned an invalid response.";
 const TARGET_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,159}$/;
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const ISO_MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -143,7 +143,7 @@ export class RentOpsApiError extends Error {
           ? "Activity records are append-only; add a new dated event instead."
             : code === "hap_create_requires_provenance"
               ? "New HAP contracts require explicit source provenance and are not available here."
-            : `Rent Operations API returned ${status}.`);
+            : `5Central Ops API returned ${status}.`);
     this.name = "RentOpsApiError";
   }
 }
@@ -614,7 +614,7 @@ function decodeRecurringSchedule(value: unknown): AdminRecurringScheduleView {
   const lineageState = optionalEnum(input, "lineageState", ["valid", "unknown"] as const);
   const resolvedEffectiveTo = nullableDate(input, "resolvedEffectiveTo");
   const canScheduleSuccessor = optionalBoolean(input, "canScheduleSuccessor");
-  if (lineageState === "valid" && resolvedEffectiveTo === undefined || canScheduleSuccessor === true && lineageState !== "valid") throw new Error("Rent Operations returned inconsistent recurring schedule history.");
+  if (lineageState === "valid" && resolvedEffectiveTo === undefined || canScheduleSuccessor === true && lineageState !== "valid") throw new Error("5Central Ops returned inconsistent recurring schedule history.");
   return {
     id: optionalId(input, "id"),
     chargeDefinitionId: nullableId(input, "chargeDefinitionId"),
@@ -1421,13 +1421,13 @@ async function requestJson(path: string, init?: RequestInit): Promise<unknown> {
     const errorPayload = await response.json().catch(() => undefined);
     const code = safeErrorCode(errorPayload);
     const reportRequest = /\/api\/rent-ops\/(?:preview-context|dashboard|snapshot|workspace\/dashboard(?:\?|$)|reports(?:\/|$))/.test(path);
-    const message = code === "not_authorized" ? "Rent Operations authorization is required."
-      : code === "not_found" ? "The requested Rent Operations record was not found."
+    const message = code === "not_authorized" ? "5Central Ops authorization is required."
+      : code === "not_found" ? "The requested 5Central Ops record was not found."
         : code === "conflict" || code === "versioned_schedule_required" ? undefined
           : code === "verified_upload_required" ? "Secure document upload is not available yet."
-            : code === "temporarily_unavailable" ? "Rent Operations is temporarily unavailable."
-              : code === "invalid_input" ? reportRequest ? "The selected report date or filters cannot be used. Choose a valid date and try again." : "Rent Operations request contains invalid input."
-              : `Rent Operations API returned ${response.status}.`;
+            : code === "temporarily_unavailable" ? "5Central Ops is temporarily unavailable."
+              : code === "invalid_input" ? reportRequest ? "The selected report date or filters cannot be used. Choose a valid date and try again." : "5Central Ops request contains invalid input."
+              : `5Central Ops API returned ${response.status}.`;
     if (code === "conflict" || code === "versioned_schedule_required" || code === "activity_append_only" || code === "hap_create_requires_provenance") throw new RentOpsApiError(code, response.status);
     throw new Error(message);
   }
@@ -1444,7 +1444,7 @@ export async function downloadRentOpsDocument(documentId: string): Promise<Blob>
   if (!response.ok) {
     const errorPayload = await response.json().catch(() => undefined);
     const code = safeErrorCode(errorPayload);
-    throw new Error(code === "not_authorized" ? "Rent Operations authorization is required."
+    throw new Error(code === "not_authorized" ? "5Central Ops authorization is required."
       : code === "not_found" ? "The document record was not found."
         : "Secure document download is unavailable.");
   }
@@ -1494,8 +1494,8 @@ function normalizeReport(key: ReportKey, value: unknown): ReportDefinition {
   return {
     key,
     label: label ?? REPORT_LABELS[key],
-    description: description ?? "Server-derived Rent Operations report.",
-    sourceNote: sourceNote ?? "Rows are derived by the Rent Operations domain service.",
+    description: description ?? "Server-derived 5Central Ops report.",
+    sourceNote: sourceNote ?? "Rows are derived by the 5Central Ops domain service.",
     columns: normalizeColumns(columns, rows),
     rows,
   };
@@ -1806,7 +1806,7 @@ export async function postRentOpsMutation(mutation: RentOpsMutation): Promise<Re
       };
       break;
     }
-    default: throw new Error(`Unsupported Rent Operations action: ${mutation.action}`);
+    default: throw new Error(`Unsupported 5Central Ops action: ${mutation.action}`);
   }
   const patchBase = PATCH_ACTION_PATHS[mutation.action];
   const revision = source.revision;

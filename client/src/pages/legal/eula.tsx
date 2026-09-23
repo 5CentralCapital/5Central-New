@@ -6,7 +6,7 @@ export default function EndUserLicenseAgreement() {
       <LegalSection title="1. Agreement">
         <p>
           This End-User License Agreement ("Agreement") is between 5Central Capital LLC ("5Central," "we," "us") and each
-          person or entity that accesses 5Central Rent Ops (the "App"), including its QuickBooks Online integration
+          person or entity that accesses 5Central Ops (formerly 5Central Rent Ops, the "App"), including its QuickBooks Online integration
           ("you"). By accessing the App or connecting a QuickBooks Online company to it, you agree to this Agreement. If
           you do not agree, do not use the App.
         </p>

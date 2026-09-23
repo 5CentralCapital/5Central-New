@@ -16,7 +16,7 @@ export function LegalPage({ title, testId, children }: { readonly title: string;
   return (
     <main className="min-h-screen bg-white pt-24 pb-20" data-testid={testId}>
       <article className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
-        <p className="text-sm uppercase tracking-wide text-gray-500">5Central Rent Ops</p>
+        <p className="text-sm uppercase tracking-wide text-gray-500">5Central Ops</p>
         <h1 className="mt-2 text-3xl md:text-4xl font-serif font-bold text-gray-900">{title}</h1>
         <p className="mt-3 text-sm text-gray-500">Effective {LEGAL_EFFECTIVE_DATE}</p>
         {children}

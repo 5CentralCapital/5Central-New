@@ -11,7 +11,7 @@ export interface RentOpsDemoServerOptions {
   /**
    * Optional explicitly seeded repository for the shared company demo.
    * Keeping this injectable lets the company fixture use one Postgres-backed
-   * snapshot while the standalone Rent Operations demo keeps its in-memory
+   * snapshot while the standalone 5Central Ops demo keeps its in-memory
    * fixture by default.
    */
   syntheticRepository?: RentOpsRepository;
@@ -25,7 +25,7 @@ export interface RentOpsDemoServerOptions {
  * startup error.
  */
 export function createRentOpsDemoApp(options: RentOpsDemoServerOptions = {}): Express {
-  if (process.env.NODE_ENV === "production") throw new Error("Rent Operations demo server cannot run in production");
+  if (process.env.NODE_ENV === "production") throw new Error("5Central Ops demo server cannot run in production");
   const app = express();
   const repository = options.syntheticRepository ?? createSyntheticRentOpsRepository();
   const demoAdmin = {
@@ -59,7 +59,7 @@ export function createRentOpsDemoApp(options: RentOpsDemoServerOptions = {}): Ex
   options.configureSyntheticRoutes?.(app);
   const publicDir = options.publicDir ?? path.resolve(process.cwd(), "dist/public");
   app.use(express.static(publicDir));
-  // Serve the built SPA shell for the two Rent Operations entry points so the
+  // Serve the built SPA shell for the two 5Central Ops entry points so the
   // explicit synthetic runtime can exercise real routing and visual states.
   app.get(/^\/(?:ops|apply)(?:\/.*)?$/, (_req, res) => res.sendFile(path.join(publicDir, "index.html")));
   return app;

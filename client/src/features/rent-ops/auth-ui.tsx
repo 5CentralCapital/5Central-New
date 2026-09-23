@@ -40,7 +40,7 @@ export function RentOpsAdminLogin({ message }: { message?: string }) {
       setPassword("");
     } catch (cause) {
       setPassword("");
-      setError(cause instanceof Error ? cause.message : "Rent Operations sign-in was not accepted.");
+      setError(cause instanceof Error ? cause.message : "5Central Ops sign-in was not accepted.");
     } finally {
       setSubmitting(false);
     }

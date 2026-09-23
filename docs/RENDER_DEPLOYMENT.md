@@ -1,6 +1,6 @@
-# Rent Ops Render deployment
+# 5Central Ops Render deployment
 
-`render.yaml` is a fail-closed Blueprint for the single-user Rent Ops web
+`render.yaml` is a fail-closed Blueprint for the single-user 5Central Ops web
 service. It deliberately defaults to Render's `free` plan with one instance:
 that is suitable for review, synthetic data, and pre-public staging only. A
 human operator must record an explicit paid-plan decision before public
@@ -18,13 +18,13 @@ multiple instances.
 2. Fill every `sync: false` value in the Blueprint. Render generates
    `SESSION_SECRET` and `RENT_OPS_SESSION_SECRET`; do not paste those values
    into the repository or a ticket. Set `RENT_OPS_ADMIN_EMAIL` to the one
-   operator account used for Rent Ops administration. Set the magic-link
+   operator account used for 5Central Ops administration. Set the magic-link
    webhook URL, webhook secret, and public app URL for the reviewed applicant
    delivery path. Plaid and Ramp values are optional host-dashboard
    integrations; if enabled, fill their `sync: false` values from the
    provider Dashboard without recording the values in source control.
 3. Provision the host database URL as `DATABASE_URL`. Provision separate
-   Rent Ops runtime and importer database roles. Put only the runtime URL in
+   5Central Ops runtime and importer database roles. Put only the runtime URL in
    `RENT_OPS_RUNTIME_DATABASE_URL` in the web deployment. Keep
    `RENT_OPS_DATABASE_URL` exclusively in the restricted operator job. The
    web startup rejects importer database and object-store credentials. Provision the host `user_sessions` table as part of the
@@ -33,7 +33,7 @@ multiple instances.
    On Replit, set the reviewed host connection as `RENT_OPS_HOST_DATABASE_URL`
    when publishing replaces `DATABASE_URL` with its managed database. This
    optional override takes priority for host queries and sessions, and startup
-   validates it against the separate Rent Ops database. An empty or invalid
+   validates it against the separate 5Central Ops database. An empty or invalid
    override fails startup; it never falls back to the provider connection.
 4. Configure a private, encrypted, versioned S3-compatible bucket and the
    two web identities named in the Blueprint plus a separate operator importer
@@ -123,7 +123,7 @@ secrets. Those are operator actions after review.
 
 The Blueprint intentionally does not declare `ADMIN_API_KEY`,
 `DASHBOARD_API_KEY`, or `FIVECENTRAL_API_KEY`: production startup rejects any
-of those legacy keys, and Rent Ops never accepts them. It also does not
+of those legacy keys, and 5Central Ops never accepts them. It also does not
 declare `RM_API_BASE`, `RM_API_TOKEN`, `RM_USERNAME`, `RM_PASSWORD`,
 `RM_LOCATION_ID`, or `RENT_MANAGER_CLIENT_PATH`. Rent Manager is an offline,
 restricted migration/import source; its credentials and client path must not

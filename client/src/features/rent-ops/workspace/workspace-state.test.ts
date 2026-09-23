@@ -228,3 +228,14 @@ test('company report bookmarks preserve report and company without changing lega
   assert.equal(new URLSearchParams(legacy).has('reportId'),false);
   assert.equal(parseWorkspaceRoute('?section=company-reports&reportId=../../private').reportId,undefined);
 });
+
+test('a saved report setup opens company reports with its preset and survives a round trip', () => {
+  const company = '10000000-0000-4000-8000-000000000001';
+  const preset = '50000000-0000-4000-8000-000000000001';
+  const route = parseWorkspaceRoute(`?section=company-reports&company=${company}&reportId=rent-paid&preset=${preset}`);
+  assert.equal(route.presetId, preset);
+  assert.equal(route.reportId, 'rent-paid');
+  assert.match(workspaceRouteSearch(route), new RegExp(`preset=${preset}`));
+  assert.equal(parseWorkspaceRoute(`?section=company-reports&company=${company}&preset=not-a-uuid`).presetId, undefined);
+  assert.equal(parseWorkspaceRoute(`?section=dashboard&preset=${preset}`).presetId, undefined);
+});

@@ -157,7 +157,7 @@ export function createProjectReportingEngine(read: ProjectReportingReadPort): Re
         const result = resultFromRecords(context, records, { source: "company_projects", basis: "mixed", missingData: missing, totals: [totals("approved_budget", totalBudget, projects[0]?.currency ?? null, totalBudget === null ? "partial" : "complete"), totals("posted_actuals", totalActual, projects[0]?.currency ?? null, totalActual === null ? "partial" : "complete")], columns: reportColumns([
           { id: "projectName", label: "Project", type: "text" }, { id: "projectType", label: "Type", type: "status" }, { id: "status", label: "Status", type: "status" }, { id: "startOn", label: "Start", type: "date" }, { id: "targetOn", label: "Target", type: "date" }, { id: "approvedBudgetCents", label: "Approved budget", type: "money" }, { id: "budgetScope", label: "Budget scope", type: "status" }, { id: "postedActualCents", label: "Posted actuals", type: "money" }, { id: "actualScope", label: "Actual scope", type: "status" }, { id: "actualCoverage", label: "Actual coverage", type: "status" }, { id: "varianceCents", label: "Variance", type: "money" },
         ]) });
-        return { ...result, coverage: [coverage(context, source, result.rows.length, "Project budgets are R-ops records; posted actuals remain partial until the accounting mirror verifies every binding.")] };
+        return { ...result, coverage: [coverage(context, source, result.rows.length, "Project budgets are 5Central Ops records; posted actuals remain partial until the accounting mirror verifies every binding.")] };
       }
       if (reportId === "contractor-exposure") {
         const commitments = source.commitments ?? [];

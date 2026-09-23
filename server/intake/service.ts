@@ -107,10 +107,10 @@ export interface TenantAccountApplyAdapterOptions {
 }
 
 function tenantAccountCommandService(value: unknown): RentOpsTenantAccountCommandService {
-  if (!value || typeof value !== "object") throw packetError("rent_ops_service_unconfigured", "The transaction-bound Rent Operations service is unavailable.");
+  if (!value || typeof value !== "object") throw packetError("rent_ops_service_unconfigured", "The transaction-bound 5Central Ops service is unavailable.");
   const candidate = value as Partial<RentOpsTenantAccountCommandService>;
   if (typeof candidate.snapshot !== "function" || typeof candidate.recordManualPayment !== "function" || typeof candidate.saveLedgerTransaction !== "function") {
-    throw packetError("rent_ops_service_unconfigured", "The transaction-bound Rent Operations service is unavailable.");
+    throw packetError("rent_ops_service_unconfigured", "The transaction-bound 5Central Ops service is unavailable.");
   }
   return candidate as RentOpsTenantAccountCommandService;
 }
@@ -174,7 +174,7 @@ function mraPaymentId(packet: MraPacketRecord, line: IntakeLineRecord): string {
 }
 
 /**
- * Default apply adapter for the existing Rent Operations command surface.
+ * Default apply adapter for the existing 5Central Ops command surface.
  * Rent and fee lines with an exact tenancy use recordManualPayment (and its
  * idempotent auto-allocation); HAP, deposit, and other typed lines use the
  * transaction-bound ledger command so their payer/category survives. The

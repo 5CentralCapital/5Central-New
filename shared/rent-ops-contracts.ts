@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Rent Operations is deliberately independent of the legacy application
+ * 5Central Ops is deliberately independent of the legacy application
  * schema. These contracts are the boundary shared by the domain, API, and
  * import tooling. Money is always integer cents outside the SQL adapter.
  */

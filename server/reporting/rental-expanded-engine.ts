@@ -174,7 +174,7 @@ function insuranceRows(context: ReportingEngineContext, snapshot: RentOpsSnapsho
   });
   return {
     rows,
-    missingData: [{ code: "insurance_policy_history_unavailable", state: "partial", message: "R-ops stores a person expiry field only; complete policy history, effective start, carrier, and coverage limits are unavailable." }],
+    missingData: [{ code: "insurance_policy_history_unavailable", state: "partial", message: "5Central Ops stores a person expiry field only; complete policy history, effective start, carrier, and coverage limits are unavailable." }],
   };
 }
 
@@ -199,7 +199,7 @@ function vehicleRows(context: ReportingEngineContext, snapshot: RentOpsSnapshot)
       recordStatus: tenancy ? "linked_to_tenancy" : "application_record_only",
     }));
   }
-  return { rows, missingData: [{ code: "current_vehicle_status_unavailable", state: "partial", message: "Vehicle facts are stored on applications; R-ops does not prove a complete current tenant vehicle history or active status." }] };
+  return { rows, missingData: [{ code: "current_vehicle_status_unavailable", state: "partial", message: "Vehicle facts are stored on applications; 5Central Ops does not prove a complete current tenant vehicle history or active status." }] };
 }
 
 export function createRentalExtendedReportingEngine(read: RentalSnapshotReadPort): ReportingEngine {

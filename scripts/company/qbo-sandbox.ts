@@ -490,7 +490,7 @@ export async function createQboSandboxHarness(options: QboSandboxHarnessOptions)
       }
       return { pass: true, notes };
     });
-    const displayName = `R-ops sandbox test ${stamp}`;
+    const displayName = `5Central Ops sandbox test ${stamp}`;
     await step("create_and_read_back", async () => {
       const created = await client.create<QuickBooksJsonObject, QuickBooksJsonObject>("Vendor", { DisplayName: displayName });
       const id = String(created.entity.Id ?? "");
@@ -504,7 +504,7 @@ export async function createQboSandboxHarness(options: QboSandboxHarnessOptions)
       const current = vendor as { id: string; syncToken: string };
       const before = await client.read<QuickBooksJsonObject>("Vendor", current.id);
       staleSyncToken = String(before.entity.SyncToken);
-      updatedCompanyName = `R-ops sandbox updated ${stamp}`;
+      updatedCompanyName = `5Central Ops sandbox updated ${stamp}`;
       await client.update({ entity: "Vendor", id: current.id, syncToken: staleSyncToken, fields: { sparse: true, CompanyName: updatedCompanyName } });
       const after = await client.read<QuickBooksJsonObject>("Vendor", current.id);
       const newToken = String(after.entity.SyncToken);
@@ -517,7 +517,7 @@ export async function createQboSandboxHarness(options: QboSandboxHarnessOptions)
       const current = vendor as { id: string; syncToken: string };
       let rejection: string | null = null;
       try {
-        await client.update({ entity: "Vendor", id: current.id, syncToken: staleSyncToken, fields: { sparse: true, CompanyName: `R-ops stale write ${stamp}` } });
+        await client.update({ entity: "Vendor", id: current.id, syncToken: staleSyncToken, fields: { sparse: true, CompanyName: `5Central Ops stale write ${stamp}` } });
       } catch (error) { rejection = safeError(error); }
       const writes = since().filter(call => call.method === "POST" && call.host.endsWith("quickbooks.api.intuit.com")).length;
       const after = await client.read<QuickBooksJsonObject>("Vendor", current.id);

@@ -1,6 +1,6 @@
 # MRA and company document intake
 
-MRA owner packets enter R-ops through the server-attested Codex ingestion port. The web and Mac company surfaces are read-only for MRA results: they list verified packets, normalized lines, reconciliation totals, outcomes, and source evidence. They do not expose upload, mapping, preview, or apply controls.
+MRA owner packets enter 5Central Ops through the server-attested Codex ingestion port. The web and Mac company surfaces are read-only for MRA results: they list verified packets, normalized lines, reconciliation totals, outcomes, and source evidence. They do not expose upload, mapping, preview, or apply controls.
 
 The ingestion lifecycle is durable and resumable:
 

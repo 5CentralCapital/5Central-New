@@ -69,7 +69,7 @@ export const RENT_OPS_TARGET_STATE_IDENTITY_COLUMNS = {
 } as const;
 
 const missingIdentityColumns = RENT_OPS_TARGET_STATE_TABLES.filter((table) => !(table in RENT_OPS_TARGET_STATE_IDENTITY_COLUMNS));
-if (missingIdentityColumns.length > 0) throw new Error("Rent Operations target-state identity inventory is incomplete");
+if (missingIdentityColumns.length > 0) throw new Error("5Central Ops target-state identity inventory is incomplete");
 
 const MONEY_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   rent_ops_units: ["market_rent_cents", "default_deposit_cents"],
@@ -104,7 +104,7 @@ export class RentOpsTargetStateError extends Error {
 
   constructor(reasons: readonly string[]) {
     const safe = Array.from(new Set(reasons.map((reason) => SAFE_CODE.test(reason) ? reason : "target_state_failed"))).sort();
-    super(`Rent Operations target-state proof failed: ${safe.join("; ")}`);
+    super(`5Central Ops target-state proof failed: ${safe.join("; ")}`);
     this.name = "RentOpsTargetStateError";
     this.reasons = safe;
   }

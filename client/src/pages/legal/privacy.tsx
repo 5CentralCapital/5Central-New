@@ -5,7 +5,7 @@ export default function PrivacyPolicy() {
     <LegalPage title="Privacy Policy" testId="privacy-policy-page">
       <LegalSection title="1. Who we are">
         <p>
-          5Central Capital LLC ("5Central," "we," "us") operates 5Central Rent Ops ("Rent Ops" or the "App"), a private
+          5Central Capital LLC ("5Central," "we," "us") operates 5Central Ops, formerly 5Central Rent Ops ("5Central Ops" or the "App"), a private
           property-management and accounting application used to run 5Central's own real estate business and affiliated
           entities. This policy explains what information the App collects, how it is used, and the choices available,
           including for data accessed through the QuickBooks Online integration.

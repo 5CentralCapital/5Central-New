@@ -97,8 +97,8 @@ const REPORT_DESCRIPTIONS: Record<ReportKey, string> = {
 };
 
 const REPORT_SOURCE_NOTES: Record<ReportKey, string> = {
-  "rent-roll": "Rows are derived by the Rent Operations domain service as of the selected date.",
-  occupancy: "Rows are derived by the Rent Operations domain service as of the selected date.",
+  "rent-roll": "Rows are derived by the 5Central Ops domain service as of the selected date.",
+  occupancy: "Rows are derived by the 5Central Ops domain service as of the selected date.",
   "scheduled-income": "Rows are derived from server-recognized recurring schedules; unresolved facts stay visible, labeled with what is missing.",
   "collected-income": "Rows are derived from posted ledger receipts; this view does not establish bank settlement.",
   "scheduled-vs-collected": "Rows compare server-derived schedules and posted receipts; incomplete inputs remain unresolved.",

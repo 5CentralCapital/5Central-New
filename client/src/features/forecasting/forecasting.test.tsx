@@ -64,7 +64,7 @@ test("every workspace view renders a real engine result with drillable cells", (
     const html = renderToStaticMarkup(element);
     assert.ok(html.includes("fc-cell") || name === "debt", `${name} has drill cells`);
     assert.ok(html.includes("<svg"), `${name} renders a chart`);
-    assert.ok(!/R-ops|Rent Ops|Rent Operations/.test(html), `${name} uses current branding`);
+    assert.ok(!/5Central Ops|5Central Ops|5Central Ops/.test(html), `${name} uses current branding`);
     assert.ok(!html.includes("NaN"), `${name} has no NaN`);
   }
   const cash = renderToStaticMarkup(<CashView result={result} onDrill={onDrill} />);

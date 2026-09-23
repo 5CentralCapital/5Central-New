@@ -1,8 +1,8 @@
 # Reporting contract
 
-This is the implementation contract for the reporting expansion. As of the September 23 U13 build, all 53 catalog reports have registered engines behind one versioned reporting service (immutable runs, cursor pages, drilldowns, exports, presets and packages) shared by the web app, HTTP and MCP. Whether a report can run for a company is a runtime capability reported by the service, not a static label; see the generated inventory below. Engine completion is not live acceptance: every source still needs real-period tie-out. It records Michael’s September 21, 2026 catalog clarification and extends the canonical R-ops Build Plan, section 9 and packets R01/R02. The supplied screenshots specify report depth and names; they do not request a copy of the blue, verbose interface. Only the labels explicitly supplied below are screenshot requirements; no clipped or unreadable screenshot details are inferred.
+This is the implementation contract for the reporting expansion. As of the September 23 U13 build, all 53 catalog reports have registered engines behind one versioned reporting service (immutable runs, cursor pages, drilldowns, exports, presets and packages) shared by the web app, HTTP and MCP. Whether a report can run for a company is a runtime capability reported by the service, not a static label; see the generated inventory below. Engine completion is not live acceptance: every source still needs real-period tie-out. It records Michael’s September 21, 2026 catalog clarification and extends the canonical 5Central Ops Build Plan, section 9 and packets R01/R02. The supplied screenshots specify report depth and names; they do not request a copy of the blue, verbose interface. Only the labels explicitly supplied below are screenshot requirements; no clipped or unreadable screenshot details are inferred.
 
-The read-only Buildium reference review is recorded in [reporting-reference-review.md](reporting-reference-review.md) and copied into the canonical plan folder as `R-ops Reporting Reference Review.md`. It is a source of useful functionality patterns, not an exhaustive requirement list or a product-scope ceiling.
+The read-only Buildium reference review is recorded in [reporting-reference-review.md](reporting-reference-review.md) and copied into the canonical plan folder as `5Central Ops Reporting Reference Review.md`. It is a source of useful functionality patterns, not an exhaustive requirement list or a product-scope ceiling.
 
 ## Existing implementation to extend
 
@@ -116,7 +116,7 @@ Engine and runtime status for each entry is in the runtime inventory above. QBO-
 
 ### Rental catalog — screenshot requirements
 
-Authority is current R-ops operational records and preserved historical evidence, linked to QBO postings where applicable. A rental report is not automatically a financial statement. Existing IDs indicate a starting calculation, not complete screenshot catalog coverage.
+Authority is current 5Central Ops operational records and preserved historical evidence, linked to QBO postings where applicable. A rental report is not automatically a financial statement. Existing IDs indicate a starting calculation, not complete screenshot catalog coverage.
 
 | Stable ID | Display title | Scope and time | Minimum content and drilldown / implementation starting point |
 |---|---|---|---|
@@ -172,7 +172,7 @@ These entries come from Build Plan section 9, not inferred screenshot content. T
 
 ## Accounting, joins and completeness
 
-QBO posted transactions and supported official reports supply per-realm financial totals at a verified synchronization watermark. R-ops supplies tenant, lease, unit, project, work-order, ownership and operational allocation context. Posted R-ops-derived receipts/costs linked to QBO are one economic event: enrich or reconcile the QBO posting, never add it a second time. Draft cost, invoice, payment allocation, PM settlement, bank settlement and forecast are distinct states. Bank feeds/Plaid provide bank observations, not an additional income/expense ledger.
+QBO posted transactions and supported official reports supply per-realm financial totals at a verified synchronization watermark. 5Central Ops supplies tenant, lease, unit, project, work-order, ownership and operational allocation context. Posted 5Central Ops-derived receipts/costs linked to QBO are one economic event: enrich or reconcile the QBO posting, never add it a second time. Draft cost, invoice, payment allocation, PM settlement, bank settlement and forecast are distinct states. Bank feeds/Plaid provide bank observations, not an additional income/expense ledger.
 
 Use verified organization/entity/realm identities and effective-dated property/ownership mappings. Property transfers and ownership changes apply on their actual effective dates. Do not allocate all historical income using current ownership. Entity-to-property and property-to-unit splits require an approved, versioned method and evidence. Show unallocated amounts and incomplete coverage; allocated plus unallocated must reconcile to the entity total. Never estimate a unit allocation simply to fill a report.
 
