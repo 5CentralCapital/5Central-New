@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { onlineManager, QueryClient, QueryObserver } from '@tanstack/react-query';
-import { refreshWorkspaceQueriesRequired } from './use-workspace-data';
+import { clearSignedOutQueries, refreshWorkspaceQueriesRequired } from './use-workspace-data';
 
 const bootstrapKey = ['rent-ops-workspace', 'bootstrap', 'scope'] as const;
 
@@ -88,4 +88,14 @@ test('required workspace refresh rejects when the required read is unmounted dur
     unsubscribe();
     client.clear();
   }
+});
+
+test('signing out drops company caches as well as rental workspace caches', () => {
+  const client = new QueryClient();
+  client.setQueryData(['rent-ops-workspace', 'bootstrap', 'manager-a'], { rows: 1 });
+  client.setQueryData(['accounting', 'health', 'org-a', 'entity-a'], { items: [] });
+  client.setQueryData(['review-cases', 'list', 'org-a', {}], { items: [] });
+  client.setQueryData(['company-context', 'lane-c'], { organizations: [{ id: 'org-a' }] });
+  clearSignedOutQueries(client);
+  assert.equal(client.getQueryCache().getAll().length, 0);
 });

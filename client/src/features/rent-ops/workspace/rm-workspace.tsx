@@ -35,7 +35,7 @@ import { formatMoney, formatLabel } from './display';
 import { CHARGE_TYPE_MISSING_LABEL, PROPERTY_MISSING_LABEL, STATUS_UNVERIFIED_LABEL } from '@shared/review-cases/display-labels';
 import { filterTenantDirectory, parseWorkspaceFilters, selectedWorkspaceProperties, workspacePropertyMatches, parseWorkspaceRoute, companyReportNavigation, workspaceApiFilters, workspaceCollectionsFor, workspaceFiltersForRecord, workspaceRouteSearch, type TenantDirectoryStatus, type WorkspaceRoute, type WorkspaceSection } from './workspace-state';
 import { recurringRegisterQueryKey, recurringRegisterViews, selectRecurringRegisterRows, type RecurringRegisterView } from './recurring-register-model';
-import { useWorkspaceData } from './use-workspace-data';
+import { clearSignedOutQueries, useWorkspaceData } from './use-workspace-data';
 import '../rent-ops.css';
 import './workspace.css';
 import './workspace-modern.css';
@@ -97,7 +97,7 @@ export default function RmWorkspace(){
  useEffect(()=>{if(auth.status!=='authenticated')document.title='5Central Ops';},[auth.status]);
  useEffect(()=>{if(auth.status==='unknown')void rentOpsAuthClient.initialize().catch(()=>undefined);},[auth.status]);
  useEffect(()=>{
-  if(auth.status!=='authenticated')client.removeQueries({queryKey:['rent-ops-workspace']});
+  if(auth.status!=='authenticated')clearSignedOutQueries(client);
  },[auth.status,client]);
  if(auth.status==='unknown')return <RentOpsAuthLoading/>;
  if(auth.status==='unauthenticated')return <RentOpsAdminLogin message={auth.message}/>;
@@ -105,7 +105,7 @@ export default function RmWorkspace(){
 }
 
 function AuthenticatedWorkspace(){
- const auth=useRentOpsAuth();const client=useQueryClient();
+ const auth=useRentOpsAuth();
  const identity=auth.user?.id??'';
  const [route,setRoute]=useState<WorkspaceRoute>(()=>parseWorkspaceRoute(window.location.search));
  const [filters,setFilters]=useState<ViewFilters>(()=>parseWorkspaceFilters(window.location.search));
@@ -152,11 +152,11 @@ function AuthenticatedWorkspace(){
   return()=>{observer.disconnect();cancelAnimationFrame(frame);clearTimeout(timeout);window.removeEventListener('wheel',stop);window.removeEventListener('touchstart',stop);window.removeEventListener('keydown',stop);};
  },[route,data.bootstrap.data,data.tenant.data,data.collectionsReady]);
  useEffect(()=>{
-  if(auth.status!=='authenticated'){if(auth.status==='unauthenticated'){client.removeQueries({queryKey:['rent-ops-workspace']});}return;}
+  if(auth.status!=='authenticated')return;
   let active=true;setContextError(undefined);
   void loadRentOpsPreviewContext().then(context=>{if(!active)return;setSource(context.source);setBusinessDate(context.asOfDate);}).catch(error=>{if(active)setContextError(error);});
   return()=>{active=false;};
- },[auth.status,auth.user?.id,client,calendarDay]);
+ },[auth.status,auth.user?.id,calendarDay]);
  const directory=useMemo(()=>data.bootstrap.data?filterTenantDirectory(data.bootstrap.data,tenantDirectoryFilters(filters,tenantStatus)):[],[data.bootstrap.data,filters,tenantStatus]);
  useEffect(()=>{if(route.section==='tenants'&&!route.recordId&&directory[0]?.person.id)go({...route,recordId:directory[0].person.id},true);},[route,directory,go]);
  function changeScope(changes:Partial<Pick<ViewFilters,'propertyScope'|'propertyId'|'propertyIds'>>){
