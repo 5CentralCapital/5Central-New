@@ -30,7 +30,7 @@ export function LeasesRenewals({ identity, snapshot, filters }: { identity: stri
     <div className="ws-toolbar">
       <Segmented label="Leases" value={view} onChange={setView} options={[["expiring", `Expiring · ${counts.expiring}`], ["month_to_month", `Month to month · ${counts.month_to_month}`], ["all", `All · ${counts.all}`]]} />
     </div>
-    <DataGrid<RentalRow> rows={rows} columns={columns} getRowKey={(row, index) => `${row.personId}:${row.unitId}:${index}`} caption="Leases and renewals" storageKey="ws-leases"
+    <DataGrid<RentalRow> rows={rows} columns={columns} getRowKey={(row, index) => `${row.personId}:${row.unitId}:${index}`} storageKey="ws-leases"
       emptyMessage={view === "expiring" ? "No leases expire in the notice window." : "No leases match these filters."} />
   </div>;
 }

@@ -7,8 +7,8 @@ import type { RentalRow } from "./models";
 export type { RentalRow };
 
 /** Report rows with names resolved from the loaded snapshot, keyed like the report pages (shared cache). */
-export function useRentalReport(identity: string, key: ReportKey, filters: ViewFilters, period: { asOfDate: string; month?: string }, enabled = true) {
-  const query = reportQueryFilters({ ...filters, search: "" }, key, period);
+export function useRentalReport(identity: string, key: ReportKey, filters: ViewFilters, period: { asOfDate: string; month?: string; fromDate?: string; toDate?: string }, overrides: Partial<ViewFilters> = {}, enabled = true) {
+  const query = reportQueryFilters({ ...filters, status: "all", search: "", ...overrides }, key, period);
   return useQuery({
     queryKey: reportQueryKey(key, query, identity),
     queryFn: ({ signal }) => loadRentOpsReport(key, query, signal),

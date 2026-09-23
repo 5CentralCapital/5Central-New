@@ -30,7 +30,7 @@ export function MovesPage({ snapshot, filters, canRecord, onRecordMove }: { snap
       <Segmented label="Moves" value={view} onChange={setView} options={[["upcoming", "Upcoming"], ["recent", "Completed"], ["all", "All"]]} />
       {canRecord && <button type="button" className="rm-button rm-button-primary ws-toolbar-end" onClick={() => onRecordMove()}>Record move</button>}
     </div>
-    <DataGrid<RentalRow> rows={rows} columns={columns} getRowKey={row => String(row.id)} caption="Move-ins and move-outs" storageKey="ws-moves"
+    <DataGrid<RentalRow> rows={rows} columns={columns} getRowKey={row => String(row.id)} storageKey="ws-moves"
       emptyMessage={view === "upcoming" ? "No planned moves in the next 60 days." : view === "recent" ? "No moves completed in the last 30 days." : "No moves in this window."} />
   </div>;
 }
@@ -70,7 +70,7 @@ function MakeReadyContent({ identity, snapshot, filters, organizationId }: { ide
   ];
   return <div className="ws-page">
     {work?.data?.truncated && <p className="ws-note">Showing the first 500 open work orders.</p>}
-    <DataGrid<MakeReadyRow> rows={visible} columns={columns} getRowKey={row => row.unit.id!} caption="Units to make ready" storageKey="ws-make-ready" emptyMessage="Every unit is occupied or ready." />
+    <DataGrid<MakeReadyRow> rows={visible} columns={columns} getRowKey={row => row.unit.id!} storageKey="ws-make-ready" emptyMessage="Every unit is occupied or ready." />
   </div>;
 }
 
@@ -98,7 +98,7 @@ function ListingsContent({ snapshot, filters }: { snapshot: AdminSnapshot; filte
   ];
   return <div className="ws-page">
     <div className="ws-toolbar"><Segmented label="Units" value={view} onChange={setView} options={[["available", "Available"], ["listed", "Listed"], ["all", "All units"]]} /></div>
-    <DataGrid<ListingRow> rows={rows} columns={columns} getRowKey={row => row.unit.id!} caption="Unit listings" storageKey="ws-listings" emptyMessage={view === "listed" ? "No units are marked listed." : "No available units match these filters."} />
+    <DataGrid<ListingRow> rows={rows} columns={columns} getRowKey={row => row.unit.id!} storageKey="ws-listings" emptyMessage={view === "listed" ? "No units are marked listed." : "No available units match these filters."} />
   </div>;
 }
 

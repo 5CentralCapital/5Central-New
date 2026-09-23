@@ -59,6 +59,6 @@ export function PropertyPerformance({ identity, filters, organizationId, onOpenR
       <div><dt><button type="button" className="ws-link" onClick={() => onOpenReport("delinquency")}>Arrears</button></dt><dd>{money(arrears.total, arrears.complete)}</dd></div>
     </dl>
     {!company && <p className="ws-note">Open work and project exposure appear once you have company access.</p>}
-    <DataGrid<Row> rows={rows} columns={columns} getRowKey={row => row.propertyId} caption="Property performance" storageKey="ws-property-performance" pageSize={50} />
+    <DataGrid<Row> rows={rows} columns={columns} getRowKey={row => row.propertyId} storageKey="ws-property-performance" pageSize={50} />
   </div>;
 }

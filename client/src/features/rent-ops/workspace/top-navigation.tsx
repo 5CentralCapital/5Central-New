@@ -50,7 +50,10 @@ export function TopNavigation({ route, onNavigate, transparency, onTransparency,
   const returnFocusToToggle = useRef(false);
   const activeGroup = activeNavigationGroup(route);
   const current = activeDestination(route);
-  useLayoutEffect(() => { setOpenGroup(undefined); setMobileOpen(false); }, [route]);
+  // Close menus when the view changes; background record selection (a replace of
+  // the same view) must not dismiss a menu the manager is using.
+  const viewKey = `${route.section}|${current?.id ?? ''}|${route.kind ?? ''}|${route.report}`;
+  useLayoutEffect(() => { setOpenGroup(undefined); setMobileOpen(false); }, [viewKey]);
   useEffect(() => {
     const media = window.matchMedia(NARROW_QUERY);
     const reset = () => { setMobileOpen(false); setOpenGroup(undefined); };

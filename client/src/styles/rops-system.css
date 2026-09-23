@@ -140,7 +140,7 @@
   border-radius: 18px;
   box-shadow: 0 6px 24px rgb(28 25 20 / 7%), 0 0 0 1px var(--ds-hairline);
 }
-.rm-workspace.rops-modern .rops-wordmark { gap: 5px; color: var(--ds-ink); font: 700 14px/1 var(--ds-font-display); letter-spacing: .08em; }
+.rm-workspace.rops-modern .rops-wordmark { gap: 1px; color: var(--ds-ink); font: 700 14px/1 var(--ds-font-display); letter-spacing: .08em; }
 .rm-workspace.rops-modern .rops-wordmark > span { color: var(--ds-gold); }
 .rm-workspace.rops-modern .rops-nav-trigger {
   min-height: 36px;

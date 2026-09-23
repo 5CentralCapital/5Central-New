@@ -12,11 +12,13 @@ await new Promise<void>(done => listener.once('listening', done));
 const origin = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
 const results: unknown[] = [];
 try {
-  for (const [name, engine, viewport] of [
+  // ROPS_BROWSERS=chromium runs one engine; ROPS_CHROMIUM_EXECUTABLE uses a locally installed Chromium.
+  const engines = (process.env.ROPS_BROWSERS ?? 'chromium,webkit').split(',').map(value => value.trim());
+  for (const [name, engine, viewport] of ([
     ['chromium', chromium, { width: 1440, height: 1000 }],
     ['webkit', webkit, { width: 390, height: 844 }],
-  ] as const) {
-    const browser = await engine.launch({ headless: true });
+  ] as const).filter(([engineName]) => engines.includes(engineName))) {
+    const browser = await engine.launch({ headless: true, ...(name === 'chromium' && process.env.ROPS_CHROMIUM_EXECUTABLE ? { executablePath: process.env.ROPS_CHROMIUM_EXECUTABLE } : {}) });
     const page = await browser.newPage({ viewport });
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));

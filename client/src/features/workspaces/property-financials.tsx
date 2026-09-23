@@ -63,6 +63,11 @@ export function PropertyFinancials({ identity, propertyId, asOfDate, organizatio
       : !financials.data ? <Loading label="Loading financials…" />
       : <>{GROUPS.map(([group, title]) => {
         const measures = financials.data.measures.filter(item => item.group === group);
+        const reasons = new Set(measures.map(item => item.unavailableReason));
+        // One reason for a wholly unavailable group reads better than the same line per measure.
+        if (measures.length && measures.every(item => item.state === "unavailable") && reasons.size === 1) {
+          return <div className="ws-measure-group" key={group}><h3>{title}</h3><p className="ws-note">{measures[0].unavailableReason}</p></div>;
+        }
         return <div className="ws-measure-group" key={group}>
           <h3>{title}</h3>
           <dl className="ws-measures">{measures.map(item => <div key={item.key} className={item.state === "unavailable" ? "is-unavailable" : undefined}>

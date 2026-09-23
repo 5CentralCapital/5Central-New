@@ -7,7 +7,7 @@ import type { AdminSnapshot, ViewFilters } from "../rent-ops/types";
 import { EntityLink, RecordLink } from "../rent-ops/workspace/entity-link";
 import { DataGrid, type GridColumn } from "../rent-ops/workspace/grid";
 import { selectedWorkspaceProperties } from "../rent-ops/workspace/workspace-state";
-import { centsSortValue, formatCentsText, formatIsoDate, formatMonth, sumCentsTexts } from "./format";
+import { centsSortValue, formatCentsText, formatIsoDate, formatMonth, humanize, sumCentsTexts } from "./format";
 import { ErrorState, Loading, Section } from "./page";
 import { matchesSearch, rentalRows, useRentalReport } from "./rental-reports";
 import { balancesDue, legacyCents, receiptsByPayment, type RentalRow } from "./models";
@@ -20,8 +20,10 @@ export function Collections({ identity, snapshot, filters, businessDate, readOnl
 }) {
   const [panel, setPanel] = useState<"receipt" | "billing">();
   const month = filters.asOfDate.slice(0, 7);
-  const delinquency = useRentalReport(identity, "delinquency", filters, { asOfDate: filters.asOfDate });
-  const collected = useRentalReport(identity, "collected-income", filters, { asOfDate: filters.asOfDate, month });
+  // Former tenants who still owe are collection work too, so every tenancy status is included.
+  const delinquency = useRentalReport(identity, "delinquency", filters, { asOfDate: filters.asOfDate }, { tenantStatus: "all" });
+  // Receipts from every tenancy count, including former tenants settling a balance.
+  const collected = useRentalReport(identity, "collected-income", filters, { asOfDate: filters.asOfDate, month, fromDate: `${month}-01`, toDate: filters.asOfDate }, { tenantStatus: "all" });
   const due = rentalRows(delinquency.data, snapshot, ["personId", "tenantName", "propertyId", "propertyName", "unitId", "unitNumber", "operationalBalanceCents", "balanceComplete", "oldestUnpaidRentOn", "lastPaymentOn", "tenancyStatus"]);
   const receiptRows = rentalRows(collected.data, snapshot, ["paymentTransactionId", "personId", "tenantName", "propertyId", "propertyName", "unitNumber", "paymentOn", "category", "amountCents"]);
   const dueRows = due ? balancesDue(due).filter(row => matchesSearch(row, filters.search, ["tenantName", "propertyName", "unitNumber"])) : undefined;
@@ -33,6 +35,7 @@ export function Collections({ identity, snapshot, filters, businessDate, readOnl
     { key: "tenantName", label: "Tenant", render: row => <EntityLink personId={row.personId as string} tab="ledger">{String(row.tenantName ?? "Tenant")}</EntityLink> },
     { key: "propertyName", label: "Property", render: row => <RecordLink kind="property" recordId={row.propertyId as string}>{String(row.propertyName ?? "—")}</RecordLink> },
     { key: "unitNumber", label: "Unit" },
+    { key: "tenancyStatus", label: "Tenancy", render: row => humanize(row.tenancyStatus as string) },
     { key: "oldestUnpaidRentOn", label: "Oldest unpaid", render: row => formatIsoDate(row.oldestUnpaidRentOn as string) },
     { key: "lastPaymentOn", label: "Last payment", render: row => formatIsoDate(row.lastPaymentOn as string) },
     { key: "operationalBalanceCents", label: "Balance due", align: "right", render: row => <EntityLink personId={row.personId as string} tab="ledger">{row.balanceComplete === false && legacyCents(row.operationalBalanceCents) ? `At least ${formatCentsText(legacyCents(row.operationalBalanceCents))}` : formatCentsText(legacyCents(row.operationalBalanceCents))}</EntityLink>, sortValue: row => centsSortValue(legacyCents(row.operationalBalanceCents)) },
@@ -59,11 +62,11 @@ export function Collections({ identity, snapshot, filters, businessDate, readOnl
       : <RecurringBillingPanel businessDate={businessDate} propertyId={filters.propertyId === "all" ? undefined : filters.propertyId} onPosted={onSaved} />)}
     <Section title="Balances due" id="collections-due" count={dueRows ? `${dueRows.length} · ${dueTotal!.complete ? formatCentsText(dueTotal!.total) : `at least ${formatCentsText(dueTotal!.total)}`}` : undefined}>
       {delinquency.error ? <ErrorState error={delinquency.error} onRetry={() => void delinquency.refetch()} /> : !dueRows ? <Loading label="Loading balances…" />
-        : <DataGrid<RentalRow> rows={dueRows} columns={dueColumns} getRowKey={(row, index) => `${row.personId}:${index}`} emptyMessage="No balances due." caption="Balances due" storageKey="ws-collections-due" />}
+        : <DataGrid<RentalRow> rows={dueRows} columns={dueColumns} getRowKey={(row, index) => `${row.personId}:${index}`} emptyMessage="No balances due." storageKey="ws-collections-due" />}
     </Section>
-    <Section title={`Receipts · ${formatMonth(month)}`} id="collections-receipts" count={receipts ? `${receipts.length} · ${receiptTotal!.complete ? formatCentsText(receiptTotal!.total) : `at least ${formatCentsText(receiptTotal!.total)}`}` : undefined}>
+    <Section title={`Receipts · ${formatMonth(month)} to date`} id="collections-receipts" count={receipts ? `${receipts.length} · ${receiptTotal!.complete ? formatCentsText(receiptTotal!.total) : `at least ${formatCentsText(receiptTotal!.total)}`}` : undefined}>
       {collected.error ? <ErrorState error={collected.error} onRetry={() => void collected.refetch()} /> : !receipts ? <Loading label="Loading receipts…" />
-        : <DataGrid<RentalRow> rows={receipts} columns={receiptColumns} getRowKey={(row, index) => `${row.paymentTransactionId}:${index}`} emptyMessage="No receipts applied this month." caption="Receipts this month" storageKey="ws-collections-receipts" />}
+        : <DataGrid<RentalRow> rows={receipts} columns={receiptColumns} getRowKey={(row, index) => `${row.paymentTransactionId}:${index}`} emptyMessage="No receipts applied this month." storageKey="ws-collections-receipts" />}
     </Section>
   </div>;
 }

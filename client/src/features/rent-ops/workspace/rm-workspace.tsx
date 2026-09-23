@@ -92,7 +92,9 @@ function RecurringRegister({snapshot,filters,onEdit}:{snapshot:AdminSnapshot;fil
 
 export default function RmWorkspace(){
  const auth=useRentOpsAuth();const client=useQueryClient();
- useEffect(()=>{const previous=document.title;document.title='5Central Ops';return()=>{document.title=previous;};},[]);
+ useEffect(()=>{const previous=document.title;return()=>{document.title=previous;};},[]);
+ // Signed-in views title themselves per page (child effects run first, so only the signed-out state is set here).
+ useEffect(()=>{if(auth.status!=='authenticated')document.title='5Central Ops';},[auth.status]);
  useEffect(()=>{if(auth.status==='unknown')void rentOpsAuthClient.initialize().catch(()=>undefined);},[auth.status]);
  useEffect(()=>{
   if(auth.status!=='authenticated')client.removeQueries({queryKey:['rent-ops-workspace']});
