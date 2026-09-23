@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { emptyRentOpsSnapshot, type RentOpsApplicationHistorySnapshot, type RentOpsRecordChange, type RentOpsRecurringChargeSchedule } from "../../../shared/rent-ops-contracts";
 import { ensureRentOpsSchema, rentOpsMigrationSql, RENT_OPS_REQUIRED_TABLES, RENT_OPS_RUNTIME_REQUIRED_TABLES } from "../persistence";
-import { createPostgresRentOpsRepository, RentOpsTablesMissingError, type RentOpsQueryExecutor } from "./postgres";
+import { createPostgresRentOpsRepository, dateValue, RentOpsTablesMissingError, type RentOpsQueryExecutor } from "./postgres";
 
 class FakeExecutor implements RentOpsQueryExecutor {
   readonly calls: Array<{ text: string; values?: unknown[] }> = [];
@@ -654,4 +654,20 @@ test("charge definition catalog reads only its table and preserves snapshot mapp
   assert.deepEqual(await repository.getChargeDefinitions(), expected);
   assert.deepEqual(executor.calls.map(call => call.text), ["SELECT * FROM rent_ops_charge_definitions"]);
   assert.deepEqual(expected.map(row => row.id), ["definition-z", "definition-a"]);
+});
+
+test("SQL DATE values keep their calendar day in any process time zone", () => {
+  const original = process.env.TZ;
+  try {
+    for (const zone of ["Asia/Tokyo", "America/New_York", "UTC"]) {
+      process.env.TZ = zone;
+      // node-postgres: DATE decoded at local midnight.
+      assert.equal(dateValue(new Date(2024, 2, 1)), "2024-03-01", zone);
+      // PGlite: DATE decoded at UTC midnight.
+      assert.equal(dateValue(new Date("2024-03-01T00:00:00.000Z")), "2024-03-01", zone);
+      assert.equal(dateValue("2024-03-01"), "2024-03-01", zone);
+    }
+  } finally {
+    if (original === undefined) delete process.env.TZ; else process.env.TZ = original;
+  }
 });

@@ -311,10 +311,18 @@ function assertRecurringChange(change: RentOpsRecordChange, successor: RentOpsRe
   if (change.origin === "admin" && !change.actorSubject) throw new RentOpsInvariantError("Recurring schedule admin change actor is required");
 }
 
-function dateValue(value: unknown): string | undefined {
+/** Read a SQL DATE. node-postgres decodes DATE at local midnight and PGlite at
+ * UTC midnight; `toISOString()` alone shifts the former back a day whenever the
+ * process time zone is east of UTC. */
+export function dateValue(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value === "string") return value.slice(0, 10);
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) return undefined;
+    const local = value.getHours() === 0 && value.getMinutes() === 0 && value.getSeconds() === 0 && value.getMilliseconds() === 0;
+    const parts = local ? [value.getFullYear(), value.getMonth() + 1, value.getDate()] : [value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate()];
+    return `${String(parts[0]).padStart(4, "0")}-${String(parts[1]).padStart(2, "0")}-${String(parts[2]).padStart(2, "0")}`;
+  }
   return String(value).slice(0, 10);
 }
 
