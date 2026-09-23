@@ -9,6 +9,16 @@ import { createTimeServices, type TimeServices, type TimeServicesOptions } from 
 import { createCompanyReportingPort } from './reporting-runtime';
 import type { ReportingPort } from '../reporting';
 import { createWorkOrderPort, type WorkOrderPort } from '../work-orders/port';
+// lane-b-accounting
+import { createJobsPort, type JobsPort } from '../jobs/operator';
+// lane-c-review
+import type { ContentAddressedObjectStore } from '../rent-ops/storage';
+import { createReviewCasePort, type ReviewCasePort } from '../review-cases/port';
+import { createIntakePort, type IntakePort } from '../intake/port';
+import { createCompanyDocumentsPort, type CompanyDocumentsPort } from '../company-documents/port';
+// lane-d-forecast
+import { createForecastingPort, type ForecastingPort } from '../forecasting/port';
+import { createForecastReportingReadPort } from '../forecasting/reporting-port';
 import { createProjectInsightsPort, type ProjectInsightsPort } from '../projects/insights'; // lane-f
 
 /** The browser and Codex share these services and the same company database. */
@@ -20,12 +30,21 @@ export interface CompanyServices {
   readonly time: TimeServices;
   readonly reporting: ReportingPort;
   readonly workOrders: WorkOrderPort;
+  // lane-b-accounting
+  readonly jobs: JobsPort;
+  // lane-c-review
+  readonly reviewCases: ReviewCasePort;
+  readonly intake: IntakePort;
+  readonly documents: CompanyDocumentsPort;
+  readonly forecasting: ForecastingPort; // lane-d-forecast
   readonly projectInsights: ProjectInsightsPort; // lane-f
 }
 
 export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
   accounting?: AccountingServicesOptions;
   time?: TimeServicesOptions;
+  // lane-c-review: verified private object store for company documents, MRA packets and review evidence.
+  documentStorage?: ContentAddressedObjectStore;
 } = {}): CompanyServices {
   const accounting = createAccountingServices(executor, options.accounting);
   // lane-f: payroll links and work-order cost links reserve QBO lines through the shared mirror ledger.
@@ -51,7 +70,7 @@ export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
       return { source: mirror, allocations: mirror, costContext: mirror };
     },
   });
-  const reporting = createCompanyReportingPort(executor, accounting);
+  const reporting = createCompanyReportingPort(executor, accounting, { forecastPort: transaction => createForecastReportingReadPort(transaction) });
   const workOrders = createWorkOrderPort(executor, { financeFactory: costFinanceFactory }); // lane-f
   // lane-f: project cost report, labor allocation and QBO line picker reads.
   const projectInsights = createProjectInsightsPort(executor, {
@@ -60,5 +79,11 @@ export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
       return createProjectFinanceReadPort(mirror, createProjectFinanceBindingStore(transaction), mirror);
     },
   });
-  return { executor, accounting, investors, projects, time, reporting, workOrders, projectInsights };
+  const jobs = createJobsPort(executor); // lane-b-accounting
+  // lane-c-review
+  const reviewCases = createReviewCasePort(executor, { documentStorage: options.documentStorage });
+  const intake = createIntakePort(executor, { documentStorage: options.documentStorage });
+  const documents = createCompanyDocumentsPort(executor, { documentStorage: options.documentStorage });
+  const forecasting = createForecastingPort(executor); // lane-d-forecast
+  return { executor, accounting, investors, projects, time, reporting, workOrders, jobs, reviewCases, intake, documents, forecasting, projectInsights };
 }

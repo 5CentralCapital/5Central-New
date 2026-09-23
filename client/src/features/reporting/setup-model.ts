@@ -143,7 +143,8 @@ export function normalizeForecastScenarios(payload: unknown): ForecastScenarioOp
     const name = text(item.name) ?? scenarioId;
     if (!scenarioId || !name) return [];
     const state = text(item.state ?? item.status) ?? "unknown";
-    const inputVersion = text(item.inputVersion ?? item.assumptionVersion ?? item.currentAssumptionVersion ?? snapshot?.assumptionVersion);
+    // Pin the latest immutable snapshot when one exists so a report reproduces exactly; otherwise the current assumption version.
+    const inputVersion = text(item.inputVersion ?? snapshot?.id ?? item.assumptionVersion ?? item.currentAssumptionVersion ?? snapshot?.assumptionVersion);
     const modelVersion = text(item.modelVersion ?? snapshot?.modelVersion);
     return [{ scenarioId, name, state, inputVersion: inputVersion === "0" ? null : inputVersion, modelVersion }];
   });
