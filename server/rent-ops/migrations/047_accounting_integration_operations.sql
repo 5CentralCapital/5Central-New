@@ -128,9 +128,12 @@ CREATE TABLE accounting_pm_settlements (
   CHECK (state <> 'reconciled' OR bank_settled_on IS NOT NULL OR owner_remittance_cents = 0)
 );
 
+-- Lines are append-only per settlement revision: an edit writes a complete
+-- new line set under the header's new record_revision and keeps the old one.
 CREATE TABLE accounting_pm_settlement_lines (
   organization_id uuid NOT NULL REFERENCES company_organizations(id),
   settlement_id uuid NOT NULL,
+  settlement_revision integer NOT NULL DEFAULT 1 CHECK (settlement_revision > 0),
   line_number integer NOT NULL CHECK (line_number > 0),
   kind text NOT NULL CHECK (kind IN ('rent_receipt','subsidy_receipt','deposit_receipt','other_receipt','pm_fee','pm_expense','other_deduction','owner_remittance')),
   tenancy_id varchar(160),
@@ -139,9 +142,13 @@ CREATE TABLE accounting_pm_settlement_lines (
   amount_cents bigint NOT NULL CHECK (amount_cents >= 0),
   occurred_on date,
   source_page integer CHECK (source_page IS NULL OR source_page > 0),
-  PRIMARY KEY (organization_id, settlement_id, line_number),
+  PRIMARY KEY (organization_id, settlement_id, settlement_revision, line_number),
   FOREIGN KEY (organization_id, settlement_id) REFERENCES accounting_pm_settlements(organization_id, id)
 );
+CREATE INDEX accounting_pm_settlements_scope
+  ON accounting_pm_settlements (organization_id, legal_entity_id, period_end DESC, id DESC);
+CREATE INDEX accounting_qbo_webhook_events_realm
+  ON accounting_qbo_webhook_events (environment, realm_id, received_at DESC);
 
 ALTER TABLE accounting_qbo_write_attempts DROP CONSTRAINT accounting_qbo_write_attempts_operation_check;
 ALTER TABLE accounting_qbo_write_attempts ADD CONSTRAINT accounting_qbo_write_attempts_operation_check

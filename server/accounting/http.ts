@@ -1,6 +1,14 @@
 import type { Express, Request, RequestHandler, Response } from "express";
 import { z } from "zod";
-import { legalEntityIdSchema, organizationIdSchema } from "../../shared/company";
+import { commandEnvelopeSchema, isoDateSchema, legalEntityIdSchema, newRecordId, organizationIdSchema, propertyReferenceIdSchema } from "../../shared/company";
+import {
+  ACCOUNTING_OPERATION_COMMAND_KINDS,
+  accountingOperationCommandPayloadSchemas,
+  PM_SETTLEMENT_STATES,
+  QBO_SYNC_REQUEST_COMMAND_KIND,
+} from "../../shared/accounting/operations";
+import { attestTransport } from "../company/authorization";
+import { ForbiddenCommandError } from "../company/commands/errors";
 import type { FinancialSourceReadPort } from "../../shared/accounting";
 import type { AccountingServices } from "./index";
 import { loadAuthenticatedPrincipal, authorizeCompanyRead } from "../company/authorization";
@@ -196,16 +204,25 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
     const page = await authorizedRead(executor, request, organizationId, query.legalEntityId, transaction => services.mirror.forExecutor(transaction).listTransactions({ scope: { provider: "qbo", organizationId, legalEntityId: query.legalEntityId, environment: query.environment, realmId: query.realmId }, from: query.from, through: query.through, limit: query.limit, cursor: query.cursor }));
     response.json(page);
   }));
+  // Sync runs in the background worker; this request only queues it.
   app.post("/api/company/:organizationId/accounting/qbo/sync", requireAdmin, companyReadHandler(async (request, response) => {
     const organizationId = organizationIdSchema.parse(request.params.organizationId);
-    const body = z.object({ legalEntityId: legalEntityIdSchema, environment: environmentSchema, realmId: realmSchema, maxPages: z.number().int().min(1).max(100).optional() }).strict().parse(request.body);
+    const body = z.object({ legalEntityId: legalEntityIdSchema, environment: environmentSchema, realmId: realmSchema, maxPages: z.number().int().min(1).max(100).optional(), fullReplay: z.boolean().optional() }).strict().parse(request.body);
     const { actorId } = await authorizedScope(executor, request, organizationId, body.legalEntityId, MUTATION_ROLES);
-    void actorId;
     if (services.qbo.status !== "configured") throw new AccountingError("accounting_configuration", "QuickBooks is not configured");
     if (body.environment !== services.qbo.environment) throw new AccountingError("accounting_conflict", "The requested QuickBooks environment is not configured for this server");
-    const sync = services.qbo.createProviderSync({ organizationId, legalEntityId: body.legalEntityId, environment: body.environment, realmId: body.realmId });
-    await sync.bootstrapRead();
-    response.json(await sync.catchUp({ maxPages: body.maxPages }));
+    const connection = await executor.query<{ status: string }>(
+      `SELECT status FROM accounting_qbo_connections WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4`,
+      [organizationId, body.legalEntityId, body.environment, body.realmId],
+    );
+    if (connection.rows[0]?.status !== "active") throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks needs to be reconnected for this company");
+    const operationId = newRecordId();
+    const resolvePrincipal = (transaction: RentOpsQueryExecutor) => loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: "admin" });
+    const receipt = await services.operations.execute(QBO_SYNC_REQUEST_COMMAND_KIND, {
+      operationId, idempotencyKey: `qbo-sync:${operationId}`, scope: { organizationId, legalEntityId: body.legalEntityId },
+      payload: { environment: body.environment, realmId: body.realmId, forceFullReplay: body.fullReplay === true },
+    }, { principal: await resolvePrincipal(executor), resolvePrincipal, transport: attestTransport("web") });
+    response.status(202).json({ status: "queued", jobId: receipt.affectedRecordIds[0] ?? null, message: receipt.validationOutcomes[0]?.message ?? "QuickBooks refresh queued." });
   }));
   app.get("/api/company/:organizationId/accounting/qbo/coverage", requireAdmin, companyReadHandler(async (request, response) => {
     const organizationId = organizationIdSchema.parse(request.params.organizationId);
@@ -279,6 +296,79 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
     const { actorId } = await authorizedScope(executor, request, organizationId, body.legalEntityId, MUTATION_ROLES);
     if (services.qbo.status !== "configured") throw new AccountingError("accounting_configuration", "QuickBooks is not configured");
     response.json(await services.qbo.disconnect({ actorId, channel: "web", scope: { organizationId, legalEntityId: body.legalEntityId, environment: services.qbo.environment, realmId: body.realmId } }));
+  }));
+  registerAccountingOperationRoutes(app, options);
+}
+
+const periodQuery = z.object({ legalEntityId: legalEntityIdSchema, periodStart: isoDateSchema, periodEnd: isoDateSchema }).strict();
+const csvList = <T extends readonly [string, ...string[]]>(values: T) => z.string().trim().min(1).max(200)
+  .transform(value => value.split(",").map(item => item.trim()).filter(Boolean)).pipe(z.array(z.enum(values)).min(1).max(values.length));
+
+/** Accounting operations (health, posting policy, PM settlements, bridge, close, payables); same port as the Codex tools. */
+function registerAccountingOperationRoutes(app: Express, options: AccountingHttpRouteOptions): void {
+  const { executor, requireAdmin, services } = options;
+  const operations = services.operations;
+  const principalFor = (request: Request, organizationId: string, connection: RentOpsQueryExecutor = executor) =>
+    loadAuthenticatedPrincipal(connection, { actorId: companyWebActor(request), organizationId, role: "admin" });
+  app.get("/api/company/:organizationId/accounting/health", requireAdmin, companyReadHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const query = z.object({ legalEntityId: legalEntityIdSchema.optional() }).strict().parse(request.query);
+    response.json(await operations.health(await principalFor(request, organizationId), { organizationId, ...query }));
+  }));
+  app.get("/api/company/:organizationId/accounting/period-close", requireAdmin, companyReadHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const query = periodQuery.parse(request.query);
+    response.json(await operations.closeChecklist(await principalFor(request, organizationId), { organizationId, ...query }));
+  }));
+  app.get("/api/company/:organizationId/accounting/posting-policies", requireAdmin, companyReadHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const query = z.object({ legalEntityId: legalEntityIdSchema }).strict().parse(request.query);
+    response.json(await operations.listPostingPolicies(await principalFor(request, organizationId), { organizationId, ...query }));
+  }));
+  app.get("/api/company/:organizationId/accounting/pm-settlements", requireAdmin, companyReadHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const query = z.object({
+      legalEntityId: legalEntityIdSchema.optional(), propertyId: propertyReferenceIdSchema.optional(), state: csvList(PM_SETTLEMENT_STATES).optional(),
+      periodFrom: isoDateSchema.optional(), periodThrough: isoDateSchema.optional(), limit: z.coerce.number().int().min(1).max(100).default(50), cursor: z.string().min(1).max(512).optional(),
+    }).strict().parse(request.query);
+    const { state, ...rest } = query;
+    response.json(await operations.listPmSettlements(await principalFor(request, organizationId), { organizationId, ...rest, ...(state ? { states: state } : {}) }));
+  }));
+  app.get("/api/company/:organizationId/accounting/pm-settlements/:settlementId", requireAdmin, companyReadHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const settlementId = z.string().uuid().parse(request.params.settlementId);
+    const query = z.object({ legalEntityId: legalEntityIdSchema.optional(), propertyId: propertyReferenceIdSchema.optional() }).strict().parse(request.query);
+    response.json(await operations.getPmSettlement(await principalFor(request, organizationId), { scope: { organizationId, ...query }, settlementId }));
+  }));
+  app.get("/api/company/:organizationId/accounting/rental-bridge", requireAdmin, companyReadHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const query = periodQuery.extend({ format: z.enum(["json", "csv"]).default("json") }).parse(request.query);
+    const principal = await principalFor(request, organizationId);
+    const input = { organizationId, legalEntityId: query.legalEntityId, periodStart: query.periodStart, periodEnd: query.periodEnd };
+    if (query.format === "csv") {
+      const exported = await operations.exportBridgeCsv(principal, input);
+      response.setHeader("Content-Type", "text/csv; charset=utf-8");
+      response.setHeader("Content-Disposition", `attachment; filename="${exported.filename}"`);
+      response.send(exported.csv);
+      return;
+    }
+    response.json(await operations.previewBridge(principal, input));
+  }));
+  app.get("/api/company/:organizationId/accounting/qbo/payables", requireAdmin, companyReadHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const query = z.object({
+      legalEntityId: legalEntityIdSchema, environment: environmentSchema, realmId: realmSchema, kind: z.enum(["bills", "payments"]).default("bills"),
+      from: isoDateSchema.optional(), through: isoDateSchema.optional(), limit: z.coerce.number().int().min(1).max(100).default(50), cursor: z.string().min(1).max(512).optional(),
+    }).strict().parse(request.query);
+    response.json(await operations.listPayables(await principalFor(request, organizationId), { organizationId, ...query }));
+  }));
+  app.post("/api/company/:organizationId/accounting-commands/:commandKind", requireAdmin, companyReadHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const kind = z.enum(ACCOUNTING_OPERATION_COMMAND_KINDS).parse(request.params.commandKind);
+    const envelope = commandEnvelopeSchema(accountingOperationCommandPayloadSchemas[kind]).parse(request.body);
+    if (envelope.scope.organizationId !== organizationId) throw new ForbiddenCommandError("Accounting command company does not match this request.");
+    const resolvePrincipal = (transaction: RentOpsQueryExecutor) => principalFor(request, organizationId, transaction);
+    response.json(await operations.execute(kind, envelope, { principal: await resolvePrincipal(executor), resolvePrincipal, transport: attestTransport("web") }));
   }));
 }
 

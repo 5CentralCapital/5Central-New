@@ -37,7 +37,11 @@ function coerceDates(body: Record<string, any>): Record<string, any> {
   return result;
 }
 
-export async function registerRoutes(app: Express, options: { onTenantPaymentService?: (service: TenantPaymentService) => void } = {}): Promise<Server> {
+export async function registerRoutes(app: Express, options: {
+  onTenantPaymentService?: (service: TenantPaymentService) => void;
+  /** lane-b-accounting: raw-body webhooks registered before express.json() reach the runtime database here. */
+  onRuntimeExecutor?: (executor: import("./rent-ops/repositories/postgres").RentOpsQueryExecutor) => void;
+} = {}): Promise<Server> {
   // Auth routes
   registerAuthRoutes(app);
 
@@ -69,6 +73,7 @@ export async function registerRoutes(app: Express, options: { onTenantPaymentSer
   const tenantPortal = registerTenantPortalRoutes(app, { repository: rentOpsRepository, database: rentOpsRuntimeDatabase, requireAdmin: requireRentOpsAdmin, ...(rentOpsObjectStores ? { documentStorage: rentOpsObjectStores.documentStorage } : {}) });
   const recurringBillingService = new RecurringBillingService(new PostgresBillingStore(rentOpsRuntimeDatabase));
   const company = createCompanyServices(rentOpsRuntimeDatabase);
+  options.onRuntimeExecutor?.(rentOpsRuntimeDatabase); // lane-b-accounting
   registerCompanyRoutes(app, { ...company, requireAdmin: requireRentOpsAdmin, hasAdminSession: hasRentOpsAdminSession });
   await registerRentOpsMcpRoutes(app, rentOpsRepository, process.env, { accountAdmin: tenantPortal.accountAdmin, billing: recurringBillingService, company });
   const tenantPaymentService = createTenantPaymentService({ executor: rentOpsRuntimeDatabase, rentOpsRepository, env: process.env });

@@ -276,7 +276,8 @@ function decodeLineCursor(value: string, scope: FinancialSourceScope, from: stri
   }
 }
 
-function versionCompare(left: string, right: string): number {
+/** Compare QBO SyncTokens numerically when both are integers, else lexically. */
+export function versionCompare(left: string, right: string): number {
   if (/^\d+$/.test(left) && /^\d+$/.test(right)) {
     const a = BigInt(left);
     const b = BigInt(right);
@@ -404,6 +405,38 @@ function exceptionReasons(reasons: readonly string[]): string[] {
   return cleaned;
 }
 
+export type QboDeletionDetection = "webhook" | "cdc" | "full_replay";
+
+export interface QboDeletionInput {
+  readonly scope: QuickBooksConnectionScope;
+  readonly objectType: string;
+  readonly objectId: string;
+  /** Last provider revision seen before the deletion; defaults to the newest mirrored revision. */
+  readonly lastKnownVersion?: string | null;
+  /** Provider deletion time when the source states it (webhook/CDC). */
+  readonly sourceDeletedAt?: string | null;
+  readonly detectedVia: QboDeletionDetection;
+  readonly observedAt: string;
+}
+
+export interface QboDeletionResult {
+  /** False when a newer live revision proves the deletion notice is stale. */
+  readonly applied: boolean;
+  readonly tombstoneCreated: boolean;
+  readonly retiredLineCount: number;
+  /** Allocations that now point at a deleted source line and are blocked for review. */
+  readonly blockedAllocationCount: number;
+  readonly blockedAllocatedCents: MoneyCents;
+}
+
+export interface QboDeletionState {
+  readonly deleted: boolean;
+  readonly detectedVia: QboDeletionDetection;
+  readonly lastKnownVersion: string | null;
+  readonly sourceDeletedAt: string | null;
+  readonly detectedAt: string;
+}
+
 export interface QboAccountingMirrorStore extends FinancialSourceReadPort, FinancialSourceAllocationPort, FinancialProviderPaymentContextPort, FinancialProviderCostContextPort {
   readonly purposeMappings: AccountingPurposeMappingPort;
   forExecutor(executor: RentOpsQueryExecutor): QboAccountingMirrorStore;
@@ -422,6 +455,20 @@ export interface QboAccountingMirrorStore extends FinancialSourceReadPort, Finan
   /** Mirrored transaction object IDs for a type, used to detect objects absent from a full replay. */
   listMirroredObjectIds(scope: QuickBooksConnectionScope, objectType: string): Promise<readonly string[]>;
   listProviderMirrors(scope: QuickBooksConnectionScope, kind: QboProviderMirrorKind): Promise<readonly QboProviderMirror[]>;
+  /**
+   * Record a provider deletion: append the tombstone, mark every mirrored
+   * revision deleted, retire the object's lines (not current, voided) and
+   * block allocations that consumed them. Idempotent.
+   */
+  recordDeletion(input: QboDeletionInput): Promise<QboDeletionResult>;
+  /** The object's tombstone and whether it is still deleted (no live revision since). */
+  readDeletionState(scope: QuickBooksConnectionScope, objectType: string, objectId: string): Promise<QboDeletionState | null>;
+  /**
+   * Undo an inferred (full-replay) deletion when the provider returns the
+   * same revision again. Explicit webhook/CDC deletions are never undone here.
+   */
+  restoreInferredDeletion(scope: QuickBooksConnectionScope, objectType: string, objectId: string, version: string): Promise<boolean>;
+  countActiveTombstones(scope: QuickBooksConnectionScope): Promise<number>;
 }
 
 interface ProviderSourceObjectRow {
@@ -740,7 +787,7 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       `SELECT provider_body, provider_updated_at, object_version
          FROM accounting_qbo_source_objects
         WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
-          AND object_type='Account' AND object_id=$5
+          AND object_type='Account' AND object_id=$5 AND deleted_at IS NULL
         ORDER BY provider_updated_at DESC NULLS LAST, received_at DESC, object_version DESC LIMIT 1`,
       [...scopeParts(source).slice(0, 4), cashAccountObjectId],
     );
@@ -757,7 +804,7 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
         `SELECT provider_body, provider_updated_at, object_version
            FROM accounting_qbo_source_objects
           WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
-            AND object_type='Account' AND object_id=$5
+            AND object_type='Account' AND object_id=$5 AND deleted_at IS NULL
           ORDER BY provider_updated_at DESC NULLS LAST, received_at DESC, object_version DESC LIMIT 1`,
         [...scopeParts(source).slice(0, 4), resolution.accountObjectId],
       );
@@ -805,7 +852,7 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       `SELECT provider_body, provider_updated_at, object_version
          FROM accounting_qbo_source_objects
         WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
-          AND object_type='Account' AND object_id=$5
+          AND object_type='Account' AND object_id=$5 AND deleted_at IS NULL
         ORDER BY provider_updated_at DESC NULLS LAST, received_at DESC, object_version DESC LIMIT 1`,
       [...scopeParts(resolution.source).slice(0, 4), resolution.accountObjectId],
     );
@@ -849,7 +896,7 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       const result = await this.executor.query<{ object_count: unknown; latest_watermark: unknown }>(
         `SELECT COUNT(DISTINCT object_id) AS object_count, MAX(provider_updated_at) AS latest_watermark
            FROM accounting_qbo_source_objects
-          WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type='Account'`,
+          WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type='Account' AND deleted_at IS NULL`,
         scopeParts(scope),
       );
       const row = result.rows[0];
@@ -867,7 +914,7 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
          FROM accounting_qbo_source_objects o
          LEFT JOIN accounting_qbo_transactions t ON t.organization_id=o.organization_id AND t.legal_entity_id=o.legal_entity_id AND t.environment=o.environment AND t.realm_id=o.realm_id AND t.object_type=o.object_type AND t.object_id=o.object_id
          LEFT JOIN accounting_qbo_source_line_balances b ON b.organization_id=o.organization_id AND b.legal_entity_id=o.legal_entity_id AND b.environment=o.environment AND b.realm_id=o.realm_id AND b.object_type=o.object_type AND b.object_id=o.object_id
-        WHERE o.organization_id=$1 AND o.legal_entity_id=$2 AND o.environment=$3 AND o.realm_id=$4 AND o.object_type=$5`,
+        WHERE o.organization_id=$1 AND o.legal_entity_id=$2 AND o.environment=$3 AND o.realm_id=$4 AND o.object_type=$5 AND o.deleted_at IS NULL`,
       [...scopeParts(scope), entity],
     );
     const row = result.rows[0];
@@ -912,6 +959,146 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
         providerUpdatedAt,
       };
     }).sort((left, right) => left.displayName.localeCompare(right.displayName) || left.providerObjectId.localeCompare(right.providerObjectId));
+  }
+
+  async recordDeletion(input: QboDeletionInput): Promise<QboDeletionResult> {
+    const scope = scopeOf(input.scope);
+    if (!/^[A-Z][A-Za-z0-9_]{0,119}$/.test(input.objectType)) throw new AccountingError("accounting_validation", "QBO object type is invalid");
+    const objectId = stringValue(input.objectId, "object ID", 200);
+    const observedAt = isoTimestampSchema.parse(input.observedAt);
+    const sourceDeletedAt = input.sourceDeletedAt ? isoTimestampSchema.parse(new Date(input.sourceDeletedAt).toISOString()) : null;
+    const identity = [...scopeParts(scope), input.objectType, objectId];
+    const live = await this.executor.query<{ object_version: string; provider_updated_at: unknown }>(
+      `SELECT object_version, provider_updated_at FROM accounting_qbo_source_objects
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6
+        ORDER BY provider_updated_at DESC NULLS LAST, received_at DESC`,
+      identity,
+    );
+    const newest = live.rows.map(row => String(row.object_version)).sort(versionCompare).at(-1) ?? null;
+    const lastKnownVersion = input.lastKnownVersion === undefined || input.lastKnownVersion === null ? newest : stringValue(input.lastKnownVersion, "object version", 120);
+    // A deletion notice older than a revision we already mirrored as live is stale.
+    const liveRows = await this.executor.query<{ object_version: string; provider_updated_at: unknown }>(
+      `SELECT object_version, provider_updated_at FROM accounting_qbo_source_objects
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6 AND deleted_at IS NULL`,
+      identity,
+    );
+    const newerLive = liveRows.rows.some(row => {
+      if (input.lastKnownVersion && versionCompare(String(row.object_version), input.lastKnownVersion) > 0) return true;
+      const updated = row.provider_updated_at instanceof Date ? row.provider_updated_at.toISOString() : typeof row.provider_updated_at === "string" ? new Date(row.provider_updated_at).toISOString() : null;
+      return sourceDeletedAt !== null && updated !== null && updated > sourceDeletedAt;
+    });
+    if (newerLive) return { applied: false, tombstoneCreated: false, retiredLineCount: 0, blockedAllocationCount: 0, blockedAllocatedCents: centsFromBigInt(BigInt(0)) };
+    const tombstone = await this.executor.query(
+      `INSERT INTO accounting_qbo_deletion_tombstones
+        (organization_id, legal_entity_id, environment, realm_id, object_type, object_id, last_known_version, source_deleted_at, detected_via, detected_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       ON CONFLICT DO NOTHING RETURNING object_id`,
+      [...identity, lastKnownVersion, sourceDeletedAt, input.detectedVia, observedAt],
+    );
+    await this.executor.query(
+      `UPDATE accounting_qbo_source_objects SET deleted_at = $7
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6 AND deleted_at IS NULL`,
+      [...identity, sourceDeletedAt ?? observedAt],
+    );
+    const allocations = await this.executor.query<{ allocation_count: unknown; allocated_cents: unknown }>(
+      `SELECT COUNT(*) AS allocation_count, COALESCE(SUM(amount_cents), 0) AS allocated_cents
+         FROM accounting_qbo_source_line_allocations
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6 AND amount_cents > 0`,
+      identity,
+    );
+    const retired = await this.executor.query<{ line_id: string }>(
+      `UPDATE accounting_qbo_source_line_balances b
+          SET is_current = false, posting_state = 'voided', settlement_state = 'voided', settled_on = NULL, settled_amount_cents = NULL,
+              allocation_blocked = b.allocation_blocked OR EXISTS (
+                SELECT 1 FROM accounting_qbo_source_line_allocations a
+                 WHERE a.organization_id=b.organization_id AND a.legal_entity_id=b.legal_entity_id AND a.environment=b.environment
+                   AND a.realm_id=b.realm_id AND a.object_type=b.object_type AND a.object_id=b.object_id AND a.line_id=b.line_id AND a.amount_cents > 0),
+              updated_at = $7
+        WHERE b.organization_id=$1 AND b.legal_entity_id=$2 AND b.environment=$3 AND b.realm_id=$4 AND b.object_type=$5 AND b.object_id=$6
+          AND (b.is_current OR b.posting_state <> 'voided')
+        RETURNING b.line_id`,
+      [...identity, observedAt],
+    );
+    if (input.detectedVia !== "full_replay") {
+      // Explicit provider evidence settles every open exception for the object;
+      // an inferred full-replay deletion keeps its exception open for review.
+      await this.executor.query(
+        `UPDATE accounting_qbo_sync_exceptions SET resolved_at = $7, resolved_version = $8, last_seen_at = GREATEST(last_seen_at, $7)
+          WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6 AND resolved_at IS NULL`,
+        [...identity, observedAt, lastKnownVersion ?? "deleted"],
+      );
+    }
+    return {
+      applied: true,
+      tombstoneCreated: tombstone.rows.length === 1,
+      retiredLineCount: retired.rows.length,
+      blockedAllocationCount: Number(allocations.rows[0]?.allocation_count ?? 0),
+      blockedAllocatedCents: centsValue(allocations.rows[0]?.allocated_cents ?? "0", "blocked allocation"),
+    };
+  }
+
+  async readDeletionState(scopeInput: QuickBooksConnectionScope, objectType: string, objectId: string): Promise<QboDeletionState | null> {
+    const scope = scopeOf(scopeInput);
+    const result = await this.executor.query<{ detected_via: string; last_known_version: string | null; source_deleted_at: unknown; detected_at: unknown; deleted: boolean }>(
+      `SELECT t.detected_via, t.last_known_version, t.source_deleted_at, t.detected_at,
+              NOT EXISTS (
+                SELECT 1 FROM accounting_qbo_source_objects o
+                 WHERE o.organization_id=t.organization_id AND o.legal_entity_id=t.legal_entity_id AND o.environment=t.environment
+                   AND o.realm_id=t.realm_id AND o.object_type=t.object_type AND o.object_id=t.object_id AND o.deleted_at IS NULL
+              ) AS deleted
+         FROM accounting_qbo_deletion_tombstones t
+        WHERE t.organization_id=$1 AND t.legal_entity_id=$2 AND t.environment=$3 AND t.realm_id=$4 AND t.object_type=$5 AND t.object_id=$6`,
+      [...scopeParts(scope), objectType, objectId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      deleted: row.deleted === true,
+      detectedVia: row.detected_via === "webhook" || row.detected_via === "cdc" ? row.detected_via : "full_replay",
+      lastKnownVersion: row.last_known_version ?? null,
+      sourceDeletedAt: row.source_deleted_at === null || row.source_deleted_at === undefined ? null : timestampValue(row.source_deleted_at, "tombstone deletion time"),
+      detectedAt: timestampValue(row.detected_at, "tombstone detection time"),
+    };
+  }
+
+  async restoreInferredDeletion(scopeInput: QuickBooksConnectionScope, objectType: string, objectId: string, version: string): Promise<boolean> {
+    const scope = scopeOf(scopeInput);
+    const identity = [...scopeParts(scope), objectType, objectId];
+    const state = await this.readDeletionState(scopeInput, objectType, objectId);
+    if (!state?.deleted || state.detectedVia !== "full_replay") return false;
+    const restored = await this.executor.query(
+      `UPDATE accounting_qbo_source_objects SET deleted_at = NULL
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6 AND object_version=$7
+        RETURNING id`,
+      [...identity, version],
+    );
+    if (!restored.rows.length) return false;
+    await this.executor.query(
+      `UPDATE accounting_qbo_source_line_balances b
+          SET is_current = true, posting_state = l.posting_state, settlement_state = l.settlement_state,
+              settled_on = l.settled_on, settled_amount_cents = l.settled_amount_cents, updated_at = $8
+         FROM accounting_qbo_transaction_lines l
+        WHERE b.organization_id=$1 AND b.legal_entity_id=$2 AND b.environment=$3 AND b.realm_id=$4 AND b.object_type=$5 AND b.object_id=$6
+          AND b.latest_version = $7
+          AND l.organization_id=b.organization_id AND l.legal_entity_id=b.legal_entity_id AND l.environment=b.environment AND l.realm_id=b.realm_id
+          AND l.object_type=b.object_type AND l.object_id=b.object_id AND l.source_line_id=b.line_id AND l.source_version=b.latest_version`,
+      [...identity, version, this.now().toISOString()],
+    );
+    return true;
+  }
+
+  async countActiveTombstones(scopeInput: QuickBooksConnectionScope): Promise<number> {
+    const scope = scopeOf(scopeInput);
+    const result = await this.executor.query<{ count: unknown }>(
+      `SELECT COUNT(*) AS count FROM accounting_qbo_deletion_tombstones t
+        WHERE t.organization_id=$1 AND t.legal_entity_id=$2 AND t.environment=$3 AND t.realm_id=$4
+          AND NOT EXISTS (
+            SELECT 1 FROM accounting_qbo_source_objects o
+             WHERE o.organization_id=t.organization_id AND o.legal_entity_id=t.legal_entity_id AND o.environment=t.environment
+               AND o.realm_id=t.realm_id AND o.object_type=t.object_type AND o.object_id=t.object_id AND o.deleted_at IS NULL)`,
+      scopeParts(scope),
+    );
+    return Number(result.rows[0]?.count ?? 0);
   }
 
   async recordSyncException(input: QboSyncExceptionInput): Promise<void> {

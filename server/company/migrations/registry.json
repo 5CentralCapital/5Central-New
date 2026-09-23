@@ -428,7 +428,7 @@
     {
       "version": 46,
       "fileName": "046_company_jobs.sql",
-      "sha256": "755b9723bf07426aa1b0aef3f7b4c8ed449f4b2d50fee51d56a53826c59e9409",
+      "sha256": "3a384728eb15bfe53168c7f74729102499903e6e8f29270bdbce49b3fc241bd9",
       "predecessor": 45,
       "minimumServerContract": 1,
       "minimumClientContract": 1,
@@ -437,7 +437,7 @@
     {
       "version": 47,
       "fileName": "047_accounting_integration_operations.sql",
-      "sha256": "3378d163997c8bcef7895a60228033e8760cc9d20e82f1de0ffa8f77d55c9072",
+      "sha256": "16f51fc659638906cdd5c9b23093df633978912287e95b81685342019c23c283",
       "predecessor": 46,
       "minimumServerContract": 1,
       "minimumClientContract": 1,

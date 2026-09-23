@@ -23,6 +23,27 @@ export const QUICKBOOKS_RATE_LIMIT_BACKOFF_MS = 60_000;
 export const QUICKBOOKS_STALE_OBJECT_FAULT_CODE = "5010";
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,50}$/;
 
+/** Intuit's change data capture returns at most 1,000 objects per response. */
+export const QUICKBOOKS_CDC_MAX_OBJECTS = 1_000;
+/** Intuit's change data capture looks back at most 30 days. */
+export const QUICKBOOKS_CDC_LOOKBACK_DAYS = 30;
+const CDC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Parsed `/cdc` response. Deleted objects appear inside an entity list with
+ * `status: "Deleted"` and only Id/MetaData. `truncated` is true when the
+ * response reached Intuit's object cap, so the window may be incomplete and
+ * the caller must fall back to a full replay.
+ */
+export interface QuickBooksCdcResponse {
+  readonly entities: Readonly<Record<string, readonly QuickBooksJsonObject[]>>;
+  readonly objectCount: number;
+  readonly truncated: boolean;
+  readonly time?: string;
+  readonly intuitTid?: string;
+  readonly status: number;
+}
+
 /** Options for a provider write. `requestId` must be reused verbatim when retrying the same logical write. */
 export interface QuickBooksWriteOptions {
   readonly requestId?: string;
@@ -184,6 +205,32 @@ function queryFromEnvelope<T extends QuickBooksJsonObject>(body: string): QuickB
   };
 }
 
+function cdcFromEnvelope(body: string, requested: readonly string[]): Omit<QuickBooksCdcResponse, "status" | "intuitTid"> | undefined {
+  const parsed = parseObject(body);
+  const responses = parsed?.CDCResponse;
+  if (!parsed || !Array.isArray(responses)) return undefined;
+  const allowed = new Set(requested);
+  const entities: Record<string, QuickBooksJsonObject[]> = Object.fromEntries(requested.map(name => [name, [] as QuickBooksJsonObject[]]));
+  let objectCount = 0;
+  for (const response of responses) {
+    if (!response || typeof response !== "object" || Array.isArray(response)) return undefined;
+    const queries = (response as Record<string, unknown>).QueryResponse;
+    const list = Array.isArray(queries) ? queries : queries === undefined ? [] : [queries];
+    for (const query of list) {
+      if (!query || typeof query !== "object" || Array.isArray(query)) return undefined;
+      for (const [key, value] of Object.entries(query as Record<string, unknown>)) {
+        if (!Array.isArray(value)) continue;
+        if (!allowed.has(key)) return undefined;
+        if (value.some(item => !item || typeof item !== "object" || Array.isArray(item))) return undefined;
+        entities[key]!.push(...value as QuickBooksJsonObject[]);
+        objectCount += value.length;
+      }
+    }
+  }
+  const time = typeof parsed.time === "string" && Number.isFinite(Date.parse(parsed.time)) ? parsed.time : undefined;
+  return { entities, objectCount, truncated: objectCount >= QUICKBOOKS_CDC_MAX_OBJECTS, ...(time ? { time } : {}) };
+}
+
 function safeNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value;
   if (typeof value === "string" && /^\d+$/.test(value)) {
@@ -224,6 +271,8 @@ export interface QuickBooksAccountingClient {
   /** Every write carries a `requestid`; pass the same `requestId` when retrying the same logical write. */
   create<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(entity: QuickBooksEntityName, fields: TFields, options?: QuickBooksWriteOptions): Promise<QuickBooksApiResponse<TResult>>;
   update<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(input: QuickBooksUpdateInput<TFields>, options?: QuickBooksWriteOptions): Promise<QuickBooksApiResponse<TResult>>;
+  /** Change data capture since `changedSince` (≤ 30 days ago), including deletions. */
+  cdc(entities: readonly QuickBooksEntityName[], changedSince: string): Promise<QuickBooksCdcResponse>;
 }
 
 /** QBO REST resource paths are lowercase (`companyinfo`, `vendor`); entity names in bodies stay PascalCase. */
@@ -317,6 +366,27 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
       if (fault) throw fault;
       const parsed = queryFromEnvelope<T>(response.body);
       if (!parsed) throw new QuickBooksIntegrationError("quickbooks_api", "QuickBooks query response could not be confirmed", { status: response.status });
+      return { ...parsed, status: response.status, intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") };
+    },
+
+    async cdc(entities: readonly QuickBooksEntityName[], changedSince: string): Promise<QuickBooksCdcResponse> {
+      if (!Array.isArray(entities) || entities.length === 0 || entities.length > 30 || new Set(entities).size !== entities.length) {
+        throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks change data capture entities are invalid");
+      }
+      for (const entity of entities) assertEntity(entity);
+      if (typeof changedSince !== "string" || !CDC_TIMESTAMP.test(changedSince) || !Number.isFinite(Date.parse(changedSince))) {
+        throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks change data capture timestamp is invalid");
+      }
+      const oldest = Date.now() - QUICKBOOKS_CDC_LOOKBACK_DAYS * 86_400_000;
+      if (Date.parse(changedSince) < oldest) {
+        throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks change data capture cannot look back more than 30 days");
+      }
+      const params = new URLSearchParams({ entities: entities.join(","), changedSince });
+      const response = await call("GET", `cdc?${params.toString()}`);
+      const fault = quickBooksProviderFaultError(response);
+      if (fault) throw fault;
+      const parsed = cdcFromEnvelope(response.body, entities);
+      if (!parsed) throw new QuickBooksIntegrationError("quickbooks_api", "QuickBooks change data capture response could not be confirmed", { status: response.status });
       return { ...parsed, status: response.status, intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") };
     },
 
