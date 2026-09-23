@@ -90,6 +90,8 @@ runtime-role grants. Migration 050 is a **reviewed proposal**: it must be applie
 | HTTP routes and `get_qbo_customer_ledger` MCP tool on the same service | QS04 | `server/accounting/http.ts`, `mcp.ts` |
 | Manager tenant record "QuickBooks" tab: running-balance documents, totals, open items/aging, `Customer.Balance` check, coverage/staleness, link-to-customer (identity map only) | QS04 (UI) | `client/src/features/accounting/customer-ledger.ts`, `client/src/features/rent-ops/workspace/tenant-quickbooks.tsx` |
 | Record-only Invoice write guard with post-save verification (release branch) | QS03 | `server/accounting/qbo-write.ts` |
+| Read-only QuickBooks customer plan (finding 4): owning entity per tenancy from dated property periods, proposed `Tenant · Property Unit · RM<id>` DisplayName checked against mirrored Customers/Vendors/Employees, inactive former tenants, linked/possible-match/collision/ownership-change/blocked statuses, counts and `planSha256` per entity; HTTP `GET …/accounting/qbo/customer-plan`, MCP `get_qbo_customer_plan`, `npm run company:qbo-customer-plan` | QS04 (plan) | `server/accounting/qbo-customer-plan.ts`, `qbo-customer-plan-service.ts`, `scripts/company/qbo-customer-plan.ts` |
+| Source-event tag on creates without a natural key (finding 3): `5CO:<operation key>` as the last line of `PrivateNote` (Invoice, Payment, CreditMemo, JournalEntry, Bill; 4,000 chars) or `Notes` (Customer, which has no PrivateNote; 2,000 chars) | QS03 | `server/accounting/qbo-source-tag.ts`, `qbo-write.ts` |
 
 ## Packet status (implementation, not acceptance)
 
@@ -98,8 +100,8 @@ runtime-role grants. Migration 050 is a **reviewed proposal**: it must be applie
 | QS00 | Done: baseline facts, deployed/DB state, gaps (this document, compliance review, cutover audit) | — |
 | QS01 | Existing identity/coverage contracts reused; receivables contracts added | Dated tenancy→property→entity attribution check on links |
 | QS02 | Receivables mirror implemented and tested; cash mirror unchanged | Apply 050 (after the cutover release, which ships 049); sandbox run against a real company; Item/Class/Department mirrors |
-| QS03 | Posting service existing; record-only Invoice guard added | Field-level edit maps per entity; `PrivateNote` source-event tagging; CreditMemo/Payment writes |
-| QS04 | Read path, links, API and MCP implemented; manager tenant record has a read-only QuickBooks tab (ledger, coverage, verification, customer link) | Tenant portal wiring; RM export inventory and batch previews per entity-period (finding 6) |
+| QS03 | Posting service existing; record-only Invoice guard; source-event tag on creates | Field-level edit maps per entity; resolve an uncertain create by a dated query matched on the tag (still held today); CreditMemo/Payment writes |
+| QS04 | Read path, links, API and MCP implemented; manager tenant record has a read-only QuickBooks tab (ledger, coverage, verification, customer link); read-only customer plan | Review the customer plan per entity; tenant portal wiring; RM export inventory and batch previews per entity-period (finding 6) |
 | QS05–QS12 | Not started | As listed in the plan, plus findings 5, 6 and 8 |
 | QS13 | Not started | Merchant/funding verification per company |
 | QS14 | Harness pieces exist (preflight, schema operator, CI) | Per-cohort cutover gates |
