@@ -14,7 +14,9 @@ export function formatInvestorMoney(value: string | null | undefined, currency =
   const negative = amount < BigInt(0);
   const absolute = (negative ? -amount : amount).toString().padStart(3, "0");
   const whole = absolute.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  return `${negative ? "-" : ""}${currency} ${whole}.${absolute.slice(-2)}`;
+  // USD reads as "$" like the rest of the app; other currencies keep their ISO code.
+  const prefix = currency === "USD" ? "$" : `${currency} `;
+  return `${negative ? "-" : ""}${prefix}${whole}.${absolute.slice(-2)}`;
 }
 const money = formatInvestorMoney;
 function stateTone(state: string): string { return state === "settled" || state === "matches" ? "is-positive" : state === "overdue" || state === "review" || state === "partial" || state === "overpaid" || state === "mismatch" ? "is-warning" : state === "reversed" || state === "unknown" || state === "manual_missing" ? "is-muted" : ""; }
@@ -90,14 +92,16 @@ export function CapitalPanel({ detail }: { detail: InvestorDetail }) {
 
 /** Maturity ladder for this investor's debt and one instrument's schedule and rollforward. */
 export function DebtMaturitiesPanel({ api, organizationId, detail }: { api: InvestorsApi; organizationId: string; detail: InvestorDetail }) {
-  const debtInstruments = detail.instruments.filter((item) => item.kind === "private_loan" || item.kind === "member_loan");
+  const debtInstruments = useMemo(() => detail.instruments.filter((item) => item.kind === "private_loan" || item.kind === "member_loan"), [detail.instruments]);
   const [ladder, setLadder] = useState<readonly InvestorDebtMaturity[]>();
   const [ladderError, setLadderError] = useState<string>();
   const [selected, setSelected] = useState(String(debtInstruments[0]?.id ?? ""));
   const [financials, setFinancials] = useState<InvestorInstrumentFinancials>();
   const [financialsError, setFinancialsError] = useState<string>();
   const [attempt, setAttempt] = useState(0);
-  const entities = useMemo(() => Array.from(new Set(debtInstruments.map((item) => String(item.legalEntityId)))), [debtInstruments]);
+  const entitiesKey = Array.from(new Set(debtInstruments.map((item) => String(item.legalEntityId)))).sort().join(",");
+  const entities = useMemo(() => (entitiesKey ? entitiesKey.split(",") : []), [entitiesKey]);
+  const instrumentsKey = debtInstruments.map((item) => `${item.id}:${item.legalEntityId}`).join(",");
   useEffect(() => {
     if (!api.getDebtMaturities || !entities.length) { setLadder([]); return; }
     const controller = new AbortController();
@@ -116,7 +120,8 @@ export function DebtMaturitiesPanel({ api, organizationId, detail }: { api: Inve
       .then((value) => { if (!controller.signal.aborted) setFinancials(value); })
       .catch((next) => { if (!controller.signal.aborted) setFinancialsError(next instanceof Error ? next.message : "The schedule could not be loaded."); });
     return () => controller.abort();
-  }, [api, attempt, debtInstruments, organizationId, selected]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on instrumentsKey so a re-render never restarts the request
+  }, [api, attempt, instrumentsKey, organizationId, selected]);
   if (!debtInstruments.length || !api.getDebtMaturities) return null;
   const currency = financials?.currency ?? "USD";
   const rollforward = financials?.rollforward;

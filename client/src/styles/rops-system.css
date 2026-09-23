@@ -338,6 +338,8 @@
 .rm-workspace.rops-modern .rmd-table-total strong { color: var(--ds-ink); font-weight: 600; font-size: 13px; }
 
 /* ── Tabs: underline segmented rail ── */
+.rm-workspace.rops-modern .investors-tabs button { padding: 0 10px; color: var(--ds-muted); font: 500 13px/1 var(--ds-font); }
+.rm-workspace.rops-modern .investors-tabs button.is-active { color: var(--ds-ink); font-weight: 600; }
 .rm-workspace.rops-modern :is(.rm-tabs, .ro-tabs, .investors-tabs, .accounting-tabs) { gap: 2px; border-bottom: 1px solid var(--ds-hairline); }
 .rm-workspace.rops-modern .rm-tabs > :where(button, a) { min-height: 38px; padding: 0 12px; color: var(--ds-muted); font: 500 13px/1 var(--ds-font); }
 .rm-workspace.rops-modern .rm-tabs > :where(button, a):hover { color: var(--ds-ink); background: transparent; }

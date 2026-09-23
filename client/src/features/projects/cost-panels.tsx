@@ -32,13 +32,13 @@ export function ProjectCostSummary({ report }: { report: ProjectCostReport }) {
   const incurred = summary.incurred;
   return <section className="projects-panel" aria-label="Cost summary">
     <div className="projects-panel-heading"><h3>Cost summary</h3><CoverageBadge coverage={summary.actualCoverage} /></div>
-    <div className="projects-execution-metric-grid">
+    <div className="projects-execution-metric-grid projects-cost-grid">
       <div><span>Original budget</span><strong>{formatMoney(summary.originalBudgetCents, currency)}</strong></div>
       <div><span>Approved changes</span><strong>{formatMoney(summary.approvedChangeCents, currency)}</strong></div>
       <div><span>Revised budget</span><strong>{formatMoney(summary.revisedBudgetCents, currency)}</strong></div>
       <div><span>Committed</span><strong>{formatMoney(summary.committedCents, currency)}</strong></div>
       <div><span>Incurred</span><strong>{money(incurred.totalCents, currency)}</strong></div>
-      <div><span>Paid</span><strong>{summary.paid.cents === null ? `${formatMoney(summary.paid.knownCents, currency)} known` : formatMoney(summary.paid.cents, currency)}</strong></div>
+      <div><span>Paid</span><strong>{summary.paid.cents === null ? `At least ${formatMoney(summary.paid.knownCents, currency)}` : formatMoney(summary.paid.cents, currency)}</strong></div>
       <div><span>Remaining commitment</span><strong>{money(summary.remainingCommitmentCents, currency)}</strong></div>
       <div><span>Cost to complete</span><strong>{money(summary.costToCompleteCents, currency)}</strong></div>
       <div><span>Forecast final cost</span><strong>{money(summary.forecastFinalCostCents, currency)}</strong></div>

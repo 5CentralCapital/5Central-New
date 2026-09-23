@@ -29,11 +29,14 @@ export function CashView({ result, onDrill }: { result: ForecastResultView; onDr
     .map(([key, cents]) => ({ key, label: categoryLabel(key), cents }));
   const lowWeek = result.summary.minAvailableWeek;
   const modeled = weeks.some(week => week.modeledInflowsCents !== "0");
+  // Unknown opening cash is excluded from the model, never treated as zero: label balances as movement only.
+  const cashUnknown = result.opening.items.some(item => (item.key === "cash_operating" || item.key === "cash_restricted") && item.state === "unknown");
+  const basis = cashUnknown ? "Excludes unknown opening cash" : undefined;
   return <div className="fc-view">
     <dl className="fc-stats">
-      <Stat label="Opening cash" value={moneyWhole(weeks[0]!.openingCashCents, currency)} note={dateLabel(weeks[0]!.start, "long")} />
-      <Stat label="Lowest available" value={moneyWhole(result.summary.minAvailableCashCents, currency)} note={lowWeek ? `Week of ${dateLabel(lowWeek)}` : undefined} tone={result.summary.weeksBelowFloor ? "warning" : undefined} />
-      <Stat label={`Cash after ${weeks.length} weeks`} value={moneyWhole(weeks.at(-1)!.closingCashCents, currency)} />
+      <Stat label="Opening cash" value={cashUnknown ? "Unknown" : moneyWhole(weeks[0]!.openingCashCents, currency)} note={cashUnknown ? "Set opening balances" : dateLabel(weeks[0]!.start, "long")} tone={cashUnknown ? "warning" : undefined} />
+      <Stat label="Lowest available" value={moneyWhole(result.summary.minAvailableCashCents, currency)} note={[lowWeek ? `Week of ${dateLabel(lowWeek)}` : null, basis].filter(Boolean).join(" · ") || undefined} tone={result.summary.weeksBelowFloor ? "warning" : undefined} />
+      <Stat label={`Cash after ${weeks.length} weeks`} value={moneyWhole(weeks.at(-1)!.closingCashCents, currency)} note={basis} />
       <Stat label="Weeks below floor" value={String(result.summary.weeksBelowFloor)} note={`Floor ${moneyWhole(result.scenario.reserveFloorCents, currency)}`} tone={result.summary.weeksBelowFloor ? "warning" : undefined} />
     </dl>
     <LineChart title="Weekly cash" periods={weeks.map(week => ({ key: week.key, label: week.start }))}

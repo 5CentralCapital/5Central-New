@@ -7,6 +7,7 @@ import { createCompanyServices } from './services';
 import { seedRentalDemo } from './testing/seed-rental-demo';
 import { PostgresRentOpsRepository } from '../rent-ops/repositories/postgres';
 import { seedWorkOrderDemo } from './testing/seed-work-orders';
+import { seedCompanyDemo } from './testing/seed-company-demo';
 import type { AccountingQboConfig } from '../accounting';
 
 export interface CompanyDemoAppOptions extends Pick<RentOpsDemoServerOptions, 'publicDir'> {
@@ -35,6 +36,7 @@ export async function createCompanyDemoApp(options: CompanyDemoAppOptions = {}) 
   };
   const company = createCompanyServices(database.executor, { accounting: { environment: accountingEnvironment, ...(accountingQbo ? { qbo: accountingQbo } : {}) }, time: { env: {} } });
   await seedWorkOrderDemo(database.executor, company.workOrders);
+  await seedCompanyDemo(database.executor, company);
   const app = createRentOpsDemoApp({ ...demoOptions,
     syntheticRepository: new PostgresRentOpsRepository(database.executor),
     configureSyntheticRoutes: app => registerCompanyRoutes(app, {

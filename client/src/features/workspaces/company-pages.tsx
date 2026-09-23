@@ -9,6 +9,8 @@ import { formatIsoDate, humanize } from "./format";
 import { Badge, CompanyGate, ErrorState, Loading, Section, Segmented, StatePanel } from "./page";
 import { qboStatusLabel } from "./models";
 
+const ENTITY_TYPE_LABELS: Record<string, string> = { llc: "LLC", corporation: "Corporation", partnership: "Partnership", individual: "Individual", other: "Other", unknown: "Type not set" };
+
 interface CompanyPageProps { identity: string; organizationId?: string; asOfDate: string; onOrganization: (organizationId: string) => void }
 
 /** Company › Entities & ownership: legal entities, dated property assignments and QuickBooks state. */
@@ -30,7 +32,7 @@ function EntitiesContent({ identity, organizationId, asOfDate, selector, onOpenA
       const production = entity.qbo.find(binding => binding.environment === "production") ?? entity.qbo[0];
       const status = qboStatusLabel(production);
       const properties = entity.properties.filter(property => showPast || property.current);
-      return <Section key={entity.id} id={`entity-${entity.id}`} title={entity.name} count={humanize(entity.entityType)}
+      return <Section key={entity.id} id={`entity-${entity.id}`} title={entity.name} count={ENTITY_TYPE_LABELS[entity.entityType] ?? humanize(entity.entityType)}
         actions={<><Badge tone={status.tone}>QuickBooks: {status.label}</Badge><button type="button" className="ws-link" onClick={onOpenAccounting}>Accounting</button></>}>
         {properties.length ? <table className="ws-table">
           <thead><tr><th scope="col">Property</th><th scope="col">From</th><th scope="col">Until</th><th scope="col">Status</th></tr></thead>

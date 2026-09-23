@@ -428,7 +428,7 @@ function ReviewQueue({ organizationId, legalEntityId, propertyId, api }: { organ
   return <div className="rc-workspace">
     <header className="rc-page-header">
       <div>
-        <h1>Review</h1>
+        <h1>Review queue</h1>
         <p className="rc-subtitle" aria-live="polite">{list.isLoading ? "Loading…" : total ? `${total.caseCount} case${total.caseCount === 1 ? "" : "s"} · ${total.affectedCount} affected record${total.affectedCount === 1 ? "" : "s"}${items.length ? ` · impact ${impact.label}` : ""}` : ""}</p>
       </div>
       <button type="button" className="rm-button" onClick={() => void checkAgain()} disabled={checking}>{checking ? <LoaderCircle size={15} className="rc-spin" /> : <RefreshCw size={15} />}Check Again</button>

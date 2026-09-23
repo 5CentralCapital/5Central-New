@@ -189,7 +189,9 @@ test('MCP catalog matches HTTP factory and all available reports have HTTP/MCP r
       assert.equal(response.status, 200, `${report.id}: HTTP request failed`);
       const envelope = await response.json();
       assert.ok(Array.isArray(envelope.rows), `${report.id}: HTTP rows missing`);
-      assert.deepEqual(envelope.rows, result.structuredContent?.data, `${report.id}: HTTP/MCP rows differ`);
+      const data = result.structuredContent?.data as { rows: unknown[]; page: { totalRows: number; nextCursor: string | null } };
+      assert.deepEqual(envelope.rows.slice(0, 200), data.rows, `${report.id}: HTTP/MCP rows differ`);
+      assert.equal(data.page.totalRows, envelope.rows.length, `${report.id}: MCP row count differs`);
     }
   } finally { await client.close(); await server.close(); await new Promise<void>((resolve, reject) => httpServer.close(error => error ? reject(error) : resolve())); }
 });
