@@ -3,7 +3,7 @@ import type { RentOpsFilters, RentOpsSnapshot } from "../../shared/rent-ops-cont
 import { deriveCollectedIncome } from "../rent-ops/domain/reports";
 import { isOccupiedTenancyOn } from "../rent-ops/domain/tenancy-occupancy";
 import { ReportingError } from "./errors";
-import { periodBounds, reportColumns, resultFromRecords, sourceCoverage } from "./source-engine-utils";
+import { periodBounds, reportColumns, resultFromRecords, rowMatchesSearch, sourceCoverage } from "./source-engine-utils";
 import type { ReportingEngine } from "./registry";
 
 export const RENTAL_EXTENDED_REPORT_IDS = [
@@ -44,10 +44,13 @@ function rentalFilters(context: ReportingEngineContext): RentOpsFilters {
   if (unitIds.length === 1) filters.unitId = unitIds[0];
   if (tenantIds.length === 1) filters.personId = tenantIds[0];
   if (tenancyIds.length === 1) filters.tenancyId = tenancyIds[0];
-  const asOfDate = stringField("asOfDate");
-  const fromDate = stringField("fromDate");
-  const toDate = stringField("toDate");
-  const month = stringField("month");
+  // The run period is the only date authority; date filter fields are not
+  // accepted for these reports.
+  const period = context.request.period;
+  const asOfDate = period.mode === "as_of" ? period.asOfDate : period.mode === "custom" ? period.asOfDate : undefined;
+  const fromDate = period.mode === "range" ? period.fromDate : period.mode === "custom" ? period.fromDate : undefined;
+  const toDate = period.mode === "range" ? period.toDate : period.mode === "custom" ? period.toDate : undefined;
+  const month = period.mode === "month" ? period.month : period.mode === "custom" ? period.month : undefined;
   const search = stringField("search");
   const tenantStatus = stringField("tenantStatus");
   const propertyScope = stringField("propertyScope");
@@ -122,7 +125,8 @@ function baseCoverage(context: ReportingEngineContext, source: RentalSnapshotRea
   });
 }
 
-function reportRows(context: ReportingEngineContext, source: RentalSnapshotReadResult, reportId: RentalExtendedReportId, records: readonly unknown[], missingData: readonly ReportMissingData[] = []): ReportingEngineResult {
+function reportRows(context: ReportingEngineContext, source: RentalSnapshotReadResult, reportId: RentalExtendedReportId, allRecords: readonly unknown[], missingData: readonly ReportMissingData[] = []): ReportingEngineResult {
+  const records = allRecords.filter(record => rowMatchesSearch(record as Record<string, unknown>, context.request.filters.search));
   const columns = reportId === "current-tenants"
     ? reportColumns([{ id: "propertyName", label: "Property", type: "text" }, { id: "unitNumber", label: "Unit", type: "text" }, { id: "tenantName", label: "Tenant", type: "text" }, { id: "status", label: "Status", type: "status" }, { id: "actualMoveInOn", label: "Move in", type: "date" }, { id: "occupancyConfirmedOn", label: "Occupancy confirmed", type: "date" }, { id: "occupancyEvidence", label: "Evidence", type: "status" }])
     : reportId === "rent-paid"
@@ -240,7 +244,73 @@ export function createRentalExtendedReportingEngine(read: RentalSnapshotReadPort
   };
 }
 
-/** Leasing-agent attribution needs a verified source field or assignment table. */
-export function createRentalLeasingAgentEngine(): ReportingEngine {
-  return { key: "rental.leasing-agent", reportIds: ["leasing-agent"], ready: false, reason: "No verified leasing-agent attribution source is registered; property operating contacts cannot be treated as leasing agents.", async run() { throw new ReportingError("report_unavailable", "Leasing-agent attribution is unavailable until a verified agent assignment source is registered.", 409, { dependency: "agent_attribution" }); } };
+export const LEASING_UNATTRIBUTED = "Unattributed";
+
+function daysBetween(from: string, through: string): number {
+  return Math.round((Date.parse(`${through.slice(0, 10)}T00:00:00Z`) - Date.parse(`${from.slice(0, 10)}T00:00:00Z`)) / 86_400_000);
+}
+
+/**
+ * Leasing activity by the person who handled each application. Attribution is
+ * the earliest non-system actor recorded on the application's activity
+ * history; an application with no such event is reported as unattributed and
+ * named in missing data, never assigned to a guessed agent.
+ */
+export function createRentalLeasingAgentEngine(read: RentalSnapshotReadPort): ReportingEngine {
+  return {
+    key: "rental.leasing-agent",
+    reportIds: ["leasing-agent"],
+    ready: true,
+    async run(context): Promise<ReportingEngineResult> {
+      const source = await read.readSnapshot({ context, filters: rentalFilters(context) });
+      const snapshot = source.snapshot;
+      const bounds = periodBounds(context);
+      const scope = context.request.scope;
+      const inScope = (propertyId?: string | null) => !scope.propertyIds.length || (typeof propertyId === "string" && scope.propertyIds.includes(propertyId as typeof scope.propertyIds[number]));
+      const tenancies = new Map(snapshot.tenancies.map(tenancy => [tenancy.id, tenancy]));
+      const actorsByApplication = new Map<string, { actor: string; occurredAt: string }>();
+      for (const event of snapshot.activityEvents) {
+        if (!event.applicationId || event.type === "system" || event.actorKnowledge === "unknown") continue;
+        const actor = event.actor?.trim();
+        if (!actor || /^(system|import|rm_import|automation)$/i.test(actor)) continue;
+        const current = actorsByApplication.get(event.applicationId);
+        if (!current || event.occurredAt < current.occurredAt) actorsByApplication.set(event.applicationId, { actor, occurredAt: event.occurredAt });
+      }
+      const groups = new Map<string, { received: number; approved: number; declined: number; withdrawn: number; converted: number; open: number; conversionDays: number[] }>();
+      let unattributed = 0;
+      for (const application of snapshot.applications) {
+        const received = application.submittedOn ?? application.createdAt.slice(0, 10);
+        if ((bounds.from && received < bounds.from) || (bounds.through && received > bounds.through)) continue;
+        const tenancy = application.convertedTenancyId ? tenancies.get(application.convertedTenancyId) : undefined;
+        if (!inScope(application.propertyId ?? tenancy?.propertyId)) continue;
+        const actor = actorsByApplication.get(application.id)?.actor ?? LEASING_UNATTRIBUTED;
+        if (actor === LEASING_UNATTRIBUTED) unattributed += 1;
+        const group = groups.get(actor) ?? { received: 0, approved: 0, declined: 0, withdrawn: 0, converted: 0, open: 0, conversionDays: [] };
+        group.received += 1;
+        if (application.status === "approved") group.approved += 1;
+        else if (application.status === "declined") group.declined += 1;
+        else if (application.status === "withdrawn") group.withdrawn += 1;
+        else if (application.status === "converted" || application.convertedTenancyId) {
+          group.converted += 1;
+          const moveIn = tenancy?.actualMoveInOn;
+          if (moveIn) group.conversionDays.push(Math.max(0, daysBetween(received, moveIn)));
+        } else group.open += 1;
+        groups.set(actor, group);
+      }
+      const rows = Array.from(groups.entries()).map(([agent, group]) => {
+        const sorted = [...group.conversionDays].sort((left, right) => left - right);
+        const median = sorted.length ? (sorted.length % 2 ? sorted[(sorted.length - 1) / 2]! : (sorted[sorted.length / 2 - 1]! + sorted[sorted.length / 2]!) / 2) : null;
+        return { agent, received: group.received, open: group.open, approved: group.approved, declined: group.declined, withdrawn: group.withdrawn, converted: group.converted, conversionPercent: group.received ? (Math.round((group.converted / group.received) * 1000) / 10).toFixed(1) : null, medianDaysToMoveIn: median };
+      }).filter(row => rowMatchesSearch(row, context.request.filters.search));
+      const missingData: ReportMissingData[] = [...emptySourceMissing(snapshot)];
+      if (unattributed) missingData.push({ code: "leasing_agent_unattributed", state: "partial", message: `${unattributed} application${unattributed === 1 ? " has" : "s have"} no recorded handling agent.`, count: unattributed });
+      const columns = reportColumns([
+        { id: "agent", label: "Agent", type: "text" }, { id: "received", label: "Applications", type: "integer" }, { id: "open", label: "Open", type: "integer" },
+        { id: "approved", label: "Approved", type: "integer" }, { id: "declined", label: "Declined", type: "integer" }, { id: "withdrawn", label: "Withdrawn", type: "integer" },
+        { id: "converted", label: "Moved in", type: "integer" }, { id: "conversionPercent", label: "Conversion", type: "percent" }, { id: "medianDaysToMoveIn", label: "Median days to move-in", type: "decimal" },
+      ]);
+      const result = resultFromRecords(context, rows, { source: "rental_applications_and_activity", basis: "operational", missingData, columns, rowId: (_record, _index, values) => `leasing-agent:${String(values.agent)}` });
+      return { ...result, coverage: [baseCoverage(context, source, result.rows.length)] };
+    },
+  };
 }

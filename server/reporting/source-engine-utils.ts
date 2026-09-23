@@ -98,16 +98,41 @@ export function unavailable(reason: string, details: Record<string, unknown> = {
   throw new ReportingError("report_unavailable", reason, 409, details);
 }
 
-export function createUnavailableReportingEngine(input: { readonly key: string; readonly reportIds: readonly `${string}`[]; readonly reason: string; readonly dependency?: string }): ReportingEngine {
+export function createUnavailableReportingEngine(input: { readonly key: string; readonly reportIds: readonly `${string}`[]; readonly reason: string; readonly dependency?: string; readonly unavailableKind?: "missing_data" | "not_implemented" }): ReportingEngine {
   return {
     key: input.key,
     reportIds: input.reportIds as ReportingEngine["reportIds"],
     ready: false,
     reason: input.reason,
+    unavailableKind: input.unavailableKind ?? "missing_data",
+    ...(input.dependency ? { dependency: input.dependency } : {}),
     async run() {
       throw new ReportingError("report_unavailable", input.reason, 409, input.dependency ? { dependency: input.dependency } : {});
     },
   };
+}
+
+
+/** A text search over the displayed values of one row (case-insensitive). */
+export function rowMatchesSearch(values: Record<string, unknown>, search: unknown): boolean {
+  if (typeof search !== "string" || !search.trim()) return true;
+  const needle = search.trim().toLocaleLowerCase();
+  return Object.values(values).some(value => (typeof value === "string" || typeof value === "number") && String(value).toLocaleLowerCase().includes(needle));
+}
+
+export function stringArrayFilter(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.length > 0) : [];
+}
+
+/** Money totals are exact BIGINT sums; a null amount makes the total unknown. */
+export function moneyTotal(key: string, values: readonly (string | null | undefined)[], currency: string | null, options: { readonly partial?: boolean } = {}): ReportTotal {
+  let sum = BigInt(0);
+  let unknown = false;
+  for (const value of values) {
+    if (value === null || value === undefined) { unknown = true; continue; }
+    sum += BigInt(value);
+  }
+  return { key, amountCents: unknown ? null : parseCents(sum.toString()), currency: currency as ReportTotal["currency"], state: unknown ? "unknown" : options.partial ? "partial" : "complete" };
 }
 
 export function periodBounds(context: ReportingEngineContext): { readonly from: string | null; readonly through: string | null } {

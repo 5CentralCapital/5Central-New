@@ -171,13 +171,17 @@ export function createProjectReportingEngine(read: ProjectReportingReadPort): Re
             missing.push({ code: "commitment_period_unavailable", state: "unknown", message: `Commitment ${commitment.id} has no dated approval or commitment date.`, scope: commitment.id });
             continue;
           }
-          if (!inDate(commitment.committedOn, context)) continue;
+          // Exposure as of a date is cumulative: every approved commitment
+          // recorded on or before the report date.
+          if (!actualInScope(commitment.committedOn, context)) continue;
           const key = `${commitment.vendorName ?? "unknown"}:${commitment.currency}`;
           const prior = grouped.get(key) ?? { projectIds: new Set<string>(), amount: BigInt(0), currency: commitment.currency };
           prior.projectIds.add(commitment.projectId); prior.amount += centsToBigInt(commitment.committedCents); grouped.set(key, prior);
         }
-        for (const [key, value] of Array.from(grouped.entries())) records.push({ vendorName: key.split(":")[0], currency: value.currency, projectCount: value.projectIds.size, projectIds: Array.from(value.projectIds), committedCents: centsFromBigInt(value.amount), exposureState: source.commitments ? "approved_commitments" : "unavailable" });
-        const result = resultFromRecords(context, records, { source: "company_project_commitments", basis: "mixed", missingData: missing, columns: reportColumns([{ id: "vendorName", label: "Vendor", type: "text" }, { id: "currency", label: "Currency", type: "text" }, { id: "projectCount", label: "Projects", type: "integer" }, { id: "committedCents", label: "Committed", type: "money" }, { id: "exposureState", label: "Coverage", type: "status" }]) });
+        for (const [key, value] of Array.from(grouped.entries())) records.push({ vendorName: key.slice(0, key.lastIndexOf(":")), currency: value.currency, projectCount: value.projectIds.size, projectIds: Array.from(value.projectIds), committedCents: centsFromBigInt(value.amount), exposureState: source.commitments ? "approved_commitments" : "unavailable" });
+        const exposureCurrencies = Array.from(grouped.values()).map(value => value.currency).filter((value, index, all) => all.indexOf(value) === index);
+        const exposureTotals = exposureCurrencies.length === 1 && source.commitments ? [totals("committed", Array.from(grouped.values()).reduce((sum, value) => sum + value.amount, BigInt(0)), exposureCurrencies[0]!, source.coverage.state === "complete" && !missing.length ? "complete" : "partial")] : [];
+        const result = resultFromRecords(context, records, { source: "company_project_commitments", basis: "mixed", missingData: missing, totals: exposureTotals, columns: reportColumns([{ id: "vendorName", label: "Vendor", type: "text" }, { id: "currency", label: "Currency", type: "text" }, { id: "projectCount", label: "Projects", type: "integer" }, { id: "committedCents", label: "Committed", type: "money" }, { id: "exposureState", label: "Coverage", type: "status" }]) });
         return { ...result, coverage: [coverage(context, source, result.rows.length, "Contractor exposure needs approved commitment records and verified accounting actuals.")] };
       }
       for (const project of projects) {

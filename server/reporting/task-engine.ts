@@ -88,7 +88,3 @@ export function createTaskReportingEngine(read: ProjectReportingReadPort): Repor
     },
   };
 }
-
-export function createUnavailableWorkOrderEngine(reason = "No company work-order source is registered."): ReportingEngine {
-  return { key: "company.work-orders", reportIds: ["work-orders"], ready: false, reason, async run() { throw new ReportingError("report_unavailable", reason, 409, { dependency: "company_task_work_order_records" }); } };
-}

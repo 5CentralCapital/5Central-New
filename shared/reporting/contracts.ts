@@ -32,9 +32,11 @@ export const reportingPeriodModeSchema = z.enum(REPORTING_PERIOD_MODES);
 export const REPORTING_SOURCES = ["rental", "quickbooks", "combined", "company", "investors", "time"] as const;
 export type ReportingSource = (typeof REPORTING_SOURCES)[number];
 export const reportingSourceSchema = z.enum(REPORTING_SOURCES);
-export const REPORTING_AVAILABILITIES = ["available", "planned"] as const;
-export type ReportingAvailability = (typeof REPORTING_AVAILABILITIES)[number];
-export const reportingAvailabilitySchema = z.enum(REPORTING_AVAILABILITIES);
+/** Runtime capability, derived from the registered engine and its source
+ * probes. It replaces the former static "planned/available" catalog label. */
+export const REPORTING_RUNTIME_STATUSES = ["available", "missing_data", "not_implemented"] as const;
+export type ReportingRuntimeStatus = (typeof REPORTING_RUNTIME_STATUSES)[number];
+export const reportingRuntimeStatusSchema = z.enum(REPORTING_RUNTIME_STATUSES);
 export const REPORTING_ACTUALITY = ["actual", "forecast", "actual_and_forecast"] as const;
 export type ReportingActuality = (typeof REPORTING_ACTUALITY)[number];
 export const reportingActualitySchema = z.enum(REPORTING_ACTUALITY);
@@ -208,15 +210,74 @@ export const reportPackageItemSchema = z.object({ id: z.string().regex(/^[a-z][a
 export type ReportPackageItem = z.infer<typeof reportPackageItemSchema>;
 export const reportPackageSchema = z.object({ id: reportRecordIdSchema, organizationId: organizationIdSchema, ownerActorId: z.string().trim().min(1).max(240), visibility: reportingVisibilitySchema, name: z.string().trim().min(1).max(160), description: z.string().trim().max(500).nullable(), revision: z.number().int().positive(), items: z.array(reportPackageItemSchema).min(1).max(100), createdAt: isoTimestampSchema, updatedAt: isoTimestampSchema }).strict();
 export type ReportPackage = z.infer<typeof reportPackageSchema>;
-export const reportPackageRunSchema = z.object({ id: reportRecordIdSchema, packageId: reportRecordIdSchema, organizationId: organizationIdSchema, actorId: z.string().trim().min(1).max(240), permissionFingerprint: z.string().regex(/^[a-f0-9]{64}$/), state: reportingJobStateSchema, itemRuns: z.array(z.object({ itemId: z.string().regex(/^[a-z][a-z0-9-]{1,119}$/), runId: reportRecordIdSchema.nullable(), state: reportingRunStateSchema, errorCode: z.string().nullable() }).strict()).max(100), createdAt: isoTimestampSchema, readyAt: isoTimestampSchema.nullable(), expiresAt: isoTimestampSchema.nullable() }).strict();
+export const REPORTING_COMPLETENESS = ["complete", "incomplete"] as const;
+export type ReportingCompleteness = (typeof REPORTING_COMPLETENESS)[number];
+export const reportingCompletenessSchema = z.enum(REPORTING_COMPLETENESS);
+export const reportPackageItemRunSchema = z.object({
+  itemId: z.string().regex(/^[a-z][a-z0-9-]{1,119}$/), runId: reportRecordIdSchema.nullable(), state: reportingRunStateSchema, errorCode: z.string().nullable(),
+  /** Optional on runs stored before completeness was recorded. */
+  title: z.string().trim().min(1).max(200).optional(), reportId: reportIdSchema.optional(),
+  completeness: reportingCompletenessSchema.optional(), reason: z.string().trim().max(500).nullable().optional(), rowCount: z.number().int().nonnegative().optional(),
+}).strict();
+export type ReportPackageItemRun = z.infer<typeof reportPackageItemRunSchema>;
+export const reportPackageRunSchema = z.object({ id: reportRecordIdSchema, packageId: reportRecordIdSchema, organizationId: organizationIdSchema, actorId: z.string().trim().min(1).max(240), permissionFingerprint: z.string().regex(/^[a-f0-9]{64}$/), state: reportingJobStateSchema, itemRuns: z.array(reportPackageItemRunSchema).max(100), packageRevision: z.number().int().positive().optional(), completeness: reportingCompletenessSchema.optional(), createdAt: isoTimestampSchema, readyAt: isoTimestampSchema.nullable(), expiresAt: isoTimestampSchema.nullable() }).strict();
 export type ReportPackageRun = z.infer<typeof reportPackageRunSchema>;
+
+/** A run is complete only when every source is complete and no missing-data
+ * item describes an unknown, partial, stale, or unavailable fact. */
+export function reportRunCompleteness(input: { readonly coverage: readonly Pick<ReportSourceCoverage, "state">[]; readonly missingData: readonly Pick<ReportMissingData, "state">[] }): ReportingCompleteness {
+  if (input.coverage.some(item => item.state !== "complete")) return "incomplete";
+  if (input.missingData.some(item => !["verified_zero", "complete", "not_applicable"].includes(item.state))) return "incomplete";
+  return "complete";
+}
+
+/** Scoped reference choices for report setup. Values are opaque record IDs. */
+export const REPORT_REFERENCE_KINDS = ["account", "investor", "owner", "project", "vendor", "staff", "tenant", "tenancy", "elimination_version"] as const;
+export type ReportReferenceKind = (typeof REPORT_REFERENCE_KINDS)[number];
+export const reportReferenceKindSchema = z.enum(REPORT_REFERENCE_KINDS);
+export const reportReferenceQuerySchema = z.object({
+  kind: reportReferenceKindSchema,
+  search: z.string().trim().max(120).optional(),
+  cursor: z.string().max(1_024).nullable().optional(),
+  limit: z.number().int().min(1).max(100).default(50),
+  legalEntityIds: z.array(legalEntityIdSchema).max(100).default([]),
+}).strict();
+export type ReportReferenceQuery = z.input<typeof reportReferenceQuerySchema>;
+export const reportReferenceOptionSchema = z.object({ value: z.string().trim().min(1).max(240), label: z.string().trim().min(1).max(240), detail: z.string().trim().max(240).nullable() }).strict();
+export type ReportReferenceOption = z.infer<typeof reportReferenceOptionSchema>;
+export const reportReferencePageSchema = z.object({ kind: reportReferenceKindSchema, items: z.array(reportReferenceOptionSchema).max(100), nextCursor: z.string().nullable(), reason: z.string().trim().max(500).nullable() }).strict();
+export type ReportReferencePage = z.infer<typeof reportReferencePageSchema>;
+/** Maps a filter's reference family to the server lookup that supplies it.
+ * Entity, property and unit choices come from the company context instead. */
+export function reportReferenceKindForFilter(filter: Pick<ReportingFilterDefinition, "reference">): ReportReferenceKind | null {
+  switch (filter.reference) {
+    case "account": return "account";
+    case "investor": return "investor";
+    case "owner": return "owner";
+    case "project": return "project";
+    case "vendor": return "vendor";
+    case "staff": return "staff";
+    case "tenant": case "person": return "tenant";
+    case "tenancy": return "tenancy";
+    default: return null;
+  }
+}
 
 export interface ReportingEngineContext { readonly runId: string; readonly snapshotId: string; readonly request: ReportRunRequest; readonly definition: ReportDefinition; readonly now: IsoTimestamp; }
 export interface ReportingEngineResult { readonly columns: readonly ReportColumn[]; readonly rows: readonly ReportRow[]; readonly totals?: readonly ReportTotal[]; readonly coverage: readonly ReportSourceCoverage[]; readonly missingData?: readonly ReportMissingData[]; readonly drilldowns?: readonly ReportDrilldown[]; }
-export interface ReportDefinition { readonly id: ReportId; readonly version: string; readonly title: string; readonly category: ReportingCategory; readonly availability: ReportingAvailability; readonly source: ReportingSource; readonly period: ReportingPeriodMode; readonly basis: readonly ReportingBasis[]; readonly actuality: ReportingActuality; readonly scopes: readonly ReportingScopeKind[]; readonly requiredSources: readonly string[]; readonly filters: readonly ReportingFilterDefinition[]; readonly columns: readonly ReportColumn[]; readonly supportedExports: readonly ReportingExportFormat[]; readonly drilldownKinds: readonly string[]; readonly engineKey: string; readonly dependencies: readonly string[]; }
-export interface ReportEntry extends ReportDefinition { readonly executable: boolean; readonly runtimeStatus: "ready" | "blocked" | "planned"; readonly runtimeReason: string | null; }
-export const reportingDefinitionSchema = z.object({ id: reportIdSchema, version: reportDefinitionVersionSchema, title: z.string().trim().min(1).max(200), category: reportingCategorySchema, availability: reportingAvailabilitySchema, source: reportingSourceSchema, period: reportingPeriodModeSchema, basis: z.array(reportingBasisSchema).min(1), actuality: reportingActualitySchema, scopes: z.array(reportingScopeKindSchema).min(1), requiredSources: z.array(z.string().trim().min(1).max(160)).min(1), filters: z.array(reportingFilterDefinitionSchema), columns: z.array(reportColumnSchema), supportedExports: z.array(reportingExportFormatSchema), drilldownKinds: z.array(z.string().trim().min(1).max(80)), engineKey: z.string().regex(/^[a-z][a-z0-9_.:-]{0,119}$/), dependencies: z.array(z.string().trim().min(1).max(160)) }).strict();
-export const reportEntrySchema = reportingDefinitionSchema.extend({ executable: z.boolean(), runtimeStatus: z.enum(["ready", "blocked", "planned"]), runtimeReason: z.string().nullable() }).strict();
+/** Report-specific setup sections. Hidden sections never contribute fields
+ * to a run request. */
+export const REPORTING_ENTITY_SCOPE_RULES = ["optional", "one_or_more", "exactly_one"] as const;
+export type ReportingEntityScopeRule = (typeof REPORTING_ENTITY_SCOPE_RULES)[number];
+export const reportSetupSchema = z.object({ entityScope: z.enum(REPORTING_ENTITY_SCOPE_RULES), propertyScope: z.boolean(), forecastScenario: z.boolean(), consolidation: z.boolean() }).strict();
+export type ReportSetup = z.infer<typeof reportSetupSchema>;
+export interface ReportDefinition { readonly id: ReportId; readonly version: string; readonly title: string; readonly category: ReportingCategory; readonly source: ReportingSource; readonly setup: ReportSetup; readonly period: ReportingPeriodMode; readonly basis: readonly ReportingBasis[]; readonly actuality: ReportingActuality; readonly scopes: readonly ReportingScopeKind[]; readonly requiredSources: readonly string[]; readonly filters: readonly ReportingFilterDefinition[]; readonly columns: readonly ReportColumn[]; readonly supportedExports: readonly ReportingExportFormat[]; readonly drilldownKinds: readonly string[]; readonly engineKey: string; readonly dependencies: readonly string[]; }
+export interface ReportEntry extends ReportDefinition { readonly executable: boolean; readonly runtimeStatus: ReportingRuntimeStatus; readonly runtimeReason: string | null; readonly runtimeDependency: string | null; }
+export const reportingDefinitionSchema = z.object({ id: reportIdSchema, version: reportDefinitionVersionSchema, title: z.string().trim().min(1).max(200), category: reportingCategorySchema, source: reportingSourceSchema, setup: reportSetupSchema, period: reportingPeriodModeSchema, basis: z.array(reportingBasisSchema).min(1), actuality: reportingActualitySchema, scopes: z.array(reportingScopeKindSchema).min(1), requiredSources: z.array(z.string().trim().min(1).max(160)).min(1), filters: z.array(reportingFilterDefinitionSchema), columns: z.array(reportColumnSchema), supportedExports: z.array(reportingExportFormatSchema), drilldownKinds: z.array(z.string().trim().min(1).max(80)), engineKey: z.string().regex(/^[a-z][a-z0-9_.:-]{0,119}$/), dependencies: z.array(z.string().trim().min(1).max(160)) }).strict();
+export const reportEntrySchema = reportingDefinitionSchema.extend({ executable: z.boolean(), runtimeStatus: reportingRuntimeStatusSchema, runtimeReason: z.string().nullable(), runtimeDependency: z.string().nullable() }).strict().superRefine((value, context) => {
+  if (value.executable !== (value.runtimeStatus === "available")) context.addIssue({ code: "custom", path: ["executable"], message: "Only available reports are executable" });
+  if (value.runtimeStatus !== "available" && !value.runtimeReason) context.addIssue({ code: "custom", path: ["runtimeReason"], message: "Unavailable reports need an exact reason" });
+});
 export type ReportIdentity = Pick<ReportDefinition, "id" | "version">;
 export type ReportingPrincipalScope = CompanyScope & { readonly legalEntityId?: LegalEntityId; readonly propertyId?: PropertyReferenceId };
 export type ReportingMoney = { readonly amountCents: MoneyCents; readonly currency: CurrencyCode };

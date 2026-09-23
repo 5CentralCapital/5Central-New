@@ -7,9 +7,12 @@ import type {
   ReportPackageRun,
   ReportPage,
   ReportPreset,
+  ReportReferenceKind,
+  ReportReferencePage,
   ReportRunRequest,
   ReportRunSummary,
 } from "@shared/reporting";
+import type { ForecastScenarioOption } from "./setup-model";
 
 export interface ReportingWorkspaceProps {
   readonly identity: string;
@@ -55,6 +58,8 @@ export interface ReportPackageSaveRequest {
 export interface ReportingApi {
   catalog(organizationId: string, signal?: AbortSignal): Promise<readonly ReportEntry[]>;
   run(organizationId: string, request: ReportRunRequest): Promise<ReportRunResponse>;
+  references(organizationId: string, kind: ReportReferenceKind, query?: { readonly search?: string; readonly cursor?: string | null; readonly limit?: number; readonly legalEntityIds?: readonly string[] }, signal?: AbortSignal): Promise<ReportReferencePage>;
+  forecastScenarios(organizationId: string, signal?: AbortSignal): Promise<ForecastScenarioOption[]>;
   page(organizationId: string, runId: string, cursor?: string | null, limit?: number): Promise<ReportPage>;
   export(organizationId: string, runId: string, format: "csv" | "json" | "html"): Promise<ReportExportJob>;
   listPresets(organizationId: string, signal?: AbortSignal): Promise<readonly ReportPreset[]>;

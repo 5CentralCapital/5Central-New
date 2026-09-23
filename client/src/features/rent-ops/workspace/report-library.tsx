@@ -4,6 +4,7 @@ import { ArrowUpRight, Search, Star } from 'lucide-react';
 import { ReportCatalogSchema } from '@shared/report-catalog';
 import type { CompanyContext } from '@shared/company/context';
 import { reportingApi } from '../../reporting/api';
+import { runtimeStatusLabel } from '../../reporting/workspace-model';
 import { rentOpsAuthClient } from '../auth';
 import { REPORT_KEYS, type ReportKey } from '../types';
 import './report-library.css';
@@ -91,7 +92,8 @@ export function ReportLibrary({ identity, organizationId, onCompanyChange, onOpe
               <Star size={17} fill={isFavorite ? 'currentColor' : 'none'} aria-hidden="true"/>
             </button>
             <button className="rops-report-open" type="button" disabled={!available && !companyAvailable} onClick={() => { if (available) onOpen(report.reportKey as ReportKey); else if (companyAvailable) onOpenCompany?.(organization!.id, report.id); }}>
-              <span>{report.title}</span>{available || companyEntry?.executable ? <ArrowUpRight size={16} aria-hidden="true"/> : <span className="rops-report-availability">{report.source === 'quickbooks' || report.source === 'combined' ? 'Awaiting integration' : 'Planned'}</span>}
+              <span>{report.title}</span>{available || companyEntry?.executable ? <ArrowUpRight size={16} aria-hidden="true"/> : <span className={`rops-report-availability is-${companyEntry?.runtimeStatus ?? 'unknown'}`} title={companyEntry?.runtimeReason ?? undefined}>{companyEntry ? runtimeStatusLabel(companyEntry.runtimeStatus) : companyCatalog.isFetching || context.isFetching ? 'Checking…' : 'Choose a company'}</span>}
+              {!available && companyEntry && !companyEntry.executable && companyEntry.runtimeReason && <span className="rops-sr-only">{companyEntry.runtimeReason}</span>}
             </button>
           </li>;
         })}</ul>

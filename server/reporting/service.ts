@@ -26,6 +26,9 @@ import {
   reportSortSchema,
   reportSourceCoverageSchema,
   reportTotalSchema,
+  reportReferencePageSchema,
+  reportReferenceQuerySchema,
+  reportRunCompleteness,
   reportingBasisSchema,
   reportingCategorySchema,
   reportingDefinitionSchema,
@@ -42,6 +45,8 @@ import {
   type ReportPage,
   type ReportPreset,
   type ReportPresetRevision,
+  type ReportReferencePage,
+  type ReportReferenceQuery,
   type ReportRunRecord,
   type ReportRunSummary,
   type ReportRunRequest,
@@ -71,8 +76,15 @@ export interface ReportingAccess {
   readonly resolvePropertyLegalEntity?: (propertyId: string, period?: ReportRunRequest["period"]) => Promise<string | null>;
 }
 
+/** Scoped reference choices (accounts, vendors, investors, projects, staff,
+ * tenants) for report setup. The reader must apply the principal's grants. */
+export interface ReportingReferenceReader {
+  list(principal: AuthenticatedPrincipal, query: ReturnType<typeof reportReferenceQuerySchema.parse>): Promise<ReportReferencePage>;
+}
+
 export interface ReportingServiceOptions {
   readonly registry?: ReportingRegistry;
+  readonly references?: ReportingReferenceReader;
   readonly store?: ReportingStore;
   readonly now?: () => Date;
   readonly runTtlMs?: number;
@@ -171,8 +183,26 @@ function defaultSort(definition: ReportDefinition): ReportSort[] {
 
 function stringValue(value: unknown): string | undefined { return typeof value === "string" && value.length > 0 ? value : undefined; }
 
-function canonicalFilters(definition: ReportDefinition, input: ReportFilterValues): ReportFilterValues {
-  const parsed = reportFilterValuesSchema.parse(input);
+const PERIOD_FILTER_NAMES = ["asOfDate", "fromDate", "toDate", "month"] as const;
+
+/** Earlier clients repeated the period as filter fields. They are accepted
+ * only when empty or identical to `request.period`, then dropped, so the
+ * period has a single authority. */
+function withoutRepeatedPeriod(definition: ReportDefinition, input: ReportFilterValues, period: ReportRunRequest["period"]): ReportFilterValues {
+  const declared = new Set(definition.filters.map(filter => filter.name));
+  const output: Record<string, unknown> = { ...input };
+  const periodValues: Record<string, string | undefined> = period.mode === "as_of" ? { asOfDate: period.asOfDate } : period.mode === "range" ? { fromDate: period.fromDate, toDate: period.toDate } : period.mode === "month" ? { month: period.month } : { asOfDate: period.asOfDate, fromDate: period.fromDate, toDate: period.toDate, month: period.month };
+  for (const name of PERIOD_FILTER_NAMES) {
+    if (declared.has(name) || !(name in output)) continue;
+    const value = output[name];
+    if (value === "" || value === null || value === undefined || value === periodValues[name]) { delete output[name]; continue; }
+    throw new ReportingError("report_validation", "Set the report period in the period field; it differs from the date filter.", 400, { reportId: definition.id, field: name });
+  }
+  return output;
+}
+
+function canonicalFilters(definition: ReportDefinition, input: ReportFilterValues, period?: ReportRunRequest["period"]): ReportFilterValues {
+  const parsed = period ? withoutRepeatedPeriod(definition, reportFilterValuesSchema.parse(input), period) : reportFilterValuesSchema.parse(input);
   const names = new Set(definition.filters.map(filter => filter.name));
   const unknown = Object.keys(parsed).filter(name => !names.has(name));
   if (unknown.length) throw new ReportingError("report_validation", "Report filters contain unsupported fields", 400, { reportId: definition.id, fields: unknown });
@@ -206,9 +236,15 @@ function filterPeriodConsistency(request: ReportRunRequest, definition: ReportDe
   if (definition.period !== "custom" && request.period.mode !== definition.period) throw new ReportingError("report_validation", `Report ${definition.id} requires a ${definition.period} period`, 400, { expected: definition.period, received: request.period.mode });
   const period = request.period;
   if (period.mode === "custom" && period.fromDate && period.toDate && period.toDate < period.fromDate) throw new ReportingError("report_validation", "Report period ends before it starts", 400);
-  if (definition.actuality !== "actual" && !request.forecast) throw new ReportingError("report_validation", "Forecast reports require a scenario, input version, and model version", 400, { reportId: definition.id });
+  if (definition.actuality !== "actual" && !request.forecast) throw new ReportingError("report_validation", "Choose an approved forecast scenario.", 400, { reportId: definition.id, field: "forecast" });
   if (definition.actuality === "actual" && request.forecast) throw new ReportingError("report_validation", "An actual report cannot include forecast inputs", 400, { reportId: definition.id });
-  if (definition.category === "financial" && !request.scope.legalEntityIds.length) throw new ReportingError("report_validation", "Financial reports require explicit legal entity IDs", 400, { reportId: definition.id });
+  if (definition.category === "financial" && !request.scope.legalEntityIds.length) throw new ReportingError("report_validation", "Choose at least one legal entity.", 400, { reportId: definition.id, field: "legalEntityIds" });
+  if (definition.setup.entityScope === "exactly_one" && request.scope.legalEntityIds.length !== 1) throw new ReportingError("report_validation", "Choose exactly one legal entity for this report.", 400, { reportId: definition.id, field: "legalEntityIds" });
+  if (definition.setup.entityScope === "one_or_more" && !request.scope.legalEntityIds.length) throw new ReportingError("report_validation", "Choose at least one legal entity.", 400, { reportId: definition.id, field: "legalEntityIds" });
+  if (!definition.setup.propertyScope && request.scope.propertyIds.length) throw new ReportingError("report_validation", "This report runs for whole legal entities; remove the property selection.", 400, { reportId: definition.id, field: "propertyIds" });
+  if (!definition.setup.consolidation && request.consolidation) throw new ReportingError("report_validation", "Only consolidated reports accept a consolidation policy.", 400, { reportId: definition.id, field: "consolidation" });
+  if (definition.setup.consolidation && !request.consolidation) throw new ReportingError("report_validation", "Choose the consolidation entities and elimination policy.", 400, { reportId: definition.id, field: "consolidation" });
+  if (!definition.basis.includes(request.basis)) throw new ReportingError("report_validation", `Report ${definition.title} supports ${definition.basis.join(" or ")} basis.`, 400, { reportId: definition.id, field: "basis" });
   if (definition.category === "financial" && !["cash", "accrual", "mixed"].includes(request.basis)) throw new ReportingError("report_validation", "Financial reports require cash, accrual, or explicitly mixed basis", 400);
 }
 
@@ -234,6 +270,7 @@ export class ReportingService {
   private readonly exportTtlMs: number;
   private readonly maxRows: number;
   private readonly authorize?: ReportingAccess["authorize"];
+  private readonly referenceReader?: ReportingReferenceReader;
 
   constructor(options: ReportingServiceOptions = {}) {
     this.registry = options.registry ?? createReportingRegistry();
@@ -243,9 +280,24 @@ export class ReportingService {
     this.exportTtlMs = options.exportTtlMs ?? 24 * 60 * 60 * 1_000;
     this.maxRows = options.maxRows ?? 100_000;
     this.authorize = options.authorize;
+    this.referenceReader = options.references;
   }
 
-  catalog(_access?: ReportingAccess): readonly ReportEntry[] { return this.registry.listEntries(); }
+  /** Runtime capability per report: available, missing data (exact reason) or not implemented. */
+  async catalog(access?: ReportingAccess): Promise<readonly ReportEntry[]> {
+    if (!access) return this.registry.listEntries();
+    access = await this.freshAccess(access);
+    this.assertCompanyRead(access.principal, { organizationId: access.principal.organizationId } as ReportingPrincipalScope, true);
+    return this.registry.listRuntimeEntries(access.principal.organizationId);
+  }
+
+  async references(access: ReportingAccess, input: ReportReferenceQuery): Promise<ReportReferencePage> {
+    access = await this.freshAccess(access);
+    const query = reportReferenceQuerySchema.parse(input);
+    if (!REPORT_READ_ROLES.includes(access.principal.role as (typeof REPORT_READ_ROLES)[number])) throw new ReportingError("report_forbidden", "The authenticated role cannot read reports");
+    if (!this.referenceReader) return reportReferencePageSchema.parse({ kind: query.kind, items: [], nextCursor: null, reason: "Named selections are not connected for this company." });
+    return reportReferencePageSchema.parse(await this.referenceReader.list(access.principal, query));
+  }
 
   private async freshAccess(access: ReportingAccess): Promise<ReportingAccess> {
     if (!access.refreshPrincipal) return access;
@@ -254,7 +306,13 @@ export class ReportingService {
 
   private permissionFingerprint(principal: AuthenticatedPrincipal): string { return sha256({ organizationId: principal.organizationId, actorId: principal.actorId, role: principal.role, scopes: principal.authorizedScopes, capabilities: principal.capabilities }); }
 
-  private assertCompanyRead(principal: AuthenticatedPrincipal, scope: ReportingPrincipalScope): void {
+  private assertCompanyRead(principal: AuthenticatedPrincipal, scope: ReportingPrincipalScope, anyGrant = false): void {
+    if (anyGrant) {
+      // Catalog discovery needs one read grant anywhere in the organization;
+      // it reveals report capability, never scoped records.
+      if (!REPORT_READ_ROLES.includes(principal.role as (typeof REPORT_READ_ROLES)[number]) || principal.organizationId !== scope.organizationId || principal.authorizedScopes.length === 0) throw new ReportingError("report_forbidden", "The authenticated role cannot read reports", 403);
+      return;
+    }
     try {
       authorizeCompanyRead(principal, scope, REPORT_READ_ROLES);
     } catch (error) {
@@ -301,7 +359,13 @@ export class ReportingService {
           this.assertCompanyRead(access.principal, scopeForAuth(request.scope, mappedEntity, propertyId));
         }
       } else {
-        this.assertCompanyRead(access.principal, scopeForAuth(request.scope));
+        // An organization-wide run needs an organization-wide grant. A
+        // principal limited to some entities or properties must choose them.
+        try { this.assertCompanyRead(access.principal, scopeForAuth(request.scope)); }
+        catch (error) {
+          if (error instanceof ReportingError && access.principal.authorizedScopes.length && REPORT_READ_ROLES.includes(access.principal.role as (typeof REPORT_READ_ROLES)[number])) throw new ReportingError("report_forbidden", "Choose the legal entities or properties you can access.", 403, { field: "legalEntityIds" });
+          throw error;
+        }
       }
     }
   }
@@ -310,7 +374,7 @@ export class ReportingService {
     const request = reportRunRequestSchema.parse(input);
     const definition = this.registry.getDefinition(request.reportId, request.definitionVersion);
     filterPeriodConsistency(request, definition);
-    const filters = canonicalFilters(definition, request.filters);
+    const filters = canonicalFilters(definition, request.filters, request.period);
     const basis = request.basis;
     const filterBasis = stringValue(filters.basis);
     if (filterBasis && filterBasis !== basis) throw new ReportingError("report_validation", "Report basis filter and request basis differ", 400, { filterBasis, basis });
@@ -562,19 +626,24 @@ export class ReportingService {
   async runPackage(access: ReportingAccess, packageId: string): Promise<ReportPackageRun> {
     access = await this.freshAccess(access);
     const pkg = await this.getPackage(access, packageId);
-    const results: ReportPackageRun["itemRuns"] = [];
-    let failed = false;
+    const results: ReportPackageRun["itemRuns"][number][] = [];
     for (const item of pkg.items) {
       try {
-        const result = await this.run(access, { reportId: item.reportId, definitionVersion: item.definitionVersion, scope: item.scope, filters: item.filters, period: item.period, basis: item.basis, currency: item.currency, consolidation: item.consolidation, forecast: item.forecast, columns: item.columns, sort: item.sort });
-        results.push({ itemId: item.id, runId: result.run.id, state: result.run.state, errorCode: null });
+        const result = await this.run(access, { reportId: item.reportId, definitionVersion: item.definitionVersion, scope: item.scope, filters: item.filters, period: item.period, basis: item.basis, currency: item.currency, consolidation: item.consolidation, forecast: item.forecast, columns: item.columns.length ? item.columns : undefined, sort: item.sort });
+        const completeness = reportRunCompleteness(result.run);
+        const reason = completeness === "complete" ? null : (result.run.missingData.find(entry => !["verified_zero", "complete", "not_applicable"].includes(entry.state))?.message ?? result.run.coverage.find(entry => entry.state !== "complete")?.reason ?? "Source coverage is incomplete.");
+        results.push({ itemId: item.id, title: item.title, reportId: item.reportId, runId: result.run.id, state: result.run.state, errorCode: null, completeness, reason: reason?.slice(0, 500) ?? null, rowCount: result.run.rows.length });
       } catch (error) {
-        failed = true;
-        results.push({ itemId: item.id, runId: null, state: "failed", errorCode: error instanceof ReportingError ? error.code : "report_unavailable" });
+        results.push({ itemId: item.id, title: item.title, reportId: item.reportId, runId: null, state: "failed", errorCode: error instanceof ReportingError ? error.code : "report_unavailable", completeness: "incomplete", reason: (error instanceof ReportingError ? error.message : "The report could not be run.").slice(0, 500), rowCount: 0 });
       }
     }
     const now = isoNow(this.now);
-    const run = reportPackageRunSchema.parse({ id: newReportingId(), packageId: pkg.id, organizationId: pkg.organizationId, actorId: access.principal.actorId, permissionFingerprint: this.permissionFingerprint(access.principal), state: failed ? "failed" : "ready", itemRuns: results, createdAt: now, readyAt: now, expiresAt: new Date(this.now().getTime() + this.runTtlMs).toISOString() });
+    const allFailed = results.every(item => item.state === "failed");
+    // A package is complete only when every constituent ran with complete
+    // coverage. A failed or partial item leaves the package incomplete; it is
+    // never presented as a finished package.
+    const completeness = results.every(item => item.completeness === "complete") ? "complete" : "incomplete";
+    const run = reportPackageRunSchema.parse({ id: newReportingId(), packageId: pkg.id, organizationId: pkg.organizationId, actorId: access.principal.actorId, permissionFingerprint: this.permissionFingerprint(access.principal), state: allFailed ? "failed" : "ready", itemRuns: results, packageRevision: pkg.revision, completeness, createdAt: now, readyAt: now, expiresAt: new Date(this.now().getTime() + this.runTtlMs).toISOString() });
     await this.store.savePackageRun(run);
     return run;
   }
@@ -598,4 +667,4 @@ export function createReportingServices(options: ReportingServiceOptions = {}): 
 
 /** Root integrations may expose this narrow request-bound port without
  * coupling company routes or MCP registration to the concrete service. */
-export type ReportingPort = Pick<ReportingService, "catalog" | "run" | "page" | "drilldown" | "createExport" | "getExport" | "savePreset" | "listPresets" | "getPreset" | "savePackage" | "listPackages" | "getPackage" | "runPackage" | "getPackageRun">;
+export type ReportingPort = Pick<ReportingService, "catalog" | "references" | "run" | "page" | "drilldown" | "createExport" | "getExport" | "savePreset" | "listPresets" | "getPreset" | "savePackage" | "listPackages" | "getPackage" | "runPackage" | "getPackageRun">;

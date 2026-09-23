@@ -2,12 +2,9 @@ import { centsFromBigInt, centsToBigInt } from "../../shared/company";
 import type { InvestorDetail } from "../../shared/investors";
 import type { ReportMissingData, ReportSourceCoverage, ReportTotal, ReportingEngineContext, ReportingEngineResult } from "../../shared/reporting";
 import { ReportingError } from "./errors";
-import { periodBounds, reportColumns, resultFromRecords, sourceCoverage } from "./source-engine-utils";
+import { periodBounds, reportColumns, resultFromRecords, sourceCoverage, stringArrayFilter } from "./source-engine-utils";
 import type { ReportingEngine } from "./registry";
 
-/** The owner-balance and owner-statement reports require a dated ownership
- * accounting source. They are deliberately held until that port exists. */
-export const INVESTOR_OWNER_REPORT_IDS = ["rental-owner-ending-balances", "rental-owner-statement"] as const;
 export const INVESTOR_REPORT_IDS = ["investor-owner-activity"] as const;
 export type InvestorReportId = (typeof INVESTOR_REPORT_IDS)[number];
 
@@ -33,6 +30,8 @@ function inPeriod(date: string, context: ReportingEngineContext): boolean {
 function accountMatches(context: ReportingEngineContext, account: InvestorDetail): boolean {
   const scope = context.request.scope;
   if (scope.investorIds.length && !scope.investorIds.includes(String(account.id) as typeof scope.investorIds[number])) return false;
+  const selected = stringArrayFilter(context.request.filters.investorIds);
+  if (selected.length && !selected.includes(String(account.id))) return false;
   return account.organizationId === scope.organizationId;
 }
 
@@ -61,14 +60,18 @@ export function createInvestorReportingEngine(read: InvestorReportingReadPort): 
     reportIds: [...INVESTOR_REPORT_IDS],
     ready: true,
     async run(context): Promise<ReportingEngineResult> {
-      const input = await read.read({ context, accountIds: context.request.scope.ownerIds.map(String), investorIds: context.request.scope.investorIds.map(String), legalEntityIds: context.request.scope.legalEntityIds.map(String) });
+      const requestedInvestors = Array.from(new Set([...context.request.scope.investorIds.map(String), ...stringArrayFilter(context.request.filters.investorIds)]));
+      const statuses = stringArrayFilter(context.request.filters.status);
+      const input = await read.read({ context, accountIds: context.request.scope.ownerIds.map(String), investorIds: requestedInvestors, legalEntityIds: context.request.scope.legalEntityIds.map(String) });
       const accounts = input.accounts.filter(account => accountMatches(context, account));
       if (!accounts.length && input.coverage.state === "unavailable") throw new ReportingError("report_unavailable", "Investor reporting data is unavailable for the requested scope.", 409, { dependency: "company_investor_obligations_and_payments" });
       const reportId = context.definition.id as InvestorReportId;
       const rows: unknown[] = [];
       const missing: ReportMissingData[] = [];
-      for (const account of accounts) for (const activity of account.activity.filter(item => inPeriod(item.occurredOn, context))) rows.push({ investorId: account.id, investorName: account.displayName, activityId: activity.id, occurredOn: activity.occurredOn, kind: activity.kind, status: activity.status, amountCents: activity.amountCents, currency: activity.currency, description: activity.description, paymentId: activity.paymentId, instrumentId: activity.instrumentId });
-      const result = resultFromRecords(context, rows, { source: "company_investor_obligations_and_payments", basis: "mixed", missingData: missing, columns: reportColumns([
+      for (const account of accounts) for (const activity of account.activity.filter(item => inPeriod(item.occurredOn, context) && (!statuses.length || statuses.includes(item.status)))) rows.push({ investorId: account.id, investorName: account.displayName, activityId: activity.id, occurredOn: activity.occurredOn, kind: activity.kind, status: activity.status, amountCents: activity.amountCents, currency: activity.currency, description: activity.description, paymentId: activity.paymentId, instrumentId: activity.instrumentId });
+      const currencies = Array.from(new Set(rows.map(row => (row as { currency: string }).currency)));
+      const activityTotals = currencies.length === 1 ? [totals("activity_amount", rows.reduce<bigint>((sum, row) => sum + centsToBigInt((row as { amountCents: string }).amountCents), BigInt(0)), currencies[0]!, input.coverage.state === "complete" ? "complete" : "partial")] : [];
+      const result = resultFromRecords(context, rows, { source: "company_investor_obligations_and_payments", basis: "mixed", missingData: missing, totals: activityTotals, columns: reportColumns([
         { id: "investorName", label: "Investor", type: "text" },
         { id: "occurredOn", label: "Date", type: "date" },
         { id: "kind", label: "Activity", type: "status" },
@@ -80,8 +83,4 @@ export function createInvestorReportingEngine(read: InvestorReportingReadPort): 
       return { ...result, coverage: [coverage(context, input, result.rows.length)] };
     },
   };
-}
-
-export function createUnavailableInvestorOwnerEngine(reason = "Dated ownership agreements and owner-accounting activity are not registered."): import("./registry").ReportingEngine {
-  return { key: "combined.investor-owner-accounting", reportIds: [...INVESTOR_OWNER_REPORT_IDS], ready: false, reason, async run() { throw new ReportingError("report_unavailable", reason, 409, { dependency: "effective_owner_agreements" }); } };
 }
