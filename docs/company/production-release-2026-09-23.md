@@ -1,55 +1,57 @@
-# Production release — audited ops rollout + QuickBooks production (Replit)
+# Production release — audited ops rollout + QuickBooks production on Render
 
 Date: September 23, 2026 · Branch: `claude/qbo-production-release`
 
 This release deploys the audited rollout (`codex/audit-ops-rollout-20260923` @ `73e5230`, see
-`codex-release-audit-2026-09-23.md`) to the existing Replit deployment at
-`https://5central.capital`, adds a continuously running worker, applies migrations 043–048, and
-connects QuickBooks **production** read-only. Render remains the next hosting move
-(`hosting-render` handoff); nothing here blocks it.
+`codex-release-audit-2026-09-23.md`) to Render with an always-on worker, applies migrations
+043–048, and connects QuickBooks **production** read-only for each LLC. The Render, AWS and
+Google accounts are being configured separately (Codex handoff); this runbook covers the code and
+database side. `render-cutover-audit-2026-09-23.md` lists what is ready and what is still open;
+`qbo-production-compliance-2026-09-23.md` maps the integration to Intuit's requirements.
 
 Hard limits for this release:
 
-- `QBO_WRITES_ENABLED=off` and `QBO_PRODUCTION_WRITES=off`. No `QBO_WRITE_TYPES`.
+- `QBO_WRITES_ENABLED=off` and `QBO_PRODUCTION_WRITES=off` (set in the Blueprint's shared group). No `QBO_WRITE_TYPES`.
 - No tenant or owner corrections are applied. No company demo data.
-- No `db:push`, `db:migrate` or startup migration. Migrations go through
+- No `db:push`, `db:migrate`, preDeploy or startup migration. Migrations go through
   `npm run company:production-schema` only.
+- Migration 049 (receivables mirror) is on the follow-up branch `claude/qbo-financial-source`
+  and is **not** part of this release.
 
 ## What this branch adds on top of `73e5230`
 
 | Change | Why |
 |---|---|
-| `claude/qbo-production-keys` merged: `npm run company:qbo-preflight`, `docs/company/qbo-production.md` | Catches QBO secret typos before connecting a company. An explicit `off` for the write switches now reads as the intended state. |
-| `npm run company:production-schema` (`server/company/operations/production-schema.ts`) | The reviewed migration operator: inspect → digest-bound apply in one transaction under an advisory lock with ledger readback; manifest-derived runtime grants with live privilege verification; backup-copy comparison. Tested on PGlite, including rollback of a failed batch. |
-| `npm start` → `scripts/deploy/start.mjs` with `RENT_OPS_PROCESS_ROLE` (`web` default, `worker`) | One build and one run command for both deployments. A second Replit deployment of the same repo runs the worker by setting a single environment value. |
-| `RELEASED_THROUGH = 48` | Migrations 043–048 ship in this release, so their registry entries freeze. |
-| Mac app (`desktop/`, `src-tauri/`) committed | Loads `https://5central.capital/ops` (was the Replit host), is named 5Central Ops, and its Go menu is drift-tested against the web navigation. |
+| `claude/qbo-production-keys` merged: `npm run company:qbo-preflight`, `docs/company/qbo-production.md` | Catches QBO secret typos before connecting a company. An explicit `off` for the write switches reads as the intended state. |
+| `npm run company:production-schema` (`server/company/operations/production-schema.ts`) | Reviewed migration operator: inspect → digest-bound apply in one transaction under an advisory lock with ledger readback; manifest-derived runtime grants with live privilege verification; backup-copy comparison. Tested on PGlite, including rollback of a failed batch. |
+| `render.yaml` rewritten; `.github/workflows/ci.yml`; `engines.node` 22 | Paid web + worker in `virginia` (next to Neon us-east-1), `production` branch with `autoDeployTrigger: checksPass`, `/readyz`, Node 22 pinned, QBO values on both services. |
+| Graceful web shutdown (`server/graceful-shutdown.ts`) | Render sends SIGTERM on every deploy; in-flight OAuth callbacks and webhook acknowledgements now finish. |
+| `npm start` → `scripts/deploy/start.mjs` (`RENT_OPS_PROCESS_ROLE`, default `web`) | One build and start command for any host; Render uses `npm run worker` directly. |
+| QBO list queries include inactive records | QuickBooks hides inactive accounts/customers unless the query names `Active`; a full replay previously tombstoned them. |
+| Record-only Invoice write guard | Any future Invoice write must disable online payment and email explicitly and is verified on the saved record. Writes remain off. |
+| `RELEASED_THROUGH = 48` | Migrations 043–048 ship in this release. |
+| Mac app (`desktop/`, `src-tauri/`) committed | Loads `https://5central.capital/ops`, named 5Central Ops, Go menu drift-tested against the web navigation. |
 
-## Facts established before the release (September 23)
+## Facts established on September 23
 
-- The live ops database is **not** Replit's "Production Database" (that one holds only the legacy
-  website tables). The runtime identity points at Neon project *Updated Website - claude code*
-  (`long-wave-42463880`, AWS us-east-1, Postgres 17), branch **`rent-ops-replacement-20260907`**,
-  database **`rent_ops_production`**. Confirm this in step 1 before changing anything: the host in
-  the deployment's `RENT_OPS_RUNTIME_DATABASE_URL` must be that branch's endpoint.
-- Previous practice for v42 was a pre-change backup branch (`rops-pre-v42-20260922`) and a
-  rehearsal branch (`rops-v42-rehearsal-20260922`). This release follows the same pattern.
-- Neon history retention on this project is 6 hours, so the branch snapshot is the backup of record.
-- Replit's deployment type cannot change from Autoscale to Reserved VM without unpublishing, which
-  would interrupt `5central.capital`. The web app therefore stays Autoscale and the worker is a
-  **second deployment** (Reserved VM, background worker) against the same database.
-- Intuit portal: app "5Central Rent Ops" is In Production; the production redirect URI
-  `https://5central.capital/api/accounting/qbo/callback` was registered on September 23.
-- `/readyz` answers 200 on `5central.capital`; Replit intercepts `/healthz`.
+- Live ops database: Neon project *Updated Website - claude code* (`long-wave-42463880`, AWS
+  us-east-1, Postgres 17), branch **`rent-ops-replacement-20260907`**, database
+  **`rent_ops_production`**. Confirm before changing anything: the host in the current
+  `RENT_OPS_RUNTIME_DATABASE_URL` must be that branch's endpoint. (Replit's own "Production
+  Database" holds only the legacy website tables.)
+- Previous practice (v42): backup branch `rops-pre-v42-20260922` + rehearsal branch
+  `rops-v42-rehearsal-20260922`. Follow the same pattern.
+- Neon history retention is 6 hours; the branch snapshot is the backup of record.
+- Intuit portal: app is In Production; production redirect URI
+  `https://5central.capital/api/accounting/qbo/callback` is registered.
 
 ## Operator steps
 
-Commands run in a shell that has this branch checked out with dependencies installed (the Replit
-workspace shell, or `~/Projects/r-ops` on the Mac). Connection strings go into environment
-variables by name; the tool never prints them. Use the **owner** role (`neondb_owner`) URLs from
-Neon ▸ Connect, selecting the branch and database each time.
+Run the database commands from any shell with this branch checked out and `npm ci` done (the Mac
+checkout, or a Render shell). Connection strings go into environment variables by name; the tool
+never prints them. Use the Neon **owner** role URLs (Neon ▸ Connect, choose branch and database).
 
-### 1. Identify and describe (read-only)
+### 1. Describe and inspect (read-only)
 
 ```sh
 export RENT_OPS_MIGRATION_DATABASE_URL='<owner URL: branch rent-ops-replacement-20260907, db rent_ops_production>'
@@ -57,120 +59,85 @@ npm run company:production-schema -- describe
 npm run company:production-schema -- inspect --through 48
 ```
 
-Expected: `installedThrough: 42`, pending `43…48`, and a `planSha256`. Record the runtime,
-importer and auditor role names from `describe.roles` (the runtime role is the user in
-`RENT_OPS_RUNTIME_DATABASE_URL`). If `installedThrough` is not 42, stop: the tool refuses drift,
-gaps and databases ahead of the build, and nothing else should be improvised.
+Expected: `installedThrough: 42`, pending `43…48`, a `planSha256`. Record the runtime, importer and
+auditor role names from `describe.roles`. Any other state: stop.
 
 ### 2. Back up and prove the backup
 
-1. Neon ▸ Branches ▸ New branch: parent `rent-ops-replacement-20260907`, "current point in time",
+1. Neon ▸ Branches ▸ New branch from `rent-ops-replacement-20260907`, current point in time,
    name `rops-pre-v48-20260923`.
-2. ```sh
-   export RENT_OPS_BACKUP_DATABASE_URL='<owner URL: branch rops-pre-v48-20260923, db rent_ops_production>'
-   npm run company:production-schema -- compare-backup --backup-url-env RENT_OPS_BACKUP_DATABASE_URL
-   ```
-   Expected `matches: true` (same ledger, identical row counts for every ops table). If live writes
-   land between the branch and the comparison, a few counts can differ; re-run immediately. Keep the
-   `ledgerSha256` as the backup attestation.
+2. `export RENT_OPS_BACKUP_DATABASE_URL='<owner URL: rops-pre-v48-20260923 / rent_ops_production>'`
+   then `npm run company:production-schema -- compare-backup --backup-url-env RENT_OPS_BACKUP_DATABASE_URL`.
+   Expect `matches: true`; keep `ledgerSha256`.
 
-### 3. Rehearse on a disposable branch
+### 3. Rehearse
 
-1. Neon ▸ New branch from `rops-pre-v48-20260923`, name `rops-v48-rehearsal-20260923`.
-2. Point `RENT_OPS_MIGRATION_DATABASE_URL` at the rehearsal branch and run the full sequence in
-   step 4 there first, including `grants-verify`. Delete the rehearsal branch afterwards.
+Branch `rops-v48-rehearsal-20260923` from the backup, point `RENT_OPS_MIGRATION_DATABASE_URL` at it,
+run step 4 in full including `grants-verify`, and point a Render **staging** web service at it for
+a smoke test if desired. Delete it afterwards.
 
-### 4. Apply 043–048 and runtime grants to production
+### 4. Apply 043–048 and runtime grants
 
 ```sh
 export RENT_OPS_MIGRATION_DATABASE_URL='<owner URL: live branch>'
 npm run company:production-schema -- inspect --through 48          # copy planSha256
 npm run company:production-schema -- apply --through 48 --confirm <planSha256> --apply-reviewed
-
 ROLES="--runtime-role <runtime> --importer-role <importer> --auditor-role <auditor>"
-ATTEST="--backup neon:rops-pre-v48-20260923:<ledgerSha256-prefix> --review <reviewer-ref> --authorization michael-20260923-release"
-npm run company:production-schema -- grants-plan  $ROLES $ATTEST   # review the SQL, copy grantSha256
+ATTEST="--backup neon:rops-pre-v48-20260923 --review <reviewer-ref> --authorization michael-20260923-release"
+npm run company:production-schema -- grants-plan  $ROLES $ATTEST   # review SQL, copy grantSha256
 npm run company:production-schema -- grants-apply $ROLES $ATTEST --confirm <grantSha256> --apply-reviewed
-npm run company:production-schema -- grants-verify $ROLES $ATTEST  # expect verified: true
-npm run company:production-schema -- inspect --through 48          # expect installedThrough 48, nothing pending
+npm run company:production-schema -- grants-verify $ROLES $ATTEST  # verified: true
 ```
 
-The apply is one transaction: any failure rolls back every pending version. The grant step is one
-transaction that refuses missing roles and rolls back unless the live privileges then equal the
-manifest exactly. The currently published build keeps working against the upgraded schema (the
-new tables are additive), so there is no outage between this step and the publish.
+The currently published build keeps working on the upgraded schema (additive tables), so this can
+run before the Render cutover.
 
-### 5. Deploy the web app (existing Replit deployment, Autoscale)
+### 5. Render
 
-1. Replit workspace ▸ Shell: `git status` (preserve any unrelated work), then
-   `git fetch origin && git checkout claude/qbo-production-release && git pull --ff-only`.
-2. Publishing ▸ Adjust settings ▸ **Production app secrets** (values entered by Michael):
+1. Create a `production` branch at the reviewed tip of this branch and protect it (require PR + the
+   `CI / verify` check). Render follows `production` only.
+2. Blueprint from `render.yaml`. Enter every `sync: false` value. Copy the existing
+   `SESSION_SECRET`/`RENT_OPS_SESSION_SECRET` from Replit to keep sessions and limiter keys.
+   `QBO_TOKEN_ENCRYPTION_KEY`: generate once (`echo "base64:$(openssl rand -base64 32)"`), store in
+   the password manager, and enter the **same** value on web and worker.
+3. QBO values: `QBO_ENVIRONMENT=production`, production `QBO_CLIENT_ID`/`QBO_CLIENT_SECRET`,
+   `QBO_REDIRECT_URI=https://5central.capital/api/accounting/qbo/callback` on both services.
+   `QBO_WEBHOOK_VERIFIER_TOKEN_PRODUCTION` on web after step 8.
+4. Verify on the `onrender.com` URL: `/readyz` 200; worker log shows job activity.
+5. DNS: add `5central.capital` and `www` as custom domains, point records as Render instructs,
+   wait for the certificate. Stop (do not delete) the Replit deployment; keep it and its bucket
+   30 days.
 
-   | Name | Value |
-   |---|---|
-   | `QBO_ENVIRONMENT` | `production` |
-   | `QBO_CLIENT_ID`, `QBO_CLIENT_SECRET` | production keys from the Intuit portal |
-   | `QBO_REDIRECT_URI` | `https://5central.capital/api/accounting/qbo/callback` (already set; keep exact) |
-   | `QBO_TOKEN_ENCRYPTION_KEY` | new: `echo "base64:$(openssl rand -base64 32)"`. Store it in the password manager: the worker, Render and every future deployment must use the identical value or stored tokens become unreadable. |
-   | `QBO_WRITES_ENABLED`, `QBO_PRODUCTION_WRITES` | `off` |
-   | `RENT_OPS_PROCESS_ROLE` | leave unset (web) |
+### 6. Verify on `https://5central.capital`
 
-   Leave "Copy development database to production" unchecked.
-3. Publish. Then verify: `https://5central.capital/readyz` → 200, manager sign-in at `/ops`,
-   the original dashboard and top navigation, report setup and a report run, Forecasting,
-   Projects, Investors, and Accounting ▸ Overview showing the **Production** badge.
-
-### 6. Deploy the worker (second Replit deployment)
-
-1. Replit ▸ Import from GitHub ▸ `5CentralCapital/5Central-New`, branch
-   `claude/qbo-production-release`, name it `5Central-Ops-Worker`.
-2. Secrets for its deployment: `NODE_ENV=production`, `RENT_OPS_PROCESS_ROLE=worker`,
-   `RENT_OPS_RUNTIME_DATABASE_URL` (identical to the web app), every `QBO_*` value identical to the
-   web app (including the same `QBO_TOKEN_ENCRYPTION_KEY`), `WORKER_SHUTDOWN_GRACE_MS=25000`.
-   The worker never reads `DATABASE_URL` in production.
-3. Publish ▸ **Reserved VM ▸ Background worker** (no port), build `npm ci && npm run build`,
-   run `npm run start`. Confirm the monthly cost in Replit's dialog.
-4. Verify in its logs: `starting 5Central Ops process` with `role: worker`, then periodic job
-   activity; a stopped worker leaves queued work waiting, never lost.
+Public site, manager sign-in at `/ops`, dashboard and top navigation, report setup and a run,
+Forecasting, Projects, Investors, legal pages (`/legal/eula`, `/legal/privacy`,
+`/quickbooks/disconnected`), document download, MCP sign-in, Accounting ▸ Overview showing the
+**Production** badge. Mac app: launch and confirm it opens the same manager.
 
 ### 7. Connect each LLC to QuickBooks production (read-only)
 
-For Capital, then Lucia, then Arcadia — one company per session, signed in to Intuit as that
-company's admin:
-
-1. Accounting ▸ Connect QuickBooks. On return, compare the CompanyInfo name and legal name with the
-   legal entity before confirming the binding (a realm cannot be rebound).
-2. Run the read probe and a sync (UI, or the `sync_accounting_source` MCP tool).
-3. Reconcile one closed month: mirror totals vs. QuickBooks P&L and trial balance. Explain every
-   difference; unsupported objects appear as sync exceptions, never as zero.
+Capital, then Lucia, then Arcadia — one per session, signed in as that company's QuickBooks admin:
+Accounting ▸ Connect QuickBooks; compare CompanyInfo with the legal entity before confirming the
+binding (a realm cannot be rebound); run the read probe and a sync; reconcile one closed month
+against QuickBooks' P&L and trial balance. Unsupported objects appear as sync exceptions, never
+zero.
 
 ### 8. Webhooks
 
-1. Intuit portal ▸ Production ▸ Webhooks: endpoint
-   `https://5central.capital/api/integrations/quickbooks/webhook/production`, CloudEvents payload,
-   entities Account, Bill, BillPayment, Customer, Deposit, Employee, Purchase, Vendor (the mirrored
-   set; add Invoice, Payment, CreditMemo, JournalEntry, Transfer when the receivable mirror ships).
-2. Put the verifier token in the web deployment's `QBO_WEBHOOK_VERIFIER_TOKEN_PRODUCTION` and
-   republish. Without it the endpoint answers 503 by design.
-3. Make a trivial edit in one company (for example a vendor memo) and confirm a row in
-   `accounting_qbo_webhook_events` and a completed fetch job. The periodic CDC catch-up is the
-   backstop for missed deliveries.
-4. Intuit's questionnaire answered "No" for webhooks and CDC; tell the Intuit case contact before
-   enabling so the app profile stays accurate.
+1. **First** tell the Intuit case contact that webhooks and change-data-capture are being enabled
+   (the questionnaire answered "No" to both) so the app profile stays accurate.
+2. Intuit portal ▸ Production ▸ Webhooks: CloudEvents format, endpoint
+   `https://5central.capital/api/integrations/quickbooks/webhook/production`, entities Account, Bill,
+   BillPayment, Customer, Deposit, Employee, Purchase, Vendor.
+3. Put the verifier token in `QBO_WEBHOOK_VERIFIER_TOKEN_PRODUCTION` (web) and redeploy.
+4. Edit a vendor memo in QuickBooks; confirm a row in `accounting_qbo_webhook_events` and a completed
+   fetch job. Hourly change-data-capture is the backstop.
 
 ## Rollback
 
-- **Before step 4:** nothing changed.
-- **After step 4, before publish:** leave the schema at 48; the current build runs on it.
-- **After publish:** Replit ▸ Publishing ▸ roll back to the previous deployment (`99a72394`), which
-  runs on the additive schema. Stop the worker deployment. Keep the QBO connections; they are
-  environment-scoped and harmless while writes are off.
-- **Data restore** only for proven corruption, from `rops-pre-v48-20260923` through Neon's branch
-  restore, accepting loss of writes made after the snapshot. Never drop the new tables as a shortcut.
-
-## Remaining blockers outside the code
-
-- Michael enters every secret value (Replit, Intuit verifier token) and approves the Reserved VM cost.
-- Each LLC's Intuit admin sign-in and CompanyInfo binding confirmation.
-- Webhook registration in the Intuit portal and the note to the Intuit case contact.
-- Owner-attested tenant corrections remain `PREPARED_NOT_APPLIED`.
+- Before DNS: nothing user-facing changed; point nothing.
+- After DNS: point DNS back to Replit (keep its deployment stopped-not-deleted for this). The Replit
+  build runs on the additive schema.
+- Data restore only for proven corruption, from `rops-pre-v48-20260923`, accepting loss of later
+  writes. Never drop the new tables as a shortcut.
