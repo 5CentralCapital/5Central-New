@@ -27,6 +27,7 @@ import {
   validateStart,
   validateStep,
 } from "@/features/rent-ops-apply/flow";
+import { applyPropertySlug } from "@/lib/routes";
 import "@/features/rent-ops-apply/rent-ops-apply.css";
 
 type PortalMode = "landing" | "start" | "resume" | "email-sent" | "resuming" | "application";
@@ -129,6 +130,7 @@ export default function RentOpsApplyPage() {
   const [propertyOptions, setPropertyOptions] = useState<ApplicantPropertyOption[]>([]);
   const [optionsError, setOptionsError] = useState<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const linkedPropertyApplied = useRef(false);
 
   const currentStep: ApplyStep = APPLY_STEPS[stepIndex]?.key ?? "profile";
   const missingItems = useMemo(() => application?.requirements.filter((requirement) => requirement.status === "requested" || requirement.status === "rejected") ?? [], [application]);
@@ -175,23 +177,17 @@ export default function RentOpsApplyPage() {
   }, []);
 
   useEffect(() => {
-    void loadApplicantPropertyOptions().then((options) => {
-      setPropertyOptions(options);
-      const slug = decodeURIComponent(window.location.pathname.split("/")[2] ?? "");
-      const linkedProperty = options.find((property) => property.slug === slug);
-      if (linkedProperty) setDraft((current) => {
-        if (!current) return current;
-        const next = { ...current, propertyId: linkedProperty.id, unitId: linkedProperty.units.length === 1 ? linkedProperty.units[0].id : current.unitId };
-        draftRef.current = next;
-        return next;
-      });
-    }).catch((reason: unknown) => setOptionsError(reason instanceof Error ? reason.message : "Available homes could not be loaded."));
+    // The effect below preselects the property named by /apply/:propertySlug.
+    void loadApplicantPropertyOptions().then(setPropertyOptions).catch((reason: unknown) => setOptionsError(reason instanceof Error ? reason.message : "Available homes could not be loaded."));
   }, []);
 
   useEffect(() => {
-    if (!draft || draft.propertyId || propertyOptions.length === 0) return;
-    const slug = decodeURIComponent(window.location.pathname.split("/")[2] ?? "");
-    const linkedProperty = propertyOptions.find((property) => property.slug === slug);
+    // Preselect once: an applicant who then picks "No preference" keeps it.
+    if (!draft || linkedPropertyApplied.current || propertyOptions.length === 0) return;
+    linkedPropertyApplied.current = true;
+    if (draft.propertyId) return;
+    const slug = applyPropertySlug(window.location.pathname);
+    const linkedProperty = slug ? propertyOptions.find((property) => property.slug === slug) : undefined;
     if (linkedProperty) {
       const next = { ...draft, propertyId: linkedProperty.id, unitId: linkedProperty.units.length === 1 ? linkedProperty.units[0].id : draft.unitId };
       draftRef.current = next;
@@ -211,7 +207,7 @@ export default function RentOpsApplyPage() {
   }, [applicationLocked]);
 
   function showError(reason: unknown): void {
-    setError(reason instanceof Error ? reason.message : "We couldn't complete that update. Try again.");
+    setError(typeof reason === "string" ? reason : reason instanceof Error ? reason.message : "We couldn't complete that update. Try again.");
     setNotice(null);
   }
 
