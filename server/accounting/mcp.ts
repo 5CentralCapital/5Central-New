@@ -16,6 +16,7 @@ import type { CommandRole } from "../../shared/company";
 import type { AccountingServices } from "./index";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { attestTransport, loadAuthenticatedPrincipal, authorizeCompanyRead } from "../company/authorization";
+import { readCustomerLedger } from "./receivables-read";
 import { AccountingError } from "./errors";
 
 export type AccountingToolRegistrar = (name: string, description: string, schema: z.ZodRawShape, write: boolean, handler: (args: any) => Promise<unknown>) => void;
@@ -66,6 +67,11 @@ export function registerAccountingMcpTools(register: AccountingToolRegistrar, op
   register("list_accounting_transactions", "List exact mirrored QBO source lines with coverage evidence and pagination.", { scope: scopeInput, from: z.string().date().optional(), through: z.string().date().optional(), limit: z.number().int().min(1).max(100).optional(), cursor: z.string().min(1).max(512).optional() }, false, async (args) => {
     const scope = scopeInput.parse(args.scope);
     return readAuthorized(scope, executor => options.services.mirror.forExecutor(executor).listTransactions({ scope, from: args.from, through: args.through, limit: args.limit, cursor: args.cursor }));
+  });
+  register("get_qbo_customer_ledger", "Read one QuickBooks customer's posted receivable history from the verified mirror: documents with the complete-history running balance, totals, QuickBooks open items and aging, verification against QuickBooks' customer balance, and coverage. Unmirrored or partial history is reported, never shown as zero. Read-only; never calls QuickBooks.", { scope: scopeInput, customerId: z.string().min(1).max(200), asOf: z.string().date().optional(), limit: z.number().int().min(1).max(500).optional(), cursor: z.string().min(1).max(64).optional() }, false, async (args) => {
+    const scope = scopeInput.parse(args.scope);
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    return readAuthorized(scope, executor => readCustomerLedger(executor, { scope, customerObjectId: args.customerId, asOf: args.asOf, today, limit: args.limit, cursor: args.cursor }));
   });
   register("sync_accounting_source", "Queue a read-only QuickBooks catch-up (change data capture, or a full replay with deletion reconciliation when needed) for an authorized connection. The background worker runs it; follow progress with get_accounting_connector_health. Pass the same operationId to retry safely.", { scope: scopeInput, fullReplay: z.boolean().optional(), operationId: z.string().uuid().optional() }, true, async (args) => {
     const scope = scopeInput.parse(args.scope);
