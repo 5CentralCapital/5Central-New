@@ -45,6 +45,10 @@ test("dates and amounts convert exactly", () => {
   assert.equal(headerDate({ t: "s", v: "2027-01" }), "2027-01-01");
   assert.equal(headerDate({ t: "s", v: "10/5/2026" }), "2026-10-05");
   assert.equal(headerDate({ t: "s", v: "Total" }), null);
+  assert.equal(headerDate({ t: "s", v: "13/45/2026" }), null, "an impossible US date is not a period");
+  assert.equal(headerDate({ t: "s", v: "2026-02-30" }), null, "an impossible ISO date is not a period");
+  assert.equal(headerDate({ t: "s", v: "2026-13" }), null);
+  assert.equal(headerDate({ t: "s", v: "2/29/2028" }), "2028-02-29");
   assert.equal(dollarsToCents(-310.25), "-31025");
   assert.equal(dollarsToCents(0.1 + 0.2), "30");
   assert.equal(dollarsToCents("$(1,234.565)"), "-123457");

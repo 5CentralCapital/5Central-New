@@ -1,5 +1,5 @@
 import { read, utils, SSF, type CellObject, type WorkBook, type WorkSheet } from "xlsx";
-import { legacyNumberToDecimal, multiplyDecimalToCents } from "../../shared/company";
+import { isIsoDate, legacyNumberToDecimal, multiplyDecimalToCents } from "../../shared/company";
 import { EXPENSE_CATEGORIES, type ExpenseCategory, type OpeningItemKey } from "../../shared/forecasting/assumptions";
 import { dayNumber } from "../../shared/forecasting/calendar";
 import { ValidationCommandError } from "../company/commands/errors";
@@ -75,12 +75,14 @@ export function headerDate(cell: CellObject | undefined): string | null {
     return `${String(parts.y).padStart(4, "0")}-${String(parts.m).padStart(2, "0")}-${String(parts.d).padStart(2, "0")}`;
   }
   const value = String(cell.v).trim();
+  // A header such as "13/45/2026" or "2026-02-30" is not a period date.
+  const real = (date: string) => (isIsoDate(date) ? date : null);
   let match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (match) return value;
+  if (match) return real(value);
   match = /^(\d{4})-(\d{2})$/.exec(value);
-  if (match) return `${value}-01`;
+  if (match) return real(`${value}-01`);
   match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
-  if (match) return `${match[3]}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}`;
+  if (match) return real(`${match[3]}-${match[1]!.padStart(2, "0")}-${match[2]!.padStart(2, "0")}`);
   return null;
 }
 
