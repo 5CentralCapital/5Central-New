@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+      - hosting/render
+      - production
+  push:
+    branches:
+      - main
+      - hosting/render
+      - production
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Typecheck application and performance tools
+        run: npm run check
+
+      - name: Verify frozen company migrations
+        run: npm run company:migrations:verify
+
+      - name: Run synthetic test suite
+        run: npm run test:all
+
+      - name: Run performance tests
+        run: npm run test:performance
+
+      - name: Build web and worker artifacts
+        run: npm run build

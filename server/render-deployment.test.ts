@@ -10,7 +10,17 @@ import {
 } from "./rent-ops/security/deployment-security";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const blueprint = readFileSync(join(repoRoot, "render.yaml"), "utf8");
+const productionBlueprint = readFileSync(join(repoRoot, "render.yaml"), "utf8");
+const stagingBlueprint = readFileSync(join(repoRoot, "render.staging.yaml"), "utf8");
+const hostingRunbook = readFileSync(join(repoRoot, "docs/RENDER_DEPLOYMENT.md"), "utf8");
+
+function serviceBlock(blueprint: string, name: string): string {
+  const nameIndex = blueprint.indexOf(`name: ${name}`);
+  assert.notEqual(nameIndex, -1, `missing Render service ${name}`);
+  const start = blueprint.lastIndexOf("  - type:", nameIndex);
+  const next = blueprint.indexOf("\n  - type:", nameIndex);
+  return blueprint.slice(start, next < 0 ? undefined : next);
+}
 
 function completeProductionEnvironment(): Record<string, string> {
   return {
@@ -39,24 +49,64 @@ function completeProductionEnvironment(): Record<string, string> {
   };
 }
 
-test("Render Blueprint declares the reviewed fail-closed service contract", () => {
-  assert.match(blueprint, /plan:\s*free/);
-  assert.match(blueprint, /numInstances:\s*1/);
-  assert.match(blueprint, /buildCommand:\s*npm ci && npm run check && npm run test:rent-ops && npm run build/);
-  assert.match(blueprint, /startCommand:\s*npm start/);
-  assert.match(blueprint, /healthCheckPath:\s*\/healthz/);
-  assert.doesNotMatch(blueprint, /migrate|migration/i);
-  for (const key of RENT_OPS_DEPLOYMENT_ENV_VARS) assert.match(blueprint, new RegExp(`key:\\s*${key}\\b`), key);
-  for (const key of ["DATABASE_URL", "RENT_OPS_RUNTIME_DATABASE_URL", "RENT_OPS_ADMIN_EMAIL", "RENT_OPS_MAGIC_LINK_WEBHOOK_URL", "RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET", "RENT_OPS_PUBLIC_APP_URL", "RENT_OPS_OBJECT_STORE_ENDPOINT", "RENT_OPS_OBJECT_STORE_REGION", "RENT_OPS_OBJECT_STORE_BUCKET", "RENT_OPS_OBJECT_STORE_RUNTIME_IDENTITY", "RENT_OPS_OBJECT_STORE_RUNTIME_TOKEN", "RENT_OPS_OBJECT_STORE_UPLOAD_IDENTITY", "RENT_OPS_OBJECT_STORE_UPLOAD_TOKEN"]) {
-    const block = blueprint.match(new RegExp(`- key: ${key}([\\s\\S]*?)(?=\\n      - key:|$)`))?.[1] ?? "";
-    assert.match(block, /sync:\s*false/);
+test("Render production and staging Blueprints use paid services and CI-gated deploys", () => {
+  for (const [blueprint, branch, group, suffix] of [
+    [productionBlueprint, "production", "5central-ops-production", ""],
+    [stagingBlueprint, "hosting/render", "5central-ops-staging", "-staging"],
+  ] as const) {
+    const web = serviceBlock(blueprint, `5central-ops${suffix}-web`);
+    const worker = serviceBlock(blueprint, `5central-ops${suffix}-worker`);
+    for (const service of [web, worker]) {
+      assert.match(service, /plan:\s*starter/);
+      assert.match(service, /region:\s*virginia/);
+      assert.match(service, new RegExp(`branch:\\s*${branch}\\b`));
+      assert.match(service, /numInstances:\s*1/);
+      assert.match(service, /buildCommand:\s*npm ci && npm run build/);
+      assert.match(service, /autoDeployTrigger:\s*checksPass/);
+      assert.match(service, new RegExp(`fromGroup:\\s*${group}\\b`));
+      assert.match(service, /key:\s*NODE_VERSION\s*\n\s*value:\s*["']22["']/);
+      assert.match(service, /key:\s*QBO_WRITES_ENABLED\s*\n\s*value:\s*["']off["']/);
+      assert.match(service, /key:\s*QBO_PRODUCTION_WRITES\s*\n\s*value:\s*["']off["']/);
+    }
+    assert.match(web, /type:\s*web/);
+    assert.match(worker, /type:\s*worker/);
+    assert.match(web, /startCommand:\s*npm start/);
+    assert.match(worker, /startCommand:\s*npm run worker/);
+    assert.match(web, /healthCheckPath:\s*\/readyz/);
+    assert.doesNotMatch(worker, /healthCheckPath:/);
+    assert.doesNotMatch(worker, /key:\s*DATABASE_URL\b/);
+    assert.doesNotMatch(worker, /key:\s*RENT_OPS_OBJECT_STORE_/);
+    assert.doesNotMatch(blueprint, /envVarGroups:/);
+    assert.doesNotMatch(blueprint, /migrate|migration/i);
+    assert.doesNotMatch(blueprint, /ADMIN_API_KEY|DASHBOARD_API_KEY|FIVECENTRAL_API_KEY/);
+    assert.doesNotMatch(blueprint, /RM_API_BASE|RM_API_TOKEN|RM_USERNAME|RM_PASSWORD|RM_LOCATION_ID|RENT_MANAGER_CLIENT_PATH/);
   }
-  for (const key of ["PLAID_ENV", "PLAID_CLIENT_ID", "PLAID_SECRET", "PLAID_REDIRECT_URI", "RAMP_CLIENT_ID", "RAMP_CLIENT_SECRET"]) {
-    const block = blueprint.match(new RegExp(`- key: ${key}([\\s\\S]*?)(?=\\n      - key:|$)`))?.[1] ?? "";
-    assert.match(block, /sync:\s*false/);
+
+  const productionWeb = serviceBlock(productionBlueprint, "5central-ops-web");
+  const stagingWeb = serviceBlock(stagingBlueprint, "5central-ops-staging-web");
+  assert.match(productionWeb, /fromGroup:\s*5central-ops-production-web/);
+  assert.match(stagingWeb, /fromGroup:\s*5central-ops-staging-web/);
+  assert.doesNotMatch(serviceBlock(productionBlueprint, "5central-ops-worker"), /fromGroup:\s*5central-ops-production-web/);
+  assert.doesNotMatch(serviceBlock(stagingBlueprint, "5central-ops-staging-worker"), /fromGroup:\s*5central-ops-staging-web/);
+  assert.match(stagingWeb, /key:\s*SESSION_SECRET\s*\n\s*generateValue:\s*true/);
+  assert.match(stagingWeb, /key:\s*RENT_OPS_SESSION_SECRET\s*\n\s*generateValue:\s*true/);
+  assert.doesNotMatch(serviceBlock(productionBlueprint, "5central-ops-worker"), /RENT_OPS_HOST_DATABASE_URL/);
+  assert.doesNotMatch(serviceBlock(stagingBlueprint, "5central-ops-staging-worker"), /RENT_OPS_HOST_DATABASE_URL/);
+  assert.match(productionWeb, /fivecentral-ops-production-651532007693/);
+  assert.match(stagingWeb, /fivecentral-ops-staging-651532007693/);
+  assert.match(productionWeb, /RENT_OPS_ADMIN_OAUTH_ORIGIN[\s\S]*?https:\/\/5central\.capital/);
+  assert.match(stagingWeb, /mail-disabled\.invalid/);
+  assert.match(stagingWeb, /key:\s*RENT_OPS_TENANT_EMAIL_ENABLED\s*\n\s*value:\s*["']false["']/);
+  assert.match(hostingRunbook, /Google sender OAuth client creation is still in progress/i);
+  for (const key of ["RENT_OPS_RUNTIME_DATABASE_URL", "QBO_ENVIRONMENT", "QBO_CLIENT_ID", "QBO_CLIENT_SECRET", "QBO_REDIRECT_URI", "QBO_TOKEN_ENCRYPTION_KEY", "RENT_OPS_HOST_DATABASE_URL", "SESSION_SECRET", "RENT_OPS_SESSION_SECRET", "RENT_OPS_ADMIN_EMAIL", "RENT_OPS_ADMIN_OAUTH_CLIENT_ID", "RENT_OPS_OAUTH_ADMIN_SUBJECTS", "RENT_OPS_PUBLIC_APP_URL", "QBO_WEBHOOK_VERIFIER_TOKEN_PRODUCTION", "QBO_WEBHOOK_VERIFIER_TOKEN_SANDBOX", "RENT_OPS_EMAIL_ALLOWED_RECIPIENTS", "RENT_OPS_GMAIL_FROM", "RENT_OPS_GMAIL_CLIENT_ID", "RENT_OPS_GMAIL_CLIENT_SECRET", "RENT_OPS_GMAIL_REFRESH_TOKEN"]) {
+    assert.ok(hostingRunbook.includes(key), `runbook must document external group key ${key}`);
   }
-  assert.doesNotMatch(blueprint, /ADMIN_API_KEY|DASHBOARD_API_KEY|FIVECENTRAL_API_KEY/);
-  assert.doesNotMatch(blueprint, /RM_API_BASE|RM_API_TOKEN|RM_USERNAME|RM_PASSWORD|RM_LOCATION_ID|RENT_MANAGER_CLIENT_PATH/);
+  for (const group of ["5central-ops-production", "5central-ops-staging", "5central-ops-production-web", "5central-ops-staging-web"]) {
+    assert.ok(hostingRunbook.includes(group), `runbook must document external group ${group}`);
+  }
+  for (const key of RENT_OPS_DEPLOYMENT_ENV_VARS) {
+    assert.ok(productionBlueprint.includes(key) || stagingBlueprint.includes(key) || hostingRunbook.includes(key), `deployment contract key missing from Blueprint and runbook: ${key}`);
+  }
 });
 
 test("production configuration is valid only with distinct roles and private store gates", () => {
@@ -99,7 +149,8 @@ test("readiness is closed until startup completes and cannot expose payload data
     const env = {...completeProductionEnvironment(), [key]: "operator-only-secret"};
     assert.equal(validateRentOpsProductionConfiguration(env).valid, false);
     assert.ok(validateRentOpsProductionConfiguration(env).blockingReasons.includes(`production_importer_credential_forbidden_${key.toLowerCase()}`));
-    assert.doesNotMatch(blueprint, new RegExp(`key: ${key}\\b`));
+    assert.doesNotMatch(productionBlueprint, new RegExp(`key: ${key}\\b`));
+    assert.doesNotMatch(stagingBlueprint, new RegExp(`key: ${key}\\b`));
   }
 });
 
