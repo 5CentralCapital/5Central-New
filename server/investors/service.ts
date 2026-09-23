@@ -58,7 +58,8 @@ import {
   type InvestorRemittanceInstruction,
   type InvestorFinancialSourceResponse,
 } from "../../shared/investors";
-import { financialSourceReferenceKey, type FinancialSourceLineResolution, type FinancialSourceReadPort } from "../../shared/accounting/source";
+import { type FinancialSourceLineResolution, type FinancialSourceReadPort } from "../../shared/accounting/source";
+import { sameFinancialSourceReference } from "../../shared/projects/source-lines";
 import { companyScopeSchema, centsFromBigInt, centsToBigInt, type CompanyScope } from "../../shared/company";
 import { dbCents, dbDate, dbDecimal, dbNullableDate, dbNullableString, dbRevision, dbString, dbTimestamp, decodeCursor, encodeCursor, parseJson, resolveEffectiveDate } from "./helpers";
 import {
@@ -658,7 +659,7 @@ export class InvestorReadService {
       return { source, validity: "unavailable" };
     }
     if (!resolution) return { source, validity: "stale" };
-    if (financialSourceReferenceKey(resolution.source) !== financialSourceReferenceKey(reference)) return { source, validity: "stale" };
+    if (!sameFinancialSourceReference(resolution.source, reference)) return { source, validity: "stale" };
     if (resolution.postingState === "voided" || resolution.settlement.state === "voided") return { source, validity: "voided" };
     if (resolution.postingState !== "posted" || resolution.currency !== source.currency || centsToBigInt(resolution.amountCents) < centsToBigInt(source.amountCents)) return { source, validity: "stale" };
     // Keep the append-only attestation exactly as stored. The validity flag is

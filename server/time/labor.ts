@@ -21,7 +21,7 @@ import {
 import { ConflictCommandError, ValidationCommandError } from "../company/commands/errors";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import type { ProjectExecutionFinancePorts } from "../projects/execution-commands";
-import { verifyCostSourceLine } from "../projects/source-lines";
+import { reserveCostAllocation, verifyCostSourceLine } from "../projects/source-lines";
 
 const PROJECT_LABOR_ROW_LIMIT = 5_000;
 export const TIME_PAYROLL_CONSUMER_KIND = "time_payroll" as const;
@@ -138,7 +138,7 @@ export async function linkPayroll(context: PayrollCommandContext, payload: TimeP
     durationSeconds: Number(row.duration_seconds),
   })));
   const batchId = randomUUID();
-  await context.finance.allocations.reserve({ source, consumerKind: TIME_PAYROLL_CONSUMER_KIND, consumerId: batchId, amountCents: payload.amountCents, currency: line.currency });
+  await reserveCostAllocation(context.finance, { source, consumerKind: TIME_PAYROLL_CONSUMER_KIND, consumerId: batchId, amountCents: payload.amountCents, currency: line.currency }, "time_payroll");
   const linkedAt = new Date().toISOString();
   for (const item of split) {
     const providerBody = { kind: "qbo_payroll_link", status: "active", batchId, source, periodFrom: payload.periodFrom, periodThrough: payload.periodThrough, batchAmountCents: payload.amountCents, lineAmountCents: line.amountCents, linkedBy: context.actorId, linkedAt };

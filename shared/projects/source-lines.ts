@@ -57,3 +57,17 @@ export const costSourceLinePageSchema = z.object({
   nextCursor: z.string().min(1).max(512).nullable(),
 }).strict();
 export type CostSourceLinePage = z.infer<typeof costSourceLinePageSchema>;
+
+/**
+ * Exact identity comparison for two QBO line references (scope, object, line
+ * and provider revision). Kept local because shared financialSourceScopeKey
+ * parses its argument with a strict scope schema and rejects a full reference.
+ */
+export function sameFinancialSourceReference(
+  left: { readonly provider: string; readonly organizationId: string; readonly legalEntityId: string; readonly environment: string; readonly realmId: string; readonly objectType: string; readonly objectId: string; readonly lineId: string | null; readonly version: string },
+  right: { readonly provider: string; readonly organizationId: string; readonly legalEntityId: string; readonly environment: string; readonly realmId: string; readonly objectType: string; readonly objectId: string; readonly lineId: string | null; readonly version: string },
+): boolean {
+  return left.provider === right.provider && left.organizationId === right.organizationId && left.legalEntityId === right.legalEntityId
+    && left.environment === right.environment && left.realmId === right.realmId && left.objectType === right.objectType
+    && left.objectId === right.objectId && (left.lineId ?? null) === (right.lineId ?? null) && left.version === right.version;
+}

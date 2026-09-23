@@ -7,8 +7,9 @@ import {
 import {
   financialSourceCoverageSchema,
   financialSourceLineResolutionSchema,
-  financialSourceReferenceKey,
   financialSourceReferenceSchema,
+  type FinancialSourceAllocationBalance,
+  type FinancialSourceAllocationRequest,
   type FinancialSourceLineResolution,
   type FinancialSourceReference,
   type FinancialSourceScope,
@@ -16,12 +17,14 @@ import {
 import {
   costSourceLinePageSchema,
   costSourceLineQuerySchema,
+  sameFinancialSourceReference,
   type CostSourceLinePage,
   type CostSourceLinePurpose,
   type CostSourceLineQuery,
 } from "../../shared/projects/source-lines";
 import { authorizeCompanyRead, type AuthenticatedPrincipal } from "../company/authorization";
 import { ValidationCommandError } from "../company/commands/errors";
+import { AccountingError } from "../accounting/errors";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import type { ProjectExecutionFinancePorts } from "./execution-commands";
 
@@ -149,7 +152,7 @@ export async function verifyCostSourceLine(finance: ProjectExecutionFinancePorts
   const line = await finance.source.resolveLine({ scope: scopeOf(source), objectType: source.objectType, objectId: source.objectId, lineId: source.lineId });
   if (!line) throw new ValidationCommandError("The QBO source line is not available", { reason: reason("line_not_found") });
   const resolved = financialSourceLineResolutionSchema.parse(line);
-  if (financialSourceReferenceKey(resolved.source) !== financialSourceReferenceKey(source)) throw new ValidationCommandError("The QBO source line changed; reload it before linking", { reason: reason("revision_mismatch") });
+  if (!sameFinancialSourceReference(resolved.source, source)) throw new ValidationCommandError("The QBO source line changed; reload it before linking", { reason: reason("revision_mismatch") });
   if (resolved.postingState !== "posted" || resolved.postedOn === null || resolved.postedOn > input.effectiveDate) throw new ValidationCommandError("The QBO source line is not posted for this date", { reason: reason("line_not_posted") });
   if (resolved.currency !== input.currency) throw new ValidationCommandError("The QBO source line currency does not match", { reason: reason("currency_mismatch") });
   const roleOk = input.purpose === "cost"
@@ -158,10 +161,26 @@ export async function verifyCostSourceLine(finance: ProjectExecutionFinancePorts
   if (!roleOk) throw new ValidationCommandError("The QBO source line is not an eligible cost", { reason: reason("line_ineligible") });
   const context = await finance.costContext.readCostContext({ scope: scopeOf(source), objectType: resolved.source.objectType, objectId: resolved.source.objectId, lineId: resolved.source.lineId ?? undefined });
   const classifications = input.purpose === "cost" ? COST_CLASSIFICATIONS : PAYROLL_CLASSIFICATIONS;
-  if (!context || financialSourceReferenceKey(context.source) !== financialSourceReferenceKey(resolved.source) || context.accountObjectId !== resolved.accountObjectId
+  if (!context || !sameFinancialSourceReference(context.source, resolved.source) || context.accountObjectId !== resolved.accountObjectId
     || context.amountCents !== resolved.amountCents || context.postingState !== "posted" || !context.eligible || !classifications.has(context.classification)) {
     throw new ValidationCommandError("The QBO account is not an eligible cost account", { reason: reason("account_ineligible") });
   }
   if (centsToBigInt(input.amountCents) > centsToBigInt(resolved.amountCents)) throw new ValidationCommandError("The allocation exceeds the source line", { reason: reason("allocation_exceeded") });
   return resolved;
+}
+
+/**
+ * Reserve an allocation in the shared QBO ledger and turn a ledger refusal
+ * (over-allocation, stale or missing line) into a command validation error.
+ */
+export async function reserveCostAllocation(finance: ProjectExecutionFinancePorts, request: FinancialSourceAllocationRequest, reasonPrefix: string): Promise<FinancialSourceAllocationBalance> {
+  try {
+    return await finance.allocations.reserve(request);
+  } catch (error) {
+    if (error instanceof AccountingError) {
+      if (error.code === "accounting_allocation_exceeded") throw new ValidationCommandError("The allocation exceeds the unallocated balance of this QBO line", { reason: `${reasonPrefix}_allocation_exceeded` });
+      if (error.code === "accounting_not_found" || error.code === "accounting_validation" || error.code === "accounting_conflict") throw new ValidationCommandError("The QBO line changed; reload it before linking", { reason: `${reasonPrefix}_line_unavailable` });
+    }
+    throw error;
+  }
 }

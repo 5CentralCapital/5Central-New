@@ -35,7 +35,7 @@ import { runCompanyCommand, type CommandHandlerContext, type CommandHandlerResul
 import { ConflictCommandError, ForbiddenCommandError, ValidationCommandError } from "../company/commands/errors";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import type { ProjectExecutionFinancePorts } from "../projects/execution-commands";
-import { verifyCostSourceLine } from "../projects/source-lines";
+import { reserveCostAllocation, verifyCostSourceLine } from "../projects/source-lines";
 import { WORK_ORDER_COST_CONSUMER_KIND } from "./service";
 import { assertEntityPropertyUnit, dbDate, dbNullableCents, dbNullableDate, dbNullableString, dbRevision, dbString, resolveEffectiveDate } from "../projects/helpers";
 
@@ -457,7 +457,7 @@ async function handleCostLink(context: Context): Promise<CommandHandlerResult> {
   }
   const finance = requireFinance(context);
   const line = await verifyCostSourceLine(finance, { source: payload.source, amountCents: payload.amountCents, currency: current.currency, effectiveDate: resolveEffectiveDate(context.envelope.effectiveDate), purpose: "cost", reasonPrefix: "work_order_cost" });
-  await finance.allocations.reserve({ source: line.source, consumerKind: WORK_ORDER_COST_CONSUMER_KIND, consumerId: current.id, amountCents: payload.amountCents, currency: line.currency });
+  await reserveCostAllocation(finance, { source: line.source, consumerKind: WORK_ORDER_COST_CONSUMER_KIND, consumerId: current.id, amountCents: payload.amountCents, currency: line.currency }, "work_order_cost");
   const revision = await saveChanges(context, current, {});
   await recordEvent(context, { workOrderId: current.id, type: "updated", revision, details: { action: "cost_linked", costLink: { source: line.source, amountCents: payload.amountCents } } });
   return costSaved(current.id, revision);
