@@ -20,6 +20,7 @@ import express, { type Request, type RequestHandler, type Response } from "expre
 import { createCompanyDemoApp, COMPANY_DEMO_CSRF_TOKEN } from "../../server/company/demo";
 import { SYNTHETIC_COMPANY } from "../../server/company/testing/synthetic-database";
 import { AccountingError } from "../../server/accounting/errors";
+import { financialSourceScopeSchema } from "../../shared/accounting";
 import type { QboProviderSyncResult } from "../../server/accounting/provider-sync";
 import { isQuickBooksIntegrationError } from "../../server/integrations/quickbooks/errors";
 import { QUICKBOOKS_ACCOUNTING_SCOPE } from "../../server/integrations/quickbooks/oauth";
@@ -133,11 +134,82 @@ export function qboProviderSyncAcceptance(result: QboProviderSyncResult): { pass
     && result.streams.length > 0
     && result.streams.every(stream => stream.result.status === "complete"
       && stream.coverageStatus === "complete"
-      && stream.unsupportedCount === 0);
+      && stream.unsupportedCount === 0
+      // Durable exceptions from earlier runs must also be resolved; a smaller
+      // count in a later incremental run is not evidence of resolution.
+      && stream.openExceptionCount === 0
+      && stream.missingFromReplayCount === 0);
   return {
     pass,
-    notes: [`status=${result.status}`, ...result.streams.map(stream => `${stream.stream}: ${stream.result.status}, coverage=${stream.coverageStatus}, unsupported=${stream.unsupportedCount}`)],
+    notes: [`status=${result.status}`, ...result.streams.map(stream => `${stream.stream}: ${stream.result.status}, mode=${stream.mode}, coverage=${stream.coverageStatus}, unsupported_this_run=${stream.unsupportedCount}, open_exceptions=${stream.openExceptionCount}, missing_from_replay=${stream.missingFromReplayCount}`)],
   };
+}
+
+const RECONCILED_ENTITIES = ["Purchase", "Bill", "BillPayment", "Deposit"] as const;
+
+function centsOf(value: unknown): bigint | null {
+  const text = typeof value === "number" ? String(value) : typeof value === "string" ? value : null;
+  if (text === null || !/^-?\d+(?:\.\d{1,2})?$/.test(text)) return null;
+  const [whole, fraction = ""] = text.replace("-", "").split(".");
+  const cents = BigInt(whole) * BigInt(100) + BigInt((fraction + "00").slice(0, 2));
+  return text.startsWith("-") ? -cents : cents;
+}
+
+/**
+ * Provider-vs-mirror reconciliation for the harness. Every provider object
+ * must be either mirrored with current lines whose total equals its TotalAmt,
+ * or carried as an open exception. Amounts are compared in integer cents.
+ */
+export function reconcileQboMirror(input: {
+  readonly entity: string;
+  readonly providerObjects: readonly QuickBooksJsonObject[];
+  readonly mirroredLineCentsByObject: ReadonlyMap<string, bigint>;
+  readonly openExceptionIds: ReadonlySet<string>;
+}) {
+  let providerTotal = BigInt(0);
+  let mirroredTotal = BigInt(0);
+  let exceptionTotal = BigInt(0);
+  let mirroredCount = 0;
+  const unexplained: string[] = [];
+  const mismatched: string[] = [];
+  for (const object of input.providerObjects) {
+    const id = String(object.Id ?? "");
+    const total = centsOf(object.TotalAmt);
+    if (total !== null) providerTotal += total;
+    if (input.openExceptionIds.has(id)) { if (total !== null) exceptionTotal += total; continue; }
+    const mirrored = input.mirroredLineCentsByObject.get(id);
+    if (mirrored === undefined) { unexplained.push(id); continue; }
+    mirroredCount += 1;
+    mirroredTotal += mirrored;
+    if (total === null || mirrored !== total) mismatched.push(id);
+  }
+  const pass = unexplained.length === 0 && mismatched.length === 0 && providerTotal === mirroredTotal + exceptionTotal;
+  return {
+    entity: input.entity,
+    pass,
+    providerCount: input.providerObjects.length,
+    mirroredCount,
+    exceptionCount: input.openExceptionIds.size,
+    providerTotalCents: providerTotal.toString(),
+    mirroredTotalCents: mirroredTotal.toString(),
+    exceptionTotalCents: exceptionTotal.toString(),
+    unexplainedObjectIds: unexplained.slice(0, 50),
+    mismatchedObjectIds: mismatched.slice(0, 50),
+  };
+}
+
+const SHAPE_REDACTED_KEYS = /^(Name|DisplayName|CompanyName|GivenName|FamilyName|PrintOnCheckName|PrivateNote|Memo|Description|Line1|Line2|City|PostalCode|Addr|BillAddr|ShipAddr|PrimaryEmailAddr|PrimaryPhone|DocNumber|CheckNum|name)$/;
+
+/** Structural summary of a provider object: keys, types, IDs, reference
+ * types and amounts only; free-text and contact fields are redacted. */
+export function qboObjectShape(value: unknown, depth = 0): unknown {
+  if (depth > 6) return "…";
+  if (Array.isArray(value)) return value.slice(0, 20).map(item => qboObjectShape(item, depth + 1));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, SHAPE_REDACTED_KEYS.test(key) ? "[redacted]" : qboObjectShape(item, depth + 1)]));
+  }
+  if (typeof value === "string") return value.length > 40 ? `[string:${value.length}]` : value;
+  return value;
 }
 
 interface EvidenceStep {
@@ -244,7 +316,13 @@ export async function createQboSandboxHarness(options: QboSandboxHarnessOptions)
     const forwarded = await forward(request, `/api/accounting/qbo/callback${callback.search}`);
     const location = forwarded.headers.get("location");
     if (forwarded.status === 303 && location) {
-      const pendingId = new URL(location, selfOrigin(request)).searchParams.get("qboPending");
+      const params = new URL(location, selfOrigin(request)).searchParams;
+      const pendingId = params.get("qboPending");
+      if (!pendingId && params.get("qboConnected")) {
+        // A previously confirmed realm binding reconnects without a new confirmation.
+        response.json({ status: "connected", realmId: params.get("qboConnected") });
+        return;
+      }
       if (pendingId) lastPendingBySession.set(sessionId(request), pendingId);
       response.json({ status: "pending_confirmation", pendingId, workspaceUrl: location, next: "POST /__sandbox/confirm to confirm the CompanyInfo binding (or open workspaceUrl in a browser with this cookie)." });
       return;
@@ -264,6 +342,79 @@ export async function createQboSandboxHarness(options: QboSandboxHarnessOptions)
     if (confirmed.ok) lastPendingBySession.delete(sessionId(request));
     const proof = (previewBody as { proof?: { providerCompanyName?: unknown; providerCompanyId?: unknown } }).proof;
     response.status(confirmed.status).json({ status: body.status ?? "confirm_failed", scope: body.scope ?? null, providerCompanyName: proof?.providerCompanyName ?? null, providerCompanyId: proof?.providerCompanyId ?? null });
+  }));
+
+  const loadAllProviderObjects = async (scope: QuickBooksConnectionScope, entity: string) => {
+    const client = qbo.createAccountingClient(scope);
+    const all: QuickBooksJsonObject[] = [];
+    for (let start = 1; start < 100_000; start += 1000) {
+      const page = await client.query<QuickBooksJsonObject>(`SELECT * FROM ${entity} STARTPOSITION ${start} MAXRESULTS 1000`);
+      all.push(...page.entities);
+      if (page.entities.length < 1000) break;
+    }
+    return all;
+  };
+
+  const reconcile = async (scope: QuickBooksConnectionScope) => {
+    const mirror = demo.services.accounting.mirror;
+    const results = [];
+    for (const entity of RECONCILED_ENTITIES) {
+      const providerObjects = await loadAllProviderObjects(scope, entity);
+      const lines = await demo.database.db.query<{ object_id: string; cents: string }>(
+        `SELECT object_id, SUM(amount_cents)::text AS cents FROM accounting_qbo_source_line_balances
+          WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND is_current = true
+          GROUP BY object_id`,
+        [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId, entity],
+      );
+      const open = await mirror.listOpenSyncExceptions(scope, `transactions.${entity.toLowerCase()}`);
+      results.push(reconcileQboMirror({
+        entity,
+        providerObjects,
+        mirroredLineCentsByObject: new Map(lines.rows.map(row => [String(row.object_id), BigInt(row.cents)])),
+        openExceptionIds: new Set(open.map(item => item.objectId)),
+      }));
+    }
+    return results;
+  };
+
+  const requireScope = async (request: Request, response: Response): Promise<QuickBooksConnectionScope | null> => {
+    const connections = await activeConnections();
+    const requestedRealm = typeof request.body?.realmId === "string" ? request.body.realmId : typeof request.query.realmId === "string" ? request.query.realmId : undefined;
+    const connection = connections.find(item => !requestedRealm || item.realmId === requestedRealm);
+    if (!connection) { response.status(409).json({ error: "No confirmed sandbox connection." }); return null; }
+    return { organizationId, legalEntityId, environment: "sandbox", realmId: connection.realmId };
+  };
+
+  /** Read-only mirror run: bootstrap, catch-up (optionally a full replay), open exceptions and reconciliation. */
+  sandbox.post("/sync", handle(async (request, response) => {
+    const scope = await requireScope(request, response);
+    if (!scope) return;
+    const maxPages = Number.isSafeInteger(request.body?.maxPages) && request.body.maxPages > 0 && request.body.maxPages <= 50 ? request.body.maxPages as number : 10;
+    const sync = qbo.createProviderSync(scope);
+    await sync.bootstrapRead();
+    const result = await sync.catchUp({ maxPages, fullReplay: request.body?.fullReplay === true });
+    const exceptions = await demo.services.accounting.mirror.listOpenSyncExceptions(scope);
+    response.json({
+      acceptance: qboProviderSyncAcceptance(result),
+      streams: result.streams.map(stream => ({ stream: stream.stream, status: stream.result.status, mode: stream.mode, coverage: stream.coverageStatus, unsupportedThisRun: stream.unsupportedCount, openExceptions: stream.openExceptionCount, missingFromReplay: stream.missingFromReplayCount, pages: stream.result.pagesFetched, items: stream.result.itemsApplied, error: stream.result.error ? safeError(stream.result.error) : null })),
+      exceptions: exceptions.map(item => ({ stream: item.stream, objectType: item.objectType, objectId: item.objectId, version: item.version, kind: item.kind, reasons: item.reasons })),
+      coverage: await demo.services.accounting.mirror.readCoverage(financialSourceScopeSchema.parse({ provider: "qbo", ...scope })),
+      reconciliation: request.body?.reconcile === false ? null : await reconcile(scope),
+    });
+  }));
+
+  /** Structural, redacted view of one sandbox object for diagnosing a rejection. */
+  sandbox.get("/inspect", handle(async (request, response) => {
+    const scope = await requireScope(request, response);
+    if (!scope) return;
+    const entity = typeof request.query.entity === "string" && /^(Purchase|Bill|BillPayment|Deposit|Account|Preferences)$/.test(request.query.entity) ? request.query.entity : null;
+    const id = typeof request.query.id === "string" && /^\d{1,20}$/.test(request.query.id) ? request.query.id : null;
+    if (!entity) { response.status(400).json({ error: "entity is required" }); return; }
+    const client = qbo.createAccountingClient(scope);
+    const result = entity === "Preferences"
+      ? (await client.query<QuickBooksJsonObject>("SELECT * FROM Preferences")).entities[0]
+      : id ? (await client.read<QuickBooksJsonObject>(entity, id)).entity : null;
+    response.json({ entity, id, shape: qboObjectShape(result ?? null) });
   }));
 
   sandbox.post("/acceptance", handle(async (request, response) => {
@@ -300,8 +451,11 @@ export async function createQboSandboxHarness(options: QboSandboxHarnessOptions)
       return { pass: bootstrap.capability.enabled, notes: [`CompanyInfo.Id=${bootstrap.providerCompanyId}`, `companyName=${bootstrap.providerCompanyName ?? "(none)"}`, `homeCurrency=${bootstrap.homeCurrency ?? "(none)"}`, "accounting.read enabled from live provider read-back"] };
     });
     await step("provider_sync_catch_up", async () => {
-      const result = await qbo.createProviderSync(scope).catchUp({ maxPages });
-      return qboProviderSyncAcceptance(result);
+      const result = await qbo.createProviderSync(scope).catchUp({ maxPages, fullReplay: request.body?.fullReplay === true });
+      const acceptance = qboProviderSyncAcceptance(result);
+      // Safe record-level detail: provider IDs and normalizer-authored reasons only.
+      const exceptions = await demo.services.accounting.mirror.listOpenSyncExceptions(scope);
+      return { pass: acceptance.pass, notes: [...acceptance.notes, ...exceptions.slice(0, 40).map(item => `exception ${item.objectType} ${item.objectId} (${item.kind}): ${item.reasons.join(" | ")}`)] };
     });
     await step("accounting_query", async () => {
       const result = await client.query<QuickBooksJsonObject>("SELECT * FROM Vendor MAXRESULTS 5");
@@ -367,7 +521,7 @@ export async function createQboSandboxHarness(options: QboSandboxHarnessOptions)
       const persistedLatest = Boolean(after && refreshes.length === 1 && refreshes[0]!.refreshTokenSha256 === sha256(after.refreshToken));
       return {
         pass: read.status === 200 && refreshes.length === 1 && persistedLatest && (after?.version ?? 0) > (before.version ?? 0),
-        notes: [`refresh calls=${refreshes.length} (expected 1)`, `persisted refresh token is the latest returned by Intuit=${persistedLatest}`, `refresh token value changed=${after ? sha256(after.refreshToken) !== beforeHash : "unknown"}`, `connection version ${before.version} -> ${after?.version}`],
+        notes: [`refresh calls=${refreshes.length} (expected 1)`, `persisted refresh token is the latest returned by Intuit=${persistedLatest}`, `refresh token value changed=${after ? sha256(after.refreshToken) !== beforeHash : "unknown"} (Intuit rotates the value about once every 24 hours, so an unchanged value within that window is expected and does not prove rotation handling)`, `connection version ${before.version} -> ${after?.version}`],
       };
     });
     if (runDisconnect) {

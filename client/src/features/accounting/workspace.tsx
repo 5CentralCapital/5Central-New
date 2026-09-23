@@ -124,7 +124,7 @@ function TransactionTable({ api, organizationId, scope }: { readonly api: Accoun
   if (query.error) return <ErrorBox error={query.error} retry={() => void query.refetch()} />;
   const page = query.data;
   if (!page?.items.length) return <div className="accounting-empty"><strong>No mirrored transactions</strong><span>Run a source sync to load the current source records.</span></div>;
-  return <><div className="accounting-meta" role="status">Coverage: {page.coverage.status} · {page.coverage.evidence}</div><div className="accounting-table-wrap"><table className="accounting-table"><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Status</th><th>Settlement</th></tr></thead><tbody>{page.items.map(item => <tr key={`${item.source.objectType}:${item.source.objectId}:${item.source.lineId ?? ""}:${item.source.version}`}><td>{item.postedOn ?? "—"}</td><td>{item.transactionType}</td><td>{centsLabel(item.amountCents, item.currency)}</td><td>{item.postingState}</td><td>{item.settlement.state}</td></tr>)}</tbody></table></div></>;
+  return <><div className="accounting-meta" role="status">Coverage: {page.coverage.status} · {page.coverage.evidence}{page.coverage.status !== "complete" ? <> — incomplete mirror; QuickBooks remains the accounting record.{page.coverage.reason ? ` ${page.coverage.reason}` : ""}</> : null}</div><div className="accounting-table-wrap"><table className="accounting-table"><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Status</th><th>Settlement</th></tr></thead><tbody>{page.items.map(item => <tr key={`${item.source.objectType}:${item.source.objectId}:${item.source.lineId ?? ""}:${item.source.version}`}><td>{item.postedOn ?? "—"}</td><td>{item.transactionType}</td><td>{centsLabel(item.amountCents, item.currency)}</td><td>{item.postingState}</td><td>{item.settlement.state}</td></tr>)}</tbody></table></div></>;
 }
 
 export function AccountingWorkspace({ organizationId, organizationName, entities, api = accountingApi }: AccountingWorkspaceProps) {
@@ -153,7 +153,7 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
   const selectedEntity = entityOptions.find(entity => entity.id === legalEntityId);
   const clearPending = async () => {
     setPendingId(null);
-    const url = new URL(window.location.href); url.searchParams.delete("qboPending"); url.searchParams.delete("qboEntity"); window.history.replaceState(window.history.state, "", url.toString());
+    const url = new URL(window.location.href); url.searchParams.delete("qboPending"); url.searchParams.delete("qboEntity"); url.searchParams.delete("qboConnected"); window.history.replaceState(window.history.state, "", url.toString());
     await connections.refetch();
   };
   async function sync() {

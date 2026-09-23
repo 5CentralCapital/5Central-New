@@ -40,6 +40,7 @@ and runs the same shared handler. Don't register it with Intuit.
 | Field | URL |
 | --- | --- |
 | Launch URL | `https://5-central-new.replit.app/ops?section=accounting` |
+| Connect/Reconnect URL (required since 2026-02-24) | `https://5-central-new.replit.app/ops?section=accounting` |
 | Disconnect URL | `https://5-central-new.replit.app/quickbooks/disconnected` |
 | End-user license agreement | `https://5-central-new.replit.app/legal/eula` |
 | Privacy policy | `https://5-central-new.replit.app/legal/privacy` |
@@ -52,6 +53,12 @@ response. The current deployment therefore cannot complete this app's OAuth
 flow or satisfy its listed app-detail URLs. Deploy the build that contains
 these routes, then verify the actual page content and callback behavior before
 the production key review.
+
+Rechecked on 2026-09-22 at about 21:40 EDT from a browser: `/legal/eula`,
+`/legal/privacy` and `/quickbooks/disconnected` still render the public site's
+"404 Page Not Found" content, `/api/accounting/qbo/callback` returns HTTP 404
+`{"error":"API route not found"}`, and `/healthz` returns 404. The published
+deployment is not this build. Nothing was deployed during the audit.
 
 ## Run it
 
@@ -116,14 +123,16 @@ These exist only in the script. They are never registered by production routes.
 | `POST /__sandbox/connect-url` | Starts the normal OAuth begin flow for the synthetic organization and legal entity, bound to this cookie session. It returns the Intuit authorize URL. |
 | `GET /__sandbox/replay?url=…` | Forwards the redirected callback's query to `/api/accounting/qbo/callback` in the same session |
 | `POST /__sandbox/confirm` `{ pendingId? }` | Confirms the pending CompanyInfo binding through the normal confirm route. It uses the last replayed pending ID by default. |
-| `POST /__sandbox/acceptance` `{ realmId?, disconnect?, maxPages? }` | Runs the automatable checklist items and writes evidence |
+| `POST /__sandbox/acceptance` `{ realmId?, disconnect?, maxPages?, fullReplay? }` | Runs the automatable checklist items and writes evidence |
+| `POST /__sandbox/sync` `{ realmId?, maxPages?, fullReplay?, reconcile? }` | Read-only: bootstrap, catch-up (or full replay), open sync exceptions with safe reasons, coverage, and a provider-vs-mirror count and cent reconciliation per transaction type |
+| `GET /__sandbox/inspect?entity=…&id=…` | Structural, redacted shape of one sandbox object (keys, types, IDs, reference types, amounts; names, memos and contact fields redacted) for diagnosing a rejection |
 
 ## Acceptance run
 
 For the confirmed connection, `/__sandbox/acceptance` runs these steps:
 
 1. Reads CompanyInfo through the provider-sync bootstrap, which enables `accounting.read` from live read-back.
-2. Runs the provider sync catch-up for Purchase, Bill, BillPayment, Deposit, and Account (`maxPages`, default 3).
+2. Runs the provider sync catch-up for Purchase, Bill, BillPayment, Deposit, and Account (`maxPages`, default 3; `fullReplay: true` re-reads everything). It passes only when every stream is complete, nothing was rejected in this run, and no durable sync exception from any earlier run remains open. The notes list each open exception by provider ID with its normalizer reason.
 3. Runs one Accounting query (`SELECT * FROM Vendor MAXRESULTS 5`).
 4. Enables `accounting.create` and `accounting.update` for this sandbox realm only, using the existing capability store with the CompanyInfo read-back evidence. Only the harness does this.
 5. Creates a disposable Vendor named `R-ops sandbox test <timestamp>` and reads it back.
@@ -149,19 +158,75 @@ follow-up:
 
 ### Sandbox verification recorded on 2026-09-22
 
-The run recorded ten acceptance steps in `~/.local/state/r-ops/qbo-sandbox/`
-(the evidence files are mode `0600`). The earlier acceptance criterion counted
-the provider sync as a pass when no stream outright failed. Review of the saved
-evidence found partial mirror coverage: 10 BillPayment and 9 Deposit entries
-were reported as unsupported. This run therefore does not establish full QBO
-mirror coverage; the acceptance gate now requires complete status and coverage
-for every stream, with zero unsupported entries.
+**First run (Codex, 00:01Z).** Ten acceptance steps were recorded, but the
+provider sync reported 10 BillPayment and 9 Deposit entries as unsupported.
+The acceptance criterion at the time still counted that sync as a pass, so the
+run did not establish full mirror coverage.
 
-The forced OAuth refresh succeeded and the stored refresh token matched the
-latest value returned by Intuit, but the value's hash matched the token stored
-before refresh. The evidence does not establish why the value stayed the same.
-The disconnect and provider revoke succeeded. These results do not change the
-production deployment and live-key review blockers described above.
+**Audit re-run (01:44Z to 01:50Z) against the same sandbox company.** Sandbox
+Company US 10b3 (realm `9341457970146424`) was used with the harness in this
+branch.
+
+- **Root cause of the 19 rejections.** Intuit omits `Line.Id` on every
+  BillPayment line (10 lines across 10 payments) and on every Deposit line that
+  moves a Payment out of Undeposited Funds (9 lines across Deposits 62, 102
+  and 121). Those linked lines can also carry a `DepositLineDetail` holding
+  only `PaymentMethodRef`/`CheckNum`. The normalizer now identifies each such
+  line by its single linked transaction (`linked:<TxnType>:<TxnId>`).
+- **Resolved.** All 10 BillPayments and Deposits 62 and 102 now mirror exactly.
+- **Intentional exceptions.** Two objects stay open as durable exceptions:
+  - Deposit 121 has $200.00 cash back. It has $1,068.15 of linked lines and a
+    net `TotalAmt` of $868.15.
+  - Purchase 139 is a $900.00 credit-card credit (refund), and
+    `Credit: true` was previously ignored. The code before this audit mirrored
+    Purchase 139 as a $900.00 outgoing expense and reported Purchase coverage
+    as complete.
+
+  Mirror coverage therefore stays `partial` for the Purchase and Deposit
+  streams, and the gate correctly fails `provider_sync_catch_up`.
+- **Reconciliation.** Each type was reconciled in cents from provider
+  `TotalAmt` to current mirrored lines plus open exceptions. Every object is
+  accounted for, with no unexplained or mismatched IDs.
+
+  | Type | Provider count | Provider total | Mirrored | Exceptions |
+  | --- | --- | --- | --- | --- |
+  | Purchase | 35 | $3,424.17 | 34 / $2,524.17 | 1 / $900.00 |
+  | Bill | 15 | $6,142.17 | 15 / $6,142.17 | 0 |
+  | BillPayment | 10 | $4,539.50 | 10 / $4,539.50 | 0 |
+  | Deposit | 5 | $7,094.90 | 4 / $6,226.75 | 1 / $868.15 |
+
+- **Initial, incremental and full-replay runs.** All three produced the same
+  open exceptions. An incremental run that rejected nothing new still reported
+  the earlier exceptions and partial coverage. A full replay found no objects
+  missing from QBO.
+- **Other steps passed.** These were:
+  - CompanyInfo bootstrap, with the home currency read from
+    `Preferences.CurrencyPrefs` (USD, multicurrency off).
+  - Vendor create and read-back.
+  - Sparse update with a SyncToken increase.
+  - Stale SyncToken rejected with fault 5010 as `quickbooks_conflict` after
+    exactly one POST, with the record unchanged. Writes now carry `requestid`.
+  - Forced refresh: one refresh call, and the latest returned refresh token was
+    persisted.
+  - Disconnect with provider revoke.
+  - Reads refused after disconnect with no provider request.
+- **Reconnect after disconnect.** Proven live. A fresh authorization revived
+  the revoked connection (version 4, new rolling expiry about 100 days out),
+  and reads and sync then worked. Replaying the used callback, or replaying it
+  with a different `realmId`, was rejected with `409 accounting_conflict`. The
+  final run disconnected and revoked the sandbox grant.
+- **Refresh token value.** It was unchanged across the forced refresh. Intuit
+  issues a new value about once every 24 hours, so this is expected. It does
+  not prove that rotating values are handled; mocked tests cover that.
+
+Still not proven live:
+
+- Delivery of a real signed webhook. No webhook route exists.
+- Wrong-environment keys.
+- 429 and 5xx responses.
+- An uncertain-write timeout.
+
+Mocked tests cover these.
 
 ## Disconnect behavior (all environments)
 

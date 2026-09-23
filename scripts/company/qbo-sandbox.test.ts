@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import type { QboProviderSyncResult } from "../../server/accounting/provider-sync";
-import { createQboSandboxHarness, qboProviderSyncAcceptance, sandboxEnvironmentProblems } from "./qbo-sandbox";
+import { createQboSandboxHarness, qboObjectShape, qboProviderSyncAcceptance, reconcileQboMirror, sandboxEnvironmentProblems } from "./qbo-sandbox";
 
 const env = {
   QBO_CLIENT_ID: "sandbox-client-id",
@@ -19,29 +19,55 @@ test("sandbox provider sync acceptance requires complete coverage for every stre
     stream: "transactions.purchase",
     result: { status: "complete", checkpoint: null, pagesFetched: 1, itemsApplied: 2 },
     unsupportedCount: 0,
+    openExceptionCount: 0,
+    missingFromReplayCount: 0,
+    mode: "initial",
     coverageStatus: "complete",
   } as const;
   const complete: QboProviderSyncResult = { status: "complete", streams: [stream] };
   assert.deepEqual(qboProviderSyncAcceptance(complete), {
     pass: true,
-    notes: ["status=complete", "transactions.purchase: complete, coverage=complete, unsupported=0"],
+    notes: ["status=complete", "transactions.purchase: complete, mode=initial, coverage=complete, unsupported_this_run=0, open_exceptions=0, missing_from_replay=0"],
   });
 
   const partialCoverage: QboProviderSyncResult = {
     status: "partial",
-    streams: [{ ...stream, unsupportedCount: 10, coverageStatus: "partial" }],
+    streams: [{ ...stream, unsupportedCount: 10, openExceptionCount: 10, coverageStatus: "partial" }],
   };
-  const partial = qboProviderSyncAcceptance(partialCoverage);
-  assert.equal(partial.pass, false);
-  assert.deepEqual(partial.notes, ["status=partial", "transactions.purchase: complete, coverage=partial, unsupported=10"]);
+  assert.equal(qboProviderSyncAcceptance(partialCoverage).pass, false);
 
   const failedStream: QboProviderSyncResult = {
     status: "partial",
     streams: [{ ...stream, result: { ...stream.result, status: "failed" }, coverageStatus: "partial" }],
   };
-  const failed = qboProviderSyncAcceptance(failedStream);
-  assert.equal(failed.pass, false);
-  assert.deepEqual(failed.notes, ["status=partial", "transactions.purchase: failed, coverage=partial, unsupported=0"]);
+  assert.equal(qboProviderSyncAcceptance(failedStream).pass, false);
+
+  // A later incremental run with no newly rejected rows does not pass while
+  // earlier exceptions remain open, even if a stream were mislabeled complete.
+  const lingering: QboProviderSyncResult = { status: "complete", streams: [{ ...stream, mode: "incremental", openExceptionCount: 3 }] };
+  assert.equal(qboProviderSyncAcceptance(lingering).pass, false);
+  const missing: QboProviderSyncResult = { status: "complete", streams: [{ ...stream, mode: "full_replay", missingFromReplayCount: 1 }] };
+  assert.equal(qboProviderSyncAcceptance(missing).pass, false);
+});
+
+test("mirror reconciliation accounts for every provider object in integer cents", () => {
+  const objects = [{ Id: "1", TotalAmt: "10.10" }, { Id: "2", TotalAmt: 5 }, { Id: "3", TotalAmt: "7.00" }];
+  const ok = reconcileQboMirror({ entity: "Bill", providerObjects: objects, mirroredLineCentsByObject: new Map([["1", BigInt(1010)], ["2", BigInt(500)]]), openExceptionIds: new Set(["3"]) });
+  assert.equal(ok.pass, true);
+  assert.equal(ok.exceptionTotalCents, "700");
+  const gap = reconcileQboMirror({ entity: "Bill", providerObjects: objects, mirroredLineCentsByObject: new Map([["1", BigInt(1000)]]), openExceptionIds: new Set() });
+  assert.equal(gap.pass, false);
+  assert.deepEqual(gap.mismatchedObjectIds, ["1"]);
+  assert.deepEqual(gap.unexplainedObjectIds, ["2", "3"]);
+});
+
+test("inspection shapes redact free text and contact fields", () => {
+  const shape = qboObjectShape({ Id: "5", DisplayName: "Jane Tenant", PrivateNote: "call 555", Line: [{ Amount: "1.00", Description: "secret" }], BillAddr: { Line1: "1 Main" } }) as Record<string, unknown>;
+  assert.equal(shape.DisplayName, "[redacted]");
+  assert.equal(shape.PrivateNote, "[redacted]");
+  assert.equal(shape.BillAddr, "[redacted]");
+  assert.equal((shape.Line as Record<string, unknown>[])[0]!.Description, "[redacted]");
+  assert.equal((shape.Line as Record<string, unknown>[])[0]!.Amount, "1.00");
 });
 
 /** Offline sandbox double with Vendor create/read/sparse-update/stale semantics. */
