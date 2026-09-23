@@ -16,6 +16,8 @@ export interface CompanyDemoAppOptions extends Pick<RentOpsDemoServerOptions, 'p
   readonly accountingEnvironment?: NodeJS.ProcessEnv;
   /** Test-only QBO overrides such as an offline transport. */
   readonly accountingQbo?: Partial<AccountingQboConfig>;
+  /** Also seed a PM statement, forecast scenario, project, investor note and review cases (local demo and browser review). */
+  readonly companyDemoData?: boolean;
 }
 
 /** Fixed local-only CSRF value that the synthetic demo session hands the browser. */
@@ -23,7 +25,7 @@ export const COMPANY_DEMO_CSRF_TOKEN = 'rent-ops-demo-csrf-token-local-only-2026
 
 /** Disposable local browser/test app; all company data is in memory. */
 export async function createCompanyDemoApp(options: CompanyDemoAppOptions = {}) {
-  const { accountingEnvironment = {}, accountingQbo, ...demoOptions } = options;
+  const { accountingEnvironment = {}, accountingQbo, companyDemoData = false, ...demoOptions } = options;
   const fixture = await createSyntheticCompanyDatabase();
   await seedRentalDemo({ executor: fixture.executor, actorId: SYNTHETIC_COMPANY.actorId, actorRole: 'owner' });
   const database = { ...fixture, executor: await createSyntheticRuntimeExecutor(fixture.db) };
@@ -36,7 +38,7 @@ export async function createCompanyDemoApp(options: CompanyDemoAppOptions = {}) 
   };
   const company = createCompanyServices(database.executor, { accounting: { environment: accountingEnvironment, ...(accountingQbo ? { qbo: accountingQbo } : {}) }, time: { env: {} } });
   await seedWorkOrderDemo(database.executor, company.workOrders);
-  await seedCompanyDemo(database.executor, company);
+  if (companyDemoData) await seedCompanyDemo(database.executor, company);
   const app = createRentOpsDemoApp({ ...demoOptions,
     syntheticRepository: new PostgresRentOpsRepository(database.executor),
     configureSyntheticRoutes: app => registerCompanyRoutes(app, {
