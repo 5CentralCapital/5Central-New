@@ -19,6 +19,7 @@ import { formatInputValue, formatMoney, parseMoneyInput } from "../projects/mone
 import { WorkOrderApiError, revisionFrom, workOrderEnvelope, workOrderViewFilters, workOrdersApi, type WorkOrderCommandEnvelope } from "./api";
 import { PRIORITY_LABELS, STATUS_LABELS, categoryLabel, dateLabel, eventSummary, operatingToday, priorityClass, scheduleOrder, statusClass, timestampLabel } from "./format";
 import { PendingEnvelopes } from "./pending";
+import { invalidateWorkOrderReads } from "../workspaces/work-data";
 import "./work-orders.css";
 
 import { WORK_ORDER_VIEWS, type WorkOrderView } from "./types";
@@ -611,6 +612,7 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
     try {
       const receipt = await workOrdersApi.command(organizationId, kind, envelope);
       pending.current.settle(key);
+      void invalidateWorkOrderReads(client);
       if (kind === "work_order.create") {
         const id = String(receipt.affectedRecordIds[0]);
         await client.invalidateQueries({ queryKey: ["work-orders", "list", organizationId] });

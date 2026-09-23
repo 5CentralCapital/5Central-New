@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 import type { WorkOrderSummary } from "@shared/work-orders";
 import { workOrdersApi } from "../work-orders/api";
 
@@ -27,4 +27,16 @@ export function useOpenWorkOrders(identity: string, organizationId: string | und
       return { items, truncated: true };
     },
   });
+}
+
+/**
+ * After a work-order change, mark the other pages' copies stale: the property
+ * record, make-ready and the dashboard's "Work due" read work orders under the
+ * workspace cache, not the work-order workspace's own keys.
+ */
+export async function invalidateWorkOrderReads(client: QueryClient): Promise<void> {
+  await Promise.all([
+    client.invalidateQueries({ queryKey: ["rent-ops-workspace", "work-orders-open"] }),
+    client.invalidateQueries({ queryKey: ["rent-ops-workspace", "dashboard-company"] }),
+  ]);
 }
