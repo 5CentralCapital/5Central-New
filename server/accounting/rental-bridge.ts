@@ -20,11 +20,12 @@ interface Totals {
   tenant: bigint; subsidy: bigint; other: bigint; receiptCount: number;
   depositReceipts: bigint; depositsReceived: bigint; depositsHeld: bigint;
   reversals: bigint; reversalOfReceipts: bigint; reversalOfCharges: bigint;
+  reversalOfCredits: bigint; reversalOfDebitAdjustments: bigint; reversalOfCreditAdjustments: bigint;
   debit: bigint; credit: bigint; voided: number; pending: number; unknown: number;
 }
 
 function empty(): Totals {
-  return { charges: ZERO, chargeCount: 0, credits: ZERO, tenant: ZERO, subsidy: ZERO, other: ZERO, receiptCount: 0, depositReceipts: ZERO, depositsReceived: ZERO, depositsHeld: ZERO, reversals: ZERO, reversalOfReceipts: ZERO, reversalOfCharges: ZERO, debit: ZERO, credit: ZERO, voided: 0, pending: 0, unknown: 0 };
+  return { charges: ZERO, chargeCount: 0, credits: ZERO, tenant: ZERO, subsidy: ZERO, other: ZERO, receiptCount: 0, depositReceipts: ZERO, depositsReceived: ZERO, depositsHeld: ZERO, reversals: ZERO, reversalOfReceipts: ZERO, reversalOfCharges: ZERO, reversalOfCredits: ZERO, reversalOfDebitAdjustments: ZERO, reversalOfCreditAdjustments: ZERO, debit: ZERO, credit: ZERO, voided: 0, pending: 0, unknown: 0 };
 }
 
 function add(target: Totals, source: Totals): void {
@@ -32,14 +33,20 @@ function add(target: Totals, source: Totals): void {
   target.tenant += source.tenant; target.subsidy += source.subsidy; target.other += source.other; target.receiptCount += source.receiptCount;
   target.depositReceipts += source.depositReceipts; target.depositsReceived += source.depositsReceived; target.depositsHeld += source.depositsHeld;
   target.reversals += source.reversals; target.reversalOfReceipts += source.reversalOfReceipts; target.reversalOfCharges += source.reversalOfCharges;
+  target.reversalOfCredits += source.reversalOfCredits; target.reversalOfDebitAdjustments += source.reversalOfDebitAdjustments; target.reversalOfCreditAdjustments += source.reversalOfCreditAdjustments;
   target.debit += source.debit; target.credit += source.credit; target.voided += source.voided; target.pending += source.pending; target.unknown += source.unknown;
 }
 
 function finish(totals: Totals): BridgeControlTotals {
   const c = (value: bigint): MoneyCents => centsFromBigInt(value);
   const receipts = totals.tenant + totals.subsidy + totals.other;
-  // A reversed receipt re-opens the receivable; a reversed charge closes it.
-  const net = totals.charges - totals.credits - receipts + totals.reversalOfReceipts - totals.reversalOfCharges + totals.debit - totals.credit;
+  // A reversal undoes its target: a reversed receipt or credit re-opens the
+  // receivable, a reversed charge closes it, and a reversed adjustment moves
+  // it opposite to the adjustment's own direction.
+  const net = totals.charges - totals.credits - receipts
+    + totals.reversalOfReceipts - totals.reversalOfCharges + totals.reversalOfCredits
+    - totals.reversalOfDebitAdjustments + totals.reversalOfCreditAdjustments
+    + totals.debit - totals.credit;
   return {
     chargesCents: c(totals.charges), chargeCount: totals.chargeCount, creditsCents: c(totals.credits),
     receipts: { tenantCents: c(totals.tenant), subsidyCents: c(totals.subsidy), otherCents: c(totals.other), totalCents: c(receipts), count: totals.receiptCount },
@@ -106,13 +113,13 @@ export async function previewRentalBridge(executor: RentOpsQueryExecutor, princi
     const through = until === null ? query.periodEnd : [query.periodEnd, day(until, -1)].sort()[0]!;
     if (through < from) continue;
     const ledger = await executor.query<Record<string, unknown>>(
-      `SELECT t.kind, t.category, t.status, t.payer, t.adjustment_direction, o.kind AS reversed_kind, o.category AS reversed_category,
+      `SELECT t.kind, t.category, t.status, t.payer, t.adjustment_direction, o.kind AS reversed_kind, o.category AS reversed_category, o.adjustment_direction AS reversed_direction,
               COUNT(*) AS count, COUNT(*) FILTER (WHERE t.amount_cents IS NULL) AS unknown_amounts,
               COALESCE(SUM(t.amount_cents), 0)::bigint::text AS amount
          FROM rent_ops_ledger_transactions t
          LEFT JOIN rent_ops_ledger_transactions o ON o.id = t.reversal_of_id
         WHERE t.property_id = $1 AND t.posted_on BETWEEN $2::date AND $3::date
-        GROUP BY t.kind, t.category, t.status, t.payer, t.adjustment_direction, o.kind, o.category`,
+        GROUP BY t.kind, t.category, t.status, t.payer, t.adjustment_direction, o.kind, o.category, o.adjustment_direction`,
       [mapping.property_id, from, through],
     );
     const totals = empty();
@@ -131,18 +138,26 @@ export async function previewRentalBridge(executor: RentOpsQueryExecutor, princi
       const deposit = DEPOSIT_CATEGORIES.includes(category);
       switch (row.kind) {
         case "charge": if (!deposit) { totals.charges += amount; totals.chargeCount += count; } break;
-        case "credit": totals.credits += amount; break;
+        // Deposit-category credits reduce held funds, not rent receivable, like deposit charges.
+        case "credit": if (!deposit) totals.credits += amount; break;
         case "payment":
           if (deposit) totals.depositReceipts += amount;
           else if (row.payer === "agency" || category === "subsidy") { totals.subsidy += amount; totals.receiptCount += count; }
           else if (row.payer === "tenant") { totals.tenant += amount; totals.receiptCount += count; }
           else { totals.other += amount; totals.receiptCount += count; }
           break;
-        case "reversal":
+        case "reversal": {
           totals.reversals += amount;
-          if (row.reversed_kind === "payment" && !DEPOSIT_CATEGORIES.includes(String(row.reversed_category))) totals.reversalOfReceipts += amount;
-          else if (row.reversed_kind === "charge" && !DEPOSIT_CATEGORIES.includes(String(row.reversed_category))) totals.reversalOfCharges += amount;
+          const reversedDeposit = DEPOSIT_CATEGORIES.includes(String(row.reversed_category));
+          if (row.reversed_kind === "payment" && !reversedDeposit) totals.reversalOfReceipts += amount;
+          else if (row.reversed_kind === "charge" && !reversedDeposit) totals.reversalOfCharges += amount;
+          else if (row.reversed_kind === "credit" && !reversedDeposit) totals.reversalOfCredits += amount;
+          else if (row.reversed_kind === "adjustment") {
+            if (row.reversed_direction === "debit") totals.reversalOfDebitAdjustments += amount;
+            else if (row.reversed_direction === "credit") totals.reversalOfCreditAdjustments += amount;
+          }
           break;
+        }
         case "adjustment": if (row.adjustment_direction === "debit") totals.debit += amount; else totals.credit += amount; break;
         default: break;
       }

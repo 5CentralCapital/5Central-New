@@ -135,6 +135,7 @@ export const connectorHealthSchema = z.object({
   lagSeconds: z.number().int().min(0).nullable(),
   coverage: z.object({ status: z.enum(["unavailable", "partial", "complete"]), reason: z.string().nullable() }).strict(),
   openSyncExceptions: z.number().int().min(0),
+  /** Objects still deleted whose deletion was detected in the last 30 days. */
   activeTombstones: z.number().int().min(0),
   jobs: z.object({
     queued: z.number().int().min(0),
@@ -385,7 +386,7 @@ export const bridgeControlTotalsSchema = z.object({
   depositsHeldAtEndCents: centsSchema,
   reversalsCents: centsSchema,
   adjustments: z.object({ debitCents: centsSchema, creditCents: centsSchema }).strict(),
-  /** Charges − credits − non-deposit receipts ± adjustments for the period. */
+  /** Charges − credits − non-deposit receipts ± adjustments, each net of its reversals, for the period (deposit categories excluded). */
   netReceivableChangeCents: centsSchema,
   excludedVoidedCount: z.number().int().min(0),
   excludedPendingCount: z.number().int().min(0),
@@ -485,10 +486,32 @@ export const requestQboSyncPayloadSchema = z.object({
   forceFullReplay: z.boolean().default(false),
 }).strict();
 
-export const ACCOUNTING_OPERATION_COMMAND_KINDS = [...RENTAL_POSTING_COMMAND_KINDS, ...PM_SETTLEMENT_COMMAND_KINDS, QBO_SYNC_REQUEST_COMMAND_KIND] as const;
+/* ── QuickBooks write submission (queues a reconciled worker write) ──── */
+
+/**
+ * Owner/admin only. Validated against the server's enabled write types and
+ * the entity's rental posting policy, then queued for the worker, which
+ * journals, posts and confirms by readback. Queued is not posted.
+ */
+export const QBO_WRITE_SUBMIT_COMMAND_KIND = "accounting.qbo_write.submit" as const;
+export const QBO_WRITE_OPERATIONS = ["create", "update", "void", "delete"] as const;
+export const submitQboWritePayloadSchema = z.object({
+  environment: qboEnvironmentSchema,
+  realmId: realmIdSchema,
+  entity: z.string().regex(/^[A-Z][A-Za-z0-9_]{0,119}$/, "QuickBooks entity name, e.g. Vendor"),
+  operation: z.enum(QBO_WRITE_OPERATIONS),
+  fields: z.record(z.string(), z.unknown()),
+  entityId: z.string().regex(/^[A-Za-z0-9_.:-]{1,160}$/).optional(),
+  syncToken: z.string().regex(/^[A-Za-z0-9_.:-]{1,160}$/).optional(),
+  rentalPosting: z.object({ activityDate: isoDateSchema, method: z.enum(["native_receivables", "summary_bridge"]) }).strict().optional(),
+}).strict();
+export type SubmitQboWritePayload = z.infer<typeof submitQboWritePayloadSchema>;
+
+export const ACCOUNTING_OPERATION_COMMAND_KINDS = [...RENTAL_POSTING_COMMAND_KINDS, ...PM_SETTLEMENT_COMMAND_KINDS, QBO_SYNC_REQUEST_COMMAND_KIND, QBO_WRITE_SUBMIT_COMMAND_KIND] as const;
 export type AccountingOperationCommandKind = (typeof ACCOUNTING_OPERATION_COMMAND_KINDS)[number];
 export const accountingOperationCommandPayloadSchemas = {
   ...rentalPostingCommandPayloadSchemas,
   ...pmSettlementCommandPayloadSchemas,
   [QBO_SYNC_REQUEST_COMMAND_KIND]: requestQboSyncPayloadSchema,
+  [QBO_WRITE_SUBMIT_COMMAND_KIND]: submitQboWritePayloadSchema,
 } as const satisfies Record<AccountingOperationCommandKind, z.ZodTypeAny>;

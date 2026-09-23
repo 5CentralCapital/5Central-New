@@ -9,6 +9,7 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import path from "path";
 import { registerRoutes } from "./routes";
+import { registerRequestBodyParsers } from "./request-body-parsers"; // lane-a-accounting
 import { setupVite, serveStatic, log } from "./vite";
 import { loadUser } from "./auth";
 import { pool } from "./db";
@@ -56,8 +57,8 @@ registerTenantPaymentWebhook(app, { getService: () => tenantPaymentService });
 // lane-b-accounting: QuickBooks CloudEvents need the raw bytes for HMAC verification.
 let quickBooksWebhookExecutor: RentOpsQueryExecutor | undefined;
 registerQuickBooksWebhookRoute(app, { getExecutor: () => quickBooksWebhookExecutor });
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+// lane-a-accounting: /mcp gets a larger JSON limit for base64 uploads; every other route keeps the default.
+registerRequestBodyParsers(app);
 
 // PostgreSQL session store
 const PgStore = connectPgSimple(session);

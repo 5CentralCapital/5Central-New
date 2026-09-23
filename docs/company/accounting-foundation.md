@@ -109,7 +109,13 @@ exponential backoff and bounded jitter (50–100% of `min(1 h, 5 s·2^(n−1))`)
 an explicit `RetryLaterJobError` delay (QBO 429) wins over a shorter backoff,
 and a job is dead-lettered after `max_attempts` or a `PermanentJobError`.
 `reapExpiredLeases()` returns expired leases to retry and records the attempt
-as `lease_expired`. Operators (organization owner/admin only) list, inspect,
+as `lease_expired`; it also dead-letters any `queued`/`retry` job whose
+attempts already equal `max_attempts` (such a job can never be claimed), so an
+operator sees it and can requeue it. `release()` (graceful shutdown) does not
+spend an attempt: the job returns to `retry` with its attempt refunded, the
+released attempt row is marked `cancelled` (`worker_shutdown`), and the next
+claim reuses that attempt number. Coalescing enqueues read the pending job
+`FOR UPDATE` before merging its payload. Operators (organization owner/admin only) list, inspect,
 requeue (`dead → queued` with more attempts; attempt numbering continues) and
 cancel (never a running job) through `job.requeue` / `job.cancel` commands on
 the shared command runner; HTTP `/api/company/:org/jobs…` and MCP
@@ -126,8 +132,9 @@ second job.
 Render `type: worker` service). It registers `outbox.dispatch`, `jobs.reap`,
 `accounting.qbo.sync`, `accounting.qbo.webhook_event` and
 `accounting.qbo.write`, writes `company_worker_heartbeats`, backs off when
-idle, and on SIGTERM stops claiming, waits for running handlers, then releases
-unfinished leases. Periodic work uses time-bucket keys:
+idle, and on SIGTERM stops claiming, waits for a claim already in flight (its
+jobs are released without starting their handlers) and for running handlers,
+then releases unfinished leases. Periodic work uses time-bucket keys:
 `outbox.dispatch:system:<minute>`, `jobs.reap:system:<5-minute bucket>`, and
 `qbo.sync:<org>:<entity>:<env>:<realm>:<yyyy-mm-ddThh>` per active connection.
 Job rows are never deleted by the runtime role (no DELETE grant); retention
@@ -143,7 +150,8 @@ needs a reviewed archival path later.
   (environment, source, id). A new event is routed to every active binding of
   that environment + realm (a realm is unique only per organization and
   environment) as one fetch job per (binding, object); pending jobs for the
-  same object coalesce. An event with no binding is `unrouted`; an entity that
+  same object coalesce; the latest notice decides fetch vs. tombstone and a
+  deletion wins a same-instant tie. An event with no binding is `unrouted`; an entity that
   is not mirrored is recorded and `processed`. The request makes no provider
   call. The job fetches the object through that binding's connection and
   mirrors it, or tombstones it for a delete notice; an object that vanished
@@ -153,7 +161,9 @@ needs a reviewed archival path later.
   `createProviderSync(scope).syncChanges()` uses the `changes` checkpoint: no
   watermark, a watermark older than 29.5 days, or a truncated CDC response
   triggers a scoped full replay with delete reconciliation; otherwise CDC runs
-  from the watermark minus a five-minute overlap. A full replay whose streams
+  from the watermark minus a five-minute overlap. Intuit's CDC `time` carries
+  a local offset (e.g. `-07:00`), so the watermark is compared as an instant
+  and stored as UTC ISO. A full replay whose streams
   all fetched anchors the chain (`cursor = verified:<time>`). Coverage stays
   partial until that anchor exists and no exceptions are open.
 - **Tombstones.** `mirror.recordDeletion()` appends
@@ -165,7 +175,11 @@ needs a reviewed archival path later.
   strictly newer revision re-creates the object; an inferred full-replay
   deletion is undone when the same revision reappears. Full-replay deletions
   also keep the `missing_from_full_replay` exception open; explicit webhook or
-  CDC deletions resolve the object's exceptions.
+  CDC deletions resolve the object's exceptions. Tombstones are insert-only
+  history keyed by `tombstone_seq`: an explicit deletion after an inferred one,
+  or a deletion of an object that came back, appends a new row, and the
+  highest sequence is the object's current deletion state (so a racing fetch
+  of the same revision cannot undo an explicit deletion).
 - **Writes.** `createQboWriteService()` is the only path that posts. It holds
   any write that is unsupported (void/delete are not implemented), disabled
   (`QBO_WRITES_ENABLED` off by default), not allow-listed (`QBO_WRITE_TYPES`)
@@ -173,10 +187,27 @@ needs a reviewed archival path later.
   reason. Supported writes are journaled in `accounting_qbo_write_attempts`
   (`prepared → validated → started → confirmed | ambiguous | failed`) through
   `PostgresQuickBooksWriteJournal`. An unknown outcome is `ambiguous` and the
-  next attempt reads back (by record Id, a natural key, or a resend under the
-  same `requestid`, which Intuit de-duplicates); it is never blindly reposted.
-  A stale SyncToken (fault 5010) is a definitive rejection (`failed`) that
-  requires a reread and a new operation key.
+  next attempt reads back by record Id (update, or a create whose response
+  carried the Id) or by natural key (Vendor/Customer `DisplayName`); it is
+  never blindly reposted. A create with neither (Bill, JournalEntry) is not
+  resent on the strength of Intuit's `requestid` de-duplication: it is held as
+  `ambiguous` / `manual_review` (`no_readback_key`) and the worker job is
+  dead-lettered with `qbo_write_ambiguous_manual_review` for an operator to
+  check QuickBooks. A stale SyncToken (fault 5010) is a definitive rejection
+  (`failed`) that requires a reread and a new operation key.
+- **Write submission (wired).** `accounting.qbo_write.submit` (owner/admin,
+  legal-entity scope, shared command runner with idempotency) is the only way
+  to queue a write: HTTP `POST /api/company/:org/accounting-commands/accounting.qbo_write.submit`
+  and MCP `submit_qbo_write` call the same port. It re-checks the server's
+  write policy (the same environment variables the worker uses), receivable
+  entities' rental posting method, field shape and an active connection, then
+  enqueues `accounting.qbo.write` under the stable key
+  `qbo.write:<scope hash>:cmd:<operationId>` (operation key `cmd:<operationId>`).
+  The receipt is `saved_in_rops` with the job id; nothing is in QuickBooks
+  until the worker confirms it by readback. With the default environment
+  (writes off) every submission is refused with the held reason. Not wired:
+  no browser UI submits writes, no domain workflow (bills, bridge entries)
+  generates them yet, and void/delete remain unimplemented.
 
 ### Rental accounting bridge
 
@@ -190,7 +221,10 @@ needs a reviewed archival path later.
 - **Summary bridge preview.** `previewRentalBridge()` builds control totals
   for an entity and period from the rental ledger (charges, credits, receipts
   split tenant/subsidy/other, deposit receipts, deposits received and held,
-  reversals, adjustments, net receivable change). Voided, pending and unknown
+  reversals, adjustments, net receivable change). Each reversal undoes its
+  target in the net receivable (receipts and credits re-open it, charges
+  close it, adjustments move opposite to their direction); deposit-category
+  charges and credits are excluded. Voided, pending and unknown
   rows are excluded and counted; an unknown amount is never treated as zero.
   JSON and CSV export only; nothing is posted.
 - **PM settlements.** Commands create, update (new append-only line set per
@@ -201,9 +235,11 @@ needs a reviewed archival path later.
   and differences; a $1,000 receipt with $100 of costs and a $900 remittance
   reports $1,000 collected, $100 costs and $900 remitted.
 - **Health and close.** Connector health (per binding) reports connection
-  state, last sync and change capture, lag, coverage, open exceptions, active
-  tombstones, job backlog/failures, last webhook, 429 cooldown and worker
-  liveness. The period close checklist is read-only and never locks QBO.
+  state, last sync and change capture, lag, coverage, open exceptions,
+  deletions detected in the last 30 days that are still in effect, job
+  backlog/failures, last webhook, 429 cooldown and worker
+  liveness. The period close checklist is read-only and never locks QBO; its
+  deletions item counts only deletions detected inside the period.
 
 ## External acceptance gates
 

@@ -7,6 +7,7 @@ import {
   PM_SETTLEMENT_COMMAND_KINDS,
   pmSettlementListQuerySchema,
   QBO_SYNC_REQUEST_COMMAND_KIND,
+  QBO_WRITE_SUBMIT_COMMAND_KIND,
   RENTAL_POSTING_COMMAND_KINDS,
   type PmSettlementCommandKind,
   type RentalPostingCommandKind,
@@ -117,6 +118,12 @@ export function registerAccountingMcpTools(register: AccountingToolRegistrar, op
     async args => {
       const scope = scopeInput.parse(args.scope);
       return operations.listPayables(await principalFor(scope.organizationId), { organizationId: scope.organizationId, legalEntityId: scope.legalEntityId, environment: scope.environment, realmId: scope.realmId, ...(args.kind ? { kind: args.kind } : {}), ...(args.from ? { from: args.from } : {}), ...(args.through ? { through: args.through } : {}), ...(args.limit ? { limit: args.limit } : {}), ...(args.cursor ? { cursor: args.cursor } : {}) });
+    });
+  register("submit_qbo_write", "Queue one QuickBooks write (owners and administrators). The server must enable writes and this Entity:operation (sandbox by default; production separately), and rental receivables need a matching rental posting method. The background worker journals the write, sends it once with a stable requestid and confirms it by reading it back; queued is not posted. Follow the returned job with get_job. Bill and JournalEntry creates whose outcome is unknown are held for manual review, never resent. Supply a stable operationId/idempotencyKey and retry an uncertain response with the identical envelope.",
+    { command: commandEnvelopeSchema(accountingOperationCommandPayloadSchemas[QBO_WRITE_SUBMIT_COMMAND_KIND]) }, true,
+    async ({ command }) => {
+      const organizationId = organizationIdSchema.parse(command.scope.organizationId);
+      return operations.execute(QBO_WRITE_SUBMIT_COMMAND_KIND, command, { principal: await principalFor(organizationId), transport, resolvePrincipal: executor => principalFor(organizationId, executor) });
     });
   const descriptions: Readonly<Record<RentalPostingCommandKind | PmSettlementCommandKind, string>> = {
     "accounting.rental_posting_policy.set": "Set the rental accounting method for a legal entity from a date (scope needs legalEntityId). Periods cannot overlap; native receivables require confirming QuickBooks invoice email is off; changing method needs an opening balance bridge reference.",

@@ -230,6 +230,44 @@ test("the summary bridge preview reports control totals from the rental ledger a
   }
 });
 
+test("the bridge net receivable reverses credits and adjustments by direction and leaves deposit credits out", async () => {
+  const h = await harness();
+  try {
+    await h.raw.query("INSERT INTO rent_ops_people (id, first_name, last_name) VALUES ('person-1','Synthetic','Tenant')");
+    await h.raw.query("INSERT INTO rent_ops_tenancies (id, property_id, unit_id, primary_person_id, status, created_at) VALUES ('tenancy-1',$1,$2,'person-1','current',now())", [PROPERTY, UNIT]);
+    const columns = "id,property_id,unit_id,tenancy_id,kind,category,status,amount_cents,posted_on,description,payer,reversal_of_id,adjustment_direction,amount_knowledge,category_knowledge,status_knowledge,posted_on_knowledge,description_knowledge,payer_knowledge,charge_definition_link_knowledge,property_link_knowledge,unit_link_knowledge,person_link_knowledge,tenancy_link_knowledge,due_on_knowledge,payment_method_knowledge";
+    const rows: [string, string, string, number, string | null, string | null][] = [
+      ["b-charge", "charge", "base_rent", 100000, null, null],
+      ["b-credit", "credit", "base_rent", 5000, null, null],
+      ["b-deposit-credit", "credit", "security_deposit", 20000, null, null],
+      ["b-rev-credit", "reversal", "base_rent", 5000, "b-credit", null],
+      ["b-adj-debit", "adjustment", "base_rent", 3000, null, "debit"],
+      ["b-rev-adj-debit", "reversal", "base_rent", 3000, "b-adj-debit", null],
+      ["b-adj-credit", "adjustment", "base_rent", 1000, null, "credit"],
+      ["b-rev-adj-credit", "reversal", "base_rent", 1000, "b-adj-credit", null],
+    ];
+    for (const [id, kind, category, amount, reversalOf, direction] of rows) {
+      await h.raw.query(
+        `INSERT INTO rent_ops_ledger_transactions (${columns})
+         VALUES ($1,$2,$3,'tenancy-1',$4,$5,'posted',$6,'2026-08-10','synthetic',NULL,$7,$8,'known','manual','manual','manual','manual','unknown','unknown','manual','manual','unknown','manual','unknown','unknown')`,
+        [id, PROPERTY, UNIT, kind, category, amount, reversalOf, direction],
+      );
+    }
+    const admin = await h.access();
+    const preview = await h.operations.previewBridge(admin.principal, { organizationId: ORG, legalEntityId: ENTITY, periodStart: "2026-08-01", periodEnd: "2026-08-31" });
+    const totals = preview.controlTotals;
+    assert.equal(totals.excludedUnknownCount, 0);
+    assert.equal(totals.chargesCents, "100000");
+    assert.equal(totals.creditsCents, "5000", "a deposit-category credit is not a rent credit");
+    assert.equal(totals.reversalsCents, "9000");
+    assert.deepEqual(totals.adjustments, { debitCents: "3000", creditCents: "1000" });
+    // Every credit and adjustment was reversed, so only the charge remains receivable.
+    assert.equal(totals.netReceivableChangeCents, "100000");
+  } finally {
+    await h.close();
+  }
+});
+
 test("period close checklist and connector health report state without changing it", async () => {
   const h = await harness();
   try {
@@ -267,6 +305,30 @@ test("period close checklist and connector health report state without changing 
     const finance = await h.access("finance-1", "finance");
     assert.equal((await h.operations.health(finance.principal, { organizationId: ORG, legalEntityId: ENTITY })).items.length, 1);
     await assert.rejects(h.operations.health(finance.principal, { organizationId: ORG, legalEntityId: randomUUID() }), (error: unknown) => error instanceof CompanyCommandError && error.status === 403);
+  } finally {
+    await h.close();
+  }
+});
+
+test("deletion counts are windowed: health shows recent deletions and the close checklist only its period", async () => {
+  const h = await harness();
+  try {
+    const admin = await h.access();
+    await h.raw.query(
+      `INSERT INTO accounting_qbo_connections (organization_id, legal_entity_id, environment, realm_id, encrypted_access_token, access_token_iv, access_token_auth_tag, encrypted_refresh_token, refresh_token_iv, refresh_token_auth_tag, access_token_expires_at)
+       VALUES ($1,$2,'sandbox','555','enc','iv','tag','enc','iv','tag',now())`, [ORG, ENTITY]);
+    await h.raw.query(`INSERT INTO accounting_qbo_realm_bindings (organization_id, legal_entity_id, environment, realm_id, provider_company_id, provider_company_name, evidence_version, company_info_hash, confirmed_by) VALUES ($1,$2,'sandbox','555','c1','Synthetic QBO','v1',$3,'demo-admin')`, [ORG, ENTITY, "f".repeat(64)]);
+    for (const [objectId, detectedAt] of [["900", "2026-02-01T00:00:00Z"], ["901", "2026-08-15T00:00:00Z"], ["902", "2026-09-10T00:00:00Z"]]) {
+      await h.raw.query(`INSERT INTO accounting_qbo_deletion_tombstones (organization_id, legal_entity_id, environment, realm_id, object_type, object_id, detected_via, detected_at) VALUES ($1,$2,'sandbox','555','Bill',$3,'cdc',$4)`, [ORG, ENTITY, objectId, detectedAt]);
+    }
+    const health = await h.operations.health(admin.principal, { organizationId: ORG });
+    assert.equal(health.items[0]?.activeTombstones, 1, "only the deletion detected in the last 30 days");
+    const august = await h.operations.closeChecklist(admin.principal, { organizationId: ORG, legalEntityId: ENTITY, periodStart: "2026-08-01", periodEnd: "2026-08-31" });
+    const deletions = august.items.find(item => item.code === "deletions_reviewed")!;
+    assert.equal(deletions.state, "attention");
+    assert.match(deletions.detail, /^1 QuickBooks record deleted in this period/);
+    const june = await h.operations.closeChecklist(admin.principal, { organizationId: ORG, legalEntityId: ENTITY, periodStart: "2026-06-01", periodEnd: "2026-06-30" });
+    assert.equal(june.items.find(item => item.code === "deletions_reviewed")?.state, "complete", "an old deletion does not keep every later close in attention");
   } finally {
     await h.close();
   }

@@ -124,6 +124,8 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   let stopping = false;
   let wake: (() => void) | null = null;
   let loop: Promise<void> | null = null;
+  /** Settles once an in-flight claim has either started its handlers or released its jobs. */
+  let claiming: Promise<void> | null = null;
   let lastHeartbeat = 0;
   let lastSchedule = 0;
 
@@ -168,10 +170,34 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     return outcome!;
   }
 
+  /**
+   * Claim a batch and either register its handlers in `inFlight` or, when
+   * stop() began while the claim was in flight, hand the jobs straight back.
+   * stop() awaits this phase so no job is left leased by a stopped worker and
+   * no handler starts after stop() has collected the running set.
+   */
+  async function claimPhase(): Promise<{ readonly jobs: readonly JobRecord[]; readonly running: Promise<("succeeded" | "failed" | "lost")[]> | null }> {
+    const jobs = await queue.claim({ workerId, topics, limit: batchSize, leaseMs: Math.max(...jobsLeases()) });
+    if (stopping) {
+      for (const job of jobs) {
+        try { if (await queue.release(job.id, workerId)) logger.warn("job released at shutdown before it started", { jobId: job.id }); }
+        catch (error) { logger.error("job release failed; its lease will expire", { jobId: job.id, code: redactJobError(error).code }); }
+      }
+      return { jobs, running: null };
+    }
+    // runJob registers each job in `inFlight` synchronously before its first await.
+    return { jobs, running: Promise.all(jobs.map(runJob)) };
+  }
+
   async function runOnce(): Promise<WorkerCycleResult> {
     if (stopping || topics.length === 0) return { claimed: 0, succeeded: 0, failed: 0, lost: 0 };
-    const jobs = await queue.claim({ workerId, topics, limit: batchSize, leaseMs: Math.max(...jobsLeases()) });
-    const outcomes = await Promise.all(jobs.map(runJob));
+    const phase = claimPhase();
+    claiming = phase.then(() => undefined, () => undefined);
+    let claimed: Awaited<ReturnType<typeof claimPhase>>;
+    try { claimed = await phase; } finally { claiming = null; }
+    const { jobs } = claimed;
+    if (!claimed.running) return { claimed: jobs.length, succeeded: 0, failed: 0, lost: jobs.length };
+    const outcomes = await claimed.running;
     return {
       claimed: jobs.length,
       succeeded: outcomes.filter(value => value === "succeeded").length,
@@ -257,8 +283,11 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     async stop(graceMs = 25_000) {
       stopping = true;
       wake?.();
-      const running = Array.from(inFlight.values());
+      // A claim that was already in flight either registers its handlers or
+      // releases its jobs; wait for that before collecting the running set.
       const deadline = new Promise<"timeout">(resolve => { const timer = setTimeout(() => resolve("timeout"), graceMs); timer.unref?.(); });
+      if (claiming) await Promise.race([claiming, deadline]);
+      const running = Array.from(inFlight.values());
       const settled = await Promise.race([Promise.all(running.map(entry => entry.done)).then(() => "done" as const), deadline]);
       if (settled === "timeout") {
         for (const [jobId, entry] of Array.from(inFlight.entries())) {

@@ -22,6 +22,7 @@ import { AccountingError } from "./errors";
 import { isQuickBooksIntegrationError } from "../integrations/quickbooks/errors";
 import { authorizeCompanyRead, loadAuthenticatedPrincipal } from "../company/authorization";
 import { createAccountingOperationsPort, type AccountingOperationsPort } from "./operations";
+import { qboWritePolicyFromEnv } from "./qbo-write";
 
 const ACCOUNTING_MUTATION_ROLES = ["owner", "admin", "finance"] as const;
 
@@ -207,7 +208,8 @@ function environmentConfig(options: AccountingServicesOptions): AccountingQboCon
 export function createAccountingServices(executor: RentOpsQueryExecutor, options: AccountingServicesOptions = {}): AccountingServices {
   const mirror = createQboAccountingMirrorStore(executor);
   const purposeMappings = mirror.purposeMappings;
-  const operations = createAccountingOperationsPort(executor);
+  // The same environment-derived write policy the worker enforces (off by default).
+  const operations = createAccountingOperationsPort(executor, { writePolicy: qboWritePolicyFromEnv(options.environment ?? process.env) });
   const config = environmentConfig(options);
   if (!config) return { financialSourceReadPort: mirror, financialSourceAllocationPort: mirror, financialProviderPaymentContextPort: mirror, financialProviderCostContextPort: mirror, purposeMappings, mirror, operations, qbo: { status: "unconfigured", reason: "missing_configuration" } };
   try {

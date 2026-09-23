@@ -103,8 +103,50 @@ test("SIGTERM-style stop releases a job whose handler outlives the grace period"
     assert.equal(job?.state, "retry");
     assert.equal(job?.lastErrorCode, "worker_shutdown");
     assert.equal(job?.leaseOwner, null);
+    assert.equal(job?.attempts, 0, "a shutdown release does not spend an attempt");
     const attempts = await executor.query<{ outcome: string }>("SELECT outcome FROM company_job_attempts WHERE job_id = $1", [job!.id]);
-    assert.deepEqual(attempts.rows.map(row => row.outcome), ["retry"]);
+    assert.deepEqual(attempts.rows.map(row => row.outcome), ["cancelled"]);
+  } finally {
+    await synthetic.close();
+  }
+});
+
+test("stop() waits for an in-flight claim and releases what it claimed instead of starting handlers", async () => {
+  const synthetic = await createSyntheticCompanyDatabase();
+  try {
+    const executor = await createSyntheticRuntimeExecutor(synthetic.db);
+    let claimEntered!: () => void;
+    const entered = new Promise<void>(resolve => { claimEntered = resolve; });
+    let openGate!: () => void;
+    const gate = new Promise<void>(resolve => { openGate = resolve; });
+    class GatedQueue extends PostgresJobQueue {
+      override async claim(input: Parameters<PostgresJobQueue["claim"]>[0]) {
+        const jobs = await super.claim(input);
+        if (jobs.length) { claimEntered(); await gate; }
+        return jobs;
+      }
+    }
+    const queue = new GatedQueue(executor);
+    await queue.enqueue({ jobKey: "racing-1", topic: "demo.race", payload: {}, organizationId: ORG, maxAttempts: 1 });
+    let handlerStarted = false;
+    const runtime = createWorkerRuntime({
+      executor, queue, workerId: "worker-race", pollIntervalMs: 5, maxIdleIntervalMs: 10, heartbeatIntervalMs: 1_000_000, schedulerIntervalMs: 1_000_000,
+      handlers: { "demo.race": { handler: async () => { handlerStarted = true; return {}; } } },
+    });
+    void runtime.start();
+    await entered;
+    let stopped = false;
+    const stopping = runtime.stop(5_000).then(() => { stopped = true; });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(stopped, false, "stop() does not return while a claim is in flight");
+    openGate();
+    await stopping;
+    assert.equal(handlerStarted, false, "no handler starts once stop() has begun");
+    const job = await queue.getByKey("racing-1");
+    assert.equal(job?.state, "retry");
+    assert.equal(job?.leaseOwner, null, "the claimed job was handed back, not left leased");
+    assert.equal(job?.attempts, 0);
+    assert.equal((await queue.claim({ workerId: "worker-next", topics: ["demo.race"] }))[0]?.id, job?.id, "another worker can run it right away");
   } finally {
     await synthetic.close();
   }

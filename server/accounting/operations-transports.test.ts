@@ -40,13 +40,23 @@ test("browser HTTP and Codex MCP share accounting operations and job operator to
     const names = tools.tools.map(item => item.name);
     for (const name of ["get_accounting_connector_health", "get_period_close_checklist", "list_rental_posting_policies", "set_rental_posting_policy", "close_rental_posting_policy",
       "list_pm_settlements", "get_pm_settlement", "create_pm_settlement", "update_pm_settlement", "reconcile_pm_settlement", "mark_pm_settlement_exception", "clear_pm_settlement_exception",
-      "preview_rental_bridge", "list_accounting_payables", "sync_accounting_source", "list_jobs", "get_job", "requeue_job", "cancel_job"]) {
+      "preview_rental_bridge", "list_accounting_payables", "sync_accounting_source", "submit_qbo_write", "list_jobs", "get_job", "requeue_job", "cancel_job"]) {
       assert.ok(names.includes(name), `${name} is registered`);
     }
     const annotations = Object.fromEntries(tools.tools.map(item => [item.name, item.annotations]));
     assert.equal(annotations.get_accounting_connector_health?.readOnlyHint, true);
     assert.equal(annotations.list_jobs?.readOnlyHint, true);
     assert.notEqual(annotations.create_pm_settlement?.readOnlyHint, true);
+    assert.notEqual(annotations.submit_qbo_write?.readOnlyHint, true);
+
+    // QuickBooks writes: one command behind both adapters; off unless the server enables them.
+    const writePayload = { environment: "sandbox", realmId: "123", entity: "Vendor", operation: "create", fields: { DisplayName: "Synthetic Supply" } };
+    const httpWrite = await post("/accounting-commands/accounting.qbo_write.submit", envelope(writePayload));
+    assert.equal(httpWrite.status, 409, await httpWrite.clone().text());
+    assert.match(await httpWrite.text(), /writes are turned off/);
+    const mcpWrite = await client.callTool({ name: "submit_qbo_write", arguments: { command: envelope(writePayload) } });
+    assert.equal(mcpWrite.isError, true, "the same command refuses the write over MCP");
+    assert.equal((await demo.database.db.query("SELECT 1 FROM company_jobs WHERE topic = 'accounting.qbo.write'")).rows.length, 0, "nothing was queued by either adapter");
 
     // Browser sets the posting method; Codex reads the same record.
     const set = await post("/accounting-commands/accounting.rental_posting_policy.set", envelope({ method: "summary_bridge", effectiveFrom: "2026-01-01", cutoffDate: "2026-01-01", reason: "Monthly PM summary" }));

@@ -491,7 +491,10 @@ export function createQboProviderSync(options: {
       }
       // A capped response may omit changes inside the window: never advance on it.
       if (response.truncated) return fullReplay("cdc_overflow", checkpoint, input.maxPages);
-      const next = response.time ?? new Date(startedAt.getTime() - 60_000).toISOString();
+      // Intuit reports CDC time with a local offset (e.g. -07:00); compare
+      // instants, never strings, and store the watermark as UTC ISO.
+      const next = new Date(response.time !== undefined ? Date.parse(response.time) : startedAt.getTime() - 60_000).toISOString();
+      const advanced = Date.parse(next) > Date.parse(watermark!) ? next : new Date(Date.parse(watermark!)).toISOString();
       const anchored = typeof checkpoint?.cursor === "string" && checkpoint.cursor.startsWith("verified:");
       if (!options.executor.transaction) throw new AccountingError("accounting_configuration", "QBO change sync requires transaction support");
       try {
@@ -524,12 +527,12 @@ export function createQboProviderSync(options: {
               extraReason: anchored ? null : "Change capture is not yet anchored to a verified full replay",
             });
           }
-          await checkpointStore.save(scope, QBO_CHANGE_STREAM, { watermark: next > watermark! ? next : watermark, cursor: checkpoint?.cursor ?? null }, checkpoint?.version ?? null, executor);
+          await checkpointStore.save(scope, QBO_CHANGE_STREAM, { watermark: advanced, cursor: checkpoint?.cursor ?? null }, checkpoint?.version ?? null, executor);
           return tally;
         });
         const unsupportedCount = Array.from(counts.unsupported.values()).reduce((sum, value) => sum + value, 0);
         const openExceptions = (await options.mirror.listOpenSyncExceptions(scope)).length;
-        return { mode: "cdc", reason: null, status: anchored && unsupportedCount === 0 && openExceptions === 0 ? "complete" : "partial", appliedCount: counts.applied, deletedCount: counts.deleted, unsupportedCount, anchored, watermark: next > watermark! ? next : watermark };
+        return { mode: "cdc", reason: null, status: anchored && unsupportedCount === 0 && openExceptions === 0 ? "complete" : "partial", appliedCount: counts.applied, deletedCount: counts.deleted, unsupportedCount, anchored, watermark: advanced };
       } catch (error) {
         return { mode: "cdc", reason: null, status: "failed", appliedCount: 0, deletedCount: 0, unsupportedCount: 0, anchored, watermark, error };
       }
