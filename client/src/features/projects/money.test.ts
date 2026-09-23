@@ -20,3 +20,15 @@ test("project money input rejects fractions beyond cents and overflow", () => {
   assert.throws(() => parseMoneyInput("92233720368547758.08"), /signed 64-bit range/);
   assert.throws(() => parseMoneyInput("1e3"), /no more than two decimal places/);
 });
+
+test("cost summary incurred and paid carry their QuickBooks qualifiers", async () => {
+  const { incurredLabel, paidLabel, formatQualifiedMoney } = await import("./money");
+  const base = { currency: "USD", incurred: { totalCents: "150000" } };
+  assert.equal(incurredLabel({ ...base, completeness: "complete" }), "$1,500.00");
+  assert.equal(incurredLabel({ ...base, completeness: "partial" }), "At least $1,500.00", "partial QuickBooks coverage makes incurred a minimum");
+  assert.equal(incurredLabel({ currency: "USD", completeness: "unavailable", incurred: { totalCents: null } }), "Unknown");
+  assert.equal(paidLabel({ currency: "USD", paid: { cents: "90000", knownCents: "90000", coverage: "complete" } }), "$900.00");
+  assert.equal(paidLabel({ currency: "USD", paid: { cents: null, knownCents: "90000", coverage: "partial" } }), "At least $900.00");
+  assert.equal(paidLabel({ currency: "USD", paid: { cents: null, knownCents: "0", coverage: "unavailable" } }), "Unknown", "unavailable QuickBooks is Unknown, not At least $0.00");
+  assert.equal(formatQualifiedMoney("5", "unavailable"), "Unknown");
+});

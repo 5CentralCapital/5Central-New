@@ -35,6 +35,7 @@ const listQuery = z.object({
   scheduledThrough: isoDateSchema.optional(),
   search: z.string().trim().max(200).optional(),
   openOnly: z.enum(["true", "false"]).optional(),
+  sort: z.enum(["priority", "schedule"]).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   cursor: z.string().trim().min(1).max(512).optional(),
 }).strict();

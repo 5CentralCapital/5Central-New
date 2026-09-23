@@ -115,6 +115,26 @@ test("an explicit ETC override with reason replaces the derived cost to complete
   assert.equal(paint.varianceCents, "-15000");
 });
 
+test("an ETC override on an archived scope line is ignored, as its warning says", () => {
+  const ARCHIVED = "51000000-0000-4000-8000-0000000000a9";
+  const withArchivedLine = {
+    scopeItems: [{ id: SCOPE_A, description: "Framing", estimatedCents: "120000" }, { id: SCOPE_B, description: "Paint", estimatedCents: "30000" }],
+    budgetVersions: [{ versionNo: 1, status: "approved" as const, totalEstimatedCents: "200000", lines: [
+      { scopeItemId: SCOPE_A, description: "Framing", estimatedCents: "120000" }, { scopeItemId: SCOPE_B, description: "Paint", estimatedCents: "30000" },
+      { scopeItemId: ARCHIVED, description: "Old line", estimatedCents: "50000" },
+    ] }],
+  };
+  const without = calculateProjectCostReport(baseInput(withArchivedLine));
+  const report = calculateProjectCostReport(baseInput({
+    ...withArchivedLine,
+    etcOverrides: [{ id: "56000000-0000-4000-8000-0000000000a2", scopeItemId: ARCHIVED, amountCents: "999900", reason: "Stale" }],
+  }));
+  assert.ok(report.warnings.some((warning) => /archived scope line and was ignored/.test(warning)));
+  assert.equal(report.summary.costToCompleteCents, without.summary.costToCompleteCents, "the ignored override does not change cost to complete");
+  const old = report.lines.find((line) => line.scopeItemId === ARCHIVED);
+  if (old) { assert.equal(old.etcOverride, null); assert.equal(old.costToCompleteCents, without.lines.find((line) => line.scopeItemId === ARCHIVED)?.costToCompleteCents); }
+});
+
 test("partial coverage keeps known subtotals and withholds forecast figures", () => {
   const report = calculateProjectCostReport(baseInput({ actualCoverage: "partial", actuals: [actual("55000000-0000-4000-8000-0000000000a3", "10000")] }));
   assert.equal(report.summary.incurred.verifiedActualCents, "10000");

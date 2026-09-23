@@ -61,6 +61,30 @@ export interface WorkOrderListFilters {
   readonly propertyId?: string;
   readonly search?: string;
   readonly cursor?: string;
+  /** Server ordering; the schedule view reads in agenda order so paging never skips earlier work. */
+  readonly sort?: "priority" | "schedule";
+}
+
+/** Status and ordering for one list view. */
+export function workOrderViewFilters(view: string): Pick<WorkOrderListFilters, "openOnly" | "statuses" | "sort"> {
+  if (view === "schedule") return { openOnly: true, statuses: ["scheduled", "in_progress"], sort: "schedule" };
+  if (view === "open") return { openOnly: true };
+  if (view === "all") return { openOnly: false };
+  return { openOnly: false, statuses: [view as WorkOrderStatus] };
+}
+
+/** Query string for a list request; one page holds at most 100 work orders. */
+export function workOrderListSearch(filters: WorkOrderListFilters): URLSearchParams {
+  const params = new URLSearchParams({ limit: "100", openOnly: String(filters.openOnly) });
+  if (filters.statuses?.length) params.set("status", filters.statuses.join(","));
+  if (filters.priority) params.set("priority", filters.priority);
+  if (filters.category) params.set("category", filters.category);
+  if (filters.legalEntityId) params.set("legalEntityId", filters.legalEntityId);
+  if (filters.propertyId) params.set("propertyId", filters.propertyId);
+  if (filters.search?.trim()) params.set("search", filters.search.trim());
+  if (filters.sort && filters.sort !== "priority") params.set("sort", filters.sort);
+  if (filters.cursor) params.set("cursor", filters.cursor);
+  return params;
 }
 
 export interface WorkOrderCommandEnvelope {
@@ -80,14 +104,7 @@ export function workOrderEnvelope(organizationId: string, legalEntityId: string,
 
 export const workOrdersApi = {
   async list(organizationId: string, filters: WorkOrderListFilters, signal?: AbortSignal): Promise<WorkOrderListResponse> {
-    const params = new URLSearchParams({ limit: "100", openOnly: String(filters.openOnly) });
-    if (filters.statuses?.length) params.set("status", filters.statuses.join(","));
-    if (filters.priority) params.set("priority", filters.priority);
-    if (filters.category) params.set("category", filters.category);
-    if (filters.legalEntityId) params.set("legalEntityId", filters.legalEntityId);
-    if (filters.propertyId) params.set("propertyId", filters.propertyId);
-    if (filters.search?.trim()) params.set("search", filters.search.trim());
-    if (filters.cursor) params.set("cursor", filters.cursor);
+    const params = workOrderListSearch(filters);
     return workOrderListResponseSchema.parse(await requestJson(`${companyPath(organizationId)}/work-orders?${params}`, { signal }));
   },
   async get(organizationId: string, workOrderId: string, signal?: AbortSignal): Promise<WorkOrderDetail> {

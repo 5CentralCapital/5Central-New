@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, ChevronLeft, CircleAlert, DoorOpen, FileText, Link2, LoaderCircle, Plus, Search, Wrench, X } from "lucide-react";
 import type { FinancialSourceReference } from "@shared/accounting/source";
 import type { CostSourceLine } from "@shared/projects/source-lines";
@@ -16,7 +16,7 @@ import {
   type WorkOrderSummary,
 } from "@shared/work-orders";
 import { formatInputValue, formatMoney, parseMoneyInput } from "../projects/money";
-import { WorkOrderApiError, revisionFrom, workOrderEnvelope, workOrdersApi, type WorkOrderCommandEnvelope } from "./api";
+import { WorkOrderApiError, revisionFrom, workOrderEnvelope, workOrderViewFilters, workOrdersApi, type WorkOrderCommandEnvelope } from "./api";
 import { PRIORITY_LABELS, STATUS_LABELS, categoryLabel, dateLabel, eventSummary, operatingToday, priorityClass, scheduleOrder, statusClass, timestampLabel } from "./format";
 import { PendingEnvelopes } from "./pending";
 import "./work-orders.css";
@@ -578,18 +578,19 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
 
   const [filterEntityId, filterPropertyId] = propertyKey ? propertyKey.split("|") : [undefined, undefined];
   const listFilters = {
-    openOnly: view === "open" || view === "schedule",
-    ...(view === "schedule" ? { statuses: ["scheduled", "in_progress"] as WorkOrderStatus[] } : view !== "open" && view !== "all" ? { statuses: [view] } : {}),
+    ...workOrderViewFilters(view),
     ...(priority ? { priority } : {}),
     ...(filterEntityId ? { legalEntityId: filterEntityId, propertyId: filterPropertyId } : {}),
     search: debouncedSearch,
   };
-  const list = useQuery({
+  const list = useInfiniteQuery({
     queryKey: ["work-orders", "list", organizationId, listFilters],
-    queryFn: ({ signal }) => workOrdersApi.list(organizationId, listFilters, signal),
+    queryFn: ({ signal, pageParam }) => workOrdersApi.list(organizationId, { ...listFilters, ...(pageParam ? { cursor: pageParam } : {}) }, signal),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: page => page.nextCursor ?? undefined,
     staleTime: 10_000, retry: false, placeholderData: previous => previous,
   });
-  const items: readonly WorkOrderSummary[] = list.data?.items ?? [];
+  const items: readonly WorkOrderSummary[] = useMemo(() => list.data?.pages.flatMap(page => page.items) ?? [], [list.data]);
   useEffect(() => {
     if (!selectedId && !list.isPlaceholderData && items[0] && window.matchMedia?.("(min-width: 901px)").matches) onSelect(items[0].id, true);
   }, [selectedId, items, onSelect, list.isPlaceholderData]);
@@ -646,7 +647,7 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
     <header className="wo-page-header">
       <div>
         <h1>Work orders</h1>
-        <p className="wo-subtitle" aria-live="polite">{list.isLoading ? "Loading…" : openCount !== undefined ? `${openCount}${list.data?.nextCursor ? "+" : ""} open${emergencyCount ? ` · ${emergencyCount} emergency` : ""}` : `${items.length}${list.data?.nextCursor ? "+" : ""} ${VIEW_LABELS[view].toLowerCase()}`}</p>
+        <p className="wo-subtitle" aria-live="polite">{list.isLoading ? "Loading…" : openCount !== undefined ? `${openCount}${list.hasNextPage ? "+" : ""} open${emergencyCount ? ` · ${emergencyCount} emergency` : ""}` : `${items.length}${list.hasNextPage ? "+" : ""} ${VIEW_LABELS[view].toLowerCase()}`}</p>
       </div>
       <button type="button" className="rm-button rm-button-primary" onClick={() => setDialog({ kind: "create" })} disabled={!choices.length}><Plus size={15} />New work order</button>
     </header>
@@ -681,6 +682,7 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
               <span className="rm-record-list-item-meta">{item.propertyName ?? item.propertyId}{item.unitNumber ? ` · Unit ${item.unitNumber}` : ""}{item.personName ? ` · ${item.personName}` : ""}</span>
               <span className="wo-list-item-foot"><StatusCapsule status={item.status} /><small>{item.reference} · {item.status === "scheduled" && item.scheduledOn ? `Scheduled ${dateLabel(item.scheduledOn)}` : item.status === "completed" && item.completedOn ? `Done ${dateLabel(item.completedOn)}` : `Reported ${dateLabel(item.reportedOn)}`}{item.vendor ? ` · ${item.vendor.name}` : ""}</small></span>
             </button></Fragment>)}
+            {list.hasNextPage && <button type="button" className="rm-button wo-load-more" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>{list.isFetchingNextPage ? "Loading…" : "Show more"}</button>}
           </div>}
       </section>
       <div className="rm-record-detail wo-detail-pane">

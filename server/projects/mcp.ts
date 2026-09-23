@@ -12,7 +12,7 @@ export type ProjectInsightToolRegistrar = (name: string, description: string, sc
 export function registerProjectInsightMcpTools(register: ProjectInsightToolRegistrar, options: { executor: RentOpsQueryExecutor; insights: ProjectInsightsPort; actorId: string }): void {
   const { executor, insights, actorId } = options;
   const principalFor = (organizationId: string) => loadAuthenticatedPrincipal(executor, { actorId, organizationId, role: "admin" });
-  register("get_project_cost_report", "Read the canonical project cost summary: original budget, approved changes, revised budget, committed, incurred (verified QBO actual plus posted payroll labor, with estimated labor shown separately), paid, remaining commitment, cost to complete, estimate at completion, variance, schedule risk, retainage rollforward and closeout checklist. Unknown amounts are null, never zero.",
+  register("get_project_cost_report", "Read the canonical project cost summary: original budget, approved changes, revised budget, committed, incurred (verified QBO actual plus posted payroll labor plus estimated labor for approved time not yet posted; each part is also reported on its own, and incurred is a minimum while QBO coverage is partial or labor is unpriced), paid, remaining commitment, cost to complete, estimate at completion, variance, schedule risk, retainage rollforward and closeout checklist. Unknown amounts are null, never zero.",
     { query: projectCostReportQuerySchema }, false,
     async ({ query }) => insights.costReport(await principalFor(query.scope.organizationId), query));
   register("get_project_labor", "Read approved time allocated to a project by jobcode mapping and cost code, with the estimated labor or linked posted payroll for each timesheet.",

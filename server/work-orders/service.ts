@@ -2,6 +2,7 @@ import { companyScopeSchema, isoDateSchema, type CompanyScope } from "../../shar
 import { financialSourceReferenceSchema } from "../../shared/accounting/source";
 import {
   WORK_ORDER_OPEN_STATUSES,
+  WORK_ORDER_TARGET_DAYS,
   allowedWorkOrderTransitions,
   workOrderAgingDays,
   workOrderDetailSchema,
@@ -160,22 +161,39 @@ function mapSummary(row: Record<string, unknown>, asOf: string): WorkOrderSummar
   });
 }
 
-interface Cursor { rank: number; reportedOn: string; id: string }
+type Cursor =
+  | { sort: "priority"; rank: number; reportedOn: string; id: string }
+  | { sort: "schedule"; on: string; id: string };
 
 function encodeCursor(value: Cursor): string {
-  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+  // Priority cursors keep their original shape so links issued before sorting existed still work.
+  const body = value.sort === "priority" ? { rank: value.rank, reportedOn: value.reportedOn, id: value.id } : value;
+  return Buffer.from(JSON.stringify(body), "utf8").toString("base64url");
 }
 
-function decodeCursor(value: string | undefined): Cursor | undefined {
+function decodeCursor(value: string | undefined, sort: "priority" | "schedule"): Cursor | undefined {
   if (value === undefined) return undefined;
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Record<string, unknown>;
+    if (sort === "schedule") {
+      if (parsed.sort !== "schedule") throw new Error("sort");
+      return { sort, on: isoDateSchema.parse(parsed.on), id: workOrderIdSchema.parse(parsed.id) };
+    }
+    if (parsed.sort !== undefined) throw new Error("sort");
     if (typeof parsed.rank !== "number" || !Number.isInteger(parsed.rank) || parsed.rank < 0 || parsed.rank > 3) throw new Error("rank");
-    return { rank: parsed.rank, reportedOn: isoDateSchema.parse(parsed.reportedOn), id: workOrderIdSchema.parse(parsed.id) };
+    return { sort, rank: parsed.rank, reportedOn: isoDateSchema.parse(parsed.reportedOn), id: workOrderIdSchema.parse(parsed.id) };
   } catch {
     throw new ValidationCommandError("Work order cursor is invalid", { reason: "invalid_work_order_cursor" });
   }
 }
+
+/**
+ * The agenda date the schedule view groups by: the scheduled date, else the
+ * derived target date (reported date plus the priority response time).
+ */
+const AGENDA_ON = `coalesce(w.scheduled_on, w.reported_on + (CASE w.priority ${
+  Object.entries(WORK_ORDER_TARGET_DAYS).map(([priority, days]) => `WHEN '${priority}' THEN ${Number(days)}`).join(" ")
+} ELSE ${Number(WORK_ORDER_TARGET_DAYS.low)} END))`;
 
 function scopePredicates(scope: CompanyScope, values: unknown[]): string[] {
   values.push(scope.organizationId, scope.legalEntityId ?? null, scope.propertyId ?? null);
@@ -189,7 +207,7 @@ export class WorkOrderReadService {
   async list(principal: AuthenticatedPrincipal, input: WorkOrderListQuery): Promise<WorkOrderListResponse> {
     const query = workOrderListQuerySchema.parse(input);
     authorizeCompanyRead(principal, query.scope, WORK_ORDER_READ_ROLES);
-    const cursor = decodeCursor(query.cursor);
+    const cursor = decodeCursor(query.cursor, query.sort);
     const values: unknown[] = [];
     const where = scopePredicates(query.scope, values);
     const add = (value: unknown): string => { values.push(value); return `$${values.length}`; };
@@ -210,13 +228,17 @@ export class WorkOrderReadService {
         OR u.unit_number ILIKE '%' || ${term} || '%' OR concat_ws(' ', pe.first_name, pe.last_name) ILIKE '%' || ${term} || '%'
         OR (length(${reference}) >= 4 AND replace(w.id::text, '-', '') LIKE ${reference} || '%'))`);
     }
-    if (cursor) {
+    if (cursor?.sort === "priority") {
       const rank = add(cursor.rank); const reported = add(cursor.reportedOn); const id = add(cursor.id);
       where.push(`(${PRIORITY_RANK} > ${rank} OR (${PRIORITY_RANK} = ${rank} AND (w.reported_on < ${reported}::date OR (w.reported_on = ${reported}::date AND w.id < ${id}::uuid))))`);
+    } else if (cursor?.sort === "schedule") {
+      const on = add(cursor.on); const id = add(cursor.id);
+      where.push(`(${AGENDA_ON} > ${on}::date OR (${AGENDA_ON} = ${on}::date AND w.id > ${id}::uuid))`);
     }
     const limit = add(query.limit + 1);
+    const order = query.sort === "schedule" ? `${AGENDA_ON} ASC, w.id ASC` : "priority_rank ASC, w.reported_on DESC, w.id DESC";
     const result = await this.executor.query<Record<string, unknown>>(
-      `${summarySelect} WHERE ${where.join(" AND ")} ORDER BY priority_rank ASC, w.reported_on DESC, w.id DESC LIMIT ${limit}`,
+      `${summarySelect} WHERE ${where.join(" AND ")} ORDER BY ${order} LIMIT ${limit}`,
       values,
     );
     const hasMore = result.rows.length > query.limit;
@@ -224,7 +246,9 @@ export class WorkOrderReadService {
     const asOf = this.today();
     const items = rows.map(row => mapSummary(row, asOf));
     const last = rows.at(-1);
-    const nextCursor = hasMore && last ? encodeCursor({ rank: Number(last.priority_rank), reportedOn: dbDate(last.reported_on, "reported_on"), id: dbString(last.id, "id") }) : null;
+    const nextCursor = !hasMore || !last ? null : query.sort === "schedule"
+      ? encodeCursor({ sort: "schedule", on: items.at(-1)!.scheduledOn ?? items.at(-1)!.targetOn, id: dbString(last.id, "id") })
+      : encodeCursor({ sort: "priority", rank: Number(last.priority_rank), reportedOn: dbDate(last.reported_on, "reported_on"), id: dbString(last.id, "id") });
     return workOrderListResponseSchema.parse({ items, nextCursor });
   }
 

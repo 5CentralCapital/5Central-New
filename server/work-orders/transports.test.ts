@@ -49,6 +49,12 @@ test("browser HTTP and Codex MCP read and write the same work order records", as
     const mcpList = await tool("list_work_orders", { query: { scope: { organizationId: fixture.organizationId }, openOnly: false } });
     assert.ok(httpList.items.length >= 6);
     assert.deepEqual(mcpList, httpList);
+    // Schedule order is one server ordering for both transports.
+    const httpSchedule = await (await fetch(`${base}/work-orders?openOnly=false&sort=schedule`)).json();
+    assert.deepEqual(await tool("list_work_orders", { query: { scope: { organizationId: fixture.organizationId }, openOnly: false, sort: "schedule" } }), httpSchedule);
+    const agenda = httpSchedule.items.map((item: { scheduledOn: string | null; targetOn: string }) => item.scheduledOn ?? item.targetOn);
+    assert.deepEqual(agenda, [...agenda].sort(), "schedule order is earliest agenda date first");
+    assert.equal((await fetch(`${base}/work-orders?sort=soonest`)).status, 400);
     const tenants = await (await fetch(`${base}/work-orders/tenant-options?legalEntityId=${fixture.entityId}&propertyId=demo-property-a`)).json();
     assert.deepEqual(await tool("list_work_order_tenant_options", { scope, propertyId: "demo-property-a" }), tenants);
     assert.ok(tenants.items.some((item: { tenancyId: string }) => item.tenancyId === "demo-tenancy-1"));

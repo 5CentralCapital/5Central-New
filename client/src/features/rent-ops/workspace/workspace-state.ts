@@ -87,6 +87,18 @@ function canonicalSection(raw: string | null): Partial<WorkspaceRoute> & { secti
   return { section: includes(WORKSPACE_SECTIONS, raw) ? raw : 'dashboard' };
 }
 
+/**
+ * Company reports navigating to another report or company. A saved setup
+ * (?preset=) belongs to the report it was saved for, so it is dropped as soon
+ * as the report or the company changes.
+ */
+export function companyReportNavigation(route: WorkspaceRoute, organizationId: string | undefined, reportId: string | undefined): WorkspaceRoute {
+  const { presetId, ...rest } = route;
+  const same = route.organizationId === organizationId && route.reportId === reportId;
+  const next: WorkspaceRoute = { ...rest, organizationId, reportId };
+  return same && presetId ? { ...next, presetId } : next;
+}
+
 export function parseWorkspaceRoute(search: string): WorkspaceRoute {
   const params = new URLSearchParams(search);
   const alias = canonicalSection(params.get('section'));
