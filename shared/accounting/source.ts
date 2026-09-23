@@ -71,7 +71,9 @@ export function financialSourceScopeKey(scope: FinancialSourceScope): string {
 
 export function financialSourceReferenceKey(reference: FinancialSourceReference): string {
   const parsed = financialSourceReferenceSchema.parse(reference);
-  return [financialSourceScopeKey(parsed), parsed.objectType, parsed.objectId, parsed.lineId ?? "*", parsed.version].join("\u0000");
+  // Key only the scope fields; the strict scope schema rejects the reference's extra fields.
+  const scope = { provider: parsed.provider, organizationId: parsed.organizationId, legalEntityId: parsed.legalEntityId, environment: parsed.environment, realmId: parsed.realmId };
+  return [financialSourceScopeKey(scope), parsed.objectType, parsed.objectId, parsed.lineId ?? "*", parsed.version].join("\u0000");
 }
 
 export const FINANCIAL_COVERAGE_STATUSES = ["unavailable", "partial", "complete"] as const;
