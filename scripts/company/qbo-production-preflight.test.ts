@@ -66,6 +66,16 @@ test("write switches and disabled discovery are warnings, not failures", () => {
   assert.equal(findings.filter(finding => finding.level === "fail").length, 0);
 });
 
+test("explicit off write switches are the intended state; any other value or a write-type list warns", () => {
+  const off = qboProductionConfigFindings({ ...good, QBO_WRITES_ENABLED: "off", QBO_PRODUCTION_WRITES: "off" });
+  assert.equal(levelOf(off, "QuickBooks writes"), "ok");
+  const typo = qboProductionConfigFindings({ ...good, QBO_WRITES_ENABLED: "yes" });
+  assert.equal(levelOf(typo, "QuickBooks writes"), "warn");
+  assert.doesNotMatch(typo.find(finding => finding.check === "QuickBooks writes")!.detail, /yes/);
+  const types = qboProductionConfigFindings({ ...good, QBO_WRITES_ENABLED: "off", QBO_WRITE_TYPES: "Vendor:create" });
+  assert.equal(levelOf(types, "QuickBooks writes"), "warn");
+});
+
 test("open sandbox connections are flagged for disconnection before the switch", () => {
   const findings = qboConnectionFindings([
     { environment: "sandbox", status: "active", count: 1 },

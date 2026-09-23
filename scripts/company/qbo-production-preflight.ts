@@ -94,9 +94,20 @@ export function qboProductionConfigFindings(env: NodeJS.ProcessEnv): PreflightFi
   if (env.QBO_OAUTH_DISCOVERY === "off") findings.push(warn("QBO_OAUTH_DISCOVERY", "off; documented endpoints will be used instead of Intuit's discovery document"));
   else findings.push(ok("QBO_OAUTH_DISCOVERY", "on"));
 
-  const writeFlags = (["QBO_WRITES_ENABLED", "QBO_PRODUCTION_WRITES", "QBO_WRITE_TYPES"] as const).filter(name => env[name]?.trim());
-  if (writeFlags.length) findings.push(warn("QuickBooks writes", `${writeFlags.join(", ")} set; keep writes off until the read-only comparison and books cleanup are signed off`));
-  else findings.push(ok("QuickBooks writes", "off"));
+  // The server enables writes only for the exact value "on" (see qbo-write.ts);
+  // an explicit "off" is the intended production state, not a warning.
+  const switches = (["QBO_WRITES_ENABLED", "QBO_PRODUCTION_WRITES"] as const);
+  const unexpected = switches.filter(name => {
+    const value = env[name];
+    return value !== undefined && value !== "" && value !== "off";
+  });
+  const writeTypes = env.QBO_WRITE_TYPES?.trim();
+  if (unexpected.length || writeTypes) {
+    const named = [...unexpected.map(name => `${name}=${env[name] === "on" ? "on" : "(unrecognized value)"}`), ...(writeTypes ? ["QBO_WRITE_TYPES set"] : [])];
+    findings.push(warn("QuickBooks writes", `${named.join(", ")}; keep writes off until the read-only comparison and books cleanup are signed off`));
+  } else {
+    findings.push(ok("QuickBooks writes", "off"));
+  }
 
   return findings;
 }
