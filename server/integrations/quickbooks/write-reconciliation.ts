@@ -3,7 +3,13 @@ import type { QuickBooksApiResponse, QuickBooksJsonObject } from "../../../share
 import { canonicalJsonSha256 } from "../../company/commands/fingerprint";
 import { QuickBooksIntegrationError } from "./errors";
 
-export type QuickBooksWriteJournalState = "started" | "ambiguous" | "confirmed" | "failed";
+/**
+ * prepared → validated → started → confirmed | ambiguous | failed. `prepared`
+ * and `validated` never reached the provider. `failed` is recorded only for a
+ * definitive provider rejection (HTTP 4xx, e.g. a stale SyncToken); any
+ * unknown outcome is `ambiguous` and is resolved by readback, never reposted.
+ */
+export type QuickBooksWriteJournalState = "prepared" | "validated" | "started" | "ambiguous" | "confirmed" | "failed";
 
 export interface QuickBooksWriteJournalEntry {
   readonly operationKey: string;
@@ -45,6 +51,11 @@ export interface QuickBooksWriteReconciler {
   execute<TRequest extends QuickBooksJsonObject>(input: {
     readonly operationKey: string;
     readonly request: TRequest;
+    /**
+     * Identity bound to the operation key when it is wider than the fields
+     * compared on readback (e.g. entity, operation, record Id and SyncToken).
+     */
+    readonly requestIdentity?: QuickBooksJsonObject;
     /**
      * Performs the provider write. It must forward `requestId` to the
      * Accounting client (`create(..., { requestId })` / `update(..., { requestId })`)
@@ -117,6 +128,11 @@ function unresolvedWriteError(cause?: unknown, intuitTid?: string): QuickBooksIn
   });
 }
 
+/** A provider HTTP 4xx answer to the write itself: the request was refused, not lost. */
+function isDefinitiveRejection(error: unknown): error is QuickBooksIntegrationError {
+  return error instanceof QuickBooksIntegrationError && !error.ambiguous && typeof error.status === "number" && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429;
+}
+
 async function saveAmbiguous(journal: QuickBooksWriteJournal, entry: QuickBooksWriteJournalEntry): Promise<void> {
   // A journal persistence failure is itself an unknown outcome. Never replace
   // it with `failed`, which would make a later worker replay a provider write.
@@ -133,7 +149,7 @@ export function createQuickBooksWriteReconciler(journal: QuickBooksWriteJournal)
     async execute(input) {
       const key = operationKey(input.operationKey);
       const requestId = quickBooksWriteRequestId(key);
-      const requestHash = canonicalJsonSha256(input.request);
+      const requestHash = canonicalJsonSha256(input.requestIdentity ?? input.request);
       const existing = await journal.load(key);
       if (existing && existing.requestHash !== requestHash) throw new QuickBooksIntegrationError("quickbooks_conflict", "QuickBooks operation key is bound to different input");
       if (existing?.state === "confirmed") return { status: "confirmed", ...(existing.providerEntityId ? { providerEntityId: existing.providerEntityId } : {}), ...(existing.providerVersion ? { providerVersion: existing.providerVersion } : {}), ...(existing.intuitTid ? { intuitTid: existing.intuitTid } : {}) };
@@ -155,6 +171,8 @@ export function createQuickBooksWriteReconciler(journal: QuickBooksWriteJournal)
         // A prior attempt is safe to retry only after the independent readback
         // established that no matching provider object exists.
       }
+      // `prepared`/`validated` entries never reached the provider; the first
+      // provider attempt starts here.
       try { await journal.save({ operationKey: key, requestHash, state: "started" }); }
       catch (error) { throw new QuickBooksIntegrationError("quickbooks_token_store", "QuickBooks write journal could not be started", { cause: error }); }
       try {
@@ -178,6 +196,12 @@ export function createQuickBooksWriteReconciler(journal: QuickBooksWriteJournal)
         return { status: "confirmed", ...(confirmed.providerEntityId ? { providerEntityId: confirmed.providerEntityId } : {}), ...(confirmed.providerVersion ? { providerVersion: confirmed.providerVersion } : {}), ...(confirmed.intuitTid ? { intuitTid: confirmed.intuitTid } : {}) };
       } catch (error) {
         const intuitTid = error instanceof QuickBooksIntegrationError ? error.intuitTid : undefined;
+        if (isDefinitiveRejection(error)) {
+          // Intuit answered and refused the request, so nothing was committed.
+          try { await journal.save({ operationKey: key, requestHash, state: "failed", ...(intuitTid ? { intuitTid } : {}) }); }
+          catch { await saveAmbiguous(journal, { operationKey: key, requestHash, state: "ambiguous", ...(intuitTid ? { intuitTid } : {}) }); }
+          throw error;
+        }
         await saveAmbiguous(journal, { operationKey: key, requestHash, state: "ambiguous", ...(intuitTid ? { intuitTid } : {}) });
         if (error instanceof QuickBooksIntegrationError && error.code === "quickbooks_conflict") throw error;
         // Any transport/provider exception leaves the side effect unknown. Do

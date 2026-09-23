@@ -352,6 +352,7 @@ export function createAccountingServices(executor: RentOpsQueryExecutor, options
       return {
         read: (...args) => client.read(...args),
         query: (...args) => client.query(...args),
+        cdc: (...args) => client.cdc(...args),
         create: (...args) => capabilityGate.requireEnabled(scope, "accounting.create").then(() => client.create(...args)),
         update: (...args) => capabilityGate.requireEnabled(scope, "accounting.update").then(() => client.update(...args)),
       } as QuickBooksAccountingClient;

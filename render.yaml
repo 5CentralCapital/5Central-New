@@ -67,6 +67,45 @@ services:
       - key: RAMP_CLIENT_SECRET
         sync: false
 
+  # 5Central Ops background worker: durable jobs (QuickBooks sync/CDC, webhook
+  # object fetches, reconciled writes, outbox dispatch, lease reaping). It runs
+  # beside the web service against the same runtime database and never posts
+  # to QuickBooks unless QBO_WRITES_ENABLED=on (production also needs
+  # QBO_PRODUCTION_WRITES=on). Render background workers need a paid plan.
+  - type: worker
+    name: 5central-ops-worker
+    runtime: node
+    plan: starter
+    numInstances: 1
+    buildCommand: npm ci && npm run check && npx esbuild server/worker.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/worker.js
+    startCommand: npm run worker
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: RENT_OPS_RUNTIME_DATABASE_URL
+        sync: false
+      - key: QBO_ENVIRONMENT
+        sync: false
+      - key: QBO_CLIENT_ID
+        sync: false
+      - key: QBO_CLIENT_SECRET
+        sync: false
+      - key: QBO_REDIRECT_URI
+        sync: false
+      - key: QBO_TOKEN_ENCRYPTION_KEY
+        sync: false
+      - key: QBO_WRITES_ENABLED
+        value: "off"
+      - key: QBO_PRODUCTION_WRITES
+        value: "off"
+      - key: WORKER_SHUTDOWN_GRACE_MS
+        value: "25000"
+
+# QuickBooks webhooks: set QBO_WEBHOOK_VERIFIER_TOKEN_SANDBOX and/or
+# QBO_WEBHOOK_VERIFIER_TOKEN_PRODUCTION on the web service and register
+# https://<host>/api/integrations/quickbooks/webhook/<sandbox|production>
+# in the Intuit developer portal. Without a token the endpoint answers 503.
+
 # Optional Stripe connection: add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET
 # in Render after test-mode verification. Missing keys keep payments disabled.
 # Checkout returns to RENT_OPS_PUBLIC_APP_URL; no Stripe credentials are stored here.

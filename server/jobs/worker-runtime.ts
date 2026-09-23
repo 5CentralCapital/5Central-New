@@ -257,11 +257,11 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     async stop(graceMs = 25_000) {
       stopping = true;
       wake?.();
-      const running = [...inFlight.values()];
+      const running = Array.from(inFlight.values());
       const deadline = new Promise<"timeout">(resolve => { const timer = setTimeout(() => resolve("timeout"), graceMs); timer.unref?.(); });
       const settled = await Promise.race([Promise.all(running.map(entry => entry.done)).then(() => "done" as const), deadline]);
       if (settled === "timeout") {
-        for (const [jobId, entry] of inFlight) {
+        for (const [jobId, entry] of Array.from(inFlight.entries())) {
           entry.controller.abort(new Error("worker_shutdown"));
           try { if (await queue.release(jobId, workerId)) logger.warn("job released at shutdown", { jobId }); }
           catch (error) { logger.error("job release failed; its lease will expire", { jobId, code: redactJobError(error).code }); }
