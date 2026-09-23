@@ -138,6 +138,7 @@ export default function Investor() {
                       </div>
                       <Slider
                         value={[initialInvestment]}
+                        aria-label="Initial investment amount"
                         onValueChange={(value) => setInitialInvestment(value[0])}
                         max={500000}
                         min={50000}
@@ -163,6 +164,7 @@ export default function Investor() {
                       </div>
                       <Slider
                         value={[investmentDuration]}
+                        aria-label="Investment duration in years"
                         onValueChange={(value) => setInvestmentDuration(value[0])}
                         max={10}
                         min={2}
