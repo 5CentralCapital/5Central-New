@@ -4,6 +4,10 @@ import {
   workOrderDetailSchema,
   workOrderListResponseSchema,
   workOrderTenantOptionsResponseSchema,
+  workOrderDocumentOptionsResponseSchema,
+  workOrderVendorOptionsResponseSchema,
+  type WorkOrderDocumentOptionsResponse,
+  type WorkOrderVendorOptionsResponse,
   type WorkOrderCategory,
   type WorkOrderCommandKind,
   type WorkOrderDetail,
@@ -12,6 +16,7 @@ import {
   type WorkOrderStatus,
   type WorkOrderTenantOption,
 } from "@shared/work-orders";
+import { costSourceLinePageSchema, type CostSourceLinePage } from "@shared/projects/source-lines";
 import { rentOpsAuthClient } from "../rent-ops/auth";
 
 export class WorkOrderApiError extends Error {
@@ -96,6 +101,18 @@ export const workOrdersApi = {
     const params = new URLSearchParams({ legalEntityId, propertyId, limit: "100" });
     const value = projectListResponseSchema.parse(await requestJson(`${companyPath(organizationId)}/projects?${params}`, { signal }));
     return value.items.map(item => ({ id: String(item.id), name: item.name }));
+  },
+  async vendorOptions(organizationId: string, legalEntityId: string, signal?: AbortSignal): Promise<WorkOrderVendorOptionsResponse["items"]> {
+    return workOrderVendorOptionsResponseSchema.parse(await requestJson(`${companyPath(organizationId)}/work-orders/vendor-options?${new URLSearchParams({ legalEntityId })}`, { signal })).items;
+  },
+  async documentOptions(organizationId: string, legalEntityId: string, propertyId: string, signal?: AbortSignal): Promise<WorkOrderDocumentOptionsResponse["items"]> {
+    return workOrderDocumentOptionsResponseSchema.parse(await requestJson(`${companyPath(organizationId)}/work-orders/document-options?${new URLSearchParams({ legalEntityId, propertyId })}`, { signal })).items;
+  },
+  async costLines(organizationId: string, legalEntityId: string, search?: string, cursor?: string, signal?: AbortSignal): Promise<CostSourceLinePage> {
+    const params = new URLSearchParams({ legalEntityId, limit: "50" });
+    if (search?.trim()) params.set("search", search.trim());
+    if (cursor) params.set("cursor", cursor);
+    return costSourceLinePageSchema.parse(await requestJson(`${companyPath(organizationId)}/work-orders/cost-lines?${params}`, { signal }));
   },
   async command(organizationId: string, kind: WorkOrderCommandKind, envelope: WorkOrderCommandEnvelope): Promise<OperationReceipt> {
     const value = await requestJson(`${companyPath(organizationId)}/work-order-commands/${encodeURIComponent(kind)}`, {
