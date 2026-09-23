@@ -18,6 +18,7 @@ import { publicRequestError } from "./request-errors";
 import { sanitizeApiPathForLogging } from "./request-logging";
 import { applicantPageSecurityHeaders } from "./applicant-page-security";
 import { securityHeaders } from "./security-headers";
+import { attachedImages } from "./static-assets";
 import { installGracefulShutdown, shutdownGraceMs } from "./graceful-shutdown";
 import {
   assertRentOpsProductionConfiguration,
@@ -90,7 +91,7 @@ app.use(
 app.use(loadUser);
 
 // Serve attached_assets statically
-app.use('/attached_assets', express.static(path.resolve(import.meta.dirname, '..', 'attached_assets')));
+app.use('/attached_assets', attachedImages(path.resolve(import.meta.dirname, '..', 'attached_assets')));
 app.use(/^\/(?:apply|tenant)(?:\/|$)/, applicantPageSecurityHeaders);
 
 app.use((req, res, next) => {

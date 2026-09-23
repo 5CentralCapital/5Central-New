@@ -30,6 +30,20 @@ export function publicAssets(publicDir: string): RequestHandler {
   };
 }
 
+const attachedImage = /\.(?:jpe?g|png|webp|gif|heic)$/i;
+
+/** The attached_assets folder also holds working CSV and text files (property
+ * financials); only the marketing images the client references are public. */
+export function attachedImages(dir: string): RequestHandler {
+  const images = express.static(resolve(dir), {index:false, dotfiles:'deny'});
+  return (req,res,next) => {
+    let pathname: string;
+    try { pathname = decodeURIComponent(req.path); } catch { res.sendStatus(404); return; }
+    if (!attachedImage.test(pathname)) { res.sendStatus(404); return; }
+    images(req,res,next);
+  };
+}
+
 /** Preload the selected route's existing modules without executing extra routes
  * or changing the order in which their styles are applied. */
 export function createPageShell(publicDir: string): (url: string) => string {
