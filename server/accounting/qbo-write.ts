@@ -23,7 +23,46 @@ export const QBO_WRITE_SUPPORT: Readonly<Record<string, readonly QboWriteOperati
   Customer: ["create", "update"],
   Bill: ["create", "update"],
   JournalEntry: ["create"],
+  // Record-only rental receivables: never emailed, never payable online (see recordOnlyInvoiceReason).
+  Invoice: ["create", "update"],
 });
+
+/**
+ * Invoices written by 5Central Ops record history and approved billing; they
+ * are not delivery or collection instructions. MRA collects rent, and
+ * QuickBooks-hosted direct collection (plan QS13) is a separate, not yet
+ * enabled action. So every Invoice write must explicitly disable online card,
+ * ACH and IPN payment and leave EmailStatus "NotSet"; QuickBooks only emails
+ * an invoice through its send endpoint, which this code never calls.
+ */
+const INVOICE_RECORD_ONLY_FLAGS = ["AllowOnlineCreditCardPayment", "AllowOnlineACHPayment", "AllowIPNPayment", "AllowOnlinePayment"] as const;
+const INVOICE_FORBIDDEN_FIELDS = ["DeliveryInfo", "InvoiceLink", "EInvoiceStatus", "AllowOnlinePayPalPayment", "AllowOnlineAffirmPayment"] as const;
+
+export function recordOnlyInvoiceReason(request: Pick<QboWriteRequest, "entity" | "operation" | "fields">): string | null {
+  if (request.entity !== "Invoice") return null;
+  const fields = request.fields ?? {};
+  for (const name of INVOICE_FORBIDDEN_FIELDS) {
+    if (name in fields && !(fields[name] === false || fields[name] === null)) return `A record-only QuickBooks Invoice cannot set ${name}.`;
+  }
+  for (const flag of INVOICE_RECORD_ONLY_FLAGS) {
+    if (flag in fields && fields[flag] !== false) return `A record-only QuickBooks Invoice must keep ${flag} false.`;
+  }
+  if ("EmailStatus" in fields && fields.EmailStatus !== "NotSet") return "A record-only QuickBooks Invoice must keep EmailStatus \"NotSet\"; it is never queued for sending.";
+  if (request.operation === "create") {
+    const missing = [...INVOICE_RECORD_ONLY_FLAGS.slice(0, 3), "EmailStatus"].filter(name => !(name in fields));
+    if (missing.length) return `A record-only QuickBooks Invoice create must state ${missing.join(", ")} explicitly (false / "NotSet") so company defaults cannot enable delivery or online payment.`;
+  }
+  return null;
+}
+
+/** The saved QuickBooks record must still be record-only; otherwise it needs review. */
+export function recordOnlyInvoiceViolation(entity: QuickBooksJsonObject | null | undefined): string | null {
+  if (!entity) return "QuickBooks did not return the saved Invoice";
+  for (const flag of INVOICE_RECORD_ONLY_FLAGS) if (entity[flag] === true) return `QuickBooks saved the Invoice with ${flag} on`;
+  if (entity.EmailStatus === "NeedToSend" || entity.EmailStatus === "EmailSent") return `QuickBooks saved the Invoice with EmailStatus ${entity.EmailStatus}`;
+  if (typeof entity.InvoiceLink === "string" && entity.InvoiceLink.length > 0) return "QuickBooks returned a payable InvoiceLink for a record-only Invoice";
+  return null;
+}
 
 /** QBO entities that carry tenant receivables; writing them is rental posting. */
 export const QBO_RENTAL_RECEIVABLE_ENTITIES: ReadonlySet<string> = new Set(["Invoice", "Payment", "CreditMemo", "SalesReceipt", "RefundReceipt"]);
@@ -190,6 +229,8 @@ function heldReason(request: QboWriteRequest, policy: QboWritePolicy): string | 
   if (!supported.includes(request.operation)) {
     return `5Central Ops cannot ${request.operation} a QuickBooks ${request.entity} yet. Make this change in QuickBooks; the next sync will read it back.`;
   }
+  const recordOnly = recordOnlyInvoiceReason(request);
+  if (recordOnly) return recordOnly;
   if (!policy.enabled) return "QuickBooks writes are turned off for this server (QBO_WRITES_ENABLED is not on).";
   if (!policy.allowed.has(`${request.entity}:${request.operation}`)) return `QuickBooks ${request.entity} ${request.operation} is not in the enabled write types (QBO_WRITE_TYPES).`;
   if (request.scope.environment === "production" && !policy.productionEnabled) return "QuickBooks production writes are turned off (QBO_PRODUCTION_WRITES is not on). Only sandbox writes can run.";
@@ -266,6 +307,7 @@ export function createQboWriteService(options: {
 
       const client = options.clientFor(request.scope);
       let createdId: string | null = existing?.provider_entity_id ?? null;
+      let savedEntity: QuickBooksJsonObject | null = null;
       const readback = async (): Promise<QuickBooksReadbackResult> => {
         const id = request.operation === "update" ? request.entityId! : createdId;
         if (id) {
@@ -300,10 +342,16 @@ export function createQboWriteService(options: {
               : await client.create(request.entity, request.fields, { requestId });
             const id = response.entity.Id;
             if (typeof id === "string" || typeof id === "number") createdId = String(id);
+            savedEntity = response.entity;
             return response;
           },
           readback,
         });
+        if (request.entity === "Invoice") {
+          // Verify what QuickBooks actually saved (from the write response, or a readback when the response was lost).
+          const saved = savedEntity ?? (await readback()).providerEntity ?? null;
+          if (recordOnlyInvoiceViolation(saved)) return { status: "conflict", reason: "readback_mismatch", recovery: "review_provider_record" };
+        }
         return { status: "confirmed", providerEntityId: result.providerEntityId ?? null, providerVersion: result.providerVersion ?? null, intuitTid: result.intuitTid ?? null };
       } catch (error) {
         if (error instanceof QuickBooksIntegrationError) {
