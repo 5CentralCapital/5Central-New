@@ -212,3 +212,21 @@ test("directory, settings, documents, cost library and dashboard reads are bound
     assert.ok(dashboard.workDue.items.every(item => item.status !== "completed"));
   } finally { await context.close(); }
 });
+
+test("Codex tools read the same workspace service and grants as the browser", async () => {
+  const context = await fixture();
+  try {
+    const { registerWorkspaceMcpTools } = await import("./mcp");
+    const { createWorkspaceReadPort } = await import("./port");
+    const tools = new Map<string, { write: boolean; handler: (args: any) => Promise<unknown> }>();
+    const port = createWorkspaceReadPort(context.executor, { today: () => AS_OF });
+    registerWorkspaceMcpTools((name, _description, _schema, write, handler) => { tools.set(name, { write, handler }); }, { port, actorId: company.actorId });
+    assert.ok([...tools.values()].every(tool => tool.write === false), "workspace tools are read-only");
+    const viaTool = propertyFinancialsSchema.parse(await tools.get("get_property_financials")!.handler({ propertyId: company.propertyId, organizationId: company.organizationId, month: MONTH, asOf: AS_OF }));
+    const viaHttp = propertyFinancialsSchema.parse(await (await context.get(`/api/workspaces/properties/${company.propertyId}/financials?month=${MONTH}&asOf=${AS_OF}&company=${company.organizationId}`)).json());
+    assert.deepEqual(viaTool, viaHttp, "the tool and the page read identical figures");
+    const outsider = new Map<string, (args: any) => Promise<unknown>>();
+    registerWorkspaceMcpTools((name, _description, _schema, _write, handler) => { outsider.set(name, handler); }, { port, actorId: "outsider-actor" });
+    await assert.rejects(outsider.get("get_dashboard_company_summary")!({ organizationId: company.organizationId }), /grant/i);
+  } finally { await context.close(); }
+});
