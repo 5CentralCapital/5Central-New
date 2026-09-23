@@ -315,7 +315,9 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
   let openingNet = ZERO;
   openingDebit.forEach(value => { openingNet += value; });
   addOpening("opening_equity", -openingNet);
-  const unknown = openingItems.filter(item => item.state === "unknown").map(item => item.label);
+  // Memo items are disclosures; partial items are included but flagged.
+  const unknown = openingItems.filter(item => !item.memo && (item.state === "unknown" || item.state === "partial"))
+    .map(item => (item.state === "partial" ? `${item.label} (partial)` : item.label));
 
   // ---------------------------------------------------------------- time actuals
   const replacedLabor = new Set<string>();

@@ -17,6 +17,9 @@ import type { TimeServices } from '../time/service';
 import { registerReportingHttpRoutes, type ReportingPort } from '../reporting';
 import { registerWorkOrderRoutes } from '../work-orders/http';
 import type { WorkOrderPort } from '../work-orders/port';
+// lane-d-forecast
+import { registerForecastingRoutes } from '../forecasting/http';
+import type { ForecastingPort } from '../forecasting/port';
 
 export interface CompanyProjectPort {
   list(principal: AuthenticatedPrincipal, query: ProjectListQuery): Promise<unknown>;
@@ -51,11 +54,15 @@ export function registerCompanyRoutes(app: Express, options: {
   time?: TimeServices;
   reporting?: ReportingPort;
   workOrders?: WorkOrderPort;
+  // lane-d-forecast
+  forecasting?: ForecastingPort;
   /** Browser-session presence check used for OAuth callback redirects (production wiring only). */
   hasAdminSession?: (request: Request) => boolean;
 }): void {
   const { executor, requireAdmin, projects } = options;
   if (options.workOrders) registerWorkOrderRoutes(app, { executor, requireAdmin, workOrders: options.workOrders });
+  // lane-d-forecast
+  if (options.forecasting) registerForecastingRoutes(app, { executor, requireAdmin, forecasting: options.forecasting });
   if (options.accounting) registerAccountingHttpRoutes(app, { executor, requireAdmin, services: options.accounting, ...(options.hasAdminSession ? { hasAdminSession: options.hasAdminSession } : {}) });
   if (options.investors) registerInvestorRoutes(app, { executor, requireAdmin, investors: options.investors });
   if (options.time) registerTimeHttpRoutes(app, { executor, requireAdmin, services: options.time });

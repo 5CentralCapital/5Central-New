@@ -64,6 +64,21 @@ CREATE TABLE company_forecast_snapshots (
 CREATE INDEX company_forecast_snapshots_scenario
   ON company_forecast_snapshots (organization_id, scenario_id, created_at DESC, id DESC);
 
+-- Approval pins the exact snapshot (model, assumption version and sources)
+-- that was reviewed. Editing assumptions returns the scenario to draft.
+ALTER TABLE company_forecast_scenarios
+  ADD COLUMN approved_snapshot_id uuid,
+  ADD COLUMN approved_by varchar(160),
+  ADD COLUMN approved_at timestamptz,
+  ADD CONSTRAINT company_forecast_scenarios_approved_snapshot
+    FOREIGN KEY (organization_id, approved_snapshot_id) REFERENCES company_forecast_snapshots(organization_id, id),
+  ADD CONSTRAINT company_forecast_scenarios_approval_complete
+    CHECK ((approved_snapshot_id IS NULL) = (approved_by IS NULL) AND (approved_by IS NULL) = (approved_at IS NULL)),
+  ADD CONSTRAINT company_forecast_scenarios_approved_state
+    CHECK (state <> 'approved' OR approved_snapshot_id IS NOT NULL);
+CREATE INDEX company_forecast_scenarios_list
+  ON company_forecast_scenarios (organization_id, updated_at DESC, id DESC);
+
 CREATE FUNCTION company_guard_forecast_history() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   RAISE EXCEPTION 'company_forecast_history_is_immutable' USING ERRCODE = '23514';

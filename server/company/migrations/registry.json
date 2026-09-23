@@ -446,7 +446,7 @@
     {
       "version": 48,
       "fileName": "048_company_forecasting.sql",
-      "sha256": "e66d4b6d8cad0043403e77c4f174a1aa66e7a6c97c0d32d2487d2b7c168a8622",
+      "sha256": "8f1f62b50d4b5da37fa1925cea76b3179caba3ec40298d466db96c5cfe7bc5ce",
       "predecessor": 47,
       "minimumServerContract": 1,
       "minimumClientContract": 1,

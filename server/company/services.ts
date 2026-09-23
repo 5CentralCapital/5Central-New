@@ -9,6 +9,8 @@ import { createTimeServices, type TimeServices, type TimeServicesOptions } from 
 import { createCompanyReportingPort } from './reporting-runtime';
 import type { ReportingPort } from '../reporting';
 import { createWorkOrderPort, type WorkOrderPort } from '../work-orders/port';
+// lane-d-forecast
+import { createForecastingPort, type ForecastingPort } from '../forecasting/port';
 
 /** The browser and Codex share these services and the same company database. */
 export interface CompanyServices {
@@ -19,6 +21,8 @@ export interface CompanyServices {
   readonly time: TimeServices;
   readonly reporting: ReportingPort;
   readonly workOrders: WorkOrderPort;
+  // lane-d-forecast
+  readonly forecasting: ForecastingPort;
 }
 
 export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
@@ -46,5 +50,7 @@ export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
   });
   const reporting = createCompanyReportingPort(executor, accounting);
   const workOrders = createWorkOrderPort(executor);
-  return { executor, accounting, investors, projects, time, reporting, workOrders };
+  // lane-d-forecast
+  const forecasting = createForecastingPort(executor);
+  return { executor, accounting, investors, projects, time, reporting, workOrders, forecasting };
 }
