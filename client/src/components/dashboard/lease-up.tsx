@@ -161,7 +161,7 @@ export default function LeaseUpControl() {
         <div className="card" style={{ padding: 10, borderColor: "rgba(239,68,68,0.4)", background: "rgba(239,68,68,0.06)" }}>
           <div style={{ fontSize: 12, color: "var(--color-danger)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>{error}</span>
-            <button onClick={() => setError(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-danger)", fontSize: 14, padding: "0 4px" }}>×</button>
+            <button type="button" aria-label="Dismiss error" onClick={() => setError(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-danger)", fontSize: 14, padding: "0 4px" }}>×</button>
           </div>
         </div>
       )}

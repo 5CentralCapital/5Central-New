@@ -1002,7 +1002,7 @@ function TenantDetail({
           border: `1px solid ${formMessage.type === "success" ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)"}`,
         }}>
           {formMessage.text}
-          <button onClick={() => setFormMessage(null)} style={{ marginLeft: 12, cursor: "pointer", fontSize: 11, color: "var(--color-text-muted)", background: "none", border: "none" }}>✕</button>
+          <button type="button" aria-label="Dismiss message" onClick={() => setFormMessage(null)} style={{ marginLeft: 12, cursor: "pointer", fontSize: 11, color: "var(--color-text-muted)", background: "none", border: "none" }}>✕</button>
         </div>
       )}
 

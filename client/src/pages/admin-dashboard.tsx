@@ -446,6 +446,7 @@ export default function AdminDashboard() {
             <div key={gi} className={`tab-dropdown ${isOpen ? "open" : ""}`}>
               <button
                 className={`nav-btn tab-dropdown-trigger ${hasActive ? "group-active" : ""}`}
+                aria-expanded={isOpen}
                 onClick={() => setOpenGroup(isOpen ? null : (group.label ?? null))}
               >
                 <span className="tab-dropdown-label">{group.label}</span>
@@ -508,7 +509,7 @@ export default function AdminDashboard() {
                   }}>
                     <span style={{ fontWeight: 600, fontSize: 14 }}>{alert.type === "danger" ? "⚠" : "⚡"}</span>
                     <span style={{ flex: 1 }}>{alert.message}</span>
-                    <button onClick={() => setDismissedAlerts(prev => { const next = new Set(Array.from(prev)); next.add(alert.message); return next; })} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", fontSize: 14, padding: "0 4px", opacity: 0.6 }}>✕</button>
+                    <button onClick={() => setDismissedAlerts(prev => { const next = new Set(Array.from(prev)); next.add(alert.message); return next; })} aria-label="Dismiss alert" style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", fontSize: 14, padding: "0 4px", opacity: 0.6 }}>✕</button>
                   </div>
                 ))}
               </div>
@@ -1474,18 +1475,24 @@ function BankingSection({ banking, onRefresh }: { banking?: DashboardData["banki
       const handler = (window as any).Plaid.create({
         token: data.link_token,
         onSuccess: async (publicToken: string, metadata: any) => {
-          await fetch("/api/plaid/exchange-token", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              public_token: publicToken,
-              institution: metadata.institution,
-            }),
-          });
-          // Immediately sync after connecting
-          await fetch("/api/plaid/sync", { method: "POST" });
-          onRefresh();
-          setConnecting(false);
+          try {
+            const exchange = await fetch("/api/plaid/exchange-token", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                public_token: publicToken,
+                institution: metadata.institution,
+              }),
+            });
+            if (!exchange.ok) throw new Error("The bank connection could not be saved.");
+            // Immediately sync after connecting
+            await fetch("/api/plaid/sync", { method: "POST" });
+          } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to connect");
+          } finally {
+            onRefresh();
+            setConnecting(false);
+          }
         },
         onExit: () => setConnecting(false),
       });
@@ -1498,9 +1505,16 @@ function BankingSection({ banking, onRefresh }: { banking?: DashboardData["banki
 
   const syncAccounts = useCallback(async () => {
     setSyncing(true);
-    await fetch("/api/plaid/sync", { method: "POST" });
-    onRefresh();
-    setSyncing(false);
+    setError(null);
+    try {
+      const res = await fetch("/api/plaid/sync", { method: "POST" });
+      if (!res.ok) setError("Bank sync failed. Try again.");
+    } catch {
+      setError("Bank sync failed. Try again.");
+    } finally {
+      onRefresh();
+      setSyncing(false);
+    }
   }, [onRefresh]);
 
   const hasAccounts = banking?.accounts && banking.accounts.length > 0;
