@@ -54,6 +54,7 @@
   const connecting = document.getElementById("connecting");
   const offline = document.getElementById("offline");
   let timer;
+  let checking = false;
 
   async function reachable() {
     const controller = new AbortController();
@@ -67,9 +68,15 @@
   }
 
   async function attempt() {
+    // An "online" event or a click during a check must not start a second
+    // check (and a second retry timer).
+    if (checking) return;
+    checking = true;
     clearTimeout(timer);
     connecting.hidden = false; offline.hidden = true;
-    if (navigator.onLine !== false && await reachable()) { window.location.replace(target); return; }
+    const ok = navigator.onLine !== false && await reachable();
+    checking = false;
+    if (ok) { window.location.replace(target); return; }
     connecting.hidden = true; offline.hidden = false;
     timer = setTimeout(attempt, 10000);
   }
