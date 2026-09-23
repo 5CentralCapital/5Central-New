@@ -235,6 +235,12 @@ function combinedTotals(reportId: CombinedFinancialReportId, rows: readonly Reco
   const currency = currencies[0] as ReportTotal["currency"];
   const make = (key: string, amount: bigint | null): ReportTotal => ({ key, amountCents: amount === null ? null : centsFromBigInt(amount), currency, state: amount === null ? "unknown" : partial ? "partial" : "complete" });
   if (reportId === "budget-vs-actual") return [make("budget", sumField(rows, "budgetCents")), make("actual", sumField(rows, "actualCents")), make("variance", sumField(rows, "varianceCents"))];
+  if (reportId === "income-statement-consolidated") {
+    // Income and expense carry natural signs; the net is income less expense.
+    const income = sumField(rows.filter(row => row.category === "income"), "consolidatedAmountCents");
+    const expenses = sumField(rows.filter(row => row.category === "expense"), "consolidatedAmountCents");
+    return [make("eliminations", sumField(rows, "eliminatedAmountCents")), make("consolidated_income", income), make("consolidated_expenses", expenses), make("consolidated_net_income", income === null || expenses === null ? null : income - expenses)];
+  }
   if (reportId.endsWith("-consolidated")) return [make("source_amount", sumField(rows, "amountCents")), make("eliminations", sumField(rows, "eliminatedAmountCents")), make("consolidated_amount", sumField(rows, "consolidatedAmountCents"))];
   if (reportId === "cash-position") return [make("cash_balance", sumField(rows, "balanceCents"))];
   if (reportId === "accounts-payable") return [make("open_payables", sumField(rows, "amountCents"))];
@@ -287,7 +293,7 @@ export function createCombinedFinancialReportingEngine(read: CombinedFinancialRe
         }
         const effectiveLines = lines.map(line => effectiveConsolidationLine(line, policy));
         const lineKeys = new Set(effectiveLines.map(line => consolidationLineKey(line)));
-        rows = aggregate(effectiveLines, line => consolidationLineKey(line), line => ({ consolidationKey: consolidationLineKey(line), accountId: line.canonicalAccountId ?? line.accountId, accountName: line.accountName ?? null, sourceRealmId: line.sourceRealmId ?? null, entityCount: new Set(effectiveLines.filter(item => consolidationLineKey(item) === consolidationLineKey(line)).map(item => item.legalEntityId)).size, eliminationVersion: policy.eliminationPolicy === "approved_version" ? policy.eliminationVersion ?? null : null, eliminationPolicy: policy.eliminationPolicy })).map(row => {
+        rows = aggregate(effectiveLines, line => consolidationLineKey(line), line => ({ consolidationKey: consolidationLineKey(line), accountId: line.canonicalAccountId ?? line.accountId, accountName: line.accountName ?? null, category: line.category ?? null, sourceRealmId: line.sourceRealmId ?? null, entityCount: new Set(effectiveLines.filter(item => consolidationLineKey(item) === consolidationLineKey(line)).map(item => item.legalEntityId)).size, eliminationVersion: policy.eliminationPolicy === "approved_version" ? policy.eliminationVersion ?? null : null, eliminationPolicy: policy.eliminationPolicy })).map(row => {
           const value = row as { consolidationKey: string; accountId: string; amountCents: string; currency: string; sourceRealmId: string | null };
           const key = value.consolidationKey;
           const adjustment = eliminationByAccount.get(key) ?? BigInt(0);
@@ -297,7 +303,9 @@ export function createCombinedFinancialReportingEngine(read: CombinedFinancialRe
         if (policy.eliminationPolicy === "approved_version") {
           for (const [key, adjustment] of Array.from(eliminationByAccount.entries())) if (!lineKeys.has(key)) {
             const [identity, currency] = key.split(/:(?=[^:]+$)/);
-            rows.push({ accountId: identity ?? key, accountName: null, sourceRealmId: null, entityCount: 0, amountCents: "0", currency, eliminationVersion: policy.eliminationVersion ?? null, eliminationPolicy: policy.eliminationPolicy, eliminatedAmountCents: centsFromBigInt(adjustment), consolidatedAmountCents: centsFromBigInt(adjustment) });
+            // An elimination on an account with no source line keeps its own
+            // row; its category comes from the mapped lines when known.
+            rows.push({ accountId: identity ?? key, accountName: null, category: null, sourceRealmId: null, entityCount: 0, amountCents: "0", currency, eliminationVersion: policy.eliminationVersion ?? null, eliminationPolicy: policy.eliminationPolicy, eliminatedAmountCents: centsFromBigInt(adjustment), consolidatedAmountCents: centsFromBigInt(adjustment) });
           }
         }
         if (policy.eliminationPolicy === "none") missingData.push(missing("elimination_policy_none", "The consolidated result excludes eliminations because the selected policy is none.", "partial"));

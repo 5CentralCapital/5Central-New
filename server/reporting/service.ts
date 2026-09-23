@@ -359,7 +359,13 @@ export class ReportingService {
           this.assertCompanyRead(access.principal, scopeForAuth(request.scope, mappedEntity, propertyId));
         }
       } else {
-        this.assertCompanyRead(access.principal, scopeForAuth(request.scope));
+        // An organization-wide run needs an organization-wide grant. A
+        // principal limited to some entities or properties must choose them.
+        try { this.assertCompanyRead(access.principal, scopeForAuth(request.scope)); }
+        catch (error) {
+          if (error instanceof ReportingError && access.principal.authorizedScopes.length && REPORT_READ_ROLES.includes(access.principal.role as (typeof REPORT_READ_ROLES)[number])) throw new ReportingError("report_forbidden", "Choose the legal entities or properties you can access.", 403, { field: "legalEntityIds" });
+          throw error;
+        }
       }
     }
   }

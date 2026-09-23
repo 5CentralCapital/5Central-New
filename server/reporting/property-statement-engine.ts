@@ -78,9 +78,11 @@ export function createPropertyStatementReportingEngine(read: PropertyStatementRe
         const collections = source.rentalCollections === null ? null : source.rentalCollections.filter(item => item.propertyId === property.propertyId);
         const collectionCurrency = collections?.[0]?.currency ?? settlements[0]?.currency ?? null;
         const values = new Map<MeasureId, bigint | null>();
-        // An unknown receipt amount makes the property's collections unknown, never zero.
-        values.set("rental_collections", collections === null || collections.some(item => item.amountCents === null) ? null : collections.reduce((sum, item) => sum + big(item.amountCents!), BigInt(0)));
+        // An unknown receipt amount, or no recorded receipts at all, leaves the
+        // property's collections unknown; the rental source cannot prove zero.
+        values.set("rental_collections", collections === null || !collections.length || collections.some(item => item.amountCents === null) ? null : collections.reduce((sum, item) => sum + big(item.amountCents!), BigInt(0)));
         if (collections?.some(item => item.amountCents === null)) missing.push({ code: "rental_collection_amount_unknown", state: "unknown", message: `${property.propertyName ?? property.propertyId}: at least one receipt has an unknown amount.`, scope: property.propertyId });
+        else if (collections && !collections.length) missing.push({ code: "rental_collections_not_recorded", state: "unknown", message: `${property.propertyName ?? property.propertyId}: no rent receipts are recorded for this period.`, scope: property.propertyId });
         if (settlements.length) {
           const sum = (field: "grossCollectionsCents" | "pmFeesCents" | "pmExpensesCents" | "otherDeductionsCents" | "ownerRemittanceCents") => settlements.reduce((acc, item) => acc + big(item[field]), BigInt(0));
           values.set("gross_collections", sum("grossCollectionsCents"));
