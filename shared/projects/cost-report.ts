@@ -4,6 +4,7 @@ import {
   centsSchema,
   centsToBigInt,
   currencyCodeSchema,
+  companyScopeSchema,
   isoDateSchema,
   type IsoDate,
   type MoneyCents,
@@ -670,3 +671,10 @@ function calculateCloseout(
     : { key: "tasks_complete", label: "Tasks complete", status: openTasks.length ? "open" : "complete", detail: openTasks.length ? `${openTasks.length} of ${input.tasks.length} tasks open.` : `${input.tasks.length} tasks closed.` });
   return projectCloseoutSchema.parse({ ready: items.every((item) => item.status === "complete" || item.status === "not_applicable"), items });
 }
+
+export const projectCostReportQuerySchema = z.object({
+  scope: companyScopeSchema,
+  projectId: z.string().uuid(),
+  asOf: isoDateSchema.optional(),
+}).strict();
+export type ProjectCostReportQuery = z.input<typeof projectCostReportQuerySchema>;

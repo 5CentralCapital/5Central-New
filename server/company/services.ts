@@ -9,6 +9,7 @@ import { createTimeServices, type TimeServices, type TimeServicesOptions } from 
 import { createCompanyReportingPort } from './reporting-runtime';
 import type { ReportingPort } from '../reporting';
 import { createWorkOrderPort, type WorkOrderPort } from '../work-orders/port';
+import { createProjectInsightsPort, type ProjectInsightsPort } from '../projects/insights'; // lane-f
 
 /** The browser and Codex share these services and the same company database. */
 export interface CompanyServices {
@@ -19,6 +20,7 @@ export interface CompanyServices {
   readonly time: TimeServices;
   readonly reporting: ReportingPort;
   readonly workOrders: WorkOrderPort;
+  readonly projectInsights: ProjectInsightsPort; // lane-f
 }
 
 export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
@@ -26,7 +28,12 @@ export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
   time?: TimeServicesOptions;
 } = {}): CompanyServices {
   const accounting = createAccountingServices(executor, options.accounting);
-  const time = createTimeServices(executor, options.time);
+  // lane-f: payroll links and work-order cost links reserve QBO lines through the shared mirror ledger.
+  const costFinanceFactory = (transaction: RentOpsQueryExecutor) => {
+    const mirror = accounting.mirror.forExecutor(transaction);
+    return { source: mirror, allocations: mirror, costContext: mirror };
+  };
+  const time = createTimeServices(executor, { ...options.time, financeFactory: options.time?.financeFactory ?? costFinanceFactory }); // lane-f
   const investors = createInvestorPort(executor, {
     sourceReadFactory: transaction => accounting.mirror.forExecutor(transaction),
     sourceResolverFactory: transaction => {
@@ -45,6 +52,13 @@ export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
     },
   });
   const reporting = createCompanyReportingPort(executor, accounting);
-  const workOrders = createWorkOrderPort(executor);
-  return { executor, accounting, investors, projects, time, reporting, workOrders };
+  const workOrders = createWorkOrderPort(executor, { financeFactory: costFinanceFactory }); // lane-f
+  // lane-f: project cost report, labor allocation and QBO line picker reads.
+  const projectInsights = createProjectInsightsPort(executor, {
+    financeFactory: transaction => {
+      const mirror = accounting.mirror.forExecutor(transaction);
+      return createProjectFinanceReadPort(mirror, createProjectFinanceBindingStore(transaction), mirror);
+    },
+  });
+  return { executor, accounting, investors, projects, time, reporting, workOrders, projectInsights };
 }

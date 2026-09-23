@@ -14,6 +14,8 @@ import type { TimeServices } from '../time/service';
 import { registerReportingMcpTools, type ReportingPort } from '../reporting';
 import { registerWorkOrderMcpTools } from '../work-orders/mcp';
 import type { WorkOrderPort } from '../work-orders/port';
+import { registerProjectInsightMcpTools } from '../projects/mcp'; // lane-f
+import type { ProjectInsightsPort } from '../projects/insights'; // lane-f
 
 export type CompanyToolRegistrar = (name: string, description: string, schema: z.ZodRawShape, write: boolean, handler: (args: any) => Promise<unknown>) => void;
 
@@ -25,9 +27,11 @@ export function registerCompanyMcpTools(register: CompanyToolRegistrar, options:
   time?: TimeServices;
   reporting?: ReportingPort;
   workOrders?: WorkOrderPort;
+  projectInsights?: ProjectInsightsPort; // lane-f
 }): void {
   const { executor, projects, actorId } = options;
   if (options.workOrders) registerWorkOrderMcpTools(register, { executor, actorId, workOrders: options.workOrders });
+  if (options.projectInsights) registerProjectInsightMcpTools(register, { executor, actorId, insights: options.projectInsights }); // lane-f
   if (options.accounting) registerAccountingMcpTools(register, { executor, actorId, services: options.accounting });
   if (options.investors) registerInvestorMcpTools(register, { executor, actorId, investors: options.investors });
   if (options.time) registerTimeMcpTools(register, { executor, actorId, services: options.time });

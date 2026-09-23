@@ -39,6 +39,8 @@ export function registerTimeMcpTools(register: TimeToolRegistrar, options: TimeM
     async ({ scope }) => read(scope, principal => services.read.listEmployeeMappings(principal, scope)));
   register("list_time_jobcode_mappings", "List scoped provider jobcode mappings to properties, projects and cost codes.", { scope: timeConnectionScopeSchema }, false,
     async ({ scope }) => read(scope, principal => services.read.listJobcodeMappings(principal, scope)));
+  register("list_time_payroll_links", "List posted payroll links for a legal entity: the QBO payroll or journal line, pay period, amount, linked timesheets, and whether the link is active or released.", { organizationId: organizationIdSchema, legalEntityId: timeConnectionScopeSchema.shape.legalEntityId }, false,
+    async ({ organizationId, legalEntityId }) => read({ organizationId, legalEntityId }, async principal => ({ items: await services.read.listPayrollLinks(principal, { organizationId, legalEntityId }) })));
   register("get_time_coverage", "Read provider synchronization coverage, modified-since watermarks, pagination status and deletion-stream completeness.", { scope: timeConnectionScopeSchema }, false,
     async ({ scope }) => read(scope, principal => services.read.readCoverage(principal, scope)));
   register("sync_time_records", "Mirror provider users, jobcodes, timesheets and deletion tombstones into 5Central Ops. This does not write back to QuickBooks Time or post payroll.", { scope: timeConnectionScopeSchema, maxPages: z.number().int().min(1).max(10_000).optional() }, true,
