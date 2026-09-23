@@ -3,7 +3,7 @@ import test from "node:test";
 import express from "express";
 import { registerRentOpsRoutes } from "../../../../server/rent-ops/routes";
 import { createSyntheticRentOpsRepository } from "../../../../server/rent-ops/fixtures/synthetic";
-import { saveManagerIncomeAction } from "./manager-income-actions";
+import { allocationChargeLabel, saveManagerIncomeAction } from "./manager-income-actions";
 
 test("manager income transport reaches the actual mounted definition and payment routes", async () => {
   const app = express(); app.use(express.json());
@@ -20,4 +20,9 @@ test("manager income transport reaches the actual mounted definition and payment
     await assert.rejects(saveManagerIncomeAction("manual-payments", {}, "POST", request));
     assert.deepEqual(statuses, [400, 400, 400]);
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
+test("a charge with an unknown amount is labeled Unknown in the allocation list, never $0.00", () => {
+  assert.equal(allocationChargeLabel({ postedOn: "2026-09-01", description: "Rent", amountCents: 125000 }), "2026-09-01 · Rent · $1,250.00");
+  assert.equal(allocationChargeLabel({ postedOn: "2026-09-01", description: "Water", amountCents: undefined }), "2026-09-01 · Water · Unknown");
 });
