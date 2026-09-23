@@ -329,3 +329,21 @@ test("list groups cases and affected records separately; inventory lists remaini
     assert.equal(summary.totals.activeCaseCount, 0);
   } finally { await fixture.close(); }
 });
+
+test("the inventory CLI runs against any executor and prints bounded JSON", async () => {
+  const { fixture, db, runtime } = await setup();
+  try {
+    await addImportedAccounts(db, 0, 4);
+    const { runReviewInventoryCli } = await import("./inventory");
+    const result = await runReviewInventoryCli(["--organization", organizationId, "--detect", "--limit", "10"], runtime);
+    assert.ok(result.detection && result.detection.opened >= 1);
+    assert.ok(result.inventory.remaining.length <= 10);
+    assert.ok(result.inventory.byReason.some(item => item.reasonCode === "history_incomplete" && item.caseCount === 1 && item.affectedCount === 4));
+    assert.doesNotThrow(() => JSON.stringify(result));
+    const readOnly = await runReviewInventoryCli(["--organization", organizationId], runtime);
+    assert.equal(readOnly.detection, null);
+    assert.equal(readOnly.inventory.totals.activeCaseCount, result.inventory.totals.activeCaseCount);
+    await assert.rejects(runReviewInventoryCli([], runtime), /organization_required/);
+    await assert.rejects(runReviewInventoryCli(["--organization", organizationId, "--limit", "0"], runtime), /limit_invalid/);
+  } finally { await fixture.close(); }
+});

@@ -7,3 +7,4 @@ export * from "./port";
 export * from "./http";
 export * from "./mcp";
 export * from "./job";
+export * from "./inventory";
