@@ -97,7 +97,7 @@ function saved(id: string, revision: Revision): CommandHandlerResult {
     state: "saved_in_rops",
     affectedRecordIds: [id],
     resultingRevisions: [{ recordId: recordReferenceIdSchema.parse(id), revision }],
-    validationOutcomes: [{ code: "work_order.saved_in_rops", severity: "info", message: "Work order saved in R-ops. No charge, bill or payment was posted." }],
+    validationOutcomes: [{ code: "work_order.saved_in_rops", severity: "info", message: "Work order saved in 5Central Ops. No charge, bill or payment was posted." }],
   };
 }
 

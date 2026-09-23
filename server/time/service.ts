@@ -230,17 +230,17 @@ async function executeTimeCommand(executor: RentOpsQueryExecutor, store: TimeSto
     }
     if (kind === "time.correct_timesheet") {
       const result = await txStore.correctTimesheet({ scope, timesheetId: String(payload.timesheetId), expectedCorrectionRevision: payload.expectedCorrectionRevision as number | undefined, type: payload.type as "regular" | "manual", start: payload.start as string | null, end: payload.end as string | null, date: String(payload.date), durationSeconds: Number(payload.durationSeconds), timezoneOffsetMinutes: payload.timezoneOffsetMinutes as number | null, timezoneName: payload.timezoneName as string | null, notes: String(payload.notes), reason: String(payload.reason), actorId: context.principal.actorId, operationId: envelope.operationId });
-      return { state: "saved_in_rops", affectedRecordIds: [result.id], resultingRevisions: [], validationOutcomes: [{ code: "time.corrected", severity: "info", message: "Time entry correction saved in R-ops" }] };
+      return { state: "saved_in_rops", affectedRecordIds: [result.id], resultingRevisions: [], validationOutcomes: [{ code: "time.corrected", severity: "info", message: "Time entry correction saved in 5Central Ops" }] };
     }
     if (kind === "time.review_timesheet") {
       const result = await txStore.reviewTimesheet({ scope, timesheetId: String(payload.timesheetId), action: payload.action as "approve" | "reject" | "request_review", reason: payload.reason as string | undefined, actorId: context.principal.actorId, operationId: envelope.operationId });
-      return { state: "saved_in_rops", affectedRecordIds: [result.id], resultingRevisions: [], validationOutcomes: [{ code: `time.${String(payload.action)}`, severity: "info", message: "Time entry review state saved in R-ops" }] };
+      return { state: "saved_in_rops", affectedRecordIds: [result.id], resultingRevisions: [], validationOutcomes: [{ code: `time.${String(payload.action)}`, severity: "info", message: "Time entry review state saved in 5Central Ops" }] };
     }
     if (kind === "time.map_employee") {
       const result = await txStore.mapEmployee({ scope, providerUserId: String(payload.providerUserId), contactId: String(payload.contactId), effectiveFrom: String(payload.effectiveFrom), effectiveTo: payload.effectiveTo as string | null | undefined, hourlyRateCents: payload.hourlyRateCents as string | null | undefined, currency: payload.currency as string | null | undefined, actorId: context.principal.actorId, operationId: envelope.operationId });
-      return { state: "saved_in_rops", affectedRecordIds: [result.id], resultingRevisions: [], validationOutcomes: [{ code: "time.employee_mapped", severity: "info", message: "Employee mapping saved in R-ops" }] };
+      return { state: "saved_in_rops", affectedRecordIds: [result.id], resultingRevisions: [], validationOutcomes: [{ code: "time.employee_mapped", severity: "info", message: "Employee mapping saved in 5Central Ops" }] };
     }
     const result = await txStore.mapJobcode({ scope, providerJobcodeId: String(payload.providerJobcodeId), propertyId: payload.propertyId as string | null | undefined, projectId: payload.projectId as string | null | undefined, costCode: payload.costCode as string | null | undefined, actorId: context.principal.actorId, operationId: envelope.operationId });
-    return { state: "saved_in_rops", affectedRecordIds: [result.id], resultingRevisions: [], validationOutcomes: [{ code: "time.jobcode_mapped", severity: "info", message: "Jobcode mapping saved in R-ops" }] };
+    return { state: "saved_in_rops", affectedRecordIds: [result.id], resultingRevisions: [], validationOutcomes: [{ code: "time.jobcode_mapped", severity: "info", message: "Jobcode mapping saved in 5Central Ops" }] };
   } });
 }

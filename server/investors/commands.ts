@@ -108,7 +108,7 @@ function savedResult(recordIds: readonly string[], revisions: readonly { id: str
     state: "saved_in_rops",
     affectedRecordIds: recordIds.map(id => recordReferenceIdSchema.parse(id)),
     resultingRevisions: revisions.map(item => ({ recordId: recordReferenceIdSchema.parse(item.id), revision: item.revision })),
-    validationOutcomes: [{ code: "investor.saved_in_rops", severity: "info", message: "Investor records saved in R-ops" }],
+    validationOutcomes: [{ code: "investor.saved_in_rops", severity: "info", message: "Investor records saved in 5Central Ops" }],
   };
 }
 

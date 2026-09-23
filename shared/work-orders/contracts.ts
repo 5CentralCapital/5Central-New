@@ -54,7 +54,7 @@ export function workOrderReference(id: string): string {
 export const workOrderChargebackSchema = z.object({
   amountCents: positiveWorkOrderCentsSchema,
   description: text(300),
-  /** Only a link to an already posted tenant charge; R-ops never posts one from a work order. */
+  /** Only a link to an already posted tenant charge; 5Central Ops never posts one from a work order. */
   ledgerTransactionId: rentalReferenceSchema.nullable(),
   state: z.enum(["intent_only", "charge_linked"]),
 }).strict();

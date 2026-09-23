@@ -109,7 +109,7 @@ function savedResult(recordId: string, revision?: Revision): CommandHandlerResul
     state: "saved_in_rops",
     affectedRecordIds: [recordId],
     resultingRevisions: revision === undefined ? [] : [{ recordId: recordReferenceIdSchema.parse(recordId), revision }],
-    validationOutcomes: [{ code: "project.saved_in_rops", severity: "info", message: "Project record saved in R-ops" }],
+    validationOutcomes: [{ code: "project.saved_in_rops", severity: "info", message: "Project record saved in 5Central Ops" }],
   };
 }
 
@@ -121,7 +121,7 @@ function savedRelatedResult(childId: string, childRevision: Revision, projectId:
       { recordId: recordReferenceIdSchema.parse(childId), revision: childRevision },
       { recordId: recordReferenceIdSchema.parse(projectId), revision: projectRevision },
     ],
-    validationOutcomes: [{ code: "project.saved_in_rops", severity: "info", message: "Project record saved in R-ops" }],
+    validationOutcomes: [{ code: "project.saved_in_rops", severity: "info", message: "Project record saved in 5Central Ops" }],
   };
 }
 
@@ -404,7 +404,7 @@ async function handleApproveBudget(context: CommandHandlerContext<ApproveBudgetP
     state: "saved_in_rops",
     affectedRecordIds: [payload.projectId, budgetId],
     resultingRevisions: [{ recordId: recordReferenceIdSchema.parse(payload.projectId), revision: dbRevision(projectUpdate.rows[0]!.record_revision) }],
-    validationOutcomes: [{ code: "project.budget.approved_in_rops", severity: "info", message: "Budget snapshot approved and saved in R-ops" }],
+    validationOutcomes: [{ code: "project.budget.approved_in_rops", severity: "info", message: "Budget snapshot approved and saved in 5Central Ops" }],
   };
 }
 

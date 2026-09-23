@@ -84,7 +84,7 @@ function savedExecutionResult(childId: string, projectId?: string, projectRevisi
     resultingRevisions: projectId === undefined || projectRevision === undefined
       ? []
       : [{ recordId: recordReferenceIdSchema.parse(projectId), revision: projectRevision }],
-    validationOutcomes: [{ code: "project.execution.saved_in_rops", severity: "info", message: "Project execution record saved in R-ops" }],
+    validationOutcomes: [{ code: "project.execution.saved_in_rops", severity: "info", message: "Project execution record saved in 5Central Ops" }],
   };
 }
 
