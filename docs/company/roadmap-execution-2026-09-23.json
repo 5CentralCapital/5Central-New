@@ -1,0 +1,387 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-23",
+  "type": "planned_rollout_not_execution_checkpoint",
+  "roadmap_file": "R-ops Updated Rollout Roadmap.md",
+  "repository": "/Users/michaelmcelwee/Projects/r-ops",
+  "source_commit": "7d97a2dd98021d21c97a5ae2979f9ad043b19b95",
+  "orchestrator": {
+    "model": "gpt-6-astra",
+    "reasoning": "high"
+  },
+  "workers": {
+    "complex": {
+      "model": "gpt-6-sol",
+      "reasoning": "high"
+    },
+    "bounded": {
+      "model": "gpt-6-luna",
+      "reasoning": "max"
+    }
+  },
+  "max_total_active_agents": 4,
+  "mac_application": "excluded_claude_owned",
+  "root_registration_and_migrations": "single_integrator",
+  "preparation_exception": "Read-only U14 discovery may run after U00 while U01 is in progress; approved U14 fixtures require U01. U16 interface design may start against U01 contracts; acceptance requires U15. U13 report families start independently but final acceptance requires all listed domain inputs. U18 is continuous, not a prerequisite for implementing the services it tests.",
+  "report_ids": [
+    "balance-sheet-by-fund-type",
+    "balance-sheet-consolidated",
+    "budget-vs-actual",
+    "general-ledger",
+    "general-ledger-consolidated",
+    "income-statement",
+    "income-statement-by-unit",
+    "income-statement-consolidated",
+    "income-statement-detailed",
+    "property-statement",
+    "rental-owner-ending-balances",
+    "rental-owner-statement",
+    "trial-balance",
+    "trial-balance-consolidated",
+    "current-tenants",
+    "delinquency",
+    "lease-expiration",
+    "leasing-agent",
+    "rent-paid",
+    "rent-roll",
+    "renters-insurance",
+    "security-deposit",
+    "tenant-ledger",
+    "tenant-vehicles",
+    "unit-listings",
+    "occupancy",
+    "completed-tasks",
+    "open-tasks",
+    "tasks-performance",
+    "vendor-details",
+    "work-orders",
+    "work-sessions",
+    "balance-sheet",
+    "cash-flow-statement",
+    "portfolio-financials",
+    "property-t12",
+    "accounts-receivable",
+    "accounts-payable",
+    "contractor-exposure",
+    "project-performance",
+    "rehab-benchmark",
+    "cash-position",
+    "cash-forecast-13-week",
+    "operating-growth-plan",
+    "debt-refinance",
+    "exit-scenarios",
+    "investor-owner-activity",
+    "lender-management-package",
+    "scheduled-income",
+    "scheduled-vs-collected",
+    "collected-income",
+    "hap",
+    "applicant-pipeline"
+  ],
+  "packets": [
+    {
+      "id": "U00",
+      "title": "Baseline",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Luna Max; first",
+      "start_after": [],
+      "acceptance_requires": [],
+      "scope": "Inspect HEAD, dirty files, deployed SHA, DB migrations, access, original manifest and service availability",
+      "acceptance": "Current-vs-planned inventory; no Mac edits; unresolved deployment facts named"
+    },
+    {
+      "id": "U01",
+      "title": "Contracts",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Astra/Sol High; U00",
+      "start_after": [
+        "U00"
+      ],
+      "acceptance_requires": [],
+      "scope": "Identity, mappings, review, financial source/settlement, forecast and report contracts; migration order",
+      "acceptance": "Domain ownership and invariant tests approved before parallel writers"
+    },
+    {
+      "id": "U02",
+      "title": "Review inventory",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Luna Max; U00",
+      "start_after": [
+        "U00"
+      ],
+      "acceptance_requires": [],
+      "scope": "Enumerate exact active causes and affected records; source discovery",
+      "acceptance": "Counts by reason, overlap and materiality; no inferred live totals"
+    },
+    {
+      "id": "U03",
+      "title": "Review resolution",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Sol High plus Luna fixtures; U01/U02",
+      "start_after": [
+        "U01",
+        "U02"
+      ],
+      "acceptance_requires": [],
+      "scope": "Extend maintenance/reconciliation and expose guarded case commands",
+      "acceptance": "Evidence-linked proposals, stale-source protection, saved readback and reopen behavior"
+    },
+    {
+      "id": "U04",
+      "title": "Company activation",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Sol High; U01",
+      "start_after": [
+        "U01"
+      ],
+      "acceptance_requires": [],
+      "scope": "Bootstrap organization/entities/grants and dated property mappings using verified identities",
+      "acceptance": "Correct user sees correct entities; denied scopes remain denied"
+    },
+    {
+      "id": "U05",
+      "title": "QBO transport",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Sol High; U01/U04",
+      "start_after": [
+        "U01",
+        "U04"
+      ],
+      "acceptance_requires": [],
+      "scope": "Outbox dispatcher, webhook, catch-up/CDC, token/retry recovery and monitoring",
+      "acceptance": "Crash/replay/outage/delete/concurrent-refresh tests; no duplicate write"
+    },
+    {
+      "id": "U06",
+      "title": "Accounting bridge",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Sol High; U05",
+      "start_after": [
+        "U05"
+      ],
+      "acceptance_requires": [],
+      "scope": "Posting ownership, line mapping, rental/PM clearing, settlement and close",
+      "acceptance": "Rental/PM source-report tie-out and gross-to-net control tests per entity/period; later cross-module tests join U10/U11"
+    },
+    {
+      "id": "U07",
+      "title": "Navigation",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Luna Max; U01",
+      "start_after": [
+        "U01"
+      ],
+      "acceptance_requires": [],
+      "scope": "Navigation configuration, routes, page filters and context links",
+      "acceptance": "Every visible destination works; old links resolve; keyboard/mobile tests"
+    },
+    {
+      "id": "U08",
+      "title": "Connected views",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Luna Max; U06/U07",
+      "start_after": [
+        "U06",
+        "U07"
+      ],
+      "acceptance_requires": [
+        "U06",
+        "U07"
+      ],
+      "scope": "Property, tenancy, project and investor financial drilldowns",
+      "acceptance": "Same totals as services/reports; no duplicated actuals; useful empty/error states"
+    },
+    {
+      "id": "U09",
+      "title": "MRA",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Sol High service review, Luna adapters; U01/U04",
+      "start_after": [
+        "U01",
+        "U04"
+      ],
+      "acceptance_requires": [],
+      "scope": "Existing intake service, root HTTP/MCP registration, private documents, results; shared case contract from U01",
+      "acceptance": "Genuine complete packet plus replay/revision/ambiguity tests; feeds U03 resolution without waiting for all cases to close"
+    },
+    {
+      "id": "U10",
+      "title": "Projects",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Luna Max with Sol review; U01/U06",
+      "start_after": [
+        "U01",
+        "U06"
+      ],
+      "acceptance_requires": [],
+      "scope": "Scope\u2192commitment\u2192change\u2192invoice\u2192draw\u2192closeout, cost library",
+      "acceptance": "One actual allocated once; cost-to-complete and schedule/ready-date fixtures"
+    },
+    {
+      "id": "U11",
+      "title": "Investors/debt",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Sol High; U01/U06",
+      "start_after": [
+        "U01",
+        "U06"
+      ],
+      "acceptance_requires": [],
+      "scope": "Agreement ingestion, obligations, payment log, source and settlement bindings",
+      "acceptance": "Monthly rollforward, partial/reversed payments, balloons and linked contracts"
+    },
+    {
+      "id": "U12",
+      "title": "Time",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Luna Max with Sol review; U01/U10",
+      "start_after": [
+        "U01",
+        "U10"
+      ],
+      "acceptance_requires": [
+        "U10"
+      ],
+      "scope": "Actual time connection/mappings, approved time and cost reconciliation",
+      "acceptance": "Four employee identities verified; overnight/DST/deletion tests; no payroll double count"
+    },
+    {
+      "id": "U13",
+      "title": "Report completion",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Three bounded batches after U01; U06/U09\u2013U12 as relevant; forecast batch joins U15",
+      "start_after": [
+        "U01"
+      ],
+      "acceptance_requires": [
+        "U06",
+        "U09",
+        "U10",
+        "U11",
+        "U12",
+        "U15"
+      ],
+      "scope": "Rental/operations, book statements, combined/investor/project reports; one registry integrator",
+      "acceptance": "All 53 have implemented engines/contracts and passing controlled fixtures; live source prerequisites are tracked separately and no unfinished engine counts complete"
+    },
+    {
+      "id": "U14",
+      "title": "Model migration",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Luna Max; U00/U01",
+      "start_after": [
+        "U00",
+        "U01"
+      ],
+      "acceptance_requires": [],
+      "scope": "Read-only workbook inventory, native recalculation, approved override and fixture extraction",
+      "acceptance": "All 15 main-workbook sheets and six growth-model sheets assessed; scenario ownership retained"
+    },
+    {
+      "id": "U15",
+      "title": "Forecast engine",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Sol High; U06/U10/U11/U14",
+      "start_after": [
+        "U06",
+        "U10",
+        "U11",
+        "U14"
+      ],
+      "acceptance_requires": [],
+      "scope": "Event calendar, drivers, integrated statements, scenarios and snapshots",
+      "acceptance": "Every forecast invariant and approved workbook comparison passes"
+    },
+    {
+      "id": "U16",
+      "title": "Forecast UI",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Luna Max; U07/U15 contracts",
+      "start_after": [
+        "U07"
+      ],
+      "acceptance_requires": [
+        "U15"
+      ],
+      "scope": "Cash/Income/Balance sheet/Debt/Scenarios/Assumptions and charts",
+      "acceptance": "Every chart drills to inputs; scenario edits reversible; unknown costs visible"
+    },
+    {
+      "id": "U17",
+      "title": "Packages/exports",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Luna Max; U13/U15",
+      "start_after": [
+        "U13",
+        "U15"
+      ],
+      "acceptance_requires": [],
+      "scope": "Presets, immutable package runs, printable exports and authorized retrieval",
+      "acceptance": "Filters/versions persist; screen/API/export totals agree; incomplete packages labeled"
+    },
+    {
+      "id": "U18",
+      "title": "Agent parity",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Sol High auth, Luna inventory/docs; U01 onward",
+      "start_after": [
+        "U01"
+      ],
+      "acceptance_requires": [
+        "U03",
+        "U09",
+        "U10",
+        "U11",
+        "U12",
+        "U13",
+        "U15",
+        "U17"
+      ],
+      "scope": "MCP/HTTP schemas, paging, errors, missing adapters and client guides",
+      "acceptance": "Real Codex and Claude workflow suite passes independently"
+    },
+    {
+      "id": "U19",
+      "title": "Company cutover",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Luna Max with Sol review; U04/U09/U10/U11/U18",
+      "start_after": [
+        "U04",
+        "U09",
+        "U10",
+        "U11",
+        "U18"
+      ],
+      "acceptance_requires": [],
+      "scope": "Documents/contacts/entities, remaining Excel/Airtable migration, utility/compliance/inventory needs",
+      "acceptance": "Source reconciliation, tested rollback, one owner per field and working links"
+    },
+    {
+      "id": "U20",
+      "title": "Release proof",
+      "status": "planned_not_started_by_this_roadmap",
+      "owner_and_dependencies": "Astra orchestrates specialists; all required packets",
+      "start_after": [
+        "U03",
+        "U05",
+        "U06",
+        "U07",
+        "U08",
+        "U09",
+        "U10",
+        "U11",
+        "U12",
+        "U13",
+        "U14",
+        "U15",
+        "U16",
+        "U17",
+        "U18",
+        "U19"
+      ],
+      "acceptance_requires": [],
+      "scope": "Production read pilot, financial close, performance, security, restore and staged activation",
+      "acceptance": "Gates below passed and evidence tied to exact release SHA"
+    }
+  ]
+}
