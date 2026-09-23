@@ -183,7 +183,8 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
       setDisconnectOpen(false);
       setDisconnectedEntities(current => new Set(current).add(selectedConnection.scope.legalEntityId));
       setMessage(result.providerOutcome === "already_revoked" ? "QuickBooks was already disconnected at Intuit. 5Central Ops cleared its connection." : "QuickBooks disconnected. Reconnect to resume record refreshes.");
-      await connections.refetch();
+      // Connections, health and mirrors all change; refetch every accounting read.
+      await queryClient.invalidateQueries({ queryKey: ["accounting"] });
     } catch (error) { setDisconnectError(error); }
     finally { setDisconnecting(false); }
   }
