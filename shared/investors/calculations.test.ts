@@ -183,3 +183,13 @@ test("a maturity payoff without fixed profit is included once in the documented 
   assert.equal(calculation.amounts.unclassifiedCents, "20000");
   assert.equal(calculation.amountComplete, true);
 });
+
+test("contract rates must be non-negative and fit the stored numeric(18,12) precision", () => {
+  assert.equal(investorContractTermsSchema.parse({ ...baseTerms, annualRate: "0.112500000000" }).annualRate, "0.1125");
+  assert.equal(investorContractTermsSchema.safeParse({ ...baseTerms, annualRate: "999999.123456789012" }).success, true);
+  for (const annualRate of ["-0.12", "0.1234567890123", "1000000"]) {
+    assert.equal(investorContractTermsSchema.safeParse({ ...baseTerms, annualRate }).success, false, annualRate);
+  }
+  assert.equal(investorContractTermsSchema.safeParse({ ...baseTerms, returnMultiple: "-1.5" }).success, false);
+  assert.equal(investorContractTermsSchema.safeParse({ ...baseTerms, preferredReturnRate: "-0.08" }).success, false);
+});
