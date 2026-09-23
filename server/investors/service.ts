@@ -567,7 +567,8 @@ export class InvestorReadService {
         if ((payment.status === "qbo_posted" || payment.status === "review_required") && (payment.postedSource === null || payment.postedSourceValidity !== "current")) return "manual_recorded";
         if (payment.status === "bank_settled" && payment.settlementSource === null) return "manual_recorded";
         if (payment.status !== "reversed" || payment.reversesPaymentId === null) return payment.status;
-        return evidenceStatus(paymentById.get(String(payment.reversesPaymentId)) ?? payment);
+        const original = paymentById.get(String(payment.reversesPaymentId));
+        return original ? evidenceStatus(original) : payment.status;
       };
       const verifiedAmount = (kind: "contribution" | "return_of_capital"): bigint => payments.reduce((total, payment) => {
         const original = payment.reversesPaymentId === null ? null : paymentById.get(String(payment.reversesPaymentId));
