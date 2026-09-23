@@ -34,6 +34,7 @@ export type ReconciliationOperation = (Guard & (
   | { kind: "schedule-establish"; replacement: RentOpsRecurringChargeSchedule }
   | { kind: "schedule-rebuild"; targetTenancy?: { id: string; expectedRevision: number; beforeSha256: string }; endId: string; effectiveFrom: string; replacement: RentOpsRecurringChargeSchedule }
   | { kind: "account-facts"; facts: NonNullable<RentOpsPerson["sourceAccountFacts"]> }
+  | { kind: "future-tenancy-unit-link"; plannedMoveInOn: string; unitGuard: RecordGuard }
 )) | (Omit<Guard, "sourceId"> & ({ kind: "manual-schedule-replace"; successorId: string } | { kind: "manual-schedule-correct"; endId: string; replacementId: string }) & { sourceId?: never; effectiveFrom: string; amountCents: number; billingFrequency: "monthly"; targetTenancy: { id: string; sourceId: string; expectedRevision: number; beforeSha256: string } });
 export interface ReconciliationManifest { id: string; actorSubject: string; occurredAt: string; operations: ReconciliationOperation[] }
 export interface ReconciliationPlan { token: string; manifestHash: string; changes: Array<{ targetId: string; before: unknown; after: unknown; beforeSha256: string; afterSha256: string }>; ledgerUnchanged: true }
@@ -44,7 +45,7 @@ function target(snapshot: RentOpsSnapshot, operation: ReconciliationOperation) {
   if (operation.kind === "metered-utility") return snapshot.tenancies.find(row => row.id === operation.targetId);
   if (operation.kind === "vacancy-confirm") return snapshot.units.find(row => row.id === operation.targetId);
   if (operation.kind === "lease-review") return snapshot.leaseTerms.find(row => row.id === operation.targetId);
-  const rows = (operation.kind === "tenancy-status" || operation.kind === "tenancy-future-departure" || operation.kind === "tenancy-expected-departure" || operation.kind === "tenancy-transfer" || operation.kind === "balance-review" || operation.kind === "schedule-establish" || operation.kind === "subsidy-establish") ? snapshot.tenancies : operation.kind === "account-facts" || operation.kind === "occupancy-establish" ? snapshot.people : operation.kind === "lease-term-correction" ? snapshot.leaseTerms : snapshot.recurringSchedules;
+  const rows = (operation.kind === "tenancy-status" || operation.kind === "tenancy-future-departure" || operation.kind === "tenancy-expected-departure" || operation.kind === "tenancy-transfer" || operation.kind === "balance-review" || operation.kind === "schedule-establish" || operation.kind === "subsidy-establish" || operation.kind === "future-tenancy-unit-link") ? snapshot.tenancies : operation.kind === "account-facts" || operation.kind === "occupancy-establish" ? snapshot.people : operation.kind === "lease-term-correction" ? snapshot.leaseTerms : snapshot.recurringSchedules;
   return rows.find(row => row.id === operation.targetId);
 }
 function ledgerHash(snapshot: RentOpsSnapshot) {
@@ -258,6 +259,31 @@ export async function reconcileImportedRecords(repository: RentOpsRepository, ma
             values: { actual_move_out_on: null, actual_move_out_knowledge: "unknown", expected_move_out_on: operation.expectedMoveOutOn, expected_move_out_knowledge: "source" } });
           await transaction.saveRecordChange({ id: `record-change:reconciliation:${manifest.id}:${index}`, entityType: "tenancy", targetId: tenancy.id, revision: operation.expectedRevision + 1, origin: "admin", actorSubject: manifest.actorSubject, occurredAt: manifest.occurredAt, changedFields: ["actualMoveOutOn", "expectedMoveOutOn"] });
           after = { ...tenancy, actualMoveOutOn: undefined, actualMoveOutKnowledge: "unknown", expectedMoveOutOn: operation.expectedMoveOutOn, expectedMoveOutKnowledge: "source", recordRevision: operation.expectedRevision + 1 };
+        } else if (operation.kind === "future-tenancy-unit-link") {
+          // Owner-attested future term: link the exact existing future tenancy to its signed unit and
+          // prospective start. Never records occupancy, move-in, charges, deposits or receipts.
+          const tenancy = before[index] as RentOpsTenancy;
+          const unit = guardedRecord(beforeSnapshot.units, operation.unitGuard);
+          const today = nowIsoDate(new Date(manifest.occurredAt));
+          const planned = operation.plannedMoveInOn;
+          const validDate = /^\d{4}-\d{2}-\d{2}$/.test(planned) && Number.isFinite(Date.parse(planned)) && new Date(planned).toISOString().slice(0, 10) === planned;
+          const linkResolved = tenancy.unitId === unit.id && ["exact", "manual"].includes(tenancy.unitLinkKnowledge ?? "");
+          const conflicting = beforeSnapshot.tenancies.some(row => row.id !== tenancy.id && row.unitId === unit.id && (row.status === "future"
+            || (["current", "notice"].includes(row.status) && !(row.actualMoveOutOn && row.actualMoveOutOn <= planned) && !(row.expectedMoveOutOn && row.expectedMoveOutOn <= planned))));
+          if (!validDate || planned <= today || tenancy.status !== "future" || tenancy.actualMoveInOn != null || tenancy.actualMoveOutOn != null
+            || tenancy.occupancyConfirmedOn != null || tenancy.operationalEndConfirmedOn != null || unit.propertyId !== tenancy.propertyId
+            || (linkResolved && tenancy.plannedMoveInOn === planned) || conflicting) throw new Error("Future unit link requires an exact future tenancy without occupancy facts, a guarded same-property unit, a prospective start and no conflicting occupancy");
+          let linked = await service.patchRecord("tenancy", operation.targetId, operation.expectedRevision, { unitId: unit.id, plannedMoveInOn: planned }, context) as RentOpsTenancy;
+          if (linked.unitId !== unit.id) throw new Error("Future unit link readback differs");
+          if (!["exact", "manual"].includes(linked.unitLinkKnowledge ?? "")) {
+            // Same unit id with unresolved link knowledge: confirm the link itself under the next revision.
+            if (!transaction.applyRecordPatch || !transaction.saveRecordChange) throw new Error("Revision and audit persistence unavailable");
+            const revision = linked.recordRevision ?? operation.expectedRevision;
+            await transaction.applyRecordPatch({ entityType: "tenancy", targetId: tenancy.id, expectedRevision: revision, nextRevision: revision + 1, values: { unit_link_knowledge: "manual" } });
+            await transaction.saveRecordChange({ id: `record-change:reconciliation:${manifest.id}:${index}`, entityType: "tenancy", targetId: tenancy.id, revision: revision + 1, origin: "admin", actorSubject: manifest.actorSubject, occurredAt: context.occurredAt, changedFields: ["unitLinkKnowledge"] });
+            linked = { ...linked, unitLinkKnowledge: "manual", recordRevision: revision + 1 };
+          }
+          after = linked;
         } else if (operation.kind === "account-facts") {
           const person = before[index] as RentOpsPerson;
           if (person.sourceAccountFacts != null) throw new Error("Account-facts backfill cannot overwrite existing observations");
