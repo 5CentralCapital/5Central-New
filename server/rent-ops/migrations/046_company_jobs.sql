@@ -36,6 +36,10 @@ CREATE INDEX company_jobs_ready ON company_jobs (priority, run_after, created_at
 CREATE INDEX company_jobs_expired_leases ON company_jobs (lease_until) WHERE state = 'running';
 CREATE INDEX company_jobs_topic_state ON company_jobs (topic, state, updated_at DESC);
 CREATE UNIQUE INDEX company_jobs_outbox_event ON company_jobs (outbox_event_id) WHERE outbox_event_id IS NOT NULL;
+CREATE INDEX company_jobs_organization_updated ON company_jobs (organization_id, updated_at DESC, id DESC);
+-- Pending object-fetch jobs coalesce by an explicit key carried in the payload.
+CREATE INDEX company_jobs_pending_coalesce ON company_jobs (topic, (payload->>'coalesceKey'))
+  WHERE state IN ('queued','retry');
 
 CREATE TABLE company_job_attempts (
   job_id uuid NOT NULL REFERENCES company_jobs(id),
