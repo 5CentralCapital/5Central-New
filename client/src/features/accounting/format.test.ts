@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ageLabel, formatCents, monthPeriod, newOperationId, sumCents } from "./format";
+import { ageLabel, formatCents, monthPeriod, newOperationId, previousOperatingMonth, sumCents } from "./format";
 
 test("cents format exactly, including values beyond double precision", () => {
   assert.equal(formatCents("100000"), "$1,000.00");
@@ -20,4 +20,11 @@ test("periods, ages and operation ids", () => {
   assert.equal(ageLabel(1800), "30 min ago");
   assert.equal(ageLabel(7200), "2 h ago");
   assert.match(newOperationId(), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+});
+
+test("the period awaiting close follows the New York calendar, not UTC", () => {
+  // 10 p.m. on September 30 in New York is already October 1 in UTC.
+  assert.deepEqual(previousOperatingMonth(new Date("2026-10-01T02:00:00Z")), { periodStart: "2026-08-01", periodEnd: "2026-08-31" });
+  assert.deepEqual(previousOperatingMonth(new Date("2026-10-01T05:00:00Z")), { periodStart: "2026-09-01", periodEnd: "2026-09-30" });
+  assert.deepEqual(previousOperatingMonth(new Date("2027-01-01T03:00:00Z")), { periodStart: "2026-11-01", periodEnd: "2026-11-30" });
 });

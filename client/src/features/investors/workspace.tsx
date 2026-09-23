@@ -6,6 +6,7 @@ import { investorAccountStatusSchema, investorPaymentLogQuerySchema, type Invest
 import { CapitalPanel, DebtMaturitiesPanel, PaymentCalendarPanel, formatInvestorMoney } from "./panels";
 import { InvestorApiError, InvestorRevisionConflictError, createInvestorCommandEnvelope, investorsApi } from "./api";
 import { percentageToBasisPoints, percentageToRateDecimal } from "./percent";
+import { workspaceToday } from "../rent-ops/workspace/workspace-date";
 import type { InvestorTab, InvestorWorkspaceEntity, InvestorWorkspaceProps } from "./types";
 import { INVESTOR_TABS, INVESTOR_TAB_LABELS } from "./types";
 import { Dialog as DialogRoot } from "@/components/ui/dialog";
@@ -26,11 +27,6 @@ function dateLabel(value: string | null | undefined): string { if (!value) retur
 /** One money format across the investor workspace: "$1,234.56", other currencies by ISO code, null as Unknown. */
 const money = formatInvestorMoney;
 function cents(value: string, required = false): string | null { const trimmed = value.trim(); if (!trimmed) return required ? null : "0"; if (!/^\d+(?:\.\d{0,2})?$/.test(trimmed)) throw new Error("Enter a non-negative amount with up to two decimals."); const [whole, fraction = ""] = trimmed.split("."); return (BigInt(whole) * BigInt(100) + BigInt(fraction.padEnd(2, "0"))).toString(); }
-function workspaceToday(date = new Date()): string {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
-  const values = Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
 function monthFor(date = new Date()): string { return `${workspaceToday(date).slice(0, 7)}-01`; }
 function shiftMonth(month: string, offset: number): string { const [year, monthNumber] = month.split("-").map(Number); const index = year * 12 + monthNumber - 1 + offset; return `${String(Math.floor(index / 12)).padStart(4, "0")}-${String(index % 12 + 1).padStart(2, "0")}-01`; }
 function statusClass(status: string): string { return status === "active" || status === "qbo_posted" || status === "bank_settled" ? "is-positive" : status === "partially_posted" || status === "partially_settled" || status === "manual_recorded" || status === "review_required" ? "is-warning" : status === "archived" || status === "reversed" ? "is-muted" : ""; }

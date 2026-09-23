@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ConnectorHealth, PmSettlementDetail, PmSettlementSummary, RentalPostingMethod } from "@shared/accounting/operations";
-import { ageLabel, dateLabel, dateTimeLabel, formatCents, isPositiveCents, monthLabel, monthPeriod, newOperationId, sumCents } from "./format";
+import { ageLabel, dateLabel, dateTimeLabel, formatCents, isPositiveCents, monthLabel, monthPeriod, newOperationId, previousOperatingMonth, sumCents } from "./format";
 import type { AccountingApi, AccountingCommandEnvelope, AccountingPeriod, AccountingScope, AccountingView } from "./types";
 import { AccountingApiError } from "./api";
 
@@ -82,7 +82,7 @@ function HealthCard({ item }: { readonly item: ConnectorHealth }) {
 }
 
 export function OverviewPanel({ api, organizationId, legalEntityId, currency, onOpen }: { readonly api: AccountingApi; readonly organizationId: string; readonly legalEntityId: string; readonly currency: string; readonly onOpen: (view: AccountingView) => void }) {
-  const period = useMemo(() => monthPeriod(new Date(), -1), []);
+  const period = useMemo(() => previousOperatingMonth(), []);
   const health = useQuery({ queryKey: ["accounting", "health", organizationId, legalEntityId], queryFn: ({ signal }) => api.health(organizationId, legalEntityId, signal), staleTime: 15_000, refetchInterval: 60_000 });
   const close = useQuery({ queryKey: ["accounting", "close", organizationId, legalEntityId, period], queryFn: ({ signal }) => api.closeChecklist(organizationId, legalEntityId, period, signal), staleTime: 30_000 });
   const open = useQuery({ queryKey: ["accounting", "pm-open", organizationId, legalEntityId], queryFn: ({ signal }) => api.pmSettlements(organizationId, { legalEntityId, states: ["draft", "exception"] }, signal), staleTime: 30_000 });
@@ -318,7 +318,7 @@ function PostingMethodForm({ api, organizationId, legalEntityId, onSaved }: { re
 }
 
 export function PeriodCloseView({ api, organizationId, legalEntityId, currency }: { readonly api: AccountingApi; readonly organizationId: string; readonly legalEntityId: string; readonly currency: string }) {
-  const [period, setPeriod] = useState<AccountingPeriod>(() => monthPeriod(new Date(), -1));
+  const [period, setPeriod] = useState<AccountingPeriod>(() => previousOperatingMonth());
   const [editing, setEditing] = useState(false);
   const queryClient = useQueryClient();
   const checklist = useQuery({ queryKey: ["accounting", "close", organizationId, legalEntityId, period], queryFn: ({ signal }) => api.closeChecklist(organizationId, legalEntityId, period, signal), staleTime: 20_000 });

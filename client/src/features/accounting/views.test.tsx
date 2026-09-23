@@ -5,7 +5,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ConnectorHealthResponse, PeriodCloseChecklist, PmSettlementDetail, RentalBridgePreview } from "@shared/accounting/operations";
-import { monthPeriod } from "./format";
+import { previousOperatingMonth } from "./format";
 import type { AccountingApi } from "./types";
 
 // The test runner compiles JSX with the classic runtime; the app build uses Vite's automatic runtime.
@@ -55,7 +55,7 @@ test("the PM statement detail shows gross-to-net without inflating income", asyn
 
 test("overview and period close render health, clearing and checklist state", async () => {
   const { OverviewPanel, PeriodCloseView } = await views;
-  const period = monthPeriod(new Date(), -1);
+  const period = previousOperatingMonth();
   const health: ConnectorHealthResponse = {
     items: [{
       scope: { organizationId: ORG, legalEntityId: ENTITY, environment: "sandbox", realmId: "555" } as never, legalEntityName: "Example LLC", companyName: "Synthetic QBO",

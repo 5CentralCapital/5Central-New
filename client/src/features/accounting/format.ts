@@ -1,4 +1,5 @@
 /** Display helpers for exact cents strings; money never passes through floating point. */
+import { workspaceToday } from "../rent-ops/workspace/workspace-date";
 
 const SYMBOLS: Readonly<Record<string, string>> = { USD: "$", CAD: "CA$", EUR: "€", GBP: "£" };
 
@@ -52,6 +53,11 @@ export function monthPeriod(reference: Date, offset = 0): { readonly periodStart
   const start = new Date(Date.UTC(reference.getUTCFullYear(), reference.getUTCMonth() + offset, 1));
   const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 0));
   return { periodStart: start.toISOString().slice(0, 10), periodEnd: end.toISOString().slice(0, 10) };
+}
+
+/** The month before the current operating (New York) month: the period awaiting close. */
+export function previousOperatingMonth(now = new Date()): { readonly periodStart: string; readonly periodEnd: string } {
+  return monthPeriod(new Date(`${workspaceToday(now).slice(0, 7)}-15T12:00:00Z`), -1);
 }
 
 export function monthLabel(periodStart: string): string {
