@@ -17,6 +17,12 @@ import {
   linkWorkOrderProjectPayloadSchema,
   setWorkOrderChargebackPayloadSchema,
   updateWorkOrderPayloadSchema,
+  assignWorkOrderVendorPayloadSchema,
+  linkWorkOrderCostPayloadSchema,
+  unlinkWorkOrderCostPayloadSchema,
+  setWorkOrderManualActualPayloadSchema,
+  workOrderAttachmentPayloadSchema,
+  type WorkOrderVendor,
   workOrderCommandPayloadSchemas,
   workOrderIdSchema,
   workOrderTransitionProblem,
@@ -28,6 +34,9 @@ import type { AuthenticatedPrincipal, CommandAuthorizationPolicy, TransportAttes
 import { runCompanyCommand, type CommandHandlerContext, type CommandHandlerResult } from "../company/commands/runner";
 import { ConflictCommandError, ForbiddenCommandError, ValidationCommandError } from "../company/commands/errors";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
+import type { ProjectExecutionFinancePorts } from "../projects/execution-commands";
+import { verifyCostSourceLine } from "../projects/source-lines";
+import { WORK_ORDER_COST_CONSUMER_KIND } from "./service";
 import { assertEntityPropertyUnit, dbDate, dbNullableCents, dbNullableDate, dbNullableString, dbRevision, dbString, resolveEffectiveDate } from "../projects/helpers";
 
 type AnyEnvelope = CommandEnvelope<Record<string, unknown>>;
@@ -37,7 +46,11 @@ export interface WorkOrderCommandExecutionOptions {
   readonly principal: AuthenticatedPrincipal;
   readonly resolvePrincipal: (executor: RentOpsQueryExecutor) => Promise<AuthenticatedPrincipal>;
   readonly transport: TransportAttestation;
+  /** Transaction-bound QBO mirror ports; required only to link or unlink QBO cost lines. */
+  readonly financeFactory?: (executor: RentOpsQueryExecutor) => ProjectExecutionFinancePorts;
 }
+
+type FinanceContext = Context & { readonly finance?: ProjectExecutionFinancePorts };
 
 const WORK_ORDER_WRITE_ROLES = ["owner", "admin", "operations_pm", "project_manager"] as const;
 const WORK_ORDER_CHARGEBACK_ROLES = ["owner", "admin", "operations_pm", "project_manager", "finance"] as const;
@@ -50,6 +63,12 @@ export const WORK_ORDER_COMMAND_POLICIES: Readonly<Record<WorkOrderCommandKind, 
   "work_order.project.link": { commandKind: "work_order.project.link", allowedRoles: WORK_ORDER_WRITE_ROLES },
   "work_order.chargeback.set": { commandKind: "work_order.chargeback.set", allowedRoles: WORK_ORDER_CHARGEBACK_ROLES },
   "work_order.chargeback.clear": { commandKind: "work_order.chargeback.clear", allowedRoles: WORK_ORDER_CHARGEBACK_ROLES },
+  "work_order.vendor.assign": { commandKind: "work_order.vendor.assign", allowedRoles: WORK_ORDER_WRITE_ROLES },
+  "work_order.cost.link": { commandKind: "work_order.cost.link", allowedRoles: WORK_ORDER_CHARGEBACK_ROLES },
+  "work_order.cost.unlink": { commandKind: "work_order.cost.unlink", allowedRoles: WORK_ORDER_CHARGEBACK_ROLES },
+  "work_order.actual.set": { commandKind: "work_order.actual.set", allowedRoles: WORK_ORDER_CHARGEBACK_ROLES },
+  "work_order.attachment.link": { commandKind: "work_order.attachment.link", allowedRoles: WORK_ORDER_CHARGEBACK_ROLES },
+  "work_order.attachment.unlink": { commandKind: "work_order.attachment.unlink", allowedRoles: WORK_ORDER_CHARGEBACK_ROLES },
 });
 
 export interface WorkOrderRow {
@@ -67,6 +86,7 @@ export interface WorkOrderRow {
   readonly chargebackAmountCents: string | null;
   readonly chargebackDescription: string | null;
   readonly chargebackLedgerTransactionId: string | null;
+  readonly currency: string;
   readonly recordRevision: Revision;
 }
 
@@ -102,7 +122,7 @@ export async function loadWorkOrderForCommand(context: Context, workOrderId: str
   const result = await context.executor.query<Record<string, unknown>>(
     `SELECT id, legal_entity_id, property_id, unit_id, tenancy_id, person_id, project_id, status,
             reported_on, scheduled_on, completed_on, chargeback_amount_cents::text AS chargeback_amount_cents,
-            chargeback_description, chargeback_ledger_transaction_id, record_revision
+            chargeback_description, chargeback_ledger_transaction_id, currency, record_revision
        FROM company_work_orders
       WHERE organization_id = $1 AND id = $2
         AND ($3::uuid IS NULL OR legal_entity_id = $3)
@@ -127,6 +147,7 @@ export async function loadWorkOrderForCommand(context: Context, workOrderId: str
     chargebackAmountCents: dbNullableCents(row.chargeback_amount_cents, "chargeback_amount_cents"),
     chargebackDescription: dbNullableString(row.chargeback_description, "chargeback_description"),
     chargebackLedgerTransactionId: dbNullableString(row.chargeback_ledger_transaction_id, "chargeback_ledger_transaction_id"),
+    currency: dbString(row.currency, "currency"),
     recordRevision: dbRevision(row.record_revision),
   };
 }
@@ -372,6 +393,149 @@ async function handleChargebackClear(context: Context): Promise<CommandHandlerRe
   return saved(current.id, revision);
 }
 
+async function currentEventState(context: Context, workOrderId: string, key: "vendorAssignment" | "manualActual"): Promise<unknown> {
+  const result = await context.executor.query<{ value: unknown }>(
+    `SELECT details->$3 AS value FROM company_work_order_events
+      WHERE organization_id = $1 AND work_order_id = $2 AND details ? $3
+      ORDER BY record_revision DESC, created_at DESC, id DESC LIMIT 1`,
+    [context.envelope.scope.organizationId, workOrderId, key],
+  );
+  const value = result.rows[0]?.value;
+  return typeof value === "string" ? JSON.parse(value) : value ?? null;
+}
+
+async function handleVendorAssign(context: Context): Promise<CommandHandlerResult> {
+  const payload = assignWorkOrderVendorPayloadSchema.parse(context.envelope.payload);
+  const current = await loadWorkOrderForCommand(context, payload.workOrderId);
+  requireRevision(context, current.recordRevision);
+  let vendor: WorkOrderVendor | null = null;
+  if (payload.vendor) {
+    const organizationId = context.envelope.scope.organizationId;
+    if (payload.vendor.kind === "contact") {
+      const result = await context.executor.query<{ display_name: string }>(
+        `SELECT c.display_name FROM company_contacts c
+          WHERE c.organization_id = $1 AND c.id = $2 AND c.archived_at IS NULL
+            AND EXISTS (SELECT 1 FROM company_contact_roles r WHERE r.organization_id = c.organization_id AND r.contact_id = c.id AND r.role = 'vendor'
+                          AND (r.legal_entity_id IS NULL OR r.legal_entity_id = $3)
+                          AND r.effective_from <= $4::date AND (r.effective_until IS NULL OR r.effective_until > $4::date))`,
+        [organizationId, payload.vendor.id, current.legalEntityId, resolveEffectiveDate(context.envelope.effectiveDate)],
+      );
+      const row = result.rows[0];
+      if (!row) throw new ValidationCommandError("Contact is not an active vendor for this entity", { reason: "work_order_vendor_not_found" });
+      vendor = { kind: "contact", id: payload.vendor.id, name: String(row.display_name).slice(0, 240) };
+    } else {
+      const result = await context.executor.query<{ name: string }>(`SELECT name FROM company_project_vendors WHERE organization_id = $1 AND id = $2 AND status <> 'inactive'`, [organizationId, payload.vendor.id]);
+      const row = result.rows[0];
+      if (!row) throw new ValidationCommandError("Vendor is not available in this company", { reason: "work_order_vendor_not_found" });
+      vendor = { kind: "project_vendor", id: payload.vendor.id, name: String(row.name).slice(0, 240) };
+    }
+  }
+  const previous = await currentEventState(context, current.id, "vendorAssignment");
+  if (JSON.stringify(previous ?? null) === JSON.stringify(vendor)) throw new ValidationCommandError("The work order already has this vendor", { reason: "work_order_vendor_unchanged" });
+  const revision = await saveChanges(context, current, {});
+  await recordEvent(context, { workOrderId: current.id, type: "updated", revision, details: { action: vendor ? "vendor_assigned" : "vendor_cleared", vendorAssignment: vendor, previousVendor: previous } });
+  return saved(current.id, revision);
+}
+
+function requireFinance(context: Context): ProjectExecutionFinancePorts {
+  const finance = (context as FinanceContext).finance;
+  if (!finance) throw new ValidationCommandError("Verified QuickBooks source lines are unavailable", { reason: "work_order_finance_unavailable" });
+  return finance;
+}
+
+/**
+ * Link a posted QBO bill line (or part of it) to a work order. The amount is
+ * reserved in the central allocation ledger shared with projects and payroll,
+ * so one bill line can never be counted as two costs.
+ */
+async function handleCostLink(context: Context): Promise<CommandHandlerResult> {
+  const payload = linkWorkOrderCostPayloadSchema.parse(context.envelope.payload);
+  const current = await loadWorkOrderForCommand(context, payload.workOrderId);
+  requireRevision(context, current.recordRevision);
+  if (payload.source.organizationId !== context.envelope.scope.organizationId || payload.source.legalEntityId !== current.legalEntityId) {
+    throw new ValidationCommandError("The QBO line belongs to another entity", { reason: "work_order_cost_scope_mismatch" });
+  }
+  const finance = requireFinance(context);
+  const line = await verifyCostSourceLine(finance, { source: payload.source, amountCents: payload.amountCents, currency: current.currency, effectiveDate: resolveEffectiveDate(context.envelope.effectiveDate), purpose: "cost", reasonPrefix: "work_order_cost" });
+  await finance.allocations.reserve({ source: line.source, consumerKind: WORK_ORDER_COST_CONSUMER_KIND, consumerId: current.id, amountCents: payload.amountCents, currency: line.currency });
+  const revision = await saveChanges(context, current, {});
+  await recordEvent(context, { workOrderId: current.id, type: "updated", revision, details: { action: "cost_linked", costLink: { source: line.source, amountCents: payload.amountCents } } });
+  return costSaved(current.id, revision);
+}
+
+async function handleCostUnlink(context: Context): Promise<CommandHandlerResult> {
+  const payload = unlinkWorkOrderCostPayloadSchema.parse(context.envelope.payload);
+  const current = await loadWorkOrderForCommand(context, payload.workOrderId);
+  requireRevision(context, current.recordRevision);
+  const source = payload.source;
+  const existing = await context.executor.query<{ amount_cents: string; currency: string; source_version: string }>(
+    `SELECT amount_cents::text AS amount_cents, currency, source_version FROM accounting_qbo_source_line_allocations
+      WHERE organization_id = $1 AND legal_entity_id = $2 AND environment = $3 AND realm_id = $4 AND object_type = $5 AND object_id = $6 AND line_id = $7
+        AND consumer_kind = $8 AND consumer_id = $9`,
+    [context.envelope.scope.organizationId, current.legalEntityId, source.environment, source.realmId, source.objectType, source.objectId, source.lineId ?? "", WORK_ORDER_COST_CONSUMER_KIND, current.id],
+  );
+  const row = existing.rows[0];
+  if (!row) throw new ValidationCommandError("This QBO line is not linked to the work order", { reason: "work_order_cost_not_linked" });
+  const finance = requireFinance(context);
+  await finance.allocations.release({ source: { ...source, version: row.source_version }, consumerKind: WORK_ORDER_COST_CONSUMER_KIND, consumerId: current.id, amountCents: row.amount_cents, currency: row.currency });
+  const revision = await saveChanges(context, current, {});
+  await recordEvent(context, { workOrderId: current.id, type: "updated", revision, details: { action: "cost_unlinked", costLink: { source: { ...source, version: row.source_version }, amountCents: row.amount_cents } } });
+  return costSaved(current.id, revision);
+}
+
+async function handleManualActual(context: Context): Promise<CommandHandlerResult> {
+  const payload = setWorkOrderManualActualPayloadSchema.parse(context.envelope.payload);
+  const current = await loadWorkOrderForCommand(context, payload.workOrderId);
+  requireRevision(context, current.recordRevision);
+  const previous = await currentEventState(context, current.id, "manualActual");
+  if (payload.amountCents === null && previous === null) throw new ValidationCommandError("This work order has no manual actual cost", { reason: "work_order_manual_actual_absent" });
+  const revision = await saveChanges(context, current, {});
+  const manualActual = payload.amountCents === null ? null : { amountCents: payload.amountCents, note: payload.note ?? null, setAt: new Date().toISOString(), setBy: context.principal.actorId };
+  await recordEvent(context, { workOrderId: current.id, type: "updated", revision, details: { action: manualActual ? "manual_actual_set" : "manual_actual_cleared", manualActual } });
+  return saved(current.id, revision);
+}
+
+async function linkedDocumentIds(context: Context, workOrderId: string): Promise<Set<string>> {
+  const events = await context.executor.query<{ details: unknown }>(
+    `SELECT details FROM company_work_order_events WHERE organization_id = $1 AND work_order_id = $2 AND details ? 'attachment' ORDER BY record_revision, created_at, id`,
+    [context.envelope.scope.organizationId, workOrderId],
+  );
+  const linked = new Set<string>();
+  for (const event of events.rows) {
+    const details = (typeof event.details === "string" ? JSON.parse(event.details) : event.details) as { attachment?: { documentId?: string; action?: string } };
+    const attachment = details.attachment;
+    if (!attachment?.documentId) continue;
+    if (attachment.action === "linked") linked.add(attachment.documentId); else linked.delete(attachment.documentId);
+  }
+  return linked;
+}
+
+async function handleAttachment(context: Context, action: "linked" | "unlinked"): Promise<CommandHandlerResult> {
+  const payload = workOrderAttachmentPayloadSchema.parse(context.envelope.payload);
+  const current = await loadWorkOrderForCommand(context, payload.workOrderId);
+  requireRevision(context, current.recordRevision);
+  const linked = await linkedDocumentIds(context, current.id);
+  if (action === "linked") {
+    if (linked.has(payload.documentId)) throw new ValidationCommandError("This document is already attached", { reason: "work_order_attachment_exists" });
+    const document = await context.executor.query(
+      `SELECT 1 FROM company_documents WHERE organization_id = $1 AND id = $2 AND state = 'verified'
+         AND (legal_entity_id IS NULL OR legal_entity_id = $3) AND (property_id IS NULL OR property_id = $4)`,
+      [context.envelope.scope.organizationId, payload.documentId, current.legalEntityId, current.propertyId],
+    );
+    if (!document.rows.length) throw new ValidationCommandError("Document is not available for this property", { reason: "work_order_document_not_found" });
+    if (linked.size >= 200) throw new ValidationCommandError("A work order can have at most 200 attachments", { reason: "work_order_attachment_limit" });
+  } else if (!linked.has(payload.documentId)) {
+    throw new ValidationCommandError("This document is not attached", { reason: "work_order_attachment_absent" });
+  }
+  const revision = await saveChanges(context, current, {});
+  await recordEvent(context, { workOrderId: current.id, type: "updated", revision, details: { action: action === "linked" ? "attachment_linked" : "attachment_unlinked", attachment: { documentId: payload.documentId, action } } });
+  return saved(current.id, revision);
+}
+
+function costSaved(id: string, revision: Revision): CommandHandlerResult {
+  return { ...saved(id, revision), validationOutcomes: [{ code: "work_order.cost_saved", severity: "info", message: "QuickBooks line allocation saved. Nothing was posted to QuickBooks." }] };
+}
+
 const handlers: Record<WorkOrderCommandKind, (context: Context) => Promise<CommandHandlerResult>> = {
   "work_order.create": handleCreate,
   "work_order.update": handleUpdate,
@@ -380,6 +544,12 @@ const handlers: Record<WorkOrderCommandKind, (context: Context) => Promise<Comma
   "work_order.project.link": handleProjectLink,
   "work_order.chargeback.set": handleChargebackSet,
   "work_order.chargeback.clear": handleChargebackClear,
+  "work_order.vendor.assign": handleVendorAssign,
+  "work_order.cost.link": handleCostLink,
+  "work_order.cost.unlink": handleCostUnlink,
+  "work_order.actual.set": handleManualActual,
+  "work_order.attachment.link": (context) => handleAttachment(context, "linked"),
+  "work_order.attachment.unlink": (context) => handleAttachment(context, "unlinked"),
 };
 
 /** The single mutation path for browser, Codex and seed callers. */
@@ -410,6 +580,6 @@ export async function executeWorkOrderCommand(
     resolvePrincipal: options.resolvePrincipal,
     transport: options.transport,
     policy: WORK_ORDER_COMMAND_POLICIES[kind],
-    handler: handler as (context: CommandHandlerContext<Record<string, unknown>>) => Promise<CommandHandlerResult>,
+    handler: (context) => handler({ ...context, finance: options.financeFactory?.(context.executor) } as FinanceContext),
   });
 }

@@ -22,7 +22,7 @@ import {
   type RecordReferenceId,
 } from "../company";
 import { projectIdSchema, type ProjectId } from "./contracts";
-import { financialSourceReferenceSchema, type FinancialSourceReference } from "../accounting/source";
+import { financialSettlementSchema, financialSourceReferenceSchema, type FinancialSourceReference } from "../accounting/source";
 
 type Brand<Value, Name extends string> = Value & { readonly __brand: Name };
 
@@ -353,6 +353,12 @@ export const projectFinanceActualSchema = z.object({
   currency: currencyCodeSchema,
   postedOn: isoDateSchema,
   sourceRevision: text(160).nullable(),
+  /** Provider transaction type of the bound line (Bill, Purchase, JournalEntry…). */
+  transactionType: z.string().trim().min(1).max(120).optional(),
+  /** Bill payment state from the mirror. Posting is never proof of payment. */
+  settlement: financialSettlementSchema.optional(),
+  /** Full source line amount, used to pro-rate a partially paid line. */
+  lineAmountCents: centsSchema.optional(),
 }).strict();
 export type ProjectFinanceActual = z.infer<typeof projectFinanceActualSchema>;
 
@@ -416,12 +422,33 @@ export const projectExecutionReadQuerySchema = z.object({
 }).strict();
 export type ProjectExecutionReadQuery = z.infer<typeof projectExecutionReadQuerySchema>;
 
+export const projectTemplateScopeItemInputSchema = z.object({
+  description: text(300),
+  category: optionalText(120),
+  unitLabel: optionalText(80),
+  quantity: executionQuantity,
+  rateCents: nonNegativeCents,
+}).strict();
+export const projectTemplateTaskInputSchema = z.object({
+  title: text(200),
+  description: optionalText(4_000),
+  relativeDays: z.number().int().min(0).max(3_650),
+}).strict();
+
 export const projectTemplateCreatePayloadSchema = z.object({
   name: text(200),
   projectType: text(80),
   description: optionalText(4_000),
   currency: currencyCodeSchema.nullable().optional(),
-}).strict();
+  scopeItems: z.array(projectTemplateScopeItemInputSchema).max(500).optional(),
+  tasks: z.array(projectTemplateTaskInputSchema).max(500).optional(),
+  /** Copy the current scope lines and tasks of an existing project into the template. */
+  fromProjectId: projectIdSchema.optional(),
+}).strict().superRefine((value, context) => {
+  if (value.fromProjectId !== undefined && ((value.scopeItems?.length ?? 0) > 0 || (value.tasks?.length ?? 0) > 0)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["fromProjectId"], message: "Copy from a project or list template lines, not both" });
+  }
+});
 export type ProjectTemplateCreatePayload = z.infer<typeof projectTemplateCreatePayloadSchema>;
 
 export const projectTemplateInstantiatePayloadSchema = z.object({
@@ -711,6 +738,21 @@ export const projectFinanceBindingReleasePayloadSchema = z.object({
 }).strict();
 export type ProjectFinanceBindingReleasePayload = z.infer<typeof projectFinanceBindingReleasePayloadSchema>;
 
+/** An explicit cost-to-complete for one scope line. The reason is required. */
+export const projectEtcOverrideSetPayloadSchema = z.object({
+  projectId: projectIdSchema,
+  scopeItemId: z.string().uuid(),
+  amountCents: nonNegativeCents,
+  reason: text(300),
+}).strict();
+export type ProjectEtcOverrideSetPayload = z.infer<typeof projectEtcOverrideSetPayloadSchema>;
+
+export const projectEtcOverrideClearPayloadSchema = z.object({
+  projectId: projectIdSchema,
+  scopeItemId: z.string().uuid(),
+}).strict();
+export type ProjectEtcOverrideClearPayload = z.infer<typeof projectEtcOverrideClearPayloadSchema>;
+
 export const projectExecutionCommandKinds = [
   "project.template.create",
   "project.template.instantiate",
@@ -738,6 +780,8 @@ export const projectExecutionCommandKinds = [
   "project.draw_request.item.update",
   "project.finance_binding.create",
   "project.finance_binding.release",
+  "project.etc_override.set",
+  "project.etc_override.clear",
 ] as const;
 export type ProjectExecutionCommandKind = (typeof projectExecutionCommandKinds)[number];
 
@@ -768,6 +812,8 @@ export const projectExecutionCommandPayloadSchemas = {
   "project.draw_request.item.update": projectDrawRequestItemUpdatePayloadSchema,
   "project.finance_binding.create": projectFinanceBindingCreatePayloadSchema,
   "project.finance_binding.release": projectFinanceBindingReleasePayloadSchema,
+  "project.etc_override.set": projectEtcOverrideSetPayloadSchema,
+  "project.etc_override.clear": projectEtcOverrideClearPayloadSchema,
 } as const;
 
 export type ProjectExecutionCommandPayload = {

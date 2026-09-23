@@ -12,6 +12,7 @@ import {
   revisionSchema,
   type CompanyScope,
 } from "../company";
+import { financialSourceReferenceSchema } from "../accounting/source";
 import { WORK_ORDER_STATUSES } from "./transitions";
 
 type Brand<Value, Name extends string> = Value & { readonly __brand: Name };
@@ -59,6 +60,43 @@ export const workOrderChargebackSchema = z.object({
 }).strict();
 export type WorkOrderChargeback = z.infer<typeof workOrderChargebackSchema>;
 
+export const WORK_ORDER_VENDOR_KINDS = ["contact", "project_vendor"] as const;
+export type WorkOrderVendorKind = (typeof WORK_ORDER_VENDOR_KINDS)[number];
+/** A vendor is a company contact with the vendor role or a project vendor record. */
+export const workOrderVendorSchema = z.object({
+  kind: z.enum(WORK_ORDER_VENDOR_KINDS),
+  id: canonicalUuidSchema,
+  name: z.string().min(1).max(240),
+}).strict();
+export type WorkOrderVendor = z.infer<typeof workOrderVendorSchema>;
+
+/** Response-time targets used for the derived target date and aging. */
+export const WORK_ORDER_TARGET_DAYS: Readonly<Record<WorkOrderPriority, number>> = Object.freeze({ emergency: 1, high: 3, normal: 7, low: 14 });
+
+/** Derived target date: reported date plus the priority response time. */
+export function workOrderTargetOn(reportedOn: string, priority: WorkOrderPriority): string {
+  const date = new Date(`${reportedOn}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + WORK_ORDER_TARGET_DAYS[priority]);
+  return date.toISOString().slice(0, 10);
+}
+
+/** Days open as of a date, or days to complete for finished work. */
+export function workOrderAgingDays(input: { reportedOn: string; completedOn: string | null; status: string }, asOf: string): number {
+  const end = input.completedOn ?? asOf;
+  const days = Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${input.reportedOn}T00:00:00Z`)) / 86_400_000);
+  return days < 0 ? 0 : days;
+}
+
+export const workOrderActualCostSchema = z.object({
+  /** Sum of QBO bill lines allocated to this work order in the central allocation ledger. */
+  linkedCents: nonNegativeWorkOrderCentsSchema,
+  linkedLineCount: z.number().int().nonnegative(),
+  /** Draft manual actual; operational only until a QBO line is linked. */
+  manualCents: nonNegativeWorkOrderCentsSchema.nullable(),
+  state: z.enum(["verified", "manual", "none"]),
+}).strict();
+export type WorkOrderActualCost = z.infer<typeof workOrderActualCostSchema>;
+
 export const workOrderSummarySchema = z.object({
   id: workOrderIdSchema,
   reference: z.string().regex(/^WO-[0-9A-F]{8}$/),
@@ -81,9 +119,13 @@ export const workOrderSummarySchema = z.object({
   scheduledOn: isoDateSchema.nullable(),
   completedOn: isoDateSchema.nullable(),
   assignedTo: z.string().nullable(),
+  vendor: workOrderVendorSchema.nullable(),
+  targetOn: isoDateSchema,
+  agingDays: z.number().int().nonnegative(),
   entryPermitted: z.boolean(),
   currency: currencyCodeSchema,
   estimatedCostCents: nonNegativeWorkOrderCentsSchema.nullable(),
+  actualCost: workOrderActualCostSchema,
   chargeback: workOrderChargebackSchema.nullable(),
   recordRevision: revisionSchema,
   createdBy: z.string().min(1).max(160),
@@ -106,8 +148,42 @@ export const workOrderEventSchema = z.object({
 }).strict();
 export type WorkOrderEvent = z.infer<typeof workOrderEventSchema>;
 
+export const workOrderAttachmentSchema = z.object({
+  documentId: z.string().min(1).max(160),
+  title: z.string().min(1).max(240),
+  kind: z.string().min(1).max(80),
+  documentDate: isoDateSchema.nullable(),
+  available: z.boolean(),
+  linkedAt: isoTimestampSchema,
+  linkedBy: z.string().min(1).max(160),
+}).strict();
+export type WorkOrderAttachment = z.infer<typeof workOrderAttachmentSchema>;
+
+export const workOrderCostLineSchema = z.object({
+  source: financialSourceReferenceSchema,
+  transactionType: z.string().max(120).nullable(),
+  description: z.string().max(500).nullable(),
+  postedOn: isoDateSchema.nullable(),
+  currency: currencyCodeSchema,
+  allocatedCents: nonNegativeWorkOrderCentsSchema,
+  lineAmountCents: nonNegativeWorkOrderCentsSchema.nullable(),
+  /** current: the mirror still proves the line; stale: the line changed or was voided. */
+  validity: z.enum(["current", "stale"]),
+}).strict();
+export type WorkOrderCostLine = z.infer<typeof workOrderCostLineSchema>;
+
+export const workOrderManualActualSchema = z.object({
+  amountCents: nonNegativeWorkOrderCentsSchema,
+  note: z.string().nullable(),
+  setAt: isoTimestampSchema,
+  setBy: z.string().min(1).max(160),
+}).strict();
+
 export const workOrderDetailSchema = workOrderSummarySchema.extend({
   description: z.string().nullable(),
+  attachments: z.array(workOrderAttachmentSchema).max(200),
+  costLines: z.array(workOrderCostLineSchema).max(200),
+  manualActual: workOrderManualActualSchema.nullable(),
   allowedTransitions: z.array(workOrderStatusSchema).max(WORK_ORDER_STATUSES.length),
   history: z.array(workOrderEventSchema).max(10_000),
 }).strict();
@@ -121,6 +197,10 @@ export const workOrderListQuerySchema = z.object({
   priorities: z.array(workOrderPrioritySchema).min(1).max(WORK_ORDER_PRIORITIES.length).optional(),
   categories: z.array(workOrderCategorySchema).min(1).max(WORK_ORDER_CATEGORIES.length).optional(),
   assignedTo: z.string().trim().min(1).max(200).optional(),
+  vendorId: canonicalUuidSchema.optional(),
+  /** Scheduled-date window, used by the schedule view. */
+  scheduledFrom: isoDateSchema.optional(),
+  scheduledThrough: isoDateSchema.optional(),
   search: z.string().trim().max(200).optional(),
   openOnly: z.boolean().default(true),
   limit: z.number().int().min(1).max(100).default(50),
@@ -231,6 +311,42 @@ export type SetWorkOrderChargebackPayload = z.output<typeof setWorkOrderChargeba
 export const clearWorkOrderChargebackPayloadSchema = z.object({ workOrderId: workOrderIdSchema }).strict();
 export type ClearWorkOrderChargebackPayload = z.output<typeof clearWorkOrderChargebackPayloadSchema>;
 
+export const assignWorkOrderVendorPayloadSchema = z.object({
+  workOrderId: workOrderIdSchema,
+  /** null clears the vendor; the free-text assignee is unchanged. */
+  vendor: z.object({ kind: z.enum(WORK_ORDER_VENDOR_KINDS), id: canonicalUuidSchema }).strict().nullable(),
+}).strict();
+export type AssignWorkOrderVendorPayload = z.output<typeof assignWorkOrderVendorPayloadSchema>;
+
+export const linkWorkOrderCostPayloadSchema = z.object({
+  workOrderId: workOrderIdSchema,
+  source: financialSourceReferenceSchema,
+  amountCents: positiveWorkOrderCentsSchema,
+}).strict().superRefine((value, context) => {
+  if (value.source.lineId === null) context.addIssue({ code: z.ZodIssueCode.custom, path: ["source", "lineId"], message: "Link an exact QBO bill line" });
+});
+export type LinkWorkOrderCostPayload = z.output<typeof linkWorkOrderCostPayloadSchema>;
+
+export const unlinkWorkOrderCostPayloadSchema = z.object({
+  workOrderId: workOrderIdSchema,
+  source: financialSourceReferenceSchema,
+}).strict();
+export type UnlinkWorkOrderCostPayload = z.output<typeof unlinkWorkOrderCostPayloadSchema>;
+
+export const setWorkOrderManualActualPayloadSchema = z.object({
+  workOrderId: workOrderIdSchema,
+  /** null clears the draft manual actual. */
+  amountCents: nonNegativeWorkOrderCentsSchema.nullable(),
+  note: optionalNullableText(500),
+}).strict();
+export type SetWorkOrderManualActualPayload = z.output<typeof setWorkOrderManualActualPayloadSchema>;
+
+export const workOrderAttachmentPayloadSchema = z.object({
+  workOrderId: workOrderIdSchema,
+  documentId: z.string().trim().min(1).max(160),
+}).strict();
+export type WorkOrderAttachmentPayload = z.output<typeof workOrderAttachmentPayloadSchema>;
+
 export const WORK_ORDER_COMMAND_KINDS = [
   "work_order.create",
   "work_order.update",
@@ -239,6 +355,12 @@ export const WORK_ORDER_COMMAND_KINDS = [
   "work_order.project.link",
   "work_order.chargeback.set",
   "work_order.chargeback.clear",
+  "work_order.vendor.assign",
+  "work_order.cost.link",
+  "work_order.cost.unlink",
+  "work_order.actual.set",
+  "work_order.attachment.link",
+  "work_order.attachment.unlink",
 ] as const;
 export type WorkOrderCommandKind = (typeof WORK_ORDER_COMMAND_KINDS)[number];
 
@@ -250,6 +372,12 @@ export const workOrderCommandPayloadSchemas = {
   "work_order.project.link": linkWorkOrderProjectPayloadSchema,
   "work_order.chargeback.set": setWorkOrderChargebackPayloadSchema,
   "work_order.chargeback.clear": clearWorkOrderChargebackPayloadSchema,
+  "work_order.vendor.assign": assignWorkOrderVendorPayloadSchema,
+  "work_order.cost.link": linkWorkOrderCostPayloadSchema,
+  "work_order.cost.unlink": unlinkWorkOrderCostPayloadSchema,
+  "work_order.actual.set": setWorkOrderManualActualPayloadSchema,
+  "work_order.attachment.link": workOrderAttachmentPayloadSchema,
+  "work_order.attachment.unlink": workOrderAttachmentPayloadSchema,
 } as const;
 
 /** Commands that edit an existing record must carry the revision the caller read. */
@@ -259,6 +387,12 @@ export const WORK_ORDER_REVISIONED_COMMANDS: readonly WorkOrderCommandKind[] = [
   "work_order.project.link",
   "work_order.chargeback.set",
   "work_order.chargeback.clear",
+  "work_order.vendor.assign",
+  "work_order.cost.link",
+  "work_order.cost.unlink",
+  "work_order.actual.set",
+  "work_order.attachment.link",
+  "work_order.attachment.unlink",
 ];
 
 /** Codex tool names; every tool calls the same shared command service as the browser. */
@@ -270,7 +404,26 @@ export const WORK_ORDER_MCP_TOOL_NAMES: Readonly<Record<WorkOrderCommandKind, st
   "work_order.project.link": "link_work_order_project",
   "work_order.chargeback.set": "set_work_order_chargeback",
   "work_order.chargeback.clear": "clear_work_order_chargeback",
+  "work_order.vendor.assign": "assign_work_order_vendor",
+  "work_order.cost.link": "link_work_order_cost",
+  "work_order.cost.unlink": "unlink_work_order_cost",
+  "work_order.actual.set": "set_work_order_manual_actual",
+  "work_order.attachment.link": "link_work_order_attachment",
+  "work_order.attachment.unlink": "unlink_work_order_attachment",
 });
+
+export const workOrderVendorOptionsResponseSchema = z.object({ items: z.array(workOrderVendorSchema.extend({ status: z.string().min(1).max(40) }).strict()).max(500) }).strict();
+export type WorkOrderVendorOptionsResponse = z.infer<typeof workOrderVendorOptionsResponseSchema>;
+
+export const workOrderDocumentOptionSchema = z.object({
+  documentId: z.string().min(1).max(160),
+  title: z.string().min(1).max(240),
+  kind: z.string().min(1).max(80),
+  documentDate: isoDateSchema.nullable(),
+  propertyId: z.string().nullable(),
+}).strict();
+export const workOrderDocumentOptionsResponseSchema = z.object({ items: z.array(workOrderDocumentOptionSchema).max(200) }).strict();
+export type WorkOrderDocumentOptionsResponse = z.infer<typeof workOrderDocumentOptionsResponseSchema>;
 
 export interface WorkOrderReadContext {
   readonly scope: CompanyScope;

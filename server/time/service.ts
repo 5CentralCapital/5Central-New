@@ -12,14 +12,20 @@ import { createTimeTokenRepository, type TimeTokenRepository } from "./connectio
 import { newTimeRefreshLeaseOwner, PostgresTimeRefreshLease, type TimeRefreshLease } from "./refresh-lease";
 import { createTimeStore, type TimeStore } from "./store";
 import { createTimeSyncService } from "./sync";
+import { linkPayroll, listPayrollLinks, readProjectLabor, unlinkPayroll } from "./labor";
+import type { ProjectExecutionFinancePorts } from "../projects/execution-commands";
+import { timePayrollLinkPayloadSchema, timePayrollUnlinkPayloadSchema, type ProjectLaborResponse, type TimePayrollLink } from "../../shared/time";
 
 const TIME_WRITE_ROLES = ["owner", "admin", "finance", "operations_pm", "project_manager"] as const;
 const TIME_READ_ROLES = ["owner", "admin", "finance", "operations_pm", "project_manager", "read_only_reviewer"] as const;
+const TIME_PAYROLL_ROLES = ["owner", "admin", "finance"] as const;
 export const TIME_COMMAND_POLICIES: Readonly<Record<TimeCommandKind, CommandAuthorizationPolicy>> = Object.freeze({
   "time.review_timesheet": { commandKind: "time.review_timesheet", allowedRoles: TIME_WRITE_ROLES },
   "time.correct_timesheet": { commandKind: "time.correct_timesheet", allowedRoles: TIME_WRITE_ROLES },
   "time.map_employee": { commandKind: "time.map_employee", allowedRoles: TIME_WRITE_ROLES },
   "time.map_jobcode": { commandKind: "time.map_jobcode", allowedRoles: TIME_WRITE_ROLES },
+  "time.payroll.link": { commandKind: "time.payroll.link", allowedRoles: TIME_PAYROLL_ROLES },
+  "time.payroll.unlink": { commandKind: "time.payroll.unlink", allowedRoles: TIME_PAYROLL_ROLES },
 } satisfies Record<TimeCommandKind, CommandAuthorizationPolicy>);
 
 export interface TimeCommandAccess { readonly principal: AuthenticatedPrincipal; readonly resolvePrincipal: (executor: RentOpsQueryExecutor) => Promise<AuthenticatedPrincipal>; readonly transport: TransportAttestation; }
@@ -39,6 +45,8 @@ export interface TimeServicesOptions {
   readonly oauthStateStore?: TimeOAuthStateStore;
   readonly now?: () => Date;
   readonly env?: NodeJS.ProcessEnv;
+  /** Transaction-bound QBO mirror ports used to verify and reserve posted payroll lines. */
+  readonly financeFactory?: (executor: RentOpsQueryExecutor) => ProjectExecutionFinancePorts;
 }
 export interface ConfiguredTimeServices { readonly status: "configured"; readonly environment: "sandbox" | "production"; readonly client: QuickBooksTimeClient; readonly oauth: QuickBooksTimeOAuthClient; readonly oauthConnection: TimeOAuthConnectionService; readonly tokenRepository: TimeTokenRepository; readonly refreshLease: TimeRefreshLease; readonly sync: TimeSyncPort; readonly getAccessToken: (scope: TimeConnectionScope) => Promise<string>; }
 export interface UnconfiguredTimeServices { readonly status: "unconfigured"; readonly reason: "missing_configuration" | "invalid_configuration"; }
@@ -64,6 +72,9 @@ export interface TimeReadPort {
   listJobcodeMappings(principal: AuthenticatedPrincipal, scope: TimeConnectionScope): Promise<readonly TimeJobcodeMapping[]>;
   readCoverage(principal: AuthenticatedPrincipal, scope: TimeConnectionScope): Promise<readonly TimeCoverage[]>;
   listConnections(principal: AuthenticatedPrincipal, scope: { readonly organizationId: TimeConnectionScope["organizationId"]; readonly legalEntityId: TimeConnectionScope["legalEntityId"]; readonly environment?: TimeConnectionScope["environment"] }): Promise<readonly TimeConnectionSummary[]>;
+  listPayrollLinks(principal: AuthenticatedPrincipal, scope: CompanyScope & { readonly legalEntityId: string }): Promise<readonly TimePayrollLink[]>;
+  /** Approved time mapped to one project through jobcode mappings, with its labor basis. */
+  projectLabor(principal: AuthenticatedPrincipal, input: { readonly scope: CompanyScope; readonly projectId: string }): Promise<ProjectLaborResponse>;
 }
 
 function createScopedTimeReadPort(executor: RentOpsQueryExecutor, store: TimeStore, openReadTransaction: boolean): TimeReadPort {
@@ -85,6 +96,15 @@ function createScopedTimeReadPort(executor: RentOpsQueryExecutor, store: TimeSto
     listJobcodeMappings: (principal, scope) => inReadTransaction(principal, scope, transactionStore => transactionStore.listJobcodeMappings(scope)),
     readCoverage: (principal, scope) => inReadTransaction(principal, scope, transactionStore => transactionStore.readCoverage(scope)),
     listConnections: (principal, scope) => inReadTransaction(principal, scope, transactionStore => transactionStore.listConnections(scope)),
+    listPayrollLinks: (principal, scope) => inReadTransaction(principal, scope, transactionStore => listPayrollLinks(transactionStore.executorForRead(), scope)),
+    projectLabor: (principal, input) => inReadTransaction(principal, input.scope, async transactionStore => {
+      const reader = transactionStore.executorForRead();
+      const project = await reader.query<{ legal_entity_id: string; property_id: string }>(`SELECT legal_entity_id, property_id FROM company_projects WHERE organization_id=$1 AND id=$2`, [input.scope.organizationId, input.projectId]);
+      const row = project.rows[0];
+      if (!row || (input.scope.legalEntityId && row.legal_entity_id !== input.scope.legalEntityId) || (input.scope.propertyId && row.property_id !== input.scope.propertyId)) throw new ValidationCommandError("Project was not found in the requested company scope", { reason: "project_not_found" });
+      const scopeItems = await reader.query<{ id: string }>(`SELECT id FROM company_project_scope_items WHERE organization_id=$1 AND project_id=$2`, [input.scope.organizationId, input.projectId]);
+      return readProjectLabor(reader, { organizationId: input.scope.organizationId, projectId: input.projectId, scopeItemIds: scopeItems.rows.map(item => String(item.id)) });
+    }),
   };
 }
 
@@ -113,7 +133,7 @@ function configured(options: TimeServicesOptions): { clientId: string; clientSec
 
 export function createTimeServices(executor: RentOpsQueryExecutor, options: TimeServicesOptions = {}): TimeServices {
   const now = options.now ?? (() => new Date()); const store = createTimeStore(executor, now); const read = createTimeReadPort(executor, store);
-  const commands: TimeCommandPort = { execute: (kind, envelope, access) => executeTimeCommand(executor, store, kind, envelope, access) };
+  const commands: TimeCommandPort = { execute: (kind, envelope, access) => executeTimeCommand(executor, store, kind, envelope, access, options.financeFactory) };
   const config = configured(options);
   if (!config) {
     const unavailable: TimeSyncPort = { async sync() { throw new ValidationCommandError("QuickBooks Time is not configured", { reason: "time_unconfigured" }); } };
@@ -195,12 +215,19 @@ export function createTimeServices(executor: RentOpsQueryExecutor, options: Time
   }
 }
 
-async function executeTimeCommand(executor: RentOpsQueryExecutor, store: TimeStore, kindInput: TimeCommandKind, envelopeInput: unknown, accessInput: unknown): Promise<OperationReceipt> {
+async function executeTimeCommand(executor: RentOpsQueryExecutor, store: TimeStore, kindInput: TimeCommandKind, envelopeInput: unknown, accessInput: unknown, financeFactory?: (executor: RentOpsQueryExecutor) => ProjectExecutionFinancePorts): Promise<OperationReceipt> {
   const kind = TIME_COMMAND_KINDS.includes(kindInput) ? kindInput : (() => { throw new ValidationCommandError("Unsupported time command", { reason: "unsupported_time_command" }); })();
   const access = accessInput as TimeCommandAccess; if (!access || !access.principal || typeof access.resolvePrincipal !== "function" || !access.transport) throw new ValidationCommandError("Time command authentication is unavailable", { reason: "time_authentication_required" });
   const envelope = commandEnvelopeSchema(timeCommandPayloadSchemas[kind]).parse(envelopeInput) as CommandEnvelope<Record<string, unknown>>;
   return runCompanyCommand(executor, { envelope, principal: access.principal, resolvePrincipal: access.resolvePrincipal, transport: access.transport, policy: TIME_COMMAND_POLICIES[kind], handler: async context => {
     const payload = envelope.payload as Record<string, unknown>; const baseScope = companyScopeSchema.parse(envelope.scope); const providerCompanyId = typeof payload.providerCompanyId === "string" ? payload.providerCompanyId : (() => { throw new ValidationCommandError("Provider company is required", { reason: "time_provider_company_required" }); })(); const environment = typeof payload.environment === "string" ? payload.environment : (() => { throw new ValidationCommandError("Provider environment is required", { reason: "time_provider_environment_required" }); })(); const scope = timeConnectionScopeSchema.parse({ ...baseScope, environment, providerCompanyId }); const txStore = store.forExecutor(context.executor);
+    if (kind === "time.payroll.link" || kind === "time.payroll.unlink") {
+      const payrollContext = { executor: context.executor, scope, actorId: context.principal.actorId, effectiveDate: envelope.effectiveDate ?? new Date().toISOString().slice(0, 10), finance: financeFactory?.(context.executor) };
+      const result = kind === "time.payroll.link"
+        ? await linkPayroll(payrollContext, timePayrollLinkPayloadSchema.parse(payload))
+        : await unlinkPayroll(payrollContext, timePayrollUnlinkPayloadSchema.parse(payload));
+      return { state: "saved_in_rops", affectedRecordIds: [result.batchId, ...result.timesheetIds], resultingRevisions: [], validationOutcomes: [{ code: kind === "time.payroll.link" ? "time.payroll_linked" : "time.payroll_unlinked", severity: "info", message: kind === "time.payroll.link" ? "Posted payroll linked to approved time. Labor estimates for this time are replaced by the posted amount." : "Posted payroll link released. Labor returns to its estimate." }] };
+    }
     if (kind === "time.correct_timesheet") {
       const result = await txStore.correctTimesheet({ scope, timesheetId: String(payload.timesheetId), expectedCorrectionRevision: payload.expectedCorrectionRevision as number | undefined, type: payload.type as "regular" | "manual", start: payload.start as string | null, end: payload.end as string | null, date: String(payload.date), durationSeconds: Number(payload.durationSeconds), timezoneOffsetMinutes: payload.timezoneOffsetMinutes as number | null, timezoneName: payload.timezoneName as string | null, notes: String(payload.notes), reason: String(payload.reason), actorId: context.principal.actorId, operationId: envelope.operationId });
       return { state: "saved_in_rops", affectedRecordIds: [result.id], resultingRevisions: [], validationOutcomes: [{ code: "time.corrected", severity: "info", message: "Time entry correction saved in R-ops" }] };

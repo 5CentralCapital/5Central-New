@@ -204,6 +204,9 @@ export async function resolveProjectFinanceActuals(
       currency: resolved.currency,
       postedOn: resolved.postedOn,
       sourceRevision: resolved.source.version,
+      transactionType: resolved.transactionType,
+      settlement: resolved.settlement,
+      lineAmountCents: resolved.amountCents,
     });
   }));
   return { coverage: mergeFinanceCoverage(coverages, hasUnresolvedBinding), actuals: results.filter((value): value is ProjectFinanceActual => value !== null) };
@@ -298,10 +301,12 @@ export function calculateProjectExecutionTotals(input: {
   // A partial mirror is useful evidence but does not establish a complete
   // remaining balance. Keep its amount visible while withholding the derived
   // exposure that would otherwise look authoritative.
+  // A closed commitment can no longer be billed, so it has no remaining
+  // exposure. This matches the canonical project cost report.
   const unspentCommitment = coverage === "complete"
     ? input.commitments
       .filter((commitment) => commitment.status === "approved" || commitment.status === "closed")
-      .reduce((total, commitment) => total + maxZero(centsToBigInt(commitment.committedCents) - (linkedActualByCommitment.get(commitment.id) ?? BigInt(0))), BigInt(0))
+      .reduce((total, commitment) => total + (commitment.status === "closed" ? BigInt(0) : maxZero(centsToBigInt(commitment.committedCents) - (linkedActualByCommitment.get(commitment.id) ?? BigInt(0)))), BigInt(0))
     : null;
   const remaining = coverage === "complete" && unspentCommitment !== null
     ? revisedBudget - actualTotal - unspentCommitment

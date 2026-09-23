@@ -20,6 +20,7 @@ import {
   type OperationId,
   type Revision,
 } from "../company";
+import { timePayrollLinkPayloadSchema, timePayrollUnlinkPayloadSchema } from "./labor";
 
 export const TIME_PROVIDER = "quickbooks_time" as const;
 export const timeProviderSchema = z.literal(TIME_PROVIDER);
@@ -261,13 +262,15 @@ export const timeMapJobcodePayloadSchema = z.object({
   costCode: z.string().trim().max(160).nullable().optional(),
 }).strict();
 
-export const TIME_COMMAND_KINDS = ["time.review_timesheet", "time.correct_timesheet", "time.map_employee", "time.map_jobcode"] as const;
+export const TIME_COMMAND_KINDS = ["time.review_timesheet", "time.correct_timesheet", "time.map_employee", "time.map_jobcode", "time.payroll.link", "time.payroll.unlink"] as const;
 export type TimeCommandKind = (typeof TIME_COMMAND_KINDS)[number];
 export const timeCommandPayloadSchemas: Readonly<Record<TimeCommandKind, z.ZodTypeAny>> = {
   "time.review_timesheet": timeReviewTimesheetPayloadSchema,
   "time.correct_timesheet": timeCorrectTimesheetPayloadSchema,
   "time.map_employee": timeMapEmployeePayloadSchema,
   "time.map_jobcode": timeMapJobcodePayloadSchema,
+  "time.payroll.link": timePayrollLinkPayloadSchema,
+  "time.payroll.unlink": timePayrollUnlinkPayloadSchema,
 };
 
 export interface TimeReadPort {
