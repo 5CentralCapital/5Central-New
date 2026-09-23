@@ -1,3 +1,4 @@
+import React from "react";
 import { LEGAL_CONTACT_EMAIL } from "./legal/legal-layout";
 
 export const QUICKBOOKS_RECONNECT_PATH = "/ops?section=accounting";
@@ -20,7 +21,7 @@ export default function QuickBooksDisconnected() {
         </div>
         <div className="mt-8 flex flex-wrap gap-3">
           <a className="inline-block rounded-md bg-gray-900 px-5 py-3 text-white hover:bg-gray-800" href={QUICKBOOKS_RECONNECT_PATH}>Reconnect QuickBooks</a>
-          <a className="inline-block rounded-md border border-gray-300 px-5 py-3 text-gray-900 hover:bg-gray-50" href={`mailto:${LEGAL_CONTACT_EMAIL}?subject=Rent%20Ops%20QuickBooks%20support`}>Contact support</a>
+          <a className="inline-block rounded-md border border-gray-300 px-5 py-3 text-gray-900 hover:bg-gray-50" href={`mailto:${LEGAL_CONTACT_EMAIL}?subject=5Central%20Ops%20QuickBooks%20support`}>Contact support</a>
         </div>
       </div>
     </main>

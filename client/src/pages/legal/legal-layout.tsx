@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import React, { type ReactNode } from "react";
 
 export const LEGAL_EFFECTIVE_DATE = "September 22, 2026";
 export const LEGAL_CONTACT_EMAIL = "michael@5central.capital";

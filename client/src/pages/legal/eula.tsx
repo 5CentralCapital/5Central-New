@@ -1,3 +1,4 @@
+import React from "react";
 import { LegalPage, LegalSection, LEGAL_CONTACT_EMAIL } from "./legal-layout";
 
 export default function EndUserLicenseAgreement() {
