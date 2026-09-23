@@ -18,6 +18,14 @@ export function parseCentsInput(value: unknown): number | undefined {
 }
 
 /**
+ * Applied amounts for a payment correction, one per existing allocation.
+ * "0" unapplies a charge; a blank field is an error, never a silent unapply.
+ */
+export function requireAppliedCents(values: readonly string[]): number[] {
+  return values.map(value => requireCentsInput(value, "Applied amount"));
+}
+
+/**
  * Parse a required admin monetary field and fail before a request is sent.
  */
 export function requireCentsInput(value: unknown, label = "Amount"): number {

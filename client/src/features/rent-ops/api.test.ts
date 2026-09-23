@@ -5,7 +5,7 @@ import { serializeAdminDashboard } from "../../../../server/rent-ops/presentatio
 import { createDemoAdminSnapshot } from "./demo";
 import { filterReportRows, buildRentOpsQuery, currentLocalIsoDate, loadRentOpsAdminSnapshot, loadRentOpsChargeDefinitions, loadRentOpsPreviewContext, loadRentOpsReport, postRentOpsMutation, reportCell, RentOpsApiError } from "./api";
 import type { ReportKey } from "./types";
-import { parseCentsInput, requireCentsInput } from "./money";
+import { parseCentsInput, requireAppliedCents, requireCentsInput } from "./money";
 import { mutationPayload } from "./form-payload";
 
 test("live report defaults follow the current local calendar date", () => {
@@ -593,4 +593,10 @@ test("tenant payer review uncertainty survives serializer and strict browser dec
       assert.equal((await loadRentOpsAdminSnapshot()).snapshot.tenants[0].payerResponsibilityUnverified, unverified);
     } finally { restore(); }
   }
+});
+
+test("payment correction applied amounts: 0 unapplies, a blank field is an error", () => {
+  assert.deepEqual(requireAppliedCents(["125.00", "0", "0.00"]), [12500, 0, 0]);
+  assert.throws(() => requireAppliedCents(["125.00", ""]), /Applied amount is required/);
+  assert.throws(() => requireAppliedCents(["abc"]), /Applied amount must use dollars/);
 });
