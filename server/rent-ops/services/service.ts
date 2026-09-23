@@ -1841,6 +1841,8 @@ export class RentOpsService {
     const snapshot = await this.snapshot();
     const original = snapshot.ledgerTransactions.find((transaction) => transaction.id === originalId);
     if (!original) throw new RentOpsInvariantError("Original ledger transaction not found");
+    // The processor reconciler owns these rows and later reverses them itself.
+    if (/^tp_.*_ledger_/.test(original.id)) throw new RentOpsInvariantError("Online payments are managed by the payment processor");
     if (!original.kind || !original.category || !original.propertyId || original.amountCents === null || !original.postedOn || !original.description) throw new RentOpsInvariantError("Original ledger transaction has unresolved financial facts");
     const reversal = withOperatorProvenance(buildReversal(original, { ...input, id: input.id ?? `reversal:${randomUUID()}` }), input);
     const existing = snapshot.ledgerTransactions.find((transaction) => transaction.kind === "reversal" && transaction.status === "posted" && transaction.reversalOfId === originalId);

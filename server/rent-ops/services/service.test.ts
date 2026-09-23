@@ -199,6 +199,14 @@ test("ledger writes reject malformed adjustments, reversal chains, and allocatio
   await assert.rejects(() => service.reverseLedgerTransaction(first.id, { id: "reversal-chain", postedOn: "2026-08-14", description: "Invalid chain", status: "posted" }), /cannot reverse another reversal/i);
 });
 
+test("manual reversal cannot touch a processor-owned online payment", async () => {
+  const snapshot = syntheticRentOpsSnapshot();
+  const demoPayment = snapshot.ledgerTransactions.find((row) => row.id === "demo-payment-1")!;
+  snapshot.ledgerTransactions.push({ ...demoPayment, id: "tp_0000_ledger_1", paymentMethod: null, description: "Stripe tenant payment" });
+  const service = new RentOpsService(new SyntheticRentOpsRepository(snapshot), () => new Date("2026-08-16T12:00:00.000Z"), undefined, undefined, true);
+  await assert.rejects(() => service.reverseLedgerTransaction("tp_0000_ledger_1", { id: "manual-reversal", postedOn: "2026-08-12", description: "Manual reversal", status: "posted" }), /managed by the payment processor/);
+});
+
 test("conversion rejects occupied units and incomplete lease setup", async () => {
   const repository = createSyntheticRentOpsRepository();
   await addBaseRentDefinition(repository);
