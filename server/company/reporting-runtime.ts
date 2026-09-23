@@ -79,10 +79,12 @@ async function readScopedRental(
 export interface CompanyReportingPortOptions {
   /**
    * Versioned forecast scenario reader supplied by the forecasting service
-   * (`createForecastReportingReadPort(executor)`). Without it, the four
-   * forecast reports report "No approved forecast scenario."
+   * (`createForecastReportingReadPort(transaction, { principal })`). The
+   * factory receives the request's freshly loaded principal so forecast
+   * authorization applies. Without it, the four forecast reports report
+   * "No approved forecast scenario."
    */
-  readonly forecastPort?: ForecastReportingReadPort | ((transaction: RentOpsQueryExecutor) => ForecastReportingReadPort);
+  readonly forecastPort?: ForecastReportingReadPort | ((transaction: RentOpsQueryExecutor, principal: AuthenticatedPrincipal) => ForecastReportingReadPort);
   /** Approved canonical account mapping and eliminations for consolidated reports. */
   readonly consolidationPort?: ConsolidationMappingReadPort | ((transaction: RentOpsQueryExecutor) => ConsolidationMappingReadPort);
 }
@@ -137,7 +139,7 @@ export function createCompanyReportingPort(executor: RentOpsQueryExecutor, accou
       projectService: new ProjectReadService(transaction, createProjectFinanceReadPort(mirror, createProjectFinanceBindingStore(transaction), mirror)),
       investorService: new InvestorReadService(transaction, { sourceRead: mirror }),
       timeRead: createTransactionBoundTimeReadPort(transaction),
-      domainPorts: { combinedFinancial, forecast: resolveFactory(options.forecastPort, transaction) },
+      domainPorts: { combinedFinancial, forecast: typeof options.forecastPort === 'function' ? options.forecastPort(transaction, principal) : options.forecastPort }, // forecasting: principal-bound
     });
     return createReportingRegistry({ engines: [scopedRental, qbo, ...domainEngines] });
   }

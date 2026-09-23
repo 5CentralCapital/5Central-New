@@ -5,7 +5,7 @@ import { ReviewQueueEntry as ReviewQueue } from "../review-cases/entry";
 import { IntakeResultsEntry as IntakeResults } from "../intake/entry";
 import { CompanyDocumentsEntry as CompanyDocuments } from "../company-documents/entry";
 import { ForecastingEntry as Forecasting } from "../forecasting/workspace";
-import type { ForecastTab } from "../forecasting/params";
+import { forecastingRoutePatch, type ForecastingRoutePatch, type ForecastTab } from "../forecasting/params";
 
 /** Mount points the manager shell uses for company workspaces. */
 export interface LaneEntryProps {
@@ -27,15 +27,16 @@ export function CompanyDocumentsEntry({ organizationId, propertyId }: LaneEntryP
   return <CompanyDocuments organizationId={organizationId} propertyId={propertyId ?? null} />;
 }
 
-export function ForecastingEntry({ identity, organizationId, onNavigate, scenarioId, legalEntityId, propertyId, tab, onTabChange }: LaneEntryProps & {
+/** Forecasting mount: each location change (tab, scenario or company) is one route update honoring replace. */
+export function ForecastingEntry({ identity, organizationId, scenarioId, legalEntityId, propertyId, tab, onLocationChange }: Omit<LaneEntryProps, "onNavigate"> & {
   readonly scenarioId?: string;
   readonly legalEntityId?: string;
   readonly tab?: string;
-  readonly onTabChange: (tab: string, scenarioId?: string) => void;
+  readonly onLocationChange: (patch: ForecastingRoutePatch, replace: boolean) => void;
 }) {
   const location = { tab: (tab ?? "cash") as ForecastTab, ...(scenarioId ? { scenarioId } : {}), ...(propertyId ? { propertyId } : {}), ...(legalEntityId ? { entityId: legalEntityId } : {}) };
   return <Forecasting identity={identity} organizationId={organizationId} location={location}
-    onNavigate={next => onTabChange(next.tab, next.scenarioId)} onOrganizationChange={onNavigate} />;
+    onNavigate={(next, options) => onLocationChange(forecastingRoutePatch(next, options), options.replace ?? false)} />;
 }
 
 export const AccountingEntryWithView = AccountingEntry as ComponentType<Parameters<typeof AccountingEntry>[0] & { view?: AccountingView }>;

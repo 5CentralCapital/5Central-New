@@ -23,7 +23,9 @@ const sectionsSchema = z.array(z.enum(RESULT_SECTIONS)).min(1).max(RESULT_SECTIO
 
 /** Bounded tool output: only the requested result sections are returned. */
 function pick(result: ForecastResultView, sections: readonly (typeof RESULT_SECTIONS)[number][]): Record<string, unknown> {
-  const header = { modelVersion: result.modelVersion, currency: result.currency, scenario: result.scenario, actualsCutoff: result.actualsCutoff, calendarEnd: result.calendarEnd, rounding: result.rounding, completeness: result.completeness };
+  const header = { modelVersion: result.modelVersion, currency: result.currency, scenario: result.scenario, actualsCutoff: result.actualsCutoff, calendarEnd: result.calendarEnd, rounding: result.rounding, completeness: result.completeness,
+    openingCashKnown: result.summary.openingCashKnown,
+    ...(result.summary.openingCashKnown ? {} : { cashNote: "Opening cash is unknown: cash balances are movements relative to that unknown amount, and lowest cash, ending cash and weeks below the reserve floor are unknown (null)." }) };
   const picked: Record<string, unknown> = { ...header };
   for (const section of sections) picked[section] = result[section];
   return picked;

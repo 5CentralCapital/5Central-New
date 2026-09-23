@@ -13,10 +13,14 @@ import {
 export interface ForecastScenarioOption {
   readonly scenarioId: string;
   readonly name: string;
+  /** The approved snapshot ID: reports read only a scenario's approved snapshot. */
   readonly inputVersion: string | null;
   readonly modelVersion: string | null;
   readonly state: string;
 }
+
+/** Forecast input pinned by a saved preset; it applies only while that scenario stays selected. */
+export interface ForecastPin { readonly scenarioId: string; readonly inputVersion: string; readonly modelVersion: string }
 
 export interface ReportSetupState {
   readonly entityIds: readonly string[];
@@ -31,6 +35,7 @@ export interface ReportSetupState {
   readonly currency: string;
   readonly filters: Readonly<Record<string, unknown>>;
   readonly scenarioId: string;
+  readonly forecastPin?: ForecastPin | null;
   /** "" means no eliminations. */
   readonly eliminationVersion: string;
 }
@@ -92,6 +97,8 @@ export function initialSetupState(entry: ReportEntry, organization: CompanyConte
     currency: seed?.currency ?? firstEntity?.currency ?? "USD",
     filters,
     scenarioId: seed?.forecast?.scenarioId ?? "",
+    // A saved preset reruns the exact forecast input it pinned.
+    forecastPin: seed?.forecast ? { scenarioId: seed.forecast.scenarioId, inputVersion: seed.forecast.inputVersion, modelVersion: seed.forecast.modelVersion } : null,
     eliminationVersion: seed?.consolidation?.eliminationPolicy === "approved_version" ? seed.consolidation.eliminationVersion ?? "" : "",
   };
 }
@@ -138,19 +145,19 @@ export function normalizeForecastScenarios(payload: unknown): ForecastScenarioOp
   return list.flatMap(raw => {
     if (!raw || typeof raw !== "object") return [];
     const item = raw as Record<string, unknown>;
-    const snapshot = (item.latestSnapshot ?? item.snapshot) as Record<string, unknown> | undefined;
+    const approved = (item.approvedSnapshot && typeof item.approvedSnapshot === "object" ? item.approvedSnapshot : undefined) as Record<string, unknown> | undefined;
     const scenarioId = text(item.scenarioId ?? item.id);
     const name = text(item.name) ?? scenarioId;
     if (!scenarioId || !name) return [];
     const state = text(item.state ?? item.status) ?? "unknown";
-    // Pin the latest immutable snapshot when one exists so a report reproduces exactly; otherwise the current assumption version.
-    const inputVersion = text(item.inputVersion ?? snapshot?.id ?? item.assumptionVersion ?? item.currentAssumptionVersion ?? snapshot?.assumptionVersion);
-    const modelVersion = text(item.modelVersion ?? snapshot?.modelVersion);
-    return [{ scenarioId, name, state, inputVersion: inputVersion === "0" ? null : inputVersion, modelVersion }];
+    // Reports read only the approved snapshot, never a newer draft or the latest run.
+    const inputVersion = text(item.approvedSnapshotId ?? approved?.id);
+    const modelVersion = inputVersion ? text(approved?.modelVersion ?? item.modelVersion) : null;
+    return [{ scenarioId, name, state, inputVersion, modelVersion }];
   });
 }
 
-/** Scenarios a report can run: approved, with a resolved input and model version. */
+/** Scenarios a report can run: approved, with a pinned approved snapshot and model version. */
 export function runnableScenarios(scenarios: readonly ForecastScenarioOption[]): ForecastScenarioOption[] {
   return scenarios.filter(item => item.state === "approved" && item.inputVersion && item.modelVersion);
 }
@@ -161,7 +168,8 @@ export function runnableScenarios(scenarios: readonly ForecastScenarioOption[]):
  */
 export function buildReportRunRequest(entry: ReportEntry, organization: CompanyContextOrganization, state: ReportSetupState, scenarios: readonly ForecastScenarioOption[] = []): ReportSetupBuildResult {
   const errors: ReportSetupError[] = [];
-  const entityIds = state.entityIds.filter(id => organization.entities.some(entity => entity.id === id));
+  // Organization-only reports (forecasts) never carry an entity selection.
+  const entityIds = entry.scopes.includes("legal_entity") ? state.entityIds.filter(id => organization.entities.some(entity => entity.id === id)) : [];
   if (entry.setup.entityScope === "exactly_one" && entityIds.length !== 1) errors.push({ field: "legalEntityIds", message: "Choose one legal entity." });
   if (entry.setup.entityScope === "one_or_more" && !entityIds.length) errors.push({ field: "legalEntityIds", message: "Choose at least one legal entity." });
   const propertyIds = entry.setup.propertyScope ? state.propertyIds.filter(id => availableProperties(organization, entityIds).some(option => option.value === id)) : [];
@@ -193,7 +201,10 @@ export function buildReportRunRequest(entry: ReportEntry, organization: CompanyC
   if (entry.setup.forecastScenario) {
     const scenario = runnableScenarios(scenarios).find(item => item.scenarioId === state.scenarioId);
     if (!scenario) errors.push({ field: "forecast", message: "Choose an approved forecast scenario." });
-    else forecast = { scenarioId: scenario.scenarioId, inputVersion: scenario.inputVersion!, modelVersion: scenario.modelVersion! };
+    else {
+      const pin = state.forecastPin && state.forecastPin.scenarioId === scenario.scenarioId ? state.forecastPin : null;
+      forecast = pin ? { scenarioId: pin.scenarioId, inputVersion: pin.inputVersion, modelVersion: pin.modelVersion } : { scenarioId: scenario.scenarioId, inputVersion: scenario.inputVersion!, modelVersion: scenario.modelVersion! };
+    }
   }
   let consolidation: ReportRunRequest["consolidation"] = null;
   if (entry.setup.consolidation && currency) {

@@ -61,6 +61,11 @@ test("browser HTTP and MCP read and write the same forecast records", async () =
     const mcpSnapshot = await tool("get_forecast_snapshot", { scope, snapshotId, sections: ["summary", "weeks"] });
     assert.deepEqual(mcpSnapshot.result.weeks, snapshot.result.weeks);
     assert.equal(mcpSnapshot.result.months, undefined, "only requested sections are returned");
+    // Unknown opening cash is stated, and absolute liquidity figures are unknown rather than zero-based.
+    assert.equal(mcpSnapshot.result.openingCashKnown, false);
+    assert.match(mcpSnapshot.result.cashNote, /Opening cash is unknown/);
+    assert.equal(mcpSnapshot.result.summary.minAvailableCashCents, null);
+    assert.equal(mcpSnapshot.result.summary.weeksBelowFloor, null);
     const week = snapshot.result.weeks[0];
     const explainUrl = `${base}/forecast-explain?snapshotId=${snapshotId}&line=cash.closing&period=${encodeURIComponent(week.key)}`;
     const httpExplain = await (await fetch(explainUrl)).json();

@@ -2,7 +2,7 @@ import { centsFromBigInt, centsToBigInt } from "../../shared/company";
 import type { ReportMissingData, ReportSourceCoverage, ReportingEngineContext, ReportingEngineResult } from "../../shared/reporting";
 import { ReportingError } from "./errors";
 import { reportColumns, resultFromRecords, sourceCoverage } from "./source-engine-utils";
-import type { ReportingEngine } from "./registry";
+import type { ReportingEngine, ReportingEngineProbeResult } from "./registry";
 
 export const FORECAST_REPORT_IDS = ["cash-forecast-13-week", "operating-growth-plan", "debt-refinance", "exit-scenarios"] as const;
 export type ForecastReportId = (typeof FORECAST_REPORT_IDS)[number];
@@ -67,6 +67,8 @@ export interface ForecastReportingReadResult {
 
 export interface ForecastReportingReadPort {
   read(input: { readonly context: ReportingEngineContext; readonly scenarioId: string; readonly inputVersion: string; readonly modelVersion: string }): Promise<ForecastReportingReadResult>;
+  /** Catalog check: is there an approved scenario this reader may use? Without it the catalog assumes one exists. */
+  probe?(input: { readonly organizationId: string }): Promise<ReportingEngineProbeResult>;
 }
 
 function coverage(context: ReportingEngineContext, result: ForecastReportingReadResult, rows: number): ReportSourceCoverage {
@@ -84,6 +86,8 @@ export function createForecastReportingEngine(read: ForecastReportingReadPort): 
     key: "combined.forecast",
     reportIds: [...FORECAST_REPORT_IDS],
     ready: true,
+    dependency: "approved_forecast_scenario",
+    ...(read.probe ? { probe: ({ organizationId }: { organizationId: string }) => read.probe!({ organizationId }) } : {}),
     async run(context): Promise<ReportingEngineResult> {
       const requested = matchingForecastContext(context);
       const source = await read.read({ context, ...requested });
@@ -105,11 +109,16 @@ export function createForecastReportingEngine(read: ForecastReportingReadPort): 
         const latestActual = source.actuals.reduce((latest, actual) => latest === null || actual.date > latest ? actual.date : latest, null as string | null);
         if (latestActual !== null && latestActual >= firstWeek.weekStart) throw new ReportingError("report_unavailable", "Forecast actuals must end before the first forecast week.", 409, { dependency: "forecast_actual_boundary" });
         let previousClosing: bigint | null = null;
+        // Balances are either explicit for every week or unknown for every week
+        // (unknown opening cash): unknown balances stay null, never zero.
+        const balancesUnknown = source.weeks.every(week => (week.openingCashCents ?? null) === null && (week.closingCashCents ?? null) === null);
+        if (balancesUnknown) missing.push({ code: "opening_cash_unknown", state: "unknown", message: "Opening cash is unknown; weekly balances are omitted and only cash movements are reported." });
         rows = source.weeks.map((week, index) => {
           const weekTime = Date.parse(`${week.weekStart}T00:00:00Z`);
           if (!Number.isFinite(weekTime) || weekTime !== firstWeekTime + index * 7 * 86_400_000) throw new ReportingError("report_unavailable", "Forecast weeks must be ordered and continuous seven-day periods.", 409, { dependency: "versioned_forecast_inputs" });
-          if (week.openingCashCents === undefined || week.openingCashCents === null || week.closingCashCents === undefined || week.closingCashCents === null) throw new ReportingError("report_unavailable", `Forecast week ${week.weekStart} is missing an explicit opening or closing cash balance.`, 409, { dependency: "versioned_forecast_inputs" });
           const inflows = centsToBigInt(week.inflowsCents); const outflows = centsToBigInt(week.outflowsCents); const net = inflows - outflows;
+          if (balancesUnknown) return { weekStart: week.weekStart, inflowsCents: week.inflowsCents, outflowsCents: week.outflowsCents, netCents: centsFromBigInt(net), openingCashCents: null, closingCashCents: null, currency: week.currency, sourceIds: week.sourceIds ?? [] };
+          if (week.openingCashCents === undefined || week.openingCashCents === null || week.closingCashCents === undefined || week.closingCashCents === null) throw new ReportingError("report_unavailable", `Forecast week ${week.weekStart} is missing an explicit opening or closing cash balance.`, 409, { dependency: "versioned_forecast_inputs" });
           const opening = centsToBigInt(week.openingCashCents);
           const closing = centsToBigInt(week.closingCashCents);
           if (previousClosing !== null && opening !== previousClosing) throw new ReportingError("report_unavailable", `Forecast week ${week.weekStart} does not reconcile to the prior week's closing cash.`, 409, { dependency: "forecast_cash_reconciliation" });

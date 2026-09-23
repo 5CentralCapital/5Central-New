@@ -12,6 +12,7 @@ import type { ForecastSourceData } from "./engine";
  */
 export type StoredForecastSnapshot = ForecastResultView & { readonly replay: { readonly sources: ForecastSourceData } };
 import { ValidationCommandError } from "../company/commands/errors";
+import { canonicalJsonSha256 } from "../company/commands/fingerprint";
 import { dbNullableString, dbRevision, dbString, dbTimestamp, dbNullableTimestamp } from "../projects/helpers";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 
@@ -31,15 +32,30 @@ export interface ScenarioRow {
   readonly currentAssumptionVersion: number;
   readonly recordRevision: number;
   readonly approvedSnapshotId: string | null;
+  readonly approvalNote: string | null;
+}
+
+/** Scenario settings that change a run's calendar or liquidity tests (not its name or kind). */
+export interface ForecastScenarioParameterSet {
+  readonly startDate: string;
+  readonly horizonWeeks: number;
+  readonly horizonMonths: number;
+  readonly reserveFloorCents: string;
+  readonly currency: string;
+}
+
+export function forecastParametersSha256(parameters: ForecastScenarioParameterSet): string {
+  return canonicalJsonSha256({ startDate: parameters.startDate, horizonWeeks: parameters.horizonWeeks, horizonMonths: parameters.horizonMonths, reserveFloorCents: parameters.reserveFloorCents, currency: parameters.currency });
 }
 
 const SCENARIO_COLUMNS = `s.id, s.organization_id, s.name, s.kind, s.state, s.base_scenario_id, s.start_date::text AS start_date,
   s.horizon_weeks, s.horizon_months, s.reserve_floor_cents::text AS reserve_floor_cents, s.currency, s.current_assumption_version,
-  s.record_revision, s.created_by, s.created_at, s.updated_at, s.updated_at::text AS updated_cursor, s.archived_at, s.approved_snapshot_id`;
+  s.record_revision, s.created_by, s.created_at, s.updated_at, s.updated_at::text AS updated_cursor, s.archived_at, s.approved_snapshot_id, s.approval_note`;
 
 const SNAPSHOT_META_COLUMNS = `n.id, n.scenario_id, n.assumption_version, n.model_version, n.actuals_cutoff::text AS actuals_cutoff,
   n.source_fingerprint, n.result_sha256, n.label, n.created_by, n.created_at,
-  n.result->>'completeness' AS completeness,
+  n.result->>'completeness' AS completeness, n.result->'scenario' AS scenario_parameters, n.result->>'currency' AS result_currency,
+  n.result->'summary'->>'openingCashKnown' AS opening_cash_known,
   NOT EXISTS (SELECT 1 FROM jsonb_array_elements(n.result->'checks') AS c(check_row) WHERE (c.check_row->>'passed')::boolean IS NOT TRUE) AS checks_passed`;
 
 function scenarioRow(row: Record<string, unknown>): ScenarioRow {
@@ -58,7 +74,17 @@ function scenarioRow(row: Record<string, unknown>): ScenarioRow {
     currentAssumptionVersion: Number(row.current_assumption_version),
     recordRevision: dbRevision(row.record_revision),
     approvedSnapshotId: dbNullableString(row.approved_snapshot_id, "approved_snapshot_id"),
+    approvalNote: dbNullableString(row.approval_note, "approval_note"),
   };
+}
+
+function snapshotParametersSha256(row: Record<string, unknown>): string {
+  const raw = typeof row.scenario_parameters === "string" ? JSON.parse(row.scenario_parameters) : row.scenario_parameters;
+  const scenario = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return forecastParametersSha256({
+    startDate: String(scenario.startDate ?? ""), horizonWeeks: Number(scenario.horizonWeeks ?? 0), horizonMonths: Number(scenario.horizonMonths ?? 0),
+    reserveFloorCents: String(scenario.reserveFloorCents ?? ""), currency: String(row.result_currency ?? ""),
+  });
 }
 
 export function snapshotMeta(row: Record<string, unknown>): ForecastSnapshotMeta {
@@ -73,38 +99,46 @@ export function snapshotMeta(row: Record<string, unknown>): ForecastSnapshotMeta
     label: dbNullableString(row.label, "label"),
     completeness: row.completeness === "complete" ? "complete" : "partial",
     checksPassed: row.checks_passed === true,
+    openingCashKnown: row.opening_cash_known === "true" || row.opening_cash_known === true,
+    parametersSha256: snapshotParametersSha256(row),
     createdBy: dbString(row.created_by, "created_by"),
     createdAt: dbTimestamp(row.created_at, "created_at"),
   });
 }
 
+const META_FIELDS = ["id", "assumption_version", "model_version", "actuals_cutoff", "source_fingerprint", "result_sha256", "label", "created_by", "created_at",
+  "completeness", "checks_passed", "scenario_parameters", "result_currency", "opening_cash_known"] as const;
+const prefixedMetaColumns = (alias: string) => META_FIELDS.map(field => `${alias}.${field} AS ${alias}_${field}`).join(", ");
+function prefixedMeta(row: Record<string, unknown>, alias: string, scenarioId: string): ForecastSnapshotMeta | null {
+  if (!row[`${alias}_id`]) return null;
+  return snapshotMeta({ ...Object.fromEntries(META_FIELDS.map(field => [field, row[`${alias}_${field}`]])), scenario_id: scenarioId });
+}
+
 function summary(row: Record<string, unknown>): ForecastScenarioSummary {
   const base = scenarioRow(row);
-  const latest = row.latest_id ? snapshotMeta({
-    id: row.latest_id, scenario_id: base.id, assumption_version: row.latest_assumption_version, model_version: row.latest_model_version,
-    actuals_cutoff: row.latest_actuals_cutoff, source_fingerprint: row.latest_source_fingerprint, result_sha256: row.latest_result_sha256,
-    label: row.latest_label, created_by: row.latest_created_by, created_at: row.latest_created_at, completeness: row.latest_completeness, checks_passed: row.latest_checks_passed,
-  }) : null;
+  const latest = prefixedMeta(row, "latest", base.id);
+  const approved = prefixedMeta(row, "approved", base.id);
   return forecastScenarioSummarySchema.parse({
     id: base.id, organizationId: base.organizationId, name: base.name, kind: base.kind, state: base.state, baseScenarioId: base.baseScenarioId,
     startDate: base.startDate, horizonWeeks: base.horizonWeeks, horizonMonths: base.horizonMonths, reserveFloorCents: base.reserveFloorCents,
     currency: base.currency, currentAssumptionVersion: base.currentAssumptionVersion, recordRevision: base.recordRevision,
     createdBy: dbString(row.created_by, "created_by"), createdAt: dbTimestamp(row.created_at, "created_at"), updatedAt: dbTimestamp(row.updated_at, "updated_at"),
-    archivedAt: dbNullableTimestamp(row.archived_at, "archived_at"), latestSnapshot: latest,
+    archivedAt: dbNullableTimestamp(row.archived_at, "archived_at"), parametersSha256: forecastParametersSha256(base), latestSnapshot: latest,
+    approvedSnapshotId: base.approvedSnapshotId, approvedSnapshot: approved, approvalNote: base.approvalNote,
   });
 }
 
-const SUMMARY_SELECT = `SELECT ${SCENARIO_COLUMNS},
-    latest.id AS latest_id, latest.assumption_version AS latest_assumption_version, latest.model_version AS latest_model_version,
-    latest.actuals_cutoff AS latest_actuals_cutoff, latest.source_fingerprint AS latest_source_fingerprint, latest.result_sha256 AS latest_result_sha256,
-    latest.label AS latest_label, latest.created_by AS latest_created_by, latest.created_at AS latest_created_at,
-    latest.completeness AS latest_completeness, latest.checks_passed AS latest_checks_passed
+const SUMMARY_SELECT = `SELECT ${SCENARIO_COLUMNS}, ${prefixedMetaColumns("latest")}, ${prefixedMetaColumns("approved")}
   FROM company_forecast_scenarios s
   LEFT JOIN LATERAL (
     SELECT ${SNAPSHOT_META_COLUMNS} FROM company_forecast_snapshots n
      WHERE n.organization_id = s.organization_id AND n.scenario_id = s.id
      ORDER BY n.created_at DESC, n.id DESC LIMIT 1
-  ) latest ON true`;
+  ) latest ON true
+  LEFT JOIN LATERAL (
+    SELECT ${SNAPSHOT_META_COLUMNS} FROM company_forecast_snapshots n
+     WHERE n.organization_id = s.organization_id AND n.id = s.approved_snapshot_id
+  ) approved ON true`;
 
 interface ListCursor { readonly updatedAt: string; readonly id: string }
 function encodeCursor(value: ListCursor): string { return Buffer.from(JSON.stringify(value), "utf8").toString("base64url"); }
@@ -160,7 +194,7 @@ export const forecastStore = {
     return result.rows.length > 0;
   },
 
-  async insertScenario(executor: RentOpsQueryExecutor, row: Omit<ScenarioRow, "state" | "recordRevision" | "approvedSnapshotId"> & { createdBy: string }): Promise<void> {
+  async insertScenario(executor: RentOpsQueryExecutor, row: Omit<ScenarioRow, "state" | "recordRevision" | "approvedSnapshotId" | "approvalNote"> & { createdBy: string }): Promise<void> {
     await executor.query(
       `INSERT INTO company_forecast_scenarios
          (id, organization_id, name, kind, state, base_scenario_id, start_date, horizon_weeks, horizon_months, reserve_floor_cents, currency, current_assumption_version, created_by)
@@ -245,12 +279,13 @@ export const forecastStore = {
     return { meta: snapshotMeta(row), view, sources: replay.sources };
   },
 
-  async latestSnapshotFor(executor: RentOpsQueryExecutor, organizationId: string, scenarioId: string, assumptionVersion: number, modelVersion: string): Promise<string | null> {
-    const result = await executor.query<{ id: string }>(
-      `SELECT id FROM company_forecast_snapshots WHERE organization_id = $1 AND scenario_id = $2 AND assumption_version = $3 AND model_version = $4
-        ORDER BY created_at DESC, id DESC LIMIT 1`,
-      [organizationId, scenarioId, assumptionVersion, modelVersion],
+  async hasApprovedScenario(executor: RentOpsQueryExecutor, organizationId: string): Promise<boolean> {
+    const result = await executor.query(
+      `SELECT 1 FROM company_forecast_scenarios s
+         JOIN company_forecast_snapshots n ON n.organization_id = s.organization_id AND n.id = s.approved_snapshot_id
+        WHERE s.organization_id = $1 AND s.state = 'approved' LIMIT 1`,
+      [organizationId],
     );
-    return result.rows[0]?.id ?? null;
+    return result.rows.length > 0;
   },
 };

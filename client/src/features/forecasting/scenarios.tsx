@@ -2,7 +2,8 @@ import React from "react";
 import { useMemo, useState, type FormEvent } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { FORECAST_SCENARIO_KINDS, FORECAST_SCENARIO_KIND_LABELS, type ForecastScenarioKind, type ForecastScenarioSummary } from "@shared/forecasting/contracts";
+import { FORECAST_SCENARIO_KINDS, FORECAST_SCENARIO_KIND_LABELS, type ForecastScenarioKind, type ForecastScenarioSummary, type ForecastSnapshotMeta } from "@shared/forecasting/contracts";
+import { FORECAST_MODEL_VERSION } from "@shared/forecasting/result";
 import { formatInputValue, parseMoneyInput } from "../projects/money";
 import { forecastApi } from "./api";
 import { LineChart } from "./charts";
@@ -15,6 +16,22 @@ export function stateClass(state: string): string {
 }
 
 type Command = (kind: "forecast.scenario.create" | "forecast.scenario.update" | "forecast.scenario.archive" | "forecast.scenario.approve", payload: Record<string, unknown>, expectedRevision?: number) => Promise<string | undefined>;
+
+/** A snapshot is current when it ran the scenario's current assumptions and settings with the current model. */
+export function snapshotIsCurrent(scenario: Pick<ForecastScenarioSummary, "currentAssumptionVersion" | "parametersSha256">, snapshot: Pick<ForecastSnapshotMeta, "assumptionVersion" | "parametersSha256" | "modelVersion"> | null | undefined): boolean {
+  return Boolean(snapshot && snapshot.assumptionVersion === scenario.currentAssumptionVersion && snapshot.parametersSha256 === scenario.parametersSha256 && snapshot.modelVersion === FORECAST_MODEL_VERSION);
+}
+
+/** Why the latest snapshot cannot be approved, or undefined when it can. */
+export function approvalBlocker(scenario: ForecastScenarioSummary | undefined): string | undefined {
+  const latest = scenario?.latestSnapshot;
+  if (!scenario || !latest) return "Save a snapshot first.";
+  if (latest.assumptionVersion !== scenario.currentAssumptionVersion) return "Save a snapshot of the current assumptions first.";
+  if (latest.parametersSha256 !== scenario.parametersSha256) return "Scenario settings changed. Save a new snapshot first.";
+  if (latest.modelVersion !== FORECAST_MODEL_VERSION) return "Save a snapshot with the current model first.";
+  if (!latest.checksPassed) return "The latest snapshot has failed checks.";
+  return undefined;
+}
 
 /** Preferred default: an approved base, then any base, then the most recently updated active scenario. */
 export function defaultScenario(scenarios: readonly ForecastScenarioSummary[]): ForecastScenarioSummary | undefined {
@@ -55,8 +72,8 @@ export function ScenariosView({ organizationId, scenarios, selected, onSelect, c
     queryFn: ({ signal }) => forecastApi.compare(organizationId, selectedSnapshot!, compareB, signal),
     enabled: Boolean(selectedSnapshot && compareB && compareB !== selectedSnapshot), retry: false, staleTime: 300_000,
   });
-  const canApprove = Boolean(selected && selected.state !== "archived" && selected.latestSnapshot && selected.latestSnapshot.assumptionVersion === selected.currentAssumptionVersion && selected.latestSnapshot.checksPassed);
-  const approveHint = !selected?.latestSnapshot ? "Save a snapshot first." : selected.latestSnapshot.assumptionVersion !== selected.currentAssumptionVersion ? "Save a snapshot of the current assumptions first." : !selected.latestSnapshot.checksPassed ? "The latest snapshot has failed checks." : undefined;
+  const approveHint = approvalBlocker(selected);
+  const canApprove = Boolean(selected && selected.state !== "archived" && !approveHint);
   const toggle = (id: string) => setChosen(current => {
     const base = current ?? comparison;
     return base.includes(id) ? base.filter(item => item !== id) : [...base, id].slice(-3);
@@ -78,7 +95,7 @@ export function ScenariosView({ organizationId, scenarios, selected, onSelect, c
             <td>{FORECAST_SCENARIO_KIND_LABELS[item.kind]}</td>
             <td><span className={stateClass(item.state)}>{STATE_LABELS[item.state]}</span></td>
             <td className="fc-num">{item.currentAssumptionVersion}</td>
-            <td>{item.latestSnapshot ? <>{dateLabel(item.latestSnapshot.createdAt.slice(0, 10), "long")} · v{item.latestSnapshot.assumptionVersion}{!item.latestSnapshot.checksPassed && <span className="rm-status rm-status--error fc-tag">Checks failed</span>}{item.latestSnapshot.completeness === "partial" && <span className="rm-status rm-status--warning fc-tag">Incomplete opening</span>}</> : <span className="fc-muted">None</span>}</td>
+            <td>{item.latestSnapshot ? <>{dateLabel(item.latestSnapshot.createdAt.slice(0, 10), "long")} · v{item.latestSnapshot.assumptionVersion}{!snapshotIsCurrent(item, item.latestSnapshot) && <span className="rm-status rm-status--unknown fc-tag">Stale</span>}{!item.latestSnapshot.checksPassed && <span className="rm-status rm-status--error fc-tag">Checks failed</span>}{item.latestSnapshot.completeness === "partial" && <span className="rm-status rm-status--warning fc-tag">Incomplete opening</span>}</> : <span className="fc-muted">None</span>}</td>
             <td>{dateLabel(item.startDate, "long")}</td>
           </tr>)}</tbody>
         </table>
@@ -92,7 +109,7 @@ export function ScenariosView({ organizationId, scenarios, selected, onSelect, c
     </div>}
     {loaded.length >= 1 && weeks.length > 0 && <>
       <LineChart title="Available cash by scenario" periods={weeks.map(week => ({ key: week.key, label: week.start }))}
-        series={loaded.map((item, index) => ({ id: item.scenario.id, label: item.scenario.name, tone: toneOrder[index % 3]!, values: weeks.map(week => item.run!.result.weeks.find(row => row.key === week.key)?.availableClosingCents ?? null) }))}
+        series={loaded.map((item, index) => ({ id: item.scenario.id, label: item.run!.result.summary.openingCashKnown === false ? `${item.scenario.name} (relative)` : item.scenario.name, tone: toneOrder[index % 3]!, values: weeks.map(week => item.run!.result.weeks.find(row => row.key === week.key)?.availableClosingCents ?? null) }))}
         floorCents={loaded[0]!.run!.result.scenario.reserveFloorCents} />
       <div className="fc-scroll" role="region" aria-label="Scenario comparison" tabIndex={0}>
         <table className="rm-table fc-table">
@@ -100,10 +117,11 @@ export function ScenariosView({ organizationId, scenarios, selected, onSelect, c
           <thead><tr><th scope="col">Measure</th>{loaded.map(item => <th key={item.scenario.id} scope="col" className="fc-num">{item.scenario.name}</th>)}</tr></thead>
           <tbody>
             <tr><th scope="row">Lowest available cash</th>{loaded.map(item => <td key={item.scenario.id} className="fc-num">{moneyWhole(item.run!.result.summary.minAvailableCashCents, item.run!.result.currency)}</td>)}</tr>
-            <tr><th scope="row">Weeks below floor</th>{loaded.map(item => <td key={item.scenario.id} className="fc-num">{item.run!.result.summary.weeksBelowFloor}</td>)}</tr>
+            <tr><th scope="row">Weeks below floor</th>{loaded.map(item => <td key={item.scenario.id} className="fc-num">{item.run!.result.summary.weeksBelowFloor ?? "Unknown"}</td>)}</tr>
             <tr><th scope="row">Ending cash</th>{loaded.map(item => <td key={item.scenario.id} className="fc-num">{moneyWhole(item.run!.result.summary.endingCashCents, item.run!.result.currency)}</td>)}</tr>
             <tr><th scope="row">Total NOI</th>{loaded.map(item => <td key={item.scenario.id} className="fc-num">{moneyWhole(item.run!.result.summary.totalNoiCents, item.run!.result.currency)}</td>)}</tr>
             <tr><th scope="row">Net income</th>{loaded.map(item => <td key={item.scenario.id} className="fc-num">{moneyWhole(item.run!.result.summary.totalNetIncomeCents, item.run!.result.currency)}</td>)}</tr>
+            <tr><th scope="row">Opening cash</th>{loaded.map(item => <td key={item.scenario.id} className="fc-num">{item.run!.result.summary.openingCashKnown === false ? "Unknown" : "Known"}</td>)}</tr>
             <tr><th scope="row">Opening position</th>{loaded.map(item => <td key={item.scenario.id} className="fc-num">{item.run!.result.completeness === "complete" ? "Complete" : "Incomplete"}</td>)}</tr>
           </tbody>
         </table>
@@ -135,11 +153,33 @@ export function ScenariosView({ organizationId, scenarios, selected, onSelect, c
       onSubmit={async payload => { const id = await command("forecast.scenario.create", payload); setDialog(null); if (id) onSelect(id); }} />}
     {dialog?.kind === "edit" && selected && <ScenarioDialog mode="edit" current={selected} scenarios={scenarios} onClose={() => setDialog(null)}
       onSubmit={async payload => { await command("forecast.scenario.update", { scenarioId: selected.id, ...payload }, selected.recordRevision); setDialog(null); }} />}
-    {dialog?.kind === "approve" && selected?.latestSnapshot && <ConfirmDialog title={`Approve ${selected.name}`} message={`Approval pins the snapshot from ${dateLabel(selected.latestSnapshot.createdAt.slice(0, 10), "long")} (version ${selected.latestSnapshot.assumptionVersion}). Editing assumptions later returns the scenario to draft.`}
-      submitLabel="Approve" onClose={() => setDialog(null)} onConfirm={async () => { await command("forecast.scenario.approve", { scenarioId: selected.id, snapshotId: selected.latestSnapshot!.id }, selected.recordRevision); setDialog(null); }} />}
+    {dialog?.kind === "approve" && selected?.latestSnapshot && <ApproveDialog scenario={selected} snapshot={selected.latestSnapshot} onClose={() => setDialog(null)}
+      onConfirm={async reason => { await command("forecast.scenario.approve", { scenarioId: selected.id, snapshotId: selected.latestSnapshot!.id, ...(reason === null ? {} : { acknowledgeIncompleteOpening: true, reason }) }, selected.recordRevision); setDialog(null); }} />}
     {dialog?.kind === "archive" && selected && <ConfirmDialog title={`Archive ${selected.name}`} message="Archived scenarios keep every version and snapshot but can no longer change." submitLabel="Archive" destructive
       onClose={() => setDialog(null)} onConfirm={async () => { await command("forecast.scenario.archive", { scenarioId: selected.id }, selected.recordRevision); setDialog(null); }} />}
   </div>;
+}
+
+/** Approval pins the snapshot; unknown opening cash needs a recorded reason. */
+export function ApproveDialog({ scenario, snapshot, onClose, onConfirm }: { scenario: ForecastScenarioSummary; snapshot: ForecastSnapshotMeta; onClose: () => void; onConfirm: (reason: string | null) => Promise<void> }) {
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<unknown>();
+  const cashUnknown = !snapshot.openingCashKnown;
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (cashUnknown && !reason.trim()) { setError(new Error("Give a reason for approving without opening cash.")); return; }
+    setSaving(true); setError(undefined);
+    try { await onConfirm(cashUnknown ? reason.trim() : null); } catch (problem) { setError(problem); setSaving(false); }
+  };
+  return <Dialog title={`Approve ${scenario.name}`} onClose={onClose} onSubmit={submit} saving={saving} submitLabel="Approve">
+    <Notice error={error} />
+    <p className="fc-dialog-note">Approval pins the snapshot from {dateLabel(snapshot.createdAt.slice(0, 10), "long")} (version {snapshot.assumptionVersion}). Editing assumptions or settings later returns the scenario to draft.</p>
+    {cashUnknown && <>
+      <p className="fc-dialog-note">Opening cash is unknown, so cash balances in this snapshot are relative movements and the reserve floor cannot be tested.</p>
+      <Field label="Reason for approving without opening cash" wide><textarea data-autofocus rows={3} maxLength={1000} value={reason} onChange={event => setReason(event.currentTarget.value)} /></Field>
+    </>}
+  </Dialog>;
 }
 
 function ConfirmDialog({ title, message, submitLabel, destructive = false, onClose, onConfirm }: { title: string; message: string; submitLabel: string; destructive?: boolean; onClose: () => void; onConfirm: () => Promise<void> }) {
