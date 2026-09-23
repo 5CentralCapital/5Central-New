@@ -28,7 +28,7 @@ Code: `shared/forecasting/` (contracts), `server/forecasting/` (engine, service,
    |---|---|---|
    | Operating and restricted cash, accounts payable | Approved opening-balance override | QuickBooks balance-sheet reads are not connected yet, so these are `unknown` until set. |
    | Rental receivables | Rental delinquency balances | `partial` when balances are unresolved or when read on a date other than the cutoff. |
-   | Security deposits held | `rent_ops_security_deposits` held at the cutoff | Partially disposed deposits without a remaining amount are excluded and flagged. |
+   | Security deposits held | `rent_ops_security_deposits` held at the cutoff | Partially disposed deposits without a remaining amount, and deposits with no receipt date or no held amount, are excluded and flagged. |
    | Funds held by property managers | Latest reconciled PM settlement per property/manager | `partial` if the latest settlement ends before the cutoff. |
    | Investor obligations due | Obligations due by the cutoff less allocated, non-reversed payments | Incomplete obligation amounts are excluded and flagged. |
    | Open project commitments | Approved commitments | Disclosed only (memo); remaining project cost comes from project assumptions. |
