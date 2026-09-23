@@ -129,5 +129,4 @@ function createApi(): CompanyDocumentsApi {
 }
 
 export const companyDocumentsApi: CompanyDocumentsApi = createApi();
-export function createCompanyDocumentsApi(): CompanyDocumentsApi { return createApi(); }
 export type { CompanyDocument };

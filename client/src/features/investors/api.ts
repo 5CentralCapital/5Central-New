@@ -129,4 +129,3 @@ function createApi(): InvestorsApi {
 }
 
 export const investorsApi: InvestorsApi = createApi();
-export function createInvestorsApi(): InvestorsApi { return createApi(); }
