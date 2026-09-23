@@ -212,3 +212,34 @@ test("contractor exposure keeps vendors with the same name apart and vendor deta
   const vendors = await tasks.run(context("vendor-details", { mode: "custom", fromDate: "2026-09-01", toDate: "2026-09-30" }, { basis: "operational" }));
   assert.deepEqual(vendors.rows.map(row => [row.values.vendorName, row.values.draftCostCents]), [["Acme: Plumbing & Heating", "700"]]);
 });
+
+test("an elimination with no source line is flagged, and actuals without a budget line are named", async () => {
+  const source: CombinedFinancialReadResult = {
+    lines: [{ id: "l1", legalEntityId, propertyId, unitId: null, accountId: "10", accountName: "Rental income", date: "2026-08-03", amountCents: "1000", currency: "USD", sourceId: "s1", sourceRealmId: "realm-a", canonicalAccountId: "4000", category: "income", statement: "income_statement", basis: "accrual" }],
+    eliminations: [{ accountId: "5000", canonicalAccountId: "5000", entityId: legalEntityId, amountCents: "-300", currency: "USD", sourceId: "e1" }],
+    eliminationVersion: "elim-v1",
+    accountMappingVersion: "accounts-v1",
+    coverage: { state: "complete", evidence: "synthetic", watermark: null, reason: null },
+  };
+  const engine = createCombinedFinancialReportingEngine({ async read() { return source; } });
+  const result = await engine.run(financialContext("income-statement-consolidated", { mode: "range", fromDate: "2026-08-01", toDate: "2026-08-31" }, {
+    basis: "accrual", scope: { ...emptyScope, propertyIds: [] },
+    consolidation: { entityIds: [legalEntityId], currency: "USD", ownershipPolicy: "full_control", eliminationPolicy: "approved_version", eliminationVersion: "elim-v1", translationPolicy: "none" },
+  }));
+  assert.ok(result.missingData?.some(item => item.code === "elimination_without_source_line"));
+  assert.equal(result.totals?.find(item => item.key === "consolidated_net_income")?.state, "partial");
+
+  const bva: CombinedFinancialReadResult = {
+    lines: [
+      { id: "l1", legalEntityId, propertyId, unitId: null, accountId: "600", accountName: "Repairs", date: "2026-09-05", month: "2026-09", amountCents: "60", currency: "USD", sourceId: "s1", sourceRealmId: "realm-a", canonicalAccountId: null, statement: "income_statement", basis: "accrual" },
+      { id: "l2", legalEntityId, propertyId, unitId: null, accountId: "610", accountName: "Landscaping", date: "2026-09-06", month: "2026-09", amountCents: "400", currency: "USD", sourceId: "s2", sourceRealmId: "realm-a", canonicalAccountId: null, statement: "income_statement", basis: "accrual" },
+    ],
+    budgetLines: [{ id: "b1", legalEntityId, propertyId, unitId: null, accountId: "600", period: "2026-09", budgetCents: "100", currency: "USD", sourceId: "budget", sourceRealmId: "realm-a" }],
+    coverage: { state: "complete", evidence: "synthetic", watermark: null, reason: null },
+  };
+  const bvaEngine = createCombinedFinancialReportingEngine({ async read() { return bva; } });
+  const bvaResult = await bvaEngine.run(financialContext("budget-vs-actual", { mode: "range", fromDate: "2026-09-01", toDate: "2026-09-30" }, { basis: "accrual" }));
+  assert.equal(bvaResult.totals?.find(item => item.key === "actual")?.amountCents, "60");
+  assert.ok(bvaResult.missingData?.some(item => item.code === "actual_without_budget" && item.count === 1));
+  assert.equal(bvaResult.totals?.find(item => item.key === "actual")?.state, "partial");
+});

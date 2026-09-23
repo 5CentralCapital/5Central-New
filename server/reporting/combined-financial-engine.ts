@@ -307,8 +307,12 @@ export function createCombinedFinancialReportingEngine(read: CombinedFinancialRe
           }
         }
         const effectiveLines = lines.map(line => effectiveConsolidationLine(line, policy));
-        const lineKeys = new Set(effectiveLines.map(line => consolidationLineKey(line)));
-        rows = aggregate(effectiveLines, line => consolidationLineKey(line), line => ({ consolidationKey: consolidationLineKey(line), accountId: line.canonicalAccountId ?? line.accountId, accountName: line.accountName ?? null, category: line.category ?? null, sourceRealmId: line.sourceRealmId ?? null, entityCount: new Set(effectiveLines.filter(item => consolidationLineKey(item) === consolidationLineKey(line)).map(item => item.legalEntityId)).size, eliminationVersion: policy.eliminationPolicy === "approved_version" ? policy.eliminationVersion ?? null : null, eliminationPolicy: policy.eliminationPolicy })).map(row => {
+        const entitiesByKey = new Map<string, Set<string>>();
+        for (const line of effectiveLines) {
+          const key = consolidationLineKey(line);
+          entitiesByKey.set(key, (entitiesByKey.get(key) ?? new Set<string>()).add(line.legalEntityId));
+        }
+        rows = aggregate(effectiveLines, line => consolidationLineKey(line), line => ({ consolidationKey: consolidationLineKey(line), accountId: line.canonicalAccountId ?? line.accountId, accountName: line.accountName ?? null, category: line.category ?? null, sourceRealmId: line.sourceRealmId ?? null, entityCount: entitiesByKey.get(consolidationLineKey(line))?.size ?? 0, eliminationVersion: policy.eliminationPolicy === "approved_version" ? policy.eliminationVersion ?? null : null, eliminationPolicy: policy.eliminationPolicy })).map(row => {
           const value = row as { consolidationKey: string; accountId: string; amountCents: string; currency: string; sourceRealmId: string | null };
           const key = value.consolidationKey;
           const adjustment = eliminationByAccount.get(key) ?? BigInt(0);
@@ -316,12 +320,18 @@ export function createCombinedFinancialReportingEngine(read: CombinedFinancialRe
           return { ...(row as Record<string, unknown>), eliminatedAmountCents: policy.eliminationPolicy === "approved_version" ? centsFromBigInt(adjustment) : "0", consolidatedAmountCents: centsFromBigInt(sourceAmount + adjustment) };
         });
         if (policy.eliminationPolicy === "approved_version") {
-          for (const [key, adjustment] of Array.from(eliminationByAccount.entries())) if (!lineKeys.has(key)) {
+          let unmatched = 0;
+          for (const [key, adjustment] of Array.from(eliminationByAccount.entries())) if (!entitiesByKey.has(key)) {
             const [identity, currency] = key.split(/:(?=[^:]+$)/);
-            // An elimination on an account with no source line keeps its own
-            // row; its category comes from the mapped lines when known.
+            // An elimination on an account with no source line in scope keeps
+            // its own row. Its category is unknown, so it is outside the
+            // income/expense totals; the counterpart is missing, so the
+            // consolidated result is flagged incomplete instead of silently
+            // leaving it out.
+            unmatched += 1;
             rows.push({ accountId: identity ?? key, accountName: null, category: null, sourceRealmId: null, entityCount: 0, amountCents: "0", currency, eliminationVersion: policy.eliminationVersion ?? null, eliminationPolicy: policy.eliminationPolicy, eliminatedAmountCents: centsFromBigInt(adjustment), consolidatedAmountCents: centsFromBigInt(adjustment) });
           }
+          if (unmatched) missingData.push({ ...missing("elimination_without_source_line", `${unmatched} elimination${unmatched === 1 ? " has" : "s have"} no matching source line in this scope and period; ${unmatched === 1 ? "it is" : "they are"} shown separately and not included in category totals.`, "partial"), count: unmatched });
         }
         if (policy.eliminationPolicy === "none") missingData.push(missing("elimination_policy_none", "The consolidated result excludes eliminations because the selected policy is none.", "partial"));
       } else if (reportId === "balance-sheet-by-fund-type") {
@@ -345,12 +355,18 @@ export function createCombinedFinancialReportingEngine(read: CombinedFinancialRe
           if (current) { current.amount += centsToBigInt(line.budgetCents); current.ids.push(line.id); }
           else budgetGroups.set(key, { amount: centsToBigInt(line.budgetCents), line, ids: [line.id] });
         }
+        const matchedActuals = new Set<string>();
         rows = Array.from(budgetGroups.values()).map(({ amount, line: budget, ids }) => {
           const actualKey = `${budgetAccountKey(budget)}:${budget.propertyId ?? ""}:${budget.unitId ?? ""}:${budget.period}`;
           const actualLine = actual.get(actualKey);
+          if (actualLine) matchedActuals.add(actualKey);
           if (!actualLine) missingData.push(missing("actual_line_missing", `No actual accounting line was found for budget period ${budget.period}.`, "partial"));
           return { budgetId: ids.join(","), accountId: budget.accountId, propertyId: budget.propertyId ?? null, unitId: budget.unitId ?? null, period: budget.period, budgetCents: centsFromBigInt(amount), actualCents: actualLine ? centsFromBigInt(actualLine.amount) : null, varianceCents: actualLine ? centsFromBigInt(actualLine.amount - amount) : null, currency: budget.currency };
         });
+        // Actual spending on an account, scope or month with no budget line is
+        // not in the rows; say so rather than letting the actual total read low.
+        const unbudgeted = Array.from(actual.keys()).filter(key => !matchedActuals.has(key)).length;
+        if (unbudgeted) missingData.push({ ...missing("actual_without_budget", `${unbudgeted} actual account/month group${unbudgeted === 1 ? " has" : "s have"} no approved budget line and ${unbudgeted === 1 ? "is" : "are"} not included in the actual total.`, "partial"), count: unbudgeted });
       } else if (reportId === "income-statement-by-unit") {
         if (!source.unitAllocationVersion) throw new ReportingError("report_unavailable", "Income statement by unit requires an approved dated unit allocation version.", 409, { dependency: "approved_allocation_version" });
         const unallocated = lines.filter(line => !line.unitId);
