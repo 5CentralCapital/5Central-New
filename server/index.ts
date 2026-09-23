@@ -1,5 +1,8 @@
 import 'dotenv/config';
 import { registerTenantPaymentWebhook } from './rent-ops/payments/routes';
+// lane-b-accounting
+import { registerQuickBooksWebhookRoute } from './accounting/webhook-route';
+import type { RentOpsQueryExecutor } from './rent-ops/repositories/postgres';
 import type { TenantPaymentService } from './rent-ops/payments/service';
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
@@ -50,6 +53,9 @@ app.use(securityHeaders({ production: isProduction }));
 let tenantPaymentService: TenantPaymentService | undefined;
 // Signature verification must receive the original bytes before any JSON parser.
 registerTenantPaymentWebhook(app, { getService: () => tenantPaymentService });
+// lane-b-accounting: QuickBooks CloudEvents need the raw bytes for HMAC verification.
+let quickBooksWebhookExecutor: RentOpsQueryExecutor | undefined;
+registerQuickBooksWebhookRoute(app, { getExecutor: () => quickBooksWebhookExecutor });
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
@@ -107,7 +113,10 @@ app.use((req, res, next) => {
     // role. Startup may prepare only the development schema.
     if (!isProduction) await ensureSchema();
 
-    const server = await registerRoutes(app, { onTenantPaymentService: (service) => { tenantPaymentService = service; } });
+    const server = await registerRoutes(app, {
+      onTenantPaymentService: (service) => { tenantPaymentService = service; },
+      onRuntimeExecutor: (executor) => { quickBooksWebhookExecutor = executor; }, // lane-b-accounting
+    });
 
     app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
       if (res.headersSent) {

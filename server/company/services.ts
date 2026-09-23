@@ -9,6 +9,8 @@ import { createTimeServices, type TimeServices, type TimeServicesOptions } from 
 import { createCompanyReportingPort } from './reporting-runtime';
 import type { ReportingPort } from '../reporting';
 import { createWorkOrderPort, type WorkOrderPort } from '../work-orders/port';
+// lane-b-accounting
+import { createJobsPort, type JobsPort } from '../jobs/operator';
 
 /** The browser and Codex share these services and the same company database. */
 export interface CompanyServices {
@@ -19,6 +21,8 @@ export interface CompanyServices {
   readonly time: TimeServices;
   readonly reporting: ReportingPort;
   readonly workOrders: WorkOrderPort;
+  // lane-b-accounting
+  readonly jobs: JobsPort;
 }
 
 export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
@@ -46,5 +50,6 @@ export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
   });
   const reporting = createCompanyReportingPort(executor, accounting);
   const workOrders = createWorkOrderPort(executor);
-  return { executor, accounting, investors, projects, time, reporting, workOrders };
+  const jobs = createJobsPort(executor); // lane-b-accounting
+  return { executor, accounting, investors, projects, time, reporting, workOrders, jobs };
 }

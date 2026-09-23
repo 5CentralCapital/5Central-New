@@ -389,10 +389,12 @@ export const bridgeControlTotalsSchema = z.object({
   netReceivableChangeCents: centsSchema,
   excludedVoidedCount: z.number().int().min(0),
   excludedPendingCount: z.number().int().min(0),
+  /** Ledger rows whose amount, status or category is unknown; never counted as zero. */
+  excludedUnknownCount: z.number().int().min(0),
 }).strict();
 export type BridgeControlTotals = z.infer<typeof bridgeControlTotalsSchema>;
 
-export const BRIDGE_PREVIEW_STATUSES = ["ready", "no_policy", "method_conflict", "mixed_policy"] as const;
+export const BRIDGE_PREVIEW_STATUSES = ["ready", "incomplete_source", "no_policy", "method_conflict", "mixed_policy"] as const;
 export const rentalBridgePreviewSchema = z.object({
   organizationId: organizationIdSchema,
   legalEntityId: legalEntityIdSchema,
@@ -433,3 +435,60 @@ export const periodCloseChecklistSchema = z.object({
   generatedAt: isoTimestampSchema,
 }).strict();
 export type PeriodCloseChecklist = z.infer<typeof periodCloseChecklistSchema>;
+
+/* ── Bills & payments (read-only mirror view) ─────────────────────────── */
+
+export const PAYABLE_KINDS = ["bills", "payments"] as const;
+export const payableKindSchema = z.enum(PAYABLE_KINDS);
+export const accountingPayableSchema = z.object({
+  objectType: z.enum(["Bill", "BillPayment"]),
+  objectId: z.string(),
+  version: z.string(),
+  docNumber: z.string().nullable(),
+  vendorName: z.string().nullable(),
+  transactionDate: isoDateSchema,
+  dueDate: isoDateSchema.nullable(),
+  currency: currencyCodeSchema,
+  /** Sum of current mirrored lines; null when the object could not be mirrored. */
+  amountCents: centsSchema.nullable(),
+  /** Provider open balance for bills; null when not stated. */
+  openBalanceCents: centsSchema.nullable(),
+  postingState: z.enum(["posted", "voided", "unknown"]),
+  mirrored: z.boolean(),
+}).strict();
+export type AccountingPayable = z.infer<typeof accountingPayableSchema>;
+export const accountingPayablesQuerySchema = z.object({
+  organizationId: organizationIdSchema,
+  legalEntityId: legalEntityIdSchema,
+  environment: qboEnvironmentSchema,
+  realmId: realmIdSchema,
+  kind: payableKindSchema.default("bills"),
+  from: isoDateSchema.optional(),
+  through: isoDateSchema.optional(),
+  limit: z.number().int().min(1).max(100).default(50),
+  cursor: cursorSchema.optional(),
+}).strict();
+export type AccountingPayablesQuery = z.input<typeof accountingPayablesQuerySchema>;
+export const accountingPayablesResponseSchema = z.object({
+  items: z.array(accountingPayableSchema),
+  nextCursor: z.string().nullable(),
+  coverage: z.object({ status: z.enum(["unavailable", "partial", "complete"]), reason: z.string().nullable() }).strict(),
+}).strict();
+export type AccountingPayablesResponse = z.infer<typeof accountingPayablesResponseSchema>;
+
+/* ── QuickBooks sync request (queues a worker job) ────────────────────── */
+
+export const QBO_SYNC_REQUEST_COMMAND_KIND = "accounting.qbo.sync.request" as const;
+export const requestQboSyncPayloadSchema = z.object({
+  environment: qboEnvironmentSchema,
+  realmId: realmIdSchema,
+  forceFullReplay: z.boolean().default(false),
+}).strict();
+
+export const ACCOUNTING_OPERATION_COMMAND_KINDS = [...RENTAL_POSTING_COMMAND_KINDS, ...PM_SETTLEMENT_COMMAND_KINDS, QBO_SYNC_REQUEST_COMMAND_KIND] as const;
+export type AccountingOperationCommandKind = (typeof ACCOUNTING_OPERATION_COMMAND_KINDS)[number];
+export const accountingOperationCommandPayloadSchemas = {
+  ...rentalPostingCommandPayloadSchemas,
+  ...pmSettlementCommandPayloadSchemas,
+  [QBO_SYNC_REQUEST_COMMAND_KIND]: requestQboSyncPayloadSchema,
+} as const satisfies Record<AccountingOperationCommandKind, z.ZodTypeAny>;
