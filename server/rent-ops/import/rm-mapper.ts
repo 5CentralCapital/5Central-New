@@ -1270,7 +1270,9 @@ function resolveRecurringScope(
     if (tenancy && tenancy.primaryPersonId !== person.id) { exception(exceptions, "recurring_schedule_tenant_mismatch", "Recurring schedule tenant scope conflicts with its explicit tenancy", "recurring_schedule", record, undefined, "error"); return undefined; }
     const unitSource = sourceLink(record, "unitId", "unitSourceId");
     const propertySource = sourceLink(record, "propertyId", "propertySourceId");
-    const unit = unitSource ? unitBySource.get(unitSource) : tenancy ? unitBySource.get(tenancy.source?.sourceId ?? "") : undefined;
+    // A lease source ID is not a unit source ID; the tenancy's own unit link
+    // is resolved below.
+    const unit = unitSource ? unitBySource.get(unitSource) : undefined;
     const property = propertySource ? propertyBySource.get(propertySource) : undefined;
     const resolvedUnit = tenancy ? Array.from(unitBySource.values()).find((candidate) => candidate.id === tenancy.unitId) : unit;
     const resolvedProperty = tenancy ? Array.from(propertyBySource.values()).find((candidate) => candidate.id === tenancy.propertyId) : property ?? (resolvedUnit ? Array.from(propertyBySource.values()).find((candidate) => candidate.id === resolvedUnit.propertyId) : undefined);

@@ -529,6 +529,24 @@ test('exact ePay and Void source reversal enums retain dated reversal and source
  }
 });
 
+test("a tenant schedule never borrows a unit whose RM ID equals its lease ID", () => {
+  const artifactSha256 = "a".repeat(64);
+  const financialSemanticCrosswalk: RentManagerFinancialSemanticCrosswalk = { artifactSha256, normalization: "exact_v1", entries: [{ artifactSha256, sourceCollection: "recurringSchedules", sourceField: "EntityType", semanticKind: "recurring_scope", normalization: "exact_v1", normalizedValue: "Tenant", targetValue: "tenant" }] };
+  const mapped = mapRentManagerExport({
+    ...input(),
+    financialSemanticCrosswalk,
+    // RM IDs are per-table integers, so lease 77 and unit 77 can coexist.
+    units: [...input().units, { entityType: "unit", sourceId: "77", propertyId: "p1", unitNumber: "Unrelated" }],
+    leases: [...input().leases, { entityType: "lease", sourceId: "77", propertyId: "p1", tenantId: "t1", moveInDate: "2025-01-01" }],
+    recurringSchedules: [{ sourceId: "unitless-lease-schedule", EntityType: "Tenant", EntityKeyID: "t1", leaseId: "77", amount: 100, effectiveFrom: "2025-01-01" }],
+  }, { fidelityVersion: 3, artifactSha256, targetIdFactory: deterministicTestTargetIdFactory });
+  const lease = mapped.snapshot.tenancies.find((row) => row.source?.sourceId === "77");
+  assert.equal(lease?.unitId, null);
+  const schedule = mapped.snapshot.recurringSchedules.find((row) => row.source?.sourceId === "unitless-lease-schedule");
+  assert.equal(schedule?.tenancyId, lease?.id);
+  assert.equal(schedule?.unitId, null);
+});
+
 test("v3 source-absent recurring amount remains retained unknown; invalid and nonpositive amounts block", () => {
   const artifactSha256 = "a".repeat(64);
   const financialSemanticCrosswalk: RentManagerFinancialSemanticCrosswalk = { artifactSha256, normalization: "exact_v1", entries: [{ artifactSha256, sourceCollection: "recurringSchedules", sourceField: "EntityType", semanticKind: "recurring_scope", normalization: "exact_v1", normalizedValue: "Tenant", targetValue: "tenant" }] };
