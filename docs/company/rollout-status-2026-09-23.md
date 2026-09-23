@@ -46,7 +46,7 @@ Audit findings that shaped the build:
 
 ## Verification on this branch
 
-Typecheck, migration registry verification, `test:company`, `test:rent-ops`, `test:performance`, the production build and the Chromium navigation smoke all pass on the final commit (see the delivery notes for exact counts). The report-setup browser smoke has one failure that also occurs on the untouched baseline: the demo tenant ledger returns no rows when filtered to current tenants, because the synthetic tenancy's status is evaluated against today's date.
+On the final commit: typecheck clean; migration registry valid (48); `test:company` 426 passed, 3 skipped (they need a real PostgreSQL URL); `test:rent-ops` 1,264 passed, 3 skipped; `test:performance` and the QBO sandbox harness tests pass; production build succeeds; the navigation browser smoke passes in Chromium (WebKit is not installed in this environment). The report-setup browser smoke has one failure that also occurs on the untouched baseline: the demo tenant ledger returns no rows when filtered to current tenants, because the synthetic tenancy's status is evaluated against today's date.
 
 ## Prerequisites that remain outside the code
 
