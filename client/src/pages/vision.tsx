@@ -284,23 +284,23 @@ export default function Vision() {
           </p>
           
           <div className="flex flex-col sm:flex-row gap-6 justify-center">
-            <Link href="/founder">
-              <Button 
+            <Button asChild 
                 className="bg-gradient-to-r from-accent-gold to-bronze text-white px-10 py-4 rounded-lg font-semibold text-lg hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1"
                 data-testid="button-meet-founder"
               >
+              <Link href="/founder">
                 Meet the Founder
-              </Button>
-            </Link>
-            <Link href="/portfolio">
-              <Button 
+              </Link>
+            </Button>
+            <Button asChild 
                 variant="outline"
                 className="border-2 border-accent-gold text-accent-gold px-10 py-4 rounded-lg font-semibold text-lg hover:bg-accent-gold hover:text-primary transition-all duration-300"
                 data-testid="button-view-current-portfolio"
               >
+              <Link href="/portfolio">
                 View Current Portfolio
-              </Button>
-            </Link>
+              </Link>
+            </Button>
           </div>
           
           <div className="mt-16 grid md:grid-cols-3 gap-8 text-center">

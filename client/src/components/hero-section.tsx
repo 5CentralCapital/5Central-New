@@ -106,23 +106,23 @@ export default function HeroSection({
 
             {/* CTA Buttons */}
             <div className="flex flex-col sm:flex-row gap-4 mb-20 fade-in-up" style={{ animationDelay: '0.4s' }}>
-              <Link href="/portfolio">
-                <Button
+              <Button asChild
                   className="btn-accent group"
                   data-testid="button-view-portfolio"
                 >
+                <Link href="/portfolio">
                   View Portfolio
                   <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
-                </Button>
-              </Link>
-              <Link href="/investor">
-                <Button
+                </Link>
+              </Button>
+              <Button asChild
                   className="btn-outline border-white/30 text-white hover:bg-white hover:text-deep-charcoal"
                   data-testid="button-investment-opportunities"
                 >
+                <Link href="/investor">
                   Investment Opportunities
-                </Button>
-              </Link>
+                </Link>
+              </Button>
             </div>
           </div>
 

@@ -103,12 +103,12 @@ export default function PropertyStory() {
     <div className="min-h-screen bg-background pt-24" data-testid="property-story-page">
       <section className="pb-12 border-b border-border">
         <div className="container-wide">
-          <Link href="/portfolio">
-            <Button className="btn-outline mb-8">
+          <Button asChild className="btn-outline mb-8">
+            <Link href="/portfolio">
               <ArrowLeft className="w-4 h-4 mr-2" />
               Portfolio
-            </Button>
-          </Link>
+            </Link>
+          </Button>
 
           <div className="grid lg:grid-cols-5 gap-8 lg:gap-12 items-end">
             <div className="lg:col-span-3">
@@ -175,9 +175,9 @@ export default function PropertyStory() {
                 </p>
               </div>
 
-              <Link href="/investor">
-                <Button className="btn-accent w-full">Join Investor List</Button>
-              </Link>
+              <Button asChild className="btn-accent w-full">
+                <Link href="/investor">Join Investor List</Link>
+              </Button>
             </div>
           </div>
         </div>

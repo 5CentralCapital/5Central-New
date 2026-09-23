@@ -282,15 +282,15 @@ export default function Founder() {
             >
               <a href="mailto:michael@5central.capital">Schedule a Meeting</a>
             </Button>
-            <Link href="/portfolio">
-              <Button
+            <Button asChild
                 variant="outline"
                 className="border-2 border-accent-gold text-accent-gold px-10 py-4 rounded-lg font-semibold text-lg hover:bg-accent-gold hover:text-primary transition-all duration-300"
                 data-testid="button-view-portfolio"
               >
+              <Link href="/portfolio">
                 View Portfolio
-              </Button>
-            </Link>
+              </Link>
+            </Button>
           </div>
         </div>
       </section>

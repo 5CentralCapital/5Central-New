@@ -989,20 +989,20 @@ export default function Portfolio() {
               </p>
 
               <div className="flex flex-col sm:flex-row gap-4">
-                <Link href="/founder">
-                  <Button className="btn-accent group w-full sm:w-auto" data-testid="button-schedule-consultation">
+                <Button asChild className="btn-accent group w-full sm:w-auto" data-testid="button-schedule-consultation">
+                  <Link href="/founder">
                     Schedule Consultation
                     <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
-                  </Button>
-                </Link>
-                <Link href="/vision">
-                  <Button
+                  </Link>
+                </Button>
+                <Button asChild
                     className="btn-outline border-white/20 text-white hover:bg-white hover:text-deep-charcoal w-full sm:w-auto"
                     data-testid="button-view-investment-vision"
                   >
+                  <Link href="/vision">
                     View Our Vision
-                  </Button>
-                </Link>
+                  </Link>
+                </Button>
               </div>
             </div>
 
