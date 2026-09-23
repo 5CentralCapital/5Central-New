@@ -12,9 +12,10 @@ import {
 } from "./storage";
 
 function ok(res: Response, data: any) { res.json(data); }
-function err(res: Response, error: any, status = 500) {
+/** Log the failure server-side; database messages (constraint values, emails) never reach the client. */
+export function err(res: Response, error: unknown, status = 500) {
   console.error(error);
-  res.status(status).json({ error: error?.message || "Internal error" });
+  res.status(status).json({ error: "Internal error" });
 }
 
 export function registerModuleRoutes(app: Express) {
