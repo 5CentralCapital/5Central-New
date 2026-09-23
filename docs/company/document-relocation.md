@@ -58,14 +58,20 @@ The tool never prints connection strings or keys and never deletes or overwrites
 
 ### IAM for the writer
 
-Create a dedicated, temporary IAM user (for example `fivecentral-ops-relocation`) scoped to
-`arn:aws:s3:::fivecentral-ops-production-651532007693/rent-ops/private/*`:
+Use the existing IAM user `fivecentral-ops-production-importer` (and
+`fivecentral-ops-staging-importer` for the rehearsal). Its reviewed policy is exactly what `copy`
+needs: `s3:PutObject`, `s3:GetObject` and `s3:GetObjectVersion` on `rent-ops/private/*`, with
+explicit denies for listing and deletion. No importer access key exists yet: create one only for
+the copy session, export it in the Replit shell as the `_IMPORTER_*` pair, never put it in a
+Render group (web startup refuses importer credentials), and deactivate it after `readback`
+passes.
 
-- allow `s3:PutObject`, `s3:GetObject`, `s3:GetObjectVersion`;
-- explicitly deny `s3:DeleteObject`, `s3:DeleteObjectVersion`, `s3:ListBucket`,
-  `s3:PutObjectAcl`.
+The reader pair is the runtime user (`fivecentral-ops-production-runtime`); its key already
+exists in the `5central-ops-production-web` group. Copy it into the Replit shell for the session
+from the Render dashboard, or create a second runtime key and deactivate it afterwards.
 
-Deactivate its access key after `readback` passes. It never goes into a Render environment.
+Without `s3:ListBucket`, S3 answers 403 (not 404) for a key that does not exist. The tool never
+depends on that answer: it writes with `If-None-Match: *` and reads only keys it just wrote.
 
 ## Run order
 
@@ -76,24 +82,29 @@ after migrations 043–049.
 1. **Inventory** (any shell with the owner URL):
    `npm run company:document-relocation -- inventory` — expect `replit-managed-gcs` ≈ 1,509
    documents. Record `inventorySha256`.
-2. **Trial copy inside the Replit workspace** (it has the managed bucket identity), on this branch
-   with `npm ci` done and the variables above exported in the shell only:
+2. **Rehearsal on staging** (optional but recommended): the staging Neon branch
+   `rops-render-staging-20260923` is a clone with the same 1,509 bindings. Run steps 3–8 against
+   it with the staging bucket and staging importer/runtime users, after migrations through 49 on
+   that branch.
+3. **Trial copy inside the Replit workspace** (it has the managed bucket identity), on this branch
+   (pushed to GitHub and pulled there) with `npm ci` done and the variables above exported in the
+   shell only:
    `npm run company:document-relocation -- copy --manifest ~/relocation-20260923.json --run-id relocate-20260923 --limit 3`
    Check the three objects in the S3 console (versions shown, sizes match).
-3. **Full copy**: the same command without `--limit`. Re-run until `remaining: 0` and
+4. **Full copy**: the same command without `--limit`. Re-run until `remaining: 0` and
    `failureCount: 0`. A failure code of `storage_checksum_mismatch` means the Replit object does
    not match its binding — stop and investigate; do not relocate that document.
-4. **Cutover window, after the freeze**: re-run the same copy once more (picks up any upload made
+5. **Cutover window, after the freeze**: re-run the same copy once more (picks up any upload made
    since), then apply migrations through **49** with `npm run company:production-schema`
    (see `production-release-2026-09-23.md`).
-5. **Plan**: `npm run company:document-relocation -- plan --manifest ~/relocation-20260923.json --run-id relocate-20260923 --authorization <michael-approval-ref>`
+6. **Plan**: `npm run company:document-relocation -- plan --manifest ~/relocation-20260923.json --run-id relocate-20260923 --authorization <michael-approval-ref>`
    Expect `documentsToRelocate` = the inventory count, `missingCount: 0`. Copy `planSha256`.
-6. **Apply**: `npm run company:document-relocation -- apply --manifest … --run-id relocate-20260923 --authorization <ref> --confirm <planSha256> --apply-reviewed --rehash`
-7. **Readback on Render** (web shell, app credentials):
+7. **Apply**: `npm run company:document-relocation -- apply --manifest … --run-id relocate-20260923 --authorization <ref> --confirm <planSha256> --apply-reviewed --rehash`
+8. **Readback on Render** (web shell, app credentials):
    `npm run company:document-relocation -- readback --url-env RENT_OPS_RUNTIME_DATABASE_URL --target-env-prefix RENT_OPS_OBJECT_STORE`
    Expect `replit-managed-gcs` absent from `byBackend`, `verifiedObjects` = distinct objects,
    `failureCount: 0`. Then download one lease in the manager UI.
-8. Keep the Replit bucket untouched for at least 30 days. Keep the manifest file with the
+9. Keep the Replit bucket untouched for at least 30 days. Keep the manifest file with the
    cutover evidence (it contains checksums and version ids only, no document content or names).
 
 ## Rollback

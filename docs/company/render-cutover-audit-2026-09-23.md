@@ -12,10 +12,13 @@ audited rollout, the QuickBooks production work and the cutover tooling below. O
 The code is ready for the cutover. Nothing in the code requires Replit once the documents are
 relocated; Replit-only backends (`replit-managed-gcs`, `replit-gmail`, `RENT_OPS_HOST_DATABASE_URL`
 override) are selected only by explicit configuration and the Render Blueprints do not select
-them. What remains is operator and account work, listed under **Gates before DNS moves**. The
-three items most likely to slip: the Gmail sender credentials (production web will not start
-without them, see gate 5), the 1,509-document relocation (gate 3), and the first contact with real
-S3 (gate 4).
+them. What remains is account, configuration and operator work, listed under **Gates before DNS
+moves**. The items most likely to slip: Render billing (staging cannot launch yet), the missing
+QuickBooks, admin sign-in and MCP values in the Render groups (gate 5), the 1,509-document
+relocation (gate 3), and the first contact with real S3 (gate 4).
+
+Account state below is from Codex's provider-setup handoff of September 23 (names only, verified
+by Codex; not re-verified here).
 
 ## Hosting configuration (Codex, verified against the code)
 
@@ -55,17 +58,26 @@ S3 (gate 4).
 4. **Real S3 on staging.** The SigV4 client has only met fakes. Startup must pass against the real
    staging bucket: path-style URLs on `https://s3.us-west-2.amazonaws.com`; `If-None-Match: *`
    PUT on a versioned bucket (412 when present); `x-amz-version-id` on HEAD/GET/PUT; HTTP 403 (not
-   404) for denied List/Delete; the canary `rent-ops/private/sha256/000…000` (64 zeros) created
-   with a retained version. Then an applicant upload and a document download.
-5. **Gmail sender credentials.** With `gmail` enabled in the Blueprint, production startup refuses
-   to run until `RENT_OPS_GMAIL_CLIENT_ID`, `_CLIENT_SECRET`, `_REFRESH_TOKEN`, `_FROM` and
-   `RENT_OPS_EMAIL_ALLOWED_RECIPIENTS` are set (`validateRentOpsProductionConfiguration`). Google
-   client creation was still in progress. If it cannot finish before the window, the only other
-   option is a reviewed Blueprint change to the staging-style disabled email, which stops tenant
-   magic-link sign-in and notices.
-6. **Session secrets** copied from Replit into `5central-ops-production-web` so sessions and
-   limiter keys survive (`RENT_OPS_SESSION_SECRET` must be ≥ 32 characters for the database
-   limiter).
+   404) for denied List/Delete; the canary `rent-ops/private/sha256/000…000` (64 zeros; Codex
+   uploaded it with a retained version in both buckets). Then an applicant upload and a document download.
+5. **Render group values still missing** (production startup or features depend on them):
+   - `5central-ops-production`: `QBO_CLIENT_ID`, `QBO_CLIENT_SECRET`, `QBO_REDIRECT_URI`,
+     `QBO_TOKEN_ENCRYPTION_KEY`. The Replit production secrets have no QBO client or key, so
+     generate the key once (`echo "base64:$(openssl rand -base64 32)"`), keep it in the password
+     manager, and never rotate it afterwards.
+   - `5central-ops-production-web`: `RENT_OPS_ADMIN_OAUTH_CLIENT_ID` and
+     `RENT_OPS_OAUTH_ADMIN_SUBJECTS` (without them manager Google sign-in is disabled);
+     `RENT_OPS_MCP_ENABLED=true`, `RENT_OPS_OAUTH_ISSUER`, `RENT_OPS_MCP_RESOURCE` (keep the current
+     audience string for the cutover); Plaid (`PLAID_CLIENT_ID`, `PLAID_SECRET`,
+     `PLAID_ACCESS_TOKENS`, `PLAID_ENV=production`) if bank feeds must keep working;
+     `QBO_WEBHOOK_VERIFIER_TOKEN_PRODUCTION` after the webhook is registered.
+   - Gmail sender credentials are saved. The production recipient allowlist holds only
+     `michael@5central.capital`, so tenant magic-link and notice emails to anyone else are refused
+     until the allowlist is widened deliberately (the Replit allowlist was broader and was not
+     copied). Decide before DNS moves.
+6. **Render billing** (card entered by Michael) so the staging Blueprint can be applied; then the
+   staging checks in `docs/RENDER_DEPLOYMENT.md`, including the app's own S3 startup probe against
+   the staging bucket. Session secrets are already copied from Replit.
 7. **Auth0**: `https://5central.capital/api/rent-ops/auth/oauth/callback` (already used on the
    Replit custom domain) and, for staging, the `onrender.com` staging callback.
 8. **QuickBooks**: the same `QBO_TOKEN_ENCRYPTION_KEY` everywhere (a new key makes stored tokens

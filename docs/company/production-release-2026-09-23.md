@@ -43,10 +43,10 @@ strings go into environment variables by name; the tools never print them. Use t
 
 1. Staging per `docs/RENDER_DEPLOYMENT.md`: isolated Neon branch, S3 canary, `/readyz` 200, upload
    and download, manager sign-in on the staging hostname, worker job, QBO **sandbox** connect.
-2. Document copy from inside the Replit workspace (`document-relocation.md` steps 1–3). It only
+2. Document copy from inside the Replit workspace (`document-relocation.md` steps 1, 3 and 4). It only
    reads the database and writes content-addressed objects to S3.
-3. Gmail sender credentials and the production groups filled in (the production web will not
-   start without Gmail, see the audit, gate 5).
+3. The missing Render group values (QBO, admin sign-in, MCP, Plaid) and the recipient-allowlist
+   decision (audit, gate 5); Render billing so staging can launch (gate 6).
 4. Lower the DNS TTL for `5central.capital` and `www` to 300 s the day before.
 
 ### 1. Describe and inspect (read-only)
@@ -95,7 +95,7 @@ other role untouched.
 
 ### 5. Relocate documents
 
-`document-relocation.md` steps 4–6: re-run the copy once (catches uploads made before the
+`document-relocation.md` steps 5–7: re-run the copy once (catches uploads made before the
 freeze), `plan` (expect `missingCount: 0`), then `apply --rehash` with the reviewed digest.
 
 ### 6. Render
@@ -106,12 +106,12 @@ freeze), `plan` (expect `missingCount: 0`), then `apply --rehash` with the revie
    - `5central-ops-production`: `RENT_OPS_RUNTIME_DATABASE_URL`, `QBO_ENVIRONMENT=production`,
      production `QBO_CLIENT_ID`/`QBO_CLIENT_SECRET`,
      `QBO_REDIRECT_URI=https://5central.capital/api/accounting/qbo/callback`,
-     `QBO_TOKEN_ENCRYPTION_KEY` (if the Replit app already has one, reuse it; otherwise generate
-     once with `echo "base64:$(openssl rand -base64 32)"` and store it in the password manager).
+     `QBO_TOKEN_ENCRYPTION_KEY` (Replit production has none: generate once with
+     `echo "base64:$(openssl rand -base64 32)"`, store it in the password manager, never rotate).
    - `5central-ops-production-web`: per `docs/RENDER_DEPLOYMENT.md`, with `SESSION_SECRET` and
      `RENT_OPS_SESSION_SECRET` copied from Replit.
 3. In a Render web shell: `npm run company:qbo-preflight -- --network --database` (no failures),
-   then the document readback (`document-relocation.md` step 7).
+   then the document readback (`document-relocation.md` step 8).
 4. On the `onrender.com` URL: `/readyz` 200; the worker log shows jobs being claimed and completed.
 5. DNS: add `5central.capital` and `www.5central.capital` as custom domains, point the records as
    Render instructs (leave MX and other mail records alone), wait for the certificate. Stop — do
