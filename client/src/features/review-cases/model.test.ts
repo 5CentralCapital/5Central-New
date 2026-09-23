@@ -29,6 +29,12 @@ test("totals with any unknown amount are labeled incomplete", () => {
   assert.equal(impactTotal([summary({ impactCents: null })]).label, "Unknown");
 });
 
+test("an impact summed from a truncated page of cases is a known subtotal, not the total", () => {
+  const firstPage = impactTotal([summary({ impactCents: "1000", impactCurrency: "USD" })], true);
+  assert.equal(firstPage.complete, false);
+  assert.equal(firstPage.label, "$10.00 known · incomplete");
+});
+
 test("the queue groups by materiality then cause family, keeping affected counts separate", () => {
   const groups = groupQueue([
     summary({ id: "00000000-0000-4000-8000-000000000002", materiality: "medium", causeFamily: "occupancy_dates", affectedCount: 1 }),

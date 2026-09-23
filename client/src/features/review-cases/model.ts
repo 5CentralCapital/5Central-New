@@ -27,10 +27,11 @@ export function formatImpact(cents: string | null | undefined, currency: string 
 }
 
 /**
- * Sum known impacts. A total containing any unknown amount is labeled
- * incomplete: it is a known subtotal, not a total.
+ * Sum known impacts. A total containing any unknown amount, or summed from a
+ * truncated page of cases, is labeled incomplete: it is a known subtotal, not
+ * a total.
  */
-export function impactTotal(items: readonly Pick<ReviewCaseSummary, "impactCents" | "impactCurrency">[]): { label: string; complete: boolean; knownCount: number; unknownCount: number } {
+export function impactTotal(items: readonly Pick<ReviewCaseSummary, "impactCents" | "impactCurrency">[], truncated = false): { label: string; complete: boolean; knownCount: number; unknownCount: number } {
   let total = BigInt(0);
   let known = 0;
   let unknown = 0;
@@ -42,7 +43,7 @@ export function impactTotal(items: readonly Pick<ReviewCaseSummary, "impactCents
   if (currencies.size > 1) return { label: "Mixed currencies", complete: false, knownCount: known, unknownCount: unknown };
   if (known === 0) return { label: UNKNOWN_AMOUNT_LABEL, complete: false, knownCount: 0, unknownCount: unknown };
   const amount = formatImpact(total.toString(), Array.from(currencies)[0] ?? "USD");
-  return unknown ? { label: `${amount} known · incomplete`, complete: false, knownCount: known, unknownCount: unknown } : { label: amount, complete: true, knownCount: known, unknownCount: 0 };
+  return unknown || truncated ? { label: `${amount} known · incomplete`, complete: false, knownCount: known, unknownCount: unknown } : { label: amount, complete: true, knownCount: known, unknownCount: 0 };
 }
 
 export function ageLabel(since: string, now: Date = new Date()): string {

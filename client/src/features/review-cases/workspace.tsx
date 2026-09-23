@@ -427,7 +427,7 @@ function ReviewQueue({ organizationId, legalEntityId, propertyId, api }: { organ
   const afterSave = useCallback(() => { setDialog(null); void refresh(); }, [refresh]);
   const current = detail.data && detail.data.id === selectedId ? detail.data : undefined;
   const total = list.data?.totals;
-  const impact = impactTotal(items);
+  const impact = impactTotal(items, Boolean(list.data?.nextCursor));
   return <div className="rc-workspace">
     <header className="rc-page-header">
       <div>
