@@ -74,13 +74,6 @@ export const COMPANY_SECTIONS: readonly WorkspaceSection[] = [
   'report-library', 'company-reports', 'saved-reports', 'report-packages', 'forecasting',
   'review-queue', 'entities', 'people', 'time', 'company-documents', 'mra-packets', 'settings',
 ];
-/** Sections rendered without the rental snapshot bootstrap. */
-export const SNAPSHOT_FREE_SECTIONS: readonly WorkspaceSection[] = [
-  'accounting', 'projects', 'cost-library', 'work-orders', 'investors', 'time',
-  'report-library', 'company-reports', 'saved-reports', 'report-packages', 'forecasting',
-  'review-queue', 'entities', 'people', 'company-documents', 'mra-packets', 'settings',
-];
-
 const tabs: TenantTab[] = ['summary','household','tenancy','charges','ledger','deposits','housing-assistance','documents','activity'];
 const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const recordPattern = /^[A-Za-z0-9:_-]{1,160}$/;

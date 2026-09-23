@@ -1,6 +1,6 @@
+import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRight } from "lucide-react";
-import type { DashboardCompany } from "@shared/workspaces/contracts";
 import { workspacesApi } from "../../workspaces/api";
 import { formatCentsText, formatIsoDate, humanize } from "../../workspaces/format";
 import { obligationRemaining } from "../../workspaces/models";
@@ -15,7 +15,7 @@ export interface DashboardCompanyTargets {
   onForecasting: (organizationId: string) => void;
 }
 
-function CompactPanel({ title, onOpen, children }: { title: string; onOpen?: () => void; children: React.ReactNode }) {
+function CompactPanel({ title, onOpen, children }: { title: string; onOpen?: () => void; children: ReactNode }) {
   return <section className="rmd-panel rmd-compact" aria-label={title}>
     <header className="rmd-panel-header"><h2>{title}</h2>{onOpen && <button type="button" onClick={onOpen} title={`Open ${title}`} aria-label={`Open ${title}`}><ArrowUpRight size={13} /></button>}</header>
     {children}

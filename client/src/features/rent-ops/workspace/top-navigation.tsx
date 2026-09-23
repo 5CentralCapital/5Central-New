@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react';
 import * as Dropdown from '@radix-ui/react-dropdown-menu';
 import { Check, ChevronDown, ChevronRight, Menu, X } from 'lucide-react';
 import { activeDestination, activeNavigationGroup, DASHBOARD_DESTINATION, WORKSPACE_NAVIGATION, type WorkspaceDestination } from './navigation';
@@ -28,7 +28,7 @@ export function accountInitials(label: string | undefined): string {
 
 const NARROW_QUERY = '(max-width: 1100px)';
 const isNarrow = () => typeof window !== 'undefined' && window.matchMedia(NARROW_QUERY).matches;
-const plainClick = (event: React.MouseEvent) => event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+const plainClick = (event: MouseEvent) => event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
 
 /** Destination href, so middle-click and copy-link keep working. */
 export function destinationHref(target: WorkspaceDestination): string {

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { WorkOrderSummary } from "@shared/work-orders";
 import { formatIsoDate, humanize } from "./format";
 import { scheduleGroups } from "./models";
@@ -16,7 +17,7 @@ export function WorkOrderSchedule({ identity, organizationId, today, onOrganizat
   </CompanyGate>;
 }
 
-function Agenda({ identity, organizationId, today, selector, onOpen }: { identity: string; organizationId: string; today: string; selector: React.ReactNode; onOpen: (workOrderId: string) => void }) {
+function Agenda({ identity, organizationId, today, selector, onOpen }: { identity: string; organizationId: string; today: string; selector: ReactNode; onOpen: (workOrderId: string) => void }) {
   const work = useOpenWorkOrders(identity, organizationId);
   if (work.error) return <ErrorState error={work.error} onRetry={() => void work.refetch()} />;
   if (!work.data) return <Loading label="Loading the schedule…" />;

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ReportPackageRun } from "@shared/reporting";
 import { reportingApi } from "../reporting/api";
@@ -15,7 +15,7 @@ export function SavedReports(props: Props) {
   </CompanyGate>;
 }
 
-function Presets({ identity, organizationId, selector, onOpenReport, onOpenLibrary }: Props & { organizationId: string; selector: React.ReactNode }) {
+function Presets({ identity, organizationId, selector, onOpenReport, onOpenLibrary }: Props & { organizationId: string; selector: ReactNode }) {
   const presets = useQuery({ queryKey: ["company-reporting", "presets", identity, organizationId], queryFn: ({ signal }) => reportingApi.listPresets(organizationId, signal), staleTime: 15_000, retry: false });
   const catalog = useQuery({ queryKey: ["company-reporting", "catalog", identity, organizationId], queryFn: ({ signal }) => reportingApi.catalog(organizationId, signal), staleTime: 30_000, retry: false });
   if (presets.error) return <ErrorState error={presets.error} onRetry={() => void presets.refetch()} />;
@@ -43,7 +43,7 @@ export function ReportPackages(props: Props) {
   </CompanyGate>;
 }
 
-function Packages({ identity, organizationId, selector, onOpenLibrary }: Props & { organizationId: string; selector: React.ReactNode }) {
+function Packages({ identity, organizationId, selector, onOpenLibrary }: Props & { organizationId: string; selector: ReactNode }) {
   const [runs, setRuns] = useState<Record<string, ReportPackageRun>>({});
   const packages = useQuery({ queryKey: ["company-reporting", "packages", identity, organizationId], queryFn: ({ signal }) => reportingApi.listPackages(organizationId, signal), staleTime: 15_000, retry: false });
   const run = useMutation({

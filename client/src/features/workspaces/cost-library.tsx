@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { workspacesApi } from "./api";
@@ -20,7 +20,7 @@ function useDebounced(value: string, delay = 250): string {
   return debounced;
 }
 
-function Library({ identity, organizationId, asOfDate, selector, onOpenProject }: { identity: string; organizationId: string; asOfDate: string; selector: React.ReactNode; onOpenProject: (projectId: string) => void }) {
+function Library({ identity, organizationId, asOfDate, selector, onOpenProject }: { identity: string; organizationId: string; asOfDate: string; selector: ReactNode; onOpenProject: (projectId: string) => void }) {
   const [search, setSearch] = useState("");
   const query = useDebounced(search.trim());
   const library = useInfiniteQuery({

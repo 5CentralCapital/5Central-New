@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { PEOPLE_ROLES, type CompanySettings } from "@shared/workspaces/contracts";
@@ -18,7 +18,7 @@ export function EntitiesPage({ identity, organizationId, asOfDate, onOrganizatio
   </CompanyGate>;
 }
 
-function EntitiesContent({ identity, organizationId, asOfDate, selector, onOpenAccounting }: { identity: string; organizationId: string; asOfDate: string; selector: React.ReactNode; onOpenAccounting: () => void }) {
+function EntitiesContent({ identity, organizationId, asOfDate, selector, onOpenAccounting }: { identity: string; organizationId: string; asOfDate: string; selector: ReactNode; onOpenAccounting: () => void }) {
   const [showPast, setShowPast] = useState(false);
   const directory = useQuery({ queryKey: ["rent-ops-workspace", "entities", identity, organizationId, asOfDate], queryFn: ({ signal }) => workspacesApi.entities(organizationId, asOfDate, signal), staleTime: 60_000, retry: false });
   if (directory.error) return <ErrorState error={directory.error} onRetry={() => void directory.refetch()} />;
@@ -57,7 +57,7 @@ export function PeoplePage({ identity, organizationId, asOfDate, onOrganization 
   </CompanyGate>;
 }
 
-function PeopleContent({ identity, organizationId, asOfDate, selector }: { identity: string; organizationId: string; asOfDate: string; selector: React.ReactNode }) {
+function PeopleContent({ identity, organizationId, asOfDate, selector }: { identity: string; organizationId: string; asOfDate: string; selector: ReactNode }) {
   const [search, setSearch] = useState("");
   const [role, setRole] = useState("");
   const [view, setView] = useState<"contacts" | "vendors">("contacts");
@@ -114,7 +114,7 @@ export function SettingsPage({ identity, organizationId, asOfDate, onOrganizatio
   </div>;
 }
 
-function SettingsContent({ identity, organizationId, selector, onOpenAccounting, onOpenTime }: { identity: string; organizationId: string; selector: React.ReactNode; onOpenAccounting: () => void; onOpenTime: () => void }) {
+function SettingsContent({ identity, organizationId, selector, onOpenAccounting, onOpenTime }: { identity: string; organizationId: string; selector: ReactNode; onOpenAccounting: () => void; onOpenTime: () => void }) {
   const settings = useQuery({ queryKey: ["rent-ops-workspace", "company-settings", identity, organizationId], queryFn: ({ signal }) => workspacesApi.settings(organizationId, signal), staleTime: 60_000, retry: false });
   if (settings.error) return <ErrorState error={settings.error} onRetry={() => void settings.refetch()} />;
   if (!settings.data) return <Loading label="Loading settings…" />;
