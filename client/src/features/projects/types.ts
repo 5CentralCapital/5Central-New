@@ -1,5 +1,5 @@
 import type { CommandEnvelope, OperationReceipt } from "@shared/company/commands";
-import type { CompanyContextEntity, CompanyContextProperty } from "@shared/company/context";
+import type { CompanyContextEntity } from "@shared/company/context";
 import type {
   ProjectCommandKind,
   ProjectExecutionCommandKind,
@@ -20,7 +20,6 @@ import type { ProjectLaborResponse } from "@shared/time/labor";
 
 export type { ProjectCostReport, CostSourceLinePage, ProjectLaborResponse };
 
-export type ProjectWorkspaceProperty = CompanyContextProperty;
 export type ProjectWorkspaceEntity = CompanyContextEntity;
 export type ProjectSummary = SharedProjectSummary;
 export type ProjectDetail = SharedProjectDetail;

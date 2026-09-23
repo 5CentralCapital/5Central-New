@@ -350,10 +350,6 @@ export function propertyUnits(snapshot: AdminSnapshot, propertyId?: string): Adm
   return snapshot.snapshot.units.filter((unit) => unit.propertyId === propertyId && knownLink(unit.propertyId, unit.propertyLinkKnowledge)).sort(compareUnits);
 }
 
-export function propertyForUnit(snapshot: AdminSnapshot, unit?: AdminUnitView): AdminPropertyView | undefined {
-  return selectedPropertyForUnit(snapshot, unit);
-}
-
 export function knownTenanciesForUnit(snapshot: AdminSnapshot, unitId?: string): AdminTenancyView[] {
   if (!unitId) return [];
   return snapshot.snapshot.tenancies.filter((tenancy) => tenancy.unitId === unitId && knownLink(tenancy.unitId, tenancy.unitLinkKnowledge));
@@ -414,32 +410,6 @@ export function occupancyHistoryForUnit(snapshot: AdminSnapshot, unit: AdminUnit
 export function occupancyHistoryForProperty(snapshot: AdminSnapshot, propertyId?: string): OccupancyHistoryRecord[] {
   const units = propertyUnits(snapshot, propertyId);
   return units.flatMap((unit) => occupancyHistoryForUnit(snapshot, unit));
-}
-
-export function occupancySummaryForUnits(snapshot: AdminSnapshot, units: AdminUnitView[]): { current: number; future: number; unknown: number; linkedHistory: number } {
-  const rows = units.flatMap((unit) => occupancyHistoryForUnit(snapshot, unit));
-  const byUnit = new Map<string, OccupancyHistoryRecord>();
-  for (const row of rows) {
-    const unitId = row.unit.id;
-    if (!unitId) continue;
-    const current = byUnit.get(unitId);
-    if (!current) {
-      byUnit.set(unitId, row);
-      continue;
-    }
-    const rank = (status: string): number => status === "current" ? 3 : status === "future_preleased" ? 2 : status === "unknown" ? 0 : 1;
-    if (rank(row.occupancyStatus) > rank(current.occupancyStatus)) byUnit.set(unitId, row);
-  }
-  let current = 0;
-  let future = 0;
-  let unknown = 0;
-  for (const unit of units) {
-    const row = unit.id ? byUnit.get(unit.id) : undefined;
-    if (!row || row.occupancyStatus === "unknown") unknown += 1;
-    else if (row.occupancyStatus === "current") current += 1;
-    else if (row.occupancyStatus === "future_preleased") future += 1;
-  }
-  return { current, future, unknown, linkedHistory: rows.filter((row) => row.tenancy).length };
 }
 
 function scheduleMatchesProperty(schedule: AdminRecurringScheduleView, propertyId: string): boolean {

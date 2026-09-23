@@ -90,7 +90,3 @@ export function nextMonday(from = new Date()): string {
   if (weekday !== 0) date.setUTCDate(date.getUTCDate() + 7 - weekday);
   return date.toISOString().slice(0, 10);
 }
-
-export function isNegative(cents: string | null | undefined): boolean {
-  return cents !== null && cents !== undefined && cents.startsWith("-");
-}

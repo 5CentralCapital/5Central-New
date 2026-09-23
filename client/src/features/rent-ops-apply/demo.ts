@@ -1,4 +1,4 @@
-import type { ApplicantHouseholdMemberView, ApplicantPublicView, ApplicantDocumentView } from "./types";
+import type { ApplicantHouseholdMemberView, ApplicantPublicView } from "./types";
 
 export const APPLY_DEMO_TOKEN = "demo-resume-token-7f3a";
 
@@ -42,10 +42,6 @@ export function demoSaveApplication(input: Partial<ApplicantPublicView>): Applic
 export function demoAddHouseholdMember(member: ApplicantHouseholdMemberView): ApplicantPublicView {
   const householdMembers = [...(memoryApplication.householdMembers ?? []), member];
   return demoSaveApplication({ householdMembers });
-}
-
-export function demoAddDocument(document: ApplicantDocumentView): ApplicantPublicView {
-  return demoSaveApplication({ documents: [...memoryApplication.documents, document] });
 }
 
 export function demoCertifyApplication(): ApplicantPublicView {

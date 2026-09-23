@@ -1012,8 +1012,6 @@ export function decodeRentOpsApplicationHistoryCase(value: unknown): AdminApplic
   };
 }
 
-export const decodeRentOpsApplicationHistory = decodeRentOpsApplicationHistoryCase;
-
 /** Decode the current positive `/api/rent-ops/applications/:id` response. */
 export function decodeRentOpsApplicationDetail(value: unknown): AdminApplicationDetailView {
   const input = exactRecord(value, "application detail", [...APPLICATION_RESPONSE_KEYS, "householdMembers", "requirements", "documents", "history"]);
@@ -1689,17 +1687,6 @@ export async function loadRentOpsApplication(applicationId: string): Promise<Adm
   return detail;
 }
 
-/** Load only the historical case when an imported-only target has no native row. */
-export async function loadRentOpsApplicationHistory(applicationId: string): Promise<AdminApplicationHistoryCaseView> {
-  if (!validTargetId(applicationId)) throw new Error("The application record is unavailable.");
-  if (DEMO_ALLOWED) throw new Error("Historical application data is not available in synthetic data.");
-  const payload = await requestJson(`/api/rent-ops/applications/${encodeURIComponent(applicationId)}/history`);
-  assertNoForbiddenResponseFields(payload);
-  const history = decodeRentOpsApplicationHistoryCase(unwrapData(payload));
-  if (history.application?.id !== applicationId) throw new Error(INVALID_RESPONSE_MESSAGE);
-  return history;
-}
-
 const PATCH_ACTION_PATHS: Partial<Record<RentOpsMutation["action"], string>> = {
   "save-property": "/api/rent-ops/properties",
   "save-unit": "/api/rent-ops/units",
@@ -1848,24 +1835,6 @@ export function filterReportRows(report: ReportDefinition, filters: { propertyId
   return { ...report, rows };
 }
 
-export function sortReportRows(report: ReportDefinition, key: string, direction: "asc" | "desc" = "asc"): ReportDefinition {
-  const factor = direction === "asc" ? 1 : -1;
-  const rows = [...report.rows].sort((left, right) => String(reportCell(left, key) ?? "").localeCompare(String(reportCell(right, key) ?? ""), undefined, { numeric: true }) * factor);
-  return { ...report, rows };
-}
-
-export function reportToCsv(report: ReportDefinition): string {
-  return [report.columns.map((column) => escapeCsvCell(column.label)).join(","), ...report.rows.map((row) => report.columns.map((column) => escapeCsvCell(reportCell(row, column.key))).join(","))].join("\n");
-}
-
-export function escapeCsvCell(value: unknown): string {
-  let text = value == null ? "" : String(value);
-  // Spreadsheet applications can execute formulas embedded in CSV cells.
-  // Prefix after optional leading whitespace while preserving display text.
-  if (/^\s*[=+\-@]/.test(text)) text = `'${text}`;
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-}
-
 export function currentLocalIsoDate(date = new Date()): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -1931,13 +1900,6 @@ export async function loadRentOpsWorkspaceBootstrap(filters: ApiFilters = {}, si
     return { workspaceVersion: 1, generatedAt: full.generatedAt, loadedCollections: ["properties", "units", "people", "tenancies", "householdMemberships", "leaseTerms", "chargeDefinitions", ...WORKSPACE_COLLECTIONS], snapshot: full.snapshot, chargeDefinitions: full.chargeDefinitions, tenantIndex: full.tenants.map(tenant => ({ person: tenant.person, tenancyIds: (tenant.tenancies ?? (tenant.tenancy ? [tenant.tenancy] : [])).flatMap(t => t.id ? [t.id] : []), accountContact: !tenant.tenancy, selectedTenancyId: tenant.tenancy?.id, category: tenant.tenancy?.status === "current" ? "current" : tenant.tenancy?.status === "former" ? "former" : tenant.tenancy?.status === "future" ? "future" : "unknown" })) };
   }
   return decodeRentOpsWorkspaceBootstrap(await requestJson(`/api/rent-ops/workspace${buildRentOpsQuery(filters)}`, { signal }));
-}
-
-export async function loadRentOpsWorkspaceSummary(filters: ApiFilters = {}, signal?: AbortSignal): Promise<DashboardSummary> {
-  if (DEMO_ALLOWED) return createDemoAdminSnapshot().summary;
-  const value = await requestJson(`/api/rent-ops/dashboard${buildRentOpsQuery(filters)}`, { signal });
-  assertNoForbiddenResponseFields(value);
-  return decodeDashboardSummary(unwrapData(value));
 }
 
 export async function loadDashboardTrends(filters: ApiFilters, signal?: AbortSignal) {

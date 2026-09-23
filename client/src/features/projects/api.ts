@@ -197,8 +197,6 @@ function createApi(): ProjectsApi {
   };
 }
 
-export const projectsApi: ProjectsApi = createApi();
-
 export function createProjectsApi(): ProjectsApi {
   return createApi();
 }

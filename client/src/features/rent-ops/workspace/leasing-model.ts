@@ -84,12 +84,6 @@ export function applicationUnitDisplayName(snapshot: AdminSnapshot, application:
   return unitDisplayName(snapshot, application.unitId);
 }
 
-export function applicationLinkedRecordLabel(snapshot: AdminSnapshot, application: AdminApplicationView): string {
-  const property = application.propertyId ? propertyDisplayName(snapshot, application.propertyId) : "Unknown property";
-  const unit = application.unitId ? unitDisplayName(snapshot, application.unitId) : "Unknown unit";
-  return `${applicationDisplayName(application)} · ${property} · ${unit}`;
-}
-
 export function applicationRecordKey(application: AdminApplicationView, index = 0): string {
   return application.id ?? `application:row:${index}`;
 }
@@ -104,13 +98,6 @@ export function applicationStatusOptions(status?: string): string[] {
   if (!current) return [];
   const transitions = APPLICATION_STATUS_TRANSITIONS[current as keyof typeof APPLICATION_STATUS_TRANSITIONS];
   return Array.from(new Set([current, ...(transitions ?? [])]));
-}
-
-export const nextApplicationStatuses = applicationStatusOptions;
-
-export function isManualDecisionStatus(status?: string): boolean {
-  const value = normalized(status);
-  return value === "approved" || value === "declined";
 }
 
 export function applicationDateValue(application: Pick<AdminApplicationView, "submittedOn" | "createdAt" | "updatedAt">): string | undefined {

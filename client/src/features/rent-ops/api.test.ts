@@ -3,16 +3,10 @@ import test from "node:test";
 
 import { serializeAdminDashboard } from "../../../../server/rent-ops/presentation/dashboard";
 import { createDemoAdminSnapshot } from "./demo";
-import { filterReportRows, buildRentOpsQuery, currentLocalIsoDate, escapeCsvCell, loadRentOpsAdminSnapshot, loadRentOpsChargeDefinitions, loadRentOpsPreviewContext, loadRentOpsReport, postRentOpsMutation, reportCell, RentOpsApiError } from "./api";
+import { filterReportRows, buildRentOpsQuery, currentLocalIsoDate, loadRentOpsAdminSnapshot, loadRentOpsChargeDefinitions, loadRentOpsPreviewContext, loadRentOpsReport, postRentOpsMutation, reportCell, RentOpsApiError } from "./api";
 import type { ReportKey } from "./types";
 import { parseCentsInput, requireCentsInput } from "./money";
 import { mutationPayload } from "./form-payload";
-
-test("CSV cells cannot become spreadsheet formulas", () => {
-  assert.equal(escapeCsvCell("=2+2"), "'=2+2");
-  assert.equal(escapeCsvCell("  @SUM(A1:A2)"), "'  @SUM(A1:A2)");
-  assert.equal(escapeCsvCell("safe text"), "safe text");
-});
 
 test("live report defaults follow the current local calendar date", () => {
   assert.equal(currentLocalIsoDate(new Date(2027, 1, 3, 23, 45)), "2027-02-03");

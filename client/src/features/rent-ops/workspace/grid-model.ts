@@ -195,12 +195,6 @@ export function paginateGridRows<T>(
   };
 }
 
-// Short aliases keep the model convenient for non-React report tests while
-// leaving the more explicit names above as the public implementation API.
-export const filterRows = filterGridRows;
-export const sortRows = sortGridRows;
-export const paginateRows = paginateGridRows;
-
 function identifierColumn(key: string): boolean {
   return /^(?:id|uuid|key)$/i.test(key) || /(?:Id|Uuid|UUID|ID|Key)$/.test(key) || /(?:^|_)(?:id|uuid|key)$/i.test(key);
 }

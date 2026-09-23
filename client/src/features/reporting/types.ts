@@ -1,4 +1,3 @@
-import type { CompanyContextOrganization } from "@shared/company/context";
 import type {
   ReportEntry,
   ReportExportJob,
@@ -13,14 +12,6 @@ import type {
   ReportRunSummary,
 } from "@shared/reporting";
 import type { ForecastScenarioOption } from "./setup-model";
-
-export interface ReportingWorkspaceProps {
-  readonly identity: string;
-  readonly organization: CompanyContextOrganization;
-  readonly initialReportId?: string;
-  readonly onNavigate?: (organizationId: string, reportId?: string) => void;
-  readonly onOpenLegacy?: (reportId: string) => void;
-}
 
 export interface ReportRunResponse {
   readonly run: ReportRunSummary;

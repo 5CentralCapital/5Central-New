@@ -441,8 +441,6 @@ export function buildRecurringChargeRows(tenant: TenantView, snapshot: AdminSnap
   });
 }
 
-export const getRecurringChargeRows = buildRecurringChargeRows;
-
 export function filterRecurringCharges(rows: RecurringChargeRow[], filter: RecurringChargeFilter): RecurringChargeRow[] {
   if (filter === "all") return rows;
   if (filter === "review") return rows.filter((row) => row.state === "unknown" || row.uncertaintyCodes.length > 0);
@@ -503,8 +501,6 @@ export function buildLedgerRows(tenant: TenantView, snapshot: AdminSnapshot): Te
     };
   });
 }
-
-export const getLedgerRows = buildLedgerRows;
 
 function revision(value: number | undefined): number {
   return value ?? 1;
@@ -640,18 +636,6 @@ export function buildTenantEditActions(tenant: TenantView, snapshot: AdminSnapsh
     personId: tenant.person.id,
   } });
   return actions;
-}
-
-export const getTenantEditActions = buildTenantEditActions;
-
-export function tenancyDates(tenancy: AdminTenancyView): Array<{ label: string; value?: string }> {
-  return [
-    { label: "Planned move-in", value: tenancy.plannedMoveInOn },
-    { label: "Actual move-in", value: tenancy.actualMoveInOn },
-    { label: "Notice", value: tenancy.noticeOn },
-    { label: "Expected move-out", value: tenancy.expectedMoveOutOn },
-    { label: "Actual move-out", value: tenancy.actualMoveOutOn },
-  ];
 }
 
 /** Only the authoritative server selection contributes; history never fills gaps. */

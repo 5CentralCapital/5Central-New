@@ -9,7 +9,6 @@ import type {
 } from "../types";
 import { getReportFilterDefinition, type ReportFilterDefinition } from "@shared/report-filter-definitions";
 import {
-  REPORT_PERIODS,
   defaultReportOccupancy,
   defaultReportTenantStatus,
   filterReportLocalRows,
@@ -217,10 +216,6 @@ export function reportSetupFieldValue(state: ReportSetupState, field: ReportSetu
   return cloneValue(fieldValue(state, field));
 }
 
-function fieldNames(definitions: readonly ReportSetupField[], predicate: (field: ReportSetupField) => boolean): string[] {
-  return definitions.filter(predicate).map(field => field.name);
-}
-
 function firstReferenceValue(state: ReportSetupState, fields: readonly ReportSetupField[], reference: ReportSetupField["reference"]): string | undefined {
   const field = fields.find(candidate => candidate.reference === reference);
   if (!field) return undefined;
@@ -365,17 +360,9 @@ export function reportSetupFromUrlValue(key: ReportKey, raw: string | null, fall
   }
 }
 
-export function reportSetupDisplaySearch(key: ReportKey, state: ReportSetupState): string {
-  return reportSetupSearch(key, state);
-}
-
 /** Kept as a named helper for tests and callers that need local narrowing. */
 export function applyReportSetupLocalFilters(rows: readonly import("../types").ReportRow[], key: ReportKey, state: ReportSetupState): import("../types").ReportRow[] {
   return filterReportLocalRows(rows, key, reportSetupLocalFilters(key, state));
-}
-
-export function dateSemanticsForReport(key: ReportKey): "as_of" | "report_month" | "activity_range" | undefined {
-  return REPORT_PERIODS[key] === "month" ? "report_month" : REPORT_PERIODS[key] === "range" ? "activity_range" : "as_of";
 }
 
 export function isReportSetupDateField(field: ReportSetupField): boolean {
@@ -384,8 +371,4 @@ export function isReportSetupDateField(field: ReportSetupField): boolean {
 
 export function isReportSetupPropertyField(field: ReportSetupField): boolean {
   return usesPropertyField(field);
-}
-
-export function reportSetupFieldNames(key: ReportKey, predicate: (field: ReportSetupField) => boolean): string[] {
-  return fieldNames(reportFilterDefinitions(key), predicate);
 }

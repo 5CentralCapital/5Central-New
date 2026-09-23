@@ -66,14 +66,6 @@ export function formatMoneyExact(value: MoneyCents | string | undefined, currenc
   return `${negative ? "-" : ""}${symbol}${groupedWhole}.${fraction}`;
 }
 
-export function assertCanonicalCents(value: string): MoneyCents {
-  const parsed = BigInt(value);
-  if (parsed < BIGINT_CENTS_MIN || parsed > BIGINT_CENTS_MAX || !/^(0|-?[1-9]\d*)$/.test(value)) {
-    throw new Error("Expected canonical signed cents.");
-  }
-  return value as MoneyCents;
-}
-
 /**
  * An amount qualified by how much of it is known: exact when complete,
  * "At least $X" when some contributors are missing (partial QuickBooks

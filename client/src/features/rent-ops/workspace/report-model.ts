@@ -513,10 +513,6 @@ export function getReportColumns(key: ReportKey, rows: readonly ReportRow[] = []
   return [...reportColumns(key), ...discoverOptionalReportColumns(key, rows, snapshot)];
 }
 
-export function toDisplayReportRows(key: ReportKey, rows: readonly ReportRow[], snapshot?: AdminSnapshot): DisplayReportRow[] {
-  const columns = getReportColumns(key, rows, snapshot);
-  return displayRowsWithColumns(rows,columns,snapshot);
-}
 function displayRowsWithColumns(rows: readonly ReportRow[],columns: ReportColumnDefinition[],snapshot?: AdminSnapshot): DisplayReportRow[] {
   return rows.map((source, index) => {
     const display: DisplayReportRow = { __source: source, __index: index };
@@ -706,16 +702,6 @@ export function reportRowKey(row: DisplayReportRow): string {
   const sourceId = readRaw(source, "id") ?? (readRaw(source, "transaction") ? readNestedTransaction(source, "id") : undefined);
   const identity = [propertyId(source), unitId(source), personId(source), sourceId, readRaw(source, "postedOn"), readRaw(source, "month")].filter((value) => value != null).map(String).join(":");
   return `${identity || "row"}:${row.__index}`;
-}
-
-function stableObject(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableObject);
-  if (!isRecord(value)) return value;
-  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableObject(value[key])]));
-}
-
-export function reportRequestKey(report: ReportKey, filters: ApiFilters): string {
-  return `${report}:${JSON.stringify(stableObject(filters))}`;
 }
 
 /** Rent roll is already fully scoped and dated by the server; only its terminal text search is local. */
