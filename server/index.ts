@@ -14,7 +14,7 @@ import { setupVite, serveStatic, log } from "./vite";
 import { loadUser } from "./auth";
 import { pool } from "./db";
 import { ensureSchema } from "./ensureSchema";
-import { publicRequestError } from "./request-errors";
+import { publicRequestError, startupFailureSummary } from "./request-errors";
 import { sanitizeApiPathForLogging } from "./request-logging";
 import { applicantPageSecurityHeaders } from "./applicant-page-security";
 import { securityHeaders } from "./security-headers";
@@ -145,9 +145,9 @@ app.use((req, res, next) => {
     // Render supplies PORT. Bind the only externally reachable listener to
     // all interfaces, and do not report readiness until listen succeeds.
     const port = parseInt(process.env.PORT || '10000', 10);
-    server.once("error", () => {
+    server.once("error", (error) => {
       readiness.markFailed();
-      log("startup failed");
+      log(`startup failed: ${startupFailureSummary(error)}`);
       process.exitCode = 1;
     });
     server.listen({
@@ -166,9 +166,9 @@ app.use((req, res, next) => {
       graceMs: shutdownGraceMs(process.env.WEB_SHUTDOWN_GRACE_MS),
       log,
     });
-  } catch {
+  } catch (error) {
     readiness.markFailed();
-    log("startup failed");
+    log(`startup failed: ${startupFailureSummary(error)}`);
     process.exitCode = 1;
   }
 })();

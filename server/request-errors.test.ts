@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import express from "express";
-import { publicRequestError } from "./request-errors";
+import { publicRequestError, startupFailureSummary } from "./request-errors";
 
 test("malformed tenant and auth JSON never echoes submitted credentials", async () => {
   const app = express();
@@ -21,4 +21,13 @@ test("malformed tenant and auth JSON never echoes submitted credentials", async 
       assert.equal(await response.text(), '{"message":"Invalid request"}');
     }
   } finally { await new Promise<void>((resolve,reject) => server.close(error => error ? reject(error) : resolve())); }
+});
+
+test("startup failures log their class and stable code, never free-text messages", () => {
+  class StorageError extends Error { readonly code = "storage_privilege_probe_failed"; }
+  assert.equal(startupFailureSummary(new StorageError("storage_privilege_probe_failed")), "StorageError:storage_privilege_probe_failed");
+  assert.equal(startupFailureSummary(Object.assign(new Error("listen EADDRINUSE: address already in use 0.0.0.0:10000"), { code: "EADDRINUSE" })), "Error:EADDRINUSE");
+  assert.equal(startupFailureSummary(new Error("public_database_limiter_configuration_required")), "Error:public_database_limiter_configuration_required");
+  assert.equal(startupFailureSummary(new Error("connect failed for postgres://owner:Secret@db.example/app")), "Error");
+  assert.equal(startupFailureSummary("postgres://owner:Secret@db.example/app"), "unclassified");
 });
