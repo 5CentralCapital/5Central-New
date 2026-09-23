@@ -366,7 +366,6 @@ export function serializeReportRows(report: string, rows: unknown): JsonObject[]
 }
 
 export const serializeCsvRows = serializeReportRows;
-export const serializeReportCsvRows = serializeReportRows;
 
 export interface PresentationReportEnvelope {
   report: string;
@@ -379,7 +378,6 @@ export function serializeReportEnvelope(input: { report: string; filters?: unkno
   return presentationObject({ report: input.report, filters: serializeFilters(input.filters ?? {}), rows: serializeReportRows(input.report, input.rows ?? []) }) as PresentationReportEnvelope;
 }
 
-export const serializeReport = serializeReportEnvelope;
 
 export function serializeReportMap(value: unknown): Record<string, JsonObject[]> {
   const input = inputOf(value);
@@ -417,4 +415,3 @@ export function serializeReportMap(value: unknown): Record<string, JsonObject[]>
   return presentationObject(output);
 }
 
-export const serializeReportRowsForCsv = serializeCsvRows;

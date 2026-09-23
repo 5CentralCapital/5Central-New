@@ -282,8 +282,6 @@ export function serializePublicListings(value: unknown): PublicListingView[] {
     .map(serializePublicListing);
 }
 
-export const serializePublicApplicationOptions = serializePublicListings;
-export const serializeListingViews = serializePublicListings;
 
 export interface PublicApplicationHouseholdMemberView {
   id?: string;
@@ -411,8 +409,6 @@ export function serializePublicApplication(value: ApplicantPublicView | unknown)
   }) as unknown as PublicApplicationView;
 }
 
-export const serializeApplicantPublicView = serializePublicApplication;
-export const serializePublicApplicationView = serializePublicApplication;
 
 export interface PublicApplicationResultView {
   application?: PublicApplicationView;
@@ -430,4 +426,3 @@ export function serializePublicApplicationResult(value: unknown): PublicApplicat
   });
 }
 
-export const serializePublicResult = serializePublicApplicationResult;

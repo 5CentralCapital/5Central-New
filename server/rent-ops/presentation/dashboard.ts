@@ -105,6 +105,3 @@ export function serializeAdminDashboard(input: AdminDashboardInput): AdminDashbo
   }) as unknown as AdminDashboardView;
 }
 
-export const serializeDashboard = serializeAdminDashboard;
-export const serializeAdminSnapshotBundle = serializeAdminDashboard;
-export const serializeDashboardResponse = serializeAdminDashboard;
