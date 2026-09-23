@@ -39,7 +39,6 @@ import type {
   RentOpsSubsidyPayment,
   RentOpsTenancy,
   RentOpsUnit,
-  RentManagerRawRecord,
   RentManagerFinancialSemanticCrosswalk,
   RentOpsChargeDefinition,
   IsoDate,
@@ -274,24 +273,8 @@ export function approvedControlsSha256(value: ImportControlTotals): string {
   return sha256(canonicalJson(value));
 }
 
-function controlMoneyCents(record: RentManagerRawRecord, ...keys: string[]): number {
-  const key = keys.find((candidate) => record[candidate] !== undefined && record[candidate] !== null && record[candidate] !== "");
-  if (!key) return 0;
-  const normalized = String(record[key]).trim().replace(/^\$/, "").replace(/,/g, "");
-  if (!/^\d+(?:\.\d+)?$/.test(normalized)) return 0;
-  const [whole, fraction = ""] = normalized.split(".");
-  const centsInput = key.toLowerCase().includes("cents");
-  if ((centsInput && fraction.length > 0) || (!centsInput && fraction.length > 2)) return 0;
-  const amount = centsInput ? Number(whole) : Number(whole) * 100 + Number((fraction + "00").slice(0, 2));
-  return Number.isSafeInteger(amount) && amount >= 0 ? amount : 0;
-}
-
-function controlMoneyTotal(records: readonly RentManagerRawRecord[] | undefined, ...keys: string[]): number {
-  return (records ?? []).reduce((total, record) => total + controlMoneyCents(record, ...keys), 0);
-}
-
 /** Recomputes approval controls from the exact normalized source, not from the caller-supplied controls object. */
-function controlsForApprovedSource(input: RentManagerImportInput): ImportControlTotals {
+export function controlsForApprovedSource(input: RentManagerImportInput): ImportControlTotals {
   const money = moneyControlCounts(input);
   return {
     counts: {
@@ -313,15 +296,15 @@ function controlsForApprovedSource(input: RentManagerImportInput): ImportControl
       activity: input.activities?.length ?? 0,
     },
     totalsCents: {
-      charges: money.knownTotals.charges ?? controlMoneyTotal(input.charges, "amountCents", "amount"),
-      payments: money.knownTotals.payments ?? controlMoneyTotal(input.payments, "amountCents", "amount"),
-      credits: money.knownTotals.credits ?? controlMoneyTotal(input.credits, "amountCents", "amount"),
-      allocations: money.knownTotals.allocations ?? controlMoneyTotal(input.allocations, "amountCents", "amount"),
-      deposits: money.knownTotals.deposits ?? controlMoneyTotal(input.deposits, "amountHeldCents", "amount", "balance"),
+      charges: money.knownTotals.charges,
+      payments: money.knownTotals.payments,
+      credits: money.knownTotals.credits,
+      allocations: money.knownTotals.allocations,
+      deposits: money.knownTotals.deposits,
     },
     hap: {
-      agencyObligationCents: money.knownTotals.hapAgencyObligationCents ?? controlMoneyTotal(input.subsidies, "agencyObligationCents", "agencyAmountCents", "agencyAmount"),
-      tenantObligationCents: money.knownTotals.hapTenantObligationCents ?? controlMoneyTotal(input.subsidies, "tenantObligationCents", "tenantAmountCents", "tenantAmount"),
+      agencyObligationCents: money.knownTotals.hapAgencyObligationCents,
+      tenantObligationCents: money.knownTotals.hapTenantObligationCents,
     },
     unknownCounts: money.unknownCounts,
     invalidMoneyCounts: money.invalidCounts,

@@ -3,7 +3,6 @@ import type {
   ImportMappingException,
   RentManagerImportInput,
   RentManagerImportResult,
-  RentManagerRawRecord,
   IsoDate,
 } from "../../../shared/rent-ops-contracts";
 import { isoDateSchema } from "../../../shared/rent-ops-contracts";
@@ -11,7 +10,7 @@ import { canonicalJson, sha256 } from "../export/hash";
 import { approvedSupplementEvidenceValid, normalizeRentManagerExport, type NormalizationException } from "../export/normalizer";
 import type { ExportEnvelope, RedactedExportManifest } from "../export/types";
 import { projectApplicationHistoryForImport } from "../application-history/projection";
-import { mapRentManagerExport, moneyControlCounts, reconcileRentManagerImport, type RentOpsTargetIdFactory } from "./rm-mapper";
+import { mapRentManagerExport, reconcileRentManagerImport, type RentOpsTargetIdFactory } from "./rm-mapper";
 import type { RentManagerTargetIdentityOptions } from "../../../shared/rent-ops-contracts";
 import {
   APPROVED_RM_NORMALIZER_ARTIFACT,
@@ -21,11 +20,11 @@ import {
   approvedMappedRowsSha256,
   approvedNormalizedRowsSha256,
   approvedRestrictedRowsSha256,
+  controlsForApprovedSource,
   verifiedSupplementReceiptReasons,
   verifiedSupplementReceiptSha256,
   type ApprovedPersistenceImportArtifact,
   type ApprovedImportBinding,
-  type ImportControlTotals,
   type RentManagerExportEnvelope,
   type VerifiedSupplementReceiptBinding,
 } from "./persistence-importer";
@@ -126,62 +125,6 @@ function restrictedIdentityReasons(payload: Record<string, unknown>): string[] {
   return [];
 }
 
-function moneyCents(record: RentManagerRawRecord, ...keys: string[]): number | undefined {
-  const key = keys.find((candidate) => record[candidate] !== undefined && record[candidate] !== null && record[candidate] !== "");
-  if (!key) return undefined;
-  const normalized = String(record[key]).trim().replace(/^\$/, "").replace(/,/g, "");
-  if (!/^\d+(?:\.\d+)?$/.test(normalized)) return undefined;
-  const [whole, fraction = ""] = normalized.split(".");
-  const centsInput = key.toLowerCase().includes("cents");
-  if ((centsInput && fraction.length > 0) || (!centsInput && fraction.length > 2)) return undefined;
-  const result = centsInput ? Number(whole) : Number(whole) * 100 + Number((fraction + "00").slice(0, 2));
-  return Number.isSafeInteger(result) && result >= 0 ? result : undefined;
-}
-
-function sumMoney(records: readonly RentManagerRawRecord[] | undefined, ...keys: string[]): number {
-  return (records ?? []).reduce((sum, record) => sum + (moneyCents(record, ...keys) ?? 0), 0);
-}
-
-function expectedSourceCounts(input: RentManagerImportInput): Partial<Record<ImportEntityType, number>> {
-  return {
-    property: input.properties?.length ?? 0,
-    unit: input.units?.length ?? 0,
-    person: (input.tenants?.length ?? 0) + (input.contacts?.length ?? 0),
-    tenancy: input.leases?.length ?? 0,
-    lease_term: input.leaseTerms?.length ?? 0,
-    charge_definition: input.chargeTypes?.length ?? 0,
-    recurring_schedule: input.recurringSchedules?.length ?? 0,
-    ledger_transaction: (input.charges?.length ?? 0) + (input.payments?.length ?? 0) + (input.credits?.length ?? 0),
-    payment_allocation: input.allocations?.length ?? 0,
-    deposit: input.deposits?.length ?? 0,
-    subsidy: (input.subsidies?.length ?? 0) + (input.hap?.length ?? 0),
-    subsidy_tenant: input.subsidyTenants?.length ?? 0,
-    subsidy_payment: input.subsidyPayments?.length ?? 0,
-    application: input.applications?.length ?? 0,
-    document: input.documents?.length ?? 0,
-    activity: input.activities?.length ?? 0,
-  };
-}
-
-function controlsFor(input: RentManagerImportInput): ImportControlTotals {
-  const money = moneyControlCounts(input);
-  return {
-    counts: expectedSourceCounts(input),
-    totalsCents: {
-      charges: money.knownTotals.charges ?? sumMoney(input.charges, "amountCents", "amount"),
-      payments: money.knownTotals.payments ?? sumMoney(input.payments, "amountCents", "amount"),
-      credits: money.knownTotals.credits ?? sumMoney(input.credits, "amountCents", "amount"),
-      allocations: money.knownTotals.allocations ?? sumMoney(input.allocations, "amountCents", "amount"),
-      deposits: money.knownTotals.deposits ?? sumMoney(input.deposits, "amountHeldCents", "amount", "balance"),
-    },
-    hap: {
-      agencyObligationCents: money.knownTotals.hapAgencyObligationCents ?? sumMoney(input.subsidies, "agencyObligationCents", "agencyAmountCents", "agencyAmount"),
-      tenantObligationCents: money.knownTotals.hapTenantObligationCents ?? sumMoney(input.subsidies, "tenantObligationCents", "tenantAmountCents", "tenantAmount"),
-    },
-    unknownCounts: money.unknownCounts,
-    invalidMoneyCounts: money.invalidCounts,
-  };
-}
 
 function normalizationSeverity(exception: NormalizationException): ImportMappingException["severity"] {
   if (exception.confidence === "ambiguous") return "error";
@@ -314,7 +257,7 @@ export function assertMigrationArtifactIntegrity(
     });
     const normalizedInput = normalizedReplay.input;
     normalizedRowsSha256 = approvedNormalizedRowsSha256(normalizedInput);
-    controlsSha256 = approvedControlsSha256(controlsFor(normalizedInput));
+    controlsSha256 = approvedControlsSha256(controlsForApprovedSource(normalizedInput));
     artifactControlsSha256 = approvedControlsSha256(artifact.controls);
     mappedRowsSha256 = approvedMappedRowsSha256(artifact.normalizedResult);
     restrictedRowsSha256 = approvedRestrictedRowsSha256(privateEnvelope);
@@ -330,7 +273,7 @@ export function assertMigrationArtifactIntegrity(
         artifactObservationOn: verifiedObservationOn,
       });
       replay.exceptions.push(...normalizedReplay.exceptions.map(mappingException));
-      const replayControls = controlsFor(normalizedInput);
+      const replayControls = controlsForApprovedSource(normalizedInput);
       const replayReconciliation = reconcileRentManagerImport(replay, normalizedInput, replayControls);
       for (const mismatch of replayReconciliation.mismatches) {
         replay.exceptions.push({ code: `reconciliation_${safeCode(mismatch.code)}_${safeCode(mismatch.metric)}`, severity: mismatch.severity, message: `Rent Manager reconciliation ${safeCode(mismatch.code)} for ${safeCode(mismatch.metric)}`, ...(mismatch.amountCents === undefined ? {} : { amountCents: mismatch.amountCents }) });
@@ -443,7 +386,7 @@ export function buildRentManagerMigrationArtifact(
     exceptions: normalized.exceptions,
   };
   const normalizationReportSha256 = sha256(canonicalJson(normalizationReport));
-  const controls = controlsFor(normalized.input);
+  const controls = controlsForApprovedSource(normalized.input);
   const controlsSha256 = approvedControlsSha256(controls);
   const result = mapRentManagerExport(normalized.input, {
     now: options.now,
