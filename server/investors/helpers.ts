@@ -1,4 +1,5 @@
 import { ValidationCommandError } from "../company/commands/errors";
+import { nowIsoDate } from "../rent-ops/domain/dates";
 import {
   centsFromBigInt,
   centsSchema,
@@ -82,6 +83,7 @@ export function decodeCursor(value: string | undefined): { updatedAt: string; id
   }
 }
 
-export function resolveEffectiveDate(value: string | undefined): string {
-  return value ?? new Date().toISOString().slice(0, 10);
+/** Defaults to the company operating date (America/New_York), not the UTC date. */
+export function resolveEffectiveDate(value: string | undefined, now = new Date()): string {
+  return value ?? nowIsoDate(now);
 }

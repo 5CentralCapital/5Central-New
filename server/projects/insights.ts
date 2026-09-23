@@ -12,6 +12,7 @@ import type { CostSourceLinePage, CostSourceLineQuery } from "../../shared/proje
 import type { ProjectLaborResponse } from "../../shared/time/labor";
 import { loadAuthenticatedPrincipal, type AuthenticatedPrincipal } from "../company/authorization";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
+import { nowIsoDate } from "../rent-ops/domain/dates";
 import { readProjectLabor } from "../time/labor";
 import { ProjectExecutionStore } from "./execution-store";
 import { dbCents, dbString } from "./helpers";
@@ -63,7 +64,7 @@ async function lienWaiverCount(executor: RentOpsQueryExecutor, organizationId: s
 }
 
 export function createProjectInsightsPort(executor: RentOpsQueryExecutor, options: CreateProjectInsightsPortOptions = {}): ProjectInsightsPort {
-  const today = options.today ?? (() => new Date().toISOString().slice(0, 10));
+  const today = options.today ?? (() => nowIsoDate());
   async function read<T>(principal: AuthenticatedPrincipal, work: (transaction: RentOpsQueryExecutor, fresh: AuthenticatedPrincipal, finance: ProjectFinanceReadPort) => Promise<T>): Promise<T> {
     if (!executor.transaction) throw new Error("Project reads require transaction support");
     return executor.transaction(async (transaction) => {

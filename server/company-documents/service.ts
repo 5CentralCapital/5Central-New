@@ -28,6 +28,7 @@ import {
 import { companyDocumentContextSchema } from "../../shared/company-documents";
 import { authenticatedPrincipalIdSchema, commandEnvelopeSchema, legalEntityIdSchema, propertyReferenceIdSchema, recordReferenceIdSchema, revisionSchema, documentReferenceIdSchema, type CommandEnvelope, type CompanyScope, type DocumentReferenceId, type OperationReceipt } from "../../shared/company";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
+import { nowIsoDate } from "../rent-ops/domain/dates";
 import { prepareVerifiedImportedDocument } from "../rent-ops/services/service";
 import type { ContentAddressedObjectStore, StorageVersionOptions } from "../rent-ops/storage";
 import type { RentOpsDocumentObjectBinding } from "../../shared/rent-ops-contracts";
@@ -113,9 +114,7 @@ function uploadStageId(organizationId: string, actorId: string, documentIdValue:
 }
 
 function operationalDate(now: () => Date): string {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now());
-  const values = Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
+  return nowIsoDate(now());
 }
 
 function safeCursor(value: string | undefined): { updatedAt: string; id: string } | undefined {

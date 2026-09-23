@@ -4,6 +4,7 @@ import test from "node:test";
 import { centsToBigInt, companyScopeSchema } from "../../shared/company";
 import { attestTransport, loadAuthenticatedPrincipal } from "../company/authorization";
 import { createCompanyServices } from "../company/services";
+import { resolveEffectiveDate } from "./helpers";
 import { createSyntheticCompanyDatabase, createSyntheticRuntimeExecutor, SYNTHETIC_COMPANY } from "../company/testing/synthetic-database";
 
 const zeroAmounts = { principalCents: "0", interestCents: "0", returnOfCapitalCents: "0", distributionCents: "0", feeCents: "0", balloonCents: "0" };
@@ -108,4 +109,9 @@ test("instrument financials, payment calendar and maturity ladder derive from re
   } finally {
     await database.close();
   }
+});
+
+test("investor default as-of date is the New York operating date, not the UTC date", () => {
+  assert.equal(resolveEffectiveDate(undefined, new Date("2027-03-08T04:00:00.000Z")), "2027-03-07");
+  assert.equal(resolveEffectiveDate("2026-01-02", new Date("2026-09-24T02:00:00.000Z")), "2026-01-02");
 });

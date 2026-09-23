@@ -31,6 +31,7 @@ import {
 import { authorizeCompanyRead, type AuthenticatedPrincipal } from "../company/authorization";
 import { ValidationCommandError } from "../company/commands/errors";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
+import { nowIsoDate } from "../rent-ops/domain/dates";
 import { dbDate, dbNullableCents, dbNullableDate, dbNullableString, dbRevision, dbString, dbTimestamp } from "../projects/helpers";
 
 export const WORK_ORDER_READ_ROLES = ["owner", "admin", "finance", "operations_pm", "project_manager", "read_only_reviewer"] as const;
@@ -98,9 +99,7 @@ export function mapManualActual(value: unknown): { amountCents: string; note: st
 }
 
 export function operatingDate(now = new Date()): string {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
-  const value = Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, part.value]));
-  return `${value.year}-${value.month}-${value.day}`;
+  return nowIsoDate(now);
 }
 
 export function actualCostFrom(row: Record<string, unknown>) {

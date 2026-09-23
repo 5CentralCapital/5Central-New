@@ -8,6 +8,7 @@ import {
 import { isoDateSchema, organizationIdSchema, type IsoDate } from "../../shared/company";
 import { detectReviewCasesWithStatus, reviewCandidateKey, type ReviewCaseCandidate, type ReviewDetectorInput, type ReviewDetectorIntakePacket, type ReviewDetectorQboConnection, type ReviewDetectorSyncException } from "../rent-ops/domain/review-detector";
 import { RentOpsInvariantError } from "../rent-ops/domain/invariants";
+import { nowIsoDate } from "../rent-ops/domain/dates";
 import { PostgresRentOpsRepository, type RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { ValidationCommandError } from "../company/commands/errors";
 import {
@@ -23,9 +24,7 @@ export const REVIEW_DETECTOR_ACTOR = "system:review-detector";
 
 /** Operating date in the company's time zone. */
 export function operatingDate(now: Date = new Date()): IsoDate {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
-  const value = Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, part.value]));
-  return isoDateSchema.parse(`${value.year}-${value.month}-${value.day}`);
+  return isoDateSchema.parse(nowIsoDate(now));
 }
 
 export interface LoadedDetectionInput {

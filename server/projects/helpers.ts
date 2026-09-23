@@ -12,6 +12,7 @@ import {
 import { multiplyDecimalToCents } from "../../shared/company/money";
 import { ValidationCommandError } from "../company/commands/errors";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
+import { nowIsoDate } from "../rent-ops/domain/dates";
 import { projectIdSchema, projectQuantitySchema, type ProjectId } from "../../shared/projects/contracts";
 import { PROJECT_RESERVED_VENDOR_PREFIX } from "../../shared/projects/cost-report";
 
@@ -99,8 +100,9 @@ export function dbCount(value: unknown, field: string): number {
   return parsed;
 }
 
-export function todayIsoDate(): IsoDate {
-  return isoDateSchema.parse(new Date().toISOString().slice(0, 10));
+/** The company operating date (America/New_York), not the UTC calendar date. */
+export function todayIsoDate(now = new Date()): IsoDate {
+  return isoDateSchema.parse(nowIsoDate(now));
 }
 
 export function resolveEffectiveDate(candidate?: string | null): IsoDate {

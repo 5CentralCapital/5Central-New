@@ -5,6 +5,7 @@ import { runCompanyCommand } from "../company/commands/runner";
 import { ValidationCommandError } from "../company/commands/errors";
 import { AccountingError } from "../accounting/errors";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
+import { nowIsoDate } from "../rent-ops/domain/dates";
 import { createQuickBooksTimeClient, createQuickBooksTimeFetchTransport, createQuickBooksTimeOAuthClient, type QuickBooksTimeClient, type QuickBooksTimeOAuthClient, type TimeTransport } from "./provider";
 import { createTimeOAuthConnectionService, PostgresTimeOAuthStateStore, type TimeOAuthConnectionService, type TimeOAuthStateStore } from "./oauth-state";
 import { createConfiguredTimeTokenCipher, type TimeTokenCipher } from "./token-crypto";
@@ -222,7 +223,7 @@ async function executeTimeCommand(executor: RentOpsQueryExecutor, store: TimeSto
   return runCompanyCommand(executor, { envelope, principal: access.principal, resolvePrincipal: access.resolvePrincipal, transport: access.transport, policy: TIME_COMMAND_POLICIES[kind], handler: async context => {
     const payload = envelope.payload as Record<string, unknown>; const baseScope = companyScopeSchema.parse(envelope.scope); const providerCompanyId = typeof payload.providerCompanyId === "string" ? payload.providerCompanyId : (() => { throw new ValidationCommandError("Provider company is required", { reason: "time_provider_company_required" }); })(); const environment = typeof payload.environment === "string" ? payload.environment : (() => { throw new ValidationCommandError("Provider environment is required", { reason: "time_provider_environment_required" }); })(); const scope = timeConnectionScopeSchema.parse({ ...baseScope, environment, providerCompanyId }); const txStore = store.forExecutor(context.executor);
     if (kind === "time.payroll.link" || kind === "time.payroll.unlink") {
-      const payrollContext = { executor: context.executor, scope, actorId: context.principal.actorId, effectiveDate: envelope.effectiveDate ?? new Date().toISOString().slice(0, 10), finance: financeFactory?.(context.executor) };
+      const payrollContext = { executor: context.executor, scope, actorId: context.principal.actorId, effectiveDate: envelope.effectiveDate ?? nowIsoDate(), finance: financeFactory?.(context.executor) };
       const result = kind === "time.payroll.link"
         ? await linkPayroll(payrollContext, timePayrollLinkPayloadSchema.parse(payload))
         : await unlinkPayroll(payrollContext, timePayrollUnlinkPayloadSchema.parse(payload));
