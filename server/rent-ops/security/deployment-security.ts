@@ -186,7 +186,7 @@ export const RENT_OPS_RUNTIME_PRIVATE_TABLES = ["rent_ops_document_objects"] as 
 export const RENT_OPS_IMPORTER_PRIVATE_TABLES = [...RENT_OPS_RUNTIME_PRIVATE_TABLES] as const;
 
 /** Independent auditor access covers binding controls, the redacted change ledger, and restricted rows. */
-export const RENT_OPS_AUDITOR_TABLES = [...RENT_OPS_RUNTIME_PRIVATE_TABLES, "rent_ops_record_changes", ...RENT_OPS_RESTRICTED_TABLES] as const;
+export const RENT_OPS_AUDITOR_TABLES = [...RENT_OPS_RUNTIME_PRIVATE_TABLES, "rent_ops_document_object_relocations", "rent_ops_record_changes", ...RENT_OPS_RESTRICTED_TABLES] as const;
 
 /** Application-created accounts, receipts and counters are never imported from RM. */
 export const RENT_OPS_APPLICATION_TABLES = [
@@ -249,6 +249,7 @@ export const RENT_OPS_ALL_TABLES = [
   "rent_ops_application_history_aggregates",
   "rent_ops_documents",
   ...RENT_OPS_RUNTIME_PRIVATE_TABLES,
+  "rent_ops_document_object_relocations",
   "rent_ops_activity_events",
   "rent_ops_record_changes",
   "rent_ops_source_records",
@@ -303,6 +304,8 @@ export const RENT_OPS_RUNTIME_READ_ONLY_TABLES = [
   "rent_ops_application_history_activities",
   "rent_ops_application_history_blockers",
   "rent_ops_application_history_aggregates",
+  // Storage relocations are recorded by the reviewed operator; the web role only resolves them.
+  "rent_ops_document_object_relocations",
 ] as const;
 
 /** Migration ledgers are inspected by imports but changed only by the migration owner. */
@@ -363,6 +366,7 @@ export const RENT_OPS_IMPORTER_INSERT_ONLY_TABLES = [
   "rent_ops_application_history_activities",
   "rent_ops_application_history_blockers",
   "rent_ops_application_history_aggregates",
+  "rent_ops_document_object_relocations",
 ] as const;
 
 /** Every normal table queried by the web repository, in loadSnapshot order. */

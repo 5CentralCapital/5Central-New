@@ -38,6 +38,7 @@
     "company:qbo-preflight": "tsx scripts/company/qbo-production-preflight.ts",
     "company:report-setup-smoke": "tsx scripts/company/report-setup-browser-smoke.ts",
     "company:production-schema": "tsx scripts/company/production-schema.ts",
+    "company:document-relocation": "tsx scripts/company/document-relocation.ts",
     "desktop:dev": "tauri dev --config src-tauri/tauri.conf.json",
     "desktop:build": "tauri build --config src-tauri/tauri.conf.json",
     "desktop:check": "tsx --no-cache --test scripts/company/desktop-config.test.ts"

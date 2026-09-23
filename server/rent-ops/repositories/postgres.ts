@@ -1715,10 +1715,36 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     return value;
   }
   async saveDocument(value: RentOpsDocument): Promise<RentOpsDocument> { if (value.storageKey !== undefined && value.storageKey !== null) assertPrivateStorageKey(value.storageKey); const snapshot = await this.getSnapshot(); const violations = documentReferenceViolations(snapshot, value); if (violations.length > 0) throw new RentOpsInvariantError("Document references are invalid", violations); await this.upsert("rent_ops_documents", ["id", "property_id", "unit_id", "person_id", "tenancy_id", "application_id", "type", "type_knowledge", "state", "state_knowledge", "file_name", "mime_type", "size_bytes", "checksum_sha256", "storage_key", "uploaded_at", "verified_at", "availability", "storage_key_knowledge", "metadata_size_bytes", "metadata_checksum_sha256", "source_system", "source_id"], [value.id, value.propertyId, value.unitId, value.personId, value.tenancyId, value.applicationId, value.type, value.typeKnowledge, value.state, value.stateKnowledge, value.fileName, value.mimeType, value.sizeBytes, value.checksumSha256, value.storageKey, value.uploadedAt, value.verifiedAt, value.availability, value.storageKeyKnowledge, value.metadataSizeBytes, value.metadataChecksumSha256, value.source?.system, value.source?.sourceId]); return value; }
+  /**
+   * The effective binding: the immutable original overlaid with its latest
+   * append-only storage relocation (same content, exact version in the new
+   * backend). Downloads and availability checks use this.
+   */
   async getDocumentObjectBinding(documentId: string): Promise<RentOpsDocumentObjectBinding | undefined> {
+    return this.readDocumentObjectBinding(documentId, true);
+  }
+  private async readDocumentObjectBinding(documentId: string, effective: boolean): Promise<RentOpsDocumentObjectBinding | undefined> {
     await this.assertReady();
     const result = await this.client.query<Record<string, unknown>>(
-      "SELECT document_id, binding_kind, source_binary_id, import_run_id, source_system, source_collection, backend, logical_key, checksum_sha256, size_bytes, immutable_generation, immutable_version, verified_at FROM rent_ops_document_objects WHERE document_id = $1 LIMIT 1",
+      effective
+        ? `SELECT o.document_id, o.binding_kind, o.source_binary_id, o.import_run_id, o.source_system, o.source_collection,
+                  CASE WHEN r.document_id IS NULL THEN o.backend ELSE r.to_backend END AS backend,
+                  o.logical_key, o.checksum_sha256, o.size_bytes,
+                  CASE WHEN r.document_id IS NULL THEN o.immutable_generation ELSE r.to_immutable_generation END AS immutable_generation,
+                  CASE WHEN r.document_id IS NULL THEN o.immutable_version ELSE r.to_immutable_version END AS immutable_version,
+                  CASE WHEN r.document_id IS NULL THEN o.verified_at ELSE r.verified_at END AS verified_at,
+                  r.checksum_sha256 AS relocation_checksum_sha256, r.size_bytes AS relocation_size_bytes, r.logical_key AS relocation_logical_key
+             FROM rent_ops_document_objects o
+             LEFT JOIN LATERAL (
+               SELECT document_id, to_backend, to_immutable_generation, to_immutable_version, verified_at, checksum_sha256, size_bytes, logical_key
+                 FROM rent_ops_document_object_relocations
+                WHERE document_id = o.document_id
+                ORDER BY relocation_sequence DESC
+                LIMIT 1
+             ) r ON true
+            WHERE o.document_id = $1
+            LIMIT 1`
+        : "SELECT document_id, binding_kind, source_binary_id, import_run_id, source_system, source_collection, backend, logical_key, checksum_sha256, size_bytes, immutable_generation, immutable_version, verified_at FROM rent_ops_document_objects WHERE document_id = $1 LIMIT 1",
       [documentId],
     );
     const row = result.rows[0];
@@ -1738,11 +1764,16 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     if ((bindingKind === "applicant" || bindingKind === "admin") && (sourceBinaryId || importRunId || sourceSystem || sourceCollection)) throw new RentOpsInvariantError("Applicant document binding cannot reference an import source");
     if (bindingKind === "import" && (!sourceBinaryId || !importRunId || !sourceSystem || !sourceCollection)) throw new RentOpsInvariantError("Imported document binding is missing its exact source identity");
     if (!textValue(row, "immutableGeneration", "immutable_generation") && !textValue(row, "immutableVersion", "immutable_version")) throw new RentOpsInvariantError("Verified document binding version is missing");
+    const relocationChecksum = textValue(row, "relocationChecksumSha256", "relocation_checksum_sha256");
+    if (relocationChecksum !== undefined && (relocationChecksum !== checksumSha256 || numberValue(row, "relocationSizeBytes", "relocation_size_bytes") !== sizeBytes || textValue(row, "relocationLogicalKey", "relocation_logical_key") !== logicalKey)) {
+      throw new RentOpsInvariantError("Verified document relocation does not match its binding");
+    }
     return { documentId: bindingDocumentId, bindingKind, ...(sourceBinaryId ? { sourceBinaryId } : {}), ...(importRunId ? { importRunId } : {}), ...(sourceSystem ? { sourceSystem } : {}), ...(sourceCollection ? { sourceCollection } : {}), backend, logicalKey, checksumSha256, sizeBytes, immutableGeneration: textValue(row, "immutableGeneration", "immutable_generation"), immutableVersion: textValue(row, "immutableVersion", "immutable_version"), verifiedAt };
   }
   async saveDocumentObjectBinding(value: RentOpsDocumentObjectBinding): Promise<RentOpsDocumentObjectBinding> {
     await this.assertReady();
-    const existing = await this.getDocumentObjectBinding(value.documentId);
+    // Idempotent retries compare against the original row, not a later relocation.
+    const existing = await this.readDocumentObjectBinding(value.documentId, false);
     if (existing) {
       if (JSON.stringify(existing) !== JSON.stringify(value)) throw new RentOpsInvariantError("Verified document object binding is immutable");
       return value;

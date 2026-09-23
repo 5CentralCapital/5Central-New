@@ -116,7 +116,8 @@ test("security inventory matches all migration tables and repository runtime rea
     "rent_ops_application_history_blockers",
     "rent_ops_application_history_aggregates",
   ];
-  assert.deepEqual([...RENT_OPS_RUNTIME_TABLES].sort(), [...repositorySnapshotTables, ...RENT_OPS_APPLICATION_TABLES, "company_access_grants", "rent_ops_schema_migrations"].sort());
+  // Storage relocations are resolved (read-only) when a verified document is opened.
+  assert.deepEqual([...RENT_OPS_RUNTIME_TABLES].sort(), [...repositorySnapshotTables, ...RENT_OPS_APPLICATION_TABLES, "company_access_grants", "rent_ops_schema_migrations", "rent_ops_document_object_relocations"].sort());
   assert.deepEqual([...RENT_OPS_RUNTIME_READ_ONLY_TABLES], [
     "company_access_grants",
     "company_project_posted_actuals",
@@ -134,6 +135,7 @@ test("security inventory matches all migration tables and repository runtime rea
     "rent_ops_application_history_activities",
     "rent_ops_application_history_blockers",
     "rent_ops_application_history_aggregates",
+    "rent_ops_document_object_relocations",
   ]);
   assert.deepEqual([...RENT_OPS_IMPORTER_READ_ONLY_TABLES], ["rent_ops_schema_meta", "rent_ops_schema_migrations", "rent_ops_record_changes"]);
   assert.deepEqual([...RENT_OPS_APPEND_ONLY_TABLES], ["accounting_qbo_binding_confirmations", "accounting_qbo_connection_events", "accounting_qbo_realm_bindings", "company_external_identities", "company_project_budget_lines", "company_investor_payment_sources", "company_investor_payment_allocations", "time_timesheet_revisions", "time_timesheet_deletion_tombstones", "time_timesheet_corrections", "time_review_events", "company_report_runs", "company_report_run_rows", "company_report_run_drilldowns", "company_report_exports", "company_report_preset_revisions", "company_report_package_revisions", "company_report_package_runs", "company_work_order_events", "company_review_case_events", "company_forecast_assumption_versions", "company_forecast_snapshots", "accounting_qbo_deletion_tombstones", "rent_ops_recurring_charge_schedules", "rent_ops_ledger_transactions", "rent_ops_payment_allocations", "rent_ops_activity_events", "rent_ops_record_changes", "rent_ops_payment_events", "rent_ops_billing_charges"]);
@@ -152,6 +154,7 @@ test("security inventory matches all migration tables and repository runtime rea
     "rent_ops_application_history_activities",
     "rent_ops_application_history_blockers",
     "rent_ops_application_history_aggregates",
+    "rent_ops_document_object_relocations",
   ]);
   assert.equal(RENT_OPS_RUNTIME_WRITABLE_TABLES.length, RENT_OPS_RUNTIME_TABLES.length - RENT_OPS_RUNTIME_READ_ONLY_TABLES.length);
 

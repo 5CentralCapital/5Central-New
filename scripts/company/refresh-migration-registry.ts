@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { rentOpsMigrationDefinitions } from "../../server/rent-ops/persistence";
 
-const RELEASED_THROUGH = 48;
+const RELEASED_THROUGH = 49;
 const RECOVERY: Record<number, string> = {
   43: "Disable MRA intake commands; keep staged packets, line registry and account outcomes, then apply a reviewed forward repair.",
   44: "Disable company document commands; keep verified immutable sources and links, then apply a reviewed forward repair.",
@@ -20,6 +20,7 @@ const RECOVERY: Record<number, string> = {
   46: "Stop the worker and outbox dispatcher; keep queued, running and dead jobs for operator recovery, then apply a reviewed forward repair.",
   47: "Disable webhook intake, posting-policy and PM settlement commands; keep ledgers and tombstones, then apply a reviewed forward repair.",
   48: "Disable forecast commands; keep scenarios, immutable assumption versions and snapshots, then apply a reviewed forward repair.",
+  49: "Keep the relocation history. Downloads follow each binding's latest relocation; correct a bad one by appending a reviewed relocation to a verified object (the source bucket is retained 30 days), never by deleting rows.",
 };
 const path = new URL("../../server/company/migrations/registry.json", import.meta.url);
 const registry = JSON.parse(readFileSync(path, "utf8"));

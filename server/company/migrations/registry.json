@@ -451,6 +451,15 @@
       "minimumServerContract": 1,
       "minimumClientContract": 1,
       "recovery": "Disable forecast commands; keep scenarios, immutable assumption versions and snapshots, then apply a reviewed forward repair."
+    },
+    {
+      "version": 49,
+      "fileName": "049_rent_ops_document_object_relocations.sql",
+      "sha256": "0037d1d7a0c13941c55a1f6d5ebdd4054645f951cde9cefaa75069cd14576cdf",
+      "predecessor": 48,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Keep the relocation history. Downloads follow each binding's latest relocation; correct a bad one by appending a reviewed relocation to a verified object (the source bucket is retained 30 days), never by deleting rows."
     }
   ]
 }
