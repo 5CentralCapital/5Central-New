@@ -231,7 +231,7 @@ export function AssumptionsView({ detail, opening, currency, onPreviewDraft, dra
 }) {
   const original = useMemo(() => (detail.assumptions ?? {}) as Doc, [detail.assumptions]);
   const [draft, setDraft] = useState<Doc>(original);
-  const [dialog, setDialog] = useState<null | { kind: "save" } | { kind: "restore"; version: number } | { kind: "opening"; item: string; amount?: string } | { kind: "override" }>(null);
+  const [dialog, setDialog] = useState<null | { kind: "save" } | { kind: "restore"; version: number } | { kind: "opening"; item: string; amount?: string } | { kind: "override" } | { kind: "remove"; id: string; label: string }>(null);
   useEffect(() => { setDraft(original); onPreviewDraft(null); }, [original, onPreviewDraft]);
   const dirty = JSON.stringify(draft) !== JSON.stringify(original);
   const validation = useMemo(() => forecastAssumptionsSchema.safeParse(draft), [draft]);
@@ -282,7 +282,7 @@ export function AssumptionsView({ detail, opening, currency, onPreviewDraft, dra
           <th scope="row">{item.kind === "opening_balance" ? OPENING_ITEM_LABELS[item.item as keyof typeof OPENING_ITEM_LABELS] : item.kind === "unit_rent" ? `Rent · ${String(item.unitId)}` : `Cost · ${String(item.expenseId)}`}</th>
           <td>{item.kind === "opening_balance" ? dateLabel(String(item.asOf), "long") : String(item.month)}</td>
           <td className="fc-num">{money(String(item.amountCents), currency)}</td><td>{String(item.reason)}</td><td>{String(item.author)} · {dateLabel(String(item.setOn), "long")}</td>
-          <td>{editable && <button type="button" className="rm-button rm-button--small rm-button--ghost" disabled={dirty} onClick={() => void save("forecast.override.set", { scenarioId: detail.id, removeOverrideId: String(item.id), reason: "Removed from the assumptions page" }, detail.recordRevision)}>Remove</button>}</td>
+          <td>{editable && <button type="button" className="rm-button rm-button--small rm-button--ghost" disabled={dirty} onClick={() => setDialog({ kind: "remove", id: String(item.id), label: item.kind === "opening_balance" ? OPENING_ITEM_LABELS[item.item as keyof typeof OPENING_ITEM_LABELS] ?? String(item.id) : String(item.id) })}>Remove</button>}</td>
         </tr>)}</tbody>
       </table>}
     </section>
@@ -312,6 +312,8 @@ export function AssumptionsView({ detail, opening, currency, onPreviewDraft, dra
       onClose={() => setDialog(null)} onSubmit={async reason => { await save("forecast.assumptions.save", { scenarioId: detail.id, fromVersion: dialog.version, reason }, detail.recordRevision); setDialog(null); }} />}
     {dialog?.kind === "opening" && <OpeningDialog item={dialog.item} initial={dialog.amount} cutoff={String(draft.actualsCutoff ?? "")} onClose={() => setDialog(null)}
       onSubmit={async (amountCents, asOf, reason) => { await save("forecast.override.set", { scenarioId: detail.id, reason, override: { id: `opening-${dialog.item}`, kind: "opening_balance", item: dialog.item, amountCents, asOf } }, detail.recordRevision); setDialog(null); }} />}
+    {dialog?.kind === "remove" && <ReasonDialog title={`Remove override · ${dialog.label}`} subtitle={`Saves version ${detail.currentAssumptionVersion + 1} without this override; earlier versions keep it.`} submitLabel="Remove Override"
+      onClose={() => setDialog(null)} onSubmit={async reason => { await save("forecast.override.set", { scenarioId: detail.id, removeOverrideId: dialog.id, reason }, detail.recordRevision); setDialog(null); }} />}
     {dialog?.kind === "override" && <OverrideDialog doc={draft} onClose={() => setDialog(null)}
       onSubmit={async (override, reason) => { await save("forecast.override.set", { scenarioId: detail.id, reason, override }, detail.recordRevision); setDialog(null); }} />}
   </div>;

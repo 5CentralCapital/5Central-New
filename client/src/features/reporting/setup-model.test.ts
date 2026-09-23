@@ -23,8 +23,11 @@ const organization: CompanyContextOrganization = {
   ],
 };
 const today = "2026-09-21";
+const approvedSnapshotId = "91000000-0000-4000-8000-000000000004";
 const scenarios = normalizeForecastScenarios({ items: [
-  { id: "90000000-0000-4000-8000-000000000001", name: "Base case", state: "approved", currentAssumptionVersion: 4, latestSnapshot: { modelVersion: "forecast.v1", assumptionVersion: 4 } },
+  // The latest snapshot is a newer run; reports must still pin the approved snapshot.
+  { id: "90000000-0000-4000-8000-000000000001", name: "Base case", state: "approved", currentAssumptionVersion: 4, latestSnapshot: { id: "91000000-0000-4000-8000-000000000005", modelVersion: "forecast.v2", assumptionVersion: 4 },
+    approvedSnapshotId, approvedSnapshot: { id: approvedSnapshotId, modelVersion: "forecast.v1", assumptionVersion: 4 } },
   { id: "90000000-0000-4000-8000-000000000002", name: "Draft case", state: "draft", currentAssumptionVersion: 1, modelVersion: "forecast.v1" },
 ] });
 
@@ -63,7 +66,8 @@ test("every report's default setup builds a request the reporting service accept
     const context = seen.at(-1)!;
     for (const name of [...periodFilterNamesFor(entry.period), "scenarioId", "inputVersion", "modelVersion", "basis", "currency"]) assert.equal(name in context.request.filters, false, `${entry.id} repeated ${name} as a filter`);
     if (entry.period !== "custom") assert.equal(context.request.period.mode, entry.period, entry.id);
-    if (entry.setup.forecastScenario) assert.deepEqual(context.request.forecast, { scenarioId: scenarios[0]!.scenarioId, inputVersion: "4", modelVersion: "forecast.v1" });
+    if (entry.setup.forecastScenario) assert.deepEqual(context.request.forecast, { scenarioId: scenarios[0]!.scenarioId, inputVersion: approvedSnapshotId, modelVersion: "forecast.v1" });
+    if (entry.setup.forecastScenario) assert.deepEqual([context.request.scope.legalEntityIds, context.request.scope.propertyIds], [[], []], `${entry.id} is company-wide`);
     else assert.equal(context.request.forecast ?? null, null, entry.id);
     if (entry.setup.consolidation) assert.deepEqual(context.request.consolidation?.entityIds, [entityA, entityB]);
     if (entry.setup.entityScope === "exactly_one") assert.equal(context.request.scope.legalEntityIds.length, 1, entry.id);
@@ -158,7 +162,11 @@ test("changing entities or properties clears selections that no longer apply", (
 
 test("scenario payloads normalize without exposing raw versions and unknown shapes yield nothing", () => {
   assert.deepEqual(runnableScenarios(scenarios).map(item => item.name), ["Base case"]);
-  assert.deepEqual(normalizeForecastScenarios([{ scenarioId: "s1", name: "Plain", status: "approved", inputVersion: "7", modelVersion: "m2" }]), [{ scenarioId: "s1", name: "Plain", state: "approved", inputVersion: "7", modelVersion: "m2" }]);
+  assert.deepEqual(normalizeForecastScenarios([{ scenarioId: "s1", name: "Plain", status: "approved", approvedSnapshotId: "snap-7", modelVersion: "m2" }]), [{ scenarioId: "s1", name: "Plain", state: "approved", inputVersion: "snap-7", modelVersion: "m2" }]);
+  // Without an approved snapshot a scenario is not runnable, even with a latest snapshot or version.
+  const unapproved = normalizeForecastScenarios([{ id: "s3", name: "Latest only", state: "approved", currentAssumptionVersion: 2, latestSnapshot: { id: "snap-9", modelVersion: "m2" }, approvedSnapshotId: null }]);
+  assert.deepEqual(unapproved, [{ scenarioId: "s3", name: "Latest only", state: "approved", inputVersion: null, modelVersion: null }]);
+  assert.equal(runnableScenarios(unapproved).length, 0);
   assert.deepEqual(normalizeForecastScenarios({ unexpected: true }), []);
   assert.deepEqual(normalizeForecastScenarios(null), []);
   assert.equal(runnableScenarios(normalizeForecastScenarios([{ id: "s2", name: "No run", state: "approved", currentAssumptionVersion: 0 }])).length, 0);
@@ -178,4 +186,23 @@ test("package helpers freeze the executed request and label incomplete runs", ()
   // A stored run without completeness is never presented as complete.
   assert.equal(packageRunSummary({ ...base, itemRuns: [{ itemId: "rent-roll-1", runId: null, state: "ready", errorCode: null }] }).complete, false);
   assert.deepEqual(["available", "missing_data", "not_implemented"].map(status => runtimeStatusLabel(status as never)), ["Available", "Missing data", "Not implemented"]);
+});
+
+test("a saved preset keeps its pinned forecast input and forecast reports drop entity and property choices", () => {
+  const forecast = entries().find(entry => entry.id === "cash-forecast-13-week")!;
+  assert.deepEqual(forecast.scopes, ["organization"]);
+  assert.equal(forecast.setup.propertyScope, false);
+  const pinned = { scenarioId: scenarios[0]!.scenarioId, inputVersion: "91000000-0000-4000-8000-000000000003", modelVersion: "forecast.v0" };
+  const seeded = buildReportRunRequest(forecast, organization, { ...initialSetupState(forecast, organization, today), scenarioId: scenarios[0]!.scenarioId }, scenarios);
+  assert.ok(seeded.ok);
+  const preset = { ...seeded.request, forecast: pinned };
+  const state = initialSetupState(forecast, organization, today, preset);
+  const rebuilt = buildReportRunRequest(forecast, organization, state, scenarios);
+  assert.ok(rebuilt.ok);
+  assert.deepEqual(rebuilt.request.forecast, pinned, "the preset's pinned input is kept");
+  // Choosing another scenario drops the pin; an entity chosen earlier never reaches a company-wide report.
+  const other = buildReportRunRequest(forecast, organization, { ...withEntities(state, organization, [entityA]), scenarioId: scenarios[0]!.scenarioId, forecastPin: { ...pinned, scenarioId: "90000000-0000-4000-8000-000000000009" } }, scenarios);
+  assert.ok(other.ok);
+  assert.deepEqual(other.request.forecast, { scenarioId: scenarios[0]!.scenarioId, inputVersion: approvedSnapshotId, modelVersion: "forecast.v1" });
+  assert.deepEqual(other.request.scope.legalEntityIds, []);
 });

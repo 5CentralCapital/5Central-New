@@ -70,7 +70,7 @@ export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
       return { source: mirror, allocations: mirror, costContext: mirror };
     },
   });
-  const reporting = createCompanyReportingPort(executor, accounting, { forecastPort: transaction => createForecastReportingReadPort(transaction) });
+  const reporting = createCompanyReportingPort(executor, accounting, { forecastPort: (transaction, principal) => createForecastReportingReadPort(transaction, { principal }) });
   const workOrders = createWorkOrderPort(executor, { financeFactory: costFinanceFactory }); // lane-f
   // lane-f: project cost report, labor allocation and QBO line picker reads.
   const projectInsights = createProjectInsightsPort(executor, {

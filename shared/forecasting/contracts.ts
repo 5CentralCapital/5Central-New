@@ -46,6 +46,10 @@ export const forecastSnapshotMetaSchema = z.object({
   label: z.string().nullable(),
   completeness: z.enum(["complete", "partial"]),
   checksPassed: z.boolean(),
+  /** False when opening cash was unknown: its balances are relative movements. */
+  openingCashKnown: z.boolean(),
+  /** Hash of the scenario settings (start date, horizons, reserve floor, currency) the snapshot ran with. */
+  parametersSha256: z.string().regex(/^[a-f0-9]{64}$/),
   createdBy: z.string(),
   createdAt: isoTimestampSchema,
 }).strict();
@@ -69,7 +73,14 @@ export const forecastScenarioSummarySchema = z.object({
   createdAt: isoTimestampSchema,
   updatedAt: isoTimestampSchema,
   archivedAt: isoTimestampSchema.nullable(),
+  /** Hash of the current scenario settings; a snapshot with a different hash is stale. */
+  parametersSha256: z.string().regex(/^[a-f0-9]{64}$/),
   latestSnapshot: forecastSnapshotMetaSchema.nullable(),
+  /** The snapshot pinned by approval; reports read only this snapshot. */
+  approvedSnapshotId: forecastSnapshotIdSchema.nullable(),
+  approvedSnapshot: forecastSnapshotMetaSchema.nullable(),
+  /** Recorded acknowledgement when approval accepted an incomplete opening position. */
+  approvalNote: z.string().nullable(),
 }).strict();
 export type ForecastScenarioSummary = z.infer<typeof forecastScenarioSummarySchema>;
 
@@ -128,7 +139,13 @@ export const updateForecastScenarioPayloadSchema = z.object({
 }).strict();
 
 export const archiveForecastScenarioPayloadSchema = z.object({ scenarioId: forecastScenarioIdSchema, reason: reasonSchema.optional() }).strict();
-export const approveForecastScenarioPayloadSchema = z.object({ scenarioId: forecastScenarioIdSchema, snapshotId: forecastSnapshotIdSchema }).strict();
+export const approveForecastScenarioPayloadSchema = z.object({
+  scenarioId: forecastScenarioIdSchema,
+  snapshotId: forecastSnapshotIdSchema,
+  /** Required (with a reason) to approve a snapshot whose opening cash is unknown. */
+  acknowledgeIncompleteOpening: z.literal(true).optional(),
+  reason: reasonSchema.optional(),
+}).strict().refine(value => !value.acknowledgeIncompleteOpening || value.reason !== undefined, { message: "Give a reason for approving with unknown opening cash", path: ["reason"] });
 
 export const saveForecastAssumptionsPayloadSchema = z.object({
   scenarioId: forecastScenarioIdSchema,

@@ -55,9 +55,10 @@ const combinedFinancial = (filters: readonly ReportingFilterDefinition[], requir
   engineKey: "combined.financial", basis: ["cash", "accrual"], scopes: options.scopes ?? (options.propertyScope === false ? ["organization", "legal_entity"] : FINANCIAL_SCOPES), filters,
   setup: setup("one_or_more", options.propertyScope !== false && !options.consolidated, { consolidation: Boolean(options.consolidated) }), requiredSources, drilldownKinds: ["source"],
 });
+// Forecasts are company-wide: organization scope only, no entity or property choice.
 const forecast = (requiredSources: readonly string[]): ReportSpec => ({
-  engineKey: "combined.forecast", basis: ["mixed"], scopes: ["organization", "legal_entity", "property"], filters: [],
-  setup: setup("optional", true, { forecastScenario: true }), requiredSources, drilldownKinds: [],
+  engineKey: "combined.forecast", basis: ["mixed"], scopes: ["organization"], filters: [],
+  setup: setup("optional", false, { forecastScenario: true }), requiredSources, drilldownKinds: [],
 });
 const rentalExpanded = (filters: readonly ReportingFilterDefinition[] = [units, tenants, search]): ReportSpec => ({
   engineKey: "rental.operational-expanded", basis: ["operational"], scopes: ["organization", "legal_entity", "property", "unit", "tenant", "tenancy"], filters,

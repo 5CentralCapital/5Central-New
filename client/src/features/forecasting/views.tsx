@@ -1,6 +1,6 @@
 import React from "react";
 import { useMemo, useState } from "react";
-import { CASH_CATEGORY_LABELS, FORECAST_ACCOUNTS, type ForecastResultView } from "@shared/forecasting/result";
+import { CASH_CATEGORY_LABELS, FORECAST_ACCOUNTS, FORECAST_LADDER_OVERDUE, type ForecastResultView } from "@shared/forecasting/result";
 import { BarLineChart, CompositionChart, LadderChart, LineChart, WaterfallChart } from "./charts";
 import { bpsToPercentText, dateLabel, dscr, money, moneyWhole, monthLabel } from "./format";
 import { DrillCell, EmptyState, type Drill } from "./ui";
@@ -12,6 +12,13 @@ const accountLabel = (key: string) => FORECAST_ACCOUNTS.find(account => account.
 function Stat({ label, value, note, tone }: { label: string; value: string; note?: string; tone?: "warning" }) {
   return <div className={`fc-stat${tone ? ` fc-stat--${tone}` : ""}`}><dt>{label}</dt><dd>{value}</dd>{note && <span>{note}</span>}</div>;
 }
+
+/** Unknown opening cash is excluded, never zero: cash balances are then movements relative to it. */
+export function openingCashUnknown(result: ForecastResultView): boolean {
+  if (typeof result.summary.openingCashKnown === "boolean") return !result.summary.openingCashKnown;
+  return result.opening.items.some(item => (item.key === "cash_operating" || item.key === "cash_restricted") && item.state === "unknown");
+}
+export const RELATIVE_CASH_NOTE = "Relative to unknown opening cash";
 
 function Scroll({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className="fc-scroll" role="region" aria-label={label} tabIndex={0}>{children}</div>;
@@ -29,33 +36,35 @@ export function CashView({ result, onDrill }: { result: ForecastResultView; onDr
     .map(([key, cents]) => ({ key, label: categoryLabel(key), cents }));
   const lowWeek = result.summary.minAvailableWeek;
   const modeled = weeks.some(week => week.modeledInflowsCents !== "0");
-  // Unknown opening cash is excluded from the model, never treated as zero: label balances as movement only.
-  const cashUnknown = result.opening.items.some(item => (item.key === "cash_operating" || item.key === "cash_restricted") && item.state === "unknown");
-  const basis = cashUnknown ? "Excludes unknown opening cash" : undefined;
+  const cashUnknown = openingCashUnknown(result);
+  const netChange = weeks.reduce((total, week) => total + big(week.netCents), BigInt(0)).toString();
+  const relative = (label: string) => cashUnknown ? `${label} (relative)` : label;
   return <div className="fc-view">
     <dl className="fc-stats">
       <Stat label="Opening cash" value={cashUnknown ? "Unknown" : moneyWhole(weeks[0]!.openingCashCents, currency)} note={cashUnknown ? "Set opening balances" : dateLabel(weeks[0]!.start, "long")} tone={cashUnknown ? "warning" : undefined} />
-      <Stat label="Lowest available" value={moneyWhole(result.summary.minAvailableCashCents, currency)} note={[lowWeek ? `Week of ${dateLabel(lowWeek)}` : null, basis].filter(Boolean).join(" · ") || undefined} tone={result.summary.weeksBelowFloor ? "warning" : undefined} />
-      <Stat label={`Cash after ${weeks.length} weeks`} value={moneyWhole(weeks.at(-1)!.closingCashCents, currency)} note={basis} />
-      <Stat label="Weeks below floor" value={String(result.summary.weeksBelowFloor)} note={`Floor ${moneyWhole(result.scenario.reserveFloorCents, currency)}`} tone={result.summary.weeksBelowFloor ? "warning" : undefined} />
+      <Stat label="Lowest available" value={moneyWhole(result.summary.minAvailableCashCents, currency)} note={[lowWeek ? `Week of ${dateLabel(lowWeek)}` : null, cashUnknown ? RELATIVE_CASH_NOTE : null].filter(Boolean).join(" · ") || undefined} tone={result.summary.weeksBelowFloor ? "warning" : undefined} />
+      {cashUnknown
+        ? <Stat label={`Net change, ${weeks.length} weeks`} value={moneyWhole(netChange, currency)} note={RELATIVE_CASH_NOTE} />
+        : <Stat label={`Cash after ${weeks.length} weeks`} value={moneyWhole(weeks.at(-1)!.closingCashCents, currency)} />}
+      <Stat label="Weeks below floor" value={result.summary.weeksBelowFloor === null ? "Unknown" : String(result.summary.weeksBelowFloor)} note={cashUnknown ? "Needs opening cash" : `Floor ${moneyWhole(result.scenario.reserveFloorCents, currency)}`} tone={result.summary.weeksBelowFloor ? "warning" : undefined} />
     </dl>
-    <LineChart title="Weekly cash" periods={weeks.map(week => ({ key: week.key, label: week.start }))}
+    <LineChart title={cashUnknown ? `Weekly cash · ${RELATIVE_CASH_NOTE.toLowerCase()}` : "Weekly cash"} periods={weeks.map(week => ({ key: week.key, label: week.start }))}
       series={[
         { id: "available", label: "Available", tone: "ink", values: weeks.map(week => week.availableClosingCents) },
         { id: "closing", label: "Total", tone: "muted", dashed: true, values: weeks.map(week => week.closingCashCents) },
       ]}
-      floorCents={result.scenario.reserveFloorCents}
+      {...(cashUnknown ? {} : { floorCents: result.scenario.reserveFloorCents })}
       onSelect={(_series, key) => onDrill("cash.available", key)} selectedKey={bridge.key} />
     <Scroll label="13-week cash table">
       <table className="rm-table fc-table">
         <caption className="fc-sr-only">Weekly cash schedule</caption>
         <thead><tr>
-          <th scope="col">Week of</th><th scope="col" className="fc-num">Opening</th><th scope="col" className="fc-num">Inflows</th><th scope="col" className="fc-num">Outflows</th>
-          <th scope="col" className="fc-num">Net</th><th scope="col" className="fc-num">Closing</th><th scope="col" className="fc-num">Restricted</th><th scope="col" className="fc-num">Available</th>
+          <th scope="col">Week of</th><th scope="col" className="fc-num">{relative("Opening")}</th><th scope="col" className="fc-num">Inflows</th><th scope="col" className="fc-num">Outflows</th>
+          <th scope="col" className="fc-num">Net</th><th scope="col" className="fc-num">{relative("Closing")}</th><th scope="col" className="fc-num">{relative("Restricted")}</th><th scope="col" className="fc-num">{relative("Available")}</th>
           {modeled && <th scope="col" className="fc-num">Modeled inflows</th>}
         </tr></thead>
-        <tbody>{weeks.map(week => <tr key={week.key} className={week.belowReserveFloor ? "fc-row--low" : undefined}>
-          <th scope="row"><button type="button" className="fc-link" onClick={() => setBridgeKey(week.key)} aria-pressed={week.key === bridge.key}>{dateLabel(week.start)}</button>{week.belowReserveFloor && <span className="rm-status rm-status--warning fc-tag">Below floor</span>}</th>
+        <tbody>{weeks.map(week => <tr key={week.key} className={week.belowReserveFloor === true ? "fc-row--low" : undefined}>
+          <th scope="row"><button type="button" className="fc-link" onClick={() => setBridgeKey(week.key)} aria-pressed={week.key === bridge.key}>{dateLabel(week.start)}</button>{week.belowReserveFloor === true && <span className="rm-status rm-status--warning fc-tag">Below floor</span>}</th>
           <DrillCell cents={week.openingCashCents} line="cash.opening" period={week.key} label={`Opening cash, week of ${week.start}`} onDrill={onDrill} currency={currency} />
           <DrillCell cents={week.inflowsCents} line="cash.inflows" period={week.key} label={`Inflows, week of ${week.start}`} onDrill={onDrill} currency={currency} />
           <DrillCell cents={week.outflowsCents} line="cash.outflows" period={week.key} label={`Outflows, week of ${week.start}`} onDrill={onDrill} currency={currency} />
@@ -67,16 +76,17 @@ export function CashView({ result, onDrill }: { result: ForecastResultView; onDr
         </tr>)}</tbody>
       </table>
     </Scroll>
+    {cashUnknown && <p className="fc-footnote">Balances are relative to unknown opening cash; set opening balances to see cash on hand.</p>}
     {modeled && <p className="fc-footnote">Modeled inflows are projected refinance, sale or draw proceeds. They are never actual cash.</p>}
     <section className="fc-split" aria-label="Cash bridge">
       <WaterfallChart title={`Cash bridge · week of ${dateLabel(bridge.start, "long")}`} openingCents={bridge.openingCashCents} closingCents={bridge.closingCashCents} steps={steps} onSelect={key => onDrill(`cash.category.${key}`, bridge.key)} />
       <table className="rm-table fc-table fc-table--compact">
         <caption className="fc-sr-only">Cash bridge values</caption>
         <tbody>
-          <tr><th scope="row">Opening</th><td className="fc-num">{money(bridge.openingCashCents, currency)}</td></tr>
+          <tr><th scope="row">{relative("Opening")}</th><td className="fc-num">{money(bridge.openingCashCents, currency)}</td></tr>
           {steps.map(step => <tr key={step.key}><th scope="row">{step.label}</th>
             <DrillCell cents={step.cents} line={`cash.category.${step.key}`} period={bridge.key} label={`${step.label}, week of ${bridge.start}`} onDrill={onDrill} currency={currency} /></tr>)}
-          <tr className="fc-row--total"><th scope="row">Closing</th><td className="fc-num">{money(bridge.closingCashCents, currency)}</td></tr>
+          <tr className="fc-row--total"><th scope="row">{relative("Closing")}</th><td className="fc-num">{money(bridge.closingCashCents, currency)}</td></tr>
         </tbody>
       </table>
     </section>
@@ -152,27 +162,35 @@ const ASSET_KEYS = ["cash_operating", "cash_restricted", "rent_receivable", "sub
 const LIABILITY_KEYS = ["accounts_payable", "project_payables", "retainage_payable", "deposits_held", "investor_payable", "debt"];
 const EQUITY_KEYS = ["opening_equity", "contributed_capital", "distributions", "retained_earnings"];
 
+/**
+ * Balance-sheet composition. Each key is an explainable line (`bs.<key>`:
+ * composites such as cash_total, or the single debt account), so selecting a
+ * segment opens exactly the figure it shows.
+ */
+export function balanceComposition(month: ForecastResultView["months"][number], cashUnknown = false) {
+  const b = month.balance;
+  const assets = [
+    { key: "cash_total", label: cashUnknown ? "Cash (relative)" : "Cash", cents: (big(b.cash_operating) + big(b.cash_restricted)).toString() },
+    { key: "receivables_total", label: "Receivables and manager funds", cents: (big(b.rent_receivable) + big(b.subsidy_receivable) + big(b.pm_held_funds)).toString() },
+    { key: "property_net", label: "Property, net", cents: (big(b.fixed_assets) - big(b.accumulated_depreciation) + big(b.cip)).toString() },
+  ];
+  const claims = [
+    { key: "debt", label: "Loans", cents: b.debt ?? "0" },
+    { key: "payables_total", label: "Payables and deposits", cents: (big(b.accounts_payable) + big(b.project_payables) + big(b.retainage_payable) + big(b.deposits_held) + big(b.investor_payable)).toString() },
+    { key: "equity_total", label: "Equity", cents: month.totalEquityCents },
+  ];
+  return { assets, claims };
+}
+
 export function BalanceView({ result, onDrill }: { result: ForecastResultView; onDrill: Drill }) {
   const { months, currency } = result;
   const [selected, setSelected] = useState(months.at(-1)?.key ?? "");
   const month = months.find(item => item.key === selected) ?? months.at(-1);
-  const composition = useMemo(() => {
-    if (!month) return null;
-    const b = month.balance;
-    const assets = [
-      { key: "cash_operating", label: "Cash", cents: (big(b.cash_operating) + big(b.cash_restricted)).toString() },
-      { key: "rent_receivable", label: "Receivables and manager funds", cents: (big(b.rent_receivable) + big(b.subsidy_receivable) + big(b.pm_held_funds)).toString() },
-      { key: "fixed_assets", label: "Property, net", cents: (big(b.fixed_assets) - big(b.accumulated_depreciation) + big(b.cip)).toString() },
-    ];
-    const claims = [
-      { key: "debt", label: "Loans", cents: b.debt ?? "0" },
-      { key: "accounts_payable", label: "Payables and deposits", cents: (big(b.accounts_payable) + big(b.project_payables) + big(b.retainage_payable) + big(b.deposits_held) + big(b.investor_payable)).toString() },
-      { key: "retained_earnings", label: "Equity", cents: month.totalEquityCents },
-    ];
-    return { assets, claims };
-  }, [month]);
+  const cashUnknown = openingCashUnknown(result);
+  const composition = useMemo(() => (month ? balanceComposition(month, cashUnknown) : null), [month, cashUnknown]);
   if (!month || !composition) return <EmptyState title="No monthly view" message="This scenario has no monthly horizon." />;
-  const rowLabel = (key: string) => key === "retained_earnings" ? "Retained earnings since cutoff" : key === "accumulated_depreciation" ? "Less accumulated depreciation" : key === "distributions" ? "Less distributions" : accountLabel(key);
+  const rowLabel = (key: string) => key === "retained_earnings" ? "Retained earnings since cutoff" : key === "accumulated_depreciation" ? "Less accumulated depreciation" : key === "distributions" ? "Less distributions"
+    : cashUnknown && (key === "cash_operating" || key === "cash_restricted") ? `${accountLabel(key)} (relative)` : accountLabel(key);
   const row = (key: string) => <tr key={key}><th scope="row" className="fc-sticky">{rowLabel(key)}</th>
     {months.map(item => <DrillCell key={item.key} cents={item.balance[key] ?? "0"} line={`bs.${key}`} period={item.key} label={`${rowLabel(key)}, ${item.month}`} onDrill={onDrill} currency={currency} />)}</tr>;
   const total = (label: string, pick: (item: ForecastResultView["months"][number]) => string) => <tr className="fc-row--total"><th scope="row" className="fc-sticky">{label}</th>{months.map(item => <td key={item.key} className="fc-num fc-num--strong">{moneyWhole(pick(item), currency)}</td>)}</tr>;
@@ -183,6 +201,7 @@ export function BalanceView({ result, onDrill }: { result: ForecastResultView; o
       {big(month.totalEquityCents) < BigInt(0) && <span className="rm-status rm-status--warning">Negative book equity</span>}
     </div>
     <CompositionChart title={`Balance sheet composition · ${monthLabel(month.month, true)}`} assets={composition.assets} claims={composition.claims} onSelect={key => onDrill(`bs.${key}`, month.key)} />
+    {cashUnknown && <p className="fc-footnote">Cash balances are relative to unknown opening cash.</p>}
     <Scroll label="Monthly balance sheet">
       <table className="rm-table fc-table fc-table--wide">
         <caption className="fc-sr-only">Monthly balance sheet</caption>
@@ -232,13 +251,15 @@ export function DebtView({ result, onDrill }: { result: ForecastResultView; onDr
   const { debt, capital, currency } = result;
   const [year, setYear] = useState<string | null>(null);
   if (!debt.loans.length && !capital.refinances.length && !capital.sales.length) return <EmptyState title="No debt in this scenario" message="Add loans in Assumptions to see maturities and coverage." />;
-  const payments = year ? debt.loans.flatMap(loan => loan.payments.filter(row => row.date.startsWith(year)).map(row => ({ ...row, loan: loan.label }))).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)) : [];
+  const overdue = year === FORECAST_LADDER_OVERDUE;
+  const payments = year ? debt.loans.flatMap(loan => loan.payments.filter(row => (overdue ? loan.pastMaturity === true : !loan.pastMaturity && row.date.startsWith(year))).map(row => ({ ...row, loan: loan.label }))).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)) : [];
+  const yearLabel = (value: string) => value === FORECAST_LADDER_OVERDUE ? "Overdue" : value;
   const kindLabel = { scheduled: "Payment", balloon: "Balloon", payoff: "Payoff", draw: "Funding" } as const;
   return <div className="fc-view">
-    {debt.ladder.length > 0 && <LadderChart title="Maturity ladder" rows={debt.ladder} onSelect={setYear} selectedYear={year ?? undefined} />}
-    {year && <div className="fc-scroll" role="region" aria-label={`Loan payments in ${year}`} tabIndex={0}>
+    {debt.ladder.length > 0 && <LadderChart title="Maturity ladder" rows={debt.ladder.map(row => ({ ...row, year: yearLabel(row.year) }))} onSelect={value => setYear(value === "Overdue" ? FORECAST_LADDER_OVERDUE : value)} selectedYear={year ? yearLabel(year) : undefined} />}
+    {year && <div className="fc-scroll" role="region" aria-label={overdue ? "Overdue loan balances" : `Loan payments in ${year}`} tabIndex={0}>
       <table className="rm-table fc-table fc-table--compact">
-        <caption className="fc-table-caption">Loan payments in {year} <button type="button" className="rm-button rm-button--small rm-button--ghost" onClick={() => setYear(null)}>Close</button></caption>
+        <caption className="fc-table-caption">{overdue ? "Overdue loan balances" : `Loan payments in ${year}`} <button type="button" className="rm-button rm-button--small rm-button--ghost" onClick={() => setYear(null)}>Close</button></caption>
         <thead><tr><th scope="col">Date</th><th scope="col">Loan</th><th scope="col">Type</th><th scope="col" className="fc-num">Interest</th><th scope="col" className="fc-num">Principal</th><th scope="col" className="fc-num">Balance after</th></tr></thead>
         <tbody>{payments.map(row => <tr key={`${row.loan}-${row.date}-${row.kind}`}><td>{dateLabel(row.date, "long")}</td><td>{row.loan}</td><td>{kindLabel[row.kind]}</td>
           <td className="fc-num">{money(row.interestCents, currency)}</td><td className="fc-num">{money(row.principalCents.replace(/^-/, ""), currency)}</td><td className="fc-num">{money(row.balanceCents, currency)}</td></tr>)}</tbody>
@@ -253,7 +274,7 @@ export function DebtView({ result, onDrill }: { result: ForecastResultView; onDr
           <td className="fc-num">{loan.principalKnown ? moneyWhole(loan.openingPrincipalCents, currency) : <span className="rm-status rm-status--warning">Unknown</span>}</td>
           <td className="fc-num">{bpsToPercentText(loan.annualRateBps, 2)}</td><td>{dateLabel(loan.maturityOn, "long")}</td>
           <td className="fc-num">{loan.balloonCents === null ? "—" : moneyWhole(loan.balloonCents, currency)}</td>
-          <td>{loan.paidOffOn ? `Paid off ${dateLabel(loan.paidOffOn, "long")}` : loan.fundedOn ? `Funded ${dateLabel(loan.fundedOn, "long")}` : loan.principalKnown ? "Outstanding" : "Excluded until balance is known"}</td>
+          <td>{loan.pastMaturity ? <span className="rm-status rm-status--warning">Past maturity</span> : loan.paidOffOn ? `Paid off ${dateLabel(loan.paidOffOn, "long")}` : loan.fundedOn ? `Funded ${dateLabel(loan.fundedOn, "long")}` : loan.principalKnown ? "Outstanding" : "Excluded until balance is known"}</td>
         </tr>)}</tbody>
       </table>
     </Scroll>

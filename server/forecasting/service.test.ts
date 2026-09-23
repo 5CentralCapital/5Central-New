@@ -51,6 +51,15 @@ async function setup() {
   return { fixture, db, executor, port, access, accessFor, scope, envelope, run, createBase };
 }
 
+/** Approved opening balances for both cash items (sources leave them unknown). */
+async function setOpeningCash(port: Awaited<ReturnType<typeof setup>>["port"], access: Awaited<ReturnType<typeof setup>>["access"], scope: { organizationId: string }, run: Awaited<ReturnType<typeof setup>>["run"], scenarioId: string) {
+  let detail = await port.get(access.principal, { scope, scenarioId });
+  await run("forecast.override.set", { scenarioId, reason: "Bank statement 12/27", override: { id: "open-cash", kind: "opening_balance", item: "cash_operating", amountCents: "8400000", asOf: "2026-12-27" } }, detail.recordRevision);
+  detail = await port.get(access.principal, { scope, scenarioId });
+  await run("forecast.override.set", { scenarioId, reason: "Reserve statement 12/27", override: { id: "open-reserve", kind: "opening_balance", item: "cash_restricted", amountCents: "600000", asOf: "2026-12-27" } }, detail.recordRevision);
+  return port.get(access.principal, { scope, scenarioId });
+}
+
 const rejectsWith = async (promise: Promise<unknown>, code: string, reason?: string) => {
   await assert.rejects(promise, (error: unknown) => {
     assert.ok(error instanceof CompanyCommandError, String(error));
@@ -111,11 +120,20 @@ test("scenario lifecycle: create, snapshot, reproduce, version, approve", async 
     await rejectsWith(port.explain(access.principal, { scope, source: { snapshotId: "99999999-9999-4999-8999-999999999999" }, line: "cash.closing", period: view.result.weeks[0]!.key }), "conflict", "forecast_snapshot_not_reproducible");
 
     // Approve requires the current version's snapshot and owner/admin role.
+    // Unknown opening cash needs an explicit, recorded acknowledgement.
     detail = await port.get(access.principal, { scope, scenarioId });
-    const approved = await run("forecast.scenario.approve", { scenarioId, snapshotId }, detail.recordRevision);
+    assert.equal(view.snapshot.openingCashKnown, false);
+    assert.equal(view.result.summary.minAvailableCashCents, null);
+    await rejectsWith(run("forecast.scenario.approve", { scenarioId, snapshotId }, detail.recordRevision), "validation", "forecast_opening_cash_unknown");
+    await rejectsWith(run("forecast.scenario.approve", { scenarioId, snapshotId, acknowledgeIncompleteOpening: true }, detail.recordRevision), "validation");
+    const approved = await run("forecast.scenario.approve", { scenarioId, snapshotId, acknowledgeIncompleteOpening: true, reason: "Bank balances arrive Monday" }, detail.recordRevision);
+    assert.ok(approved.validationOutcomes.some(outcome => outcome.code === "forecast.opening_cash_acknowledged"));
     detail = await port.get(access.principal, { scope, scenarioId });
     assert.equal(detail.state, "approved");
     assert.equal(detail.recordRevision, approved.resultingRevisions[0]!.revision);
+    assert.equal(detail.approvedSnapshotId, snapshotId);
+    assert.equal(detail.approvedSnapshot?.id, snapshotId);
+    assert.equal(detail.approvalNote, "Approved with unknown opening cash: Bank balances arrive Monday");
 
     // A new assumption version (with a reason) returns the scenario to draft.
     const doc = syntheticForecastAssumptionsInput();
@@ -124,6 +142,8 @@ test("scenario lifecycle: create, snapshot, reproduce, version, approve", async 
     const saved = await run("forecast.assumptions.save", { scenarioId, assumptions: doc, reason: "Higher bad debt from Q4 collections" }, detail.recordRevision);
     detail = await port.get(access.principal, { scope, scenarioId });
     assert.equal(detail.state, "draft");
+    assert.equal(detail.approvedSnapshotId, null);
+    assert.equal(detail.approvalNote, null);
     assert.equal(detail.currentAssumptionVersion, 2);
     assert.equal(detail.versions[0]!.reason, "Higher bad debt from Q4 collections");
     await rejectsWith(run("forecast.scenario.approve", { scenarioId, snapshotId }, detail.recordRevision), "conflict", "forecast_snapshot_stale");
@@ -285,6 +305,14 @@ test("explain drills every figure to events that sum to it; compare lists change
     await check("cf.financing", month.key, month.cashFlow.financingCents);
     await check("bs.debt", month.key, month.balance.debt!);
     await check("bs.retained_earnings", month.key, month.balance.retained_earnings!);
+    // Composite balance-sheet figures (composition chart) explain every account they add up.
+    const b = month.balance;
+    const sum = (...keys: string[]) => keys.reduce((total, key) => total + BigInt(b[key] ?? "0"), BigInt(0)).toString();
+    await check("bs.cash_total", month.key, sum("cash_operating", "cash_restricted"));
+    await check("bs.receivables_total", month.key, sum("rent_receivable", "subsidy_receivable", "pm_held_funds"));
+    await check("bs.property_net", month.key, (BigInt(sum("fixed_assets", "cip")) - BigInt(b.accumulated_depreciation ?? "0")).toString());
+    await check("bs.payables_total", month.key, sum("accounts_payable", "project_payables", "retainage_payable", "deposits_held", "investor_payable"));
+    await check("bs.equity_total", month.key, month.totalEquityCents);
     const debt = await check("debt.service", month.key, view.result.debt.coverage[3]!.debtServiceCents);
     assert.ok(debt.inputs.some(input => input.ref === "loans[loan-a]"));
     const rent = await port.explain(access.principal, { scope, source: { scenarioId: baseId }, line: "ops.scheduled_rent", period: month.key, limit: 2 });
@@ -312,42 +340,123 @@ test("explain drills every figure to events that sum to it; compare lists change
   }
 });
 
-test("the reporting port runs the four forecast reports from saved snapshots", async () => {
-  const { fixture, executor, port, access, run, createBase } = await setup();
+test("the reporting port runs the four forecast reports from the approved snapshot only, within the report period", async () => {
+  const { fixture, executor, port, access, scope, run, createBase } = await setup();
   try {
     const scenarioId = await createBase();
+    let detail = await setOpeningCash(port, access, scope, run, scenarioId);
     const snapshotId = String((await run("forecast.snapshot.create", { scenarioId })).affectedRecordIds[0]);
     const readPort = createForecastReportingReadPort(port, { principal: access.principal });
     const reportScope = { organizationId, legalEntityIds: [], propertyIds: [], unitIds: [], tenantIds: [], tenancyIds: [], ownerIds: [], investorIds: [], projectIds: [], vendorIds: [], staffIds: [] };
-    const context = (reportId: string, inputVersion: string): ReportingEngineContext => ({
+    const context = (reportId: string, inputVersion: string, period: Record<string, unknown> = { mode: "custom", fromDate: "2026-12-28", toDate: "2029-12-31" }, scopeOverride: Record<string, unknown> = {}): ReportingEngineContext => ({
       runId: "11111111-1111-4111-8111-111111111112", snapshotId: "11111111-1111-4111-8111-111111111113", now: "2026-12-28T12:00:00.000Z" as never,
-      request: reportRunRequestSchema.parse({ reportId, definitionVersion: "1", scope: reportScope, filters: {}, period: { mode: "custom", fromDate: "2026-12-28", toDate: "2027-03-28" }, basis: "mixed", currency: "USD",
+      request: reportRunRequestSchema.parse({ reportId, definitionVersion: "1", scope: { ...reportScope, ...scopeOverride }, filters: {}, period, basis: "mixed", currency: "USD",
         forecast: { scenarioId, inputVersion, modelVersion: FORECAST_MODEL_VERSION } }),
       definition: getReportingDefinition(reportId)!,
     });
-    const bySnapshot = await readPort.read({ context: context("cash-forecast-13-week", snapshotId), scenarioId, inputVersion: snapshotId, modelVersion: FORECAST_MODEL_VERSION });
-    const byVersion = await readPort.read({ context: context("cash-forecast-13-week", "v1"), scenarioId, inputVersion: "v1", modelVersion: FORECAST_MODEL_VERSION });
+    const read = (reportId: string, inputVersion: string, period?: Record<string, unknown>, scopeOverride?: Record<string, unknown>) => readPort.read({ context: context(reportId, inputVersion, period, scopeOverride), scenarioId, inputVersion, modelVersion: FORECAST_MODEL_VERSION });
+    const unavailable = (error: unknown) => error instanceof ReportingError && error.code === "report_unavailable";
+    // A draft scenario is never reported, even with a snapshot.
+    await assert.rejects(read("cash-forecast-13-week", snapshotId), (error: unknown) => unavailable(error) && (error as ReportingError).message === "No approved forecast scenario.");
+    assert.deepEqual(await readPort.probe!({ organizationId }), { status: "missing_data", reason: "No approved forecast scenario.", dependency: "approved_forecast_scenario" });
+    detail = await port.get(access.principal, { scope, scenarioId });
+    await run("forecast.scenario.approve", { scenarioId, snapshotId }, detail.recordRevision);
+    assert.deepEqual(await readPort.probe!({ organizationId }), { status: "available" });
+
+    const bySnapshot = await read("cash-forecast-13-week", snapshotId);
+    const byVersion = await read("cash-forecast-13-week", "v3");
     assert.deepEqual(byVersion.weeks, bySnapshot.weeks);
     assert.equal(bySnapshot.weeks!.length, 13);
-    assert.equal(bySnapshot.coverage.state, "partial");
+    assert.equal(bySnapshot.weeks![0]!.openingCashCents, "9000000");
     assert.equal(bySnapshot.coverage.evidence, "reproducible_snapshot");
     assert.ok(bySnapshot.actuals.every(row => row.date < bySnapshot.weeks![0]!.weekStart));
     assert.ok(bySnapshot.growth!.some(line => line.metric === "Net operating income"));
     assert.ok(bySnapshot.debt!.some(line => line.debtId === "loan-c" && line.refinanceBalanceCents === "5500000"));
     assert.ok(bySnapshot.exits!.length >= 1);
-    // All four forecast reports run through the reporting engine from the snapshot.
+    // All four forecast reports run through the reporting engine from the approved snapshot.
     const engine = createForecastReportingEngine(readPort);
-    const cash = await engine.run(context("cash-forecast-13-week", "v1"));
-    assert.equal(cash.rows.length, 13);
-    for (const reportId of ["operating-growth-plan", "debt-refinance", "exit-scenarios"]) {
-      const report = await engine.run(context(reportId, snapshotId));
-      assert.ok(report.rows.length > 0, reportId);
-    }
-    await assert.rejects(readPort.read({ context: context("cash-forecast-13-week", "v9"), scenarioId, inputVersion: "v9", modelVersion: FORECAST_MODEL_VERSION }), (error: unknown) => error instanceof ReportingError && error.code === "report_unavailable");
-    const direct = createForecastReportingReadPort(executor);
-    assert.deepEqual((await direct.read({ context: context("debt-refinance", "1"), scenarioId, inputVersion: "1", modelVersion: FORECAST_MODEL_VERSION })).debt, bySnapshot.debt);
-    const withoutPrincipal = createForecastReportingReadPort(port);
-    await assert.rejects(withoutPrincipal.read({ context: context("debt-refinance", "1"), scenarioId, inputVersion: "1", modelVersion: FORECAST_MODEL_VERSION }), (error: unknown) => error instanceof ReportingError && error.code === "report_forbidden");
+    assert.equal((await engine.run(context("cash-forecast-13-week", "v3"))).rows.length, 13);
+    for (const reportId of ["operating-growth-plan", "debt-refinance", "exit-scenarios"]) assert.ok((await engine.run(context(reportId, snapshotId))).rows.length > 0, reportId);
+
+    // A newer draft version or snapshot is not the approved input.
+    detail = await port.get(access.principal, { scope, scenarioId });
+    const newer = String((await run("forecast.snapshot.create", { scenarioId })).affectedRecordIds[0]);
+    await assert.rejects(read("cash-forecast-13-week", newer), unavailable);
+    await assert.rejects(read("cash-forecast-13-week", "v2"), unavailable);
+    await assert.rejects(read("cash-forecast-13-week", "v9"), unavailable);
+
+    // The report period limits every report.
+    const later = await read("cash-forecast-13-week", snapshotId, { mode: "custom", fromDate: "2027-01-06", toDate: "2027-01-20" });
+    assert.equal(later.weeks![0]!.weekStart, "2027-01-04");
+    assert.equal(later.weeks!.length, 12, "only the weeks left in the horizon");
+    await assert.rejects(engine.run(context("cash-forecast-13-week", snapshotId, { mode: "custom", fromDate: "2027-01-06", toDate: "2027-01-20" })), unavailable);
+    const quarter = await read("operating-growth-plan", snapshotId, { mode: "range", fromDate: "2027-02-01", toDate: "2027-04-30" });
+    assert.deepEqual(Array.from(new Set(quarter.growth!.map(line => line.period))), ["2027-02-01", "2027-03-01", "2027-04-01"]);
+    assert.deepEqual((await read("exit-scenarios", snapshotId, { mode: "range", fromDate: "2027-01-01", toDate: "2027-06-30" })).exits, []);
+    assert.equal((await read("exit-scenarios", snapshotId, { mode: "range", fromDate: "2027-09-01", toDate: "2027-09-30" })).exits!.length, 1);
+    const afterRefinance = await read("debt-refinance", snapshotId, { mode: "as_of", asOfDate: "2028-01-15" });
+    assert.ok(!afterRefinance.debt!.some(line => line.debtId === "loan-b"), "the construction line was paid off before the period");
+    assert.ok(afterRefinance.debt!.some(line => line.debtId === "loan-c"));
+
+    // Entity or property scope is refused; a reader without a principal is refused.
+    await assert.rejects(read("cash-forecast-13-week", snapshotId, undefined, { legalEntityIds: [entityId] }), (error: unknown) => error instanceof ReportingError && error.code === "report_validation");
+    await assert.rejects(createForecastReportingReadPort(executor).read({ context: context("debt-refinance", "3"), scenarioId, inputVersion: "3", modelVersion: FORECAST_MODEL_VERSION }), (error: unknown) => error instanceof ReportingError && error.code === "report_forbidden");
+    const direct = createForecastReportingReadPort(executor, { principal: access.principal });
+    assert.deepEqual((await direct.read({ context: context("debt-refinance", "3"), scenarioId, inputVersion: "3", modelVersion: FORECAST_MODEL_VERSION })).debt, bySnapshot.debt);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("reports of an approved scenario with unknown opening cash show movements, never zero-based balances", async () => {
+  const { fixture, port, access, scope, run, createBase } = await setup();
+  try {
+    const scenarioId = await createBase();
+    const snapshotId = String((await run("forecast.snapshot.create", { scenarioId })).affectedRecordIds[0]);
+    const detail = await port.get(access.principal, { scope, scenarioId });
+    await run("forecast.scenario.approve", { scenarioId, snapshotId, acknowledgeIncompleteOpening: true, reason: "Synthetic review" }, detail.recordRevision);
+    const readPort = createForecastReportingReadPort(port, { principal: access.principal });
+    const reportScope = { organizationId, legalEntityIds: [], propertyIds: [], unitIds: [], tenantIds: [], tenancyIds: [], ownerIds: [], investorIds: [], projectIds: [], vendorIds: [], staffIds: [] };
+    const context = (reportId: string): ReportingEngineContext => ({
+      runId: "11111111-1111-4111-8111-111111111112", snapshotId: "11111111-1111-4111-8111-111111111113", now: "2026-12-28T12:00:00.000Z" as never,
+      request: reportRunRequestSchema.parse({ reportId, definitionVersion: "1", scope: reportScope, filters: {}, period: { mode: "custom", fromDate: "2026-12-28", toDate: "2027-03-28" }, basis: "mixed", currency: "USD",
+        forecast: { scenarioId, inputVersion: snapshotId, modelVersion: FORECAST_MODEL_VERSION } }),
+      definition: getReportingDefinition(reportId)!,
+    });
+    const source = await readPort.read({ context: context("cash-forecast-13-week"), scenarioId, inputVersion: snapshotId, modelVersion: FORECAST_MODEL_VERSION });
+    assert.ok(source.weeks!.every(week => week.openingCashCents === null && week.closingCashCents === null));
+    assert.ok(!source.growth!.some(line => line.metric === "Closing cash"));
+    assert.ok(source.growth!.some(line => line.metric === "Net change in cash"));
+    assert.match(source.coverage.reason ?? "", /Opening cash is unknown/);
+    const report = await createForecastReportingEngine(readPort).run(context("cash-forecast-13-week"));
+    assert.equal(report.rows.length, 13);
+    assert.ok(report.rows.every(row => row.values.openingCashCents === null && row.values.closingCashCents === null && typeof row.values.netCents === "string"));
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("approval refuses a snapshot made under different scenario settings", async () => {
+  const { fixture, port, access, scope, run, createBase } = await setup();
+  try {
+    const scenarioId = await createBase();
+    let detail = await setOpeningCash(port, access, scope, run, scenarioId);
+    const snapshotId = String((await run("forecast.snapshot.create", { scenarioId })).affectedRecordIds[0]);
+    detail = await port.get(access.principal, { scope, scenarioId });
+    assert.equal(detail.latestSnapshot!.parametersSha256, detail.parametersSha256, "a fresh snapshot matches the settings");
+    assert.equal(detail.latestSnapshot!.openingCashKnown, true);
+    await run("forecast.scenario.update", { scenarioId, reserveFloorCents: "99900000", horizonWeeks: 26 }, detail.recordRevision);
+    detail = await port.get(access.principal, { scope, scenarioId });
+    assert.notEqual(detail.latestSnapshot!.parametersSha256, detail.parametersSha256, "the snapshot is now stale");
+    await rejectsWith(run("forecast.scenario.approve", { scenarioId, snapshotId }, detail.recordRevision), "conflict", "forecast_snapshot_parameters_stale");
+    // A rename alone does not stale the run.
+    await run("forecast.scenario.update", { scenarioId, reserveFloorCents: "2500000", horizonWeeks: 13, name: "Base renamed" }, detail.recordRevision);
+    detail = await port.get(access.principal, { scope, scenarioId });
+    assert.equal(detail.latestSnapshot!.parametersSha256, detail.parametersSha256);
+    await run("forecast.scenario.approve", { scenarioId, snapshotId }, detail.recordRevision);
+    detail = await port.get(access.principal, { scope, scenarioId });
+    assert.equal(detail.state, "approved");
+    assert.equal(detail.approvalNote, null, "known opening cash needs no acknowledgement");
   } finally {
     await fixture.close();
   }

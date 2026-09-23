@@ -21,7 +21,7 @@ import { runCompanyCommand, type CommandHandlerContext, type CommandHandlerResul
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { computeForecast, parseForecastAssumptions, type ForecastRuntime } from "./service";
 import { resultView } from "./explain";
-import { forecastStore, type ScenarioRow } from "./store";
+import { forecastParametersSha256, forecastStore, type ScenarioRow } from "./store";
 
 type Context = CommandHandlerContext<Record<string, unknown>>;
 
@@ -95,7 +95,7 @@ async function appendVersion(context: Context, scenario: ScenarioRow, assumption
   await forecastStore.insertAssumptionVersion(context.executor, { organizationId: scenario.organizationId, scenarioId: scenario.id, version, assumptions, sha256, reason, authorId: context.principal.actorId });
   const revision = await forecastStore.updateScenario(context.executor, scenario, {
     current_assumption_version: version, state: scenario.state === "approved" ? "draft" : scenario.state,
-    approved_snapshot_id: null, approved_by: null, approved_at: null,
+    approved_snapshot_id: null, approved_by: null, approved_at: null, approval_note: null,
   });
   return saved(scenario.id, revision);
 }
@@ -151,7 +151,7 @@ const handlersFor = (runtime: ForecastRuntime): Readonly<Record<ForecastCommandK
     if (payload.horizonMonths !== undefined && payload.horizonMonths !== scenario.horizonMonths) changes.horizon_months = payload.horizonMonths;
     if (payload.reserveFloorCents !== undefined && payload.reserveFloorCents !== scenario.reserveFloorCents) changes.reserve_floor_cents = payload.reserveFloorCents;
     if (!Object.keys(changes).length) throw new ValidationCommandError("Nothing changed", { reason: "forecast_scenario_unchanged" });
-    if (scenario.state === "approved") Object.assign(changes, { state: "draft", approved_snapshot_id: null, approved_by: null, approved_at: null });
+    if (scenario.state === "approved") Object.assign(changes, { state: "draft", approved_snapshot_id: null, approved_by: null, approved_at: null, approval_note: null });
     return saved(scenario.id, await forecastStore.updateScenario(context.executor, scenario, changes));
   },
 
@@ -171,11 +171,21 @@ const handlersFor = (runtime: ForecastRuntime): Readonly<Record<ForecastCommandK
     const snapshot = await forecastStore.getSnapshotMeta(context.executor, scenario.organizationId, payload.snapshotId);
     if (!snapshot || snapshot.scenarioId !== scenario.id) throw new ValidationCommandError("Snapshot does not belong to this scenario", { reason: "forecast_snapshot_not_found" });
     if (snapshot.assumptionVersion !== scenario.currentAssumptionVersion) throw new ConflictCommandError("Run a snapshot of the current assumptions before approving", { reason: "forecast_snapshot_stale" });
+    if (snapshot.parametersSha256 !== forecastParametersSha256(scenario)) {
+      throw new ConflictCommandError("The scenario settings changed after this snapshot. Run a snapshot with the current settings before approving", { reason: "forecast_snapshot_parameters_stale" });
+    }
     if (snapshot.modelVersion !== FORECAST_MODEL_VERSION) throw new ConflictCommandError("Run a snapshot with the current model before approving", { reason: "forecast_model_stale" });
     if (!snapshot.checksPassed) throw new ValidationCommandError("A snapshot with failed accounting checks cannot be approved", { reason: "forecast_checks_failed" });
-    return saved(scenario.id, await forecastStore.updateScenario(context.executor, scenario, {
-      state: "approved", approved_snapshot_id: snapshot.id, approved_by: context.principal.actorId, approved_at: new Date().toISOString(),
+    // Unknown opening cash makes every liquidity figure relative; approval
+    // needs an explicit, recorded acknowledgement.
+    if (!snapshot.openingCashKnown && !payload.acknowledgeIncompleteOpening) {
+      throw new ValidationCommandError("Opening cash is unknown, so balances are relative movements. Set opening cash or acknowledge the incomplete opening position with a reason", { reason: "forecast_opening_cash_unknown" });
+    }
+    const note = !snapshot.openingCashKnown && payload.reason ? `Approved with unknown opening cash: ${payload.reason}` : null;
+    const result = saved(scenario.id, await forecastStore.updateScenario(context.executor, scenario, {
+      state: "approved", approved_snapshot_id: snapshot.id, approved_by: context.principal.actorId, approved_at: new Date().toISOString(), approval_note: note,
     }));
+    return note ? { ...result, validationOutcomes: [...(result.validationOutcomes ?? []), { code: "forecast.opening_cash_acknowledged", severity: "warning" as const, message: note }] } : result;
   },
 
   async "forecast.assumptions.save"(context) {

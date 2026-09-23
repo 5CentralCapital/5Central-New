@@ -64,6 +64,18 @@ function weightedNatural(event: ForecastEvent, weights: Readonly<Record<string, 
   return total;
 }
 
+/**
+ * Balance-sheet composites shown in the composition chart (`bs.<key>`).
+ * Weights apply to natural-sign balances; contra and deduction accounts are -1.
+ */
+export const BALANCE_COMPOSITES: Readonly<Record<string, { readonly label: string; readonly weights: Readonly<Record<string, number>>; readonly retainedEarnings?: true }>> = Object.freeze({
+  cash_total: { label: "Cash", weights: { cash_operating: 1, cash_restricted: 1 } },
+  receivables_total: { label: "Receivables and manager funds", weights: { rent_receivable: 1, subsidy_receivable: 1, pm_held_funds: 1 } },
+  property_net: { label: "Property, net", weights: { fixed_assets: 1, accumulated_depreciation: -1, cip: 1 } },
+  payables_total: { label: "Payables and deposits", weights: { accounts_payable: 1, project_payables: 1, retainage_payable: 1, deposits_held: 1, investor_payable: 1 } },
+  equity_total: { label: "Equity", weights: { opening_equity: 1, contributed_capital: 1, distributions: -1 }, retainedEarnings: true },
+});
+
 interface LineDefinition {
   readonly label: string;
   readonly kind: "flow" | "balance";
@@ -104,6 +116,18 @@ function lineDefinition(result: ForecastResult, line: string, debitBefore: (acco
     if (key === "retained_earnings") {
       return { label: "Retained earnings since cutoff", kind: "balance", monthOnly: true, amount: incomeNatural,
         opening: start => -debitBefore(FORECAST_ACCOUNTS.filter(account => account.cashFlowClass === "income_statement").map(account => account.key), start) };
+    }
+    const composite = BALANCE_COMPOSITES[key];
+    if (composite) {
+      // Composite figures (balance-sheet composition) explain every account they add up.
+      const accounts = Object.keys(composite.weights);
+      const incomeAccounts = FORECAST_ACCOUNTS.filter(account => account.cashFlowClass === "income_statement").map(account => account.key);
+      return {
+        label: composite.label, kind: "balance", monthOnly: true,
+        amount: event => weightedNatural(event, composite.weights) + (composite.retainedEarnings ? incomeNatural(event) : ZERO),
+        opening: start => accounts.reduce((total, account) => total + BigInt(composite.weights[account]!) * naturalOf(account, debitBefore([account], start)), ZERO)
+          - (composite.retainedEarnings ? debitBefore(incomeAccounts, start) : ZERO),
+      };
     }
     const definition = FORECAST_ACCOUNT_BY_KEY[key];
     if (!definition || definition.cashFlowClass === "income_statement") throw new ValidationCommandError("Unknown balance sheet line", { reason: "forecast_line_unknown" });

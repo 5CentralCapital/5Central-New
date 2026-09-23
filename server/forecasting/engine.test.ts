@@ -3,10 +3,11 @@ import test from "node:test";
 import { canonicalJsonSha256 } from "../company/commands/fingerprint";
 import { addDays, monthlyPeriods, periodIndexFor, weeklyPeriods } from "../../shared/forecasting/calendar";
 import type { ForecastEvent, ForecastResult } from "../../shared/forecasting/result";
-import { ForecastInputError, runForecast } from "./engine";
+import { ForecastInputError, modeledProceedsViolations, runForecast, weeklyMonthlyDisagreements } from "./engine";
 import { buildLoanSchedule, days360 } from "./debt";
 import { allocate, applyBps, divideHalfEven, levelPayment, prorate } from "./money";
 import { SYNTHETIC_FORECAST_CUTOFF, syntheticEngineInput } from "./testing/fixture";
+import { forecastReportBounds, forecastReportRows } from "./reporting-port";
 
 const big = (value: string | undefined | null) => BigInt(value ?? "0");
 const run = (...args: Parameters<typeof syntheticEngineInput>) => runForecast(syntheticEngineInput(...args));
@@ -351,4 +352,121 @@ test("an unknown loan balance is excluded and surfaced instead of treated as zer
   assert.ok(result.opening.unknown.includes("Example Court mortgage principal"));
   assert.ok(result.warnings.some(warning => warning.code === "loan_principal_unknown"));
   assertAllChecks(result);
+});
+
+// ---------------------------------------------------------------- audit regressions
+function withUnknownOpeningCash(input = syntheticEngineInput()) {
+  return { ...input, sources: { ...input.sources, items: input.sources.items.map(item => item.key === "cash_operating" ? { ...item, amountCents: null, asOf: null, state: "unknown" as const, sourceIds: [] } : item) } };
+}
+
+test("unknown opening cash leaves liquidity figures unknown instead of treating the balance as zero", () => {
+  const known = run();
+  const result = runForecast(withUnknownOpeningCash());
+  assertAllChecks(result);
+  assert.equal(known.summary.openingCashKnown, true);
+  assert.equal(result.summary.openingCashKnown, false);
+  assert.equal(result.summary.minAvailableCashCents, null);
+  assert.equal(result.summary.endingCashCents, null);
+  assert.equal(result.summary.weeksBelowFloor, null);
+  assert.ok(result.weeks.every(week => week.belowReserveFloor === null));
+  // Relative movements stay exact; the lowest week does not depend on the unknown constant.
+  assert.deepEqual(result.weeks.map(week => week.netCents), known.weeks.map(week => week.netCents));
+  assert.equal(result.summary.minAvailableWeek, known.summary.minAvailableWeek);
+  assert.ok(result.opening.unknown.includes("Operating cash"));
+  assert.ok(typeof known.summary.weeksBelowFloor === "number");
+});
+
+test("a loan past maturity at the cutoff falls due on the first forecast day and the debt rollforward holds", () => {
+  const result = run(draft => {
+    draft.loans![0] = { ...draft.loans![0]!, firstPaymentOn: "2024-01-01", maturityOn: "2026-12-01" };
+    draft.sales = [];
+  });
+  assertAllChecks(result);
+  const loan = result.debt.loans.find(item => item.loanId === "loan-a")!;
+  assert.equal(loan.pastMaturity, true);
+  assert.equal(loan.maturityOn, "2026-12-01");
+  assert.equal(loan.payments.length, 1);
+  assert.equal(loan.payments[0]!.date, "2026-12-28");
+  assert.equal(loan.payments[0]!.principalCents, "50000000");
+  assert.equal(loan.payments[0]!.balanceCents, "0");
+  assert.equal(result.debt.ladder[0]!.year, "overdue");
+  assert.equal(result.debt.ladder[0]!.maturingCents, "50000000");
+  assert.ok(!result.debt.ladder.some(row => row.year !== "overdue" && row.maturingCents === "50000000"));
+  const due = result.events.find(event => event.id === "loan-payment:loan-a:2026-12-28")!;
+  assert.equal(lineTotal(due, "debt"), BigInt(50_000_000));
+  assert.ok(result.warnings.some(warning => warning.code === "loan_matured_before_cutoff"));
+});
+
+test("paying off a loan whose principal is unknown leaves payoff and net proceeds unknown, never zero", () => {
+  const refinance = run(draft => { draft.loans![1]!.principalCents = null; });
+  const refi = refinance.capital.refinances[0]!;
+  assert.equal(refi.payoffUnknown, true);
+  assert.equal(refi.payoffCents, null);
+  assert.equal(refi.netUsableCents, null);
+  assert.deepEqual(refi.payoffLoanIds, ["loan-b"]);
+  assert.ok(refinance.warnings.some(warning => warning.code === "refinance_payoff_unknown"));
+  const sale = run(draft => {
+    draft.loans![0]!.principalCents = null;
+    draft.sales = [{ id: "sell-a", label: "Sell Example Court", propertyId: "prop-a", closeOn: "2028-06-01", priceCents: "110000000", sellingCostsCents: "3300000", payoffLoanIds: ["loan-a"], transferDeposits: true }];
+  });
+  const sold = sale.capital.sales[0]!;
+  assert.equal(sold.payoffUnknown, true);
+  assert.equal(sold.payoffCents, null);
+  assert.equal(sold.netProceedsCents, null);
+  assert.ok(sale.warnings.some(warning => warning.code === "sale_payoff_unknown"));
+  const known = run().capital.refinances[0]!;
+  assert.equal(known.payoffUnknown, false);
+  assert.ok(known.netUsableCents !== null);
+});
+
+test("collections plus bad debt never exceed the tenant amount due", () => {
+  const result = run(draft => {
+    draft.leasing!.collectionsBps = 5_000;
+    draft.leasing!.badDebtBps = 5_000;
+    draft.units!.find(unit => unit.unitId === "b-2")!.currentRentCents = "150003";
+  });
+  assertAllChecks(result);
+  let checked = 0;
+  for (const event of result.events.filter(item => item.kind === "rent_charge" && item.id.startsWith("rent:b-2:"))) {
+    const period = event.id.slice("rent:b-2:".length);
+    const due = lineTotal(event, "rent_receivable");
+    const collected = result.events.find(item => item.id === `collect:b-2:${period}`);
+    const writtenOff = result.events.find(item => item.id === `bad-debt:b-2:${period}`);
+    const cleared = -(collected ? lineTotal(collected, "rent_receivable") : BigInt(0)) - (writtenOff ? lineTotal(writtenOff, "rent_receivable") : BigInt(0));
+    assert.ok(cleared <= due, `${period}: cleared ${cleared} > due ${due}`);
+    if (due === BigInt(150_003) && collected && writtenOff) { assert.equal(cleared, due); checked += 1; }
+  }
+  assert.ok(checked > 0, "full-month charges were checked");
+});
+
+test("the weekly/monthly and modeled-proceeds checks detect real disagreements", () => {
+  const result = run();
+  const events = result.events.map(event => ({ date: event.date, cashCents: cashOf(event) }));
+  assert.deepEqual(weeklyMonthlyDisagreements(result.weeks, result.months, events), []);
+  const tampered = result.months.map((month, index) => index === 1 ? { ...month, cashFlow: { ...month.cashFlow, closingCashCents: (big(month.cashFlow.closingCashCents) + BigInt(1)).toString() } } : month);
+  assert.equal(weeklyMonthlyDisagreements(result.weeks, tampered, events).length, 1);
+  const modeled = result.events.map(event => ({ id: event.id, date: event.date, kind: event.kind, modeled: event.modeled, cashCents: cashOf(event) }));
+  assert.deepEqual(modeledProceedsViolations(modeled, SYNTHETIC_FORECAST_CUTOFF), []);
+  const funding = modeled.find(event => event.kind === "loan_funding")!;
+  assert.equal(modeledProceedsViolations([{ ...funding, modeled: false }], SYNTHETIC_FORECAST_CUTOFF).length, 1);
+  assert.equal(modeledProceedsViolations([{ ...funding, date: SYNTHETIC_FORECAST_CUTOFF }], SYNTHETIC_FORECAST_CUTOFF).length, 1);
+  const rent = modeled.find(event => event.kind === "tenant_collection")!;
+  assert.equal(modeledProceedsViolations([{ ...rent, modeled: true }], SYNTHETIC_FORECAST_CUTOFF).length, 1);
+});
+
+test("a loan paid off by a sale on a refinance's closing day is not reported as refinanced", () => {
+  const { events: _events, ...view } = run(draft => {
+    draft.sales = [{ id: "sell-a", label: "Sell Example Court", propertyId: "prop-a", closeOn: "2027-09-15", priceCents: "110000000", sellingCostsCents: "3300000", payoffLoanIds: ["loan-a"], transferDeposits: true }];
+  });
+  assert.deepEqual(view.capital.refinances[0]!.payoffLoanIds, ["loan-b"]);
+  assert.deepEqual(view.capital.sales[0]!.payoffLoanIds, ["loan-a"]);
+  const meta = { id: "99999999-9999-4999-8999-999999999991", scenarioId: "99999999-9999-4999-8999-999999999992", assumptionVersion: 1, modelVersion: view.modelVersion, createdAt: "2026-12-28T00:00:00.000Z" } as never;
+  const rows = forecastReportRows(meta, view);
+  const loanA = rows.debt!.find(line => line.debtId === "loan-a")!;
+  const loanB = rows.debt!.find(line => line.debtId === "loan-b")!;
+  assert.equal(view.debt.loans.find(loan => loan.loanId === "loan-a")!.paidOffOn, "2027-09-15");
+  assert.equal(loanA.refinanceBalanceCents, null, "paid off by the sale, not refinanced");
+  assert.notEqual(loanB.refinanceBalanceCents, null);
+  assert.deepEqual(forecastReportBounds({ mode: "month", month: "2027-02" } as never), { from: "2027-02-01", through: "2027-02-28" });
+  assert.deepEqual(forecastReportBounds({ mode: "custom", asOfDate: "2027-05-03" } as never), { from: "2027-05-03", through: "2027-05-03" });
 });

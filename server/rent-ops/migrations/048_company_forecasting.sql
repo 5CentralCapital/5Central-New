@@ -70,6 +70,10 @@ ALTER TABLE company_forecast_scenarios
   ADD COLUMN approved_snapshot_id uuid,
   ADD COLUMN approved_by varchar(160),
   ADD COLUMN approved_at timestamptz,
+  -- Recorded when approval accepts a snapshot whose opening cash is unknown.
+  ADD COLUMN approval_note text CHECK (approval_note IS NULL OR length(btrim(approval_note)) BETWEEN 1 AND 1200),
+  ADD CONSTRAINT company_forecast_scenarios_approval_note_approved
+    CHECK (approval_note IS NULL OR approved_snapshot_id IS NOT NULL),
   ADD CONSTRAINT company_forecast_scenarios_approved_snapshot
     FOREIGN KEY (organization_id, approved_snapshot_id) REFERENCES company_forecast_snapshots(organization_id, id),
   ADD CONSTRAINT company_forecast_scenarios_approval_complete

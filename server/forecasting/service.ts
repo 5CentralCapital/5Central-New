@@ -220,19 +220,30 @@ export class ForecastReadService {
     return compareForecasts(await side(query.snapshotA), await side(query.snapshotB), query.limit);
   }
 
-  /** Resolve a snapshot for report runs: an explicit snapshot ID, or the latest snapshot of an assumption version. */
-  async reportSnapshot(principal: AuthenticatedPrincipal, input: { organizationId: string; scenarioId: string; inputVersion: string; modelVersion: string }): Promise<{ meta: ForecastSnapshotMeta; result: ForecastResultView } | null> {
+  /** Report catalog probe: does the company have an approved scenario with a pinned snapshot? */
+  async hasApprovedScenario(principal: AuthenticatedPrincipal, organizationId: string): Promise<boolean> {
+    const scope = this.authorize(principal, { organizationId });
+    return forecastStore.hasApprovedScenario(this.executor, scope.organizationId);
+  }
+
+  /**
+   * Resolve the snapshot a report may read: only the scenario's approved
+   * snapshot. The requested input (snapshot ID or assumption version) and
+   * model version must match it; otherwise the report is unavailable.
+   */
+  async reportSnapshot(principal: AuthenticatedPrincipal, input: { organizationId: string; scenarioId: string; inputVersion: string; modelVersion: string }): Promise<{ meta: ForecastSnapshotMeta; result: ForecastResultView }> {
     const scope = this.authorize(principal, { organizationId: input.organizationId });
     const scenarioId = forecastScenarioIdSchema.parse(input.scenarioId);
-    let snapshotId: string | null;
-    if (/^v?\d+$/.test(input.inputVersion)) {
-      snapshotId = await forecastStore.latestSnapshotFor(this.executor, scope.organizationId, scenarioId, Number(input.inputVersion.replace(/^v/, "")), input.modelVersion);
-    } else {
-      snapshotId = forecastSnapshotIdSchema.parse(input.inputVersion);
+    const scenario = await forecastStore.getScenario(this.executor, scope.organizationId, scenarioId);
+    if (!scenario || scenario.state !== "approved" || !scenario.approvedSnapshotId) throw new ValidationCommandError("No approved forecast scenario.", { reason: "forecast_not_approved" });
+    const stored = await forecastStore.getSnapshot(this.executor, scope.organizationId, scenario.approvedSnapshotId);
+    if (!stored) throw new ValidationCommandError("No approved forecast scenario.", { reason: "forecast_not_approved" });
+    const pinned = /^v?\d+$/.test(input.inputVersion)
+      ? Number(input.inputVersion.replace(/^v/, "")) === stored.meta.assumptionVersion
+      : forecastSnapshotIdSchema.parse(input.inputVersion) === stored.meta.id;
+    if (!pinned || stored.meta.modelVersion !== input.modelVersion) {
+      throw new ValidationCommandError("The selected forecast input is not the scenario's approved snapshot. Choose the scenario again to use its approved snapshot.", { reason: "forecast_input_not_approved" });
     }
-    if (!snapshotId) return null;
-    const stored = await forecastStore.getSnapshot(this.executor, scope.organizationId, snapshotId);
-    if (!stored || stored.meta.scenarioId !== scenarioId || stored.meta.modelVersion !== input.modelVersion) return null;
     return { meta: stored.meta, result: stored.view };
   }
 }

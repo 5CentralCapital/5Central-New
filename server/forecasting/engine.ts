@@ -24,13 +24,13 @@ import {
   monthOf,
   monthStartDate,
   monthlyPeriods,
-  periodIndexFor,
   weeklyPeriods,
   type ForecastPeriod,
 } from "../../shared/forecasting/calendar";
 import {
   FORECAST_ACCOUNT_BY_KEY,
   FORECAST_ACCOUNTS,
+  FORECAST_LADDER_OVERDUE,
   FORECAST_MODEL_VERSION,
   type CashCategory,
   type ForecastCheck,
@@ -49,7 +49,7 @@ import {
   type ForecastWeekRow,
 } from "../../shared/forecasting/result";
 import { balanceOn, buildLoanSchedule, type LoanSchedule } from "./debt";
-import { ZERO, allocate, applyBps, big, growByBps, minBig, prorate, text } from "./money";
+import { ZERO, allocate, applyBps, big, growByBps, maxBig, minBig, prorate, text } from "./money";
 
 export class ForecastInputError extends Error {
   constructor(readonly code: string, message: string, readonly path?: string) {
@@ -178,6 +178,47 @@ function naturalSign(account: string, debit: bigint): bigint {
   if (definition.type === "asset" || definition.type === "expense") return debit;
   if (account === "distributions") return debit;
   return -debit;
+}
+
+/**
+ * Month-end cash from the monthly statements must equal the weekly treasury
+ * schedule: the opening cash of the week containing the month end plus the
+ * cash events of that week dated on or before the month end. Months that end
+ * outside the weekly horizon are not compared.
+ */
+export function weeklyMonthlyDisagreements(
+  weekRows: readonly Pick<ForecastWeekRow, "start" | "end" | "openingCashCents">[],
+  monthRows: readonly Pick<ForecastMonthRow, "month" | "start" | "end" | "cashFlow">[],
+  events: readonly { readonly date: string; readonly cashCents: bigint }[],
+): string[] {
+  const failures: string[] = [];
+  monthRows.forEach((month, index) => {
+    if (index > 0 && month.start <= monthRows[index - 1]!.end) failures.push(`${month.month}: monthly periods overlap`);
+    const week = weekRows.find(row => row.start <= month.end && row.end >= month.end);
+    if (!week) return;
+    let cash = big(week.openingCashCents);
+    for (const event of events) if (event.date >= week.start && event.date <= month.end) cash += event.cashCents;
+    if (cash !== big(month.cashFlow.closingCashCents)) failures.push(`${month.month}: weekly cash at month end ${cash} vs monthly closing ${month.cashFlow.closingCashCents}`);
+  });
+  return failures;
+}
+
+/** Event kinds that carry modeled capital proceeds (refinance funding, sale, construction draw). */
+export const MODELED_EVENT_KINDS: ReadonlySet<ForecastEventKind> = new Set<ForecastEventKind>(["loan_funding", "sale", "project_draw"]);
+
+/**
+ * Modeled capital proceeds are flagged, never dated in the actual period, and
+ * no other event is flagged as modeled, so weekly "modeled inflows" and the
+ * report boundary can always separate them from actual cash.
+ */
+export function modeledProceedsViolations(events: readonly { readonly id: string; readonly date: string; readonly kind: ForecastEventKind; readonly modeled: boolean; readonly cashCents: bigint }[], cutoff: string): string[] {
+  const failures: string[] = [];
+  for (const event of events) {
+    if (MODELED_EVENT_KINDS.has(event.kind) && event.cashCents > ZERO && !event.modeled) failures.push(`${event.id}: capital proceeds are not flagged as modeled`);
+    if (event.modeled && !MODELED_EVENT_KINDS.has(event.kind)) failures.push(`${event.id}: only capital proceeds may be modeled`);
+    if (event.modeled && event.date <= cutoff) failures.push(`${event.id}: modeled proceeds are dated inside the actual period`);
+  }
+  return failures;
 }
 
 /**
@@ -424,7 +465,9 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
         firstCharge = false;
         const tenantDue = tenant - concession;
         const collected = applyBps(tenantDue, leasing.collectionsBps);
-        const writtenOff = applyBps(tenantDue, leasing.badDebtBps);
+        // Collections and bad debt round independently; the write-off never
+        // exceeds what is left of the amount due, so receivables stay >= 0.
+        const writtenOff = maxBig(minBig(applyBps(tenantDue, leasing.badDebtBps), tenantDue - collected), ZERO);
         const collectedOn = addDays(periodStart, leasing.collectionLagDays);
         const subsidyOn = addDays(periodStart, leasing.subsidyLagDays);
         const receiving = managed ? "pm_held_funds" : "cash_operating";
@@ -620,22 +663,33 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
   for (const refinance of assumptions.refinances) if (!refinanceExcluded.has(refinance.id)) for (const loanId of refinance.payoffLoanIds) notePayoff(loanId, refinance.closeOn, `refinances[${refinance.id}]`);
   for (const sale of assumptions.sales) if (!saleExcluded.has(sale.id)) for (const loanId of sale.payoffLoanIds) notePayoff(loanId, sale.closeOn, `sales[${sale.id}]`);
 
-  interface LoanPlan { id: string; terms: LoanTerms; origin: "existing" | "refinance"; opening: bigint | null; schedule: LoanSchedule | null; fundedOn: string | null; ref: string; propertyId?: string }
+  interface LoanPlan { id: string; terms: LoanTerms; origin: "existing" | "refinance"; opening: bigint | null; schedule: LoanSchedule | null; fundedOn: string | null; ref: string; propertyId?: string; pastMaturity: boolean }
   const loanPlans: LoanPlan[] = [];
   for (const loan of assumptions.loans) {
     const opening = loanOpening.get(loan.id) ?? null;
     const ref = `loans[${loan.id}]`;
-    if (opening === null) { loanPlans.push({ id: loan.id, terms: loan, origin: "existing", opening, schedule: null, fundedOn: null, ref, ...(loan.propertyId ? { propertyId: loan.propertyId } : {}) }); continue; }
-    if (loan.maturityOn <= cutoff) warn("loan_matured_before_cutoff", `${loan.label} matured before the cutoff but still has a balance.`, ref);
+    if (opening === null) { loanPlans.push({ id: loan.id, terms: loan, origin: "existing", opening, schedule: null, fundedOn: null, ref, pastMaturity: false, ...(loan.propertyId ? { propertyId: loan.propertyId } : {}) }); continue; }
+    if (loan.dayCount === "30_360" && draws.some(draw => draw.loanId === loan.id)) warn("draws_on_30_360", `${loan.label} receives draws; interest on 30/360 is accrued on the draw-weighted balance.`, ref);
+    const loanDraws = draws.filter(draw => draw.loanId === loan.id && draw.date > cutoff);
+    const payoff = payoffOn.has(loan.id) ? { payoffOn: payoffOn.get(loan.id)!.date } : {};
+    if (loan.maturityOn <= cutoff && (opening !== ZERO || loanDraws.length)) {
+      // Past maturity with a balance: the contractual maturity row is inside the
+      // actual period and can never post, so the outstanding balance falls due
+      // on the first forecast day. The schedule starts at the cutoff.
+      warn("loan_matured_before_cutoff", `${loan.label} matured on ${loan.maturityOn}, before the cutoff, but still has a balance; it is shown as due on ${first}.`, ref);
+      const overdueTerms: LoanTerms = { ...loan, firstPaymentOn: first as LoanTerms["firstPaymentOn"], maturityOn: first as LoanTerms["maturityOn"], paymentDay: Number(first.slice(8)) };
+      const schedule = buildLoanSchedule({ terms: overdueTerms, openingBalance: opening, accrualStart: cutoff, draws: [], ...(payoff.payoffOn && payoff.payoffOn <= first ? payoff : {}) });
+      loanPlans.push({ id: loan.id, terms: loan, origin: "existing", opening, schedule, fundedOn: null, ref, pastMaturity: true, ...(loan.propertyId ? { propertyId: loan.propertyId } : {}) });
+      continue;
+    }
     let accrualStart = addMonthsToDate(loan.firstPaymentOn, -1, loan.paymentDay);
     for (let index = 0; index < 1_000; index += 1) {
       const date = addMonthsToDate(loan.firstPaymentOn, index, loan.paymentDay);
       if (date > cutoff || date >= loan.maturityOn) break;
       accrualStart = date;
     }
-    if (loan.dayCount === "30_360" && draws.some(draw => draw.loanId === loan.id)) warn("draws_on_30_360", `${loan.label} receives draws; interest on 30/360 is accrued on the draw-weighted balance.`, ref);
-    const schedule = buildLoanSchedule({ terms: loan, openingBalance: opening, accrualStart, draws: draws.filter(draw => draw.loanId === loan.id && draw.date > cutoff), ...(payoffOn.has(loan.id) ? { payoffOn: payoffOn.get(loan.id)!.date } : {}) });
-    loanPlans.push({ id: loan.id, terms: loan, origin: "existing", opening, schedule, fundedOn: null, ref, ...(loan.propertyId ? { propertyId: loan.propertyId } : {}) });
+    const schedule = buildLoanSchedule({ terms: loan, openingBalance: opening, accrualStart, draws: loanDraws, ...payoff });
+    loanPlans.push({ id: loan.id, terms: loan, origin: "existing", opening, schedule, fundedOn: null, ref, pastMaturity: false, ...(loan.propertyId ? { propertyId: loan.propertyId } : {}) });
   }
   for (const refinance of assumptions.refinances) {
     if (refinanceExcluded.has(refinance.id)) continue;
@@ -644,7 +698,7 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
     const schedule = buildLoanSchedule({ terms: loan, openingBalance: ZERO, accrualStart: refinance.closeOn,
       draws: [{ date: refinance.closeOn, amount: gross }, ...draws.filter(draw => draw.loanId === loan.id && draw.date > refinance.closeOn)],
       ...(payoffOn.has(loan.id) ? { payoffOn: payoffOn.get(loan.id)!.date } : {}) });
-    loanPlans.push({ id: loan.id, terms: loan, origin: "refinance", opening: ZERO, schedule, fundedOn: refinance.closeOn, ref: `refinances[${refinance.id}]`, ...(loan.propertyId ? { propertyId: loan.propertyId } : {}) });
+    loanPlans.push({ id: loan.id, terms: loan, origin: "refinance", opening: ZERO, schedule, fundedOn: refinance.closeOn, ref: `refinances[${refinance.id}]`, pastMaturity: false, ...(loan.propertyId ? { propertyId: loan.propertyId } : {}) });
   }
   for (const plan of loanPlans) {
     if (!plan.schedule) continue;
@@ -671,18 +725,38 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
           [["interest_expense", row.interest], ["debt", row.principal, plan.id], ["cash_operating", -(row.interest + row.principal)]]);
         continue;
       }
-      journal.post({ id: `loan-payment:${plan.id}:${row.date}`, date: row.date, kind: "loan_payment", label: `${row.kind === "balloon" ? "Balloon payment" : "Loan payment"} · ${plan.terms.label}`, cashCategory: "debt_service", cashFlowClass: "financing", ref: plan.ref, ...(plan.propertyId ? { propertyId: plan.propertyId } : {}) },
+      journal.post({ id: `loan-payment:${plan.id}:${row.date}`, date: row.date, kind: "loan_payment", label: `${plan.pastMaturity ? "Past-maturity balance due" : row.kind === "balloon" ? "Balloon payment" : "Loan payment"} · ${plan.terms.label}`, cashCategory: "debt_service", cashFlowClass: "financing", ref: plan.ref, ...(plan.propertyId ? { propertyId: plan.propertyId } : {}) },
         [["interest_expense", row.interest], ["debt", row.principal, plan.id], ["cash_operating", -(row.interest + row.principal)]]);
-      if (row.kind === "scheduled" && escrow !== ZERO) {
+      if (row.kind === "scheduled" && escrow !== ZERO && !plan.pastMaturity) {
         journal.post({ id: `escrow:${plan.id}:${row.date}`, date: row.date, kind: "escrow_deposit", label: `Escrow deposit · ${plan.terms.label}`, cashCategory: null, cashFlowClass: "operating", ref: plan.ref, ...(plan.propertyId ? { propertyId: plan.propertyId } : {}) },
           [["cash_restricted", escrow], ["cash_operating", -escrow]]);
       }
     }
   }
   const scheduleFor = (loanId: string) => loanPlans.find(plan => plan.id === loanId);
-  const payoffAmount = (loanId: string): bigint => {
-    const row = scheduleFor(loanId)?.schedule?.rows.find(item => item.kind === "payoff");
+  /** Payoff paid at closing; null when the loan's principal is unknown (never zero). */
+  const payoffAmount = (loanId: string): bigint | null => {
+    const plan = scheduleFor(loanId);
+    if (plan && plan.opening === null) return null;
+    const row = plan?.schedule?.rows.find(item => item.kind === "payoff");
     return row ? row.principal + row.interest : ZERO;
+  };
+  /** Loans a capital event actually pays off, and their total payoff (null if any is unknown). */
+  const payoffsFor = (loanIds: readonly string[], ref: string, excluded: boolean): { ids: string[]; total: bigint | null } => {
+    if (excluded) return { ids: [], total: ZERO };
+    // Only loans this event actually pays at closing: a loan that matures (or is
+    // paid off by an earlier event) before the closing is not paid again.
+    const ids = loanIds.filter(loanId => {
+      if (payoffOn.get(loanId)?.ref !== ref) return false;
+      const plan = scheduleFor(loanId);
+      return Boolean(plan && (plan.opening === null || plan.schedule?.rows.some(item => item.kind === "payoff")));
+    });
+    let total: bigint | null = ZERO;
+    for (const loanId of ids) {
+      const amount = payoffAmount(loanId);
+      total = total === null || amount === null ? null : total + amount;
+    }
+    return { ids, total };
   };
 
   // ---------------------------------------------------------------- refinances
@@ -691,10 +765,12 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
     const ref = `refinances[${refinance.id}]`;
     const excluded = refinanceExcluded.has(refinance.id);
     const gross = refinance.newLoan.principalCents === null ? ZERO : big(refinance.newLoan.principalCents);
-    const payoff = excluded ? ZERO : refinance.payoffLoanIds.reduce((total, loanId) => payoffOn.get(loanId)?.ref === ref ? total + payoffAmount(loanId) : total, ZERO);
+    const { ids: paidOff, total: payoff } = payoffsFor(refinance.payoffLoanIds, ref, excluded);
+    if (payoff === null) warn("refinance_payoff_unknown", `${refinance.label} pays off a loan with no known principal; its payoff and net usable proceeds are unknown and cash excludes that payoff.`, ref);
     const costs = big(refinance.closingCostsCents) + big(refinance.prepaymentCostsCents);
     const reserves = big(refinance.reserveCents);
-    refinanceResults.push({ id: refinance.id, label: refinance.label, closeOn: refinance.closeOn, grossProceedsCents: text(gross), payoffCents: text(payoff), costsCents: text(costs), reservesCents: text(reserves), netUsableCents: text(gross - payoff - costs - reserves), modeled: true, excluded });
+    refinanceResults.push({ id: refinance.id, label: refinance.label, closeOn: refinance.closeOn, payoffLoanIds: paidOff, grossProceedsCents: text(gross), payoffCents: payoff === null ? null : text(payoff), costsCents: text(costs), reservesCents: text(reserves),
+      netUsableCents: payoff === null ? null : text(gross - payoff - costs - reserves), payoffUnknown: payoff === null, modeled: true, excluded });
     if (excluded) continue;
     journal.post({ id: `refinance:${refinance.id}:funding`, date: refinance.closeOn, kind: "loan_funding", label: `Refinance proceeds · ${refinance.label}`, cashCategory: "loan_proceeds", cashFlowClass: "financing", modeled: true, ref },
       [["cash_operating", gross], ["debt", -gross, refinance.newLoan.id]]);
@@ -724,10 +800,11 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
     const sellingCosts = big(sale.sellingCostsCents);
     const netBook = cost - accumulated + cip;
     const gain = price - sellingCosts - netBook;
-    const payoff = excluded ? ZERO : sale.payoffLoanIds.reduce((total, loanId) => payoffOn.get(loanId)?.ref === ref ? total + payoffAmount(loanId) : total, ZERO);
+    const { ids: paidOff, total: payoff } = payoffsFor(sale.payoffLoanIds, ref, excluded);
+    if (payoff === null) warn("sale_payoff_unknown", `${sale.label} pays off a loan with no known principal; its payoff and net proceeds are unknown and cash excludes that payoff.`, ref);
     const deposits = sale.transferDeposits ? unitPlans.filter(plan => plan.unit.propertyId === sale.propertyId).reduce((total, plan) => total + plan.depositAtSale, ZERO) : ZERO;
-    saleResults.push({ id: sale.id, label: sale.label, propertyId: sale.propertyId, closeOn: sale.closeOn, priceCents: text(price), sellingCostsCents: text(sellingCosts), netBookValueCents: text(netBook), gainCents: text(gain),
-      payoffCents: text(payoff), depositsTransferredCents: text(deposits), netProceedsCents: text(price - sellingCosts - payoff - deposits), modeled: true, excluded });
+    saleResults.push({ id: sale.id, label: sale.label, propertyId: sale.propertyId, closeOn: sale.closeOn, payoffLoanIds: paidOff, priceCents: text(price), sellingCostsCents: text(sellingCosts), netBookValueCents: text(netBook), gainCents: text(gain),
+      payoffCents: payoff === null ? null : text(payoff), depositsTransferredCents: text(deposits), netProceedsCents: payoff === null ? null : text(price - sellingCosts - payoff - deposits), payoffUnknown: payoff === null, modeled: true, excluded });
     if (excluded) continue;
     journal.post({ id: `sale:${sale.id}`, date: sale.closeOn, kind: "sale", label: `Sale · ${sale.label}`, cashCategory: "sale_proceeds", cashFlowClass: "investing", modeled: true, ref, propertyId: sale.propertyId },
       [["cash_operating", price - sellingCosts], ["accumulated_depreciation", accumulated, sale.propertyId], ["fixed_assets", -cost, sale.propertyId],
@@ -754,8 +831,10 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
   // ---------------------------------------------------------------- views
   const events = [...journal.events].sort((left, right) => left.date < right.date ? -1 : left.date > right.date ? 1 : left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
   const cashNet = (event: InternalEvent) => event.lines.reduce((total, [account, cents]) => CASH_ACCOUNTS.has(account) ? total + cents : total, ZERO);
-  const openingCash = (openingDebit.get("cash_operating") ?? ZERO) + (openingDebit.get("cash_restricted") ?? ZERO);
   const floor = big(scenario.reserveFloorCents);
+  // Unknown opening cash is excluded (never zero): balances are then movements
+  // relative to it and absolute liquidity measures are unknown.
+  const openingCashKnown = openingAmount.get("cash_operating") !== null && openingAmount.get("cash_restricted") !== null;
 
   // Weekly treasury schedule (direct method).
   const weekRows: ForecastWeekRow[] = [];
@@ -786,7 +865,7 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
       const closing = operating + restricted;
       weekRows.push({ key: week.key, start: week.start, end: week.end, openingCashCents: text(opening), inflowsCents: text(inflows), outflowsCents: text(outflows),
         netCents: text(inflows - outflows), closingCashCents: text(closing), restrictedClosingCents: text(restricted), availableClosingCents: text(operating),
-        modeledInflowsCents: text(modeledInflows), belowReserveFloor: operating < floor,
+        modeledInflowsCents: text(modeledInflows), belowReserveFloor: openingCashKnown ? operating < floor : null,
         categories: Object.fromEntries(Object.entries(categories).sort(([a], [b]) => (a < b ? -1 : 1)).map(([key, value]) => [key, text(value)])) });
     }
   }
@@ -922,21 +1001,9 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
     const previous = monthRows[index - 1];
     if (previous && previous.cashFlow.closingCashCents !== month.cashFlow.openingCashCents) fail("cash_rollforward", `${month.month}: opening ≠ prior closing`);
   });
-  // Weekly and monthly views bucket the same events exactly once each.
-  {
-    const lastWeekEnd = weeks.at(-1)!.end;
-    const weekTotal = weekRows.reduce((total, week) => total + big(week.netCents), ZERO);
-    const monthTotals = new Map<number, bigint>();
-    for (const event of events) {
-      if (event.date < weeks[0]!.start || event.date > lastWeekEnd) continue;
-      const index = periodIndexFor(months, event.date);
-      monthTotals.set(index, (monthTotals.get(index) ?? ZERO) + cashNet(event));
-    }
-    const viaMonths = Array.from(monthTotals.values()).reduce((total, value) => total + value, ZERO);
-    if (weekTotal !== viaMonths) fail("weekly_monthly_agree", `weekly ${weekTotal} vs monthly ${viaMonths}`);
-    const overlapping = months.filter((month, index) => index > 0 && month.start <= months[index - 1]!.end);
-    if (overlapping.length) fail("weekly_monthly_agree", "Monthly periods overlap");
-  }
+  // Weekly and monthly views are built by separate running balances; they must
+  // agree on cash at every month end inside the weekly horizon.
+  for (const detail of weeklyMonthlyDisagreements(weekRows, monthRows, events.map(event => ({ date: event.date, cashCents: cashNet(event) })))) fail("weekly_monthly_agree", detail);
   // Debt: the journal's loan balances equal the loan schedules at every month end.
   for (const month of monthRows) {
     let scheduled = ZERO;
@@ -957,7 +1024,7 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
     const duplicate = events.some(event => mondayOf(event.date) === week && (kind === "project" ? event.kind === "project_labor" && event.ref === `projects[${id}]` : event.kind !== "labor_actual" && event.ref === `expenses[${id}]` && expenses.get(id)?.laborEstimate));
     if (duplicate) fail("labor_not_duplicated", `${key}: estimated labor posted alongside approved time`);
   }
-  if (events.some(event => event.modeled && event.date <= cutoff)) fail("modeled_proceeds_not_actual", "A modeled capital event is dated inside the actual period");
+  for (const detail of modeledProceedsViolations(events.map(event => ({ id: event.id, date: event.date, kind: event.kind, modeled: event.modeled === true, cashCents: cashNet(event) })), cutoff)) fail("modeled_proceeds_not_actual", detail);
   const CHECKS: readonly [string, string][] = [
     ["journal_balanced", "Every forecast event is a balanced journal entry."],
     ["balance_sheet_balances", "Assets equal liabilities plus equity in every month."],
@@ -981,7 +1048,7 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
     loanId: plan.id, label: plan.terms.label, lender: plan.terms.lender ?? null, origin: plan.origin, principalKnown: plan.opening !== null,
     openingPrincipalCents: plan.opening === null ? null : text(plan.opening), annualRateBps: plan.terms.annualRateBps, maturityOn: plan.terms.maturityOn,
     balloonCents: plan.schedule?.balloon === null || plan.schedule === null ? null : text(plan.schedule.balloon),
-    fundedOn: plan.fundedOn, paidOffOn: plan.schedule?.paidOffOn ?? null,
+    fundedOn: plan.fundedOn, paidOffOn: plan.schedule?.paidOffOn ?? null, pastMaturity: plan.pastMaturity,
     payments: (plan.schedule?.rows ?? []).map(row => ({ date: row.date, interestCents: text(row.interest), principalCents: text(row.principal), balanceCents: text(row.balance), kind: row.kind })),
   }));
   const coverage: ForecastCoverageRow[] = monthRows.map(month => {
@@ -993,6 +1060,13 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
   const ladderMap = new Map<string, { maturing: bigint; scheduled: bigint }>();
   for (const plan of loanPlans) {
     for (const row of plan.schedule?.rows ?? []) {
+      if (plan.pastMaturity) {
+        // Already past maturity at the cutoff: overdue, not a maturity in a past or current year.
+        const entry = ladderMap.get(FORECAST_LADDER_OVERDUE) ?? { maturing: ZERO, scheduled: ZERO };
+        if (row.principal > ZERO) entry.maturing += row.principal;
+        ladderMap.set(FORECAST_LADDER_OVERDUE, entry);
+        continue;
+      }
       const year = row.date.slice(0, 4);
       const entry = ladderMap.get(year) ?? { maturing: ZERO, scheduled: ZERO };
       if (row.kind === "balloon" || (row.kind === "scheduled" && row.date === plan.terms.maturityOn)) entry.maturing += row.principal;
@@ -1000,7 +1074,7 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
       ladderMap.set(year, entry);
     }
   }
-  const ladder = Array.from(ladderMap.entries()).sort(([a], [b]) => (a < b ? -1 : 1)).map(([year, value]) => ({ year, maturingCents: text(value.maturing), scheduledPrincipalCents: text(value.scheduled) }));
+  const ladder = Array.from(ladderMap.entries()).sort(([a], [b]) => (a === FORECAST_LADDER_OVERDUE ? -1 : b === FORECAST_LADDER_OVERDUE ? 1 : a < b ? -1 : 1)).map(([year, value]) => ({ year, maturingCents: text(value.maturing), scheduledPrincipalCents: text(value.scheduled) }));
 
   // ---------------------------------------------------------------- owner planning view (never in company statements)
   let owner: ForecastOwnerView | null = null;
@@ -1018,11 +1092,13 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
   }
 
   // ---------------------------------------------------------------- summary
+  // The lowest week does not depend on the (unknown) opening constant; the amount does.
   let minAvailable: bigint | null = null; let minWeek: string | null = null;
   for (const week of weekRows) {
     const available = big(week.availableClosingCents);
     if (minAvailable === null || available < minAvailable) { minAvailable = available; minWeek = week.start; }
   }
+  if (!openingCashKnown) minAvailable = null;
   const complete = unknown.length === 0 && !warnings.some(item => item.code === "sale_basis_unknown");
   const publicEvents: ForecastEvent[] = events.map(event => ({
     id: event.id, date: event.date, kind: event.kind, label: event.label, cashCategory: event.cashCategory, cashFlowClass: event.cashFlowClass,
@@ -1048,9 +1124,10 @@ export function runForecast(input: ForecastEngineInput): ForecastResult {
     checks,
     warnings,
     summary: {
+      openingCashKnown,
       minAvailableCashCents: minAvailable === null ? null : text(minAvailable), minAvailableWeek: minWeek,
-      endingCashCents: monthRows.at(-1)?.cashFlow.closingCashCents ?? null,
-      weeksBelowFloor: weekRows.filter(week => week.belowReserveFloor).length,
+      endingCashCents: openingCashKnown ? monthRows.at(-1)?.cashFlow.closingCashCents ?? null : null,
+      weeksBelowFloor: openingCashKnown ? weekRows.filter(week => week.belowReserveFloor).length : null,
       totalNoiCents: text(monthRows.reduce((total, month) => total + big(month.noiCents), ZERO)),
       totalNetIncomeCents: text(monthRows.reduce((total, month) => total + big(month.netIncomeCents), ZERO)),
       eventCount: publicEvents.length,

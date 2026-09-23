@@ -43,3 +43,27 @@ export function forecastingParams(location: ForecastingLocation, base: URLSearch
   if (location.tab !== "cash") params.set("tab", location.tab);
   return params;
 }
+
+/** How a forecasting location change is applied: history mode and, for a company switch, the new company. */
+export interface ForecastingNavigation {
+  readonly replace?: boolean;
+  readonly organizationId?: string;
+}
+
+/** Route fields the shell stores for Forecasting. */
+export interface ForecastingRoutePatch {
+  readonly forecastTab: ForecastTab;
+  readonly scenarioId: string | undefined;
+  readonly organizationId?: string;
+  readonly recordId?: undefined;
+}
+
+/**
+ * One route update for a location change, including a company switch, so the
+ * shell applies it in a single navigation instead of two updates that each
+ * start from the same stale route. A new company drops the old scenario.
+ */
+export function forecastingRoutePatch(location: ForecastingLocation, options: ForecastingNavigation = {}): ForecastingRoutePatch {
+  if (options.organizationId) return { forecastTab: location.tab, scenarioId: undefined, organizationId: options.organizationId, recordId: undefined };
+  return { forecastTab: location.tab, scenarioId: location.scenarioId };
+}

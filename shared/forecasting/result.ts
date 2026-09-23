@@ -1,8 +1,8 @@
 /**
- * Output contract of the deterministic forecast engine (model fcst-1.0.0).
+ * Output contract of the deterministic forecast engine (model fcst-1.1.0).
  * All monetary values are canonical signed cents strings.
  */
-export const FORECAST_MODEL_VERSION = "fcst-1.0.0" as const;
+export const FORECAST_MODEL_VERSION = "fcst-1.1.0" as const;
 
 export const FORECAST_ACCOUNT_TYPES = ["asset", "contra_asset", "liability", "equity", "income", "expense"] as const;
 export type ForecastAccountType = (typeof FORECAST_ACCOUNT_TYPES)[number];
@@ -146,7 +146,8 @@ export interface ForecastWeekRow {
   readonly availableClosingCents: string;
   /** Inflows that come from modeled capital events (refinance/sale proceeds, draws). */
   readonly modeledInflowsCents: string;
-  readonly belowReserveFloor: boolean;
+  /** Null while opening cash is unknown: balances are then relative movements, not cash on hand. */
+  readonly belowReserveFloor: boolean | null;
   /** Net cash by category (signed). */
   readonly categories: Readonly<Record<string, string>>;
 }
@@ -214,6 +215,8 @@ export interface ForecastLoanSchedule {
   readonly balloonCents: string | null;
   readonly fundedOn: string | null;
   readonly paidOffOn: string | null;
+  /** Matured on or before the actuals cutoff with a balance still outstanding; the balance is due on the first forecast day. */
+  readonly pastMaturity: boolean;
   readonly payments: readonly ForecastLoanPayment[];
 }
 
@@ -227,16 +230,20 @@ export interface ForecastCoverageRow {
 
 export interface ForecastRefinanceResult {
   readonly id: string; readonly label: string; readonly closeOn: string;
-  readonly grossProceedsCents: string; readonly payoffCents: string; readonly costsCents: string;
-  readonly reservesCents: string; readonly netUsableCents: string; readonly modeled: true;
+  /** Loans this refinance actually pays off (a loan already paid off earlier is not repeated). */
+  readonly payoffLoanIds: readonly string[];
+  /** Null when a paid-off loan's principal is unknown; never counted as zero. */
+  readonly grossProceedsCents: string; readonly payoffCents: string | null; readonly costsCents: string;
+  readonly reservesCents: string; readonly netUsableCents: string | null; readonly payoffUnknown: boolean; readonly modeled: true;
   readonly excluded: boolean;
 }
 
 export interface ForecastSaleResult {
   readonly id: string; readonly label: string; readonly propertyId: string; readonly closeOn: string;
+  readonly payoffLoanIds: readonly string[];
   readonly priceCents: string; readonly sellingCostsCents: string; readonly netBookValueCents: string;
-  readonly gainCents: string; readonly payoffCents: string; readonly depositsTransferredCents: string;
-  readonly netProceedsCents: string; readonly modeled: true; readonly excluded: boolean;
+  readonly gainCents: string; readonly payoffCents: string | null; readonly depositsTransferredCents: string;
+  readonly netProceedsCents: string | null; readonly payoffUnknown: boolean; readonly modeled: true; readonly excluded: boolean;
 }
 
 export interface ForecastCheck { readonly code: string; readonly passed: boolean; readonly detail: string }
@@ -247,11 +254,20 @@ export interface ForecastOwnerView {
   readonly months: readonly { readonly key: string; readonly netCents: string; readonly cumulativeCents: string }[];
 }
 
+/** Ladder key for loans that matured before the actuals cutoff with a balance outstanding. */
+export const FORECAST_LADDER_OVERDUE = "overdue" as const;
+
 export interface ForecastSummary {
+  /**
+   * False when operating or restricted opening cash is unknown. Cash balances
+   * are then movements relative to that unknown opening amount, so absolute
+   * liquidity figures (minimum, ending cash, weeks below floor) are null.
+   */
+  readonly openingCashKnown: boolean;
   readonly minAvailableCashCents: string | null;
   readonly minAvailableWeek: string | null;
   readonly endingCashCents: string | null;
-  readonly weeksBelowFloor: number;
+  readonly weeksBelowFloor: number | null;
   readonly totalNoiCents: string;
   readonly totalNetIncomeCents: string;
   readonly eventCount: number;
@@ -274,6 +290,7 @@ export interface ForecastResult {
   readonly debt: {
     readonly loans: readonly ForecastLoanSchedule[];
     readonly coverage: readonly ForecastCoverageRow[];
+    /** By calendar year; balances already past maturity at the cutoff are keyed FORECAST_LADDER_OVERDUE and listed first. */
     readonly ladder: readonly { readonly year: string; readonly maturingCents: string; readonly scheduledPrincipalCents: string }[];
   };
   readonly capital: { readonly refinances: readonly ForecastRefinanceResult[]; readonly sales: readonly ForecastSaleResult[] };

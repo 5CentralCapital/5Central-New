@@ -10,14 +10,14 @@ import { ForecastApiError, forecastApi, forecastEnvelope, type ForecastCommandEn
 import { AssumptionsView } from "./assumptions-editor";
 import { DrilldownSheet } from "./drilldown";
 import { dateLabel } from "./format";
-import { FORECAST_TABS, FORECAST_TAB_LABELS, type ForecastingLocation, type ForecastTab } from "./params";
-import { STATE_LABELS, ScenariosView, defaultScenario, stateClass } from "./scenarios";
+import { FORECAST_TABS, FORECAST_TAB_LABELS, type ForecastingLocation, type ForecastingNavigation, type ForecastTab } from "./params";
+import { STATE_LABELS, ScenariosView, defaultScenario, snapshotIsCurrent, stateClass } from "./scenarios";
 import { EmptyState, Notice } from "./ui";
 import { BalanceView, CashView, DebtView, IncomeView } from "./views";
 import "./forecasting.css";
 
-export type { ForecastingLocation, ForecastTab } from "./params";
-export { forecastingParams, parseForecastingParams } from "./params";
+export type { ForecastingLocation, ForecastingNavigation, ForecastingRoutePatch, ForecastTab } from "./params";
+export { forecastingParams, forecastingRoutePatch, parseForecastingParams } from "./params";
 
 export interface ForecastingWorkspaceProps {
   readonly organizationId: string;
@@ -56,9 +56,10 @@ export function ForecastingWorkspace({ organizationId, location, onNavigate }: F
     enabled: Boolean(selected), retry: false, staleTime: 15_000,
   });
   const current = detail.data;
-  const snapshotId = current?.snapshots.find(item => item.assumptionVersion === current.currentAssumptionVersion)?.id;
+  // The current run is a snapshot of the current assumptions, settings and model; otherwise an unsaved preview.
+  const snapshotId = current?.snapshots.find(item => snapshotIsCurrent(current, item))?.id;
   const run = useQuery({
-    queryKey: ["forecasting", "run", organizationId, current?.id, snapshotId ?? `preview:${current?.currentAssumptionVersion}`],
+    queryKey: ["forecasting", "run", organizationId, current?.id, snapshotId ?? `preview:${current?.currentAssumptionVersion}:${current?.parametersSha256}`],
     queryFn: ({ signal }) => snapshotId ? forecastApi.snapshot(organizationId, snapshotId, signal) : forecastApi.preview(organizationId, current!.id, { assumptionVersion: current!.currentAssumptionVersion }, signal),
     enabled: Boolean(current && current.currentAssumptionVersion > 0), retry: false, staleTime: 60_000,
   });
@@ -172,13 +173,12 @@ export function ForecastingWorkspace({ organizationId, location, onNavigate }: F
   </div>;
 }
 
-/** Company selector entry point: Reporting → Forecasting. */
-export function ForecastingEntry({ identity, organizationId, location, onNavigate, onOrganizationChange }: {
+/** Company selector entry point: Reporting → Forecasting. Every change, including a company switch, is one navigation. */
+export function ForecastingEntry({ identity, organizationId, location, onNavigate }: {
   identity: string;
   organizationId?: string;
   location: ForecastingLocation;
-  onNavigate: (location: ForecastingLocation, replace?: boolean) => void;
-  onOrganizationChange?: (organizationId: string) => void;
+  onNavigate: (location: ForecastingLocation, options: ForecastingNavigation) => void;
 }) {
   const context = useQuery({
     queryKey: ["rent-ops-workspace", "company-context", identity],
@@ -196,9 +196,9 @@ export function ForecastingEntry({ identity, organizationId, location, onNavigat
   if (!organizations.length) return <div className="rm-empty">Company access needs setup.</div>;
   const active = organizations.find(item => item.id === (organizationId ?? chosen)) ?? (organizations.length === 1 ? organizations[0] : undefined);
   return <>
-    {(organizations.length > 1 || !active) && <div className="rm-toolbar"><label>Company <select aria-label="Company" value={active?.id ?? ""} onChange={event => { const next = event.currentTarget.value; setChosen(next); onOrganizationChange?.(next); onNavigate({ tab: location.tab }, false); }}>
+    {(organizations.length > 1 || !active) && <div className="rm-toolbar"><label>Company <select aria-label="Company" value={active?.id ?? ""} onChange={event => { const next = event.currentTarget.value; setChosen(next); onNavigate({ tab: location.tab }, { organizationId: next }); }}>
       <option value="" disabled>Select company</option>{organizations.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
     </select></label></div>}
-    {active && <ForecastingWorkspace key={active.id} organizationId={active.id} location={location} onNavigate={onNavigate} />}
+    {active && <ForecastingWorkspace key={active.id} organizationId={active.id} location={location} onNavigate={(next, replace) => onNavigate(next, { replace: replace ?? false })} />}
   </>;
 }
