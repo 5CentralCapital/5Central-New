@@ -14,6 +14,7 @@ const PropertyDetailView = lazy(() => import("../components/dashboard/property-d
 const InvestorOverview = lazy(() => import("../components/dashboard/investor-overview"));
 
 import { equityInvestors, mortgageObligations, getInvestorSummary } from "@/lib/investor-data";
+import { occupancyFromRentRolls } from "@/lib/rm-occupancy";
 
 // Dashboard types (inline to avoid external dependency)
 interface TaskItem { id: string; title: string; dueDate?: string; cadence?: string; status: string; property?: string; module?: string; priority?: string; notes?: string; }
@@ -284,7 +285,6 @@ export default function AdminDashboard() {
     try {
       const res = await fetch("/api/rm/vacancies", { credentials: "include" });
       if (!res.ok) return;
-      const report = await res.json();
       // Property mapping: RM ID -> display name
       const propNames: Record<string, string> = { "30": "MLK Apartments", "31": "Hickory Landing", "32": "Sun Cove Apartments", "33": "Lucia Apartments" };
       const propIds = ["30", "31", "32", "33"];
@@ -298,39 +298,15 @@ export default function AdminDashboard() {
           } catch { return null; }
         })
       );
-      // Build per-property RM data keyed by display name
-      const rmByName = new Map<string, { units: number; occupied: number; vacant: number; occRate: number; monthlyRent: number }>();
-      const rmOccupancy: OccupancyRecord[] = perPropReqs
-        .filter((rr): rr is any => rr !== null)
-        .map((rr, i) => {
-          const name = propNames[propIds[i]] || `Property ${propIds[i]}`;
-          const occPct = Math.round(rr.summary.occupancyRate * 1000) / 10;
-          rmByName.set(name, {
-            units: rr.summary.totalUnits,
-            occupied: rr.summary.occupiedUnits,
-            vacant: rr.summary.vacantUnits,
-            occRate: occPct,
-            monthlyRent: rr.summary.totalMonthlyRent,
-          });
-          return {
-            id: `rm-occ-${propIds[i]}`,
-            property: name,
-            units: rr.summary.totalUnits,
-            occupied: rr.summary.occupiedUnits,
-            vacant: rr.summary.vacantUnits,
-            occupancyRate: occPct,
-            monthlyRent: rr.summary.totalMonthlyRent,
-            status: rr.summary.occupancyRate < 0.75 ? "critical" : rr.summary.occupancyRate < 0.9 ? "watch" : "stable",
-          };
-        });
+      const rmOccupancy: OccupancyRecord[] = occupancyFromRentRolls(propIds, propNames, perPropReqs);
       if (rmOccupancy.length > 0) {
         setData((prev) => {
           if (!prev) return prev;
           // Overlay properties with live RM occupancy + unit counts
           const updatedProperties = prev.properties.map((p) => {
-            const rm = rmByName.get(p.name);
+            const rm = rmOccupancy.find((record) => record.property === p.name);
             if (!rm) return p;
-            return { ...p, units: rm.units, occupancyRate: rm.occRate, occupiedUnits: rm.occupied };
+            return { ...p, units: rm.units, occupancyRate: rm.occupancyRate, occupiedUnits: rm.occupied };
           });
           return { ...prev, occupancy: rmOccupancy, properties: updatedProperties };
         });
@@ -362,11 +338,15 @@ export default function AdminDashboard() {
 
   const save = useCallback(
     async (table: keyof DashboardData, payload: unknown, reason = "inline_edit") => {
-      await fetch("/api/dashboard", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ table, data: payload, reason }),
-      });
+      try {
+        await fetch("/api/dashboard", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ table, data: payload, reason }),
+        });
+      } catch {
+        // Reload below shows the stored values.
+      }
       await load();
     },
     [load]
@@ -374,7 +354,11 @@ export default function AdminDashboard() {
 
   const triggerRefresh = useCallback(async () => {
     setRefreshing(true);
-    await fetch("/api/dashboard/refresh", { method: "POST" });
+    try {
+      await fetch("/api/dashboard/refresh", { method: "POST" });
+    } catch {
+      // Reload below still shows the latest stored data.
+    }
     await load();
     setRefreshing(false);
   }, [load]);
