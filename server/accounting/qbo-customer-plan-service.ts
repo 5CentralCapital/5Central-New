@@ -1,3 +1,4 @@
+import { financialSourceScopeSchema } from "../../shared/accounting";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { AccountingError } from "./errors";
 import { createQboAccountingMirrorStore } from "./mirror-store";
@@ -82,7 +83,7 @@ export async function readQboCustomerPlan(executor: RentOpsQueryExecutor, query:
     let mirrorRead = false;
     if (realmId) {
       const scope = { organizationId, legalEntityId, environment, realmId };
-      const coverage = await mirror.readCoverage({ provider: "qbo", ...scope }, "customers");
+      const coverage = await mirror.readCoverage(financialSourceScopeSchema.parse({ provider: "qbo", ...scope }), "customers");
       mirrorRead = coverage.status !== "unavailable";
       for (const kind of ["customers", "vendors", "employees"] as const) {
         const items = await mirror.listProviderMirrors(scope, kind);
