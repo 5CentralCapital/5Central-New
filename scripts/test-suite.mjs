@@ -46,9 +46,10 @@ for (const path of roots) discover(resolve(root, path));
 if (!tests.length) throw new Error("No tests discovered; refusing an empty pass");
 const env = { ...process.env, NODE_ENV: "test" };
 // Tests use synthetic repositories/PGlite. Never inherit live database or
-// service credentials into the default test runner.
+// service credentials into the default test runner. Opt-in real-PostgreSQL
+// tests (RENT_OPS_QA_POSTGRES_URL, *_TEST_URL, PG*) are skipped here too.
 for (const key of Object.keys(env)) {
-  if (/(?:DATABASE_URL|API_KEY|TOKEN|SECRET|PRIVATE_KEY|ENCRYPTION_KEY)$/.test(key)) delete env[key];
+  if (/(?:DATABASE_URL|POSTGRES_URL|_TEST_URL|API_KEY|SECRET_KEY|TOKENS?|SECRET|PASSWORD|PRIVATE_KEY|ENCRYPTION_KEY)$|^PG[A-Z]+$/.test(key)) delete env[key];
 }
 const concurrency = Number(process.env.ROPS_TEST_CONCURRENCY ?? 4);
 if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error("ROPS_TEST_CONCURRENCY must be an integer from 1 to 8");
