@@ -277,11 +277,22 @@ async function assertScopeRelationships(executor: RentOpsQueryExecutor, context:
     if (property.rows.length !== 1) throw new CompanyDocumentError("scope_not_found", "The document property is not assigned to the selected legal entity.");
   }
   if (context.projectId) {
-    const project = await executor.query("SELECT id FROM company_projects WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL", [context.organizationId, context.projectId]);
+    // The project must sit inside the document's own entity/property, or a
+    // document authorized for one entity could attach to another entity's project.
+    const project = await executor.query(
+      `SELECT id FROM company_projects WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL
+          AND ($3::uuid IS NULL OR legal_entity_id = $3) AND ($4::varchar IS NULL OR property_id = $4)`,
+      [context.organizationId, context.projectId, context.legalEntityId ?? null, context.propertyId ?? null],
+    );
     if (project.rows.length !== 1) throw new CompanyDocumentError("scope_not_found", "The document project is unavailable.");
   }
   if (context.investorContractId) {
-    const contract = await executor.query("SELECT id FROM company_investor_contracts WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL", [context.organizationId, context.investorContractId]);
+    const contract = await executor.query(
+      `SELECT c.id FROM company_investor_contracts c
+         JOIN company_investor_instruments i ON i.organization_id = c.organization_id AND i.id = c.instrument_id
+        WHERE c.organization_id = $1 AND c.id = $2 AND c.archived_at IS NULL AND ($3::uuid IS NULL OR i.legal_entity_id = $3)`,
+      [context.organizationId, context.investorContractId, context.legalEntityId ?? null],
+    );
     if (contract.rows.length !== 1) throw new CompanyDocumentError("scope_not_found", "The investor contract is unavailable.");
   }
   if (context.investorContractVersionId && context.investorContractId) {

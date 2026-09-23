@@ -99,3 +99,22 @@ test("documents: upload (prepare + commit) -> list -> authorized download; links
     assert.equal((await fetch(`${app.base}/documents/${encodeURIComponent(documentId)}/download`)).status, 400);
   } finally { await app.close(); }
 });
+
+test("documents: a document cannot claim another legal entity's project as its context", async () => {
+  const app = await createLaneTestApp();
+  try {
+    const otherEntityId = "20000000-0000-4000-8000-000000000002";
+    const otherProjectId = "50000000-0000-4000-8000-000000000077";
+    await app.db.query("INSERT INTO company_legal_entities(id,organization_id,name,entity_type,currency) VALUES ($1,$2,'Other Property LLC','llc','USD')", [otherEntityId, organizationId]);
+    await app.db.query("INSERT INTO rent_ops_properties(id,name,slug) VALUES ('demo-property-z','Demo property Z','demo-property-z')");
+    await app.db.query("INSERT INTO company_property_entity_periods(id,organization_id,legal_entity_id,property_id,effective_from) VALUES ('30000000-0000-4000-8000-000000000077',$1,$2,'demo-property-z','2020-01-01')", [organizationId, otherEntityId]);
+    await app.db.query("INSERT INTO company_projects (id, organization_id, legal_entity_id, property_id, name, project_type, status, currency) VALUES ($1,$2,$3,'demo-property-z','Other entity project','rehab','planning','USD')", [otherProjectId, organizationId, otherEntityId]);
+    const input = { context: { organizationId, legalEntityId: fixture.entityId, projectId: otherProjectId }, kind: "other", title: "Misfiled bid", tags: [], links: [] };
+    const prepared = await fetch(`${app.base}/documents/uploads`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream", "x-declared-content-type": "text/plain", "x-file-name": "bid.txt", "x-document-metadata": metadataHeader(input) },
+      body: Buffer.from("synthetic bid"),
+    });
+    assert.equal(prepared.status, 400, await prepared.clone().text());
+  } finally { await app.close(); }
+});
