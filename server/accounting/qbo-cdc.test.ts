@@ -285,3 +285,26 @@ test("an object deleted again after it came back gets a new tombstone with its n
     await h.close();
   }
 });
+
+test("re-reading an unchanged revision after a rename or a posting keeps the first body instead of failing the replay", async () => {
+  const account = { Id: "7", SyncToken: "0", Name: "Electric", FullyQualifiedName: "Utilities:Electric", AccountType: "Expense", CurrentBalance: 100, ParentRef: { value: "6", name: "Utilities" }, MetaData: { LastUpdatedTime: "2026-09-01T00:00:00Z" } };
+  const store: Store = { Bill: [{ ...bill("40", "0", "2026-09-10T10:00:00Z"), VendorRef: { value: "56", name: "Old Vendor Name" } } as QuickBooksJsonObject], Account: [account] };
+  const h = await harness(store, "2026-09-20T00:00:00Z");
+  try {
+    assert.equal((await h.sync.syncChanges()).status, "complete");
+    // Same SyncTokens; QuickBooks now reports the renamed vendor and parent account and a new balance.
+    store.Bill = [{ ...store.Bill![0]!, VendorRef: { value: "56", name: "New Vendor Name" } } as QuickBooksJsonObject];
+    store.Account = [{ ...account, FullyQualifiedName: "Energy:Electric", CurrentBalance: 250, ParentRef: { value: "6", name: "Energy" } }];
+    const replay = await h.sync.syncChanges({ forceFullReplay: true });
+    assert.equal(replay.status, "complete");
+    assert.equal(replay.anchored, true);
+    assert.equal((await h.mirror.resolveLine({ scope: sourceScope, objectType: "Bill", objectId: "40", lineId: "1" }))?.amountCents, "10000");
+
+    // A real change under the same SyncToken is still refused.
+    store.Bill = [{ ...store.Bill[0]!, TotalAmt: 999 } as QuickBooksJsonObject];
+    const changed = await h.sync.syncChanges({ forceFullReplay: true });
+    assert.equal(changed.status, "failed");
+  } finally {
+    await h.close();
+  }
+});

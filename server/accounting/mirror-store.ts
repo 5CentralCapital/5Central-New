@@ -490,6 +490,38 @@ interface ProviderSourceObjectRow {
   received_at?: unknown;
 }
 
+/**
+ * Fields QuickBooks computes when an object is read, without issuing a new
+ * SyncToken: every reference's display name (AccountRef.name is the current
+ * full account path, VendorRef.name the current vendor name), an Account's
+ * FullyQualifiedName and running balances, and a name-list record's balance.
+ * Re-reading an unchanged revision after a rename or a posting returns them
+ * changed; they are ignored when checking that a revision is unchanged.
+ */
+const READ_TIME_TOP_LEVEL_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
+  Account: new Set(["FullyQualifiedName", "CurrentBalance", "CurrentBalanceWithSubAccounts"]),
+  Customer: new Set(["FullyQualifiedName", "Balance", "BalanceWithJobs"]),
+  Vendor: new Set(["Balance"]),
+};
+
+function withoutReadTimeFields(objectType: string, value: unknown, topLevel = true): unknown {
+  if (Array.isArray(value)) return value.map(item => withoutReadTimeFields(objectType, item, false));
+  if (!value || typeof value !== "object") return value;
+  const skip = topLevel ? READ_TIME_TOP_LEVEL_FIELDS[objectType] : undefined;
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (skip?.has(key)) continue;
+    if (key.endsWith("Ref") && child && typeof child === "object" && !Array.isArray(child)) {
+      const reference = { ...(child as Record<string, unknown>) };
+      delete reference.name;
+      result[key] = withoutReadTimeFields(objectType, reference, false);
+    } else {
+      result[key] = withoutReadTimeFields(objectType, child, false);
+    }
+  }
+  return result;
+}
+
 function providerReference(body: unknown, key: string): string | null {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
   const value = (body as Record<string, unknown>)[key];
@@ -561,7 +593,7 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
     const version = stringValue(input.version, "object version", 120);
     if (!input.providerBody || typeof input.providerBody !== "object" || Array.isArray(input.providerBody)) throw new AccountingError("accounting_validation", "QBO provider body must be an object");
     const bodyHash = canonicalJsonSha256(input.providerBody);
-    const id = input.providerBody && typeof input.providerBody.Id === "string" ? randomUUID() : randomUUID();
+    const id = randomUUID();
     const result = await this.executor.query<{ id: string }>(
       `INSERT INTO accounting_qbo_source_objects
         (id, organization_id, legal_entity_id, environment, realm_id, object_type, object_id, object_version, provider_updated_at, body_hash, provider_body, received_at, deleted_at)
@@ -571,13 +603,22 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       [id, ...scopeParts(scope), objectType, objectId, version, input.providerUpdatedAt ?? null, bodyHash, JSON.stringify(input.providerBody), input.receivedAt ?? this.now().toISOString(), input.deletedAt ?? null],
     );
     if (result.rows[0]) return { id: result.rows[0].id, bodyHash };
-    const existing = await this.executor.query<{ id: string; body_hash: string }>(
-      `SELECT id, body_hash FROM accounting_qbo_source_objects
+    const existing = await this.executor.query<{ id: string; body_hash: string; provider_body: unknown }>(
+      `SELECT id, body_hash, provider_body FROM accounting_qbo_source_objects
        WHERE organization_id = $1 AND legal_entity_id = $2 AND environment = $3 AND realm_id = $4 AND object_type = $5 AND object_id = $6 AND object_version = $7`,
       [...scopeParts(scope), objectType, objectId, version],
     );
     const row = existing.rows[0];
-    if (!row || row.body_hash !== bodyHash) throw new AccountingError("accounting_conflict", "QBO source object version changed after it was mirrored");
+    if (!row) throw new AccountingError("accounting_conflict", "QBO source object version changed after it was mirrored");
+    if (row.body_hash !== bodyHash) {
+      // The first-seen body stays (append-only). Only read-time fields may
+      // differ under the same SyncToken; any other difference is a conflict.
+      const stored = typeof row.provider_body === "string" ? JSON.parse(row.provider_body) as unknown : row.provider_body;
+      if (canonicalJsonSha256(withoutReadTimeFields(objectType, stored)) !== canonicalJsonSha256(withoutReadTimeFields(objectType, input.providerBody))) {
+        throw new AccountingError("accounting_conflict", "QBO source object version changed after it was mirrored");
+      }
+      return { id: row.id, bodyHash: row.body_hash };
+    }
     return { id: row.id, bodyHash };
   }
 
