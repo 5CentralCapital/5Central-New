@@ -1,5 +1,6 @@
 import type { CompanyContextOrganization } from "@shared/company/context";
 import {
+  periodFilterNamesFor,
   reportReferenceKindForFilter,
   reportRunRequestSchema,
   type ReportEntry,
@@ -39,15 +40,15 @@ export type ReportSetupBuildResult = { readonly ok: true; readonly request: Repo
 
 /** Scope choices live in the Scope section; these filter names only mirror it. */
 const SCOPE_MIRROR_FILTERS = new Set(["legalEntityIds", "propertyIds", "propertyId"]);
-const PERIOD_FILTERS = new Set(["asOfDate", "fromDate", "toDate", "month"]);
 
 export function isFinancialBasis(entry: Pick<ReportEntry, "basis">): boolean {
   return entry.basis.includes("cash") || entry.basis.includes("accrual");
 }
 
 /** Filters shown in the report-specific Filters section. */
-export function visibleSetupFilters(entry: Pick<ReportEntry, "filters">): readonly ReportingFilterDefinition[] {
-  return entry.filters.filter(filter => !SCOPE_MIRROR_FILTERS.has(filter.name) && !PERIOD_FILTERS.has(filter.name));
+export function visibleSetupFilters(entry: Pick<ReportEntry, "filters" | "period">): readonly ReportingFilterDefinition[] {
+  const repeated = new Set(periodFilterNamesFor(entry.period));
+  return entry.filters.filter(filter => !SCOPE_MIRROR_FILTERS.has(filter.name) && !repeated.has(filter.name));
 }
 
 /** Reference filters answered from the company context instead of the server. */
@@ -174,8 +175,9 @@ export function buildReportRunRequest(entry: ReportEntry, organization: CompanyC
   const currency = financial ? state.currency.trim().toUpperCase() : null;
   if (financial && !/^[A-Z]{3}$/.test(currency ?? "")) errors.push({ field: "currency", message: "Enter a three-letter currency code." });
   const filters: Record<string, unknown> = {};
+  const repeated = new Set(periodFilterNamesFor(entry.period));
   for (const filter of entry.filters) {
-    if (PERIOD_FILTERS.has(filter.name)) continue;
+    if (repeated.has(filter.name)) continue;
     if (filter.name === "propertyIds") { if (propertyIds.length) filters.propertyIds = [...propertyIds]; continue; }
     if (filter.name === "legalEntityIds") { if (entityIds.length) filters.legalEntityIds = [...entityIds]; continue; }
     if (filter.name === "propertyId") continue;
@@ -223,8 +225,10 @@ export function describeAppliedFilters(entry: ReportEntry, request: ReportRunReq
     const value = request.filters[filter.name];
     if (isEmpty(value) || (filter.default !== undefined && JSON.stringify(value) === JSON.stringify(filter.default))) continue;
     const values = Array.isArray(value) ? value.map(String) : [String(value)];
-    const display = values.map(item => labels[`${filter.name}:${item}`] ?? filter.options?.find(option => option.value === item)?.label ?? item);
-    items.push(`${filter.label}: ${display.length > 2 ? `${display.length} selected` : display.join(", ")}`);
+    const localOptions = filter.reference === "unit" ? availableUnits(organization, [], []) : filter.reference === "property" ? availableProperties(organization, []) : [];
+    const display = values.map(item => labels[`${filter.name}:${item}`] ?? filter.options?.find(option => option.value === item)?.label ?? localOptions.find(option => option.value === item)?.label ?? (filter.kind === "reference" ? null : item));
+    // Record IDs are never shown; an unnamed reference is summarized by count.
+    items.push(`${filter.label}: ${display.length > 2 || display.some(item => item === null) ? `${display.length} selected` : display.join(", ")}`);
   }
   return items;
 }

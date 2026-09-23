@@ -30,9 +30,11 @@ function Field({ label, error, children, wide }: { label: string; error?: string
 }
 
 /** Multi-select with type-to-filter; checkboxes carry the real selection state. */
-function ChoiceList({ id, label, options, selected, onChange, multiple = true, emptyLabel, loading, onSearch, onMore, reason }: {
+function ChoiceList({ id, label, options, selected, onChange, multiple = true, emptyLabel, loading, onSearch, onMore, reason, onLabel }: {
   id: string; label: string; options: readonly Option[]; selected: readonly string[]; onChange: (values: string[]) => void; multiple?: boolean;
   emptyLabel: string; loading?: boolean; onSearch?: (search: string) => void; onMore?: () => void; reason?: string | null;
+  /** Remembers display names for the applied-filter summary; IDs are never shown. */
+  onLabel?: (value: string, label: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -41,6 +43,7 @@ function ChoiceList({ id, label, options, selected, onChange, multiple = true, e
   const visible = onSearch || !search.trim() ? options : options.filter(option => `${option.label} ${option.detail ?? ""}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
   const summary = selected.length === 0 ? emptyLabel : selected.length === 1 ? known.current.get(selected[0]!) ?? "1 selected" : `${selected.length} selected`;
   const toggle = (value: string) => {
+    onLabel?.(value, known.current.get(value) ?? value);
     if (!multiple) { onChange(selected[0] === value ? [] : [value]); setOpen(false); return; }
     onChange(selected.includes(value) ? selected.filter(item => item !== value) : [...selected, value]);
   };
@@ -66,40 +69,40 @@ function ChoiceList({ id, label, options, selected, onChange, multiple = true, e
 }
 
 /** Server-backed reference choices, scoped to the principal's grants and selected entities. */
-function ReferenceChoice({ id, filter, kind, organizationId, entityIds, value, onChange, api }: {
+function ReferenceChoice({ id, filter, kind, organizationId, entityIds, value, onChange, api, onLabel }: {
   id: string; filter: ReportingFilterDefinition; kind: ReportReferenceKind; organizationId: string; entityIds: readonly string[];
-  value: unknown; onChange: (value: unknown) => void; api: Pick<ReportingApi, "references">;
+  value: unknown; onChange: (value: unknown) => void; api: Pick<ReportingApi, "references">; onLabel?: (value: string, label: string) => void;
 }) {
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
-  const [extra, setExtra] = useState<{ items: ReportReferenceOption[]; cursor: string | null }>({ items: [], cursor: null });
+  const [extra, setExtra] = useState<{ items: ReportReferenceOption[]; cursor: string | null; loaded: boolean }>({ items: [], cursor: null, loaded: false });
   useEffect(() => { const timer = setTimeout(() => setDebounced(search), 200); return () => clearTimeout(timer); }, [search]);
   const query = useQuery({
     queryKey: ["company-reporting", "references", organizationId, kind, debounced, entityIds.join(",")],
     queryFn: ({ signal }) => api.references(organizationId, kind, { search: debounced, legalEntityIds: entityIds }, signal),
     staleTime: 30_000, retry: false,
   });
-  useEffect(() => { setExtra({ items: [], cursor: null }); }, [query.data]);
+  useEffect(() => { setExtra({ items: [], cursor: null, loaded: false }); }, [query.data]);
   const options = [...(query.data?.items ?? []), ...extra.items];
-  const nextCursor = extra.cursor ?? query.data?.nextCursor ?? null;
+  const nextCursor = extra.loaded ? extra.cursor : query.data?.nextCursor ?? null;
   const more = async () => {
     if (!nextCursor) return;
     const page = await api.references(organizationId, kind, { search: debounced, cursor: nextCursor, legalEntityIds: entityIds });
-    setExtra(current => ({ items: [...current.items, ...page.items], cursor: page.nextCursor }));
+    setExtra(current => ({ items: [...current.items, ...page.items], cursor: page.nextCursor, loaded: true }));
   };
   const selected = Array.isArray(value) ? value.map(String) : typeof value === "string" && value ? [value] : [];
   return <ChoiceList id={id} label={filter.label} options={options} selected={selected} multiple={filter.multiple} emptyLabel={filter.multiple ? "All" : "Any"}
-    loading={query.isLoading} reason={query.error ? "Choices could not be loaded." : query.data?.reason ?? null} onSearch={setSearch} onMore={nextCursor ? () => void more() : undefined}
+    loading={query.isLoading} reason={query.error ? "Choices could not be loaded." : query.data?.reason ?? null} onSearch={setSearch} onMore={nextCursor ? () => void more() : undefined} onLabel={onLabel}
     onChange={values => onChange(filter.multiple ? values : values[0] ?? "")} />;
 }
 
-function FilterControl({ id, filter, value, onChange, organization, state, api }: { id: string; filter: ReportingFilterDefinition; value: unknown; onChange: (value: unknown) => void; organization: CompanyContextOrganization; state: ReportSetupState; api: Pick<ReportingApi, "references"> }) {
+function FilterControl({ id, filter, value, onChange, organization, state, api, onLabel }: { id: string; filter: ReportingFilterDefinition; value: unknown; onChange: (value: unknown) => void; organization: CompanyContextOrganization; state: ReportSetupState; api: Pick<ReportingApi, "references">; onLabel: (value: string, label: string) => void }) {
   const referenceKind = serverReferenceKind(filter);
-  if (referenceKind) return <ReferenceChoice id={id} filter={filter} kind={referenceKind} organizationId={organization.id} entityIds={state.entityIds} value={value} onChange={onChange} api={api} />;
+  if (referenceKind) return <ReferenceChoice id={id} filter={filter} kind={referenceKind} organizationId={organization.id} entityIds={state.entityIds} value={value} onChange={onChange} api={api} onLabel={onLabel} />;
   if (isLocalReference(filter)) {
     const options = filter.reference === "unit" ? availableUnits(organization, state.entityIds, state.propertyIds) : availableProperties(organization, state.entityIds);
     const selected = Array.isArray(value) ? value.map(String) : typeof value === "string" && value ? [value] : [];
-    return <ChoiceList id={id} label={filter.label} options={options} selected={selected} multiple={filter.multiple} emptyLabel={filter.multiple ? "All" : "Any"} reason="No choices for this scope" onChange={values => onChange(filter.multiple ? values : values[0] ?? "")} />;
+    return <ChoiceList id={id} label={filter.label} options={options} selected={selected} multiple={filter.multiple} emptyLabel={filter.multiple ? "All" : "Any"} reason="No choices for this scope" onLabel={onLabel} onChange={values => onChange(filter.multiple ? values : values[0] ?? "")} />;
   }
   if (filter.kind === "date") return <input id={id} type="date" value={typeof value === "string" ? value : ""} onChange={event => onChange(event.currentTarget.value)} />;
   if (filter.kind === "month") return <input id={id} type="month" value={typeof value === "string" ? value : ""} onChange={event => onChange(event.currentTarget.value)} />;
@@ -134,6 +137,7 @@ function EliminationControl({ id, organizationId, value, onChange, api }: { id: 
 export function ReportSetup({ entry, organization, onRun, running, initialRequest, api = reportingApi, today = workspaceToday() }: SetupProps) {
   const [state, setState] = useState<ReportSetupState>(() => initialSetupState(entry, organization, today, initialRequest));
   const [errors, setErrors] = useState<readonly ReportSetupError[]>([]);
+  const labels = useRef<Record<string, string>>({});
   const scenarios = useQuery({ queryKey: ["company-reporting", "forecast-scenarios", organization.id], queryFn: ({ signal }) => api.forecastScenarios(organization.id, signal), staleTime: 30_000, retry: false, enabled: entry.setup.forecastScenario });
   const filters = useMemo(() => visibleSetupFilters(entry), [entry]);
   const errorFor = (field: string) => errors.find(error => error.field === field)?.message;
@@ -146,7 +150,7 @@ export function ReportSetup({ entry, organization, onRun, running, initialReques
     const result = buildReportRunRequest(entry, organization, state, scenarios.data ?? []);
     if (!result.ok) { setErrors(result.errors); return; }
     setErrors([]);
-    onRun(result.request, {});
+    onRun(result.request, { ...labels.current });
   };
   const reset = () => { setState(initialSetupState(entry, organization, today)); setErrors([]); };
   const general = errors.filter(error => !["legalEntityIds", "period", "currency", "forecast", ...filters.map(filter => filter.name)].includes(error.field));
@@ -179,7 +183,7 @@ export function ReportSetup({ entry, organization, onRun, running, initialReques
         <legend>{entry.setup.forecastScenario ? "Scenario" : entry.setup.consolidation ? "Consolidation" : "Filters"}</legend>
         {entry.setup.forecastScenario && <Field label="Forecast scenario" error={errorFor("forecast")}>{id => <ScenarioControl id={id} organizationId={organization.id} value={state.scenarioId} onChange={value => setState(current => ({ ...current, scenarioId: value }))} api={api} />}</Field>}
         {entry.setup.consolidation && <Field label="Intercompany eliminations">{id => <EliminationControl id={id} organizationId={organization.id} value={state.eliminationVersion} onChange={value => setState(current => ({ ...current, eliminationVersion: value }))} api={api} />}</Field>}
-        {filters.map(filter => <Field key={filter.name} label={filter.label} error={errorFor(filter.name)}>{id => <FilterControl id={id} filter={filter} value={state.filters[filter.name]} onChange={value => update(filter.name, value)} organization={organization} state={state} api={api} />}</Field>)}
+        {filters.map(filter => <Field key={filter.name} label={filter.label} error={errorFor(filter.name)}>{id => <FilterControl id={id} filter={filter} value={state.filters[filter.name]} onChange={value => update(filter.name, value)} organization={organization} state={state} api={api} onLabel={(value, label) => { labels.current[`${filter.name}:${value}`] = label; }} />}</Field>)}
       </fieldset>}
     </div>
     {general.length > 0 && <div className="reporting-error" role="alert">{general.map(error => <p key={`${error.field}:${error.message}`}>{error.message}</p>)}</div>}

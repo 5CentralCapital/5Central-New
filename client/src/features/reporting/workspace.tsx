@@ -187,12 +187,12 @@ export function ReportingWorkspace({ identity, organization, initialReportId, on
     return Object.keys(CATEGORY_LABELS).map(category => ({ category, items: matches.filter(entry => entry.category === category) })).filter(group => group.items.length);
   }, [entries, search]);
   const choose = (entry: ReportEntry) => { setSelectedId(entry.id); setLastRequest(undefined); setPage(undefined); setError(undefined); onNavigate?.(organization.id, entry.id); };
-  const run = async (request: ReportRunRequest) => {
+  const run = async (request: ReportRunRequest, labels: Readonly<Record<string, string>> = {}) => {
     setLastRequest(request); setRunning(true); setError(undefined); setPage(undefined);
     try {
       const result = await reportingApi.run(organization.id, request);
       const entry = entries.find(item => item.id === request.reportId);
-      setPage({ page: result.page, applied: entry ? [describeReportPeriod(request.period), ...describeAppliedFilters(entry, request, organization)] : [describeReportPeriod(request.period)], title: entry?.title ?? request.reportId });
+      setPage({ page: result.page, applied: entry ? [describeReportPeriod(request.period), ...describeAppliedFilters(entry, request, organization, labels)] : [describeReportPeriod(request.period)], title: entry?.title ?? request.reportId });
     } catch (nextError) { setError(nextError); } finally { setRunning(false); }
   };
   const applySavedRequest = (request: ReportRunRequest) => { setSelectedId(request.reportId); setLastRequest(request); setSetupRevision(value => value + 1); setPage(undefined); setError(undefined); onNavigate?.(organization.id, request.reportId); };
@@ -216,7 +216,7 @@ export function ReportingWorkspace({ identity, organization, initialReportId, on
       {selected ? <>
         <header className="reporting-heading"><div><span className="reporting-kicker">{CATEGORY_LABELS[selected.category] ?? reportStatusLabel(selected.category)}</span><h1>{selected.title}</h1></div></header>
         {selected.executable
-          ? <ReportSetup key={`${selected.id}:${setupRevision}`} entry={selected} organization={organization} initialRequest={lastRequest} onRun={request => void run(request)} running={running} />
+          ? <ReportSetup key={`${selected.id}:${setupRevision}`} entry={selected} organization={organization} initialRequest={lastRequest} onRun={(request, labels) => void run(request, labels)} running={running} />
           : <div className="reporting-empty-state"><h3>{runtimeStatusLabel(selected.runtimeStatus)}</h3><p>{selected.runtimeReason ?? "This report cannot run yet."}</p><button type="button" className="reporting-quiet-button" onClick={() => void catalog.refetch()}>Check Again</button></div>}
         {error !== undefined && <div className="reporting-error" role="alert">{errorMessage(error, "The report could not be run.")}</div>}
         {page && <Result organizationId={organization.id} page={page.page} applied={page.applied} title={page.title} onPage={next => setPage(current => current ? { ...current, page: { ...next, rows: [...current.page.rows, ...next.rows] } } : current)} />}

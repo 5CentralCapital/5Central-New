@@ -52,7 +52,7 @@ Generated from `shared/reporting/definitions.ts` and the engine registry. Setup 
 | `rent-roll` | Rent roll | `rental.operational` | rental_operational_records | entities (optional), properties | as-of | operational | propertyScope, propertyIds, unitId, occupancy, readiness, listing, balanceStatus, search | Available |
 | `renters-insurance` | Renters insurance | `rental.operational-expanded` | rental_operational_records | entities (optional), properties | as-of | operational | unitIds, tenantIds, search | Available |
 | `security-deposit` | Security deposit and liabilities | `rental.operational` | rental_operational_records | entities (optional), properties | as-of | operational | propertyScope, propertyIds, unitId, tenantStatus, search | Available |
-| `tenant-ledger` | Tenant statement | `rental.operational` | rental_operational_records | entities (optional), properties | range | operational | propertyScope, propertyIds, unitId, tenancyId, personId, tenantStatus | Available |
+| `tenant-ledger` | Tenant statement | `rental.operational` | rental_operational_records | entities (optional), properties | range | operational | propertyScope, propertyIds, asOfDate, unitId, tenancyId, personId, tenantStatus | Available |
 | `tenant-vehicles` | Tenant vehicles | `rental.operational-expanded` | rental_operational_records | entities (optional), properties | as-of | operational | unitIds, tenantIds, search | Available |
 | `unit-listings` | Unit listings | `rental.operational-expanded` | rental_operational_records | entities (optional), properties | as-of | operational | unitIds, search | Available |
 | `occupancy` | Occupancy & vacancy | `rental.operational` | rental_operational_records | entities (optional), properties | as-of | operational | propertyScope, propertyIds, unitId, occupancy, readiness, listing | Available |
@@ -78,10 +78,10 @@ Generated from `shared/reporting/definitions.ts` and the engine registry. Setup 
 | `exit-scenarios` | Exit scenarios | `combined.forecast` | verified_actuals, approved_forecast_scenario | entities (optional), properties, forecast scenario | custom | mixed | — | Missing data: No approved forecast scenario (forecasting service port) |
 | `investor-owner-activity` | Investor and owner activity | `combined.investors` | company_investor_obligations_and_payments | entities (optional), properties | range | mixed | investorIds, status | Available |
 | `lender-management-package` | Lender and management package | `combined.lender-package` | frozen_report_runs, lender_package_template | entities (required) | custom | mixed | — | Available; sections are ready only when matching saved runs exist |
-| `scheduled-income` | Scheduled income | `rental.operational` | rental_operational_records | entities (optional), properties | month | operational | propertyScope, propertyIds, unitId, tenantStatus, search | Available |
-| `scheduled-vs-collected` | Scheduled vs collected | `rental.operational` | rental_operational_records | entities (optional), properties | month | operational | propertyScope, propertyIds, unitId, tenantStatus, search | Available |
-| `collected-income` | Collected income | `rental.operational` | rental_operational_records | entities (optional), properties | range | operational | propertyScope, propertyIds, unitId, tenancyId, personId, tenantStatus, search | Available |
-| `hap` | Housing assistance | `rental.operational` | rental_operational_records | entities (optional), properties | month | operational | propertyScope, propertyIds, tenantStatus, status, search | Available |
+| `scheduled-income` | Scheduled income | `rental.operational` | rental_operational_records | entities (optional), properties | month | operational | propertyScope, propertyIds, asOfDate, unitId, tenantStatus, search | Available |
+| `scheduled-vs-collected` | Scheduled vs collected | `rental.operational` | rental_operational_records | entities (optional), properties | month | operational | propertyScope, propertyIds, asOfDate, unitId, tenantStatus, search | Available |
+| `collected-income` | Collected income | `rental.operational` | rental_operational_records | entities (optional), properties | range | operational | propertyScope, propertyIds, asOfDate, unitId, tenancyId, personId, tenantStatus, search | Available |
+| `hap` | Housing assistance | `rental.operational` | rental_operational_records | entities (optional), properties | month | operational | propertyScope, propertyIds, asOfDate, tenantStatus, status, search | Available |
 | `applicant-pipeline` | Applicant pipeline | `rental.operational` | rental_operational_records | entities (optional), properties | as-of | operational | propertyScope, propertyIds, status, search | Available |
 <!-- report-inventory:end -->
 

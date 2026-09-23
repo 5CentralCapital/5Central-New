@@ -120,13 +120,14 @@ function inPeriod(date: string, context: ReportingEngineContext): boolean {
 
 function scopeLines(context: ReportingEngineContext, reportId: CombinedFinancialReportId, lines: readonly FinancialReportingLine[]): FinancialReportingLine[] {
   const scope = context.request.scope;
+  const selectedUnits = Array.isArray(context.request.filters.unitIds) ? context.request.filters.unitIds.filter((value): value is string => typeof value === "string") : [];
   const cumulative = new Set<CombinedFinancialReportId>(["balance-sheet-by-fund-type", "balance-sheet-consolidated", "trial-balance-consolidated", "accounts-receivable", "accounts-payable", "cash-position"]);
   const bounds = periodBounds(context);
   return lines.filter(line => {
     const dateSelected = cumulative.has(reportId)
       ? (!bounds.through || lineDate(line) <= bounds.through)
       : inPeriod(lineDate(line), context);
-    return (!scope.legalEntityIds.length || scope.legalEntityIds.includes(line.legalEntityId as typeof scope.legalEntityIds[number])) && (!scope.propertyIds.length || (line.propertyId !== null && line.propertyId !== undefined && scope.propertyIds.includes(line.propertyId as typeof scope.propertyIds[number]))) && (!scope.unitIds.length || (line.unitId !== null && line.unitId !== undefined && scope.unitIds.includes(line.unitId as typeof scope.unitIds[number]))) && dateSelected;
+    return (!scope.legalEntityIds.length || scope.legalEntityIds.includes(line.legalEntityId as typeof scope.legalEntityIds[number])) && (!scope.propertyIds.length || (line.propertyId !== null && line.propertyId !== undefined && scope.propertyIds.includes(line.propertyId as typeof scope.propertyIds[number]))) && (!scope.unitIds.length || (line.unitId !== null && line.unitId !== undefined && scope.unitIds.includes(line.unitId as typeof scope.unitIds[number]))) && (!selectedUnits.length || (typeof line.unitId === "string" && selectedUnits.includes(line.unitId))) && dateSelected;
   });
 }
 
@@ -261,7 +262,8 @@ export function createCombinedFinancialReportingEngine(read: CombinedFinancialRe
     ...(read.probe ? { probe: ({ organizationId, reportId }: { organizationId: string; reportId: string }) => read.probe!({ organizationId, reportId: reportId as CombinedFinancialReportId }) } : {}),
     async run(context): Promise<ReportingEngineResult> {
       const reportId = context.definition.id as CombinedFinancialReportId;
-      const source = await read.read({ context, reportId, legalEntityIds: context.request.scope.legalEntityIds.map(String), propertyIds: context.request.scope.propertyIds.map(String), unitIds: context.request.scope.unitIds.map(String), accountIds: Array.isArray(context.request.filters.accountIds) ? context.request.filters.accountIds.filter((value): value is string => typeof value === "string") : [] });
+      const filterUnits = Array.isArray(context.request.filters.unitIds) ? context.request.filters.unitIds.filter((value): value is string => typeof value === "string") : [];
+      const source = await read.read({ context, reportId, legalEntityIds: context.request.scope.legalEntityIds.map(String), propertyIds: context.request.scope.propertyIds.map(String), unitIds: Array.from(new Set([...context.request.scope.unitIds.map(String), ...filterUnits])), accountIds: Array.isArray(context.request.filters.accountIds) ? context.request.filters.accountIds.filter((value): value is string => typeof value === "string") : [] });
       if (source.coverage.state === "unavailable") throw new ReportingError("report_unavailable", source.coverage.reason ?? "The accounting mirror is unavailable for the requested entity scope.", 409, { dependency: "quickbooks_accounting_mirror" });
       const lines = scopeLines(context, reportId, source.lines);
       const missingData: ReportMissingData[] = [];

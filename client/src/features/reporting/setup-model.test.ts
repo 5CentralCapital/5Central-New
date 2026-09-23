@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CompanyContextOrganization } from "@shared/company/context";
-import { getReportingDefinitions, type ReportEntry, type ReportingEngineContext } from "@shared/reporting";
+import { getReportingDefinitions, periodFilterNamesFor, type ReportEntry, type ReportingEngineContext } from "@shared/reporting";
 import { createAuthenticatedPrincipal } from "../../../../server/company/authorization";
 import { createReportingRegistry } from "../../../../server/reporting/registry";
 import { ReportingService } from "../../../../server/reporting/service";
@@ -61,7 +61,7 @@ test("every report's default setup builds a request the reporting service accept
     const response = await service.run(access, built.request);
     assert.equal(response.run.reportId, entry.id);
     const context = seen.at(-1)!;
-    for (const name of ["asOfDate", "fromDate", "toDate", "month", "scenarioId", "inputVersion", "modelVersion", "basis", "currency"]) assert.equal(name in context.request.filters, false, `${entry.id} repeated ${name} as a filter`);
+    for (const name of [...periodFilterNamesFor(entry.period), "scenarioId", "inputVersion", "modelVersion", "basis", "currency"]) assert.equal(name in context.request.filters, false, `${entry.id} repeated ${name} as a filter`);
     if (entry.period !== "custom") assert.equal(context.request.period.mode, entry.period, entry.id);
     if (entry.setup.forecastScenario) assert.deepEqual(context.request.forecast, { scenarioId: scenarios[0]!.scenarioId, inputVersion: "4", modelVersion: "forecast.v1" });
     else assert.equal(context.request.forecast ?? null, null, entry.id);
@@ -92,10 +92,16 @@ test("the chosen period populates the request for the reports the old form broke
   assert.deepEqual(seen.at(-1)!.request.period, { mode: "custom", asOfDate: "2026-09-01" });
   assert.deepEqual(seen.at(-1)!.request.filters, { status: ["new", "scheduled"], assignedTo: "Example Plumbing" });
   const scheduled = byId.get("scheduled-income")!;
+  assert.deepEqual(visibleSetupFilters(scheduled).find(filter => filter.name === "asOfDate")?.label, "Status as of", "a month report keeps its secondary status date");
   const month = buildReportRunRequest(scheduled, organization, { ...initialSetupState(scheduled, organization, today), month: "2026-08" });
   assert.ok(month.ok);
   await service.run(access, month.request);
   assert.deepEqual(seen.at(-1)!.request.period, { mode: "month", month: "2026-08" });
+  assert.equal("asOfDate" in seen.at(-1)!.request.filters, false, "an empty secondary date is omitted");
+  const statusDated = buildReportRunRequest(scheduled, organization, { ...initialSetupState(scheduled, organization, today), month: "2026-08", filters: { ...initialSetupState(scheduled, organization, today).filters, asOfDate: "2026-08-15" } });
+  assert.ok(statusDated.ok);
+  await service.run(access, statusDated.request);
+  assert.equal(seen.at(-1)!.request.filters.asOfDate, "2026-08-15");
 });
 
 test("setup validation names the missing field instead of sending an invalid request", () => {
@@ -119,7 +125,8 @@ test("setup validation names the missing field instead of sending an invalid req
 test("forecast and consolidation are setup sections, never generic filter fields", () => {
   for (const entry of entries()) {
     const names = visibleSetupFilters(entry).map(filter => filter.name);
-    for (const name of ["scenarioId", "inputVersion", "modelVersion", "asOfDate", "fromDate", "toDate", "month", "basis", "currency", "legalEntityIds", "propertyIds"]) assert.ok(!names.includes(name), `${entry.id} exposes ${name}`);
+    for (const name of ["scenarioId", "inputVersion", "modelVersion", ...periodFilterNamesFor(entry.period), "basis", "currency", "legalEntityIds", "propertyIds"]) assert.ok(!names.includes(name), `${entry.id} exposes ${name}`);
+    if (entry.source !== "rental" || entry.engineKey !== "rental.operational") assert.ok(!names.some(name => ["asOfDate", "fromDate", "toDate", "month"].includes(name)), `${entry.id} has no secondary dates`);
     const grouping = entry.filters.some(filter => filter.name === "grouping");
     assert.equal(grouping, ["balance-sheet", "cash-flow-statement", "income-statement", "income-statement-detailed"].includes(entry.id), `${entry.id} grouping`);
   }

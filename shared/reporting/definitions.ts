@@ -9,6 +9,7 @@ import {
   type ReportSetup,
   type ReportingBasis,
   type ReportingFilterDefinition,
+  type ReportingPeriodMode,
   type ReportingScopeKind,
 } from "./contracts";
 
@@ -156,12 +157,23 @@ function mapExistingFilter(item: ReturnType<typeof getReportFilterDefinition> ex
   } as ReportingFilterDefinition;
 }
 
-/** The report period is chosen once in setup and travels as `request.period`.
- * Legacy rental date filters are therefore not repeated as filter fields. */
-const RENTAL_PERIOD_FILTERS = new Set(["asOfDate", "fromDate", "toDate", "month"]);
+/**
+ * Filter names that would repeat the report period. The period is chosen once
+ * in setup and travels as `request.period`, so these are never filter fields.
+ * A secondary date that does not repeat the period (for example the
+ * tenant-status date of a month report) remains an optional filter.
+ */
+export function periodFilterNamesFor(period: ReportingPeriodMode): readonly string[] {
+  if (period === "as_of") return ["asOfDate"];
+  if (period === "month") return ["month"];
+  if (period === "range") return ["fromDate", "toDate", "month"];
+  return ["asOfDate", "fromDate", "toDate", "month"];
+}
 
 function rentalTransportDefinition(entry: ReportCatalogEntry): ReportDefinition {
-  const filters = (getReportFilterDefinition(entry.id as never) ?? []).filter(item => !RENTAL_PERIOD_FILTERS.has(item.name)).map(mapExistingFilter);
+  const repeated = new Set(periodFilterNamesFor(entry.period));
+  const filters = (getReportFilterDefinition(entry.id as never) ?? []).filter(item => !repeated.has(item.name)).map(mapExistingFilter)
+    .map(filter => filter.name === "asOfDate" ? { ...filter, label: "Status as of" } : filter);
   return parseReportDefinition({ id: entry.id, version: "1", title: entry.title, category: entry.category, source: "rental", setup: setup("optional", true), period: entry.period, basis: ["operational"], actuality: "actual", scopes: ["organization", "legal_entity", "property", "unit", "tenant", "tenancy"], requiredSources: entry.requiredSources, filters, columns: [column("row", "Report row", "json")], supportedExports: ["csv", "json", "html"], drilldownKinds: [], engineKey: "rental.operational", dependencies: [] });
 }
 
