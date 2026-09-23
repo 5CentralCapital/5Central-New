@@ -5,7 +5,7 @@ import express from "express";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { registerRequestBodyParsers } from "./request-body-parsers";
+import { mcpJsonBodyParser, registerRequestBodyParsers } from "./request-body-parsers";
 
 /*
  * The production /mcp route (server/rent-ops/mcp/routes.ts) hands req.body to
@@ -16,7 +16,9 @@ import { registerRequestBodyParsers } from "./request-body-parsers";
 function app() {
   const server = express();
   registerRequestBodyParsers(server);
-  server.post("/mcp", async (req, res) => {
+  // Mirrors server/rent-ops/mcp/routes.ts: authenticate, then parse, then handle.
+  const authenticate: express.RequestHandler = (req, res, next) => { if (req.get("authorization") === "Bearer synthetic") next(); else res.status(401).json({ error: "invalid_token" }); };
+  server.post("/mcp", authenticate, mcpJsonBodyParser, async (req, res) => {
     const mcp = new McpServer({ name: "body-limit-test", version: "1" });
     mcp.registerTool("stage_bytes", { description: "Report the decoded size of base64 content.", inputSchema: { contentBase64: z.string() } }, async ({ contentBase64 }) => {
       const bytes = Buffer.from(contentBase64, "base64").length;
@@ -40,7 +42,7 @@ test("a multi-megabyte base64 MCP upload passes the JSON parser while other rout
     const rpc = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "stage_bytes", arguments: { contentBase64: bytes.toString("base64") } } };
     const body = JSON.stringify(rpc);
     assert.ok(body.length > 4 * 1024 * 1024, "well above the 100 KB default");
-    const response = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body });
+    const response = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: "Bearer synthetic" }, body });
     const text = await response.text();
     assert.equal(response.status, 200, text);
     const parsed = JSON.parse(text) as { result?: { content?: { text: string }[] } };
@@ -52,8 +54,11 @@ test("a multi-megabyte base64 MCP upload passes the JSON parser while other rout
     const small = await fetch(`${base}/api/echo`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ a: 1 }) });
     assert.deepEqual(await small.json(), { keys: 1 });
 
-    const oversized = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ ...rpc, params: { ...rpc.params, arguments: { contentBase64: "A".repeat(17 * 1024 * 1024) } } }) });
+    const oversized = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: "Bearer synthetic" }, body: JSON.stringify({ ...rpc, params: { ...rpc.params, arguments: { contentBase64: "A".repeat(17 * 1024 * 1024) } } }) });
     assert.equal(oversized.status, 413, "MCP bodies are still bounded");
+
+    const anonymous = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json" }, body: "{not json" });
+    assert.equal(anonymous.status, 401, "an unauthenticated MCP body is rejected before it is parsed");
   } finally {
     listener.close();
   }

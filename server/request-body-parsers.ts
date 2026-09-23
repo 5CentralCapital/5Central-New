@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type RequestHandler } from "express";
 
 /**
  * MCP uploads carry file bytes as base64 inside JSON-RPC (stage_mra_packet and
@@ -8,12 +8,18 @@ import express, { type Express } from "express";
 export const MCP_JSON_BODY_LIMIT = "16mb";
 
 /**
- * Register the JSON and form parsers. The /mcp parser runs first; the global
- * parser then skips a request whose body is already parsed, so only MCP gets
- * the larger limit. Raw-body webhook routes must be registered before this.
+ * The /mcp JSON parser. The MCP route mounts it after bearer-token
+ * verification so an anonymous client cannot make the server buffer and parse
+ * a 16 MB body.
+ */
+export const mcpJsonBodyParser: RequestHandler = express.json({ limit: MCP_JSON_BODY_LIMIT });
+
+/**
+ * Register the global JSON and form parsers. /mcp is skipped here and parsed
+ * by its own route. Raw-body webhook routes must be registered before this.
  */
 export function registerRequestBodyParsers(app: Express): void {
-  app.use("/mcp", express.json({ limit: MCP_JSON_BODY_LIMIT }));
-  app.use(express.json());
+  const json = express.json();
+  app.use((req, res, next) => { if (/^\/mcp\/?$/i.test(req.path)) next(); else json(req, res, next); });
   app.use(express.urlencoded({ extended: false }));
 }
