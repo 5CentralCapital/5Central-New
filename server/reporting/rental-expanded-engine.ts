@@ -184,7 +184,10 @@ function vehicleRows(context: ReportingEngineContext, snapshot: RentOpsSnapshot)
   for (const application of snapshot.applications) {
     if (!application.vehicles?.length) continue;
     const tenancy = application.convertedTenancyId ? snapshot.tenancies.find(item => item.id === application.convertedTenancyId) : currentByApplication.get(application.id);
-    if (tenancy && !scopeMatches(context, tenancy.propertyId, tenancy.unitId, tenancy.primaryPersonId, tenancy.id)) continue;
+    // An application-only record is matched on the application's own
+    // property/unit; a tenant or tenancy selection never matches it.
+    if (tenancy ? !scopeMatches(context, tenancy.propertyId, tenancy.unitId, tenancy.primaryPersonId, tenancy.id) : !scopeMatches(context, application.propertyId, application.unitId, null, null)) continue;
+    if (!tenancy && (context.request.scope.tenantIds.length || context.request.scope.tenancyIds.length || (context.request.scope.unitIds.length && !application.unitId))) continue;
     application.vehicles.forEach((vehicle, index) => rows.push({
       applicationId: application.id,
       tenancyId: tenancy?.id ?? null,

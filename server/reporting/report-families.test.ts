@@ -451,3 +451,19 @@ test("lender package lists each template section with its frozen run state", asy
   assert.deepEqual(result.rows.map(row => [row.rowId, row.values.state]), [["lender-package:balance_sheet", "unavailable"], ["lender-package:rent_roll", "ready"]]);
   assert.equal(result.missingData?.length, 1);
 });
+
+test("tenant vehicles on application-only records honor unit and tenant selections", async () => {
+  const snapshot = syntheticRentOpsSnapshot();
+  snapshot.applications = snapshot.applications.map(application => application.id === "demo-application-1"
+    ? { ...application, unitId: "demo-unit-a-2", vehicles: [{ makeModel: "Applicant sedan", plateLastFour: "1111" }] }
+    : application);
+  snapshot.tenancies = snapshot.tenancies.map(tenancy => tenancy.id === "demo-tenancy-1" ? { ...tenancy, applicationId: "demo-application-9" } : tenancy);
+  snapshot.applications = [...snapshot.applications, { ...snapshot.applications[0]!, id: "demo-application-9", unitId: "demo-unit-a-1", convertedTenancyId: "demo-tenancy-1", vehicles: [{ makeModel: "Tenant truck", plateLastFour: "2222" }] }];
+  const engine = createRentalExtendedReportingEngine({ async readSnapshot() { return { snapshot }; } });
+  const all = await engine.run(context("tenant-vehicles", { mode: "as_of", asOfDate: "2026-09-15" }));
+  assert.deepEqual(all.rows.map(row => row.values.makeModel).sort(), ["Applicant sedan", "Tenant truck"]);
+  const byTenant = await engine.run(context("tenant-vehicles", { mode: "as_of", asOfDate: "2026-09-15" }, { filters: { tenantIds: ["demo-person-1"] } }));
+  assert.deepEqual(byTenant.rows.map(row => row.values.makeModel), ["Tenant truck"]);
+  const byUnit = await engine.run(context("tenant-vehicles", { mode: "as_of", asOfDate: "2026-09-15" }, { filters: { unitIds: ["demo-unit-a-1"] } }));
+  assert.deepEqual(byUnit.rows.map(row => row.values.makeModel), ["Tenant truck"]);
+});
