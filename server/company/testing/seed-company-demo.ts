@@ -5,6 +5,9 @@ import { attestTransport, loadAuthenticatedPrincipal } from "../authorization";
 import { SYNTHETIC_COMPANY } from "./synthetic-database";
 import { syntheticForecastAssumptionsInput, SYNTHETIC_FORECAST_START } from "../../forecasting/testing/fixture";
 import { REVIEW_DETECTOR_ACTOR, runReviewDetection } from "../../review-cases/detection";
+import { PostgresRentOpsRepository } from "../../rent-ops/repositories/postgres";
+import { RentOpsService } from "../../rent-ops/services/service";
+import { nowIsoDate } from "../../rent-ops/domain/dates";
 
 /**
  * Synthetic company data for the local demo and browser checks: a PM statement
@@ -43,8 +46,8 @@ export async function seedCompanyDemo(executor: RentOpsQueryExecutor, services: 
   const snapshotId = String(snapshot.affectedRecordIds.find(id => id !== scenarioId) ?? snapshot.affectedRecordIds[0]);
   const detail = await services.forecasting.get(access.principal, { scope: { organizationId }, scenarioId });
   try {
-    await services.forecasting.execute("forecast.scenario.approve", envelope({ organizationId }, { scenarioId, snapshotId }, detail.recordRevision), access);
-  } catch { /* Approval rules may require a complete snapshot; the draft remains useful for the demo. */ }
+    await services.forecasting.execute("forecast.scenario.approve", envelope({ organizationId }, { scenarioId, snapshotId, acknowledgeIncompleteOpening: true, reason: "Synthetic demo: opening cash is intentionally not set" }, detail.recordRevision), access);
+  } catch (error) { throw new Error(`Demo forecast approval failed: ${error instanceof Error ? error.message : String(error)}`); }
 
   // A rehab project with an approved budget, a commitment and a cost-to-complete override.
   const projectScope = { organizationId, legalEntityId: entityId, propertyId };
@@ -78,5 +81,15 @@ export async function seedCompanyDemo(executor: RentOpsQueryExecutor, services: 
     maturityOn: "2027-09-01", amortizationMonths: null, balloonCents: "25000000", dayCount: "30_360",
   });
 
+  // The shared synthetic fixture dates a "future" tenancy's move-in in September 2026. Once that date
+  // passes, the rent roll correctly refuses a future tenancy that has already moved in, so the local
+  // demo advances such tenancies through the audited patch path before running detection.
+  const rental = new RentOpsService(new PostgresRentOpsRepository(executor));
+  const today = nowIsoDate();
+  for (const tenancy of (await rental.snapshot()).tenancies) {
+    if (tenancy.status === "future" && tenancy.actualMoveInOn && tenancy.actualMoveInOn <= today) {
+      await rental.patchRecord("tenancy", tenancy.id, tenancy.recordRevision ?? 1, { status: "current" }, { actorSubject: actorId, occurredAt: new Date().toISOString() });
+    }
+  }
   await runReviewDetection(executor, organizationId, { actorId: REVIEW_DETECTOR_ACTOR });
 }
