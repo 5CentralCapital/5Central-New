@@ -29,7 +29,7 @@ Writes stay off.
 | 6 | **Refresh-token 5-year hard expiry** (policy Nov 2025); request `x_refresh_token_hard_expires_in` | Pass | Sends `x-include-refresh-token-hard-expires-in: true` and stores the hard expiry (`oauth.ts`). |
 | 7 | **Reconnect URL mandatory** (since Feb 24 2026); `invalid_grant` → reconnect | Pass / confirm | `invalid_grant` marks the connection `needs_reconnect`; the reconnect entry is `/ops?section=accounting`. Confirm the Reconnect URL field in the portal. |
 | 8 | **Disconnect**: revoke tokens at Intuit, stop access, Disconnect URL page | Pass | Revoke then clear credentials and capabilities; uncertain revoke keeps the connection for retry; `/quickbooks/disconnected` page. |
-| 9 | **Token security**: never log or expose tokens; encrypt at rest | Pass | AES-256-GCM with scope-bound AAD (`token-crypto.ts`); errors carry fault codes only. Key must be identical on web and worker (Blueprint comment + runbook). |
+| 9 | **Token security**: never log or expose tokens; encrypt at rest | Pass | AES-256-GCM with scope-bound AAD (`token-crypto.ts`); errors carry fault codes only. One key for web and worker: it lives in the shared `5central-ops-production` group; the preflight checks it decodes to 32 bytes. |
 | 10 | **minorversion 75** on every request (versions 1–74 retired Aug 2025) | Pass | `DEFAULT_QUICKBOOKS_MINOR_VERSION = "75"` applied to reads, queries, CDC, writes and reports; tested. |
 | 11 | **Throttling**: 500 req/min/realm, 10 concurrent; back off on HTTP 429 | Pass | 429 sets a per-realm cooldown of `Retry-After` or 60 s; worker batch size 4 keeps concurrency low. |
 | 12 | **`intuit_tid`** captured for support | Pass | Captured on every response and persisted with write attempts and capability evidence. |
@@ -55,13 +55,14 @@ Writes stay off.
 - `server/accounting/provider-sync.ts`: list queries include inactive records (item 14).
 - `server/accounting/qbo-write.ts`: record-only Invoice guard and post-save verification (item 22).
 - `scripts/company/qbo-production-preflight.ts`: explicit `off` write switches read as intended.
-- `render.yaml`: QBO values on the web service (OAuth callback and webhooks run there) and the
-  worker, with one shared encryption key.
+- Hosting (Codex's `render.yaml`, verified): all `QBO_*` values in the shared group attached to
+  both the web service (OAuth callback, webhooks) and the worker (sync, CDC, fetches); both write
+  switches pinned `off` on both services.
 
 ## Before the first production connection
 
 1. Notify Intuit (item 27).
-2. Set the production values on both Render services; run
-   `npm run company:qbo-preflight -- --network` in a Render shell.
+2. Set the production values in `5central-ops-production`; run
+   `npm run company:qbo-preflight -- --network --database` in a Render web shell.
 3. Connect one company at a time and reconcile a closed month before the next.
 4. Keep writes off until the read-only comparison and the books cleanup are signed off.

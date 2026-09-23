@@ -20,10 +20,14 @@ cannot see or revoke sandbox connections, so disconnect those first.
 | `QBO_REDIRECT_URI` | `https://5central.capital/api/accounting/qbo/callback`, unchanged; must match the portal's Production redirect URI exactly |
 | `QBO_TOKEN_ENCRYPTION_KEY` | Unchanged. Do not rotate it during the switch. |
 | `QBO_OAUTH_DISCOVERY` | Leave unset |
-| `QBO_WRITES_ENABLED`, `QBO_PRODUCTION_WRITES`, `QBO_WRITE_TYPES` | Leave unset until the read-only comparison and books cleanup are signed off |
+| `QBO_WRITES_ENABLED`, `QBO_PRODUCTION_WRITES` | `off` (pinned in `render.yaml` on both services). Keep off until the read-only comparison and books cleanup are signed off |
+| `QBO_WRITE_TYPES` | Leave unset |
 
-Replit secrets are not tied to a git branch. The next deploy of any branch
-uses whatever the deployment secrets hold at that moment.
+On Render these values live in the external group `5central-ops-production`,
+which both the web service (connect flow, callback, webhooks) and the worker
+(sync, change-data-capture, webhook fetches) read. Group changes apply on the
+next deploy or restart of each service. The webhook verifier token
+(`QBO_WEBHOOK_VERIFIER_TOKEN_PRODUCTION`) goes only in the web group.
 
 ## Preflight
 

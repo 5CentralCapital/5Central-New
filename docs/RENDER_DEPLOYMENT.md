@@ -131,13 +131,20 @@ Production web:
 Codex client IDs have been reviewed for MRA mutation access.
 
 The Blueprint sets `RENT_OPS_ADMIN_OAUTH_ORIGIN=https://5central.capital`,
-which is one of the two canonical origins accepted by the current app. The
-other accepted origin is the existing Replit origin. Register the branded
-callback `https://5central.capital/api/rent-ops/auth/oauth/callback` with the
-OAuth provider when that domain is attached. The app currently rejects other
-origins, including Render's `onrender.com` hostnames. A staging login therefore
-requires a separately reviewed narrow app change to permit its final canonical
-staging origin; do not claim staging OAuth works on the Render hostname.
+which is one of the two canonical origins accepted by the app. The other
+accepted origin is the existing Replit origin. Register the branded callback
+`https://5central.capital/api/rent-ops/auth/oauth/callback` with the OAuth
+provider when that domain is attached.
+
+The staging Blueprint sets
+`RENT_OPS_ADMIN_OAUTH_ORIGIN=https://5central-ops-staging-web.onrender.com`.
+The app accepts that origin only when Render's own variables identify the
+process as the `5central-ops-staging-web` service on that hostname
+(`RENDER=true`, `RENDER_SERVICE_NAME`, `RENDER_EXTERNAL_HOSTNAME`) and
+`QBO_ENVIRONMENT` is not `production` (`server/admin-oauth.ts`). Every other
+`onrender.com` hostname, including production's, is still rejected. Add
+`https://5central-ops-staging-web.onrender.com/api/rent-ops/auth/oauth/callback`
+to the Auth0 application's allowed callbacks before testing staging sign-in.
 
 The staging web-only group has the staging host database URL, admin email,
 public URL, `QBO_WEBHOOK_VERIFIER_TOKEN_SANDBOX`, plus separate staging-bucket
@@ -189,9 +196,13 @@ The live read-only inventory is schema registry v42 (42 registered rows) and
 `company_investor_contract_documents` currently exists. Full document
 rebinding and verification to the private S3 buckets is mandatory before
 production cutover. This Render configuration does not move those objects or
-apply database migrations. The document-move plan and migration review are
-separate release gates; retain source object identity, checksums, bindings, and
-independent reconciliation evidence.
+apply database migrations. The document move is implemented as migration 049
+(append-only `rent_ops_document_object_relocations`) and the reviewed
+`npm run company:document-relocation` operator; the original bindings, source
+object identities and checksums are never rewritten. Procedure, IAM and
+evidence: `docs/company/document-relocation.md`. Migrations 043–049 and the
+runtime grants go through `npm run company:production-schema`
+(`docs/company/production-release-2026-09-23.md`).
 
 The isolated staging Neon branch must be created and verified before setting
 staging `RENT_OPS_RUNTIME_DATABASE_URL` and the staging web
@@ -215,8 +226,8 @@ checks. Neither `RENT_OPS_DATABASE_URL` nor
    branch/roles/schema, staging S3 bucket and canary, and scoped staging IAM
    identities are ready. Set the web-only host URL and S3 values in Render.
    Keep QBO pointed to sandbox and both write flags off. Staging manager login
-   remains blocked until a narrow origin allowlist change and OAuth callback
-   review are complete.
+   works on the staging hostname once the staging callback is listed in
+   Auth0 (see the admin OAuth note above).
 3. After staging is running, verify Render logs contain no credentials, the
    startup database and object-store privilege probes pass, `/readyz` returns
    200, login/email/webhook safety is as intended, and worker polling/shutdown
