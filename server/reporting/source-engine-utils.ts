@@ -1,4 +1,4 @@
-import { legacyNumberToCents, parseCents, type MoneyCents } from "../../shared/company";
+import { parseCents } from "../../shared/company";
 import type { IsoDate } from "../../shared/company";
 import type {
   ReportColumn,
@@ -203,11 +203,4 @@ export function resultFromRecords(
     missingData: input.missingData ?? [],
     drilldowns: input.drilldowns ?? [],
   };
-}
-
-export function asMoneyCents(value: unknown): MoneyCents | null {
-  if (value === null || value === undefined) return null;
-  if (typeof value === "number") return legacyNumberToCents(value);
-  if (typeof value === "string") return parseCents(value);
-  return null;
 }

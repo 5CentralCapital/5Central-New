@@ -179,10 +179,6 @@ function statementFor(reportId: CombinedFinancialReportId): FinancialReportingLi
   return null;
 }
 
-function accountKey(line: FinancialReportingLine, _consolidated: boolean): string {
-  const identity = line.canonicalAccountId ?? `${line.sourceRealmId ?? line.legalEntityId}:${line.accountId}`;
-  return `${identity}:${line.currency}`;
-}
 
 function budgetPeriodInScope(period: string, context: ReportingEngineContext): boolean {
   const bounds = periodBounds(context);
@@ -190,12 +186,8 @@ function budgetPeriodInScope(period: string, context: ReportingEngineContext): b
   return (!bounds.from || month >= bounds.from.slice(0, 7)) && (!bounds.through || month <= bounds.through.slice(0, 7));
 }
 
-function budgetAccountKey(line: FinancialReportingBudgetLine): string {
-  const identity = line.canonicalAccountId ?? `${line.sourceRealmId ?? line.legalEntityId}:${line.accountId}`;
-  return `${identity}:${line.currency}`;
-}
-
-function consolidationLineKey(line: { readonly accountId: string; readonly canonicalAccountId?: string | null; readonly sourceRealmId?: string | null; readonly legalEntityId: string; readonly currency: string }): string {
+/** Realm-local account IDs are merged only through an approved canonical ID. */
+function accountKey(line: { readonly accountId: string; readonly canonicalAccountId?: string | null; readonly sourceRealmId?: string | null; readonly legalEntityId: string; readonly currency: string }): string {
   const identity = line.canonicalAccountId ?? `${line.sourceRealmId ?? line.legalEntityId}:${line.accountId}`;
   return `${identity}:${line.currency}`;
 }
@@ -302,17 +294,17 @@ export function createCombinedFinancialReportingEngine(read: CombinedFinancialRe
         if (policy.eliminationPolicy === "approved_version") {
           for (const item of source.eliminations ?? []) {
             if (!selectedEntities.has(String(item.entityId)) || item.currency !== policy.currency) throw new ReportingError("report_unavailable", "The accounting mirror returned an elimination outside the selected entity set or report currency.", 409, { dependency: policy.eliminationVersion ?? "approved_elimination_version" });
-            const key = consolidationLineKey({ accountId: item.accountId, canonicalAccountId: item.canonicalAccountId, sourceRealmId: item.sourceRealmId, legalEntityId: item.entityId, currency: item.currency });
+            const key = accountKey({ accountId: item.accountId, canonicalAccountId: item.canonicalAccountId, sourceRealmId: item.sourceRealmId, legalEntityId: item.entityId, currency: item.currency });
             eliminationByAccount.set(key, (eliminationByAccount.get(key) ?? BigInt(0)) + centsToBigInt(item.amountCents));
           }
         }
         const effectiveLines = lines.map(line => effectiveConsolidationLine(line, policy));
         const entitiesByKey = new Map<string, Set<string>>();
         for (const line of effectiveLines) {
-          const key = consolidationLineKey(line);
+          const key = accountKey(line);
           entitiesByKey.set(key, (entitiesByKey.get(key) ?? new Set<string>()).add(line.legalEntityId));
         }
-        rows = aggregate(effectiveLines, line => consolidationLineKey(line), line => ({ consolidationKey: consolidationLineKey(line), accountId: line.canonicalAccountId ?? line.accountId, accountName: line.accountName ?? null, category: line.category ?? null, sourceRealmId: line.sourceRealmId ?? null, entityCount: entitiesByKey.get(consolidationLineKey(line))?.size ?? 0, eliminationVersion: policy.eliminationPolicy === "approved_version" ? policy.eliminationVersion ?? null : null, eliminationPolicy: policy.eliminationPolicy })).map(row => {
+        rows = aggregate(effectiveLines, line => accountKey(line), line => ({ consolidationKey: accountKey(line), accountId: line.canonicalAccountId ?? line.accountId, accountName: line.accountName ?? null, category: line.category ?? null, sourceRealmId: line.sourceRealmId ?? null, entityCount: entitiesByKey.get(accountKey(line))?.size ?? 0, eliminationVersion: policy.eliminationPolicy === "approved_version" ? policy.eliminationVersion ?? null : null, eliminationPolicy: policy.eliminationPolicy })).map(row => {
           const value = row as { consolidationKey: string; accountId: string; amountCents: string; currency: string; sourceRealmId: string | null };
           const key = value.consolidationKey;
           const adjustment = eliminationByAccount.get(key) ?? BigInt(0);
@@ -338,11 +330,11 @@ export function createCombinedFinancialReportingEngine(read: CombinedFinancialRe
         if (!source.fundMappingVersion) throw new ReportingError("report_unavailable", "Balance sheet by fund type requires an approved fund mapping version.", 409, { dependency: "approved_fund_mapping" });
         const withoutFund = lines.filter(line => !line.fundType);
         if (withoutFund.length) missingData.push(missing("fund_mapping_missing", "Some balance-sheet lines have no approved fund-type mapping.", "partial"));
-        rows = aggregate(lines.filter(line => line.fundType), line => `${line.fundType}:${accountKey(line, false)}`, line => ({ fundType: line.fundType, accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null }));
+        rows = aggregate(lines.filter(line => line.fundType), line => `${line.fundType}:${accountKey(line)}`, line => ({ fundType: line.fundType, accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null }));
       } else if (reportId === "budget-vs-actual") {
         if (!source.budgetLines) throw new ReportingError("report_unavailable", "No approved budget version is available for the selected period.", 409, { dependency: "approved_budget_version" });
         const actual = new Map<string, { amount: bigint; line: FinancialReportingLine }>();
-        for (const line of lines) { const key = `${accountKey(line, false)}:${line.propertyId ?? ""}:${line.unitId ?? ""}:${line.month ?? line.date.slice(0, 7)}`; const current = actual.get(key); actual.set(key, { amount: (current?.amount ?? BigInt(0)) + centsToBigInt(line.amountCents), line }); }
+        for (const line of lines) { const key = `${accountKey(line)}:${line.propertyId ?? ""}:${line.unitId ?? ""}:${line.month ?? line.date.slice(0, 7)}`; const current = actual.get(key); actual.set(key, { amount: (current?.amount ?? BigInt(0)) + centsToBigInt(line.amountCents), line }); }
         const budgetGroups = new Map<string, { amount: bigint; line: FinancialReportingBudgetLine; ids: string[] }>();
         for (const line of source.budgetLines) {
           if (!budgetPeriodInScope(line.period, context)) continue;
@@ -350,14 +342,14 @@ export function createCombinedFinancialReportingEngine(read: CombinedFinancialRe
           if (context.request.scope.propertyIds.length && (!line.propertyId || !context.request.scope.propertyIds.includes(line.propertyId as typeof context.request.scope.propertyIds[number]))) continue;
           if (context.request.scope.unitIds.length && (!line.unitId || !context.request.scope.unitIds.includes(line.unitId as typeof context.request.scope.unitIds[number]))) continue;
           if (Array.isArray(context.request.filters.accountIds) && context.request.filters.accountIds.length && !context.request.filters.accountIds.includes(line.accountId)) continue;
-          const key = `${budgetAccountKey(line)}:${line.propertyId ?? ""}:${line.unitId ?? ""}:${line.period}`;
+          const key = `${accountKey(line)}:${line.propertyId ?? ""}:${line.unitId ?? ""}:${line.period}`;
           const current = budgetGroups.get(key);
           if (current) { current.amount += centsToBigInt(line.budgetCents); current.ids.push(line.id); }
           else budgetGroups.set(key, { amount: centsToBigInt(line.budgetCents), line, ids: [line.id] });
         }
         const matchedActuals = new Set<string>();
         rows = Array.from(budgetGroups.values()).map(({ amount, line: budget, ids }) => {
-          const actualKey = `${budgetAccountKey(budget)}:${budget.propertyId ?? ""}:${budget.unitId ?? ""}:${budget.period}`;
+          const actualKey = `${accountKey(budget)}:${budget.propertyId ?? ""}:${budget.unitId ?? ""}:${budget.period}`;
           const actualLine = actual.get(actualKey);
           if (actualLine) matchedActuals.add(actualKey);
           if (!actualLine) missingData.push(missing("actual_line_missing", `No actual accounting line was found for budget period ${budget.period}.`, "partial"));
@@ -371,32 +363,32 @@ export function createCombinedFinancialReportingEngine(read: CombinedFinancialRe
         if (!source.unitAllocationVersion) throw new ReportingError("report_unavailable", "Income statement by unit requires an approved dated unit allocation version.", 409, { dependency: "approved_allocation_version" });
         const unallocated = lines.filter(line => !line.unitId);
         if (unallocated.length) missingData.push(missing("unit_allocation_missing", "Some income lines have no approved unit allocation.", "partial"));
-        rows = aggregate(lines.filter(line => line.unitId), line => `${line.unitId}:${accountKey(line, false)}`, line => ({ unitId: line.unitId, accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null, propertyId: line.propertyId ?? null, category: line.category ?? null }));
+        rows = aggregate(lines.filter(line => line.unitId), line => `${line.unitId}:${accountKey(line)}`, line => ({ unitId: line.unitId, accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null, propertyId: line.propertyId ?? null, category: line.category ?? null }));
       } else if (reportId === "portfolio-financials") {
         if (!source.propertyMappingVersion) throw new ReportingError("report_unavailable", "Property financial reports require an approved dated property allocation version.", 409, { dependency: "effective_property_entity_mapping" });
         const unallocated = lines.filter(line => !line.propertyId);
         if (unallocated.length) missingData.push(missing("property_allocation_missing", "Some financial lines have no verified dated property mapping.", "partial"));
         // Lines without a dated property mapping stay in an explicit
         // unallocated bucket instead of being spread across properties.
-        rows = aggregate(lines, line => `${line.propertyId ?? "unallocated"}:${accountKey(line, false)}`, line => ({ propertyId: line.propertyId ?? null, propertyLabel: line.propertyId ?? "Unallocated", accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null, category: line.category ?? null }));
+        rows = aggregate(lines, line => `${line.propertyId ?? "unallocated"}:${accountKey(line)}`, line => ({ propertyId: line.propertyId ?? null, propertyLabel: line.propertyId ?? "Unallocated", accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null, category: line.category ?? null }));
       } else if (reportId === "property-t12") {
         if (!source.propertyMappingVersion) throw new ReportingError("report_unavailable", "Property T12 requires an approved dated property mapping version.", 409, { dependency: "effective_property_entity_mapping" });
         const unallocated = lines.filter(line => !line.propertyId);
         if (unallocated.length || source.propertyAttribution?.unattributedLineCount) missingData.push(missing("property_allocation_missing", "Some T12 lines have no verified dated property mapping.", "partial"));
-        rows = aggregate(lines.filter(line => line.propertyId), line => `${line.propertyId}:${accountKey(line, false)}:${line.month ?? line.date.slice(0, 7)}`, line => ({ propertyId: line.propertyId, accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null, month: line.month ?? line.date.slice(0, 7), category: line.category ?? null }));
+        rows = aggregate(lines.filter(line => line.propertyId), line => `${line.propertyId}:${accountKey(line)}:${line.month ?? line.date.slice(0, 7)}`, line => ({ propertyId: line.propertyId, accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null, month: line.month ?? line.date.slice(0, 7), category: line.category ?? null }));
       } else if (reportId === "accounts-receivable") {
         const receivable = lines.filter(line => line.category === "accounts_receivable" || line.category === "receivable");
         if (!receivable.length && lines.length) missingData.push(missing("receivable_classification_missing", "The accounting mirror returned lines without an approved receivable classification.", "partial"));
-        rows = aggregate(receivable, line => `${line.legalEntityId}:${line.propertyId ?? ""}:${accountKey(line, false)}`, line => ({ legalEntityId: line.legalEntityId, propertyId: line.propertyId ?? null, accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null }));
+        rows = aggregate(receivable, line => `${line.legalEntityId}:${line.propertyId ?? ""}:${accountKey(line)}`, line => ({ legalEntityId: line.legalEntityId, propertyId: line.propertyId ?? null, accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null }));
       } else if (reportId === "accounts-payable") {
         const payable = lines.filter(line => line.category === "accounts_payable" || line.category === "payable");
         if (!payable.length && lines.length) missingData.push(missing("payable_classification_missing", "The accounting mirror returned lines without an approved payable classification.", "partial"));
-        rows = aggregate(payable, line => `${line.legalEntityId}:${line.propertyId ?? ""}:${accountKey(line, false)}`, line => ({ legalEntityId: line.legalEntityId, propertyId: line.propertyId ?? null, accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null }));
+        rows = aggregate(payable, line => `${line.legalEntityId}:${line.propertyId ?? ""}:${accountKey(line)}`, line => ({ legalEntityId: line.legalEntityId, propertyId: line.propertyId ?? null, accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null }));
       } else if (reportId === "cash-position") {
         if (!source.bankBalances) throw new ReportingError("report_unavailable", "Bank observations are not available for cash position.", 409, { dependency: "bank_observations" });
         rows = source.bankBalances.map(balance => ({ accountId: balance.accountId, legalEntityId: balance.legalEntityId, asOfDate: balance.asOfDate, balanceCents: balance.balanceCents, currency: balance.currency, sourceId: balance.sourceId }));
       } else {
-        rows = aggregate(lines, line => accountKey(line, false), line => ({ accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null, legalEntityId: line.legalEntityId, category: line.category ?? null }));
+        rows = aggregate(lines, line => accountKey(line), line => ({ accountId: line.canonicalAccountId ?? line.accountId, sourceRealmId: line.sourceRealmId ?? null, accountName: line.accountName ?? null, legalEntityId: line.legalEntityId, category: line.category ?? null }));
       }
       const columns = reportId === "budget-vs-actual"
         ? reportColumns([{ id: "accountId", label: "Account", type: "text" }, { id: "propertyId", label: "Property", type: "text" }, { id: "unitId", label: "Unit", type: "text" }, { id: "period", label: "Period", type: "date" }, { id: "budgetCents", label: "Budget", type: "money" }, { id: "actualCents", label: "Actual", type: "money" }, { id: "varianceCents", label: "Variance", type: "money" }, { id: "currency", label: "Currency", type: "text" }])
@@ -417,8 +409,4 @@ export function createCombinedFinancialReportingEngine(read: CombinedFinancialRe
       return { ...result, coverage: [coverage(context, source, result.rows.length)] };
     },
   };
-}
-
-export function createUnavailableCombinedFinancialEngine(reason = "No accounting mirror and mapping reader is registered."): ReportingEngine {
-  return { key: "combined.financial", reportIds: [...COMBINED_FINANCIAL_REPORT_IDS], ready: false, reason, async run() { throw new ReportingError("report_unavailable", reason, 409, { dependency: "verified_quickbooks_books" }); } };
 }

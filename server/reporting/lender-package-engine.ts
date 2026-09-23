@@ -40,7 +40,3 @@ export function createLenderManagementPackageEngine(read: LenderPackageReadPort)
     },
   };
 }
-
-export function createUnavailableLenderPackageEngine(reason = "No book-report and template reader is registered."): ReportingEngine {
-  return { key: "combined.lender-package", reportIds: ["lender-management-package"], ready: false, reason, async run() { throw new ReportingError("report_unavailable", reason, 409, { dependency: "required_templates" }); } };
-}

@@ -119,7 +119,3 @@ export function createTimeReportingEngine(read: TimeReportingReadPort): Reportin
     },
   };
 }
-
-export function createUnavailableTimeReportingEngine(reason = "QuickBooks Time read source is not registered."): ReportingEngine {
-  return { key: "company.time", reportIds: [...TIME_REPORT_IDS], ready: false, reason, async run() { throw new ReportingError("report_unavailable", reason, 409, { dependency: "time_entries" }); } };
-}

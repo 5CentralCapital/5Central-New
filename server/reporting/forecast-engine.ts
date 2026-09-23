@@ -149,7 +149,3 @@ export function createForecastReportingEngine(read: ForecastReportingReadPort): 
     },
   };
 }
-
-export function createUnavailableForecastEngine(reason = "No versioned forecast scenario reader is registered."): ReportingEngine {
-  return { key: "combined.forecast", reportIds: [...FORECAST_REPORT_IDS], ready: false, reason, async run() { throw new ReportingError("report_unavailable", reason, 409, { dependency: "versioned_forecast_inputs" }); } };
-}
