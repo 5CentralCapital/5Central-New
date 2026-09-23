@@ -57,6 +57,7 @@ export default function InvestorOverview() {
   const [loading, setLoading] = useState(true);
   const [expandedInvestor, setExpandedInvestor] = useState<string | null>(null);
 
+  const [loadFailed, setLoadFailed] = useState(false);
   useEffect(() => {
     fetch("/api/admin/investors", { credentials: "include" })
       .then(r => { if (!r.ok) throw new Error("Failed to fetch"); return r.json(); })
@@ -64,7 +65,7 @@ export default function InvestorOverview() {
         if (Array.isArray(data)) setProfiles(data);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(() => { setLoadFailed(true); setLoading(false); });
   }, []);
 
   /* ── Computed data ── */
@@ -96,6 +97,8 @@ export default function InvestorOverview() {
   const totalBalloon = totalDealBalloon;
 
   if (loading) return <div style={{ textAlign: "center", padding: 60, color: "var(--color-text-muted)" }}>Loading investor data…</div>;
+  // Without this, a failed load rendered every total as $0.
+  if (loadFailed) return <div role="alert" style={{ textAlign: "center", padding: 60, color: "var(--color-danger)" }}>Investor data could not be loaded. Reload the page to try again.</div>;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
