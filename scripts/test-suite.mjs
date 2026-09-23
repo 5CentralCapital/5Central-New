@@ -15,6 +15,9 @@ const roots = suite === "company"
     "server/intake", "shared/intake", "server/time", "shared/time", "client/src/features/time",
     "server/reporting", "shared/reporting", "client/src/features/reporting",
     "server/work-orders", "shared/work-orders", "client/src/features/work-orders",
+    // lane-e-nav: manager workspace read models and pages
+    "server/workspaces", "shared/workspaces", "client/src/features/workspaces",
+    "scripts/company/desktop-config.test.ts",
   ]
   : suite === "all"
     ? ["server", "shared", "client/src/features", "scripts", "client/src/components/account-entry.test.ts"]

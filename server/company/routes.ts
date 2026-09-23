@@ -17,6 +17,8 @@ import type { TimeServices } from '../time/service';
 import { registerReportingHttpRoutes, type ReportingPort } from '../reporting';
 import { registerWorkOrderRoutes } from '../work-orders/http';
 import type { WorkOrderPort } from '../work-orders/port';
+// lane-e-nav: manager workspace read endpoints
+import { registerWorkspaceRoutes } from '../workspaces/routes';
 
 export interface CompanyProjectPort {
   list(principal: AuthenticatedPrincipal, query: ProjectListQuery): Promise<unknown>;
@@ -65,6 +67,8 @@ export function registerCompanyRoutes(app: Express, options: {
       actorId: companyWebActor(request), organizationId, role: 'admin',
     }) }),
   });
+  // lane-e-nav: manager workspace read endpoints
+  registerWorkspaceRoutes(app, { executor, requireAdmin });
   const web = attestTransport('web');
   app.get('/api/company/context', requireAdmin, companyReadHandler(async (req, res) => {
     res.json(await readCompanyContext(executor, companyWebActor(req), 'admin'));
