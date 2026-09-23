@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { QuickBooksApiResponse, QuickBooksJsonObject } from "../../../shared/accounting/quickbooks";
+import { canonicalizeDecimal, legacyNumberToDecimal } from "../../../shared/company";
 import { canonicalJsonSha256 } from "../../company/commands/fingerprint";
 import { QuickBooksIntegrationError, isQuickBooksRequestNotSent } from "./errors";
 
@@ -91,8 +92,26 @@ function providerVersion(response: QuickBooksApiResponse): string | undefined {
   return typeof value === "string" || typeof value === "number" ? String(value) : undefined;
 }
 
+function decimalText(value: unknown): string | null {
+  try {
+    if (typeof value === "number") return legacyNumberToDecimal(value);
+    if (typeof value === "string") return canonicalizeDecimal(value);
+  } catch {
+    // Not a plain decimal; the comparison fails closed.
+  }
+  return null;
+}
+
+/**
+ * Provider responses are parsed losslessly, so a number arrives as its JSON
+ * lexeme ("200.0"), while the request holds a JavaScript number (200).
+ * Numbers therefore compare as canonical decimals, never as raw text.
+ */
 function scalarEqual(left: unknown, right: unknown): boolean {
-  if (typeof left === "number" || typeof right === "number") return String(left) === String(right);
+  if (typeof left === "number" || typeof right === "number") {
+    const leftDecimal = decimalText(left);
+    return leftDecimal !== null && leftDecimal === decimalText(right);
+  }
   return left === right;
 }
 
