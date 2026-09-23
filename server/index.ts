@@ -18,6 +18,7 @@ import { publicRequestError } from "./request-errors";
 import { sanitizeApiPathForLogging } from "./request-logging";
 import { applicantPageSecurityHeaders } from "./applicant-page-security";
 import { securityHeaders } from "./security-headers";
+import { installGracefulShutdown, shutdownGraceMs } from "./graceful-shutdown";
 import {
   assertRentOpsProductionConfiguration,
   createRentOpsReadinessGate,
@@ -47,7 +48,7 @@ if (isProduction) {
   assertRentOpsProductionConfiguration(process.env);
 }
 
-// Trust proxy for Replit (behind reverse proxy)
+// Exactly one trusted reverse-proxy hop (Render's router; Replit's before it).
 app.set("trust proxy", 1);
 app.use(securityHeaders({ production: isProduction }));
 
@@ -154,6 +155,15 @@ app.use((req, res, next) => {
     }, () => {
       readiness.markReady();
       log(`serving on port ${port}`);
+    });
+    // Drain in-flight requests on SIGTERM so deploys never cut off a
+    // QuickBooks callback, webhook acknowledgement or payment request.
+    installGracefulShutdown({
+      server,
+      markNotReady: readiness.markFailed,
+      cleanup: () => pool.end(),
+      graceMs: shutdownGraceMs(process.env.WEB_SHUTDOWN_GRACE_MS),
+      log,
     });
   } catch {
     readiness.markFailed();
