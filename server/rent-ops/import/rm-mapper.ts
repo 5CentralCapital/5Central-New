@@ -623,78 +623,13 @@ function mapProperty(context: MappingContext, record: RawRecord, exceptions: Imp
       operatingContactKnowledge: stringValue(record, "operatingContact", "contactName") ? "source" : "unknown",
     } as unknown as RentOpsProperty;
   }
+  // v2 only from here: v3 returned above.
   if (!name || !addressLine1 || !city || !state || !postalCode) {
-    if (isV3(context)) {
-      exception(exceptions, "property_fact_unknown", "Property retained with explicit unknown source fields", "property", record, undefined, "warning");
-      const propertyTypeText = stringValue(record, "propertyType", "type")?.toLowerCase();
-      const propertyState = propertyStateFromEvidence(record);
-      if (stringValue(record, "stateStatus", "status", "propertyStatus", "State", "StateStatus") && !propertyState) {
-        exception(exceptions, "property_state_unknown", "Property state was not a recognized explicit RM value; retained as unknown", "property", record, undefined, "warning");
-      }
-      const propertyType: RentOpsProperty["propertyType"] | null = propertyTypeText && /single/.test(propertyTypeText)
-        ? "single_family"
-        : propertyTypeText && /multi|apartment/.test(propertyTypeText)
-          ? "multifamily"
-          : propertyTypeText && /other/.test(propertyTypeText)
-            ? "other"
-            : null;
-      const value = {
-        id,
-        source: { system: SYSTEM, entityType: "property", sourceId: sourceId(record), sourceUpdatedAt: sourceUpdatedAt(record) },
-        name: name ?? null,
-        slug: (stringValue(record, "slug", "shortName") ?? name ?? `property-${id.slice(-12)}`).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || `property-${id.slice(-12)}`,
-        address: {
-          line1: addressLine1 ?? null,
-          line2: stringValue(record, "addressLine2", "unitAddress") ?? null,
-          city: city ?? null,
-          state: state && state.length === 2 ? state : null,
-          postalCode: postalCode ?? null,
-        },
-        propertyType,
-        state: propertyState,
-        operatingContact: stringValue(record, "operatingContact", "contactName") ?? null,
-        nameKnowledge: name ? "source" : "unknown",
-        addressKnowledge: addressLine1 && city && state && postalCode ? "source" : "unknown",
-        propertyTypeKnowledge: propertyType ? "source" : "unknown",
-        stateKnowledge: propertyState ? "source" : "unknown",
-        operatingContactKnowledge: stringValue(record, "operatingContact", "contactName") ? "source" : "unknown",
-      };
-      return value as unknown as RentOpsProperty;
-    }
     exception(exceptions, "property_fact_incomplete", "Property was quarantined because its sourced name and complete address are required", "property", record, undefined, "error");
     return undefined;
   }
   const propertyTypeText = stringValue(record, "propertyType", "type")?.toLowerCase();
   const stateText = stringValue(record, "stateStatus", "status", "propertyStatus")?.toLowerCase();
-  const parsedV3State = propertyStateFromEvidence(record);
-  const hasExplicitState = parsedV3State !== null;
-  if (isV3(context) && (!propertyTypeText || !hasExplicitState)) {
-    if (!propertyTypeText) exception(exceptions, "property_type_unknown", "Property type was not returned by RM; retained as explicit unknown", "property", record, undefined, "warning");
-    if (!hasExplicitState) exception(exceptions, "property_state_unknown", stateText ? "Property state was not a recognized explicit RM value; retained as explicit unknown" : "Property active/archive state was not returned by RM; retained as explicit unknown", "property", record, undefined, "warning");
-    const explicitType: RentOpsProperty["propertyType"] | null = propertyTypeText && /single/.test(propertyTypeText)
-      ? "single_family"
-      : propertyTypeText && /multi|apartment/.test(propertyTypeText)
-        ? "multifamily"
-        : propertyTypeText && /other/.test(propertyTypeText)
-          ? "other"
-          : null;
-    const explicitState = parsedV3State;
-    return {
-      id,
-      source: { system: SYSTEM, entityType: "property", sourceId: sourceId(record), sourceUpdatedAt: sourceUpdatedAt(record) },
-      name,
-      slug: (stringValue(record, "slug", "shortName") ?? name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || `property-${id.slice(-12)}`,
-      address: { line1: addressLine1, line2: stringValue(record, "addressLine2", "unitAddress"), city, state: state && state.length === 2 ? state : null, postalCode },
-      propertyType: explicitType,
-      state: explicitState,
-      operatingContact: stringValue(record, "operatingContact", "contactName"),
-      nameKnowledge: "source",
-      addressKnowledge: state && state.length === 2 ? "source" : "unknown",
-      propertyTypeKnowledge: explicitType ? "source" : "unknown",
-      stateKnowledge: explicitState ? "source" : "unknown",
-      operatingContactKnowledge: stringValue(record, "operatingContact", "contactName") ? "source" : "unknown",
-    } as unknown as RentOpsProperty;
-  }
   const propertyType: RentOpsProperty["propertyType"] = propertyTypeText && /single/.test(propertyTypeText) ? "single_family" : propertyTypeText && /multi|apartment/.test(propertyTypeText) ? "multifamily" : propertyTypeText && /other/.test(propertyTypeText) ? "other" : "other";
   if (!propertyTypeText) exception(exceptions, "property_type_unknown", "Property type was not returned by RM; retained as explicit unknown", "property", record, undefined, "warning");
   const propertyState: RentOpsProperty["state"] = boolValue(record, "archived", "isArchived") || /archiv|inactive|closed/.test(stateText ?? "") ? "archived" : "active";
