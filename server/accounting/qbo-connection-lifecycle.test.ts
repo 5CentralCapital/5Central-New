@@ -109,6 +109,16 @@ async function startHarness() {
 
 const tokenExchanges = (calls: readonly { grantType?: string }[]) => calls.filter(call => call.grantType === "authorization_code").length;
 
+/** Callback failures leave the code-bearing URL for the application URL with a machine error code. */
+async function assertCallbackRejected(response: Response, ...codes: readonly string[]): Promise<void> {
+  assert.equal(response.status, 303, await response.clone().text());
+  const location = new URL(response.headers.get("location")!, "http://callback.test");
+  assert.equal(location.pathname, "/ops");
+  const code = location.searchParams.get("qboError") ?? "";
+  assert.ok(codes.includes(code), `unexpected qboError ${code}`);
+  assert.doesNotMatch(location.search, /code-|access-|refresh-/);
+}
+
 test("organization-free callback completes a valid state through the shared confirmation path", async () => {
   const harness = await startHarness();
   try {
@@ -170,19 +180,19 @@ test("organization-free callback rejects invalid, expired, and used state withou
   const harness = await startHarness();
   try {
     const invalid = await harness.callback({ state: "A".repeat(43), code: "code-x", realmId });
-    assert.equal(invalid.status, 409);
+    await assertCallbackRejected(invalid, "accounting_conflict", "accounting_validation");
 
     const expiredState = await harness.begin();
     await harness.demo.database.db.query("UPDATE accounting_qbo_oauth_states SET expires_at = now() - interval '1 minute'");
     const expired = await harness.callback({ state: expiredState, code: "code-x", realmId });
-    assert.equal(expired.status, 409);
+    await assertCallbackRejected(expired, "accounting_conflict");
     assert.equal(tokenExchanges(harness.intuit.calls), 0);
 
     const state = await harness.begin();
     const first = await harness.callback({ state, code: "code-1", realmId });
     assert.equal(first.status, 303);
     const replay = await harness.callback({ state, code: "code-1", realmId });
-    assert.equal(replay.status, 409);
+    await assertCallbackRejected(replay, "accounting_conflict");
     assert.equal(tokenExchanges(harness.intuit.calls), 1);
   } finally {
     await harness.close();
@@ -194,13 +204,13 @@ test("organization-free callback rejects actor and session mismatches", async ()
   try {
     const otherActor = await harness.qbo.oauthConnection.begin({ actorId: "another-admin", sessionBinding: SESSION, organizationId, legalEntityId, environment: "sandbox" });
     const actorMismatch = await harness.callback({ state: otherActor.state, code: "code-a", realmId });
-    assert.equal(actorMismatch.status, 409);
+    await assertCallbackRejected(actorMismatch, "accounting_conflict");
 
     const state = await harness.begin("initiating-session-1");
     const sessionMismatch = await harness.callback({ state, code: "code-b", realmId }, "different-session-2");
-    assert.equal(sessionMismatch.status, 409);
+    await assertCallbackRejected(sessionMismatch, "accounting_conflict");
     const missingSession = await fetch(`${harness.origin}/api/accounting/qbo/callback?${new URLSearchParams({ state: await harness.begin(), code: "code-c", realmId })}`, { redirect: "manual" });
-    assert.equal(missingSession.status, 409);
+    await assertCallbackRejected(missingSession, "accounting_conflict");
     assert.equal(tokenExchanges(harness.intuit.calls), 0);
     assert.deepEqual(await harness.listConnections(), []);
   } finally {
@@ -213,10 +223,10 @@ test("provider access_denied consumes the state and leaves no usable token", asy
   try {
     const state = await harness.begin();
     const denied = await harness.callback({ state, error: "access_denied", error_description: "User denied access" });
-    assert.equal(denied.status, 503);
+    await assertCallbackRejected(denied, "accounting_provider", "accounting_unavailable", "accounting_configuration", "accounting_conflict", "quickbooks_oauth");
     assert.equal(tokenExchanges(harness.intuit.calls), 0);
     const retried = await harness.callback({ state, code: "code-late", realmId });
-    assert.equal(retried.status, 409);
+    await assertCallbackRejected(retried, "accounting_conflict");
     const db = harness.demo.database.db;
     assert.equal((await db.query<{ count: number }>("SELECT count(*)::int AS count FROM accounting_qbo_connections")).rows[0]!.count, 0);
     assert.equal((await db.query<{ count: number }>("SELECT count(*)::int AS count FROM accounting_qbo_pending_bindings")).rows[0]!.count, 0);

@@ -227,6 +227,11 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
  * the Rent Ops admin login and every mutating request also needs its CSRF
  * token. This middleware is injected into the Rent Ops router only.
  */
+/** True when the browser still carries the dedicated Rent Ops admin session marker. */
+export function hasRentOpsAdminSession(req: Request): boolean {
+  return Boolean(req.session?.rentOpsAdminUserId);
+}
+
 export async function requireRentOpsAdmin(req: Request, res: Response, next: NextFunction) {
   if (extractApiKey(req) || !req.session?.rentOpsAdminUserId) {
     res.status(401).json({ message: "Rent Ops administrator authentication required" });

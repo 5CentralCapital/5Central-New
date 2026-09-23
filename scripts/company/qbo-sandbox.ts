@@ -251,7 +251,7 @@ export async function createQboSandboxHarness(options: QboSandboxHarnessOptions)
   const demo = await createCompanyDemoApp({
     ...(options.publicDir ? { publicDir: options.publicDir } : {}),
     accountingEnvironment,
-    accountingQbo: { transport: { fetchImpl: recorder.fetch } },
+    accountingQbo: { transport: { fetchImpl: recorder.fetch }, discovery: true },
   });
   const qboServices = demo.services.accounting.qbo;
   if (qboServices.status !== "configured") {
@@ -317,6 +317,12 @@ export async function createQboSandboxHarness(options: QboSandboxHarnessOptions)
     const location = forwarded.headers.get("location");
     if (forwarded.status === 303 && location) {
       const params = new URL(location, selfOrigin(request)).searchParams;
+      const callbackError = params.get("qboError");
+      if (callbackError) {
+        // The callback never renders JSON on failure; the application URL carries the code.
+        response.status(409).json({ status: "rejected", error: callbackError, workspaceUrl: location });
+        return;
+      }
       const pendingId = params.get("qboPending");
       if (!pendingId && params.get("qboConnected")) {
         // A previously confirmed realm binding reconnects without a new confirmation.

@@ -30,7 +30,7 @@ recovers the organization and legal entity from the server-side OAuth state.
 | App keys | Redirect URI |
 | --- | --- |
 | Development (sandbox harness) | `http://localhost:4178/api/accounting/qbo/callback` |
-| Production | `https://5-central-new.replit.app/api/accounting/qbo/callback` |
+| Production | `https://5central.capital/api/accounting/qbo/callback` (canonical branded host; `5-central-new.replit.app` still serves the app but is not registered) |
 
 The older `/api/company/:organizationId/accounting/qbo/callback` route remains
 and runs the same shared handler. Don't register it with Intuit.
@@ -39,26 +39,47 @@ and runs the same shared handler. Don't register it with Intuit.
 
 | Field | URL |
 | --- | --- |
-| Launch URL | `https://5-central-new.replit.app/ops?section=accounting` |
-| Connect/Reconnect URL (required since 2026-02-24) | `https://5-central-new.replit.app/ops?section=accounting` |
-| Disconnect URL | `https://5-central-new.replit.app/quickbooks/disconnected` |
-| End-user license agreement | `https://5-central-new.replit.app/legal/eula` |
-| Privacy policy | `https://5-central-new.replit.app/legal/privacy` |
+| Launch URL | `https://5central.capital/ops?section=accounting` |
+| Connect/Reconnect URL (required since 2026-02-24) | `https://5central.capital/ops?section=accounting` |
+| Disconnect URL | `https://5central.capital/quickbooks/disconnected` |
+| End-user license agreement | `https://5central.capital/legal/eula` |
+| Privacy policy | `https://5central.capital/legal/privacy` |
 
 The active build contains the disconnect, EULA, privacy, and OAuth callback
-routes. As of 2026-09-22, the published disconnect and legal URLs above render
-the public site's 404 page (the SPA returns HTTP 200, so status alone is
-misleading), and the published callback returns an `API route not found`
-response. The current deployment therefore cannot complete this app's OAuth
-flow or satisfy its listed app-detail URLs. Deploy the build that contains
-these routes, then verify the actual page content and callback behavior before
-the production key review.
+routes. Verified on 2026-09-23 (about 00:30 EDT) on `https://5central.capital`:
+`/legal/eula`, `/legal/privacy` and `/quickbooks/disconnected` render their
+content, `/ops?section=accounting` shows the manager sign-in, `/readyz`
+returns 200, and `/api/accounting/qbo/callback` exists. `/healthz` is
+intercepted by the host's front end and returns 404 on both hosts; use
+`/readyz` for health checks. The 2026-09-22 findings (public-site 404s on the
+legal and disconnect URLs, callback "API route not found") are resolved.
 
-Rechecked on 2026-09-22 at about 21:40 EDT from a browser: `/legal/eula`,
-`/legal/privacy` and `/quickbooks/disconnected` still render the public site's
-"404 Page Not Found" content, `/api/accounting/qbo/callback` returns HTTP 404
-`{"error":"API route not found"}`, and `/healthz` returns 404. The published
-deployment is not this build. Nothing was deployed during the audit.
+`QBO_REDIRECT_URI` in the deployment, the production redirect URI registered
+with Intuit, and the five app-detail URLs must all use the same host. The
+browser session cookie is per host: signing in on one host and receiving the
+Intuit redirect on the other loses the session.
+
+### Callback behavior
+
+- A callback that arrives without an administrator session is redirected
+  (303) to `/ops?section=accounting&qboError=session_expired`. The
+  authorization code is not carried forward.
+- Known failures (expired, replayed or mismatched state; a provider
+  `access_denied`) are redirected to `/ops?section=accounting&qboError=<code>`
+  instead of returning JSON at the callback URL. The harness `/__sandbox/replay`
+  reports these as `{ "status": "rejected", "error": "<code>" }` with HTTP 409.
+- Successful callbacks redirect to the workspace as before.
+
+### OAuth endpoint discovery
+
+The OAuth client resolves the authorize, token and revocation endpoints from
+Intuit's discovery document (`/.well-known/openid_configuration`, or the
+`openid_sandbox_configuration` variant) once per 24 hours, before building an
+authorization URL and before every token or revoke call. One failed discovery
+falls back to the documented endpoints for five minutes; it is never retried
+in a loop. Discovery is on for the real fetch transport and for this harness
+(`discovery: true`); it is off when tests inject a fetch implementation.
+`QBO_OAUTH_DISCOVERY=off` disables it for a deployment.
 
 ## Run it
 

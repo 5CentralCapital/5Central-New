@@ -89,3 +89,65 @@ test("a directly connected OAuth callback redirects to a clean URL and never ren
     await fixture.close();
   }
 });
+
+test("an OAuth callback without an administrator session is redirected to sign-in, never answered with JSON", async () => {
+  const fixture = await createCompanyDemoApp({
+    accountingQbo: {
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      redirectUri: "http://localhost:4178/api/accounting/qbo/callback",
+      environment: "sandbox",
+      tokenCipher: createQboTokenCipher(Buffer.alloc(32, 7)),
+      transport: { fetchImpl: async () => new Response("{}", { status: 404 }) },
+    },
+  });
+  const outer = express();
+  // Production wiring supplies hasAdminSession; emulate a lapsed session here.
+  const { registerAccountingHttpRoutes } = await import("./http");
+  registerAccountingHttpRoutes(outer, { executor: fixture.database.executor, requireAdmin: (_request, response) => { response.status(401).json({ message: "should not be reached" }); }, services: fixture.services.accounting, hasAdminSession: () => false });
+  const listener = outer.listen(0, "127.0.0.1");
+  await new Promise<void>(resolve => listener.once("listening", resolve));
+  const origin = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
+  try {
+    const callback = await fetch(`${origin}/api/accounting/qbo/callback?${new URLSearchParams({ state: "stale-state", code: "one-time-auth-code", realmId: "123456" })}`, { redirect: "manual" });
+    assert.equal(callback.status, 303);
+    assert.equal(callback.headers.get("referrer-policy"), "no-referrer");
+    const location = new URL(callback.headers.get("location")!, origin);
+    assert.equal(location.pathname, "/ops");
+    assert.equal(location.searchParams.get("qboError"), "session_expired");
+    assert.doesNotMatch(location.search + (await callback.text()), /one-time-auth-code|stale-state/);
+  } finally {
+    await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+    await fixture.close();
+  }
+});
+
+test("an OAuth callback with an invalid or replayed state lands on the application URL with an error code", async () => {
+  const fixture = await createCompanyDemoApp({
+    accountingQbo: {
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      redirectUri: "http://localhost:4178/api/accounting/qbo/callback",
+      environment: "sandbox",
+      tokenCipher: createQboTokenCipher(Buffer.alloc(32, 7)),
+      transport: { fetchImpl: async () => new Response("{}", { status: 404 }) },
+    },
+  });
+  const outer = express();
+  outer.use((request, _response, next) => { (request as unknown as { sessionID: string }).sessionID = "http-test-session-2"; next(); });
+  outer.use(fixture.app);
+  const listener = outer.listen(0, "127.0.0.1");
+  await new Promise<void>(resolve => listener.once("listening", resolve));
+  const origin = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
+  try {
+    const callback = await fetch(`${origin}/api/accounting/qbo/callback?${new URLSearchParams({ state: "never-issued", code: "one-time-auth-code", realmId: "123456" })}`, { redirect: "manual" });
+    assert.equal(callback.status, 303, await callback.clone().text());
+    const location = new URL(callback.headers.get("location")!, origin);
+    assert.equal(location.pathname, "/ops");
+    assert.ok(["accounting_validation", "accounting_conflict"].includes(location.searchParams.get("qboError") ?? ""), location.search);
+    assert.doesNotMatch(location.search + (await callback.text()), /one-time-auth-code/);
+  } finally {
+    await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+    await fixture.close();
+  }
+});

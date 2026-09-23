@@ -78,6 +78,12 @@ export interface AccountingHttpRouteOptions {
   readonly executor: RentOpsQueryExecutor;
   readonly requireAdmin: RequestHandler;
   readonly services: AccountingServices;
+  /**
+   * Whether the browser still carries an administrator session. When given,
+   * an OAuth callback without one is redirected to the sign-in page instead of
+   * receiving the API's JSON 401. Omitted for synthetic/demo wiring.
+   */
+  readonly hasAdminSession?: (request: Request) => boolean;
 }
 
 /** Root wiring owns the route prefix; this adapter only supplies authenticated handlers. */
@@ -227,12 +233,39 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
     const body = z.object({ legalEntityId: legalEntityIdSchema, expectedRealmId: realmSchema.optional() }).strict().parse(request.body);
     const { actorId } = await authorizedScope(executor, request, organizationId, body.legalEntityId, MUTATION_ROLES);
     if (services.qbo.status !== "configured") throw new AccountingError("accounting_configuration", "QuickBooks is not configured");
+    // Refresh Intuit's discovery document (cached) so the authorize URL is current.
+    await services.qbo.oauth.resolveEndpoints();
     response.json(await services.qbo.oauthConnection.begin({ actorId, sessionBinding: browserSessionBinding(request), organizationId, legalEntityId: body.legalEntityId, environment: services.qbo.environment, expectedRealmId: body.expectedRealmId }));
   }));
   // Intuit redirect URIs must match exactly, so the organization-free route is
   // the one registered with Intuit. Both routes share one completion path.
-  app.get("/api/accounting/qbo/callback", requireAdmin, companyReadHandler((request, response) => completeCallback(request, response, null)));
-  app.get("/api/company/:organizationId/accounting/qbo/callback", requireAdmin, companyReadHandler((request, response) => completeCallback(request, response, organizationIdSchema.parse(request.params.organizationId))));
+  // Intuit sends the browser back here after consent. If the administrator
+  // session lapsed meanwhile, leave the code-bearing URL for the sign-in page
+  // instead of answering with API JSON. The code is never copied forward.
+  const callbackSessionGuard: RequestHandler = (request, response, next) => {
+    if (options.hasAdminSession && !options.hasAdminSession(request)) {
+      response.setHeader("Referrer-Policy", "no-referrer");
+      response.redirect(303, `/ops?${new URLSearchParams({ section: "accounting", qboError: "session_expired" }).toString()}`);
+      return;
+    }
+    next();
+  };
+  // Known OAuth failures (expired state, replayed callback, provider error)
+  // also land on the application URL so the browser never sits on the callback.
+  const callbackHandler = (expectedOrganizationId: (request: Request) => string | null): RequestHandler => companyReadHandler(async (request, response) => {
+    try {
+      await completeCallback(request, response, expectedOrganizationId(request));
+    } catch (error) {
+      if (error instanceof AccountingError || error instanceof QuickBooksIntegrationError) {
+        response.setHeader("Referrer-Policy", "no-referrer");
+        response.redirect(303, `/ops?${new URLSearchParams({ section: "accounting", qboError: error.code }).toString()}`);
+        return;
+      }
+      throw error;
+    }
+  });
+  app.get("/api/accounting/qbo/callback", callbackSessionGuard, requireAdmin, callbackHandler(() => null));
+  app.get("/api/company/:organizationId/accounting/qbo/callback", callbackSessionGuard, requireAdmin, callbackHandler(request => organizationIdSchema.parse(request.params.organizationId)));
   app.post("/api/company/:organizationId/accounting/qbo/confirm", requireAdmin, companyReadHandler(async (request, response) => {
     const organizationId = organizationIdSchema.parse(request.params.organizationId);
     const body = z.object({ legalEntityId: legalEntityIdSchema, pendingId: z.string().uuid(), confirmRealmBinding: z.literal(true) }).strict().parse(request.body);

@@ -1,6 +1,7 @@
 import type {
   QuickBooksOAuthClientConfig,
   QuickBooksOAuthDiscoveryDocument,
+  QuickBooksOAuthEndpoints,
   QuickBooksOAuthTokenSet,
   QuickBooksTransport,
   QuickBooksTransportResponse,
@@ -176,6 +177,12 @@ function defaultTransport(): QuickBooksTransport {
 export interface QuickBooksOAuthClient {
   getAuthorizationUrl(state: string, scopes?: readonly string[]): string;
   getDiscoveryDocument(): Promise<QuickBooksOAuthDiscoveryDocument>;
+  /**
+   * Endpoints this client will use for the next OAuth call. With discovery
+   * enabled this resolves (and caches) the discovery document first; call it
+   * before building an authorization URL so the authorize endpoint is current.
+   */
+  resolveEndpoints(): Promise<QuickBooksOAuthEndpoints>;
   exchangeAuthorizationCode(code: string): Promise<QuickBooksOAuthTokenSet>;
   refreshToken(refreshToken: string, previousRefreshTokenExpiresAt?: string, previousRefreshTokenHardExpiresAt?: string): Promise<QuickBooksOAuthTokenSet>;
   revokeToken(token: string): Promise<{ intuitTid?: string }>;
@@ -195,17 +202,57 @@ export function createQuickBooksOAuthClient(config: QuickBooksOAuthClientConfig)
   if (typeof config.transport !== "function") throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks OAuth transport is required");
   const transport = config.transport ?? defaultTransport();
   const now = config.now ?? (() => new Date());
-  const authorizationEndpoint = config.authorizationEndpoint ?? QUICKBOOKS_AUTHORIZATION_ENDPOINT;
-  const tokenEndpoint = config.tokenEndpoint ?? QUICKBOOKS_TOKEN_ENDPOINT;
-  const revokeEndpoint = config.revokeEndpoint ?? QUICKBOOKS_REVOKE_ENDPOINT;
+  const documented: QuickBooksOAuthEndpoints = {
+    authorizationEndpoint: config.authorizationEndpoint ?? QUICKBOOKS_AUTHORIZATION_ENDPOINT,
+    tokenEndpoint: config.tokenEndpoint ?? QUICKBOOKS_TOKEN_ENDPOINT,
+    revokeEndpoint: config.revokeEndpoint ?? QUICKBOOKS_REVOKE_ENDPOINT,
+  };
+  const discoveryEnabled = config.discovery?.enabled === true;
+  const discoveryTtlMs = config.discovery?.ttlMs ?? 24 * 60 * 60 * 1_000;
+  const discoveryFailureTtlMs = config.discovery?.failureTtlMs ?? 5 * 60 * 1_000;
+  let cachedEndpoints: { readonly endpoints: QuickBooksOAuthEndpoints; readonly expiresAt: number } | null = null;
+  let discoveryInFlight: Promise<QuickBooksOAuthEndpoints> | null = null;
 
-  return {
+  // Explicit overrides win over discovery so tests and pinned deployments stay deterministic.
+  const withOverrides = (discovered: QuickBooksOAuthDiscoveryDocument): QuickBooksOAuthEndpoints => ({
+    authorizationEndpoint: config.authorizationEndpoint ?? discovered.authorizationEndpoint,
+    tokenEndpoint: config.tokenEndpoint ?? discovered.tokenEndpoint,
+    revokeEndpoint: config.revokeEndpoint ?? discovered.revokeEndpoint,
+  });
+
+  const resolveEndpoints = async (): Promise<QuickBooksOAuthEndpoints> => {
+    if (!discoveryEnabled) return documented;
+    const at = now().getTime();
+    if (cachedEndpoints && cachedEndpoints.expiresAt > at) return cachedEndpoints.endpoints;
+    if (discoveryInFlight) return discoveryInFlight;
+    discoveryInFlight = (async () => {
+      try {
+        // One discovery request; a failure falls back to the documented
+        // endpoints for a short window rather than retrying the same call.
+        const discovered = await client.getDiscoveryDocument();
+        cachedEndpoints = { endpoints: withOverrides(discovered), expiresAt: at + discoveryTtlMs };
+      } catch {
+        cachedEndpoints = { endpoints: documented, expiresAt: at + discoveryFailureTtlMs };
+      } finally {
+        discoveryInFlight = null;
+      }
+      return cachedEndpoints.endpoints;
+    })();
+    return discoveryInFlight;
+  };
+
+  const client: QuickBooksOAuthClient = {
+    resolveEndpoints,
+
     getAuthorizationUrl(state: string, scopes = [QUICKBOOKS_ACCOUNTING_SCOPE]): string {
       assertNonEmpty(state, "QuickBooks OAuth state");
       if (scopes.length === 0 || scopes.some(scope => typeof scope !== "string" || !SAFE_OAUTH_VALUE.test(scope) || !(QUICKBOOKS_ALLOWED_OAUTH_SCOPES as readonly string[]).includes(scope))) {
         throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks OAuth scopes are invalid");
       }
-      const url = new URL(authorizationEndpoint);
+      // Synchronous by contract: use the cached discovery result when
+      // resolveEndpoints() has run, otherwise the documented endpoint.
+      const at = now().getTime();
+      const url = new URL(cachedEndpoints && cachedEndpoints.expiresAt > at ? cachedEndpoints.endpoints.authorizationEndpoint : documented.authorizationEndpoint);
       url.searchParams.set("client_id", config.clientId);
       url.searchParams.set("response_type", "code");
       url.searchParams.set("scope", scopes.join(" "));
@@ -234,6 +281,7 @@ export function createQuickBooksOAuthClient(config: QuickBooksOAuthClientConfig)
 
     async exchangeAuthorizationCode(code: string): Promise<QuickBooksOAuthTokenSet> {
       assertNonEmpty(code, "QuickBooks authorization code");
+      const { tokenEndpoint } = await resolveEndpoints();
       const response = await transport({
         method: "POST",
         url: tokenEndpoint,
@@ -255,6 +303,7 @@ export function createQuickBooksOAuthClient(config: QuickBooksOAuthClientConfig)
 
     async refreshToken(refreshToken: string, previousRefreshTokenExpiresAt?: string, previousRefreshTokenHardExpiresAt?: string): Promise<QuickBooksOAuthTokenSet> {
       assertNonEmpty(refreshToken, "QuickBooks refresh token", 8192);
+      const { tokenEndpoint } = await resolveEndpoints();
       const response = await transport({
         method: "POST",
         url: tokenEndpoint,
@@ -275,6 +324,7 @@ export function createQuickBooksOAuthClient(config: QuickBooksOAuthClientConfig)
 
     async revokeToken(token: string): Promise<{ intuitTid?: string }> {
       assertNonEmpty(token, "QuickBooks token", 8192);
+      const { revokeEndpoint } = await resolveEndpoints();
       const response = await transport({
         method: "POST",
         url: revokeEndpoint,
@@ -290,4 +340,5 @@ export function createQuickBooksOAuthClient(config: QuickBooksOAuthClientConfig)
       return intuitTid ? { intuitTid } : {};
     },
   };
+  return client;
 }

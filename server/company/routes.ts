@@ -1,4 +1,4 @@
-import type { Express, RequestHandler } from 'express';
+import type { Express, Request, RequestHandler } from 'express';
 import { z } from 'zod';
 import { organizationIdSchema, legalEntityIdSchema, propertyReferenceIdSchema, commandEnvelopeSchema, isoDateSchema } from '../../shared/company';
 import { PROJECT_COMMAND_KINDS, projectCommandPayloadSchemas, projectIdSchema, projectStatusSchema } from '../../shared/projects/contracts';
@@ -51,10 +51,12 @@ export function registerCompanyRoutes(app: Express, options: {
   time?: TimeServices;
   reporting?: ReportingPort;
   workOrders?: WorkOrderPort;
+  /** Browser-session presence check used for OAuth callback redirects (production wiring only). */
+  hasAdminSession?: (request: Request) => boolean;
 }): void {
   const { executor, requireAdmin, projects } = options;
   if (options.workOrders) registerWorkOrderRoutes(app, { executor, requireAdmin, workOrders: options.workOrders });
-  if (options.accounting) registerAccountingHttpRoutes(app, { executor, requireAdmin, services: options.accounting });
+  if (options.accounting) registerAccountingHttpRoutes(app, { executor, requireAdmin, services: options.accounting, ...(options.hasAdminSession ? { hasAdminSession: options.hasAdminSession } : {}) });
   if (options.investors) registerInvestorRoutes(app, { executor, requireAdmin, investors: options.investors });
   if (options.time) registerTimeHttpRoutes(app, { executor, requireAdmin, services: options.time });
   if (options.reporting) registerReportingHttpRoutes(app, {

@@ -142,3 +142,57 @@ test("OAuth errors keep only a machine error code, never provider free text", as
     return true;
   });
 });
+
+test("OAuth discovery, when enabled, supplies the token and revoke endpoints and is cached", async () => {
+  const calls: QuickBooksTransportRequest[] = [];
+  const transport = async (request: QuickBooksTransportRequest): Promise<QuickBooksTransportResponse> => {
+    calls.push(request);
+    if (request.method === "GET") {
+      return response(200, {
+        authorization_endpoint: "https://appcenter.intuit.com/connect/oauth2",
+        token_endpoint: "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer-discovered",
+        revocation_endpoint: "https://developer.api.intuit.com/v2/oauth2/tokens/revoke-discovered",
+      });
+    }
+    if (request.url.endsWith("bearer-discovered")) return response(200, { access_token: "access-1", refresh_token: "refresh-1", token_type: "bearer", expires_in: 3600 });
+    return response(200, {});
+  };
+  const client = createQuickBooksOAuthClient({ ...config(transport), discovery: { enabled: true } });
+  const endpoints = await client.resolveEndpoints();
+  assert.equal(endpoints.tokenEndpoint, "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer-discovered");
+  assert.equal(new URL(client.getAuthorizationUrl("state-1")).origin, "https://appcenter.intuit.com");
+  await client.exchangeAuthorizationCode("code-1");
+  await client.refreshToken("refresh-1");
+  await client.revokeToken("refresh-1");
+  assert.deepEqual(calls.map(call => `${call.method} ${call.url}`), [
+    "GET https://developer.api.intuit.com/.well-known/openid_sandbox_configuration",
+    "POST https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer-discovered",
+    "POST https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer-discovered",
+    "POST https://developer.api.intuit.com/v2/oauth2/tokens/revoke-discovered",
+  ], "discovery is fetched once and reused for every OAuth call");
+});
+
+test("OAuth discovery failure falls back to the documented endpoints without retrying", async () => {
+  const calls: QuickBooksTransportRequest[] = [];
+  const transport = async (request: QuickBooksTransportRequest): Promise<QuickBooksTransportResponse> => {
+    calls.push(request);
+    if (request.method === "GET") return response(503, {});
+    return response(200, { access_token: "access-1", refresh_token: "refresh-1", token_type: "bearer", expires_in: 3600 });
+  };
+  const client = createQuickBooksOAuthClient({ ...config(transport), discovery: { enabled: true } });
+  await client.exchangeAuthorizationCode("code-1");
+  await client.refreshToken("refresh-1");
+  assert.deepEqual(calls.map(call => `${call.method} ${call.url}`), [
+    "GET https://developer.api.intuit.com/.well-known/openid_sandbox_configuration",
+    `POST ${QUICKBOOKS_TOKEN_ENDPOINT}`,
+    `POST ${QUICKBOOKS_TOKEN_ENDPOINT}`,
+  ], "one discovery attempt, then the documented endpoint for the fallback window");
+});
+
+test("OAuth discovery stays off by default so offline tests see no discovery request", async () => {
+  const calls: QuickBooksTransportRequest[] = [];
+  const client = createQuickBooksOAuthClient(config(async request => { calls.push(request); return response(200, {}); }));
+  assert.equal((await client.resolveEndpoints()).tokenEndpoint, QUICKBOOKS_TOKEN_ENDPOINT);
+  await client.revokeToken("token");
+  assert.deepEqual(calls.map(call => call.method), ["POST"]);
+});

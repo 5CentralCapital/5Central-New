@@ -30,6 +30,13 @@ export interface AccountingQboConfig {
   readonly redirectUri: string;
   readonly environment: "sandbox" | "production";
   readonly transport?: QuickBooksFetchTransportOptions;
+  /**
+   * Resolve OAuth endpoints from Intuit's discovery document. Defaults on for
+   * the real fetch transport and off when a fetch implementation is injected
+   * (tests, recorders), unless set explicitly. `QBO_OAUTH_DISCOVERY=off`
+   * disables it for a deployment.
+   */
+  readonly discovery?: boolean;
   readonly now?: () => Date;
   readonly tokenCipher?: QboTokenCipher;
   readonly refreshLease?: QuickBooksRefreshLease;
@@ -186,7 +193,8 @@ function environmentConfig(options: AccountingServicesOptions): AccountingQboCon
   const redirectUri = supplied.redirectUri ?? env.QBO_REDIRECT_URI;
   const environment = supplied.environment ?? (env.QBO_ENVIRONMENT === "production" ? "production" : env.QBO_ENVIRONMENT === "sandbox" ? "sandbox" : undefined);
   if (!clientId || !clientSecret || !redirectUri || !environment) return null;
-  return { clientId, clientSecret, redirectUri, environment, transport: supplied.transport, now: supplied.now, tokenCipher: supplied.tokenCipher, refreshLease: supplied.refreshLease, refreshLeaseOwnerId: supplied.refreshLeaseOwnerId, refreshLeaseTtlMs: supplied.refreshLeaseTtlMs, verifyRealmBinding: supplied.verifyRealmBinding };
+  const discovery = supplied.discovery ?? (env.QBO_OAUTH_DISCOVERY !== "off" && !supplied.transport?.fetchImpl);
+  return { clientId, clientSecret, redirectUri, environment, transport: supplied.transport, discovery, now: supplied.now, tokenCipher: supplied.tokenCipher, refreshLease: supplied.refreshLease, refreshLeaseOwnerId: supplied.refreshLeaseOwnerId, refreshLeaseTtlMs: supplied.refreshLeaseTtlMs, verifyRealmBinding: supplied.verifyRealmBinding };
 }
 
 /**
@@ -205,7 +213,7 @@ export function createAccountingServices(executor: RentOpsQueryExecutor, options
     const lease = config.refreshLease ?? new PostgresQuickBooksRefreshLease(executor, config.now);
     const leaseOwner = config.refreshLeaseOwnerId ?? newQuickBooksRefreshLeaseOwner();
     const transport = createQuickBooksFetchTransport(config.transport);
-    const oauth = createQuickBooksOAuthClient({ clientId: config.clientId, clientSecret: config.clientSecret, redirectUri: config.redirectUri, environment: config.environment, transport, now: config.now });
+    const oauth = createQuickBooksOAuthClient({ clientId: config.clientId, clientSecret: config.clientSecret, redirectUri: config.redirectUri, environment: config.environment, transport, now: config.now, discovery: { enabled: config.discovery === true } });
     const defaultLeaseTtlMs = Math.min(600_000, Math.max(180_000, (config.transport?.timeoutMs ?? 15_000) * 2 + 10_000));
     const tokenManager = createQuickBooksTokenManager({ oauth, repository: tokenRepository, now: config.now, refreshLease: lease, refreshLeaseOwnerId: leaseOwner, refreshLeaseTtlMs: config.refreshLeaseTtlMs ?? defaultLeaseTtlMs });
     const capabilityStore = new PostgresQuickBooksCapabilityStore(executor);

@@ -177,6 +177,27 @@ export interface QuickBooksOAuthClientConfig {
   readonly authorizationEndpoint?: string;
   readonly transport: QuickBooksTransport;
   readonly now?: () => Date;
+  /**
+   * Resolve the authorization, token and revocation endpoints from Intuit's
+   * OpenID discovery document instead of the documented constants. Explicit
+   * endpoint overrides above always win. Discovery is attempted once per TTL
+   * and falls back to the documented endpoints when it is unavailable.
+   */
+  readonly discovery?: QuickBooksOAuthDiscoveryOptions;
+}
+
+export interface QuickBooksOAuthDiscoveryOptions {
+  readonly enabled: boolean;
+  /** Cache lifetime for a successful discovery. Default 24 hours. */
+  readonly ttlMs?: number;
+  /** Cache lifetime for the fallback after a failed discovery. Default 5 minutes. */
+  readonly failureTtlMs?: number;
+}
+
+export interface QuickBooksOAuthEndpoints {
+  readonly authorizationEndpoint: string;
+  readonly tokenEndpoint: string;
+  readonly revokeEndpoint: string;
 }
 
 export interface QuickBooksOAuthDiscoveryDocument {
