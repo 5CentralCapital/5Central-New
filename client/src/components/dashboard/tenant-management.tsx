@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, useMemo } from "react";
+import { localIsoDate } from "@/lib/format";
 import { PropertySubTabs } from "./shared/property-subtabs";
 
 /* ── Types matching the EnrichedTenant shape from server/dashboard/rentmanager.ts ── */
@@ -790,7 +791,7 @@ function TenantDetail({
   const [showLogPayment, setShowLogPayment] = useState(false);
   const [showAddNote, setShowAddNote] = useState(false);
   const [formAmount, setFormAmount] = useState("");
-  const [formDate, setFormDate] = useState(new Date().toISOString().split("T")[0]);
+  const [formDate, setFormDate] = useState(() => localIsoDate());
   const [formComment, setFormComment] = useState("");
   const [formChargeType, setFormChargeType] = useState(2); // default to Rent
   const [formSubmitting, setFormSubmitting] = useState(false);
@@ -801,7 +802,7 @@ function TenantDetail({
     const tid = tenant.TenantID;
     const twelveMonthsAgo = new Date();
     twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
-    const fromDate = twelveMonthsAgo.toISOString().split("T")[0];
+    const fromDate = localIsoDate(twelveMonthsAgo);
 
     // Fetch both charges and payments, then merge
     Promise.all([
@@ -840,7 +841,7 @@ function TenantDetail({
     const tid = tenant.TenantID;
     const twelveMonthsAgo = new Date();
     twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
-    const fromDate = twelveMonthsAgo.toISOString().split("T")[0];
+    const fromDate = localIsoDate(twelveMonthsAgo);
     Promise.all([
       fetch(`/api/rm/charges?tenantId=${tid}&fromDate=${fromDate}`, { credentials: "include" })
         .then(r => r.ok ? r.json() : []).catch(() => []),

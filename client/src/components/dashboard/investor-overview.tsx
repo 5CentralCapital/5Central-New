@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { formatCalendarDate } from "@/lib/format";
 
 /* ══════════════════════════════════════════════════════════════
    Investor Overview — 5Central Capital
@@ -49,12 +50,7 @@ const fmt = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigi
 const fmtDec = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const pct = (n: number) => (n * 100).toFixed(2) + "%";
 const num = (v: string | null | undefined) => parseFloat(v || "0") || 0;
-const shortDate = (v: string | null | undefined) => {
-  if (!v) return "—";
-  const d = new Date(v);
-  if (isNaN(d.getTime())) return v;
-  return d.toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
-};
+const shortDate = (v: string | null | undefined) => formatCalendarDate(v, { month: "2-digit", day: "2-digit", year: "numeric" }, v || "—");
 
 export default function InvestorOverview() {
   const [profiles, setProfiles] = useState<InvestorProfile[]>([]);
