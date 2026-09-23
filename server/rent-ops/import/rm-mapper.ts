@@ -84,8 +84,6 @@ export function createKeyedTargetIdFactory(
   return { factory, identity: { algorithm: "hmac-sha256", keyId: identity.keyId, keyVersion: identity.keyVersion } };
 }
 
-export const createStableHmacTargetIdFactory = createKeyedTargetIdFactory;
-
 /**
  * Development/test compatibility only. Production callers must inject a
  * keyed pseudonymizer or persisted random mapping; an unkeyed digest is not

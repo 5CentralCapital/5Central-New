@@ -123,8 +123,6 @@ export function assertReadOnlyRequest(request: RentManagerRequest): void {
   if (!request.path.startsWith("/") || request.path.includes("..") || request.path.includes("\0")) throw new ReadOnlyRequestError("unsafe-path");
 }
 
-export const enforceReadOnlyRequest = assertReadOnlyRequest;
-
 function callTransport(transport: RentManagerTransport, request: RentManagerRequest): Promise<RentManagerResponse> {
   return typeof transport === "function" ? transport(request) : transport.request(request);
 }

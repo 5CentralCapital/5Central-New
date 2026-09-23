@@ -57,9 +57,6 @@ export interface RestrictedMigrationArchive {
  */
 export type { VerifiedSupplementReceiptBinding };
 
-/** Alias used by supplement-facing callers that do not need the runner name. */
-export type RestrictedSupplementVerifiedReceipt = VerifiedSupplementReceiptBinding;
-
 /** Aggregate-only tuple supplied to the independent approval store. */
 export type VerifiedSupplementReceiptVerificationInput = Omit<
   VerifiedSupplementReceiptBinding,

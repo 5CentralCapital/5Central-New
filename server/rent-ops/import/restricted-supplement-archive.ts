@@ -11,10 +11,8 @@ import {
   type RestrictedSupplementRequest,
   type RestrictedSupplementResult,
 } from "./restricted-supplement";
-import { RestrictedMigrationArchiveError, readRestrictedMigrationArchive, verifyRestrictedArchiveBinaries, type VerifiedSupplementReceiptBinding, type VerifiedSupplementReceiptVerifier } from "./migration-runner";
+import { RestrictedMigrationArchiveError, readRestrictedMigrationArchive, verifyRestrictedArchiveBinaries, type VerifiedSupplementReceiptVerifier } from "./migration-runner";
 
-/** Public archive-boundary name for the aggregate-only trust-root receipt. */
-export type { VerifiedSupplementReceiptBinding } from "./migration-runner";
 
 export const RESTRICTED_SUPPLEMENT_DERIVATIVE_VERSION = "rm-restricted-supplement-derivative/v1" as const;
 export const RESTRICTED_SUPPLEMENT_PACKAGE_VERSION = "rm-restricted-supplement-package/v1" as const;
@@ -766,27 +764,4 @@ export async function applyRestrictedSupplementPackage(options: {
   try { value = JSON.parse(Buffer.from(await readPrivateFileFromDescriptor(path, "supplement_package_unreadable")).toString("utf8")); }
   catch { throw new RestrictedSupplementDerivativeArchiveError(["supplement_package_unreadable"]); }
   return writeRestrictedSupplementDerivativeArchive({ ...options, supplementPackage: value });
-}
-
-export const runRestrictedSupplementDerivative = writeRestrictedSupplementDerivativeArchive;
-export const applyRestrictedSupplementArchive = writeRestrictedSupplementDerivativeArchive;
-
-export async function readRestrictedSupplementDerivativeArchive(
-  rootInput: string,
-  options: { supplementReceiptVerifier?: VerifiedSupplementReceiptVerifier } = {},
-): Promise<{
-  envelope: ExportEnvelope;
-  manifest: RedactedExportManifest;
-  provenance: RestrictedSupplementDerivativeProvenance;
-  verifiedSupplementReceipt?: VerifiedSupplementReceiptBinding;
-}> {
-  const root = assertSafeAbsolutePath(rootInput, "restricted_derivative_path_invalid");
-  await assertPathChainNoSymlinks(root, "restricted_derivative_symlink_rejected");
-  const archive = await readRestrictedMigrationArchive(root, options);
-  const provenance = await readProvenance(root);
-  if (!provenance) throw new RestrictedSupplementDerivativeArchiveError(["restricted_derivative_provenance_missing"]);
-  const envelopeHash = sha256(canonicalJson(archive.envelope));
-  const manifestHash = sha256(canonicalJson(archive.manifest));
-  if (envelopeHash !== provenance.derivativeEnvelopeSha256 || manifestHash !== provenance.derivativeManifestSha256) throw new RestrictedSupplementDerivativeArchiveError(["restricted_derivative_digest_mismatch"]);
-  return { ...archive, provenance };
 }

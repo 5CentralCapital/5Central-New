@@ -1914,7 +1914,3 @@ export class PersistenceImporter {
     return { mode, importRunId: result.importRun.id, sourceManifestHash: result.importRun.sourceManifestHash, wouldWrite: true, committed: true, counts, totalsCents, warningCount, errorCount, blockedReasons: [] };
   }
 }
-
-export function summarizeImportExceptions(exceptions: ImportMappingException[]): { warningCount: number; errorCount: number; codes: string[] } {
-  return { warningCount: exceptions.filter((exception) => exception.severity === "warning").length, errorCount: exceptions.filter((exception) => exception.severity === "error").length, codes: Array.from(new Set(exceptions.map((exception) => safeCode(exception.code)))) };
-}
