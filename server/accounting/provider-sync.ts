@@ -274,12 +274,25 @@ export function decodeQboKeysetCursor(value: string): QboKeysetCursor {
   return { floor: match[1] === "" ? null : match[1], startPosition };
 }
 
+/**
+ * QBO name-list queries return only ACTIVE records unless the query names
+ * the Active field. Closed accounts, retired vendors and former tenants
+ * (customers) are made inactive, never deleted, so every list query includes
+ * both states; otherwise a full replay would read them as deletions.
+ */
+const QBO_ACTIVE_FILTERED_ENTITIES = new Set(["Account", "Customer", "Vendor", "Employee", "Item", "Class", "Department", "Term", "PaymentMethod"]);
+
 export function queryFor(entity: string, cursor: QboKeysetCursor): string {
   if (!Number.isSafeInteger(cursor.startPosition) || cursor.startPosition < 1) throw new AccountingError("accounting_validation", "QBO query cursor is invalid");
+  if (!/^[A-Z][A-Za-z0-9]{0,79}$/.test(entity)) throw new AccountingError("accounting_validation", "QBO query entity is invalid");
   // Floor values originate from QBO MetaData.LastUpdatedTime. Keep the
   // grammar narrow before interpolating the value into QBO's query language.
   if (cursor.floor !== null && !QBO_QUERY_TIMESTAMP.test(cursor.floor)) throw new AccountingError("accounting_validation", "QBO query cursor is invalid");
-  const where = cursor.floor !== null ? ` WHERE MetaData.LastUpdatedTime >= '${cursor.floor}'` : "";
+  const conditions = [
+    ...(QBO_ACTIVE_FILTERED_ENTITIES.has(entity) ? ["Active IN (true, false)"] : []),
+    ...(cursor.floor !== null ? [`MetaData.LastUpdatedTime >= '${cursor.floor}'`] : []),
+  ];
+  const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
   return `SELECT * FROM ${entity}${where} ORDERBY MetaData.LastUpdatedTime ASC STARTPOSITION ${cursor.startPosition} MAXRESULTS ${PAGE_SIZE}`;
 }
 
