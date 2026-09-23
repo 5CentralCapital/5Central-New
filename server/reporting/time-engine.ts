@@ -20,6 +20,8 @@ export interface TimeReportingReadResult {
 }
 
 export interface TimeReportingReadPort {
+  /** Organization-level check for at least one active QuickBooks Time connection. */
+  hasConnection?(organizationId: string): Promise<boolean>;
   read(input: { readonly context: ReportingEngineContext; readonly legalEntityIds: readonly string[]; readonly propertyIds: readonly string[]; readonly projectIds: readonly string[] }): Promise<TimeReportingReadResult>;
 }
 
@@ -48,6 +50,7 @@ export function createTimeReportingEngine(read: TimeReportingReadPort): Reportin
     key: "company.time",
     reportIds: [...TIME_REPORT_IDS],
     ready: true,
+    ...(read.hasConnection ? { probe: async ({ organizationId }: { organizationId: string }) => await read.hasConnection!(organizationId) ? { status: "available" as const } : { status: "missing_data" as const, reason: "Connect QuickBooks Time to report work sessions.", dependency: "quickbooks_time_entries" } } : {}),
     async run(context): Promise<ReportingEngineResult> {
       const source = await read.read({ context, legalEntityIds: context.request.scope.legalEntityIds.map(String), propertyIds: context.request.scope.propertyIds.map(String), projectIds: context.request.scope.projectIds.map(String) });
       if (source.coverage.state === "unavailable") throw new ReportingError("report_unavailable", "Time entries are unavailable for the requested legal entity.", 409, { dependency: "time_entries" });

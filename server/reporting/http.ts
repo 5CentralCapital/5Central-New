@@ -2,8 +2,12 @@ import type { Express, RequestHandler, Request, Response } from "express";
 import { z, ZodError } from "zod";
 import { organizationIdSchema } from "../../shared/company";
 import {
+  legalEntityIdSchema,
+} from "../../shared/company";
+import {
   reportExportRequestSchema,
   reportRecordIdSchema,
+  reportReferenceKindSchema,
   reportRunRequestSchema,
 } from "../../shared/reporting";
 import { companyHttpError } from "../company/http";
@@ -13,6 +17,12 @@ import { publicReportRunResponse, type ReportPackageInput, type ReportPresetInpu
 const idParams = z.object({ organizationId: organizationIdSchema, runId: reportRecordIdSchema }).strict();
 const jobParams = z.object({ organizationId: organizationIdSchema, jobId: reportRecordIdSchema }).strict();
 const cursorQuery = z.object({ cursor: z.string().max(1_024).optional(), limit: z.coerce.number().int().min(1).max(1_000).default(100) }).strict();
+const referenceQuery = z.object({
+  search: z.string().trim().max(120).optional(),
+  cursor: z.string().max(1_024).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  legalEntityIds: z.union([legalEntityIdSchema, z.array(legalEntityIdSchema).max(100)]).optional(),
+}).strict();
 
 export interface ReportingHttpRouteOptions {
   readonly service: ReportingPort;
@@ -48,9 +58,18 @@ function handler(options: ReportingHttpRouteOptions, fn: (request: Request, resp
 export function registerReportingHttpRoutes(app: Express, options: ReportingHttpRouteOptions): void {
   const prefix = options.prefix ?? "/api/company/:organizationId/reporting";
   const admin = options.requireAdmin;
+  // Scoped, searchable reference choices for report setup (accounts, investors,
+  // projects, vendors, staff, tenants). Paged with an opaque cursor.
+  const referencesPath = options.prefix ? `${options.prefix}/references/:kind` : "/api/company/:organizationId/report-references/:kind";
+  app.get(referencesPath, admin, handler(options, async (request, response, access) => {
+    const kind = reportReferenceKindSchema.parse(request.params.kind);
+    const query = referenceQuery.parse(request.query);
+    const legalEntityIds = query.legalEntityIds === undefined ? [] : Array.isArray(query.legalEntityIds) ? query.legalEntityIds : [query.legalEntityIds];
+    response.json(await options.service.references(access, { kind, search: query.search, cursor: query.cursor ?? null, limit: query.limit, legalEntityIds }));
+  }));
   const route = (method: "get" | "post", path: string, fn: Parameters<typeof handler>[1]) => app[method](`${prefix}${path}`, admin, handler(options, fn));
 
-  route("get", "/catalog", async (_request, response, access) => { response.json(options.service.catalog(access)); });
+  route("get", "/catalog", async (_request, response, access) => { response.json(await options.service.catalog(access)); });
   route("post", "/runs", async (request, response, access, organizationId) => {
     const input = reportRunRequestSchema.parse(request.body);
     if (input.scope.organizationId !== organizationId) throw new ReportingError("report_forbidden", "Report organization does not match the route", 403);

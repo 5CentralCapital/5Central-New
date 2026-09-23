@@ -1,4 +1,5 @@
-import { reportEntrySchema, reportExportJobSchema, reportPageSchema, reportPackageRunSchema, reportPackageSchema, reportPresetSchema, reportRunSummarySchema, type ReportEntry, type ReportExportJob, type ReportPage, type ReportRunRequest } from "@shared/reporting";
+import { reportEntrySchema, reportExportJobSchema, reportPageSchema, reportPackageRunSchema, reportPackageSchema, reportPresetSchema, reportReferencePageSchema, reportRunSummarySchema, type ReportEntry, type ReportExportJob, type ReportPage, type ReportRunRequest } from "@shared/reporting";
+import { normalizeForecastScenarios } from "./setup-model";
 import { rentOpsAuthClient } from "../rent-ops/auth";
 import type { ReportPackageSaveRequest, ReportPresetSaveRequest, ReportRunResponse, ReportingApi } from "./types";
 
@@ -41,6 +42,23 @@ export function createReportingApi(): ReportingApi {
     async page(organizationId, runId, cursor, limit = 100) {
       const query = new URLSearchParams({ limit: String(limit), ...(cursor ? { cursor } : {}) });
       return reportPageSchema.parse(await requestJson(`${path(organizationId)}/runs/${encodeURIComponent(runId)}?${query}`));
+    },
+    async references(organizationId, kind, query = {}, signal) {
+      const params = new URLSearchParams({ limit: String(query.limit ?? 50) });
+      if (query.search?.trim()) params.set("search", query.search.trim());
+      if (query.cursor) params.set("cursor", query.cursor);
+      for (const id of query.legalEntityIds ?? []) params.append("legalEntityIds", id);
+      return reportReferencePageSchema.parse(await requestJson(`/api/company/${encodeURIComponent(organizationId)}/report-references/${encodeURIComponent(kind)}?${params}`, { signal }));
+    },
+    async forecastScenarios(organizationId, signal) {
+      // Provided by the forecasting service. Until it exists (404), setup
+      // shows "No scenarios yet" instead of an error.
+      try {
+        return normalizeForecastScenarios(await requestJson(`/api/company/${encodeURIComponent(organizationId)}/forecast-scenarios`, { signal }));
+      } catch (error) {
+        if (error instanceof ReportingApiError && error.status === 404) return [];
+        throw error;
+      }
     },
     async export(organizationId, runId, format) {
       const payload = await requestJson(`${path(organizationId)}/exports`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId, format }) });

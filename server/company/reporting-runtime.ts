@@ -6,8 +6,11 @@ import {
   createQuickBooksReportingEngine, createRentalReportingEngine, createReportingRegistry,
   createCompanyDomainReportingEngines,
   PostgresReportingStore, ReportingError, ReportingService,
-  type ReportingAccess, type ReportingPort,
+  type ForecastReportingReadPort, type ReportingAccess, type ReportingEngine, type ReportingPort,
 } from '../reporting';
+import { createMirrorCombinedFinancialReadPort, type ConsolidationMappingReadPort } from '../reporting/ports/mirror-financial';
+import { createPostgresReportReferenceReader } from '../reporting/ports/references';
+import { resolveRentalPropertyIds } from '../reporting/ports/scope';
 import { PostgresRentOpsRepository, type RentOpsQueryExecutor } from '../rent-ops/repositories/postgres';
 import { RentOpsService } from '../rent-ops/services/service';
 import { authorizeCompanyRead, loadAuthenticatedPrincipal, type AuthenticatedPrincipal } from './authorization';
@@ -25,7 +28,7 @@ function periodBounds(period: ReportRunRequest['period']): { from: string; throu
   if (period.mode === 'month' || period.month) {
     const month = period.month!;
     const [year, number] = month.split('-').map(Number);
-    return { from: `${month}-01`, through: `${month}-${new Date(Date.UTC(year, number, 0)).getUTCDate()}` };
+    return { from: `${month}-01`, through: `${month}-${String(new Date(Date.UTC(year, number, 0)).getUTCDate()).padStart(2, '0')}` };
   }
   const from = period.fromDate ?? period.asOfDate;
   const through = period.toDate ?? period.asOfDate;
@@ -44,40 +47,60 @@ async function readScopedRental(
   if (request.scope.propertyIds.length && filterProperties.some(id => !request.scope.propertyIds.includes(id as typeof request.scope.propertyIds[number]))) {
     throw new ReportingError('report_validation', 'Property filters must stay within the selected report scope.', 400);
   }
-  const requestedProperties = filterProperties.length ? filterProperties : request.scope.propertyIds;
-  const mappings = await executor.query<{ property_id: string; legal_entity_id: string; covers_period: boolean }>(
-    `SELECT property_id,legal_entity_id,
-      effective_from <= $2::date AND (effective_until IS NULL OR effective_until > $3::date) AS covers_period
-      FROM company_property_entity_periods
-      WHERE organization_id=$1 AND effective_from <= $3::date
-        AND (effective_until IS NULL OR effective_until > $2::date)
-        AND (cardinality($4::uuid[])=0 OR legal_entity_id=ANY($4::uuid[]))
-        AND (cardinality($5::varchar[])=0 OR property_id=ANY($5::varchar[]))`,
-    [request.scope.organizationId, period.from, period.through, request.scope.legalEntityIds, requestedProperties],
-  );
-  if (mappings.rows.some(row => !row.covers_period)) {
-    throw new ReportingError('report_unavailable', 'A property changed entities during this period. Choose a period within one ownership interval.', 409);
+  let properties: string[];
+  if (!filterProperties.length) {
+    properties = [...await resolveRentalPropertyIds({ executor, principal }, context)];
+  } else {
+    const mappings = await executor.query<{ property_id: string; legal_entity_id: string; covers_period: boolean }>(
+      `SELECT property_id,legal_entity_id,
+        effective_from <= $2::date AND (effective_until IS NULL OR effective_until > $3::date) AS covers_period
+        FROM company_property_entity_periods
+        WHERE organization_id=$1 AND effective_from <= $3::date
+          AND (effective_until IS NULL OR effective_until > $2::date)
+          AND (cardinality($4::uuid[])=0 OR legal_entity_id=ANY($4::uuid[]))
+          AND property_id=ANY($5::varchar[])`,
+      [request.scope.organizationId, period.from, period.through, request.scope.legalEntityIds, filterProperties],
+    );
+    if (mappings.rows.some(row => !row.covers_period)) {
+      throw new ReportingError('report_unavailable', 'A property changed entities during this period. Choose a period within one ownership interval.', 409);
+    }
+    properties = Array.from(new Set(mappings.rows.map(row => row.property_id)));
+    for (const row of mappings.rows) authorizeCompanyRead(principal, {
+      organizationId: principal.organizationId,
+      legalEntityId: legalEntityIdSchema.parse(row.legal_entity_id), propertyId: propertyReferenceIdSchema.parse(row.property_id),
+    }, READ_ROLES);
+    if (filterProperties.some(id => !properties.includes(id))) throw new ReportingError('report_forbidden', 'A selected property is outside the company reporting period.', 403);
   }
-  const properties = Array.from(new Set(mappings.rows.map(row => row.property_id)));
-  for (const row of mappings.rows) authorizeCompanyRead(principal, {
-    organizationId: principal.organizationId,
-    legalEntityId: legalEntityIdSchema.parse(row.legal_entity_id), propertyId: propertyReferenceIdSchema.parse(row.property_id),
-  }, READ_ROLES);
-  if (requestedProperties.some(id => !properties.includes(id))) throw new ReportingError('report_forbidden', 'A selected property is outside the company reporting period.', 403);
   if (!properties.length) return [];
   const service = new RentOpsService(new PostgresRentOpsRepository(executor, true));
   return service.report(name, { ...filters, propertyId: undefined, propertyIds: properties });
 }
 
+export interface CompanyReportingPortOptions {
+  /**
+   * Versioned forecast scenario reader supplied by the forecasting service
+   * (`createForecastReportingReadPort(executor)`). Without it, the four
+   * forecast reports report "No approved forecast scenario."
+   */
+  readonly forecastPort?: ForecastReportingReadPort | ((transaction: RentOpsQueryExecutor) => ForecastReportingReadPort);
+  /** Approved canonical account mapping and eliminations for consolidated reports. */
+  readonly consolidationPort?: ConsolidationMappingReadPort | ((transaction: RentOpsQueryExecutor) => ConsolidationMappingReadPort);
+}
+
+function resolveFactory<T>(value: T | ((transaction: RentOpsQueryExecutor) => T) | undefined, transaction: RentOpsQueryExecutor): T | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === 'function' ? (value as (transaction: RentOpsQueryExecutor) => T)(transaction) : value;
+}
+
 /** Compose domain reports with the same database and provider authority used by other company features. */
-export function createCompanyReportingPort(executor: RentOpsQueryExecutor, accounting: AccountingServices): ReportingPort {
-  function registry(transaction: RentOpsQueryExecutor, principal?: AuthenticatedPrincipal) {
+export function createCompanyReportingPort(executor: RentOpsQueryExecutor, accounting: AccountingServices, options: CompanyReportingPortOptions = {}): ReportingPort {
+  const environment = accounting.qbo.status === 'configured' ? accounting.qbo.environment : null;
+
+  function registry(transaction: RentOpsQueryExecutor, principal: AuthenticatedPrincipal) {
     const rental = createRentalReportingEngine({ report: async () => { throw new ReportingError('report_forbidden', 'Report access is required.', 403); } });
-    const scopedRental = { ...rental, run: async (context: ReportingEngineContext) => {
-      if (!principal) throw new ReportingError('report_forbidden', 'Report access is required.', 403);
-      return createRentalReportingEngine({ report: (name, filters = {}) => readScopedRental(transaction, principal, context, name, filters) }).run(context);
-    } };
-    const qbo = createQuickBooksReportingEngine({
+    const scopedRental: ReportingEngine = { ...rental, reportIds: [...rental.reportIds], run: async (context: ReportingEngineContext) => createRentalReportingEngine({ report: (name, filters = {}) => readScopedRental(transaction, principal, context, name, filters) }).run(context) };
+    const connectionProbe = new Map<string, Promise<number>>();
+    const qboEngine = createQuickBooksReportingEngine({
       ready: accounting.qbo.status === 'configured',
       reason: accounting.qbo.status === 'configured' ? undefined : 'Connect QuickBooks to run financial statements.',
       async resolveConnectionScope(organizationId, legalEntityId) {
@@ -87,7 +110,7 @@ export function createCompanyReportingPort(executor: RentOpsQueryExecutor, accou
            WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND revoked_at IS NULL`,
           [organizationId, legalEntityId, accounting.qbo.environment],
         );
-        if (result.rows.length !== 1) throw new ReportingError('report_unavailable', 'Choose one verified QuickBooks connection for this entity.', 409);
+        if (result.rows.length !== 1) throw new ReportingError('report_unavailable', 'This legal entity has no active QuickBooks connection.', 409, { dependency: 'verified_quickbooks_connection' });
         return { organizationId, legalEntityId, environment: accounting.qbo.environment, realmId: result.rows[0].realm_id };
       },
       createClient(scope) {
@@ -95,13 +118,27 @@ export function createCompanyReportingPort(executor: RentOpsQueryExecutor, accou
         return accounting.qbo.createReportsClient(scope);
       },
     });
+    const qbo: ReportingEngine = {
+      ...qboEngine, reportIds: [...qboEngine.reportIds], dependency: 'verified_quickbooks_connection',
+      async probe({ organizationId }) {
+        if (environment === null) return { status: 'missing_data', reason: 'Connect QuickBooks to run financial statements.', dependency: 'verified_quickbooks_connection' };
+        let count = connectionProbe.get(organizationId);
+        if (!count) {
+          count = transaction.query<{ count: string | number }>(`SELECT count(*)::text AS count FROM accounting_qbo_connections WHERE organization_id=$1 AND environment=$2 AND revoked_at IS NULL`, [organizationId, environment]).then(result => Number(result.rows[0]?.count ?? 0));
+          connectionProbe.set(organizationId, count);
+        }
+        return await count ? { status: 'available' } : { status: 'missing_data', reason: 'No legal entity has an active QuickBooks connection.', dependency: 'verified_quickbooks_connection' };
+      },
+    };
     const mirror = accounting.mirror.forExecutor(transaction);
-    const domainEngines = principal ? createCompanyDomainReportingEngines({
+    const combinedFinancial = createMirrorCombinedFinancialReadPort({ executor: transaction, principal, environment, mirror, consolidation: resolveFactory(options.consolidationPort, transaction) });
+    const domainEngines = createCompanyDomainReportingEngines({
       executor: transaction, principal,
       projectService: new ProjectReadService(transaction, createProjectFinanceReadPort(mirror, createProjectFinanceBindingStore(transaction), mirror)),
       investorService: new InvestorReadService(transaction, { sourceRead: mirror }),
       timeRead: createTransactionBoundTimeReadPort(transaction),
-    }) : [];
+      domainPorts: { combinedFinancial, forecast: resolveFactory(options.forecastPort, transaction) },
+    });
     return createReportingRegistry({ engines: [scopedRental, qbo, ...domainEngines] });
   }
 
@@ -126,13 +163,17 @@ export function createCompanyReportingPort(executor: RentOpsQueryExecutor, accou
           return result.rows.length === 1 ? result.rows[0].legal_entity_id : null;
         },
       };
-      const service = new ReportingService({ registry: registry(transaction, principal), store: new PostgresReportingStore(transaction) });
+      const service = new ReportingService({ registry: registry(transaction, principal), store: new PostgresReportingStore(transaction), references: createPostgresReportReferenceReader({ executor: transaction, environment, consolidation: resolveFactory(options.consolidationPort, transaction) }) });
       return work(service, fresh);
     }, { readOnly });
   }
 
   return {
-    catalog: access => registry(executor, access?.principal).listEntries(),
+    catalog: access => {
+      if (!access) return Promise.resolve(createReportingRegistry().listEntries());
+      return within(access, true, (service, fresh) => service.catalog(fresh));
+    },
+    references: (access, input) => within(access, true, (service, fresh) => service.references(fresh, input)),
     run: (access, input) => within(access, false, (service, fresh) => service.run(fresh, input)),
     page: (access, input) => within(access, true, (service, fresh) => service.page(fresh, input)),
     drilldown: (access, input) => within(access, true, (service, fresh) => service.drilldown(fresh, input)),

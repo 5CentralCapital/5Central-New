@@ -1,91 +1,191 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import * as Popover from "@radix-ui/react-popover";
+import { useQuery } from "@tanstack/react-query";
+import { Check, ChevronDown, Search, X } from "lucide-react";
 import type { CompanyContextOrganization } from "@shared/company/context";
-import { currencyCodeSchema, isoDateSchema, legalEntityIdSchema, organizationIdSchema, propertyReferenceIdSchema, type CurrencyCode } from "@shared/company";
-import { isoMonthSchema } from "@shared/rent-ops-contracts";
-import { reportRunRequestSchema, type ReportEntry, type ReportPeriod, type ReportRunRequest, type ReportingFilterDefinition } from "@shared/reporting";
+import type { ReportEntry, ReportReferenceKind, ReportReferenceOption, ReportRunRequest, ReportingFilterDefinition } from "@shared/reporting";
 import { workspaceToday } from "../rent-ops/workspace/workspace-date";
+import { reportingApi } from "./api";
+import type { ReportingApi } from "./types";
+import {
+  availableProperties, availableUnits, buildReportRunRequest, initialSetupState, isFinancialBasis, isLocalReference, runnableScenarios,
+  serverReferenceKind, visibleSetupFilters, withEntities, withProperties, type ReportSetupError, type ReportSetupState,
+} from "./setup-model";
 
 interface SetupProps {
   readonly entry: ReportEntry;
   readonly organization: CompanyContextOrganization;
-  readonly onRun: (request: ReportRunRequest) => void;
+  readonly onRun: (request: ReportRunRequest, labels: Readonly<Record<string, string>>) => void;
   readonly running: boolean;
   readonly initialRequest?: ReportRunRequest;
+  readonly api?: Pick<ReportingApi, "references" | "forecastScenarios">;
+  readonly today?: string;
 }
 
-function today(): string { return workspaceToday(); }
-function month(): string { return today().slice(0, 7); }
-function periodFor(entry: ReportEntry, from: string, through: string, asOf: string, reportMonth: string): ReportPeriod {
-  if (entry.period === "range") return { mode: "range", fromDate: isoDateSchema.parse(from), toDate: isoDateSchema.parse(through) };
-  if (entry.period === "month") return { mode: "month", month: isoMonthSchema.parse(reportMonth) };
-  if (entry.period === "as_of") return { mode: "as_of", asOfDate: isoDateSchema.parse(asOf) };
-  return { mode: "custom", ...(asOf ? { asOfDate: isoDateSchema.parse(asOf) } : {}), ...(from ? { fromDate: isoDateSchema.parse(from) } : {}), ...(through ? { toDate: isoDateSchema.parse(through) } : {}), ...(reportMonth ? { month: isoMonthSchema.parse(reportMonth) } : {}) };
+type Option = { readonly value: string; readonly label: string; readonly detail?: string | null };
+
+function Field({ label, error, children, wide }: { label: string; error?: string; children: (id: string) => ReactNode; wide?: boolean }) {
+  const id = useId();
+  return <div className={`reporting-field${wide ? " is-wide" : ""}`}><label htmlFor={id}>{label}</label>{children(id)}{error && <span className="reporting-field-error" role="alert">{error}</span>}</div>;
 }
 
-function initialFilter(filter: ReportingFilterDefinition): unknown {
-  if (filter.default !== undefined) return Array.isArray(filter.default) ? [...filter.default] : filter.default;
-  return filter.multiple ? [] : "";
+/** Multi-select with type-to-filter; checkboxes carry the real selection state. */
+function ChoiceList({ id, label, options, selected, onChange, multiple = true, emptyLabel, loading, onSearch, onMore, reason }: {
+  id: string; label: string; options: readonly Option[]; selected: readonly string[]; onChange: (values: string[]) => void; multiple?: boolean;
+  emptyLabel: string; loading?: boolean; onSearch?: (search: string) => void; onMore?: () => void; reason?: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const known = useRef(new Map<string, string>());
+  for (const option of options) known.current.set(option.value, option.label);
+  const visible = onSearch || !search.trim() ? options : options.filter(option => `${option.label} ${option.detail ?? ""}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
+  const summary = selected.length === 0 ? emptyLabel : selected.length === 1 ? known.current.get(selected[0]!) ?? "1 selected" : `${selected.length} selected`;
+  const toggle = (value: string) => {
+    if (!multiple) { onChange(selected[0] === value ? [] : [value]); setOpen(false); return; }
+    onChange(selected.includes(value) ? selected.filter(item => item !== value) : [...selected, value]);
+  };
+  return <Popover.Root open={open} onOpenChange={setOpen}>
+    <Popover.Trigger asChild><button id={id} type="button" className="reporting-choice-trigger" aria-haspopup="listbox" aria-expanded={open}><span className={selected.length ? "" : "is-placeholder"}>{summary}</span><ChevronDown size={15} aria-hidden="true" /></button></Popover.Trigger>
+    <Popover.Portal><Popover.Content className="reporting-choice-popover" align="start" sideOffset={6} collisionPadding={12}>
+      <div className="reporting-choice-search"><Search size={15} aria-hidden="true" /><input aria-label={`Search ${label.toLowerCase()}`} placeholder="Search" value={search} autoFocus onChange={event => { setSearch(event.currentTarget.value); onSearch?.(event.currentTarget.value); }} /></div>
+      <div className="reporting-choice-list" role="listbox" aria-label={label} aria-multiselectable={multiple}>
+        {visible.map(option => {
+          const checked = selected.includes(option.value);
+          return <div key={option.value} role="option" aria-selected={checked} className={`reporting-choice-option${checked ? " is-selected" : ""}`} tabIndex={0} onClick={() => toggle(option.value)} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(option.value); } }}>
+            <span className="reporting-choice-check" aria-hidden="true">{checked && <Check size={14} />}</span><span className="reporting-choice-label">{option.label}{option.detail && <small>{option.detail}</small>}</span>
+          </div>;
+        })}
+        {!visible.length && <div className="reporting-choice-empty">{loading ? "Loading…" : reason ?? "No matches"}</div>}
+      </div>
+      <div className="reporting-choice-footer">
+        {onMore && <button type="button" className="reporting-quiet-button" onClick={onMore}>Show more</button>}
+        {selected.length > 0 && <button type="button" className="reporting-quiet-button" onClick={() => onChange([])}><X size={14} aria-hidden="true" />Clear</button>}
+      </div>
+    </Popover.Content></Popover.Portal>
+  </Popover.Root>;
 }
 
-const scopeFilterNames = new Set(["legalEntityIds", "propertyIds", "unitIds", "tenantIds", "tenancyIds", "ownerIds", "investorIds", "projectIds", "vendorIds", "staffIds"]);
-
-function emptyValue(value: unknown): boolean {
-  return value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0);
+/** Server-backed reference choices, scoped to the principal's grants and selected entities. */
+function ReferenceChoice({ id, filter, kind, organizationId, entityIds, value, onChange, api }: {
+  id: string; filter: ReportingFilterDefinition; kind: ReportReferenceKind; organizationId: string; entityIds: readonly string[];
+  value: unknown; onChange: (value: unknown) => void; api: Pick<ReportingApi, "references">;
+}) {
+  const [search, setSearch] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const [extra, setExtra] = useState<{ items: ReportReferenceOption[]; cursor: string | null }>({ items: [], cursor: null });
+  useEffect(() => { const timer = setTimeout(() => setDebounced(search), 200); return () => clearTimeout(timer); }, [search]);
+  const query = useQuery({
+    queryKey: ["company-reporting", "references", organizationId, kind, debounced, entityIds.join(",")],
+    queryFn: ({ signal }) => api.references(organizationId, kind, { search: debounced, legalEntityIds: entityIds }, signal),
+    staleTime: 30_000, retry: false,
+  });
+  useEffect(() => { setExtra({ items: [], cursor: null }); }, [query.data]);
+  const options = [...(query.data?.items ?? []), ...extra.items];
+  const nextCursor = extra.cursor ?? query.data?.nextCursor ?? null;
+  const more = async () => {
+    if (!nextCursor) return;
+    const page = await api.references(organizationId, kind, { search: debounced, cursor: nextCursor, legalEntityIds: entityIds });
+    setExtra(current => ({ items: [...current.items, ...page.items], cursor: page.nextCursor }));
+  };
+  const selected = Array.isArray(value) ? value.map(String) : typeof value === "string" && value ? [value] : [];
+  return <ChoiceList id={id} label={filter.label} options={options} selected={selected} multiple={filter.multiple} emptyLabel={filter.multiple ? "All" : "Any"}
+    loading={query.isLoading} reason={query.error ? "Choices could not be loaded." : query.data?.reason ?? null} onSearch={setSearch} onMore={nextCursor ? () => void more() : undefined}
+    onChange={values => onChange(filter.multiple ? values : values[0] ?? "")} />;
 }
 
-function isPeriodFilter(entry: ReportEntry, filter: ReportingFilterDefinition): boolean {
-  if (entry.period === "as_of") return filter.name === "asOfDate";
-  if (entry.period === "range") return filter.name === "fromDate" || filter.name === "toDate";
-  if (entry.period === "month") return filter.name === "month";
-  return filter.dateMode !== undefined;
-}
-
-function visibleReferenceOptions(filter: ReportingFilterDefinition, organization: CompanyContextOrganization): { value: string; label: string }[] {
-  if (filter.reference === "legal_entity") return organization.entities.map(entity => ({ value: entity.id, label: entity.name }));
-  if (filter.reference === "property") return organization.entities.flatMap(entity => entity.properties.map(property => ({ value: property.id, label: `${property.name} · ${entity.name}` })));
-  if (filter.reference === "unit") return organization.entities.flatMap(entity => entity.properties.flatMap(property => property.units.map(unit => ({ value: unit.id, label: `${property.name} · ${unit.unitNumber}` }))));
-  return [];
-}
-
-function FilterControl({ filter, value, onChange, organization }: { filter: ReportingFilterDefinition; value: unknown; onChange: (value: unknown) => void; organization: CompanyContextOrganization }) {
-  const referenceOptions = visibleReferenceOptions(filter, organization);
-  if (filter.kind === "reference" && !filter.options && referenceOptions.length === 0) return <span className="reporting-filter-unavailable">Named {filter.label.toLowerCase()} selections are unavailable.</span>;
-  if (filter.kind === "date") return <input type="date" value={typeof value === "string" ? value : ""} onChange={event => onChange(event.currentTarget.value)} />;
-  if (filter.kind === "month") return <input type="month" value={typeof value === "string" ? value : ""} onChange={event => onChange(event.currentTarget.value)} />;
-  if (filter.kind === "boolean") return <input type="checkbox" checked={value === true} onChange={event => onChange(event.currentTarget.checked)} />;
-  if (filter.options || referenceOptions.length) {
-    const options = filter.options ?? referenceOptions;
-    if (filter.multiple || filter.kind === "multi_select") {
-      const selected = Array.isArray(value) ? value.map(String) : [];
-      return <select multiple value={selected} size={Math.min(5, Math.max(2, options.length))} onChange={event => onChange(Array.from(event.currentTarget.selectedOptions, option => option.value))}>{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>;
-    }
-    return <select value={typeof value === "string" ? value : ""} onChange={event => onChange(event.currentTarget.value)}><option value="">Choose {filter.label.toLowerCase()}</option>{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>;
+function FilterControl({ id, filter, value, onChange, organization, state, api }: { id: string; filter: ReportingFilterDefinition; value: unknown; onChange: (value: unknown) => void; organization: CompanyContextOrganization; state: ReportSetupState; api: Pick<ReportingApi, "references"> }) {
+  const referenceKind = serverReferenceKind(filter);
+  if (referenceKind) return <ReferenceChoice id={id} filter={filter} kind={referenceKind} organizationId={organization.id} entityIds={state.entityIds} value={value} onChange={onChange} api={api} />;
+  if (isLocalReference(filter)) {
+    const options = filter.reference === "unit" ? availableUnits(organization, state.entityIds, state.propertyIds) : availableProperties(organization, state.entityIds);
+    const selected = Array.isArray(value) ? value.map(String) : typeof value === "string" && value ? [value] : [];
+    return <ChoiceList id={id} label={filter.label} options={options} selected={selected} multiple={filter.multiple} emptyLabel={filter.multiple ? "All" : "Any"} reason="No choices for this scope" onChange={values => onChange(filter.multiple ? values : values[0] ?? "")} />;
   }
-  if (filter.kind === "money" || filter.kind === "number") return <input inputMode="decimal" value={typeof value === "string" ? value : ""} onChange={event => onChange(event.currentTarget.value)} />;
-  return <input value={typeof value === "string" ? value : ""} onChange={event => onChange(event.currentTarget.value)} />;
+  if (filter.kind === "date") return <input id={id} type="date" value={typeof value === "string" ? value : ""} onChange={event => onChange(event.currentTarget.value)} />;
+  if (filter.kind === "month") return <input id={id} type="month" value={typeof value === "string" ? value : ""} onChange={event => onChange(event.currentTarget.value)} />;
+  if (filter.kind === "boolean") return <input id={id} type="checkbox" checked={value === true} onChange={event => onChange(event.currentTarget.checked)} />;
+  if (filter.options && (filter.multiple || filter.kind === "multi_select")) {
+    const selected = Array.isArray(value) ? value.map(String) : [];
+    return <ChoiceList id={id} label={filter.label} options={filter.options} selected={selected} emptyLabel="All" onChange={onChange} />;
+  }
+  if (filter.options) return <select id={id} value={typeof value === "string" ? value : ""} onChange={event => onChange(event.currentTarget.value)}>{filter.default === undefined && <option value="">Any</option>}{filter.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>;
+  if (filter.kind === "money" || filter.kind === "number") return <input id={id} inputMode="decimal" value={typeof value === "string" ? value : ""} onChange={event => onChange(event.currentTarget.value)} />;
+  return <input id={id} type={filter.name === "search" ? "search" : "text"} value={typeof value === "string" ? value : ""} onChange={event => onChange(event.currentTarget.value)} />;
 }
 
-export function ReportSetup({ entry, organization, onRun, running, initialRequest }: SetupProps) {
-  const firstEntity = organization.entities[0];
-  const seededRequest = initialRequest?.reportId === entry.id ? initialRequest : undefined;
-  const seededPeriod = seededRequest?.period;
-  const todayValue = today();
-  const [entityIds, setEntityIds] = useState<string[]>(() => [...(seededRequest?.scope.legalEntityIds ?? [])]);
-  const [propertyIds, setPropertyIds] = useState<string[]>(() => [...(seededRequest?.scope.propertyIds ?? [])]);
-  const [from, setFrom] = useState(() => seededPeriod?.mode === "range" ? seededPeriod.fromDate : seededPeriod?.mode === "custom" ? seededPeriod.fromDate ?? `${todayValue.slice(0, 4)}-01-01` : `${todayValue.slice(0, 4)}-01-01`);
-  const [through, setThrough] = useState(() => seededPeriod?.mode === "range" ? seededPeriod.toDate : seededPeriod?.mode === "custom" ? seededPeriod.toDate ?? todayValue : todayValue);
-  const [asOf, setAsOf] = useState(() => seededPeriod?.mode === "as_of" ? seededPeriod.asOfDate : seededPeriod?.mode === "custom" ? seededPeriod.asOfDate ?? todayValue : todayValue);
-  const [reportMonth, setReportMonth] = useState(() => seededPeriod?.mode === "month" ? seededPeriod.month : seededPeriod?.mode === "custom" ? seededPeriod.month ?? month() : month());
-  const [basis, setBasis] = useState<ReportRunRequest["basis"]>(() => seededRequest?.basis ?? (entry.basis.includes("cash") ? "cash" : "operational"));
-  const [currency, setCurrency] = useState(() => seededRequest?.currency ?? firstEntity?.currency ?? "USD");
-  const [filters, setFilters] = useState<Record<string, unknown>>(() => Object.fromEntries(entry.filters.map(filter => [filter.name, seededRequest && Object.prototype.hasOwnProperty.call(seededRequest.filters, filter.name) ? seededRequest.filters[filter.name] : initialFilter(filter)])));
-  const availableEntities = useMemo(() => organization.entities.filter(entity => entityIds.includes(entity.id)), [organization.entities, entityIds]);
-  const update = (name: string, value: unknown) => setFilters(current => ({ ...current, [name]: value }));
+function ScenarioControl({ id, organizationId, value, onChange, api }: { id: string; organizationId: string; value: string; onChange: (value: string) => void; api: Pick<ReportingApi, "forecastScenarios"> }) {
+  const scenarios = useQuery({ queryKey: ["company-reporting", "forecast-scenarios", organizationId], queryFn: ({ signal }) => api.forecastScenarios(organizationId, signal), staleTime: 30_000, retry: false });
+  const runnable = runnableScenarios(scenarios.data ?? []);
+  if (scenarios.isLoading) return <span className="reporting-inline-note" role="status">Loading scenarios…</span>;
+  if (scenarios.error) return <span className="reporting-inline-note">Scenarios could not be loaded.</span>;
+  if (!runnable.length) return <span className="reporting-inline-note">No scenarios yet</span>;
+  return <select id={id} value={value} onChange={event => onChange(event.currentTarget.value)}><option value="">Choose a scenario</option>{runnable.map(scenario => <option key={scenario.scenarioId} value={scenario.scenarioId}>{scenario.name}</option>)}</select>;
+}
+
+function EliminationControl({ id, organizationId, value, onChange, api }: { id: string; organizationId: string; value: string; onChange: (value: string) => void; api: Pick<ReportingApi, "references"> }) {
+  const versions = useQuery({ queryKey: ["company-reporting", "references", organizationId, "elimination_version"], queryFn: ({ signal }) => api.references(organizationId, "elimination_version", {}, signal), staleTime: 30_000, retry: false });
+  const items = versions.data?.items ?? [];
+  return <select id={id} value={value} onChange={event => onChange(event.currentTarget.value)} disabled={versions.isLoading}>
+    <option value="">No eliminations</option>
+    {items.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
+  </select>;
+}
+
+export function ReportSetup({ entry, organization, onRun, running, initialRequest, api = reportingApi, today = workspaceToday() }: SetupProps) {
+  const [state, setState] = useState<ReportSetupState>(() => initialSetupState(entry, organization, today, initialRequest));
+  const [errors, setErrors] = useState<readonly ReportSetupError[]>([]);
+  const scenarios = useQuery({ queryKey: ["company-reporting", "forecast-scenarios", organization.id], queryFn: ({ signal }) => api.forecastScenarios(organization.id, signal), staleTime: 30_000, retry: false, enabled: entry.setup.forecastScenario });
+  const filters = useMemo(() => visibleSetupFilters(entry), [entry]);
+  const errorFor = (field: string) => errors.find(error => error.field === field)?.message;
+  const update = (name: string, value: unknown) => setState(current => ({ ...current, filters: { ...current.filters, [name]: value } }));
+  const financial = isFinancialBasis(entry);
+  const bases = entry.basis.filter(value => value === "cash" || value === "accrual");
+  const entityOptions = organization.entities.map(entity => ({ value: entity.id, label: entity.name }));
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const nextFilters = { ...filters, ...(propertyIds.length ? { propertyIds } : {}), ...(entry.filters.some(filter => filter.name === "basis") ? { basis } : {}), ...(entry.filters.some(filter => filter.name === "currency") ? { currency } : {}) };
-    const request: ReportRunRequest = { reportId: entry.id, definitionVersion: entry.version, scope: { organizationId: organizationIdSchema.parse(organization.id), legalEntityIds: entityIds.map(value => legalEntityIdSchema.parse(value)), propertyIds: propertyIds.map(value => propertyReferenceIdSchema.parse(value)), unitIds: [], tenantIds: [], tenancyIds: [], ownerIds: [], investorIds: [], projectIds: [], vendorIds: [], staffIds: [] }, filters: nextFilters, period: periodFor(entry, from, through, asOf, reportMonth), basis, currency: basis === "cash" || basis === "accrual" ? currencyCodeSchema.parse(currency) as CurrencyCode : null, columns: undefined, sort: undefined };
-    onRun(request);
+    const result = buildReportRunRequest(entry, organization, state, scenarios.data ?? []);
+    if (!result.ok) { setErrors(result.errors); return; }
+    setErrors([]);
+    onRun(result.request, {});
   };
-  return <form className="reporting-setup" onSubmit={submit}><div className="reporting-setup-grid"><fieldset><legend>Scope</legend><label>Legal entities<select multiple value={entityIds} size={Math.min(4, Math.max(2, organization.entities.length))} onChange={event => { const selected = Array.from(event.currentTarget.selectedOptions, option => option.value); setEntityIds(selected); setPropertyIds([]); const entity = organization.entities.find(candidate => candidate.id === selected[0]); if (entity) setCurrency(entity.currency); }}>{organization.entities.map(entity => <option key={entity.id} value={entity.id}>{entity.name}</option>)}</select></label><label>Properties<select multiple value={propertyIds} size={Math.min(5, Math.max(2, availableEntities.flatMap(entity => entity.properties).length || 2))} onChange={event => setPropertyIds(Array.from(event.currentTarget.selectedOptions, option => option.value))}>{availableEntities.flatMap(entity => entity.properties.map(property => <option key={property.id} value={property.id}>{property.name} · {entity.name}</option>))}</select></label></fieldset><fieldset><legend>Period</legend>{entry.period === "range" && <><label>From<input type="date" value={from} onChange={event => setFrom(event.currentTarget.value)} /></label><label>Through<input type="date" value={through} onChange={event => setThrough(event.currentTarget.value)} /></label></>}{entry.period === "month" && <label>Month<input type="month" value={reportMonth} onChange={event => setReportMonth(event.currentTarget.value)} /></label>}{entry.period === "as_of" && <label>As of<input type="date" value={asOf} onChange={event => setAsOf(event.currentTarget.value)} /></label>}{entry.period === "custom" && <><label>From<input type="date" value={from} onChange={event => setFrom(event.currentTarget.value)} /></label><label>Through<input type="date" value={through} onChange={event => setThrough(event.currentTarget.value)} /></label><label>As of<input type="date" value={asOf} onChange={event => setAsOf(event.currentTarget.value)} /></label></>}</fieldset><fieldset><legend>Report filters</legend>{entry.filters.filter(filter => !["legalEntityIds", "propertyIds"].includes(filter.name) && !isPeriodFilter(entry, filter)).map(filter => <label key={filter.name}>{filter.label}<FilterControl filter={filter} value={filters[filter.name]} onChange={value => update(filter.name, value)} organization={organization} /></label>)}{(entry.basis.includes("cash") || entry.basis.includes("accrual")) && <><label>Basis<select value={basis} onChange={event => setBasis(event.currentTarget.value as ReportRunRequest["basis"])}>{entry.basis.filter(value => value === "cash" || value === "accrual").map(value => <option key={value}>{value}</option>)}</select></label><label>Currency<input value={currency} maxLength={3} onChange={event => setCurrency(event.currentTarget.value.toUpperCase())} /></label></>}</fieldset></div><button className="reporting-primary" type="submit" disabled={running || !entityIds.length}>{running ? "Running…" : "Run report"}</button></form>;
+  const reset = () => { setState(initialSetupState(entry, organization, today)); setErrors([]); };
+  const general = errors.filter(error => !["legalEntityIds", "period", "currency", "forecast", ...filters.map(filter => filter.name)].includes(error.field));
+  return <form className="reporting-setup" onSubmit={submit} aria-label={`${entry.title} setup`} noValidate>
+    <div className="reporting-setup-grid">
+      <fieldset>
+        <legend>Scope</legend>
+        {entry.setup.entityScope === "exactly_one"
+          ? <Field label="Legal entity" error={errorFor("legalEntityIds")}>{id => <select id={id} value={state.entityIds[0] ?? ""} onChange={event => setState(current => withEntities(current, organization, event.currentTarget.value ? [event.currentTarget.value] : []))}><option value="">Choose a legal entity</option>{entityOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>}</Field>
+          : <Field label="Legal entities" error={errorFor("legalEntityIds")}>{id => <ChoiceList id={id} label="Legal entities" options={entityOptions} selected={state.entityIds} emptyLabel={entry.setup.entityScope === "optional" ? "All authorized" : "Choose"} onChange={values => setState(current => withEntities(current, organization, values))} />}</Field>}
+        {entry.setup.propertyScope && <Field label="Properties">{id => <ChoiceList id={id} label="Properties" options={availableProperties(organization, state.entityIds)} selected={state.propertyIds} emptyLabel="All in scope" reason="No properties for these entities" onChange={values => setState(current => withProperties(current, organization, values))} />}</Field>}
+      </fieldset>
+      <fieldset>
+        <legend>Period</legend>
+        {entry.period === "custom" && <div className="reporting-segmented" role="radiogroup" aria-label="Period type">
+          {(["range", "as_of"] as const).map(mode => <button key={mode} type="button" role="radio" aria-checked={state.customMode === mode} className={state.customMode === mode ? "is-selected" : ""} onClick={() => setState(current => ({ ...current, customMode: mode }))}>{mode === "range" ? "Date range" : "As of"}</button>)}
+        </div>}
+        {(entry.period === "range" || (entry.period === "custom" && state.customMode === "range")) && <>
+          <Field label="From">{id => <input id={id} type="date" value={state.from} onChange={event => setState(current => ({ ...current, from: event.currentTarget.value }))} />}</Field>
+          <Field label="Through" error={errorFor("period")}>{id => <input id={id} type="date" value={state.through} onChange={event => setState(current => ({ ...current, through: event.currentTarget.value }))} />}</Field>
+        </>}
+        {(entry.period === "as_of" || (entry.period === "custom" && state.customMode === "as_of")) && <Field label="As of" error={errorFor("period")}>{id => <input id={id} type="date" value={state.asOf} onChange={event => setState(current => ({ ...current, asOf: event.currentTarget.value }))} />}</Field>}
+        {entry.period === "month" && <Field label="Month" error={errorFor("period")}>{id => <input id={id} type="month" value={state.month} onChange={event => setState(current => ({ ...current, month: event.currentTarget.value }))} />}</Field>}
+        {financial && <>
+          {bases.length > 1 ? <div className="reporting-field"><span className="reporting-field-label" id={`${entry.id}-basis`}>Basis</span><div className="reporting-segmented" role="radiogroup" aria-labelledby={`${entry.id}-basis`}>{bases.map(value => <button key={value} type="button" role="radio" aria-checked={state.basis === value} className={state.basis === value ? "is-selected" : ""} onClick={() => setState(current => ({ ...current, basis: value }))}>{value === "cash" ? "Cash" : "Accrual"}</button>)}</div></div> : <p className="reporting-inline-note">{bases[0] === "accrual" ? "Accrual basis" : "Cash basis"}</p>}
+          <Field label="Currency" error={errorFor("currency")}>{id => <input id={id} value={state.currency} maxLength={3} autoComplete="off" onChange={event => setState(current => ({ ...current, currency: event.currentTarget.value.toUpperCase() }))} />}</Field>
+        </>}
+      </fieldset>
+      {(filters.length > 0 || entry.setup.forecastScenario || entry.setup.consolidation) && <fieldset>
+        <legend>{entry.setup.forecastScenario ? "Scenario" : entry.setup.consolidation ? "Consolidation" : "Filters"}</legend>
+        {entry.setup.forecastScenario && <Field label="Forecast scenario" error={errorFor("forecast")}>{id => <ScenarioControl id={id} organizationId={organization.id} value={state.scenarioId} onChange={value => setState(current => ({ ...current, scenarioId: value }))} api={api} />}</Field>}
+        {entry.setup.consolidation && <Field label="Intercompany eliminations">{id => <EliminationControl id={id} organizationId={organization.id} value={state.eliminationVersion} onChange={value => setState(current => ({ ...current, eliminationVersion: value }))} api={api} />}</Field>}
+        {filters.map(filter => <Field key={filter.name} label={filter.label} error={errorFor(filter.name)}>{id => <FilterControl id={id} filter={filter} value={state.filters[filter.name]} onChange={value => update(filter.name, value)} organization={organization} state={state} api={api} />}</Field>)}
+      </fieldset>}
+    </div>
+    {general.length > 0 && <div className="reporting-error" role="alert">{general.map(error => <p key={`${error.field}:${error.message}`}>{error.message}</p>)}</div>}
+    <div className="reporting-setup-actions">
+      <button className="reporting-primary" type="submit" disabled={running}>{running ? "Running…" : "Run Report"}</button>
+      <button className="reporting-quiet-button" type="button" onClick={reset} disabled={running}>Reset</button>
+    </div>
+  </form>;
 }

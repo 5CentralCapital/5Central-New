@@ -18,6 +18,9 @@
 .rops-modern .rops-report-open:disabled { color: #656568; cursor: default; opacity: 1; }
 .rops-report-favorite:hover, .rops-report-open:not(:disabled):hover { background: #faf9f6; }
 .rops-report-availability { flex: 0 0 auto; color: #656568; font-size: 12px; }
+.rops-report-availability.is-missing_data { color: #9a6a0f; }
+.rops-report-availability.is-not_implemented { color: #6e6e73; font-style: italic; }
+.rops-report-library .rops-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @media (max-width: 800px) {
   .rops-report-category ul { grid-template-columns: minmax(0, 1fr); padding-inline: 8px; }
   .rops-report-category li:nth-last-child(2) { border-bottom: 1px solid var(--rm-line); }

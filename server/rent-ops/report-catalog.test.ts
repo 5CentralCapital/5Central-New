@@ -20,10 +20,10 @@ test('catalog advertises exactly the existing rental capabilities and preserves 
   const enabled = catalog.reports.filter(report => report.availability === 'available');
   assert.equal(enabled.length, 11);
   assert.deepEqual(enabled.map(report => report.reportKey).sort(), ['rent-roll','occupancy','scheduled-income','collected-income','scheduled-vs-collected','delinquency','tenant-ledger','lease-expiration','security-deposit','applicant-pipeline','hap'].sort());
-  assert.equal(catalog.reports.find(report => report.id === 'rent-paid')?.availability, 'planned');
+  assert.equal(catalog.reports.find(report => report.id === 'rent-paid')?.availability, 'company_service');
   assert.equal(enabled.find(report => report.id === 'lease-expiration')?.mcpReport, 'lease-expirations');
   assert.equal(enabled.find(report => report.id === 'security-deposit')?.mcpReport, 'deposits');
-  for (const report of catalog.reports.filter(report => report.availability === 'planned')) { assert.equal(report.reportKey, undefined); assert.equal(report.mcpReport, undefined); assert.ok(report.reason); }
+  for (const report of catalog.reports.filter(report => report.availability === 'company_service')) { assert.equal(report.reportKey, undefined); assert.equal(report.mcpReport, undefined); assert.ok(report.reason); }
   assert.equal(ReportCatalogSchema.safeParse({...catalog, reports: [...catalog.reports, catalog.reports[0]]}).success, false);
   const runnable = enabled[0];
   for (const absent of ['reportKey', 'mcpReport'] as const) {

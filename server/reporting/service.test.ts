@@ -30,7 +30,7 @@ test("report runs convert legacy cents, page immutable snapshots, and export the
   assert.equal(replayed.run.id, replay.run.id);
   assert.equal((await service.page({ principal }, { runId: result.run.id, limit: 1 })).snapshotId, result.run.snapshotId);
   const exportJob = await service.createExport({ principal }, { runId: result.run.id, format: "csv" });
-  assert.match(exportJob.content ?? "", /123/);
+  assert.match(exportJob.content ?? "", /,1\.23\r\n/);
 });
 
 test("paging fallback and drilldowns continue from the immutable snapshot", async () => {
