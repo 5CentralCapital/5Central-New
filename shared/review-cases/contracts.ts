@@ -16,7 +16,10 @@ import {
   REVIEW_MATERIALITIES,
   REVIEW_REASON_CODES,
   REVIEW_SCOPE_LEVELS,
+  REVIEW_SUPPORTED_OPERATION_KINDS,
 } from "./reasons";
+export { REVIEW_SUPPORTED_OPERATION_KINDS } from "./reasons";
+export type { ReviewSupportedOperationKind } from "./reasons";
 import { REVIEW_CASE_COMMAND_KINDS, REVIEW_CASE_STATES, type ReviewCaseCommandKind } from "./transitions";
 
 type Brand<Value, Name extends string> = Value & { readonly __brand: Name };
@@ -87,13 +90,6 @@ export type ReviewEvidence = z.infer<typeof reviewEvidenceSchema>;
  * Guarded reconciliation operation kinds a case may apply. Kinds that need an
  * archived snapshot or a separate transfer phase stay in the maintenance CLI.
  */
-export const REVIEW_SUPPORTED_OPERATION_KINDS = [
-  "tenancy-status", "lease-term-correction", "tenancy-expected-departure", "balance-review", "vacancy-confirm",
-  "lease-review", "metered-utility", "occupancy-establish", "schedule-replace", "schedule-end", "subsidy-establish",
-  "schedule-establish", "schedule-rebuild", "manual-schedule-replace", "manual-schedule-correct",
-] as const;
-export type ReviewSupportedOperationKind = (typeof REVIEW_SUPPORTED_OPERATION_KINDS)[number];
-
 /** A reconciliation operation without evidence; the server binds the verified evidence document. */
 export const reviewOperationSchema = z.object({
   kind: z.enum(REVIEW_SUPPORTED_OPERATION_KINDS),

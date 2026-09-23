@@ -142,11 +142,14 @@ test("rental postings are held unless the entity's posting policy allows that me
     assert.match((missing as { reason: string }).reason, /Set the rental accounting method/);
     await synthetic.executor.query(`INSERT INTO accounting_rental_posting_policies (id, organization_id, legal_entity_id, method, effective_from, cutoff_date, invoice_delivery_verified, approved_by, reason)
       VALUES ('60000000-0000-4000-8000-000000000001',$1,$2,'native_receivables','2026-01-01','2026-01-01',true,'demo-admin','native')`, [scope.organizationId, scope.legalEntityId]);
+    const unclassified = await writer.execute({ ...entry, operationKey: "bridge-unclassified" });
+    assert.equal(unclassified.status, "held");
+    assert.match((unclassified as { reason: string }).reason, /must declare its rental posting method/);
     const conflict = await writer.execute({ ...entry, rentalPosting: { activityDate: "2026-08-31", method: "summary_bridge" } });
     assert.match((conflict as { reason: string }).reason, /double count/);
     const invoice = await createQboWriteService({ executor, clientFor: () => p.client, policy: qboWritePolicyFromEnv({ QBO_WRITES_ENABLED: "on", QBO_WRITE_TYPES: "Invoice:create" }) }).execute({ scope, operationKey: "inv-1", entity: "Invoice", operation: "create", fields: {} });
     assert.equal(invoice.status, "held");
-    assert.equal(p.posts.length, 0);
+    assert.equal(p.posts.length, 0, "an unclassified journal entry never reaches QuickBooks");
     assert.equal((await executor.query("SELECT 1 FROM accounting_qbo_write_attempts")).rows.length, 0);
   } finally {
     await synthetic.close();

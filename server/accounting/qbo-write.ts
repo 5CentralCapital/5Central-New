@@ -28,6 +28,17 @@ export const QBO_WRITE_SUPPORT: Readonly<Record<string, readonly QboWriteOperati
 /** QBO entities that carry tenant receivables; writing them is rental posting. */
 export const QBO_RENTAL_RECEIVABLE_ENTITIES: ReadonlySet<string> = new Set(["Invoice", "Payment", "CreditMemo", "SalesReceipt", "RefundReceipt"]);
 
+/** Until an explicit non-rental classification exists, every JournalEntry create must identify its rental method. */
+function rentalPostingRequiredReason(request: QboWriteRequest): string | null {
+  if (QBO_RENTAL_RECEIVABLE_ENTITIES.has(request.entity) && !request.rentalPosting) {
+    return `A QuickBooks ${request.entity} posts rental activity; submit it with its rental posting method and date.`;
+  }
+  if (request.entity === "JournalEntry" && request.operation === "create" && !request.rentalPosting) {
+    return "A QuickBooks JournalEntry create must declare its rental posting method and date. Non-rental journal entries are not enabled yet.";
+  }
+  return null;
+}
+
 /** Natural keys used to find a created object when the provider response was lost. */
 const CREATE_READBACK_KEYS: Readonly<Record<string, string>> = { Vendor: "DisplayName", Customer: "DisplayName" };
 
@@ -171,10 +182,7 @@ export type QboWriteOutcome =
 export function qboWriteHeldReason(request: QboWriteRequest, policy: QboWritePolicy): string | null {
   const held = heldReason(request, policy);
   if (held) return held;
-  if (QBO_RENTAL_RECEIVABLE_ENTITIES.has(request.entity) && !request.rentalPosting) {
-    return `A QuickBooks ${request.entity} posts rental activity; submit it with its rental posting method and date.`;
-  }
-  return null;
+  return rentalPostingRequiredReason(request);
 }
 
 function heldReason(request: QboWriteRequest, policy: QboWritePolicy): string | null {
@@ -224,13 +232,10 @@ export function createQboWriteService(options: {
   const policy = options.policy ?? QBO_WRITES_DISABLED;
   return {
     policy,
-    heldReason: (request: QboWriteRequest) => heldReason(request, policy),
+    heldReason: (request: QboWriteRequest) => qboWriteHeldReason(request, policy),
     async execute(request: QboWriteRequest): Promise<QboWriteOutcome> {
-      const held = heldReason(request, policy);
+      const held = qboWriteHeldReason(request, policy);
       if (held) return { status: "held", reason: held };
-      if (QBO_RENTAL_RECEIVABLE_ENTITIES.has(request.entity) && !request.rentalPosting) {
-        return { status: "held", reason: `A QuickBooks ${request.entity} posts rental activity; submit it with its rental posting method and date.` };
-      }
       if (request.rentalPosting) {
         try {
           await assertRentalPostingMethod(options.executor, { organizationId: request.scope.organizationId, legalEntityId: request.scope.legalEntityId, activityDate: request.rentalPosting.activityDate, method: request.rentalPosting.method });

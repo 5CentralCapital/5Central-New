@@ -5,9 +5,9 @@ import { createSyntheticCompanyDatabase, createSyntheticRuntimeExecutor, SYNTHET
 import { quickBooksWebhookSignature } from "../integrations/quickbooks/webhook";
 import { PostgresJobQueue } from "../jobs/queue";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
-import { ingestQuickBooksWebhookDelivery, mergeWebhookObjectPayload, QBO_SYNC_TOPIC, QBO_WEBHOOK_EVENT_TOPIC } from "./webhook-ingest";
+import { finalizeCompletedWebhookEvents, ingestQuickBooksWebhookDelivery, mergeWebhookObjectPayload, QBO_SYNC_TOPIC, QBO_WEBHOOK_EVENT_TOPIC } from "./webhook-ingest";
 import { registerQuickBooksWebhookRoute } from "./webhook-route";
-import { createAccountingJobHandlers } from "./worker-handlers";
+import { createAccountingJobHandlers, qboWebhookFinalizationJobs } from "./worker-handlers";
 import type { AccountingServices } from "./index";
 
 const VERIFIER = "synthetic-verifier-token";
@@ -20,23 +20,23 @@ const SHARED_REALM = "9130350000000001";
 const SECOND_REALM = "9130350000000002";
 const UNBOUND_REALM = "9130350000000099";
 
-async function bind(raw: RentOpsQueryExecutor, organizationId: string, legalEntityId: string, realmId: string, status = "active") {
+async function bind(raw: RentOpsQueryExecutor, organizationId: string, legalEntityId: string, realmId: string, status = "active", environment: "sandbox" | "production" = "sandbox") {
   await raw.query(
     `INSERT INTO accounting_qbo_connections (organization_id, legal_entity_id, environment, realm_id, encrypted_access_token, access_token_iv, access_token_auth_tag,
        encrypted_refresh_token, refresh_token_iv, refresh_token_auth_tag, access_token_expires_at, status, revoked_at)
-     VALUES ($1,$2,'sandbox',$3,$4,'iv','tag',$5,'iv','tag',now() + interval '1 hour',$6,$7)`,
-    [organizationId, legalEntityId, realmId, status === "active" ? "enc" : null, status === "active" ? "enc" : null, status, status === "active" ? null : new Date().toISOString()],
+     VALUES ($1,$2,$8,$3,$4,'iv','tag',$5,'iv','tag',now() + interval '1 hour',$6,$7)`,
+    [organizationId, legalEntityId, realmId, status === "active" ? "enc" : null, status === "active" ? "enc" : null, status, status === "active" ? null : new Date().toISOString(), environment],
   ).catch(async () => {
     await raw.query(
       `INSERT INTO accounting_qbo_connections (organization_id, legal_entity_id, environment, realm_id, access_token_expires_at, status, revoked_at)
-       VALUES ($1,$2,'sandbox',$3,now(),$4,now())`,
-      [organizationId, legalEntityId, realmId, status],
+       VALUES ($1,$2,$5,$3,now(),$4,now())`,
+      [organizationId, legalEntityId, realmId, status, environment],
     );
   });
   await raw.query(
     `INSERT INTO accounting_qbo_realm_bindings (organization_id, legal_entity_id, environment, realm_id, provider_company_id, evidence_version, company_info_hash, confirmed_by)
-     VALUES ($1,$2,'sandbox',$3,$4,'v1',$5,'demo-admin')`,
-    [organizationId, legalEntityId, realmId, `company-${realmId}`, "e".repeat(64)],
+     VALUES ($1,$2,$6,$3,$4,'v1',$5,'demo-admin')`,
+    [organizationId, legalEntityId, realmId, `company-${realmId}`, "e".repeat(64), environment],
   );
 }
 
@@ -131,6 +131,93 @@ test("one delivery with several realms fans out to every active binding and dedu
   }
 });
 
+test("wildcard catch-up finalization is durable, concurrent, and scoped by environment", async () => {
+  const h = await harness();
+  try {
+    await bind(h.raw, ORG_A, ENTITY_A, SHARED_REALM, "active", "production");
+    const webhook = event({ id: "evt-wildcard", type: "qbo.account.updated.v1", intuitentityid: undefined });
+    const { body, signature } = delivery([webhook]);
+    const accepted = await ingestQuickBooksWebhookDelivery({ executor: h.executor, environment: "sandbox", rawBody: body, signature, verifierToken: VERIFIER });
+    assert.deepEqual(accepted, { status: "accepted", received: 1, fresh: 1, jobs: 2, unrouted: 0, ignored: 0 });
+    await ingestQuickBooksWebhookDelivery({ executor: h.executor, environment: "production", rawBody: body, signature, verifierToken: VERIFIER });
+    const eventRows = await h.raw.query<{ environment: string; state: string; routed_bindings: number }>("SELECT environment, state, routed_bindings FROM accounting_qbo_webhook_events WHERE event_id = 'evt-wildcard' ORDER BY environment");
+    assert.deepEqual(eventRows.rows.map(row => [row.environment, row.state, row.routed_bindings]), [["production", "routed", 1], ["sandbox", "routed", 2]]);
+
+    const jobs = await h.raw.query<{ payload: Record<string, unknown> }>("SELECT payload FROM company_jobs WHERE topic = $1 ORDER BY payload->>'environment', payload->>'legalEntityId'", [QBO_SYNC_TOPIC]);
+    assert.equal(jobs.rows.length, 3, "each active binding in both environments gets its own event-linked catch-up");
+    for (const row of jobs.rows) assert.deepEqual(row.payload.events, [{ source: "intuit.synthetic-source", id: "evt-wildcard" }]);
+
+    const services = {
+      qbo: {
+        status: "configured",
+        environment: "sandbox",
+        createProviderSync: () => ({
+          bootstrapRead: async () => ({}),
+          syncChanges: async () => ({ mode: "cdc", reason: null, status: "complete", appliedCount: 0, deletedCount: 0, unsupportedCount: 0, anchored: true, watermark: "2026-09-23T10:00:00.000Z" }),
+        }),
+      },
+    } as unknown as AccountingServices;
+    const queue = new PostgresJobQueue(h.executor);
+    const claimed = await queue.claim({ workerId: "worker-sync", topics: [QBO_SYNC_TOPIC], limit: 10 });
+    assert.equal(claimed.length, 3);
+    const sandboxJobs = claimed.filter(job => job.payload.environment === "sandbox");
+    const productionJobs = claimed.filter(job => job.payload.environment === "production");
+    assert.equal(sandboxJobs.length, 2);
+    assert.equal(productionJobs.length, 1);
+    const handlersByEnvironment = {
+      sandbox: createAccountingJobHandlers({ services }),
+      production: createAccountingJobHandlers({ services: { qbo: { ...services.qbo, environment: "production" } } as unknown as AccountingServices }),
+    };
+    const run = async (job: typeof claimed[number]) => handlersByEnvironment[job.payload.environment as "sandbox" | "production"][QBO_SYNC_TOPIC]!.handler({
+      job, workerId: "worker-sync", signal: new AbortController().signal, queue, executor: h.executor, now: () => new Date(), checkpoint: async () => {},
+    });
+    // Two bindings can finish together without relying on either handler to mark the event.
+    const sandboxResults = await Promise.all(sandboxJobs.map(async job => ({ job, result: await run(job) })));
+    await Promise.all(sandboxResults.map(({ job, result }) => queue.complete(job.id, "worker-sync", result ?? {})));
+    const sandboxFinalized = await finalizeCompletedWebhookEvents(h.executor, { now: new Date("2026-09-23T10:01:00Z") });
+    assert.equal(sandboxFinalized, 1, "a periodic sweep recovers after all scoped jobs durably completed");
+    const afterSandbox = await h.raw.query<{ environment: string; state: string }>("SELECT environment, state FROM accounting_qbo_webhook_events WHERE event_id = 'evt-wildcard' ORDER BY environment");
+    assert.deepEqual(afterSandbox.rows.map(row => [row.environment, row.state]), [["production", "routed"], ["sandbox", "processed"]], "sandbox and production copies of the same CloudEvent do not interfere");
+
+    const productionResults = await Promise.all(productionJobs.map(async job => ({ job, result: await run(job) })));
+    await Promise.all(productionResults.map(({ job, result }) => queue.complete(job.id, "worker-sync", result ?? {})));
+    assert.equal(await finalizeCompletedWebhookEvents(h.executor, { now: new Date("2026-09-23T10:02:00Z") }), 1);
+    const afterProduction = await h.raw.query<{ environment: string; state: string }>("SELECT environment, state FROM accounting_qbo_webhook_events WHERE event_id = 'evt-wildcard' ORDER BY environment");
+    assert.deepEqual(afterProduction.rows.map(row => [row.environment, row.state]), [["production", "processed"], ["sandbox", "processed"]]);
+
+    const finalizer = qboWebhookFinalizationJobs()[0]!;
+    assert.deepEqual(await finalizer.enumerate(new Date("2026-09-23T10:02:00Z")), [{ keyPart: "routed-events", payload: {}, maxAttempts: 8 }]);
+  } finally {
+    await h.close();
+  }
+});
+
+test("the finalizer refuses legacy skipped, partial, or unanchored successful sync results", async () => {
+  const h = await harness();
+  try {
+    const { body, signature } = delivery([event({ id: "evt-incomplete-sync", type: "qbo.account.updated.v1", intuitentityid: undefined })]);
+    await ingestQuickBooksWebhookDelivery({ executor: h.executor, environment: "sandbox", rawBody: body, signature, verifierToken: VERIFIER });
+    const queue = new PostgresJobQueue(h.executor);
+    const claimed = await queue.claim({ workerId: "worker-incomplete", topics: [QBO_SYNC_TOPIC], limit: 10 });
+    assert.equal(claimed.length, 2);
+    const ids = claimed.map(job => job.id);
+    await Promise.all([
+      queue.complete(ids[0]!, "worker-incomplete", { skipped: "connection_inactive" }),
+      queue.complete(ids[1]!, "worker-incomplete", { mode: "cdc", status: "complete", anchored: true }),
+    ]);
+    assert.equal(await finalizeCompletedWebhookEvents(h.executor), 0, "a succeeded inactive/skipped job cannot close the webhook event");
+
+    await h.raw.query("UPDATE company_jobs SET result = $2::jsonb WHERE id = $1", [ids[0], JSON.stringify({ mode: "cdc", status: "partial", anchored: true })]);
+    assert.equal(await finalizeCompletedWebhookEvents(h.executor), 0, "a legacy successful partial sync remains routed");
+    await h.raw.query("UPDATE company_jobs SET result = $2::jsonb WHERE id = $1", [ids[0], JSON.stringify({ mode: "cdc", status: "complete", anchored: false })]);
+    assert.equal(await finalizeCompletedWebhookEvents(h.executor), 0, "a complete but unanchored legacy sync remains routed");
+    await h.raw.query("UPDATE company_jobs SET result = $2::jsonb WHERE id = $1", [ids[0], JSON.stringify({ mode: "cdc", status: "complete", anchored: true })]);
+    assert.equal(await finalizeCompletedWebhookEvents(h.executor), 1, "the routed event closes when every binding has an anchored complete result");
+  } finally {
+    await h.close();
+  }
+});
+
 test("the raw-body route verifies per-environment tokens and acknowledges without provider calls", async () => {
   const h = await harness();
   const app = express();
@@ -153,7 +240,7 @@ test("the raw-body route verifies per-environment tokens and acknowledges withou
   }
 });
 
-test("the object job applies the change through the scoped provider sync and marks its events processed", async () => {
+test("the object job applies the change and the durable sweep waits for every binding", async () => {
   const h = await harness();
   try {
     const { body, signature } = delivery([event({ type: "qbo.bill.deleted.v1" })]);
@@ -176,9 +263,9 @@ test("the object job applies the change through the scoped provider sync and mar
       const result = await handlers[QBO_WEBHOOK_EVENT_TOPIC]!.handler({ job, workerId: "worker-a", signal: new AbortController().signal, queue, executor: h.executor, now: () => new Date(), checkpoint: async () => {} });
       assert.equal((result as { status: string }).status, "deleted");
       const events = await h.raw.query<{ state: string }>("SELECT state FROM accounting_qbo_webhook_events");
-      // The first binding's job leaves the event routed until the second finishes.
-      assert.equal(events.rows[0]?.state, job === claimed[0] ? "routed" : "processed");
+      assert.equal(events.rows[0]?.state, "routed", "handlers never claim completion before queue success is durable");
       await queue.complete(job.id, "worker-a", result as Record<string, unknown>);
+      assert.equal(await finalizeCompletedWebhookEvents(h.executor), job === claimed[0] ? 0 : 1);
     }
     assert.deepEqual(calls.map(call => (call as { operation: string; occurredAt: string }).operation), ["deleted", "deleted"]);
     assert.equal((calls[0] as { occurredAt: string }).occurredAt, "2026-09-23T10:00:00.000Z");
@@ -188,6 +275,44 @@ test("the object job applies the change through the scoped provider sync and mar
     await queue.enqueue({ jobKey: "wrong-env", topic: QBO_WEBHOOK_EVENT_TOPIC, organizationId: ORG_A, payload: { organizationId: ORG_A, legalEntityId: ENTITY_A, environment: "sandbox", realmId: SHARED_REALM, objectType: "Bill", objectId: "1", operation: "updated", events: [] } });
     const [job] = await queue.claim({ workerId: "worker-b", topics: [QBO_WEBHOOK_EVENT_TOPIC] });
     await assert.rejects(() => productionWorker[QBO_WEBHOOK_EVENT_TOPIC]!.handler({ job: job!, workerId: "worker-b", signal: new AbortController().signal, queue, executor: h.executor, now: () => new Date(), checkpoint: async () => {} }), (error: unknown) => (error as { code?: string }).code === "qbo_environment_mismatch");
+  } finally {
+    await h.close();
+  }
+});
+
+test("a not-found object catch-up accepts the full 200-ref object payload bound", async () => {
+  const h = await harness();
+  try {
+    const events = Array.from({ length: 101 }, (_, index) => ({ source: "intuit.synthetic-source", id: `evt-batch-${index}` }));
+    const queue = new PostgresJobQueue(h.executor);
+    await queue.enqueue({
+      jobKey: "object-refs-over-100",
+      topic: QBO_WEBHOOK_EVENT_TOPIC,
+      organizationId: ORG_A,
+      payload: { organizationId: ORG_A, legalEntityId: ENTITY_A, environment: "sandbox", realmId: SHARED_REALM, objectType: "Bill", objectId: "501", operation: "updated", occurredAt: null, events },
+    });
+    const services = {
+      qbo: {
+        status: "configured",
+        environment: "sandbox",
+        createProviderSync: () => ({
+          applyObject: async () => ({ status: "not_found", objectType: "Bill", objectId: "501", version: null }),
+          bootstrapRead: async () => ({}),
+          syncChanges: async () => ({ mode: "cdc", reason: null, status: "complete", appliedCount: 0, deletedCount: 0, unsupportedCount: 0, anchored: true, watermark: "2026-09-23T10:00:00.000Z" }),
+        }),
+      },
+    } as unknown as AccountingServices;
+    const handlers = createAccountingJobHandlers({ services });
+    const [objectJob] = await queue.claim({ workerId: "worker-long-events", topics: [QBO_WEBHOOK_EVENT_TOPIC], limit: 1 });
+    assert.ok(objectJob);
+    const objectResult = await handlers[QBO_WEBHOOK_EVENT_TOPIC]!.handler({ job: objectJob, workerId: "worker-long-events", signal: new AbortController().signal, queue, executor: h.executor, now: () => new Date(), checkpoint: async () => {} });
+    await queue.complete(objectJob.id, "worker-long-events", objectResult as Record<string, unknown>);
+
+    const [catchUpJob] = await queue.claim({ workerId: "worker-long-events", topics: [QBO_SYNC_TOPIC], limit: 1 });
+    assert.ok(catchUpJob);
+    assert.equal((catchUpJob.payload.events as unknown[]).length, 101);
+    const syncResult = await handlers[QBO_SYNC_TOPIC]!.handler({ job: catchUpJob, workerId: "worker-long-events", signal: new AbortController().signal, queue, executor: h.executor, now: () => new Date(), checkpoint: async () => {} });
+    assert.equal((syncResult as { status: string }).status, "complete", "the follow-up payload parses and completes with more than 100 refs");
   } finally {
     await h.close();
   }

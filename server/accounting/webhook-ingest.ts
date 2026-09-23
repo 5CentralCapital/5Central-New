@@ -8,6 +8,7 @@ import { QBO_CDC_ENTITIES, QBO_NAMED_ENTITIES } from "./provider-sync";
 
 export const QBO_WEBHOOK_EVENT_TOPIC = "accounting.qbo.webhook_event";
 export const QBO_SYNC_TOPIC = "accounting.qbo.sync";
+export const QBO_WEBHOOK_FINALIZE_TOPIC = "accounting.qbo.webhook.finalize";
 export const QBO_WRITE_TOPIC = "accounting.qbo.write";
 
 export interface QboBindingScope {
@@ -30,6 +31,24 @@ export async function enqueueQboSync(queue: PostgresJobQueue, scope: QboBindingS
     organizationId: scope.organizationId,
     payload: { ...scope, origin: input.origin, forceFullReplay: input.forceFullReplay === true },
     priority: input.origin === "manual" ? 50 : 100,
+    maxAttempts: 6,
+  });
+}
+
+/** A webhook catch-up keeps all event refs on a distinct scoped job. */
+export async function enqueueQboWebhookCatchUp(queue: PostgresJobQueue, scope: QboBindingScope, events: readonly { readonly source: string; readonly id: string }[]) {
+  const refs = events.map(ref => ({ source: ref.source, id: ref.id }))
+    .filter((ref, index, all) => all.findIndex(other => other.source === ref.source && other.id === ref.id) === index)
+    .sort((left, right) => left.source.localeCompare(right.source) || left.id.localeCompare(right.id));
+  if (refs.length === 0) throw new RangeError("A webhook catch-up must carry at least one event ref");
+  const scopeHash = createHash("sha256").update(qboScopeKeyPart(scope)).digest("hex").slice(0, 24);
+  const eventHash = createHash("sha256").update(JSON.stringify(refs)).digest("hex").slice(0, 24);
+  return queue.enqueue({
+    jobKey: `qbo.sync:webhook:${scopeHash}:${eventHash}`,
+    topic: QBO_SYNC_TOPIC,
+    organizationId: scope.organizationId,
+    payload: { ...scope, origin: "webhook", forceFullReplay: false, events: refs },
+    priority: 100,
     maxAttempts: 6,
   });
 }
@@ -141,7 +160,7 @@ export async function ingestQuickBooksWebhookDelivery(input: {
         for (const binding of bindings.rows) {
           const scope: QboBindingScope = { organizationId: String(binding.organization_id), legalEntityId: String(binding.legal_entity_id), environment: input.environment, realmId: event.intuitAccountId };
           if (objectId === "*") {
-            const result = await enqueueQboSync(queue, scope, { origin: "webhook", bucketMs: 15 * 60_000, now });
+            const result = await enqueueQboWebhookCatchUp(queue, scope, [eventRef(event)]);
             if (result.created) jobs += 1;
           } else {
             const identity = `${qboScopeKeyPart(scope)}|${objectType}|${objectId}`;
@@ -172,23 +191,52 @@ export async function ingestQuickBooksWebhookDelivery(input: {
 }
 
 /**
- * After a fetch job succeeds, mark its events processed once no other
- * binding's job for them is still outstanding.
+ * Reconcile routed event rows after their fan-out jobs have durably succeeded.
+ * This sweep is safe to retry after a worker crash and is environment-scoped
+ * because the same CloudEvent source/id can arrive in sandbox and production.
  */
-export async function markWebhookEventsProcessed(executor: RentOpsQueryExecutor, input: { readonly environment: QboEnvironment; readonly events: readonly { readonly source: string; readonly id: string }[]; readonly now: Date; readonly currentJobId: string }): Promise<number> {
-  let marked = 0;
-  for (const ref of input.events.slice(0, MAX_EVENT_REFS)) {
-    const result = await executor.query(
-      `UPDATE accounting_qbo_webhook_events e SET state = 'processed', processed_at = $4
-        WHERE e.environment = $1 AND e.event_source = $2 AND e.event_id = $3 AND e.state IN ('received','routed','failed')
+export async function finalizeCompletedWebhookEvents(executor: RentOpsQueryExecutor, input: { readonly now?: Date; readonly limit?: number } = {}): Promise<number> {
+  const limit = input.limit ?? 500;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 5_000) throw new RangeError("Webhook finalization limit must be 1–5000");
+  const result = await executor.query(
+    `WITH candidates AS (
+       SELECT e.environment, e.event_source, e.event_id
+         FROM accounting_qbo_webhook_events e
+        WHERE e.state = 'routed' AND e.routed_bindings > 0
+          AND e.routed_bindings = (
+            SELECT COUNT(DISTINCT ((j.payload->>'organizationId') || ':' || (j.payload->>'legalEntityId') || ':' || (j.payload->>'realmId')))::integer FROM company_jobs j
+             WHERE j.topic = ANY($1::text[]) AND j.payload->>'environment' = e.environment
+               AND j.payload->'events' @> jsonb_build_array(jsonb_build_object('source', e.event_source, 'id', e.event_id)))
           AND NOT EXISTS (
             SELECT 1 FROM company_jobs j
-             WHERE j.topic = $5 AND j.state IN ('queued','running','retry') AND j.id <> $6::uuid
-               AND j.payload->'events' @> jsonb_build_array(jsonb_build_object('source', e.event_source, 'id', e.event_id)))
-        RETURNING e.event_id`,
-      [input.environment, ref.source, ref.id, input.now.toISOString(), QBO_WEBHOOK_EVENT_TOPIC, input.currentJobId],
-    );
-    marked += result.rows.length;
-  }
-  return marked;
+             WHERE j.topic = ANY($1::text[]) AND j.payload->>'environment' = e.environment
+               AND j.payload->'events' @> jsonb_build_array(jsonb_build_object('source', e.event_source, 'id', e.event_id))
+               AND (
+                 j.state <> 'succeeded'
+                 OR j.result->>'skipped' IS NOT NULL
+                 OR (j.topic = $4 AND (j.result->>'status' IS DISTINCT FROM 'complete' OR j.result->>'anchored' IS DISTINCT FROM 'true'))
+                 OR (j.topic = $5 AND NOT (COALESCE(j.result->>'status', '') = ANY(ARRAY['applied','deleted','stale','not_found']::text[])))
+                 OR (j.topic = $5 AND j.result->>'status' = 'not_found' AND NOT EXISTS (
+                   SELECT 1 FROM company_jobs c
+                    WHERE c.topic = $4 AND c.payload->>'environment' = e.environment
+                      AND c.payload->>'organizationId' = j.payload->>'organizationId'
+                      AND c.payload->>'legalEntityId' = j.payload->>'legalEntityId'
+                      AND c.payload->>'realmId' = j.payload->>'realmId'
+                      AND c.payload->'events' @> jsonb_build_array(jsonb_build_object('source', e.event_source, 'id', e.event_id))
+                      AND c.state = 'succeeded' AND c.result->>'skipped' IS NULL
+                      AND c.result->>'status' = 'complete' AND c.result->>'anchored' = 'true'
+                 ))
+               ))
+        ORDER BY e.received_at, e.event_source, e.event_id
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+     )
+     UPDATE accounting_qbo_webhook_events e SET state = 'processed', processed_at = $3
+       FROM candidates c
+      WHERE e.environment = c.environment AND e.event_source = c.event_source AND e.event_id = c.event_id
+        AND e.state = 'routed'
+     RETURNING e.event_id`,
+    [[QBO_WEBHOOK_EVENT_TOPIC, QBO_SYNC_TOPIC], limit, (input.now ?? new Date()).toISOString(), QBO_SYNC_TOPIC, QBO_WEBHOOK_EVENT_TOPIC],
+  );
+  return result.rows.length;
 }

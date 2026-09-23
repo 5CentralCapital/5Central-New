@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { createAccountingServices } from "./accounting";
-import { createAccountingJobHandlers, qboPeriodicSyncJobs } from "./accounting/worker-handlers";
+import { createAccountingJobHandlers, qboPeriodicSyncJobs, qboWebhookFinalizationJobs } from "./accounting/worker-handlers";
 import { createSystemJobHandlers, systemPeriodicJobs } from "./jobs/system-handlers";
 import { createReviewJobHandlers, reviewPeriodicJobs } from "./review-cases/worker";
 import { createWorkerRuntime, newWorkerId, type JobLogger } from "./jobs/worker-runtime";
@@ -43,7 +43,7 @@ async function main(): Promise<void> {
     pollIntervalMs: positiveInteger(process.env.WORKER_POLL_MS, 1_000, 60_000),
     maxIdleIntervalMs: positiveInteger(process.env.WORKER_MAX_IDLE_MS, 15_000, 300_000),
     handlers: { ...createSystemJobHandlers(), ...createAccountingJobHandlers({ services }), ...createReviewJobHandlers({ executor }) },
-    periodic: [...systemPeriodicJobs(), ...qboPeriodicSyncJobs({ executor, services }), ...reviewPeriodicJobs({ executor })],
+    periodic: [...systemPeriodicJobs(), ...qboPeriodicSyncJobs({ executor, services }), ...qboWebhookFinalizationJobs(), ...reviewPeriodicJobs({ executor })],
     logger,
   });
   let stopping = false;

@@ -42,6 +42,14 @@ export type ReviewScopeLevel = (typeof REVIEW_SCOPE_LEVELS)[number];
 /** Operational corrections use the guarded reconciliation writer; financial ones route to accounting. */
 export type ReviewResolutionKind = "operational" | "financial" | "connection";
 
+/** Guarded operations available to review cases. Other reconciliation kinds stay in maintenance tooling. */
+export const REVIEW_SUPPORTED_OPERATION_KINDS = [
+  "tenancy-status", "lease-term-correction", "tenancy-expected-departure", "balance-review", "vacancy-confirm",
+  "lease-review", "metered-utility", "occupancy-establish", "schedule-replace", "schedule-end", "subsidy-establish",
+  "schedule-establish", "schedule-rebuild", "manual-schedule-replace", "manual-schedule-correct",
+] as const;
+export type ReviewSupportedOperationKind = (typeof REVIEW_SUPPORTED_OPERATION_KINDS)[number];
+
 export interface ReviewReasonDefinition {
   readonly code: string;
   readonly shortLabel: string;
@@ -51,6 +59,8 @@ export interface ReviewReasonDefinition {
   /** "reason": all codes of this reason in a scope form one case; "code": one case per source code. */
   readonly causeBy: "reason" | "code";
   readonly resolution: ReviewResolutionKind;
+  /** Operational corrections are denied unless a reason explicitly names their guarded operation kinds. */
+  readonly allowedOperationalOperationKinds?: readonly ReviewSupportedOperationKind[];
   readonly researchGuidance: string;
   readonly requiredVerification: string;
   /** Exact source codes emitted by the rental domain, coverage checks or adapters. */
@@ -101,6 +111,7 @@ export const REVIEW_REASONS = define([
     resolution: "operational",
     researchGuidance: "New ledger activity arrived after the owner balance review. Obtain a newer dated observation or confirm the posted ledger.",
     requiredVerification: "A balance review whose ledger fingerprint matches the current ledger is recorded.",
+    allowedOperationalOperationKinds: ["balance-review"],
     sourceCodes: ["balance_review_stale"],
   },
   {
@@ -113,6 +124,7 @@ export const REVIEW_REASONS = define([
     resolution: "operational",
     researchGuidance: "Equally dated balance reviews disagree. Identify which observation is authoritative from the source documents.",
     requiredVerification: "Exactly one latest review applies to the account and property.",
+    allowedOperationalOperationKinds: ["balance-review"],
     sourceCodes: ["balance_review_scope_ambiguous"],
   },
   {
@@ -178,6 +190,7 @@ export const REVIEW_REASONS = define([
     resolution: "operational",
     researchGuidance: "Two tenancies claim the same unit or status. Check the lease, move-in/out evidence and actual occupancy.",
     requiredVerification: "Exactly one current occupancy per unit; no occupancy is inferred from an inquiry, signed future lease or marketing status alone.",
+    allowedOperationalOperationKinds: ["tenancy-status", "tenancy-expected-departure", "vacancy-confirm"],
     sourceCodes: [
       "overlapping_current_tenancies", "multiple_current_tenancies", "multiple_future_tenancies", "future_conflicts_current",
       "simultaneous_tenancy_conflict", "occupancy_conflict", "tenancy_account_status_conflict", "tenancy_status_unknown",
@@ -206,6 +219,7 @@ export const REVIEW_REASONS = define([
     resolution: "operational",
     researchGuidance: "Find the move-in inspection, key handoff or first rent receipt that dates actual occupancy.",
     requiredVerification: "A dated move-in (or scheduled move-in for future tenancies) comes from lease or occupancy evidence.",
+    allowedOperationalOperationKinds: ["occupancy-establish"],
     sourceCodes: ["current_move_in_missing", "future_move_in_missing", "actual_move_in_unknown", "planned_move_in_unknown"],
   },
   {
@@ -218,6 +232,7 @@ export const REVIEW_REASONS = define([
     resolution: "operational",
     researchGuidance: "The recorded status disagrees with its dates. Confirm the move-out, notice or move-in from dated evidence.",
     requiredVerification: "Status and move dates agree as of today.",
+    allowedOperationalOperationKinds: ["tenancy-status", "tenancy-expected-departure", "lease-term-correction", "lease-review"],
     sourceCodes: ["current_move_out_stale", "future_move_in_elapsed", "actual_move_out_unknown"],
   },
   {
@@ -230,6 +245,7 @@ export const REVIEW_REASONS = define([
     resolution: "operational",
     researchGuidance: "Confirm the monthly rent from the executed lease and any effective rent changes.",
     requiredVerification: "A confirmed monthly base rent schedule applies to the tenancy.",
+    allowedOperationalOperationKinds: ["schedule-replace", "schedule-end", "schedule-establish", "schedule-rebuild", "manual-schedule-replace", "manual-schedule-correct"],
     sourceCodes: ["base_rent_unconfirmed", "scheduled_amount_unconfirmed"],
   },
   {
@@ -242,6 +258,7 @@ export const REVIEW_REASONS = define([
     resolution: "operational",
     researchGuidance: "Review the recurring charge schedules' scope, cadence and lineage against the lease terms.",
     requiredVerification: "Each recurring schedule has a confirmed scope, amount, monthly cadence and a single lineage.",
+    allowedOperationalOperationKinds: ["schedule-replace", "schedule-end", "schedule-establish", "schedule-rebuild", "manual-schedule-replace", "manual-schedule-correct"],
     sourceCodes: [
       "scheduled_category_unknown", "schedule_cadence_unknown", "active_state_unknown", "active_unknown", "overlapping_base_rent_schedule", "property_schedule_duplicate_conflict",
       "unknown_open_start", "unknown_open_start_historical", "unknown_open_start_current_configuration",
@@ -270,6 +287,7 @@ export const REVIEW_REASONS = define([
     resolution: "operational",
     researchGuidance: "Obtain the housing authority contract (HAP) showing agency and tenant portions and effective dates.",
     requiredVerification: "One active subsidy contract with a verified gross rent split applies to the tenancy.",
+    allowedOperationalOperationKinds: ["subsidy-establish"],
     sourceCodes: ["assistance_responsibility_unverified", "subsidy_contract_unconfirmed", "subsidy_contract_ambiguous", "overlapping_hap_contract", "duplicate_subsidy_payment_id"],
     sourcePatterns: [/^subsidy_[a-z_]+$/],
   },

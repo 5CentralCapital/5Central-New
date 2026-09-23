@@ -11,6 +11,7 @@ import { reconciliationHash } from "../rent-ops/reconciliation/operator";
 import { prepareVerifiedImportedDocument } from "../rent-ops/services/service";
 import { createInMemoryObjectStore } from "../rent-ops/storage";
 import { createReviewCasePort, reviewDetectionJobHandler, runReviewDetection, summarizeReviewCaseRows, mapReviewCaseRow, REVIEW_CASE_COLUMNS } from "./index";
+import { insertReviewCase } from "./store";
 
 const organizationId = SYNTHETIC_COMPANY.organizationId;
 const web = attestTransport("web");
@@ -59,13 +60,6 @@ async function removeImportedAccounts(db: PGlite): Promise<void> {
 async function historyCase(db: PGlite) {
   const result = await db.query<Record<string, unknown>>(`SELECT ${REVIEW_CASE_COLUMNS} FROM company_review_cases c WHERE c.reason_code = 'history_incomplete'`);
   assert.equal(result.rows.length, 1);
-  return mapReviewCaseRow(result.rows[0]!);
-}
-
-/** Any one case scoped to this key; the test needs the scope, not a particular reason. */
-async function caseInScope(db: PGlite, scopeKey: string) {
-  const result = await db.query<Record<string, unknown>>(`SELECT ${REVIEW_CASE_COLUMNS} FROM company_review_cases c WHERE c.scope_key = $1 ORDER BY c.reason_code LIMIT 1`, [scopeKey]);
-  assert.equal(result.rows.length, 1, `a case scoped to ${scopeKey}`);
   return mapReviewCaseRow(result.rows[0]!);
 }
 
@@ -230,8 +224,8 @@ test("financial fixes are routed to accounting and never applied; connection fix
   } finally { await fixture.close(); }
 });
 
-async function addEvidenceDocument(db: PGlite, storage: ReturnType<typeof createInMemoryObjectStore>, id = "company-document:evidence-9z") {
-  const bytes = Buffer.from("Synthetic move-out inspection for unit 9Z, 2026-09-01.");
+async function addEvidenceDocument(db: PGlite, storage: ReturnType<typeof createInMemoryObjectStore>, id = "company-document:evidence-9z", text = "Synthetic source evidence for a guarded review operation.") {
+  const bytes = Buffer.from(text);
   const checksum = createHash("sha256").update(bytes).digest("hex");
   const prepared = await prepareVerifiedImportedDocument(storage, {
     documentId: id, type: "other", fileName: "inspection.txt", mimeType: "application/octet-stream", bytes, sizeBytes: bytes.byteLength, checksumSha256: checksum,
@@ -242,84 +236,110 @@ async function addEvidenceDocument(db: PGlite, storage: ReturnType<typeof create
   [id, organizationId, bytes.byteLength, checksum, prepared.binding.backend, prepared.binding.logicalKey, prepared.binding.immutableGeneration ?? null, prepared.binding.immutableVersion ?? null, prepared.binding.verifiedAt]);
 }
 
-test("operational fixes dry-run on propose, refuse stale sources, apply through the guarded writer and verify by readback", async () => {
+test("a reason-matched operational fix dry-runs, refuses stale sources and applies through the guarded writer", async () => {
   const { fixture, db, runtime, storage, port, accessFor } = await setup();
   try {
-    await asImporter(db, async () => { await db.query("INSERT INTO rent_ops_units(id,property_id,unit_number,property_link_knowledge,source_system,source_id) VALUES ('rm-unit-9','demo-property-a','9Z','exact','rent_manager','unit:9')"); });
-    await runReviewDetection(runtime, organizationId);
+    const snapshot = await new PostgresRentOpsRepository(runtime).getSnapshot();
+    const tenancy = snapshot.tenancies.find(row => row.id === "demo-tenancy-1")!;
+    const scopeKey = `tenancy:${tenancy.id}`;
+    const caseId = await insertReviewCase(runtime, {
+      organizationId, legalEntityId: SYNTHETIC_COMPANY.entityId, propertyId: tenancy.propertyId,
+      reasonCode: "balance_review_stale", causeKey: "balance_review_stale:synthetic-case", scopeKey, scopeLabel: "Demo tenancy",
+      materiality: "medium", asOf: "2026-09-23", impactCents: null, impactCurrency: null,
+      affectedRecords: [{ kind: "tenancy", id: tenancy.id, label: "Demo tenancy", propertyId: tenancy.propertyId, unitId: tenancy.unitId,
+        tenancyId: tenancy.id, personId: tenancy.primaryPersonId, codes: ["balance_review_stale"] }],
+      affectedCount: 1, sourceFingerprint: createHash("sha256").update("synthetic-balance-review-case").digest("hex"), evidence: [], detectedBy: "manual",
+    });
     const access = await accessFor();
-    // A verified company document is the evidence the guarded writer re-hashes.
-    await addEvidenceDocument(db, storage);
+    await addEvidenceDocument(db, storage, "company-document:balance-review", "Synthetic owner balance review for demo tenancy.");
 
-    const unit = async () => (await new PostgresRentOpsRepository(runtime).getSnapshot()).units.find(row => row.id === "rm-unit-9")!;
-    const operation = async () => ({ kind: "vacancy-confirm", targetId: "rm-unit-9", sourceId: "unit:9", expectedRevision: 1, beforeSha256: reconciliationHash(await unit()), vacancyConfirmedOn: "2026-09-01" });
-    // The market-rent case at property A names unit 9Z, so a fix to that unit belongs to it.
-    const marketCase = () => caseBy(db, "market_rent_missing", "property:demo-property-a");
-    let current = await marketCase();
-    assert.ok(current.affectedRecords.some(record => record.id === "rm-unit-9"));
-    await port.execute("review_case.propose", envelope({ caseId: current.id, correction: { kind: "operational", summary: "Confirm unit 9Z vacant from the inspection", operation: await operation(), evidenceDocumentId: "company-document:evidence-9z" } }, current.recordRevision), access);
-    current = await marketCase();
+    const readCase = async () => {
+      const result = await db.query<Record<string, unknown>>(`SELECT ${REVIEW_CASE_COLUMNS} FROM company_review_cases c WHERE c.organization_id = $1 AND c.id = $2`, [organizationId, caseId]);
+      assert.equal(result.rows.length, 1);
+      return mapReviewCaseRow(result.rows[0]!);
+    };
+    const makeOperation = async () => {
+      const target = (await new PostgresRentOpsRepository(runtime).getSnapshot()).tenancies.find(row => row.id === tenancy.id)!;
+      return {
+        kind: "balance-review", targetId: target.id, expectedRevision: target.recordRevision ?? 1,
+        beforeSha256: reconciliationHash(target),
+        review: { schema: "balance_review_v1", id: "balance-review:review-case-synthetic", tenancyId: target.id, personId: target.primaryPersonId,
+          propertyId: target.propertyId, unitId: target.unitId, asOfDate: "2026-09-01", reviewedBalanceCents: 0,
+          tenantBalanceCents: 0, agencyBalanceCents: 0, qualifications: [], sourceRefs: ["synthetic:test-review"] },
+      };
+    };
+    let current = await readCase();
+    await port.execute("review_case.propose", envelope({ caseId: current.id, correction: { kind: "operational", summary: "Record a current operational balance review", operation: await makeOperation(), evidenceDocumentId: "company-document:balance-review" } }, current.recordRevision), access);
+    current = await readCase();
     assert.equal(current.state, "proposed");
     assert.match(current.proposedCorrection?.preview?.planToken ?? "", /^[a-f0-9]{64}$/);
-    assert.equal((await unit()).vacancyConfirmedOn ?? null, null, "propose is a dry run");
+    assert.equal((await new PostgresRentOpsRepository(runtime).getSnapshot()).activityEvents.some(event => event.id === "balance-review:review-case-synthetic"), false, "propose is a dry run");
 
-    // The unit changes after the proposal: apply refuses the stale source and changes nothing.
-    await db.query("UPDATE rent_ops_units SET unit_number = '9Z-A' WHERE id = 'rm-unit-9'");
+    // The tenancy changes after the proposal: apply refuses the stale source and changes nothing.
+    await db.query("UPDATE rent_ops_tenancies SET expected_move_out_on = '2026-12-31' WHERE id = $1", [tenancy.id]);
     await expectCommandError(port.execute("review_case.apply", envelope({ caseId: current.id }, current.recordRevision), access), 409, "review_case_source_stale");
-    assert.equal((await marketCase()).state, "proposed");
-    assert.equal((await unit()).vacancyConfirmedOn ?? null, null);
+    assert.equal((await readCase()).state, "proposed");
+    assert.equal((await new PostgresRentOpsRepository(runtime).getSnapshot()).activityEvents.some(event => event.id === "balance-review:review-case-synthetic"), false);
 
-    await port.execute("review_case.propose", envelope({ caseId: current.id, correction: { kind: "operational", summary: "Confirm unit 9Z vacant from the inspection", operation: await operation(), evidenceDocumentId: "company-document:evidence-9z" } }, current.recordRevision), access);
-    current = await marketCase();
+    await port.execute("review_case.propose", envelope({ caseId: current.id, correction: { kind: "operational", summary: "Record a current operational balance review", operation: await makeOperation(), evidenceDocumentId: "company-document:balance-review" } }, current.recordRevision), access);
+    current = await readCase();
+    const beforeLedger = await db.query<{ count: string | number }>("SELECT count(*) AS count FROM rent_ops_ledger_transactions");
     const applied = await port.execute("review_case.apply", envelope({ caseId: current.id }, current.recordRevision), access);
-    assert.ok(applied.affectedRecordIds.includes("rm-unit-9"));
-    current = await marketCase();
+    assert.ok(applied.affectedRecordIds.includes(tenancy.id));
+    current = await readCase();
     assert.equal(current.state, "applied");
-    assert.equal((await unit()).vacancyConfirmedOn, "2026-09-01");
-    const ledger = await db.query<{ count: string | number }>("SELECT count(*) AS count FROM rent_ops_ledger_transactions WHERE id LIKE 'review%'");
-    assert.equal(Number(ledger.rows[0]!.count), 0);
-
-    // Readback: the cause is still detected, so verify refuses.
-    await expectCommandError(port.execute("review_case.verify", envelope({ caseId: current.id }, current.recordRevision), access), 400, "review_case_cause_present");
-    await db.query("UPDATE rent_ops_units SET market_rent_cents = 120000 WHERE property_id = 'demo-property-a' AND market_rent_cents IS NULL");
-    await port.execute("review_case.verify", envelope({ caseId: current.id }, current.recordRevision), access);
-    current = await marketCase();
-    assert.equal(current.state, "verified");
-    await port.execute("review_case.reopen", envelope({ caseId: current.id, reason: "New rent survey found" }, current.recordRevision), access);
-    current = await marketCase();
-    assert.equal(current.state, "open");
-    assert.equal(current.reopenedCount, 1);
-    assert.deepEqual((await events(db, current.id)).map(event => event.event_kind), ["detected", "proposed", "proposed", "applied", "verified", "reopened"]);
+    assert.equal((await new PostgresRentOpsRepository(runtime).getSnapshot()).activityEvents.some(event => event.id === "balance-review:review-case-synthetic"), true);
+    const afterLedger = await db.query<{ count: string | number }>("SELECT count(*) AS count FROM rent_ops_ledger_transactions");
+    assert.equal(Number(afterLedger.rows[0]!.count), Number(beforeLedger.rows[0]!.count), "balance reviews never mutate the financial ledger");
   } finally { await fixture.close(); }
 });
 
 test("an operational fix must target a record of its own case, inside the case's company scope", async () => {
   const { fixture, db, runtime, storage, port, accessFor } = await setup();
   try {
-    await addImportedAccounts(db, 0, 2);
-    await asImporter(db, async () => { await db.query("INSERT INTO rent_ops_units(id,property_id,unit_number,property_link_knowledge,source_system,source_id) VALUES ('rm-unit-9','demo-property-b','9Z','exact','rent_manager','unit:9')"); });
-    await runReviewDetection(runtime, organizationId);
+    const snapshot = await new PostgresRentOpsRepository(runtime).getSnapshot();
+    const tenancyA = snapshot.tenancies.find(row => row.id === "demo-tenancy-1")!;
+    const scopeKey = `unit:${tenancyA.unitId}`;
+    const caseId = await insertReviewCase(runtime, {
+      organizationId, legalEntityId: SYNTHETIC_COMPANY.entityId, propertyId: tenancyA.propertyId,
+      reasonCode: "tenancy_conflict", causeKey: "tenancy_conflict:synthetic-target-scope", scopeKey, scopeLabel: "Demo unit 1A",
+      materiality: "high", asOf: "2026-09-23", impactCents: null, impactCurrency: null,
+      affectedRecords: [{ kind: "tenancy", id: tenancyA.id, label: "Demo tenancy", propertyId: tenancyA.propertyId, unitId: tenancyA.unitId,
+        tenancyId: tenancyA.id, personId: tenancyA.primaryPersonId, codes: ["overlapping_current_tenancies"] }],
+      affectedCount: 1, sourceFingerprint: createHash("sha256").update("synthetic-target-scope-case").digest("hex"), evidence: [], detectedBy: "manual",
+    });
     await addEvidenceDocument(db, storage);
     const access = await accessFor();
-    const snapshotUnit = async (id: string) => (await new PostgresRentOpsRepository(runtime).getSnapshot()).units.find(row => row.id === id)!;
-    const vacancy = async (targetId: string, sourceId: string) => ({ kind: "operational", summary: "Confirm vacant", evidenceDocumentId: "company-document:evidence-9z",
-      operation: { kind: "vacancy-confirm", targetId, sourceId, expectedRevision: 1, beforeSha256: reconciliationHash(await snapshotUnit(targetId)), vacancyConfirmedOn: "2026-09-01" } });
+    const readCase = async () => {
+      const result = await db.query<Record<string, unknown>>(`SELECT ${REVIEW_CASE_COLUMNS} FROM company_review_cases c WHERE c.organization_id = $1 AND c.id = $2`, [organizationId, caseId]);
+      assert.equal(result.rows.length, 1);
+      return mapReviewCaseRow(result.rows[0]!);
+    };
+    const correction = async (targetId: string) => {
+      const target = (await new PostgresRentOpsRepository(runtime).getSnapshot()).tenancies.find(row => row.id === targetId)!;
+      return { kind: "operational", summary: "Correct tenancy status from dated evidence", evidenceDocumentId: "company-document:evidence-9z",
+        operation: { kind: "tenancy-status", targetId: target.id, sourceId: "synthetic:tenancy", expectedRevision: target.recordRevision ?? 1,
+          beforeSha256: reconciliationHash(target), status: "cancelled" } };
+    };
+    let current = await readCase();
 
-    // An organization-level history case about imported tenants cannot change an unrelated unit.
-    const history = await historyCase(db);
-    await expectCommandError(port.execute("review_case.propose", envelope({ caseId: history.id, correction: await vacancy("rm-unit-9", "unit:9") }, history.recordRevision), access), 400, "review_case_target_unrelated");
-    // A case scoped to property A cannot change a unit at property B.
-    const propertyA = await caseInScope(db, "property:demo-property-a");
-    await expectCommandError(port.execute("review_case.propose", envelope({ caseId: propertyA.id, correction: await vacancy("rm-unit-9", "unit:9") }, propertyA.recordRevision), access), 403, "review_case_target_out_of_scope");
-    // Rental tables are not organization-scoped: a unit at a property this company does not own is refused
-    // even when a case names it.
+    // An allowed tenancy operation cannot target another tenancy in the same company.
+    await expectCommandError(port.execute("review_case.propose", envelope({ caseId, correction: await correction("demo-tenancy-2") }, current.recordRevision), access), 400, "review_case_target_unrelated");
+    assert.equal((await readCase()).state, "open", "nothing was proposed");
+
+    // A case scoped to property A cannot change an otherwise in-company tenancy at property B.
+    await expectCommandError(port.execute("review_case.propose", envelope({ caseId, correction: await correction("demo-tenancy-3") }, current.recordRevision), access), 403, "review_case_target_out_of_scope");
+
+    // Rental tables are not organization-scoped: an unowned property's tenancy is refused even if named by the case.
     await db.query("INSERT INTO rent_ops_properties(id,name,slug) VALUES ('other-company-property','Other Co','other-co')");
-    await asImporter(db, async () => { await db.query("INSERT INTO rent_ops_units(id,property_id,unit_number,property_link_knowledge,source_system,source_id) VALUES ('rm-unit-x','other-company-property','X1','exact','rent_manager','unit:77')"); });
-    await db.query(`UPDATE company_review_cases SET affected_records = affected_records || '[{"kind":"unit","id":"rm-unit-x","label":null,"propertyId":"other-company-property","unitId":"rm-unit-x","tenancyId":null,"personId":null,"codes":["market_rent_unknown"]}]'::jsonb WHERE id = $1`, [history.id]);
-    const tampered = await historyCase(db);
-    await expectCommandError(port.execute("review_case.propose", envelope({ caseId: tampered.id, correction: await vacancy("rm-unit-x", "unit:77") }, tampered.recordRevision), access), 403, "review_case_target_out_of_scope");
-    assert.equal((await historyCase(db)).state, "open", "nothing was proposed");
-    assert.equal((await snapshotUnit("rm-unit-9")).vacancyConfirmedOn ?? null, null);
+    await asImporter(db, async () => {
+      await db.query("INSERT INTO rent_ops_units(id,property_id,unit_number,property_link_knowledge) VALUES ('other-company-unit','other-company-property','X1','manual')");
+      await db.query("INSERT INTO rent_ops_people(id,first_name,last_name) VALUES ('other-company-person','Other','Resident')");
+      await db.query(`INSERT INTO rent_ops_tenancies(id,property_id,unit_id,primary_person_id,status,created_at,property_link_knowledge,unit_link_knowledge,primary_person_link_knowledge,status_knowledge)
+        VALUES ('other-company-tenancy','other-company-property','other-company-unit','other-company-person','current',now(),'manual','manual','manual','manual')`);
+    });
+    await expectCommandError(port.execute("review_case.propose", envelope({ caseId, correction: await correction("other-company-tenancy") }, current.recordRevision), access), 403, "review_case_target_out_of_scope");
+    assert.equal((await readCase()).state, "open", "nothing was proposed");
   } finally { await fixture.close(); }
 });
 
@@ -427,6 +447,60 @@ test("a detail offers Apply only when the proposal can be applied here", async (
     detail = await port.get(principal, { scope: { organizationId }, caseId: current.id });
     assert.ok(!detail.allowedCommands.includes("review_case.apply"), "a routed fix is not routed again");
     assert.equal(detail.nextAction, "Post the correction in Accounting");
+  } finally { await fixture.close(); }
+});
+
+test("financial and unsupported reasons reject operational proposals and defend apply against a stored mismatched proposal", async () => {
+  const { fixture, db, runtime, port, accessFor } = await setup();
+  try {
+    const snapshot = await new PostgresRentOpsRepository(runtime).getSnapshot();
+    const tenancy = snapshot.tenancies.find(row => row.id === "demo-tenancy-1")!;
+    const insertCase = (reasonCode: "receipt_unmatched" | "market_rent_missing", scopeKey: string, causeKey: string) => insertReviewCase(runtime, {
+      organizationId, legalEntityId: SYNTHETIC_COMPANY.entityId, propertyId: tenancy.propertyId, reasonCode, causeKey, scopeKey,
+      scopeLabel: "Synthetic review case", materiality: "medium", asOf: "2026-09-23", impactCents: null, impactCurrency: null,
+      affectedRecords: [{ kind: "tenancy", id: tenancy.id, label: "Demo tenancy", propertyId: tenancy.propertyId, unitId: tenancy.unitId,
+        tenancyId: tenancy.id, personId: tenancy.primaryPersonId, codes: [reasonCode === "receipt_unmatched" ? "allocation_evidence_unknown" : "market_rent_unknown"] }],
+      affectedCount: 1, sourceFingerprint: createHash("sha256").update(causeKey).digest("hex"), evidence: [], detectedBy: "manual",
+    });
+    const readCase = async (caseId: string) => {
+      const result = await db.query<Record<string, unknown>>(`SELECT ${REVIEW_CASE_COLUMNS} FROM company_review_cases c WHERE c.organization_id = $1 AND c.id = $2`, [organizationId, caseId]);
+      assert.equal(result.rows.length, 1);
+      return mapReviewCaseRow(result.rows[0]!);
+    };
+    const forbiddenScheduleChange = {
+      kind: "operational", summary: "End the recurring rent schedule", evidenceDocumentId: "company-document:not-used",
+      operation: { kind: "schedule-end", targetId: "demo-schedule-1", expectedRevision: 1, beforeSha256: "a".repeat(64), successorId: "forbidden-end", effectiveFrom: "2026-09-23" },
+    };
+    const access = await accessFor();
+    const receiptId = await insertCase("receipt_unmatched", `tenancy:${tenancy.id}:receipt`, "receipt_unmatched:synthetic-case");
+    let receiptCase = await readCase(receiptId);
+    await expectCommandError(port.execute("review_case.propose", envelope({ caseId: receiptId, correction: forbiddenScheduleChange }, receiptCase.recordRevision), access), 400, "review_case_resolution_mismatch");
+    assert.equal((await readCase(receiptId)).state, "open", "a financial cause cannot propose a recurring-schedule operation");
+
+    // A valid financial route is still accepted, but a stored proposal cannot be changed into an operational write.
+    await port.execute("review_case.propose", envelope({ caseId: receiptId, correction: { kind: "financial", summary: "Review the unmatched receipt", route: "accounting.receipt_allocation", amountCents: null } }, receiptCase.recordRevision), access);
+    receiptCase = await readCase(receiptId);
+    const tamperedProposal = {
+      input: forbiddenScheduleChange,
+      preview: null,
+      proposedBy: SYNTHETIC_COMPANY.actorId,
+      proposedAt: "2026-09-23T12:00:00.000Z",
+      routing: null,
+    };
+    await db.query("UPDATE company_review_cases SET proposed_correction = $2::jsonb WHERE organization_id = $1 AND id = $3", [organizationId, JSON.stringify(tamperedProposal), receiptId]);
+    const schedulesBefore = await db.query<{ count: string | number }>("SELECT count(*) AS count FROM rent_ops_recurring_charge_schedules");
+    await expectCommandError(port.execute("review_case.apply", envelope({ caseId: receiptId }, receiptCase.recordRevision), access), 400, "review_case_resolution_mismatch");
+    assert.equal((await readCase(receiptId)).state, "proposed");
+    const schedulesAfter = await db.query<{ count: string | number }>("SELECT count(*) AS count FROM rent_ops_recurring_charge_schedules");
+    assert.equal(Number(schedulesAfter.rows[0]!.count), Number(schedulesBefore.rows[0]!.count), "apply rejects a directly edited stored operation before mutation");
+
+    const marketRentId = await insertCase("market_rent_missing", `tenancy:${tenancy.id}:market-rent`, "market_rent_missing:synthetic-case");
+    const marketCase = await readCase(marketRentId);
+    await expectCommandError(port.execute("review_case.propose", envelope({ caseId: marketRentId, correction: {
+      kind: "operational", summary: "Confirm unit vacancy", evidenceDocumentId: "company-document:not-used",
+      operation: { kind: "vacancy-confirm", targetId: tenancy.unitId, expectedRevision: 1, beforeSha256: "b".repeat(64), vacancyConfirmedOn: "2026-09-01" },
+    } }, marketCase.recordRevision), access), 400, "review_case_resolution_mismatch");
+    assert.equal((await readCase(marketRentId)).state, "open", "reasons without a matching guarded operation remain on the evidence/research path");
   } finally { await fixture.close(); }
 });
 

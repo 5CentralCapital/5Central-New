@@ -31,6 +31,31 @@ import { loadReviewCaseForUpdate, recordReviewCaseEvent, saveReviewCase, type Re
 type AnyEnvelope = CommandEnvelope<Record<string, unknown>>;
 type Context = CommandHandlerContext<Record<string, unknown>>;
 
+/** Bind each correction to its case taxonomy before proposal and again before apply. */
+function assertCorrectionMatchesReason(reasonCode: string, correction: ReviewProposedCorrection["input"]): void {
+  const reason = reviewReason(reasonCode);
+  if (reason.resolution !== "operational" && correction.kind !== reason.resolution) {
+    throw new ValidationCommandError(
+      `This ${reason.shortLabel.toLowerCase()} case is routed to ${reason.resolution}; it cannot accept a ${correction.kind} correction.`,
+      { reason: "review_case_resolution_mismatch", reasonCode, correctionKind: correction.kind, expectedResolution: reason.resolution },
+    );
+  }
+  if (correction.kind === "operational") {
+    const allowed = reason.allowedOperationalOperationKinds ?? [];
+    if (!allowed.includes(correction.operation.kind)) {
+      throw new ValidationCommandError(
+        allowed.length
+          ? `This ${reason.shortLabel.toLowerCase()} case does not support ${correction.operation.kind}. Use one of its documented guarded operations, or continue research.`
+          : `This ${reason.shortLabel.toLowerCase()} case has no supported operational correction. Continue research or block it on the missing evidence.`,
+        {
+          reason: "review_case_resolution_mismatch", reasonCode, correctionKind: correction.kind,
+          operationKind: correction.operation.kind, allowedOperations: allowed,
+        },
+      );
+    }
+  }
+}
+
 export interface ReviewCaseCommandAccess {
   readonly principal: AuthenticatedPrincipal;
   readonly resolvePrincipal: (executor: RentOpsQueryExecutor) => Promise<AuthenticatedPrincipal>;
@@ -168,11 +193,8 @@ function handlers(options: ReviewCaseCommandOptions): Record<ReviewCaseCommandKi
       const current = await loadCase(context, payload.caseId);
       requireRevision(context, current.recordRevision);
       assertTransition(current, "proposed");
-      const reason = reviewReason(current.reasonCode);
       const correction = payload.correction;
-      if (correction.kind === "operational" && reason.resolution === "connection") {
-        throw new ValidationCommandError("This cause is a connection or software gap; propose a connection fix instead of a record change", { reason: "review_case_resolution_mismatch" });
-      }
+      assertCorrectionMatchesReason(current.reasonCode, correction);
       let preview: ReviewProposedCorrection["preview"] = null;
       if (correction.kind === "operational") {
         await assertCorrectionTargetInCase({
@@ -212,6 +234,8 @@ function handlers(options: ReviewCaseCommandOptions): Record<ReviewCaseCommandKi
       if (current.state !== "proposed" || !current.proposedCorrection) throw new ValidationCommandError("Only a case with a proposed fix can be applied", { reason: "review_case_transition_not_allowed", from: current.state, to: "applied" });
       const proposal = current.proposedCorrection;
       const input = proposal.input;
+      // Defend against a stale or directly edited stored proposal that bypassed propose-time checks.
+      assertCorrectionMatchesReason(current.reasonCode, input);
       if (input.kind === "connection") {
         throw new ValidationCommandError("Connection and software fixes are made outside this case. Fix the connection, then run detection to verify.", { reason: "review_case_apply_unsupported" });
       }

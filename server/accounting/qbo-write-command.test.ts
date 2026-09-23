@@ -153,6 +153,7 @@ test("the write command refuses disabled, unlisted, unsupported, receivable and 
     await rejects(operations.execute("accounting.qbo_write.submit", envelope({ entity: "Customer", operation: "create", fields: { DisplayName: "X" } }), admin), "qbo_write_held");
     await rejects(operations.execute("accounting.qbo_write.submit", envelope({ entity: "Bill", operation: "void", fields: {} }), admin), "qbo_write_held");
     await rejects(operations.execute("accounting.qbo_write.submit", envelope({ entity: "Invoice", operation: "create", fields: {} }), admin), "qbo_write_held");
+    await rejects(operations.execute("accounting.qbo_write.submit", envelope({ entity: "JournalEntry", operation: "create", fields: { TxnDate: "2026-08-31" } }), admin), "qbo_write_held");
     await rejects(operations.execute("accounting.qbo_write.submit", envelope({ entity: "JournalEntry", operation: "create", fields: { TxnDate: "2026-08-31" }, rentalPosting: { activityDate: "2026-08-31", method: "summary_bridge" } }), admin), "rental_posting_policy_missing");
     await rejects(operations.execute("accounting.qbo_write.submit", envelope({ entity: "Vendor", operation: "create", fields: { Id: "7", DisplayName: "X" } }), admin), "qbo_write_invalid", 400);
     await rejects(operations.execute("accounting.qbo_write.submit", { ...envelope({ entity: "Vendor", operation: "create", fields: { DisplayName: "X" } }), payload: { environment: "sandbox", realmId: "999", entity: "Vendor", operation: "create", fields: { DisplayName: "X" } } }, admin), "qbo_connection_missing");

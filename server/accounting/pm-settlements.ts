@@ -254,7 +254,7 @@ async function handleCreate(context: Context): Promise<CommandHandlerResult> {
       payload.closingHeldCents, payload.statementDocumentId ?? null, payload.intakePacketId ?? null, JSON.stringify(payload.qboReferences), sourceFingerprint(payload.propertyId, payload)],
   );
   await insertLines(context, id, 1, payload.lines);
-  return saved(id, dbRevision(1), "PM statement saved in 5Central Ops. It is not reconciled until bank settlement evidence is attached.");
+  return saved(id, dbRevision(1), "PM statement saved in 5Central Ops. Positive owner remittances cannot be reconciled until a verified bank-observation source is available.");
 }
 
 async function handleUpdate(context: Context): Promise<CommandHandlerResult> {
@@ -284,12 +284,18 @@ async function handleReconcile(context: Context): Promise<CommandHandlerResult> 
   const payload = reconcilePmSettlementPayloadSchema.parse(context.envelope.payload);
   const current = await loadForCommand(context, payload.settlementId);
   if (current.state === "reconciled") throw new ConflictCommandError("This statement is already reconciled", { reason: "pm_settlement_already_reconciled" });
-  const bankReference = payload.bankObservationReference ?? current.bankObservationReference;
-  const bankSettledOn = payload.bankSettledOn ?? current.bankSettledOn;
+  // This service has no verified bank-observation source. A free-form reference
+  // and date are not proof, so positive owner remittances must stay unreconciled.
   if (centsToBigInt(current.ownerRemittanceCents) > ZERO) {
-    if (!bankReference || !bankSettledOn) throw new ValidationCommandError("Attach the bank deposit that received the owner remittance before reconciling", { reason: "pm_settlement_bank_evidence_required" });
+    throw new ValidationCommandError(
+      "Bank verification for PM remittances is unavailable. A supplied reference or date does not verify the deposit; this statement cannot be reconciled until verified bank observations are supported.",
+      { reason: "pm_settlement_bank_verification_unavailable" },
+    );
   }
-  if (bankSettledOn && bankSettledOn < current.periodStart) throw new ValidationCommandError("The bank settlement date cannot be before the statement period", { reason: "pm_settlement_bank_date" });
+  // With no owner remittance, no bank event is being reconciled. Ignore legacy
+  // optional fields rather than persisting them as if they were verified.
+  const bankReference: string | null = null;
+  const bankSettledOn: string | null = null;
   const lines = await currentLines(context.executor, context.envelope.scope.organizationId, current.id, current.recordRevision);
   const header = await context.executor.query<Record<string, unknown>>(
     `SELECT gross_collections_cents::text AS gross, pm_fees_cents::text AS fees, pm_expenses_cents::text AS expenses, other_deductions_cents::text AS other
@@ -311,7 +317,7 @@ async function handleReconcile(context: Context): Promise<CommandHandlerResult> 
   if (updated.rows.length !== 1) throw new ConflictCommandError("The PM settlement changed while it was being saved", { reason: "revision_conflict" });
   // Lines stay under the revision they were entered with; the header revision moves on.
   await copyLines(context, current.id, current.recordRevision, dbRevision(updated.rows[0]!.record_revision));
-  return saved(current.id, dbRevision(updated.rows[0]!.record_revision), "PM statement reconciled to its bank settlement in 5Central Ops. Nothing was posted to QuickBooks.");
+  return saved(current.id, dbRevision(updated.rows[0]!.record_revision), "PM statement totals reconciled in 5Central Ops; no owner remittance was due. Nothing was posted to QuickBooks.");
 }
 
 async function handleMarkException(context: Context): Promise<CommandHandlerResult> {

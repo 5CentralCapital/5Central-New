@@ -6,7 +6,7 @@ import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { AccountingError } from "./errors";
 import type { AccountingServices } from "./index";
 import { createQboWriteService, qboWritePolicyFromEnv, type QboWritePolicy } from "./qbo-write";
-import { enqueueQboSync, markWebhookEventsProcessed, qboScopeKeyPart, QBO_SYNC_TOPIC, QBO_WEBHOOK_EVENT_TOPIC, QBO_WRITE_TOPIC, type QboBindingScope } from "./webhook-ingest";
+import { enqueueQboSync, enqueueQboWebhookCatchUp, finalizeCompletedWebhookEvents, qboScopeKeyPart, QBO_SYNC_TOPIC, QBO_WEBHOOK_EVENT_TOPIC, QBO_WEBHOOK_FINALIZE_TOPIC, QBO_WRITE_TOPIC, type QboBindingScope } from "./webhook-ingest";
 
 const scopeSchema = z.object({
   organizationId: z.string().uuid(),
@@ -15,13 +15,14 @@ const scopeSchema = z.object({
   realmId: z.string().regex(/^\d{1,32}$/),
 });
 
-const syncPayloadSchema = scopeSchema.extend({ origin: z.string().optional(), forceFullReplay: z.boolean().optional() }).passthrough();
+const webhookEventsSchema = z.array(z.object({ source: z.string().min(1).max(512), id: z.string().min(1).max(255) }).strict()).max(200).default([]);
+const syncPayloadSchema = scopeSchema.extend({ origin: z.string().optional(), forceFullReplay: z.boolean().optional(), events: webhookEventsSchema }).passthrough();
 const objectPayloadSchema = scopeSchema.extend({
   objectType: z.string().regex(/^[A-Z][A-Za-z0-9_]{0,119}$/),
   objectId: z.string().regex(/^[A-Za-z0-9_.:-]{1,160}$/),
   operation: z.string().min(1).max(40),
   occurredAt: z.string().nullable().optional(),
-  events: z.array(z.object({ source: z.string(), id: z.string() })).max(200).default([]),
+  events: webhookEventsSchema,
 }).passthrough();
 const writePayloadSchema = scopeSchema.extend({
   operationKey: z.string().regex(/^[A-Za-z0-9_.:-]{1,255}$/),
@@ -83,12 +84,18 @@ export function createAccountingJobHandlers(options: AccountingJobHandlerOptions
         const scope: QboBindingScope = { organizationId: payload.organizationId, legalEntityId: payload.legalEntityId, environment: payload.environment, realmId: payload.realmId };
         const qbo = configured(services, scope);
         const status = await connectionStatus(executor, scope);
-        if (status !== "active") return { skipped: "connection_inactive", connectionStatus: status };
+        if (status !== "active") {
+          if (payload.events.length > 0) throw new RetryLaterJobError("qbo_connection_inactive", "QuickBooks must be reconnected before this webhook catch-up can complete", 10 * 60_000);
+          return { skipped: "connection_inactive", connectionStatus: status };
+        }
         const sync = qbo.createProviderSync(scope);
         try {
           await sync.bootstrapRead();
           const result = await sync.syncChanges({ forceFullReplay: payload.forceFullReplay === true });
           if (result.status === "failed") providerFailure(result.error ?? new AccountingError("accounting_unavailable", "QuickBooks sync did not complete"));
+          if (payload.events.length > 0 && (result.status !== "complete" || result.anchored !== true)) {
+            throw new RetryLaterJobError("qbo_webhook_sync_incomplete", "QuickBooks webhook catch-up is partial or unanchored and must be retried", 60_000);
+          }
           return { mode: result.mode, reason: result.reason, status: result.status, applied: result.appliedCount, deleted: result.deletedCount, unsupported: result.unsupportedCount, anchored: result.anchored, watermark: result.watermark };
         } catch (error) {
           return providerFailure(error);
@@ -104,24 +111,28 @@ export function createAccountingJobHandlers(options: AccountingJobHandlerOptions
         const status = await connectionStatus(executor, scope);
         let result: Record<string, unknown>;
         if (status !== "active") {
-          // A reconnect is followed by a catch-up, which recovers this change.
-          result = { skipped: "connection_inactive", connectionStatus: status };
+          throw new RetryLaterJobError("qbo_connection_inactive", "QuickBooks must be reconnected before this webhook event can be fetched", 10 * 60_000);
         } else {
           try {
             const applied = await qbo.createProviderSync(scope).applyObject({ objectType: payload.objectType, objectId: payload.objectId, operation: payload.operation, occurredAt: payload.occurredAt ?? null });
             result = { ...applied };
             if (applied.status === "not_found") {
-              // The object vanished between notice and fetch; change capture reports the deletion.
-              const followUp = await enqueueQboSync(queue.forExecutor(executor), scope, { origin: "recovery", bucketMs: 15 * 60_000, now: now() });
+              // The object vanished between notice and fetch; carry the same refs
+              // into a durable catch-up and keep the event routed until it anchors.
+              const followUp = payload.events.length > 0
+                ? await enqueueQboWebhookCatchUp(queue.forExecutor(executor), scope, payload.events)
+                : await enqueueQboSync(queue.forExecutor(executor), scope, { origin: "recovery", bucketMs: 15 * 60_000, now: now() });
               result = { ...result, followUpJobId: followUp.job.id };
             }
           } catch (error) {
             return providerFailure(error);
           }
         }
-        await markWebhookEventsProcessed(executor, { environment: scope.environment, events: payload.events, now: now(), currentJobId: job.id });
         return result;
       },
+    },
+    [QBO_WEBHOOK_FINALIZE_TOPIC]: {
+      handler: async ({ executor, now }) => ({ processed: await finalizeCompletedWebhookEvents(executor, { now: now() }) }),
     },
     [QBO_WRITE_TOPIC]: {
       leaseMs: 5 * 60_000,
@@ -168,5 +179,15 @@ export function qboPeriodicSyncJobs(options: { readonly executor: RentOpsQueryEx
         return { keyPart: qboScopeKeyPart(scope), organizationId: scope.organizationId, payload: { ...scope, origin: "periodic", forceFullReplay: false }, maxAttempts: 6 };
       });
     },
+  }];
+}
+
+/** Recover webhook status finalization if a worker exits after a fetch job succeeds. */
+export function qboWebhookFinalizationJobs(): PeriodicJobDefinition[] {
+  return [{
+    topic: QBO_WEBHOOK_FINALIZE_TOPIC,
+    keyPrefix: "qbo.webhook.finalize",
+    bucketMs: 60_000,
+    async enumerate() { return [{ keyPart: "routed-events", payload: {}, maxAttempts: 8 }]; },
   }];
 }

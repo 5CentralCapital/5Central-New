@@ -93,12 +93,13 @@ const pmStatement = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-test("PM settlement gross-to-net: $1,000 collected, $100 costs, $900 remitted â€” never $1,900 of income", async () => {
+test("PM settlement gross-to-net keeps positive remittances draft without verified bank observations", async () => {
   const h = await harness();
   try {
     const admin = await h.access();
     const created = await h.operations.execute("accounting.pm_settlement.create", envelope(pmStatement()), admin);
     const id = created.affectedRecordIds[0]!;
+    assert.match(created.validationOutcomes[0]!.message, /verified bank-observation source is available/i);
     const detail = await h.operations.getPmSettlement(admin.principal, { scope: { organizationId: ORG } as never, settlementId: id });
     assert.equal(detail.grossToNet.collections.totalCents, "100000");
     assert.equal(detail.grossToNet.operatingCollectionsCents, "100000");
@@ -109,27 +110,94 @@ test("PM settlement gross-to-net: $1,000 collected, $100 costs, $900 remitted â€
     assert.deepEqual(detail.differences.map(item => [item.code, item.amountCents]), [["remittance_not_bank_settled", "90000"]]);
     assert.equal(detail.state, "draft");
 
-    await rejects(h.operations.execute("accounting.pm_settlement.reconcile", envelope({ settlementId: id }, { expectedRevision: 1 }), admin), "pm_settlement_bank_evidence_required");
-    const reconciled = await h.operations.execute("accounting.pm_settlement.reconcile", envelope({ settlementId: id, bankObservationReference: "Synthetic bank deposit 2026-09-02", bankSettledOn: "2026-09-02" }, { expectedRevision: 1 }), admin);
-    assert.equal(reconciled.resultingRevisions[0]?.revision, 2);
+    const headerBefore = await h.raw.query<Record<string, unknown>>(
+      "SELECT state, record_revision, bank_observation_reference, bank_settled_on FROM accounting_pm_settlements WHERE id = $1", [id],
+    );
+    const lineHistoryBefore = await h.raw.query<{ settlement_revision: number; count: number }>(
+      "SELECT settlement_revision, COUNT(*)::int AS count FROM accounting_pm_settlement_lines WHERE settlement_id = $1 GROUP BY settlement_revision ORDER BY settlement_revision", [id],
+    );
+    const auditBefore = await h.raw.query<{ count: number }>("SELECT COUNT(*)::int AS count FROM company_command_receipts WHERE organization_id = $1", [ORG]);
+    await assert.rejects(
+      h.operations.execute("accounting.pm_settlement.reconcile", envelope({ settlementId: id, bankObservationReference: "Fabricated deposit reference", bankSettledOn: "2026-09-02" }, { expectedRevision: 1 }), admin),
+      (error: unknown) => {
+        assert.ok(error instanceof CompanyCommandError);
+        assert.equal(error.details.reason, "pm_settlement_bank_verification_unavailable");
+        assert.match(error.message, /bank verification.*unavailable/i);
+        assert.match(error.message, /reference or date does not verify/i);
+        return true;
+      },
+    );
+    const headerAfter = await h.raw.query<Record<string, unknown>>(
+      "SELECT state, record_revision, bank_observation_reference, bank_settled_on FROM accounting_pm_settlements WHERE id = $1", [id],
+    );
+    const lineHistoryAfter = await h.raw.query<{ settlement_revision: number; count: number }>(
+      "SELECT settlement_revision, COUNT(*)::int AS count FROM accounting_pm_settlement_lines WHERE settlement_id = $1 GROUP BY settlement_revision ORDER BY settlement_revision", [id],
+    );
+    const auditAfter = await h.raw.query<{ count: number }>("SELECT COUNT(*)::int AS count FROM company_command_receipts WHERE organization_id = $1", [ORG]);
+    assert.deepEqual(headerAfter.rows, headerBefore.rows, "a fabricated reference changes neither the header nor revision");
+    assert.deepEqual(lineHistoryAfter.rows, lineHistoryBefore.rows, "a rejected reconcile adds no line revision");
+    assert.equal(auditAfter.rows[0]?.count, auditBefore.rows[0]?.count, "a rejected reconcile writes no command audit receipt");
     const after = await h.operations.getPmSettlement(admin.principal, { scope: { organizationId: ORG, legalEntityId: ENTITY } as never, settlementId: id });
-    assert.equal(after.state, "reconciled");
-    assert.deepEqual(after.differences, []);
-    assert.equal(after.lines.length, 3, "lines carry forward to the new header revision");
-    await rejects(h.operations.execute("accounting.pm_settlement.update", envelope({ settlementId: id, ...pmStatement({ propertyId: undefined }) }, { expectedRevision: 2 }), admin), "invalid_command_payload");
-    const { propertyId: _ignored, ...content } = pmStatement();
+    assert.equal(after.state, "draft");
+    assert.equal(after.recordRevision, 1);
+    assert.equal(after.bankObservationReference, null);
+    assert.equal(after.bankSettledOn, null);
+    assert.equal(after.grossToNet.collections.totalCents, "100000");
+    assert.equal(after.grossToNet.costs.totalCents, "10000");
+    assert.equal(after.grossToNet.remittedCents, "90000");
+    assert.equal(after.lines.length, 3);
+  } finally {
+    await h.close();
+  }
+});
+
+test("zero-remittance PM settlements reconcile without bank evidence and retain revision history", async () => {
+  const h = await harness();
+  try {
+    const admin = await h.access();
+    const statement = pmStatement({ ownerRemittanceCents: "0", closingHeldCents: "90000", lines: pmStatement().lines.slice(0, 2) });
+    const created = await h.operations.execute("accounting.pm_settlement.create", envelope(statement), admin);
+    const id = created.affectedRecordIds[0]!;
+    const { propertyId: _ignored, ...content } = statement;
+
+    const reconciled = await h.operations.execute("accounting.pm_settlement.reconcile", envelope({ settlementId: id }, { expectedRevision: 1 }), admin);
+    assert.equal(reconciled.resultingRevisions[0]?.revision, 2);
+    const afterReconcile = await h.operations.getPmSettlement(admin.principal, { scope: { organizationId: ORG } as never, settlementId: id });
+    assert.equal(afterReconcile.state, "reconciled");
+    assert.equal(afterReconcile.bankObservationReference, null);
+    assert.equal(afterReconcile.bankSettledOn, null);
+    assert.deepEqual(afterReconcile.differences, []);
+    assert.equal(afterReconcile.grossToNet.collections.totalCents, "100000");
+    assert.equal(afterReconcile.grossToNet.costs.totalCents, "10000");
+    assert.equal(afterReconcile.grossToNet.remittedCents, "0");
+    assert.equal(afterReconcile.grossToNet.heldChangeCents, "90000");
+    assert.equal(afterReconcile.lines.length, 2, "the zero-remittance lines carry forward to revision 2");
     await rejects(h.operations.execute("accounting.pm_settlement.update", envelope({ settlementId: id, ...content }, { expectedRevision: 2 }), admin), "pm_settlement_reconciled_locked");
-    await h.operations.execute("accounting.pm_settlement.exception.mark", envelope({ settlementId: id, reason: "Fee rate differs from the agreement" }, { expectedRevision: 2 }), admin);
+
+    await h.operations.execute("accounting.pm_settlement.exception.mark", envelope({ settlementId: id, reason: "Correcting statement detail" }, { expectedRevision: 2 }), admin);
     await rejects(h.operations.execute("accounting.pm_settlement.update", envelope({ settlementId: id, ...content }, { expectedRevision: 2 }), admin), "revision_conflict");
-    const corrected = { ...content, pmFeesCents: "8000", ownerRemittanceCents: "92000", lines: [content.lines[0], { kind: "pm_fee", description: "Management fee (8%)", amountCents: "8000" }, { kind: "owner_remittance", description: "Owner draw", amountCents: "92000" }] };
+    const corrected = {
+      ...content,
+      pmFeesCents: "8000",
+      ownerRemittanceCents: "92000",
+      closingHeldCents: "0",
+      lines: [content.lines[0], { kind: "pm_fee", description: "Management fee (8%)", amountCents: "8000" }, { kind: "owner_remittance", description: "Owner draw", amountCents: "92000" }],
+    };
     await h.operations.execute("accounting.pm_settlement.update", envelope({ settlementId: id, ...corrected }, { expectedRevision: 3 }), admin);
-    const history = await h.raw.query<{ settlement_revision: number; count: string | number }>("SELECT settlement_revision, COUNT(*) AS count FROM accounting_pm_settlement_lines GROUP BY settlement_revision ORDER BY settlement_revision");
-    assert.deepEqual(history.rows.map(row => [row.settlement_revision, Number(row.count)]), [[1, 3], [2, 3], [3, 3], [4, 3]], "every line set is retained");
+    const historyBeforeClear = await h.raw.query<{ settlement_revision: number; count: number }>(
+      "SELECT settlement_revision, COUNT(*)::int AS count FROM accounting_pm_settlement_lines WHERE settlement_id = $1 GROUP BY settlement_revision ORDER BY settlement_revision", [id],
+    );
+    assert.deepEqual(historyBeforeClear.rows.map(row => [row.settlement_revision, row.count]), [[1, 2], [2, 2], [3, 2], [4, 3]], "each line set remains attached to its revision");
     await h.operations.execute("accounting.pm_settlement.exception.clear", envelope({ settlementId: id }, { expectedRevision: 4 }), admin);
     const cleared = await h.operations.getPmSettlement(admin.principal, { scope: { organizationId: ORG } as never, settlementId: id });
     assert.equal(cleared.state, "draft");
+    assert.equal(cleared.recordRevision, 5);
     assert.equal(cleared.grossToNet.costs.feesCents, "8000");
     assert.equal(cleared.grossToNet.remittedCents, "92000");
+    const history = await h.raw.query<{ settlement_revision: number; count: number }>(
+      "SELECT settlement_revision, COUNT(*)::int AS count FROM accounting_pm_settlement_lines WHERE settlement_id = $1 GROUP BY settlement_revision ORDER BY settlement_revision", [id],
+    );
+    assert.deepEqual(history.rows.map(row => [row.settlement_revision, row.count]), [[1, 2], [2, 2], [3, 2], [4, 3], [5, 3]], "exception and clear revisions retain their lines");
   } finally {
     await h.close();
   }
