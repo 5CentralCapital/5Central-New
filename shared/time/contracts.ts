@@ -3,6 +3,7 @@ import {
   centsSchema,
   companyScopeSchema,
   currencyCodeSchema,
+  isIsoDate,
   isoDateSchema,
   isoTimestampSchema,
   legalEntityIdSchema,
@@ -77,8 +78,10 @@ export const timeCorrectionRevisionSchema = z.number().int().nonnegative();
 export type TimeCorrectionRevision = z.infer<typeof timeCorrectionRevisionSchema>;
 
 const localTimestampSchema = z.string().trim().min(1).max(80).refine(value => {
-  const match = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})$/.exec(value);
-  return Boolean(match) && Number.isFinite(Date.parse(value));
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})$/.exec(value);
+  // Date.parse rolls impossible dates and 24:00 forward, so check the fields first.
+  return match !== null && isIsoDate(match[1]) && Number(match[2]) <= 23 && Number(match[3]) <= 59
+    && Number(match[4] ?? "0") <= 59 && Number.isFinite(Date.parse(value));
 }, "Expected an ISO-8601 timestamp with an explicit timezone");
 export type TimeLocalTimestamp = z.infer<typeof localTimestampSchema>;
 

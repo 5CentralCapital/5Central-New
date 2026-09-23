@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { timeEntrySchema } from "./contracts";
+import { localTimestampSchema, timeEntrySchema } from "./contracts";
 import { allocatePayrollToTimesheets, timeEntryDurationSeconds } from "./labor";
 
 test("overnight shifts count elapsed time across midnight", () => {
@@ -43,4 +43,13 @@ test("posted payroll splits exactly across timesheets", () => {
   assert.deepEqual(byHours.map((item) => item.amountCents), ["6667", "3334"]);
   assert.equal(byHours.reduce((total, item) => total + BigInt(item.amountCents), BigInt(0)), BigInt(10_001));
   assert.throws(() => allocatePayrollToTimesheets("100", [{ id: "a", estimatedCents: null, durationSeconds: 0 }]), /no hours/);
+});
+
+test("entry timestamps must name a real calendar date and clock time", () => {
+  assert.equal(localTimestampSchema.safeParse("2028-02-29T08:00:00-05:00").success, true);
+  assert.equal(localTimestampSchema.safeParse("2026-09-23T23:59-0400").success, true);
+  // Date.parse would silently roll each of these into a different instant.
+  for (const value of ["2026-02-30T08:00:00-05:00", "2027-02-29T08:00:00Z", "2026-04-31T08:00Z", "2026-09-23T24:00:00Z", "2026-09-23T10:00:60Z"]) {
+    assert.equal(localTimestampSchema.safeParse(value).success, false, value);
+  }
 });
