@@ -4,9 +4,17 @@ import { READ_SCOPE, validateIssuer, verifyOAuthToken, type McpPrincipal, type O
 
 export const ADMIN_OAUTH_ISSUER = "https://dev-0mw45hx037gk3vbi.us.auth0.com/";
 export const ADMIN_OAUTH_ORIGIN = "https://5-central-new.replit.app";
+export const BRANDED_ADMIN_OAUTH_ORIGIN = "https://5central.capital";
 export const ADMIN_OAUTH_SUBJECT = "google-oauth2|118183229923455274061";
 export const ADMIN_OAUTH_CALLBACK = `${ADMIN_OAUTH_ORIGIN}/api/rent-ops/auth/oauth/callback`;
 export const ADMIN_OAUTH_EMAIL = "michael@5central.capital";
+export function managerOAuthOrigin(env: NodeJS.ProcessEnv): string {
+  const origin = env.RENT_OPS_ADMIN_OAUTH_ORIGIN?.trim() || ADMIN_OAUTH_ORIGIN;
+  if (origin !== ADMIN_OAUTH_ORIGIN && origin !== BRANDED_ADMIN_OAUTH_ORIGIN) {
+    throw new Error("RENT_OPS_ADMIN_OAUTH_ORIGIN must be an approved canonical HTTPS origin");
+  }
+  return origin;
+}
 interface PendingLogin { state: string; verifier: string; expiresAt: number }
 declare module "express-session" {
   interface SessionData {
@@ -41,6 +49,9 @@ async function save(req: Request) {
 }
 export function registerManagerOAuthRoutes(app: Express, options: Options) {
   const env = options.env ?? process.env;
+  const canonicalOrigin = managerOAuthOrigin(env);
+  const canonicalHost = new URL(canonicalOrigin).host;
+  const callback = `${canonicalOrigin}/api/rent-ops/auth/oauth/callback`;
   const fetcher = options.fetcher ?? fetch;
   const now = options.now ?? Date.now;
   const configured = () => Boolean(env.RENT_OPS_ADMIN_OAUTH_CLIENT_ID?.match(/^[A-Za-z0-9_-]{8,128}$/)) && managerOAuthAllowed(env, ADMIN_OAUTH_SUBJECT);
@@ -50,6 +61,10 @@ export function registerManagerOAuthRoutes(app: Express, options: Options) {
   app.get("/api/rent-ops/auth/oauth/config", (_req, res) => res.set("Cache-Control", "no-store").json({ enabled: configured() }));
   app.get("/api/rent-ops/auth/oauth/start", async (req, res) => {
     res.set({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" });
+    if (canonicalOrigin !== ADMIN_OAUTH_ORIGIN && req.get("host")?.toLowerCase() !== canonicalHost) {
+      res.redirect(302, `${canonicalOrigin}/api/rent-ops/auth/oauth/start`);
+      return;
+    }
     const retry = options.limit(req.ip || req.socket.remoteAddress || "unknown");
     if (retry) { res.set("Retry-After", String(retry)).status(429).send("Too many sign-in attempts. Try again later."); return; }
     if (!configured()) { res.status(503).send("Manager Google sign-in is not configured."); return; }
@@ -62,7 +77,7 @@ export function registerManagerOAuthRoutes(app: Express, options: Options) {
       req.session.rentOpsOAuthPending = { state, verifier, expiresAt: now() + 5 * 60 * 1000 };
       await save(req);
       const url = new URL("authorize", ADMIN_OAUTH_ISSUER);
-      url.search = new URLSearchParams({ response_type: "code", client_id: env.RENT_OPS_ADMIN_OAUTH_CLIENT_ID!, redirect_uri: ADMIN_OAUTH_CALLBACK,
+      url.search = new URLSearchParams({ response_type: "code", client_id: env.RENT_OPS_ADMIN_OAUTH_CLIENT_ID!, redirect_uri: callback,
         audience: config.resource, scope: `openid ${READ_SCOPE}`, connection: "google-oauth2", state,
         code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256" }).toString();
       res.redirect(302, url.toString());
@@ -80,7 +95,7 @@ export function registerManagerOAuthRoutes(app: Express, options: Options) {
       if (!configured() || !pending || retry || req.query.iss !== ADMIN_OAUTH_ISSUER || typeof req.query.code !== "string" || req.query.code.length > 2048 || req.query.error) throw new Error("login rejected");
       await ready();
       const response = await fetcher(new URL("oauth/token", ADMIN_OAUTH_ISSUER), { method: "POST", redirect: "error", signal: AbortSignal.timeout(10000),
-        headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", client_id: env.RENT_OPS_ADMIN_OAUTH_CLIENT_ID!, code: req.query.code, code_verifier: pending.verifier, redirect_uri: ADMIN_OAUTH_CALLBACK }) });
+        headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", client_id: env.RENT_OPS_ADMIN_OAUTH_CLIENT_ID!, code: req.query.code, code_verifier: pending.verifier, redirect_uri: callback }) });
       if (!response.ok) throw new Error("token exchange rejected");
       const token = await response.json() as { access_token?: unknown; token_type?: unknown };
       if (typeof token.access_token !== "string" || token.token_type?.toString().toLowerCase() !== "bearer") throw new Error("token rejected");
@@ -93,7 +108,7 @@ export function registerManagerOAuthRoutes(app: Express, options: Options) {
       req.session.rentOpsOAuthSubject = principal.subject;
       req.session.rentOpsCsrfToken = options.csrfToken();
       await save(req);
-      res.redirect(303, `${ADMIN_OAUTH_ORIGIN}/ops`);
-    } catch { res.redirect(303, `${ADMIN_OAUTH_ORIGIN}/ops?login=failed`); }
+      res.redirect(303, `${canonicalOrigin}/ops`);
+    } catch { res.redirect(303, `${canonicalOrigin}/ops?login=failed`); }
   });
 }
