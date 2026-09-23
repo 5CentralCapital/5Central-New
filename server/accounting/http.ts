@@ -20,6 +20,7 @@ import type { QboProviderMirrorKind } from "./mirror-store";
 import { hashQuickBooksSessionBinding } from "./oauth-state";
 import { readCustomerLedger, resolveTenancyCustomer } from "./receivables-read";
 import { linkTenancyToQboCustomer } from "./receivables-links";
+import { readQboCustomerPlan } from "./qbo-customer-plan-service";
 
 function businessToday(now = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
@@ -283,6 +284,20 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
       return linkTenancyToQboCustomer(transaction, { scope: { provider: "qbo", organizationId, legalEntityId: body.legalEntityId, environment: body.environment, realmId: body.realmId }, tenancyId: body.tenancyId, customerObjectId: body.customerId });
     });
     response.status(result.status === "linked" ? 201 : 200).json(result);
+  }));
+  // Read-only QuickBooks customer plan: one proposed Customer per tenancy in
+  // the owning entity's company. Nothing is written to QuickBooks.
+  app.get("/api/company/:organizationId/accounting/qbo/customer-plan", requireAdmin, companyReadHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const query = z.object({ environment: environmentSchema.default("production"), legalEntityId: legalEntityIdSchema.optional(), asOf: z.string().date().optional() }).strict().parse(request.query);
+    if (!executor.transaction) throw new AccountingError("accounting_configuration", "Accounting reads require a transactional company database");
+    const actorId = companyWebActor(request);
+    const plan = await executor.transaction(async transaction => {
+      const principal = await loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: "admin" });
+      authorizeCompanyRead(principal, { organizationId, ...(query.legalEntityId ? { legalEntityId: query.legalEntityId } : {}) }, READ_ROLES);
+      return readQboCustomerPlan(transaction, { organizationId, environment: query.environment, asOf: query.asOf ?? businessToday(), ...(query.legalEntityId ? { legalEntityId: query.legalEntityId } : {}) });
+    }, { readOnly: true });
+    response.json(plan);
   }));
   app.get("/api/company/:organizationId/accounting/qbo/source-line", requireAdmin, companyReadHandler(async (request, response) => {
     const organizationId = organizationIdSchema.parse(request.params.organizationId);

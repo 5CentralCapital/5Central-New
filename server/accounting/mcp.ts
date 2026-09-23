@@ -17,6 +17,7 @@ import type { AccountingServices } from "./index";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { attestTransport, loadAuthenticatedPrincipal, authorizeCompanyRead } from "../company/authorization";
 import { readCustomerLedger } from "./receivables-read";
+import { readQboCustomerPlan } from "./qbo-customer-plan-service";
 import { AccountingError } from "./errors";
 
 export type AccountingToolRegistrar = (name: string, description: string, schema: z.ZodRawShape, write: boolean, handler: (args: any) => Promise<unknown>) => void;
@@ -72,6 +73,17 @@ export function registerAccountingMcpTools(register: AccountingToolRegistrar, op
     const scope = scopeInput.parse(args.scope);
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
     return readAuthorized(scope, executor => readCustomerLedger(executor, { scope, customerObjectId: args.customerId, asOf: args.asOf, today, limit: args.limit, cursor: args.cursor }));
+  });
+  register("get_qbo_customer_plan", "Read the proposed QuickBooks customer plan: one Customer per tenancy in the QuickBooks company of the legal entity that owned the property during the tenancy, with the proposed DisplayName (unique across customers, vendors and employees, at most 100 characters, no colons), inactive for former tenants. Rows are create, linked, review (possible match, name collision, ownership change) or blocked (not connected, mirror not read, no owning entity), with counts and a planSha256 per entity. Read-only plan; never calls or writes QuickBooks.", { organizationId: organizationIdSchema, legalEntityId: legalEntityIdSchema.optional(), environment: z.enum(["sandbox", "production"]).optional(), asOf: isoDateSchema.optional() }, false, async (args) => {
+    const organizationId = organizationIdSchema.parse(args.organizationId);
+    const legalEntityId = args.legalEntityId === undefined ? undefined : legalEntityIdSchema.parse(args.legalEntityId);
+    const asOf = args.asOf === undefined ? new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()) : isoDateSchema.parse(args.asOf);
+    if (!options.executor.transaction) throw new AccountingError("accounting_configuration", "Accounting reads require a transactional company database");
+    return options.executor.transaction(async executor => {
+      const principal = await principalFor(organizationId, executor);
+      authorizeCompanyRead(principal, { organizationId, ...(legalEntityId ? { legalEntityId } : {}) }, ["owner", "admin", "finance", "read_only_reviewer"]);
+      return readQboCustomerPlan(executor, { organizationId, environment: args.environment ?? "production", asOf, ...(legalEntityId ? { legalEntityId } : {}) });
+    }, { readOnly: true });
   });
   register("sync_accounting_source", "Queue a read-only QuickBooks catch-up (change data capture, or a full replay with deletion reconciliation when needed) for an authorized connection. The background worker runs it; follow progress with get_accounting_connector_health. Pass the same operationId to retry safely.", { scope: scopeInput, fullReplay: z.boolean().optional(), operationId: z.string().uuid().optional() }, true, async (args) => {
     const scope = scopeInput.parse(args.scope);
