@@ -28,6 +28,10 @@ import "./property-unit-records.css";
 import { PropertyOccupancyPanel } from "./property-occupancy-panel";
 import { UnitReadinessBadge, UnitReadinessProvider, useUnitReadiness } from "./unit-readiness";
 import { unitReadinessDisplay } from "./unit-readiness-model";
+import type { ReportKey } from "../types";
+import { canonicalPropertyTab, PROPERTY_RECORD_TABS, PROPERTY_RECORD_TAB_LABELS, type PropertyRecordTab } from "../../workspaces/property-record-model";
+import { PropertyFinancials } from "../../workspaces/property-financials";
+import { PropertyDocumentsTab, PropertyProjectsTab, PropertyWorkOrdersTab } from "../../workspaces/property-record-tabs";
 
 export type EditAction = (action: QuickAction, values?: FormValues) => void;
 
@@ -40,7 +44,15 @@ export interface PropertyUnitRecordsProps {
   onSelect: (kind: "property" | "unit", id: string) => void;
   onEdit: EditAction;
   onSearchChange?: (search:string)=>void;
+  /** Company context for the connected property tabs (financials, projects, work orders, documents). */
+  identity: string;
+  organizationId?: string;
+  onOpenProject: (organizationId: string, projectId?: string) => void;
+  onOpenWorkOrder: (organizationId: string, workOrderId?: string) => void;
+  onOpenReport: (report: ReportKey) => void;
 }
+
+type PropertyLinks = Pick<PropertyUnitRecordsProps, "identity" | "organizationId" | "onOpenProject" | "onOpenWorkOrder" | "onOpenReport">;
 
 const TAB_LABELS: Record<PropertyUnitTab, string> = {
   general: "General",
@@ -102,9 +114,16 @@ function FieldGroup({ title, children }: { title: string; children: ReactNode })
   return <section className="rm-property-unit-group"><h3>{title}</h3><dl>{children}</dl></section>;
 }
 
-function RecordTabs({ tabs, selected, onSelect }: { tabs: PropertyUnitTab[]; selected: PropertyUnitTab; onSelect: (tab: PropertyUnitTab) => void }) {
-  return <nav className="rm-tabs rm-property-unit-tabs" aria-label="Record sections" role="tablist">
-    {tabs.map((tab) => <button type="button" role="tab" aria-selected={selected === tab} className={selected === tab ? "active" : ""} key={tab} onClick={() => onSelect(tab)}>{TAB_LABELS[tab]}</button>)}
+function RecordTabs<T extends string>({ tabs, selected, onSelect, labels }: { tabs: readonly T[]; selected: T; onSelect: (tab: T) => void; labels: Record<T, string> }) {
+  return <nav className="rm-tabs rm-property-unit-tabs" aria-label="Record sections" role="tablist" onKeyDown={(event) => {
+    // Arrow keys move between tabs, as in the platform tab pattern.
+    if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+    const index = tabs.indexOf(selected);
+    const next = tabs[(index + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length];
+    event.preventDefault(); onSelect(next);
+    requestAnimationFrame(() => (event.currentTarget.querySelector(`[data-tab="${next}"]`) as HTMLElement | null)?.focus());
+  }}>
+    {tabs.map((tab) => <button type="button" role="tab" data-tab={tab} tabIndex={selected === tab ? 0 : -1} aria-selected={selected === tab} className={selected === tab ? "active" : ""} key={tab} onClick={() => onSelect(tab)}>{labels[tab]}</button>)}
   </nav>;
 }
 
@@ -180,48 +199,18 @@ function PropertyOccupancy({ snapshot, property, units, asOfDate, onSelect }: { 
   return <PropertyOccupancyPanel key={property.id} snapshot={snapshot} units={units} asOfDate={asOfDate} onSelect={onSelect} unresolvedLinks={unresolvedTenancyLinkCount(snapshot, property.id)} />;
 }
 
-type MarketingGridRow = GridRow & { id: string; unit: AdminUnitView };
-
-function MarketingGrid({ units, onSelect }: { units: AdminUnitView[]; onSelect: (unitId: string) => void }) {
-  const { occupancy } = useUnitReadiness();
-  const rows: MarketingGridRow[] = units.map((unit, index) => ({ id: unit.id ?? `marketing:${index}`, unit }));
-  const columns: GridColumn<MarketingGridRow>[] = [
-    { key: "unit", label: "Unit", render: (row) => <RecordLink kind="unit" recordId={row.unit.id} onOpen={onSelect}>{value(row.unit.unitNumber, row.unit.unitNumberKnowledge)}</RecordLink>, sortValue: (row) => row.unit.unitNumber ?? "" },
-    { key: "readiness", label: "Readiness", render: (row) => <UnitReadinessBadge unit={row.unit} />, sortValue: (row) => unitReadinessDisplay(row.unit, occupancy.get(row.unit.id ?? "")).label },
-    { key: "listing", label: "Listing", render: (row) => optionalStatus(row.unit.listing, row.unit.listingKnowledge), sortValue: (row) => row.unit.listing ?? "" },
-    { key: "access", label: "Access notes", render: (row) => propertyUnitFieldValue(row.unit.accessNotes), sortValue: (row) => row.unit.accessNotes ?? "" },
-  ];
-  return <DataGrid<MarketingGridRow> rows={rows} columns={columns} getRowKey={(row) => row.id} emptyMessage="No unit marketing fields are available." caption="Unit readiness and listing" storageKey="rm-property-marketing" />;
-}
-
-function marketingCounts(units: AdminUnitView[], occupancy: Map<string, string>): string {
-  const occupied = units.filter(unit => occupancy.get(unit.id ?? "") === "current").length;
-  const allUnits = units;
-  const pending = units.filter(unit => !occupancy.has(unit.id ?? "")).length;
-  units = units.filter(unit => occupancy.has(unit.id ?? "") && occupancy.get(unit.id ?? "") !== "current");
-  const count = (key: "readiness" | "listing", target: string) => (key === "listing" ? allUnits : units).filter((unit) => unit[key] === target && recordedOptionalStatus(unit[key], unit[key === "readiness" ? "readinessKnowledge" : "listingKnowledge"])).length;
-  const readinessKnown = units.filter((unit) => recordedOptionalStatus(unit.readiness, unit.readinessKnowledge)).length;
-  const listingKnown = allUnits.filter((unit) => recordedOptionalStatus(unit.listing, unit.listingKnowledge)).length;
-  return [pending ? `${pending} occupancy pending` : undefined, `${occupied} occupied`, `${count("readiness", "ready")} ready`, `${count("readiness", "not_ready")} not ready`, `${count("readiness", "off_market")} off market`, units.length > readinessKnown ? `${units.length - readinessKnown} readiness not recorded` : undefined, `${count("listing", "listed")} listed`, `${count("listing", "unlisted")} unlisted`, allUnits.length > listingKnown ? `${allUnits.length - listingKnown} listing not recorded` : undefined].filter(Boolean).join(" · ");
-}
-
-function PropertyMarketing({ units, onSelect }: { units: AdminUnitView[]; onSelect: (unitId: string) => void }) {
-  const { occupancy } = useUnitReadiness();
-  return <section className="rm-property-unit-tab-panel"><div className="rm-property-unit-panel-heading"><div><h3>Marketing readiness</h3><p>{marketingCounts(units, occupancy)}</p></div></div><MarketingGrid units={units} onSelect={onSelect} /></section>;
-}
-
-function PropertyRecord({ snapshot, asOfDate, readOnly, property, activeTab, onTab, onSelect, onEdit }: { snapshot: AdminSnapshot; asOfDate: string; readOnly?: boolean; property: AdminPropertyView; activeTab: PropertyUnitTab; onTab: (tab: PropertyUnitTab) => void; onSelect: (kind: "property" | "unit", id: string) => void; onEdit: EditAction }) {
+function PropertyRecord({ snapshot, asOfDate, readOnly, property, activeTab, onTab, onSelect, onEdit, links }: { snapshot: AdminSnapshot; asOfDate: string; readOnly?: boolean; property: AdminPropertyView; activeTab: PropertyRecordTab; onTab: (tab: PropertyRecordTab) => void; onSelect: (kind: "property" | "unit", id: string) => void; onEdit: EditAction; links: PropertyLinks }) {
   const units = propertyUnits(snapshot, property.id);
   const allUnitsForProperty = snapshot.snapshot.units.filter((unit) => unit.propertyId === property.id);
   const unresolvedUnitCount = allUnitsForProperty.length - units.length;
-  const tabs = availablePropertyTabs(snapshot, property);
-  const tab = tabs.includes(activeTab) ? activeTab : "general";
-  return <div className="rm-property-unit-detail"><PropertySummary property={property} units={units} unresolvedUnitCount={unresolvedUnitCount} onEdit={onEdit} onAddUnit={() => onEdit("save-unit", addUnitValues(property))} /><RecordTabs tabs={tabs} selected={tab} onSelect={onTab} /><div className="rm-property-unit-tab-content">
-    {tab === "general" && <PropertyGeneral property={property} />}
-    {tab === "units" && <PropertyUnits units={units} onSelect={(id) => onSelect("unit", id)} onEdit={onEdit} />}
-    {tab === "occupancy" && <PropertyOccupancy asOfDate={asOfDate} snapshot={snapshot} property={property} units={units} onSelect={(id) => onSelect("unit", id)} />}
-    {tab === "recurring" && <PropertyRecurringPanel key={`property:${property.id}`} onEdit={onEdit} asOfDate={asOfDate} snapshot={snapshot} property={property} readOnly={readOnly} />}
-    {tab === "marketing" && <PropertyMarketing units={units} onSelect={(id) => onSelect("unit", id)} />}
+  const tab = activeTab;
+  return <div className="rm-property-unit-detail"><PropertySummary property={property} units={units} unresolvedUnitCount={unresolvedUnitCount} onEdit={onEdit} onAddUnit={() => onEdit("save-unit", addUnitValues(property))} /><RecordTabs tabs={PROPERTY_RECORD_TABS} labels={PROPERTY_RECORD_TAB_LABELS} selected={tab} onSelect={onTab} /><div className="rm-property-unit-tab-content" role="tabpanel" aria-label={PROPERTY_RECORD_TAB_LABELS[tab]}>
+    {tab === "overview" && <><PropertyGeneral property={property} /><PropertyUnits units={units} onSelect={(id) => onSelect("unit", id)} onEdit={onEdit} /></>}
+    {tab === "rent-roll" && <>{(units.length > 0 || availablePropertyTabs(snapshot, property).includes("occupancy")) && <PropertyOccupancy asOfDate={asOfDate} snapshot={snapshot} property={property} units={units} onSelect={(id) => onSelect("unit", id)} />}<PropertyRecurringPanel key={`property:${property.id}`} onEdit={onEdit} asOfDate={asOfDate} snapshot={snapshot} property={property} readOnly={readOnly} /></>}
+    {tab === "financials" && property.id && <PropertyFinancials identity={links.identity} propertyId={property.id} asOfDate={asOfDate} organizationId={links.organizationId} onOpenProject={links.onOpenProject} onOpenReport={links.onOpenReport} />}
+    {tab === "projects" && property.id && <PropertyProjectsTab identity={links.identity} propertyId={property.id} organizationId={links.organizationId} onOpenProject={links.onOpenProject} onNewProject={organizationId => links.onOpenProject(organizationId)} />}
+    {tab === "work-orders" && property.id && <PropertyWorkOrdersTab identity={links.identity} propertyId={property.id} organizationId={links.organizationId} onOpenWorkOrder={links.onOpenWorkOrder} />}
+    {tab === "documents" && property.id && <PropertyDocumentsTab identity={links.identity} propertyId={property.id} organizationId={links.organizationId} snapshot={snapshot} asOfDate={asOfDate} />}
   </div></div>;
 }
 
@@ -266,7 +255,7 @@ function UnitRecord({ snapshot, asOfDate, readOnly, unit, property, activeTab, o
   const units = propertyUnits(snapshot, property?.id);
   const tabs = availableUnitTabs(snapshot, unit);
   const tab = tabs.includes(activeTab) ? activeTab : "general";
-  return <div className="rm-property-unit-detail"><UnitSummary unit={unit} property={property} propertyUnitCount={units.length} onSelect={onSelect} onEdit={onEdit} /><RecordTabs tabs={tabs} selected={tab} onSelect={onTab} /><div className="rm-property-unit-tab-content">
+  return <div className="rm-property-unit-detail"><UnitSummary unit={unit} property={property} propertyUnitCount={units.length} onSelect={onSelect} onEdit={onEdit} /><RecordTabs tabs={tabs} labels={TAB_LABELS} selected={tab} onSelect={onTab} /><div className="rm-property-unit-tab-content" role="tabpanel" aria-label={TAB_LABELS[tab]}>
     {tab === "general" && <UnitGeneral unit={unit} property={property} onSelect={onSelect} />}
     {tab === "occupancy" && <UnitOccupancy asOfDate={asOfDate} snapshot={snapshot} unit={unit} onSelect={(id) => onSelect("unit", id)} />}
     {tab === "recurring" && (property ? <PropertyRecurringPanel key={`unit:${unit.id}`} onEdit={onEdit} asOfDate={asOfDate} snapshot={snapshot} property={property} unit={unit} readOnly={readOnly} /> : <EmptyState message="The unit’s property link needs review before recurring charges can be shown." />)}
@@ -278,22 +267,23 @@ export function PropertyUnitRecords(props: PropertyUnitRecordsProps) {
   return <UnitReadinessProvider filters={props.filters} readOnly={props.readOnly ?? false}><PropertyUnitRecordsContent {...props} /></UnitReadinessProvider>;
 }
 
-function PropertyUnitRecordsContent({ snapshot, readOnly, filters, selectedPropertyId, selectedUnitId, onSelect, onEdit, onSearchChange }: PropertyUnitRecordsProps) {
+function PropertyUnitRecordsContent({ snapshot, readOnly, filters, selectedPropertyId, selectedUnitId, onSelect, onEdit, onSearchChange, identity, organizationId, onOpenProject, onOpenWorkOrder, onOpenReport }: PropertyUnitRecordsProps) {
+  const links: PropertyLinks = { identity, organizationId, onOpenProject, onOpenWorkOrder, onOpenReport };
   const { occupancy } = useUnitReadiness();
   const [search, setSearch] = useState(filters.search ?? "");
-  const [activeTab, setActiveTab] = useState<PropertyUnitTab>(()=>(new URLSearchParams(window.location.search).get("propertyTab")??"general") as PropertyUnitTab);
+  const [activeTab, setActiveTab] = useState<string>(()=>new URLSearchParams(window.location.search).get("propertyTab")??"overview");
   useEffect(() => { setSearch(filters.search ?? ""); }, [filters.search]);
 
   const listRows = useMemo(() => propertyUnitListItems(snapshot, filters, search, occupancy), [snapshot, filters.propertyId, filters.propertyIds, filters.propertyScope, search, occupancy]);
   const selected = useMemo(() => resolvePropertyUnitSelection(snapshot, filters, selectedPropertyId, selectedUnitId, search, occupancy), [snapshot, filters.propertyId, filters.propertyIds, filters.propertyScope, selectedPropertyId, selectedUnitId, search, occupancy]);
-  const changeTab=(tab:PropertyUnitTab)=>{setActiveTab(tab);const params=new URLSearchParams(window.location.search);params.set("propertyTab",tab);window.history.replaceState(window.history.state,"",`${window.location.pathname}?${params}`);};
+  const changeTab=(tab:string)=>{setActiveTab(tab);const params=new URLSearchParams(window.location.search);params.set("propertyTab",tab);window.history.replaceState(window.history.state,"",`${window.location.pathname}?${params}`);};
 
   return <div className="rm-record-layout rm-property-unit-records">
     <RecordList rows={listRows} selected={selected ? { kind: selected.kind, id: selected.kind === "unit" ? selected.unit?.id : selected.property?.id } : undefined} search={search} onSearch={next=>{setSearch(next);onSearchChange?.(next);}} onSelect={onSelect} />
     <main className="rm-property-unit-main">
       {!selected && <section className="rm-panel"><EmptyState message="Select a property or unit record to continue." /></section>}
-      {selected?.kind === "property" && selected.property && <PropertyRecord readOnly={readOnly} asOfDate={filters.asOfDate} snapshot={snapshot} property={selected.property} activeTab={activeTab} onTab={changeTab} onSelect={onSelect} onEdit={onEdit} />}
-      {selected?.kind === "unit" && selected.unit && <UnitRecord readOnly={readOnly} asOfDate={filters.asOfDate} snapshot={snapshot} unit={selected.unit} property={selected.property} activeTab={activeTab} onTab={changeTab} onSelect={onSelect} onEdit={onEdit} />}
+      {selected?.kind === "property" && selected.property && <PropertyRecord readOnly={readOnly} asOfDate={filters.asOfDate} snapshot={snapshot} property={selected.property} activeTab={canonicalPropertyTab(activeTab)} onTab={changeTab} onSelect={onSelect} onEdit={onEdit} links={links} />}
+      {selected?.kind === "unit" && selected.unit && <UnitRecord readOnly={readOnly} asOfDate={filters.asOfDate} snapshot={snapshot} unit={selected.unit} property={selected.property} activeTab={activeTab as PropertyUnitTab} onTab={changeTab} onSelect={onSelect} onEdit={onEdit} />}
     </main>
   </div>;
 }

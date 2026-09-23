@@ -17,8 +17,8 @@ import type { TimeServices } from '../time/service';
 import { registerReportingHttpRoutes, type ReportingPort } from '../reporting';
 import { registerWorkOrderRoutes } from '../work-orders/http';
 import type { WorkOrderPort } from '../work-orders/port';
-import { registerProjectInsightRoutes } from '../projects/http'; // lane-f
-import type { ProjectInsightsPort } from '../projects/insights'; // lane-f
+// lane-e-nav: manager workspace read endpoints
+import { registerWorkspaceRoutes } from '../workspaces/routes';
 
 export interface CompanyProjectPort {
   list(principal: AuthenticatedPrincipal, query: ProjectListQuery): Promise<unknown>;
@@ -53,13 +53,11 @@ export function registerCompanyRoutes(app: Express, options: {
   time?: TimeServices;
   reporting?: ReportingPort;
   workOrders?: WorkOrderPort;
-  projectInsights?: ProjectInsightsPort; // lane-f
   /** Browser-session presence check used for OAuth callback redirects (production wiring only). */
   hasAdminSession?: (request: Request) => boolean;
 }): void {
   const { executor, requireAdmin, projects } = options;
   if (options.workOrders) registerWorkOrderRoutes(app, { executor, requireAdmin, workOrders: options.workOrders });
-  if (options.projectInsights) registerProjectInsightRoutes(app, { executor, requireAdmin, insights: options.projectInsights }); // lane-f
   if (options.accounting) registerAccountingHttpRoutes(app, { executor, requireAdmin, services: options.accounting, ...(options.hasAdminSession ? { hasAdminSession: options.hasAdminSession } : {}) });
   if (options.investors) registerInvestorRoutes(app, { executor, requireAdmin, investors: options.investors });
   if (options.time) registerTimeHttpRoutes(app, { executor, requireAdmin, services: options.time });
@@ -69,6 +67,8 @@ export function registerCompanyRoutes(app: Express, options: {
       actorId: companyWebActor(request), organizationId, role: 'admin',
     }) }),
   });
+  // lane-e-nav: manager workspace read endpoints
+  registerWorkspaceRoutes(app, { executor, requireAdmin });
   const web = attestTransport('web');
   app.get('/api/company/context', requireAdmin, companyReadHandler(async (req, res) => {
     res.json(await readCompanyContext(executor, companyWebActor(req), 'admin'));

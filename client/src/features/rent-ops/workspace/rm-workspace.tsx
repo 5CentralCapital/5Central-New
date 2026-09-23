@@ -3,21 +3,21 @@ import { ProjectEntry } from '../../company/project-entry';
 import { InvestorEntry } from '../../company/investor-entry';
 import { TimeEntry } from '../../time/entry';
 import { WorkOrderEntry } from '../../work-orders/entry';
-import { AccountingEntry } from '../../accounting/entry';
 import { ReportingEntry } from '../../reporting/entry';
+import type { ProjectTab } from '../../projects/types';
+import type { InvestorTab } from '../../investors/types';
+import type { WorkOrderView } from '../../work-orders/types';
 import { ManagerTenancyActions } from './manager-tenancy-actions';
 import { useWorkspaceDate } from './use-workspace-date';
 import { selectWorkspaceToday, pinWorkspaceDate } from './workspace-date';
 import { useRecurringChargeTerms } from './use-recurring-charge-terms';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, Plus, RefreshCw, Search, X } from 'lucide-react';
 import { loadOperationalScheduleRegister, loadRentOpsPreviewContext, loadRentOpsWorkspaceBootstrap } from '../api';
 import { rentOpsAuthClient } from '../auth';
 import { RentOpsAdminLogin, RentOpsAuthLoading, useRentOpsAuth } from '../auth-ui';
-import { ManagerIncomeActions } from '../manager-income-actions';
 import { RmBanking } from './rm-banking';
-import { RecurringBillingPanel } from '../recurring-billing-panel';
 import type { QuickAction, FormValues } from '../form-payload';
 import { REPORT_KEYS, REPORT_LABELS, type AdminSnapshot, type ReportKey, type TenantTab, type ViewFilters } from '../types';
 import { EntityLink, RecordLink, EntityNavigationContext } from './entity-link';
@@ -26,14 +26,13 @@ import { DEFAULT_TENANT_DIRECTORY_STATUS, tenantDirectoryFilters } from './tenan
 import { scheduleDisplayInterval } from './schedule-display';
 import { PropertyUnitRecords } from './property-unit-records';
 import { ReportsWorkspace } from './reports-workspace';
-import { isOccupancyReport, occupancyReportStatusOptions } from './report-model';
 import { DashboardWorkspace } from './dashboard-workspace';
+import { DashboardCompanyPanels } from './dashboard-company';
 import { ApplicationsWorkspace } from './applications-workspace';
-import { DocumentsWorkspace } from './documents-workspace';
 import { WorkspaceEditor } from './editor';
 import { DataGrid } from './grid';
 import { formatMoney, formatLabel } from './display';
-import { filterTenantDirectory, parseWorkspaceFilters, selectedWorkspaceProperties, workspacePropertyMatches, parseWorkspaceRoute, workspaceApiFilters, workspaceCollectionsFor, workspaceFiltersForRecord, workspaceRouteSearch, type WorkspaceRoute } from './workspace-state';
+import { filterTenantDirectory, parseWorkspaceFilters, selectedWorkspaceProperties, workspacePropertyMatches, parseWorkspaceRoute, workspaceApiFilters, workspaceCollectionsFor, workspaceFiltersForRecord, workspaceRouteSearch, type TenantDirectoryStatus, type WorkspaceRoute, type WorkspaceSection } from './workspace-state';
 import { recurringRegisterQueryKey, recurringRegisterViews, selectRecurringRegisterRows, type RecurringRegisterView } from './recurring-register-model';
 import { useWorkspaceData } from './use-workspace-data';
 import '../rent-ops.css';
@@ -42,14 +41,24 @@ import './workspace-modern.css';
 import './dashboard-modern.css';
 import '../../../styles/rops-system.css';
 import { TopNavigation, useWorkspaceAppearance } from './top-navigation';
-import { WORKSPACE_LABELS, type WorkspaceDestination } from './navigation';
+import { destinationRoute, workspaceDocumentTitle, workspacePageTitle, type WorkspaceDestination } from './navigation';
+import { WORKSPACE_VIEWS, investorTabForWorkspace, investorTabFromWorkspace, projectTabForWorkspace, projectTabFromWorkspace } from '../../workspaces/views';
+import { AccountingEntryWithView, CompanyDocumentsEntry, ForecastingEntry, IntakeResultsEntry, ReviewQueueEntry } from '../../workspaces/lane-mounts';
+import { PropertyPerformance } from '../../workspaces/property-performance';
+import { PropertyDocumentsPage } from '../../workspaces/property-documents';
+import { Collections } from '../../workspaces/collections';
+import { LeasesRenewals } from '../../workspaces/leases-renewals';
+import { ListingsPage, MakeReadyPage, MovesPage } from '../../workspaces/unit-pages';
+import { EntitiesPage, PeoplePage, SettingsPage } from '../../workspaces/company-pages';
+import { WorkOrderSchedule } from '../../workspaces/work-order-schedule';
+import { CostLibrary } from '../../workspaces/cost-library';
+import { ReportPackages, SavedReports } from '../../workspaces/report-collections';
 
 const tenantStatuses=[['current','Current'],['all','All tenants'],['future','Future'],['former','Former'],['contact','Account contacts'],['unknown','Status needs review']];
-const generalStatuses=[['all','All statuses'],['current','Current'],['future_preleased','Future preleased'],['vacant','Vacant'],['not_ready','Not ready'],['off_market','Off market']];
 const applicationStatuses=[['all','All applications'],['submitted','Submitted'],['missing_information','Missing information'],['under_review','Under review'],['approved','Approved'],['declined','Declined'],['withdrawn','Withdrawn'],['converted','Converted']];
 function Busy({label='Loading records…'}:{label?:string}){return <div className="rm-empty" role="status"><RefreshCw size={18} className="spin"/><span>{label}</span></div>;}
 function ErrorNotice({error,retry}:{error:unknown;retry?:()=>void}){return <div className="rm-error" role="alert"><span>{error instanceof Error?error.message:'Records could not be loaded.'}</span>{retry&&<button className="rm-button" onClick={retry}>Try again</button>}</div>;}
-function routeKey(route:WorkspaceRoute){if(route.section==='projects')return ['projects',route.organizationId??'',route.recordId??''].join(':');return [route.section,route.kind??'',route.recordId??'',route.section==='reports'?route.report:''].join(':');}
+function routeKey(route:WorkspaceRoute){return [route.section,route.organizationId??'',route.kind??'',route.recordId??'',route.section==='reports'?route.report:'',route.projectTab??'',route.investorTab??'',route.workOrderView??'',route.accountingView??''].join(':');}
 function scopeProperties(snapshot:AdminSnapshot,filters:ViewFilters){return snapshot.snapshot.properties.filter(p=>filters.propertyScope==='all'||p.state==='active');}
 
 function RecurringRegister({snapshot,filters,onEdit}:{snapshot:AdminSnapshot;filters:ViewFilters;onEdit:(action:QuickAction,values?:FormValues)=>void}){
@@ -83,7 +92,9 @@ function RecurringRegister({snapshot,filters,onEdit}:{snapshot:AdminSnapshot;fil
 
 export default function RmWorkspace(){
  const auth=useRentOpsAuth();const client=useQueryClient();
- useEffect(()=>{const previous=document.title;document.title='5Central | Rent Operations';return()=>{document.title=previous;};},[]);
+ useEffect(()=>{const previous=document.title;return()=>{document.title=previous;};},[]);
+ // Signed-in views title themselves per page (child effects run first, so only the signed-out state is set here).
+ useEffect(()=>{if(auth.status!=='authenticated')document.title='5Central Ops';},[auth.status]);
  useEffect(()=>{if(auth.status==='unknown')void rentOpsAuthClient.initialize().catch(()=>undefined);},[auth.status]);
  useEffect(()=>{
   if(auth.status!=='authenticated')client.removeQueries({queryKey:['rent-ops-workspace']});
@@ -95,27 +106,29 @@ export default function RmWorkspace(){
 
 function AuthenticatedWorkspace(){
  const auth=useRentOpsAuth();const client=useQueryClient();
+ const identity=auth.user?.id??'';
  const [route,setRoute]=useState<WorkspaceRoute>(()=>parseWorkspaceRoute(window.location.search));
  const [filters,setFilters]=useState<ViewFilters>(()=>parseWorkspaceFilters(window.location.search));
  const calendarDay=useWorkspaceDate(setFilters);
- const [tenantStatus,setTenantStatus]=useState(()=>new URLSearchParams(window.location.search).get('tenantStatus')??DEFAULT_TENANT_DIRECTORY_STATUS);
  const [incomeHistoryNeeded,setIncomeHistoryNeeded]=useState(false);
  const [source,setSource]=useState<'live'|'synthetic'>('live');const [contextError,setContextError]=useState<unknown>();
  const [businessDate,setBusinessDate]=useState('');const [notice,setNotice]=useState('');
  const [manageMoves,setManageMoves]=useState<{personId?:string}>();
  const [editing,setEditing]=useState<{action:QuickAction;values:FormValues}>();
- const [workOrderCreate,setWorkOrderCreate]=useState(0);
  const {transparency,changeTransparency}=useWorkspaceAppearance();
+ const view=WORKSPACE_VIEWS[route.section];
+ const tenantStatus:TenantDirectoryStatus=route.tenantStatus??DEFAULT_TENANT_DIRECTORY_STATUS;
  const scrollPositions=useRef(new Map<string,number>());
  const navigationRef=useRef(route);
  const filtersRef=useRef(filters);filtersRef.current=filters;
  const captureScroll=()=>({window:window.scrollY,panels:Array.from(document.querySelectorAll('.rm-main,.rm-record-list-items,.rm-property-unit-list-items')).map(node=>node.scrollTop)});
  const pendingScroll=useRef<ReturnType<typeof captureScroll>>();
  const needed=useMemo(()=>workspaceCollectionsFor(route.section,manageMoves?'save-tenancy':editing?.action,incomeHistoryNeeded),[route.section,editing?.action,incomeHistoryNeeded,manageMoves]);
- const data=useWorkspaceData({enabled:auth.status==='authenticated'&&!['projects','investors','time','work-orders','accounting','report-library','company-reports'].includes(route.section),identity:auth.user?.id??'',filters,collections:needed,summaryNeeded:route.section==='dashboard',personId:route.section==='tenants'?route.recordId:undefined});
- const reportDirectoryQuery=useQuery({queryKey:['rent-ops-workspace','report-directory',auth.user?.id??'',filters.asOfDate],queryFn:({signal})=>loadRentOpsWorkspaceBootstrap({propertyScope:'all',asOfDate:filters.asOfDate},signal),enabled:auth.status==='authenticated'&&['reports','rent-roll','leases','income'].includes(route.section)&&!!filters.asOfDate,staleTime:60_000,gcTime:300_000,retry:false});
+ const data=useWorkspaceData({enabled:auth.status==='authenticated'&&view.snapshot,identity,filters,collections:needed,summaryNeeded:route.section==='dashboard',personId:route.section==='tenants'?route.recordId:undefined});
+ const reportDirectoryQuery=useQuery({queryKey:['rent-ops-workspace','report-directory',identity,filters.asOfDate],queryFn:({signal})=>loadRentOpsWorkspaceBootstrap({propertyScope:'all',asOfDate:filters.asOfDate},signal),enabled:auth.status==='authenticated'&&['reports','rent-roll'].includes(route.section)&&!!filters.asOfDate,staleTime:60_000,gcTime:300_000,retry:false});
  const reportDirectory=reportDirectoryQuery.data?{properties:reportDirectoryQuery.data.snapshot.properties,units:reportDirectoryQuery.data.snapshot.units,people:reportDirectoryQuery.data.snapshot.people,tenancies:reportDirectoryQuery.data.snapshot.tenancies}:undefined;
  const snapshot=data.snapshot;
+ useEffect(()=>{document.title=workspaceDocumentTitle(route);},[route]);
  const reconcileRecordScope=useCallback((next:WorkspaceRoute)=>{setFilters(current=>workspaceFiltersForRecord(next,data.bootstrap.data,current));},[data.bootstrap.data]);
  const go=useCallback((next:WorkspaceRoute,replace=false)=>{
   const previous=navigationRef.current;pendingScroll.current=undefined;
@@ -126,8 +139,8 @@ function AuthenticatedWorkspace(){
  },[]);
  const activateRecord=useCallback((next:WorkspaceRoute,replace=false)=>{reconcileRecordScope(next);go(next,replace);},[go,reconcileRecordScope]);
  useEffect(()=>{if(data.bootstrap.data&&route.recordId)reconcileRecordScope(route);},[data.bootstrap.data,route,reconcileRecordScope]);
- useEffect(()=>{const listener=()=>{scrollPositions.current.set(routeKey(navigationRef.current),window.scrollY);const next=parseWorkspaceRoute(window.location.search);setFilters(parseWorkspaceFilters(window.location.search));setTenantStatus(new URLSearchParams(window.location.search).get('tenantStatus')??DEFAULT_TENANT_DIRECTORY_STATUS);pendingScroll.current=window.history.state?.scroll;navigationRef.current=next;setRoute(next);};window.addEventListener('popstate',listener);return()=>window.removeEventListener('popstate',listener);},[]);
- useEffect(()=>{const search=workspaceRouteSearch(route,filters,window.location.search);const params=new URLSearchParams(search);params.set('tenantStatus',tenantStatus);window.history.replaceState(window.history.state,'',`${window.location.pathname}?${params}`);},[route,filters,tenantStatus]);
+ useEffect(()=>{const listener=()=>{scrollPositions.current.set(routeKey(navigationRef.current),window.scrollY);const next=parseWorkspaceRoute(window.location.search);setFilters(parseWorkspaceFilters(window.location.search));pendingScroll.current=window.history.state?.scroll;navigationRef.current=next;setRoute(next);};window.addEventListener('popstate',listener);return()=>window.removeEventListener('popstate',listener);},[]);
+ useEffect(()=>{window.history.replaceState(window.history.state,'',`${window.location.pathname}${workspaceRouteSearch(route,filters,window.location.search)}`);},[route,filters]);
  useEffect(()=>{
   const saved=pendingScroll.current;let frame=0;
   const restore=()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(()=>{window.scrollTo({top:saved?.window??scrollPositions.current.get(routeKey(route))??0,behavior:'instant'});if(saved)document.querySelectorAll('.rm-main,.rm-record-list-items,.rm-property-unit-list-items').forEach((node,index)=>{node.scrollTop=saved.panels[index]??0;});});};
@@ -157,31 +170,21 @@ function AuthenticatedWorkspace(){
   }
  }
  function navigate(destination:WorkspaceDestination){
-  const {section,kind,report,reportId,projectTab,investorTab,workOrderView,workOrderCreate:createWorkOrder}=destination;
-  if(!section)return;
-  const nextFilters={...filters,status:report==='occupancy'?'vacant':'all',search:''};
+  const nextFilters={...filters,status:destination.report==='occupancy'?'vacant':'all',search:''};
   setFilters(nextFilters);filtersRef.current=nextFilters;
-  if(destination.tenantStatus)setTenantStatus(destination.tenantStatus);
   const propertyIds=new Set(snapshot?scopeProperties(snapshot,filters).map(p=>p.id):[]);
-  const firstId=section==='properties'?(kind==='unit'?snapshot?.snapshot.units.find(u=>propertyIds.has(u.propertyId)&&workspacePropertyMatches(filters,u.propertyId))?.id:snapshot?.snapshot.properties.find(p=>propertyIds.has(p.id)&&workspacePropertyMatches(filters,p.id))?.id):undefined;
-  const currentCompanyRecord=['projects','investors','time','accounting','company-reports','report-library'].includes(section)&&route.section===section?{organizationId:route.organizationId,recordId:route.recordId}:{};
-  if(section==='work-orders'){
-   const sameSection=route.section==='work-orders';const view=workOrderView??(sameSection?route.workOrderView:undefined)??'open';
-   go({section,tab:'summary',report:'rent-roll',organizationId:sameSection?route.organizationId:undefined,recordId:sameSection&&view===(route.workOrderView??'open')?route.recordId:undefined,workOrderView:view});
-   if(createWorkOrder)setWorkOrderCreate(value=>value+1);
-   return;
-  }
-  go({section,kind,recordId:firstId,tab:'summary',report:report??'rent-roll',...currentCompanyRecord,...(projectTab?{projectTab}:{}),...(investorTab?{investorTab}:{}),...(reportId?{reportId}:{})});
+  const firstId=destination.section==='properties'?(destination.kind==='unit'?snapshot?.snapshot.units.find(u=>propertyIds.has(u.propertyId)&&workspacePropertyMatches(filters,u.propertyId))?.id:snapshot?.snapshot.properties.find(p=>propertyIds.has(p.id)&&workspacePropertyMatches(filters,p.id))?.id):undefined;
+  go(destinationRoute(destination,route,firstId));
  }
- function labelFor(record:WorkspaceRoute){
-  if(record.section==='tenants'&&record.recordId){const person=snapshot?.snapshot.people.find(p=>p.id===record.recordId);return person?`${person.firstName??''} ${person.lastName??''}`.trim():'Tenant';}
-  if(record.section==='properties'&&record.recordId){return record.kind==='unit'?`Unit ${snapshot?.snapshot.units.find(u=>u.id===record.recordId)?.unitNumber??''}`:`${snapshot?.snapshot.properties.find(p=>p.id===record.recordId)?.name??'Property'}`;}
-  if(record.section==='reports')return record.report==='rent-roll'?'Rent roll':record.report==='occupancy'?'Vacancies':record.report==='delinquency'?'Balances due':REPORT_LABELS[record.report];
-  return record.section==='properties'&&record.kind==='unit'?'Units':WORKSPACE_LABELS[record.section];
- }
+ const base={tab:'summary' as TenantTab,report:'rent-roll' as ReportKey};
+ const openCompany=(section:WorkspaceSection,organizationId:string|undefined,extra:Partial<WorkspaceRoute>={})=>go({...base,section,...(organizationId?{organizationId}:{}),...extra});
  function openTenant(id:string,tab:TenantTab='summary'){activateRecord({section:'tenants',recordId:id,tab,report:'rent-roll'});}
  function openUnit(id:string){activateRecord({section:'properties',kind:'unit',recordId:id,tab:'summary',report:'rent-roll'});}
  function openProperty(id:string){activateRecord({section:'properties',kind:'property',recordId:id,tab:'summary',report:'rent-roll'});}
+ const openReport=(report:ReportKey)=>go({...base,section:'reports',report});
+ const openProject=(organizationId:string,projectId?:string)=>openCompany('projects',organizationId,{projectTab:'overview',...(projectId?{recordId:projectId}:{})});
+ const openWorkOrder=(organizationId:string,workOrderId?:string)=>openCompany('work-orders',organizationId,{workOrderView:workOrderId?'all':'open',...(workOrderId?{recordId:workOrderId}:{})});
+ const changeOrganization=(organizationId:string)=>go({...route,organizationId,recordId:undefined});
  const openEditor=(action:QuickAction,values:FormValues={})=>{setNotice('');setEditing({action,values});};
  const refresh=useCallback(async()=>{await data.refresh();},[data.refresh]);
  const refreshRequired=useCallback(async()=>{await data.refreshRequired();},[data.refreshRequired]);
@@ -195,40 +198,76 @@ function AuthenticatedWorkspace(){
   }
   void refresh();
  }
- const selectedReport=route.section==='rent-roll'?'rent-roll':route.section==='leases'?'lease-expiration':route.report;
+ const selectedReport=route.section==='rent-roll'?'rent-roll':route.report;
  const fullTenant=data.tenant.data&&snapshot?{...data.tenant.data,property:data.tenant.data.property??snapshot.snapshot.properties.find(p=>p.id===data.tenant.data?.tenancy?.propertyId),unit:data.tenant.data.unit??snapshot.snapshot.units.find(u=>u.id===data.tenant.data?.tenancy?.unitId)}:undefined;
- const occupancyStatus=['reports','rent-roll'].includes(route.section)&&isOccupancyReport(selectedReport);
- const statusOptions=route.section==='tenants'?tenantStatuses:route.section==='applicants'?applicationStatuses:occupancyStatus?occupancyReportStatusOptions:generalStatuses;
- const selectedStatus=route.section==='tenants'?tenantStatus:occupancyStatus&&!statusOptions.some(([value])=>value===filters.status)?'all':filters.status;
+ const statusOptions=view.status==='tenants'?tenantStatuses:applicationStatuses;
+ const heading=route.section==='tenants'?'Tenants':route.section==='properties'?(route.kind==='unit'?'Units':'Properties'):route.section==='reports'?(route.report==='occupancy'?'Availability':route.report==='rent-roll'?'Rent roll':REPORT_LABELS[route.report]):workspacePageTitle(route);
+ const canRecordMoves=source==='live'&&!!businessDate;
+ const reportsView=()=>reportDirectoryQuery.isLoading?<Busy label="Loading report directory…"/>:reportDirectoryQuery.error?<ErrorNotice error={reportDirectoryQuery.error} retry={()=>void reportDirectoryQuery.refetch()}/>:reportDirectory&&snapshot?<ReportsWorkspace snapshot={snapshot} filters={filters} selected={selectedReport} directory={reportDirectory} allowAllScope onSelect={report=>openReport(report)} onOpenTenant={openTenant} onOpenUnit={openUnit} onOpenProperty={openProperty}/>:<Busy label="Loading report directory…"/>;
+ const needsCollections=(render:()=>ReactNode)=>()=>data.collectionsReady?render():<Busy/>;
+ /** One renderer per canonical view; a missing section is a compile-time error. */
+ const views:Record<WorkspaceSection,()=>ReactNode>={
+  dashboard:()=><>{data.summary.error&&<ErrorNotice error={data.summary.error} retry={()=>void data.summary.refetch()}/>}{!data.summary.data?!data.summary.error&&<Busy label="Loading portfolio summary…"/>:<DashboardWorkspace onManageMoves={canRecordMoves?()=>setManageMoves({}):undefined} snapshot={snapshot!} filters={filters} previews={data.summary.data.reports} refreshing={data.summary.isFetching} onReport={openReport} onOpenTenant={openTenant} onOpenUnit={openUnit} onOpenProperty={openProperty}
+   companyPanels={<DashboardCompanyPanels identity={identity} organizationId={route.organizationId} asOfDate={filters.asOfDate} targets={{
+    onObligations:organizationId=>openCompany('investors',organizationId,{investorTab:'payments'}),
+    onMaturities:organizationId=>openCompany('investors',organizationId,{investorTab:'debt'}),
+    onReviewQueue:organizationId=>openCompany('review-queue',organizationId),
+    onWorkSchedule:(organizationId,workOrderId)=>workOrderId?openWorkOrder(organizationId,workOrderId):openCompany('work-orders',organizationId,{workOrderView:'schedule'}),
+    onForecasting:organizationId=>openCompany('forecasting',organizationId,{forecastTab:'cash'}),
+   }}/>}/>}</>,
+  properties:needsCollections(()=><PropertyUnitRecords readOnly={source!=='live'} snapshot={snapshot!} filters={filters} onSearchChange={search=>setFilters(current=>({...current,search}))} selectedPropertyId={route.kind==='property'?route.recordId:undefined} selectedUnitId={route.kind==='unit'?route.recordId:undefined} onSelect={(kind,id)=>go({...route,kind,recordId:id})} onEdit={openEditor}
+   identity={identity} organizationId={route.organizationId} onOpenProject={openProject} onOpenWorkOrder={openWorkOrder} onOpenReport={openReport}/>),
+  'property-performance':()=><PropertyPerformance identity={identity} filters={filters} organizationId={route.organizationId} onOpenReport={openReport}/>,
+  'rent-roll':reportsView,
+  reports:reportsView,
+  'property-documents':needsCollections(()=><PropertyDocumentsPage identity={identity} snapshot={snapshot!} filters={filters} organizationId={route.organizationId} onEdit={openEditor} onChanged={()=>void refresh()}/>),
+  tenants:()=><div className="rm-record-layout"><section className="rm-record-list"><div className="rm-toolbar"><strong>{directory.length} tenants</strong><button className="rm-button" onClick={()=>openEditor('save-person')}><Plus size={13}/>Add</button></div><div className="rm-record-list-items">{directory.map(tenant=>{const id=tenant.person.id;const index=data.bootstrap.data?.tenantIndex.find(row=>row.person.id===id);return <EntityLink personId={id} tab={route.tab} onOpen={()=>go({...route,recordId:id})} key={id??`${tenant.person.firstName}:${tenant.person.lastName}`} className={`rm-record-list-item${route.recordId===id?' active':''}`} ><strong className="rm-record-list-item-title">{tenant.person.lastName}{tenant.person.lastName?', ':''}{tenant.person.firstName}</strong><span className="rm-record-list-item-meta">{tenant.property?.name??'Account contact'}{tenant.unit?.unitNumber?` · ${tenant.unit.unitNumber}`:''}</span><small className="rm-record-list-item-meta">{formatLabel(index?.category??'unknown')}</small></EntityLink>;})}{!directory.length&&<div className="rm-empty">No tenants match these filters.</div>}</div></section><div className="rm-record-detail">{data.tenant.error?<ErrorNotice error={data.tenant.error} retry={()=>void data.tenant.refetch()}/>:fullTenant?<TenantRecord tenant={fullTenant} snapshot={snapshot!} tab={route.tab} onTab={(tab:TenantTab)=>go({...route,tab},true)} onEdit={openEditor} onChanged={refresh} onMoveRefresh={refreshRequired} businessDate={businessDate} readOnly={source!=='live'} onManageMoves={()=>setManageMoves({personId:fullTenant.person.id})}/>:<Busy label={route.recordId?'Loading tenant details…':'Select a tenant to open the record.'}/>}</div></div>,
+  collections:()=><Collections identity={identity} snapshot={snapshot!} filters={filters} businessDate={businessDate} readOnly={source!=='live'} paymentContextLoading={incomeHistoryNeeded&&!data.collectionsReady} onRequestPaymentContext={()=>setIncomeHistoryNeeded(true)} onSaved={refresh} onEdit={action=>openEditor(action)} onOpenRecurring={()=>go({...base,section:'recurring'})}/>,
+  leases:()=><LeasesRenewals identity={identity} snapshot={snapshot!} filters={filters}/>,
+  moves:()=><MovesPage snapshot={snapshot!} filters={filters} canRecord={canRecordMoves} onRecordMove={personId=>setManageMoves({personId})}/>,
+  applicants:needsCollections(()=><ApplicationsWorkspace snapshot={snapshot!} filters={filters} onChanged={()=>void refresh()} onEdit={openEditor}/>),
+  recurring:needsCollections(()=><RecurringRegister snapshot={snapshot!} filters={filters} onEdit={openEditor}/>),
+  'make-ready':()=><MakeReadyPage identity={identity} snapshot={snapshot!} filters={filters} organizationId={route.organizationId} readOnly={source!=='live'}/>,
+  listings:()=><ListingsPage snapshot={snapshot!} filters={filters} readOnly={source!=='live'}/>,
+  accounting:()=><>{route.accountingView==='banking'&&<RmBanking/>}<AccountingEntryWithView identity={identity} organizationId={route.organizationId} view={route.accountingView??'overview'} onNavigate={organizationId=>go({...route,organizationId})}/></>,
+  projects:()=><ProjectEntry identity={identity} organizationId={route.organizationId} projectId={route.recordId} projectTab={projectTabForWorkspace(route.projectTab??'overview') as ProjectTab} onTabChange={tab=>go({...route,projectTab:projectTabFromWorkspace(tab)})} onNavigate={(organizationId,recordId)=>go({...route,organizationId,recordId})}/>,
+  'cost-library':()=><CostLibrary identity={identity} organizationId={route.organizationId} asOfDate={filters.asOfDate} onOrganization={changeOrganization} onOpenProject={openProject}/>,
+  'work-orders':()=>route.workOrderView==='schedule'
+   ?<WorkOrderSchedule identity={identity} organizationId={route.organizationId} today={filters.asOfDate} onOrganization={changeOrganization} onOpen={(organizationId,id)=>openWorkOrder(organizationId,id)}/>
+   :<WorkOrderEntry identity={identity} organizationId={route.organizationId} workOrderId={route.recordId} view={(route.workOrderView??'open') as WorkOrderView} onNavigate={(organizationId,recordId,replace)=>go({...route,organizationId,recordId},replace)} onViewChange={workOrderView=>go({...route,workOrderView,recordId:undefined})} onOpenProperty={openProperty} onOpenUnit={openUnit} onOpenTenant={id=>openTenant(id)}/>,
+  investors:()=><InvestorEntry identity={identity} organizationId={route.organizationId} accountId={route.recordId} investorTab={investorTabForWorkspace(route.investorTab??'overview') as InvestorTab} onTabChange={tab=>go({...route,investorTab:investorTabFromWorkspace(tab)})} onNavigate={(organizationId,recordId)=>go({...route,organizationId,recordId})}/>,
+  'report-library':()=><ReportLibrary identity={identity} organizationId={route.organizationId} onCompanyChange={organizationId=>go({...route,organizationId})} onOpen={report=>openReport(report)} onOpenCompany={(organizationId,reportId)=>go({...base,section:'company-reports',organizationId,reportId})}/>,
+  'company-reports':()=><ReportingEntry identity={identity} organizationId={route.organizationId} reportId={route.reportId} onNavigate={(organizationId,reportId)=>go({...route,organizationId,reportId})} onOpenLegacy={report=>{if(REPORT_KEYS.includes(report as ReportKey))openReport(report as ReportKey);}}/>,
+  'saved-reports':()=><SavedReports identity={identity} organizationId={route.organizationId} onOrganization={changeOrganization} onOpenReport={(organizationId,reportId)=>go({...base,section:'company-reports',organizationId,reportId})} onOpenLibrary={()=>go({...base,section:'report-library',...(route.organizationId?{organizationId:route.organizationId}:{})})}/>,
+  'report-packages':()=><ReportPackages identity={identity} organizationId={route.organizationId} onOrganization={changeOrganization} onOpenReport={(organizationId,reportId)=>go({...base,section:'company-reports',organizationId,reportId})} onOpenLibrary={()=>go({...base,section:'report-library',...(route.organizationId?{organizationId:route.organizationId}:{})})}/>,
+  forecasting:()=><ForecastingEntry identity={identity} organizationId={route.organizationId} onNavigate={changeOrganization} scenarioId={route.scenarioId} legalEntityId={route.legalEntityId} propertyId={selectedWorkspaceProperties(filters).length===1?selectedWorkspaceProperties(filters)[0]:undefined} tab={route.forecastTab} onTabChange={(tab:string)=>go({...route,forecastTab:tab as WorkspaceRoute['forecastTab']},true)}/>,
+  'review-queue':()=><ReviewQueueEntry identity={identity} organizationId={route.organizationId} onNavigate={changeOrganization}/>,
+  entities:()=><EntitiesPage identity={identity} organizationId={route.organizationId} asOfDate={filters.asOfDate} onOrganization={changeOrganization} onOpenAccounting={organizationId=>openCompany('accounting',organizationId,{accountingView:'overview'})}/>,
+  people:()=><PeoplePage identity={identity} organizationId={route.organizationId} asOfDate={filters.asOfDate} onOrganization={changeOrganization}/>,
+  time:()=><TimeEntry identity={identity} organizationId={route.organizationId} onNavigate={organizationId=>go({...route,organizationId})}/>,
+  'company-documents':()=><CompanyDocumentsEntry identity={identity} organizationId={route.organizationId} onNavigate={changeOrganization}/>,
+  'mra-packets':()=><IntakeResultsEntry identity={identity} organizationId={route.organizationId} onNavigate={changeOrganization}/>,
+  settings:()=><SettingsPage identity={identity} organizationId={route.organizationId} asOfDate={filters.asOfDate} onOrganization={changeOrganization} transparency={transparency} onTransparency={changeTransparency} onOpenAccounting={organizationId=>openCompany('accounting',organizationId,{accountingView:'overview'})} onOpenTime={organizationId=>openCompany('time',organizationId)}/>,
+ };
+ const body=!view.snapshot?views[route.section]():contextError?<ErrorNotice error={contextError}/>:data.bootstrap.error?<ErrorNotice error={data.bootstrap.error} retry={()=>void data.bootstrap.refetch()}/>:!snapshot?<Busy label="Loading the workspace directory…"/>:<>{data.collectionError&&<ErrorNotice error={data.collectionError} retry={()=>void refresh()}/>}{views[route.section]()}</>;
  return <EntityNavigationContext.Provider value={{onTenant:openTenant,onRecord:(kind,id)=>kind==='unit'?openUnit(id):openProperty(id)}}><div className="rm-workspace rops-modern" data-transparency={transparency}>
   <a className="rops-skip-link" href="#rops-content">Skip to content</a>
-  <TopNavigation route={route} onNavigate={navigate} transparency={transparency} onTransparency={changeTransparency} source={source} onLogout={()=>void rentOpsAuthClient.logout()}/>
+  <TopNavigation route={route} onNavigate={navigate} transparency={transparency} onTransparency={changeTransparency} source={source} accountLabel={auth.user?.email??auth.user?.id} onLogout={()=>void rentOpsAuthClient.logout()}/>
   <div className="rm-body">
-  <main className="rm-main" id="rops-content" tabIndex={-1}>
-   {!['projects','investors','time','work-orders','accounting','company-reports'].includes(route.section)&&<header className="rm-page-heading rm-workspace-heading">{route.recordId&&window.history.state?.returnTo&&<button className="rm-button rm-button--icon" aria-label="Back to previous view" title="Back" onClick={()=>window.history.back()}><ChevronLeft size={17}/></button>}<h1>{route.section==='tenants'?'Tenants':labelFor({...route,recordId:undefined})}</h1></header>}
-   {!['banking','projects','investors','time','work-orders','accounting','report-library','company-reports','reports','rent-roll','leases'].includes(route.section)&&<div className="rm-toolbar rm-workspace-toolbar" aria-label="Workspace filters">
+  <main className="rm-main" id="rops-content" tabIndex={-1} aria-labelledby={view.heading?'rops-page-title':undefined}>
+   {view.heading&&<header className="rm-page-heading rm-workspace-heading">{route.recordId&&window.history.state?.returnTo&&<button className="rm-button rm-button--icon" aria-label="Back to previous view" title="Back" onClick={()=>window.history.back()}><ChevronLeft size={17}/></button>}<h1 id="rops-page-title">{heading}</h1></header>}
+   {view.filters&&<div className="rm-toolbar rm-workspace-toolbar" role="toolbar" aria-label="Workspace filters">
     <label>Portfolio<select aria-label="Portfolio scope" value={filters.propertyScope} onChange={e=>changeScope({propertyScope:e.target.value as 'active'|'all',propertyId:'all',propertyIds:[]})}><option value="active">Active portfolio</option><option value="all">All imported properties</option></select></label>
     <details className="rm-property-filter"><summary>{selectedWorkspaceProperties(filters).length===0?'All properties':selectedWorkspaceProperties(filters).length===1?(snapshot?.snapshot.properties.find(p=>p.id===selectedWorkspaceProperties(filters)[0])?.name??'1 property'):`${selectedWorkspaceProperties(filters).length} properties`}</summary><div className="rm-property-filter-options"><label><input type="checkbox" checked={!selectedWorkspaceProperties(filters).length} onChange={()=>changeScope({propertyId:'all',propertyIds:[]})}/>All properties</label>{snapshot&&scopeProperties(snapshot,filters).map(p=>p.id&&<label key={p.id}><input type="checkbox" checked={selectedWorkspaceProperties(filters).includes(p.id)} onChange={e=>{const ids=e.target.checked?[...selectedWorkspaceProperties(filters),p.id!]:selectedWorkspaceProperties(filters).filter(id=>id!==p.id);changeScope({propertyIds:ids,propertyId:ids.length===1?ids[0]:'all'});}}/>{p.name??'Unnamed property'}</label>)}</div></details>
     <label>As of<input type="date" value={filters.asOfDate} onChange={e=>{if(e.target.value)setFilters(f=>pinWorkspaceDate(f,e.target.value));}}/></label>
     <button type="button" className="rm-button" aria-pressed={filters.asOfMode==='today'} onClick={()=>setFilters(f=>selectWorkspaceToday(f))}>Today</button>
-    {['tenants','applicants'].includes(route.section)&&<label>Status<select value={selectedStatus} onChange={e=>{if(route.section==='tenants'){setTenantStatus(e.target.value);go({...route,recordId:undefined},true);}else setFilters(f=>({...f,status:e.target.value}));}}>{statusOptions.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>}
+    {view.status&&<label>Status<select value={view.status==='tenants'?tenantStatus:filters.status} onChange={e=>{if(view.status==='tenants')go({...route,tenantStatus:e.target.value as TenantDirectoryStatus,recordId:undefined},true);else setFilters(f=>({...f,status:e.target.value}));}}>{statusOptions.map(([value,label])=><option value={value} key={value}>{label}</option>)}</select></label>}
     <label className="rm-search"><Search size={14}/><input aria-label="Search records" placeholder={route.section==='tenants'?'Name, property, unit, email or phone':'Search records'} value={filters.search} onChange={e=>setFilters(f=>({...f,search:e.target.value}))}/></label>
     <div className="rm-workspace-toolbar-actions"><button className="rm-button rm-button--icon" aria-label="Refresh workspace" title="Refresh" onClick={()=>void refresh()} disabled={data.isRefreshing}><RefreshCw size={15} className={data.isRefreshing?'spin':''}/></button>
-    {route.section==='properties'&&snapshot&&<button className="rm-button rm-button-primary" onClick={()=>openEditor('save-property')}><Plus size={14}/>Add property</button>}</div>
+    {route.section==='properties'&&route.kind!=='unit'&&snapshot&&source==='live'&&<button className="rm-button rm-button-primary" onClick={()=>openEditor('save-property')}><Plus size={14}/>Add property</button>}</div>
    </div>}
    {notice&&<div className="rm-notice" role="status">{notice}<button className="rm-button" aria-label="Dismiss notice" onClick={()=>setNotice('')}><X size={12}/></button></div>}
-   {route.section==='report-library'?<ReportLibrary identity={auth.user?.id??''} organizationId={route.organizationId} onCompanyChange={organizationId=>go({...route,organizationId})} onOpen={report=>navigate({label:report,section:'reports',report})} onOpenCompany={(organizationId,reportId)=>go({section:'company-reports',organizationId,reportId,tab:'summary',report:'rent-roll'})}/>:route.section==='projects'?<ProjectEntry identity={auth.user?.id??''} organizationId={route.organizationId} projectId={route.recordId} projectTab={route.projectTab??'overview'} onTabChange={projectTab=>go({...route,projectTab})} onNavigate={(organizationId,recordId)=>go({...route,organizationId,recordId})}/>:route.section==='investors'?<InvestorEntry identity={auth.user?.id??''} organizationId={route.organizationId} accountId={route.recordId} investorTab={route.investorTab??'overview'} onTabChange={investorTab=>go({...route,investorTab})} onNavigate={(organizationId,recordId)=>go({...route,organizationId,recordId})}/>:route.section==='accounting'?<AccountingEntry identity={auth.user?.id??''} organizationId={route.organizationId} onNavigate={organizationId=>go({...route,organizationId})}/>:route.section==='work-orders'?<WorkOrderEntry identity={auth.user?.id??''} organizationId={route.organizationId} workOrderId={route.recordId} view={route.workOrderView??'open'} createRequest={workOrderCreate} onNavigate={(organizationId,recordId,replace)=>go({...route,organizationId,recordId},replace)} onViewChange={workOrderView=>go({...route,workOrderView,recordId:undefined})} onOpenProperty={openProperty} onOpenUnit={openUnit} onOpenTenant={id=>openTenant(id)}/>:route.section==='time'?<TimeEntry identity={auth.user?.id??''} organizationId={route.organizationId} onNavigate={organizationId=>go({...route,organizationId})}/>:route.section==='company-reports'?<ReportingEntry identity={auth.user?.id??''} organizationId={route.organizationId} reportId={route.reportId} onNavigate={(organizationId,reportId)=>go({...route,organizationId,reportId})} onOpenLegacy={report=>{if(REPORT_KEYS.includes(report as ReportKey))navigate({label:report,section:'reports',report:report as ReportKey});}}/>:contextError?<ErrorNotice error={contextError}/>:data.bootstrap.error?<ErrorNotice error={data.bootstrap.error} retry={()=>void data.bootstrap.refetch()}/>:!snapshot?<Busy label="Loading the workspace directory…"/>:<>
-    {data.collectionError&&<ErrorNotice error={data.collectionError} retry={()=>void refresh()}/>}
-    {route.section==='dashboard'&&<>{data.summary.error&&<ErrorNotice error={data.summary.error} retry={()=>void data.summary.refetch()}/>} {!data.summary.data?!data.summary.error&&<Busy label="Loading portfolio summary…"/>:<DashboardWorkspace onManageMoves={source==='live' && businessDate ? ()=>setManageMoves({}) : undefined} snapshot={snapshot} filters={filters} previews={data.summary.data.reports} refreshing={data.summary.isFetching} onReport={report=>go({section:'reports',report,tab:'summary'})} onOpenTenant={openTenant} onOpenUnit={openUnit} onOpenProperty={openProperty}/>}</>}
-    {route.section==='tenants'&&<div className="rm-record-layout"><section className="rm-record-list"><div className="rm-toolbar"><strong>{directory.length} tenants</strong><button className="rm-button" onClick={()=>openEditor('save-person')}><Plus size={13}/>Add</button></div><div className="rm-record-list-items">{directory.map(tenant=>{const id=tenant.person.id;const index=data.bootstrap.data?.tenantIndex.find(row=>row.person.id===id);return <EntityLink personId={id} tab={route.tab} onOpen={()=>go({...route,recordId:id})} key={id??`${tenant.person.firstName}:${tenant.person.lastName}`} className={`rm-record-list-item${route.recordId===id?' active':''}`} ><strong className="rm-record-list-item-title">{tenant.person.lastName}{tenant.person.lastName?', ':''}{tenant.person.firstName}</strong><span className="rm-record-list-item-meta">{tenant.property?.name??'Account contact'}{tenant.unit?.unitNumber?` · ${tenant.unit.unitNumber}`:''}</span><small className="rm-record-list-item-meta">{formatLabel(index?.category??'unknown')}</small></EntityLink>;})}{!directory.length&&<div className="rm-empty">No tenants match these filters.</div>}</div></section><div className="rm-record-detail">{data.tenant.error?<ErrorNotice error={data.tenant.error} retry={()=>void data.tenant.refetch()}/>:fullTenant?<TenantRecord tenant={fullTenant} snapshot={snapshot} tab={route.tab} onTab={(tab:TenantTab)=>go({...route,tab},true)} onEdit={openEditor} onChanged={refresh} onMoveRefresh={refreshRequired} businessDate={businessDate} readOnly={source!=='live'} onManageMoves={()=>setManageMoves({personId:fullTenant.person.id})}/>:<Busy label={route.recordId?'Loading tenant details…':'Select a tenant to open the record.'}/>}</div></div>}
-    {route.section==='properties'&&(data.collectionsReady?<PropertyUnitRecords readOnly={source !== 'live'} snapshot={snapshot} filters={filters} onSearchChange={search=>setFilters(current=>({...current,search}))} selectedPropertyId={route.kind==='property'?route.recordId:undefined} selectedUnitId={route.kind==='unit'?route.recordId:undefined} onSelect={(kind,id)=>go({...route,kind,recordId:id})} onEdit={openEditor}/>:<Busy/>)}
-    {['reports','rent-roll','leases'].includes(route.section)&&(reportDirectoryQuery.isLoading?<Busy label="Loading report directory…"/>:reportDirectoryQuery.error?<ErrorNotice error={reportDirectoryQuery.error} retry={()=>void reportDirectoryQuery.refetch()}/>:reportDirectory?<ReportsWorkspace snapshot={snapshot} filters={filters} selected={selectedReport} directory={reportDirectory} allowAllScope onSelect={report=>go({section:'reports',report,tab:'summary'})} onOpenTenant={openTenant} onOpenUnit={openUnit} onOpenProperty={openProperty}/>:<Busy label="Loading report directory…"/>)}
-    {route.section==='income'&&<><ManagerIncomeActions snapshot={snapshot} businessDate={businessDate} propertyId={filters.propertyId} onSaved={refresh} onRequestPaymentContext={()=>setIncomeHistoryNeeded(true)} paymentContextLoading={incomeHistoryNeeded&&!data.collectionsReady}/><>{selectedWorkspaceProperties(filters).length>1?<button className="rm-button" disabled>Select one property</button>:<RecurringBillingPanel businessDate={businessDate} propertyId={filters.propertyId==='all'?undefined:filters.propertyId} onPosted={refresh}/>}</><div className="rm-toolbar"><button className="rm-button" onClick={()=>openEditor('post-ledger-transaction')}>Post charge or credit</button><button className="rm-button" onClick={()=>openEditor('save-payment-allocation')}>Allocate payment</button><button className="rm-button" onClick={()=>openEditor('reverse-ledger-transaction')}>Reverse transaction</button></div>{reportDirectoryQuery.isLoading?<Busy label="Loading report directory…"/>:reportDirectoryQuery.error?<ErrorNotice error={reportDirectoryQuery.error} retry={()=>void reportDirectoryQuery.refetch()}/>:reportDirectory?<ReportsWorkspace snapshot={snapshot} filters={filters} selected="scheduled-vs-collected" directory={reportDirectory} allowAllScope onOpenTenant={openTenant} onOpenUnit={openUnit} onOpenProperty={openProperty} onSelect={report=>go({section:'reports',report,tab:'summary'})}/>:<Busy label="Loading report directory…"/>}</>}
-    {route.section==='recurring'&&(data.collectionsReady?<RecurringRegister snapshot={snapshot} filters={filters} onEdit={openEditor}/>:<Busy/>)}
-    {route.section==='applicants'&&(data.collectionsReady?<ApplicationsWorkspace snapshot={snapshot} filters={filters} onChanged={()=>void refresh()} onEdit={openEditor}/>:<Busy/>)}
-    {route.section==='banking'&&<RmBanking/>}
-    {route.section==='documents'&&(data.collectionsReady?<DocumentsWorkspace snapshot={snapshot} filters={filters} onChanged={()=>void refresh()} onEdit={openEditor}/>:<Busy/>)}
-   </>}
+   {body}
   </main></div>
   {manageMoves&&source==='live'&&snapshot&&<div className="rm-dialog-backdrop"><section className="rm-dialog" role="dialog" aria-modal="true" aria-label="Move-in and move-out">{data.collectionsReady?<ManagerTenancyActions snapshot={snapshot} businessDate={businessDate} personId={manageMoves.personId} propertyId={filters.propertyId} onSaved={refreshRequired} onClose={()=>setManageMoves(undefined)}/>:<><Busy label="Loading tenancy records…"/>{data.collectionError&&<ErrorNotice error={data.collectionError} retry={()=>void refresh()}/>}<button className="rm-button" onClick={()=>setManageMoves(undefined)}>Cancel</button></>}</section></div>}
   {editing&&snapshot&&(data.collectionsReady?<WorkspaceEditor action={editing.action} snapshot={snapshot} initialValues={editing.values} onClose={()=>setEditing(undefined)} onSaved={finishEdit} onConflict={()=>{setEditing(undefined);setNotice('This record changed. The latest values are being loaded; review them before saving again.');void refresh();}}/>:<div className="rm-dialog-backdrop"><section className="rm-dialog" role="dialog" aria-modal="true" aria-label="Loading editor"><Busy label="Loading related records…"/>{data.collectionError&&<ErrorNotice error={data.collectionError}/>}<button className="rm-button" onClick={()=>setEditing(undefined)}>Cancel</button></section></div>)}

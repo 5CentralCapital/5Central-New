@@ -1,40 +1,147 @@
-import { PROJECT_TABS, type ProjectTab } from '../../projects/types';
-import { INVESTOR_TABS, type InvestorTab } from '../../investors/types';
 import { isWorkOrderView, type WorkOrderView } from '../../work-orders/types';
 import { workspaceToday } from './workspace-date';
-import type { AdminSnapshot, AdminSnapshotView, ApiFilters, DashboardSummary, ReportKey, SectionKey, TenantTab, TenantView, ViewFilters } from '../types';
+import type { AdminSnapshot, AdminSnapshotView, ApiFilters, DashboardSummary, ReportKey, TenantTab, TenantView, ViewFilters } from '../types';
 import { REPORT_KEYS } from '../types';
 import { createWorkspaceReportDefinition, type RentOpsWorkspaceBootstrap, type WorkspaceCollection } from '../api';
 import type { QuickAction } from '../form-payload';
 
-export type WorkspaceSection = SectionKey | 'recurring' | 'banking' | 'accounting' | 'projects' | 'investors' | 'time' | 'work-orders' | 'company-reports' | 'report-library';
-export interface WorkspaceRoute { section: WorkspaceSection; recordId?: string; organizationId?: string; projectTab?: ProjectTab; investorTab?: InvestorTab; workOrderView?: WorkOrderView; reportId?: string; kind?: 'property' | 'unit'; tab: TenantTab; report: ReportKey; }
-const sections: WorkspaceSection[] = ['dashboard','tenants','properties','reports','rent-roll','leases','income','applicants','documents','recurring','banking','accounting','projects','investors','time','work-orders','company-reports','report-library'];
+/**
+ * Canonical manager views. Every value is rendered by rm-workspace; legacy
+ * spellings (income, banking, documents, old project/investor tabs) are
+ * accepted only through the alias table below and never serialized again.
+ */
+export const WORKSPACE_SECTIONS = [
+  'dashboard',
+  // Properties
+  'properties', 'property-performance', 'rent-roll', 'property-documents',
+  // Tenants
+  'tenants', 'collections', 'leases', 'moves', 'applicants', 'recurring',
+  // Units
+  'make-ready', 'listings',
+  // Accounting, projects, work, investors
+  'accounting', 'projects', 'cost-library', 'work-orders', 'investors',
+  // Reporting
+  'reports', 'report-library', 'company-reports', 'saved-reports', 'report-packages', 'forecasting',
+  // Company
+  'review-queue', 'entities', 'people', 'time', 'company-documents', 'mra-packets', 'settings',
+] as const;
+export type WorkspaceSection = (typeof WORKSPACE_SECTIONS)[number];
+
+/** Project workspace tabs as named in navigation (Lane F owns the workspace). */
+export const PROJECT_NAV_TABS = ['overview', 'schedule', 'budget', 'commitments', 'draws'] as const;
+export type ProjectNavTab = (typeof PROJECT_NAV_TABS)[number];
+export const INVESTOR_NAV_TABS = ['overview', 'payments', 'capital', 'debt', 'contracts'] as const;
+export type InvestorNavTab = (typeof INVESTOR_NAV_TABS)[number];
+export const ACCOUNTING_VIEWS = ['overview', 'transactions', 'bills', 'banking', 'pm-settlements', 'close'] as const;
+export type AccountingView = (typeof ACCOUNTING_VIEWS)[number];
+export const FORECAST_TABS = ['cash', 'income', 'balance', 'debt', 'scenarios', 'assumptions'] as const;
+export type ForecastTab = (typeof FORECAST_TABS)[number];
+export const TENANT_DIRECTORY_STATUSES = ['current', 'all', 'future', 'former', 'contact', 'unknown'] as const;
+export type TenantDirectoryStatus = (typeof TENANT_DIRECTORY_STATUSES)[number];
+/** The schedule is an agenda over the same work orders; other values are the existing list views. */
+export type WorkOrderRouteView = WorkOrderView | 'schedule';
+
+export interface WorkspaceRoute {
+  section: WorkspaceSection;
+  recordId?: string;
+  organizationId?: string;
+  projectTab?: ProjectNavTab;
+  investorTab?: InvestorNavTab;
+  workOrderView?: WorkOrderRouteView;
+  accountingView?: AccountingView;
+  tenantStatus?: TenantDirectoryStatus;
+  forecastTab?: ForecastTab;
+  scenarioId?: string;
+  legalEntityId?: string;
+  reportId?: string;
+  kind?: 'property' | 'unit';
+  tab: TenantTab;
+  report: ReportKey;
+}
+
+/** Old bookmarks keep working: each legacy value maps to exactly one canonical view. */
+export const LEGACY_SECTION_ALIASES: Readonly<Record<string, Partial<WorkspaceRoute> & { section: WorkspaceSection }>> = Object.freeze({
+  income: { section: 'collections' },
+  banking: { section: 'accounting', accountingView: 'banking' },
+  documents: { section: 'property-documents' },
+});
+export const LEGACY_PROJECT_TAB_ALIASES: Readonly<Record<string, ProjectNavTab>> = Object.freeze({ scope: 'budget', costs: 'budget', execution: 'commitments' });
+export const LEGACY_INVESTOR_TAB_ALIASES: Readonly<Record<string, InvestorNavTab>> = Object.freeze({ activity: 'capital' });
+
+/** Sections whose data is owned by a company (organization) rather than the rental snapshot. */
+export const COMPANY_SECTIONS: readonly WorkspaceSection[] = [
+  'dashboard', 'property-performance', 'property-documents', 'accounting', 'projects', 'cost-library', 'work-orders', 'investors',
+  'report-library', 'company-reports', 'saved-reports', 'report-packages', 'forecasting',
+  'review-queue', 'entities', 'people', 'time', 'company-documents', 'mra-packets', 'settings',
+];
 const tabs: TenantTab[] = ['summary','household','tenancy','charges','ledger','deposits','housing-assistance','documents','activity'];
+const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+const recordPattern = /^[A-Za-z0-9:_-]{1,160}$/;
+const includes = <T extends string>(values: readonly T[], value: unknown): value is T => typeof value === 'string' && (values as readonly string[]).includes(value);
+
+function canonicalSection(raw: string | null): Partial<WorkspaceRoute> & { section: WorkspaceSection } {
+  if (raw && Object.hasOwn(LEGACY_SECTION_ALIASES, raw)) return LEGACY_SECTION_ALIASES[raw];
+  return { section: includes(WORKSPACE_SECTIONS, raw) ? raw : 'dashboard' };
+}
+
 export function parseWorkspaceRoute(search: string): WorkspaceRoute {
   const params = new URLSearchParams(search);
-  const section = params.get('section') as WorkspaceSection;
-  const tab = params.get('tab') as TenantTab;
-  const report = params.get('report') as ReportKey;
+  const alias = canonicalSection(params.get('section'));
+  const section = alias.section;
+  const rawTab = params.get('tab');
+  const report = params.get('report');
   const record = params.get('record');
-  const projectTab = params.get('projectTab') as ProjectTab;
-  const investorTab = params.get('investorTab') as InvestorTab;
   const organizationId = params.get('company');
   const reportId = params.get('reportId');
+  const rawProjectTab = params.get('projectTab') ?? '';
+  const projectTab = includes(PROJECT_NAV_TABS, rawProjectTab) ? rawProjectTab : LEGACY_PROJECT_TAB_ALIASES[rawProjectTab];
+  const rawInvestorTab = params.get('investorTab') ?? '';
+  const investorTab = includes(INVESTOR_NAV_TABS, rawInvestorTab) ? rawInvestorTab : LEGACY_INVESTOR_TAB_ALIASES[rawInvestorTab];
   const workOrderView = params.get('woView');
-  return { ...(section === 'company-reports' && reportId && /^[a-z][a-z0-9-]{1,119}$/.test(reportId) ? { reportId } : {}), section: sections.includes(section) ? section : 'dashboard', tab: tabs.includes(tab) ? tab : 'summary', report: REPORT_KEYS.includes(report) ? report : 'rent-roll', recordId: record && /^[A-Za-z0-9:_-]{1,160}$/.test(record) ? record : undefined, ...(section === 'projects' && PROJECT_TABS.includes(projectTab) ? { projectTab } : {}), ...(section === 'investors' && INVESTOR_TABS.includes(investorTab) ? { investorTab } : {}), ...(section === 'work-orders' && isWorkOrderView(workOrderView) ? { workOrderView } : {}), kind: params.get('kind') === 'unit' ? 'unit' : 'property', ...(['projects', 'investors', 'time', 'work-orders', 'accounting', 'company-reports', 'report-library'].includes(section) && organizationId && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(organizationId) ? { organizationId } : {}) };
+  const accountingView = params.get('acctView');
+  const tenantStatus = params.get('tenantStatus');
+  const scenarioId = params.get('scenario');
+  const legalEntityId = params.get('entity');
+  return {
+    ...(section === 'company-reports' && reportId && /^[a-z][a-z0-9-]{1,119}$/.test(reportId) ? { reportId } : {}),
+    section,
+    tab: section === 'tenants' && includes(tabs, rawTab) ? rawTab : 'summary',
+    report: includes(REPORT_KEYS, report) ? report : 'rent-roll',
+    recordId: record && recordPattern.test(record) ? record : undefined,
+    ...(section === 'projects' && projectTab ? { projectTab } : {}),
+    ...(section === 'investors' && investorTab ? { investorTab } : {}),
+    ...(section === 'work-orders' && (workOrderView === 'schedule' || isWorkOrderView(workOrderView)) ? { workOrderView } : {}),
+    ...(section === 'accounting' ? { accountingView: includes(ACCOUNTING_VIEWS, accountingView) ? accountingView : alias.accountingView ?? 'overview' } : {}),
+    ...(section === 'tenants' && includes(TENANT_DIRECTORY_STATUSES, tenantStatus) ? { tenantStatus } : {}),
+    ...(section === 'forecasting' && includes(FORECAST_TABS, rawTab) ? { forecastTab: rawTab } : {}),
+    ...(section === 'forecasting' && scenarioId && recordPattern.test(scenarioId) ? { scenarioId } : {}),
+    ...(section === 'forecasting' && legalEntityId && uuidPattern.test(legalEntityId) ? { legalEntityId } : {}),
+    kind: params.get('kind') === 'unit' ? 'unit' : 'property',
+    ...(COMPANY_SECTIONS.includes(section) && organizationId && uuidPattern.test(organizationId) ? { organizationId } : {}),
+  };
 }
+
+const ROUTE_KEYS = ['section', 'record', 'kind', 'tab', 'report', 'company', 'projectTab', 'investorTab', 'woView', 'reportId', 'acctView', 'tenantStatus', 'scenario', 'entity'];
+
 export function workspaceRouteSearch(route: WorkspaceRoute, filters?: ViewFilters, baseSearch = ""): string {
   const params = new URLSearchParams(baseSearch);
-  for (const key of ["section", "record", "kind", "tab", "report", "company", "projectTab", "investorTab", "woView", "reportId"]) params.delete(key);
+  for (const key of ROUTE_KEYS) params.delete(key);
+  // Record-local view state belongs only to the view that wrote it.
+  if (route.section !== 'properties') params.delete('propertyTab');
+  if (route.section !== 'recurring') params.delete('recurringView');
   params.set("section",route.section);
   if(route.recordId) params.set('record',route.recordId);
-  if(['projects','investors','time','work-orders','accounting','company-reports','report-library'].includes(route.section)&&route.organizationId) params.set('company',route.organizationId);
+  if(COMPANY_SECTIONS.includes(route.section)&&route.organizationId) params.set('company',route.organizationId);
   if(route.section==='work-orders'&&route.workOrderView&&route.workOrderView!=='open') params.set('woView',route.workOrderView);
   if(route.section==='projects'&&route.projectTab) params.set('projectTab',route.projectTab);
   if(route.section==='investors'&&route.investorTab) params.set('investorTab',route.investorTab);
+  if(route.section==='accounting') params.set('acctView',route.accountingView??'overview');
   if(route.section==='properties') params.set('kind',route.kind??'property');
   if(route.section==='tenants' && route.tab!=='summary') params.set('tab',route.tab);
+  if(route.section==='tenants' && route.tenantStatus) params.set('tenantStatus',route.tenantStatus);
+  if(route.section==='forecasting' && route.forecastTab) params.set('tab',route.forecastTab);
+  if(route.section==='forecasting' && route.scenarioId) params.set('scenario',route.scenarioId);
+  if(route.section==='forecasting' && route.legalEntityId) params.set('entity',route.legalEntityId);
   if(route.section==='reports') params.set('report',route.report);
   if(route.section==='company-reports'&&route.reportId) params.set('reportId',route.reportId);
   if(filters) {
@@ -95,9 +202,9 @@ export function composeWorkspaceSnapshot(bootstrap:RentOpsWorkspaceBootstrap,asO
 export function workspaceCollectionsFor(section:WorkspaceSection,editing?:QuickAction,includeIncomeHistory=true):WorkspaceCollection[] {
   const names:WorkspaceCollection[]=[];
   if(section==='properties'||section==='recurring')names.push('recurringSchedules');
-  if(section==='income'&&includeIncomeHistory)names.push('ledgerTransactions','paymentAllocations');
+  if(section==='collections'&&includeIncomeHistory)names.push('ledgerTransactions','paymentAllocations');
   if(section==='applicants')names.push('applications','applicationHouseholdMembers','applicationRequirements');
-  if(section==='documents')names.push('documents','activityEvents');
+  if(section==='property-documents')names.push('documents','activityEvents');
   if(editing==='save-payment-allocation'||editing==='reverse-ledger-transaction')names.push('ledgerTransactions','paymentAllocations');
   if(editing==='save-tenancy')names.push('recurringSchedules','securityDeposits');
   if(editing==='save-security-deposit')names.push('securityDeposits');

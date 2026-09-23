@@ -15,8 +15,8 @@ const roots = suite === "company"
     "server/intake", "shared/intake", "server/time", "shared/time", "client/src/features/time",
     "server/reporting", "shared/reporting", "client/src/features/reporting",
     "server/work-orders", "shared/work-orders", "client/src/features/work-orders",
-    // lane-d-forecast
-    "server/forecasting", "shared/forecasting", "client/src/features/forecasting",
+    // lane-e-nav: manager workspace read models and pages
+    "server/workspaces", "shared/workspaces", "client/src/features/workspaces",
     "scripts/company/desktop-config.test.ts",
   ]
   : suite === "all"

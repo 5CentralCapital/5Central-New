@@ -21,7 +21,7 @@ test('project bookmarks retain their company and record without changing rental 
 });
 
 test('project subsection bookmarks survive reload and cannot leak into rental routes', () => {
-  for (const projectTab of ['overview', 'scope', 'schedule', 'costs', 'execution']) {
+  for (const projectTab of ['overview', 'schedule', 'budget', 'commitments', 'draws'] as const) {
     const route = parseWorkspaceRoute(`?section=projects&record=project:123&projectTab=${projectTab}`);
     assert.equal(route.projectTab, projectTab);
     assert.deepEqual(parseWorkspaceRoute(workspaceRouteSearch(route)), route);
@@ -45,15 +45,15 @@ test('report library bookmark retains portfolio context independently of legacy 
 test('investor account bookmarks retain company and subsection through reload and clear unrelated tabs', () => {
   const company = '10000000-0000-4000-8000-000000000001';
   const account = '20000000-0000-4000-8000-000000000002';
-  for (const investorTab of ['overview', 'payments', 'contracts', 'debt', 'activity']) {
+  for (const investorTab of ['overview', 'payments', 'capital', 'debt', 'contracts'] as const) {
     const route = parseWorkspaceRoute(`?section=investors&company=${company}&record=${account}&investorTab=${investorTab}`);
     assert.equal(route.organizationId, company);
     assert.equal(route.recordId, account);
     assert.equal(route.investorTab, investorTab);
     assert.deepEqual(parseWorkspaceRoute(workspaceRouteSearch(route)), route);
-    const project = workspaceRouteSearch({ ...route, section: 'projects', projectTab: 'execution' }, undefined, workspaceRouteSearch(route));
+    const project = workspaceRouteSearch({ ...route, section: 'projects', projectTab: 'commitments' }, undefined, workspaceRouteSearch(route));
     assert.equal(new URLSearchParams(project).has('investorTab'), false);
-    assert.equal(parseWorkspaceRoute(project).projectTab, 'execution');
+    assert.equal(parseWorkspaceRoute(project).projectTab, 'commitments');
   }
   assert.equal(parseWorkspaceRoute('?section=investors&investorTab=invalid').investorTab, undefined);
   assert.equal(parseWorkspaceRoute('?section=tenants&investorTab=payments').investorTab, undefined);
