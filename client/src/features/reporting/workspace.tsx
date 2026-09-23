@@ -8,7 +8,7 @@ import { reportingApi, ReportingApiError } from "./api";
 import { ReportSetup } from "./setup";
 import { describeAppliedFilters } from "./setup-model";
 import type { ReportPackageSaveRequest, ReportPresetSaveRequest } from "./types";
-import { packageItemFromRequest, packageRunSummary, runtimeStatusLabel, type PackageDraft } from "./workspace-model";
+import { openPrintView, packageItemFromRequest, packageRunSummary, runtimeStatusLabel, type PackageDraft } from "./workspace-model";
 import "./reporting.css";
 
 const CATEGORY_LABELS: Readonly<Record<string, string>> = { financial: "Financial", rental: "Rental", tasks: "Tasks and work", projects: "Projects", investors: "Investors and owners", forecast: "Forecast" };
@@ -37,8 +37,7 @@ async function printRun(organizationId: string, runId: string): Promise<void> {
   const job = await reportingApi.export(organizationId, runId, "html");
   if (job.content === null) return;
   const url = URL.createObjectURL(new Blob([job.content], { type: "text/html" }));
-  const view = window.open(url, "_blank", "noopener");
-  if (!view) { const anchor = document.createElement("a"); anchor.href = url; anchor.download = job.fileName; anchor.click(); }
+  if (!openPrintView((target, name) => window.open(target, name), url)) { const anchor = document.createElement("a"); anchor.href = url; anchor.download = job.fileName; anchor.click(); }
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 

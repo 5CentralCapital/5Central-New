@@ -10,12 +10,13 @@ import { syntheticRentOpsSnapshot } from "../rent-ops/fixtures/synthetic";
 import { createCombinedFinancialReportingEngine } from "./combined-financial-engine";
 import { createInvestorReportingEngine } from "./investor-engine";
 import { createLenderManagementPackageEngine } from "./lender-package-engine";
-import { createOwnerStatementReportingEngine, type PmSettlementRecord } from "./owner-statement-engine";
+import { createOwnerStatementReportingEngine, type PmSettlementReadPort, type PmSettlementRecord } from "./owner-statement-engine";
 import { createProjectReportingEngine } from "./project-engine";
 import { createPropertyStatementReportingEngine } from "./property-statement-engine";
-import { createRentalExtendedReportingEngine, createRentalLeasingAgentEngine } from "./rental-expanded-engine";
+import { createRentalExtendedReportingEngine, createRentalLeasingAgentEngine, type RentalSnapshotReadPort } from "./rental-expanded-engine";
 import { createWorkOrderReportingEngine } from "./work-order-engine";
-import { createMirrorCombinedFinancialReadPort, type ConsolidationMappingReadPort } from "./ports/mirror-financial";
+import { allocateProRata, createMirrorCombinedFinancialReadPort, type ConsolidationMappingReadPort } from "./ports/mirror-financial";
+import { createPropertyStatementReadPort } from "./ports/property-statement";
 import { ReportingError } from "./errors";
 
 const organizationId = "11111111-1111-4111-8111-111111111111";
@@ -82,6 +83,11 @@ function fakeFinancialDatabase(input: { connections: Record<string, string>; pro
         const bodies = values[4] === "Vendor" ? input.vendors ?? {} : input.accounts;
         return { rows: Object.entries(bodies).map(([object_id, provider_body]) => ({ object_id, provider_body })) } as never;
       }
+      if (sql.includes("FROM accounting_qbo_source_line_balances")) {
+        const billIds = values[4] as string[];
+        const bills = (input.lines[String(values[1])] ?? []).filter(item => item.transactionType === "Bill" && billIds.includes(item.source.objectId));
+        return { rows: bills.map(item => ({ object_id: item.source.objectId, line_id: item.source.lineId, account_object_id: item.accountObjectId, amount_cents: item.amountCents, currency: item.currency, posting_state: item.postingState })) } as never;
+      }
       if (sql.includes("FROM company_property_entity_periods")) return { rows: (input.properties[String(values[1])] ?? []).map(property_id => ({ property_id, effective_from: "2020-01-01", effective_until: null, covers: true })) } as never;
       throw new Error(`Unexpected query: ${sql}`);
     },
@@ -97,9 +103,9 @@ function fakeFinancialDatabase(input: { connections: Record<string, string>; pro
 }
 
 const principal = createAuthenticatedPrincipal({ actorId: "demo-admin", organizationId, role: "admin", authorizedScopes: [{}] });
-const accountBodies = { "10": { Name: "Rent income", Classification: "Revenue", AccountType: "Income" }, "20": { Name: "Repairs", Classification: "Expense", AccountType: "Expense" }, "30": { Name: "Operating bank", Classification: "Asset", AccountType: "Bank" } };
+const accountBodies = { "10": { Name: "Rent income", Classification: "Revenue", AccountType: "Income" }, "20": { Name: "Repairs", Classification: "Expense", AccountType: "Expense" }, "21": { Name: "Utilities", Classification: "Expense", AccountType: "Expense" }, "30": { Name: "Operating bank", Classification: "Asset", AccountType: "Bank" } };
 
-test("property T12 from the mirror signs income and expense, attributes a sole mapped property, and keeps bills off the cash basis", async () => {
+test("property T12 from the mirror signs income and expense, attributes a sole mapped property, and recognizes bills by payment on the cash basis", async () => {
   const { executor, mirror } = fakeFinancialDatabase({
     connections: { [entityA]: "9001" }, properties: { [entityA]: ["property-a"] }, accounts: accountBodies,
     lines: { [entityA]: [
@@ -117,7 +123,43 @@ test("property T12 from the mirror signs income and expense, attributes a sole m
   assert.ok(accrual.rows.every(row => row.values.propertyId === "property-a"));
   assert.equal(accrual.coverage[0]?.state, "partial");
   const cash = await engine.run(context("property-t12", { mode: "range", fromDate: "2026-08-01", toDate: "2026-08-31" }, { basis: "cash", scope: { legalEntityIds: [entityA] } }));
-  assert.equal(total(cash, "expenses"), "6000");
+  // The bill itself is not cash; its payment is, attributed to the bill's expense account.
+  assert.equal(total(cash, "expenses"), "10000");
+});
+
+test("cash-basis statements attribute bill payments pro rata to the paid bill's lines and name payments they cannot attribute", async () => {
+  const { executor, mirror } = fakeFinancialDatabase({
+    connections: { [entityA]: "9001" }, properties: { [entityA]: ["property-a"] }, accounts: accountBodies,
+    lines: { [entityA]: [
+      line({ entity: entityA, realm: "9001", type: "Purchase", id: "p1", account: "20", amount: "6000", on: "2026-08-10" }),
+      // A July bill with two expense lines, partly paid in August.
+      line({ entity: entityA, realm: "9001", type: "Bill", id: "b1", account: "20", amount: "3000", on: "2026-07-20", lineId: "1" }),
+      line({ entity: entityA, realm: "9001", type: "Bill", id: "b1", account: "21", amount: "1001", on: "2026-07-20", lineId: "2" }),
+      line({ entity: entityA, realm: "9001", type: "BillPayment", id: "bp1", account: "30", amount: "2001", on: "2026-08-20", lineId: "linked:Bill:b1" }),
+      // A payment whose bill is not mirrored.
+      line({ entity: entityA, realm: "9001", type: "BillPayment", id: "bp2", account: "30", amount: "700", on: "2026-08-21", lineId: "linked:Bill:b9" }),
+    ] },
+  });
+  const engine = createCombinedFinancialReportingEngine(createMirrorCombinedFinancialReadPort({ executor, principal, environment: "sandbox", mirror }));
+  const cash = await engine.run(context("property-t12", { mode: "range", fromDate: "2026-08-01", toDate: "2026-08-31" }, { basis: "cash", scope: { legalEntityIds: [entityA] } }));
+  // 2001 split 3000:1001 is 1499.75 : 501.25 -> 1500 + 501 after the largest remainder, summing exactly to 2001.
+  const byAccount = Object.fromEntries(cash.rows.map(row => [row.values.accountName, row.values.amountCents]));
+  assert.equal(byAccount.Repairs, "7500");
+  assert.equal(byAccount.Utilities, "501");
+  assert.equal(total(cash, "expenses"), "8001");
+  assert.match(String(cash.coverage[0]?.reason), /1 bill payment line \(7\.00\) is excluded from this cash-basis statement/);
+  assert.equal(cash.coverage[0]?.state, "partial");
+  assert.equal(cash.coverage[0]?.evidence, "unverified");
+  const accrual = await engine.run(context("property-t12", { mode: "range", fromDate: "2026-07-01", toDate: "2026-08-31" }, { basis: "accrual", scope: { legalEntityIds: [entityA] } }));
+  assert.equal(total(accrual, "expenses"), "10001", "the accrual basis recognizes the bill, never its payment");
+});
+
+test("pro-rata allocation is exact and deterministic", () => {
+  assert.deepEqual(allocateProRata(BigInt(2001), [BigInt(3000), BigInt(1001)]).map(String), ["1500", "501"]);
+  assert.deepEqual(allocateProRata(BigInt(100), [BigInt(1), BigInt(1), BigInt(1)]).map(String), ["34", "33", "33"]);
+  assert.deepEqual(allocateProRata(BigInt(-100), [BigInt(1), BigInt(1), BigInt(1)]).map(String), ["-34", "-33", "-33"]);
+  assert.deepEqual(allocateProRata(BigInt(5), [BigInt(0), BigInt(7)]).map(String), ["0", "5"]);
+  assert.throws(() => allocateProRata(BigInt(5), [BigInt(0)]));
 });
 
 test("accounts payable nets bill payments against bills per vendor through the report date", async () => {
@@ -241,7 +283,42 @@ test("investor activity honors investor and status filters", async () => {
   const result = await engine.run(context("investor-owner-activity", { mode: "range", fromDate: "2026-08-01", toDate: "2026-08-31" }, { filters: { investorIds: ["66666666-6666-4666-8666-666666666662"], status: ["due"] } }));
   assert.deepEqual(requested, ["66666666-6666-4666-8666-666666666662"]);
   assert.deepEqual(result.rows.map(row => [row.values.investorName, row.values.status]), [["Investor Two", "due"]]);
-  assert.equal(total(result, "activity_amount"), "2500");
+  assert.equal(total(result, "interest_expected"), "2500");
+  assert.equal(total(result, "interest_recorded"), undefined, "expected amounts are never added to recorded payments");
+});
+
+test("investor activity totals each kind separately and leaves unverified and reversed payments out", async () => {
+  const investorId = "66666666-6666-4666-8666-666666666663";
+  const activity = (id: string, kind: string, status: string, amountCents: string, paymentId: string | null = `pay-${id}`) => ({ id, occurredOn: "2026-08-10", kind, status, amountCents, currency: "USD", description: kind, paymentId, instrumentId: null });
+  const account = { id: investorId, organizationId, displayName: "Investor Three",
+    payments: [{ id: "pay-principal", reversesPaymentId: null }, { id: "pay-reversal", reversesPaymentId: "pay-principal" }],
+    activity: [
+      activity("contribution", "contribution", "bank_settled", "100000"),
+      activity("distribution", "distribution", "qbo_posted", "30000"),
+      activity("interest-posted", "interest", "manual_recorded", "4000"),
+      activity("interest-review", "interest", "review_required", "5000"),
+      activity("principal", "principal", "qbo_posted", "20000", "pay-principal"),
+      activity("reversal", "correction", "reversed", "-20000", "pay-reversal"),
+      activity("interest-due", "interest", "due", "2500", null),
+    ] } as unknown as InvestorDetail;
+  const engine = createInvestorReportingEngine({ async read() { return { accounts: [account], coverage: { state: "complete", evidence: "synthetic" } }; } });
+  const result = await engine.run(context("investor-owner-activity", { mode: "range", fromDate: "2026-08-01", toDate: "2026-08-31" }));
+  // Every activity stays visible as a row with how it counts.
+  assert.equal(result.rows.length, 7);
+  assert.deepEqual(result.rows.map(row => `${row.values.kind}/${row.values.status}/${row.values.totalTreatment}`).sort(), [
+    "contribution/bank_settled/recorded", "correction/reversed/reversed", "distribution/qbo_posted/recorded", "interest/due/expected",
+    "interest/manual_recorded/recorded", "interest/review_required/review_required", "principal/qbo_posted/reversed",
+  ]);
+  const totals = Object.fromEntries((result.totals ?? []).map(item => [item.key, [item.amountCents, item.state]]));
+  assert.deepEqual(totals, {
+    contribution_recorded: ["100000", "complete"],
+    distribution_recorded: ["30000", "complete"],
+    interest_recorded: ["4000", "partial"],
+    interest_expected: ["2500", "complete"],
+  });
+  assert.equal(total(result, "activity_amount"), undefined, "money in and money out are never summed together");
+  assert.equal(result.missingData?.find(item => item.code === "investor_activity_review_required")?.count, 1);
+  assert.equal(result.missingData?.find(item => item.code === "investor_activity_reversed")?.count, 2);
 });
 
 function settlement(overrides: Partial<PmSettlementRecord>): PmSettlementRecord {
@@ -311,6 +388,58 @@ test("property statement keeps collections, PM deductions and the owner remittan
   assert.equal(result.rows.find(row => row.rowId === "property-statement:property-a:collections_variance")?.values.amountCents, "0");
   assert.equal(result.rows.find(row => row.rowId === "property-statement:property-a:book_income")?.values.amountCents, null);
   assert.ok(result.missingData?.some(item => item.code === "book_actuals_unavailable"));
+});
+
+test("owner statements flag and exclude settlements that end after the report period", async () => {
+  const july = settlement({});
+  const augustIntoSeptember = settlement({ id: "77777777-7777-4777-8777-777777777773", periodStart: "2026-08-01", periodEnd: "2026-09-15", grossCollectionsCents: "150000", ownerRemittanceCents: "140000" });
+  const engine = createOwnerStatementReportingEngine({ async read() { return { settlements: [july, augustIntoSeptember], coverage: { state: "complete", evidence: "synthetic" } }; } });
+  const statement = await engine.run(context("rental-owner-statement", { mode: "range", fromDate: "2026-07-01", toDate: "2026-08-31" }));
+  assert.deepEqual(statement.rows.map(row => row.rowId), [`owner-statement:${july.id}`]);
+  assert.equal(total(statement, "gross_collections"), "100000");
+  assert.equal(statement.missingData?.find(item => item.code === "pm_settlement_extends_past_period")?.count, 1);
+  assert.ok(statement.totals?.every(item => item.state === "partial"), "a period with an excluded settlement is never complete");
+  assert.equal(statement.coverage[0]?.state, "partial");
+  // Ending balances only use settlements that ended by the report date.
+  const balances = await engine.run(context("rental-owner-ending-balances", { mode: "as_of", asOfDate: "2026-08-31" }));
+  assert.deepEqual(balances.rows.map(row => row.values.balanceThrough), ["2026-07-31"]);
+});
+
+function rentalPort(): RentalSnapshotReadPort {
+  const snapshot = syntheticRentOpsSnapshot();
+  return { async readSnapshot() { return { snapshot, coverage: { state: "complete" } }; } };
+}
+const noSettlements: PmSettlementReadPort = { async read() { return { settlements: [], coverage: { state: "complete", evidence: "synthetic" } }; } };
+const bookLines = [
+  line({ entity: entityA, realm: "9001", type: "Deposit", id: "d1", account: "10", amount: "100000", on: "2026-08-03" }),
+  line({ entity: entityA, realm: "9001", type: "Purchase", id: "p1", account: "20", amount: "6000", on: "2026-08-10" }),
+];
+
+test("property statement book actuals are unknown, not zero, when mirror lines cannot be attributed to the property", async () => {
+  const { executor, mirror } = fakeFinancialDatabase({ connections: { [entityA]: "9001" }, properties: { [entityA]: ["demo-property-a", "demo-property-b"] }, accounts: accountBodies, lines: { [entityA]: bookLines } });
+  const financial = createMirrorCombinedFinancialReadPort({ executor, principal, environment: "sandbox", mirror });
+  const engine = createPropertyStatementReportingEngine(createPropertyStatementReadPort({ rental: rentalPort(), settlements: noSettlements, financial }));
+  const result = await engine.run(context("property-statement", { mode: "range", fromDate: "2026-08-01", toDate: "2026-08-31" }, { basis: "cash", scope: { legalEntityIds: [entityA], propertyIds: ["demo-property-a"] } }));
+  assert.equal(total(result, "book_income"), null);
+  assert.equal(total(result, "book_expenses"), null);
+  assert.equal(result.totals?.find(item => item.key === "book_income")?.state, "unknown");
+  assert.equal(result.rows.find(row => row.rowId === "property-statement:demo-property-a:book_income")?.values.amountCents, null);
+  assert.ok(result.missingData?.some(item => item.code === "book_actuals_not_attributed" && item.state === "unknown"));
+  assert.match(String(result.coverage.find(item => item.source === "quickbooks_accounting_mirror")?.reason), /not attributed/);
+});
+
+test("property statement book totals carry the mirror's partial coverage", async () => {
+  const { executor, mirror } = fakeFinancialDatabase({ connections: { [entityA]: "9001" }, properties: { [entityA]: ["demo-property-a"] }, accounts: accountBodies, lines: { [entityA]: bookLines } });
+  const financial = createMirrorCombinedFinancialReadPort({ executor, principal, environment: "sandbox", mirror });
+  const engine = createPropertyStatementReportingEngine(createPropertyStatementReadPort({ rental: rentalPort(), settlements: noSettlements, financial }));
+  const result = await engine.run(context("property-statement", { mode: "range", fromDate: "2026-08-01", toDate: "2026-08-31" }, { basis: "cash", scope: { legalEntityIds: [entityA], propertyIds: ["demo-property-a"] } }));
+  assert.equal(total(result, "book_income"), "100000");
+  assert.equal(total(result, "book_expenses"), "6000");
+  assert.equal(result.totals?.find(item => item.key === "book_income")?.state, "partial", "the QuickBooks mirror is always partial, so its totals are never complete");
+  assert.ok(!result.missingData?.some(item => item.code === "book_actuals_not_attributed"));
+  // A property of an unselected or unmapped entity is unknown, never zero.
+  const other = await engine.run(context("property-statement", { mode: "range", fromDate: "2026-08-01", toDate: "2026-08-31" }, { basis: "cash", scope: { legalEntityIds: [entityA], propertyIds: ["demo-property-b"] } }));
+  assert.equal(total(other, "book_income"), null);
 });
 
 test("lender package lists each template section with its frozen run state", async () => {

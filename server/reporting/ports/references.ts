@@ -40,6 +40,13 @@ export function createPostgresReportReferenceReader(deps: { readonly executor: R
       let sql: string;
       let reason: string | null = null;
       const entityProperty = (entityColumn: string, propertyColumn: string | null) => scopePredicate(scopes, values, entityColumn, propertyColumn);
+      // Staff, investors and accounts belong to a whole legal entity, so a
+      // property-limited grant never lists them.
+      const entityScopes = scopes.filter(scope => !scope.propertyId);
+      const entityOnly = (entityColumn: string) => scopePredicate(entityScopes, values, entityColumn, null);
+      const organizationWide = scopes.some(scope => !scope.legalEntityId);
+      const entityLevelKinds: readonly ReportReferenceKind[] = ["investor", "owner", "staff", "account"];
+      if (entityLevelKinds.includes(query.kind as ReportReferenceKind) && scopes.length && !entityScopes.length) reason = "This list needs access to a whole legal entity.";
       switch (query.kind as ReportReferenceKind) {
         case "project":
           sql = `SELECT p.id::text AS value, p.name AS label, rp.name AS detail FROM company_projects p JOIN rent_ops_properties rp ON rp.id=p.property_id
@@ -49,19 +56,22 @@ export function createPostgresReportReferenceReader(deps: { readonly executor: R
         case "vendor":
           sql = `SELECT v.id::text AS value, v.name AS label, v.status AS detail FROM company_project_vendors v
                   WHERE v.organization_id=$1 AND ($2::text IS NULL OR v.name ILIKE '%' || $2 || '%')
-                    AND EXISTS (SELECT 1 FROM company_projects p WHERE p.organization_id=v.organization_id AND ${entityProperty("p.legal_entity_id", "p.property_id")})
+                    AND (${organizationWide ? "true" : `EXISTS (SELECT 1 FROM company_projects p
+                          WHERE p.organization_id=v.organization_id AND ${entityProperty("p.legal_entity_id", "p.property_id")}
+                            AND (EXISTS (SELECT 1 FROM company_project_commitments c WHERE c.organization_id=p.organization_id AND c.project_id=p.id AND c.vendor_id=v.id)
+                              OR EXISTS (SELECT 1 FROM company_project_bids b WHERE b.organization_id=p.organization_id AND b.project_id=p.id AND b.vendor_id=v.id)))`})
                   ORDER BY lower(v.name), v.id`;
           break;
         case "investor":
         case "owner":
           sql = `SELECT a.id::text AS value, a.display_name AS label, a.status AS detail FROM company_investor_accounts a
                   WHERE a.organization_id=$1 AND a.archived_at IS NULL AND ($2::text IS NULL OR a.display_name ILIKE '%' || $2 || '%')
-                    AND (${scopes.some(scope => !scope.legalEntityId) ? "true" : `EXISTS (SELECT 1 FROM company_investor_instruments i WHERE i.organization_id=a.organization_id AND i.account_id=a.id AND i.archived_at IS NULL AND ${entityProperty("i.legal_entity_id", null)})`})
+                    AND (${organizationWide ? "true" : `EXISTS (SELECT 1 FROM company_investor_instruments i WHERE i.organization_id=a.organization_id AND i.account_id=a.id AND i.archived_at IS NULL AND ${entityOnly("i.legal_entity_id")})`})
                   ORDER BY lower(a.display_name), a.id`;
           break;
         case "staff":
           sql = `SELECT u.provider_user_id AS value, u.display_name AS label, CASE WHEN u.active THEN NULL ELSE 'Inactive' END AS detail FROM time_source_users u
-                  WHERE u.organization_id=$1 AND u.deleted_at IS NULL AND ($2::text IS NULL OR u.display_name ILIKE '%' || $2 || '%') AND ${entityProperty("u.legal_entity_id", null)}
+                  WHERE u.organization_id=$1 AND u.deleted_at IS NULL AND ($2::text IS NULL OR u.display_name ILIKE '%' || $2 || '%') AND ${entityOnly("u.legal_entity_id")}
                   ORDER BY lower(u.display_name), u.provider_user_id`;
           break;
         case "account":
@@ -72,7 +82,7 @@ export function createPostgresReportReferenceReader(deps: { readonly executor: R
                    FROM accounting_qbo_source_objects o JOIN company_legal_entities e ON e.organization_id=o.organization_id AND e.id=o.legal_entity_id
                   WHERE o.organization_id=$1 AND o.object_type='Account' AND o.deleted_at IS NULL AND o.environment=$${values.length}
                     AND ($2::text IS NULL OR COALESCE(o.provider_body->>'FullyQualifiedName', o.provider_body->>'Name', '') ILIKE '%' || $2 || '%')
-                    AND ${entityProperty("o.legal_entity_id", null)}
+                    AND ${entityOnly("o.legal_entity_id")}
                   ORDER BY o.object_id, o.provider_updated_at DESC NULLS LAST, o.received_at DESC`;
           sql = `SELECT * FROM (${sql}) accounts ORDER BY lower(label), value`;
           break;

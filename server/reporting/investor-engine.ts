@@ -50,6 +50,18 @@ function coverage(context: ReportingEngineContext, result: InvestorReportingRead
   });
 }
 
+type TotalTreatment = "recorded" | "expected" | "review_required" | "reversed";
+
+/** How an activity row counts: recorded payments are totaled per kind,
+ * planned/due obligations separately, and unverified or reversed payments
+ * are shown but never counted. */
+function activityTreatment(status: string, reversedOriginal: boolean): TotalTreatment {
+  if (status === "reversed" || reversedOriginal) return "reversed";
+  if (status === "review_required") return "review_required";
+  if (status === "planned" || status === "due") return "expected";
+  return "recorded";
+}
+
 function totals(key: string, amount: bigint | null, currency: string | null, state: ReportTotal["state"]): ReportTotal {
   return { key, amountCents: amount === null ? null : centsFromBigInt(amount), currency: currency as ReportTotal["currency"], state };
 }
@@ -68,14 +80,40 @@ export function createInvestorReportingEngine(read: InvestorReportingReadPort): 
       const reportId = context.definition.id as InvestorReportId;
       const rows: unknown[] = [];
       const missing: ReportMissingData[] = [];
-      for (const account of accounts) for (const activity of account.activity.filter(item => inPeriod(item.occurredOn, context) && (!statuses.length || statuses.includes(item.status)))) rows.push({ investorId: account.id, investorName: account.displayName, activityId: activity.id, occurredOn: activity.occurredOn, kind: activity.kind, status: activity.status, amountCents: activity.amountCents, currency: activity.currency, description: activity.description, paymentId: activity.paymentId, instrumentId: activity.instrumentId });
-      const currencies = Array.from(new Set(rows.map(row => (row as { currency: string }).currency)));
-      const activityTotals = currencies.length === 1 ? [totals("activity_amount", rows.reduce<bigint>((sum, row) => sum + centsToBigInt((row as { amountCents: string }).amountCents), BigInt(0)), currencies[0]!, input.coverage.state === "complete" ? "complete" : "partial")] : [];
+      for (const account of accounts) {
+        // A reversal is appended as a separate "reversed" correction; the
+        // original keeps its status. Both stay visible and neither is counted.
+        const reversedPaymentIds = new Set((account.payments ?? []).map(payment => payment.reversesPaymentId).filter((id): id is NonNullable<typeof id> => Boolean(id)).map(String));
+        for (const activity of account.activity.filter(item => inPeriod(item.occurredOn, context) && (!statuses.length || statuses.includes(item.status)))) {
+          const treatment = activityTreatment(activity.status, activity.paymentId !== null && reversedPaymentIds.has(String(activity.paymentId)));
+          rows.push({ investorId: account.id, investorName: account.displayName, activityId: activity.id, occurredOn: activity.occurredOn, kind: activity.kind, status: activity.status, totalTreatment: treatment, amountCents: activity.amountCents, currency: activity.currency, description: activity.description, paymentId: activity.paymentId, instrumentId: activity.instrumentId });
+        }
+      }
+      const typed = rows as { kind: string; totalTreatment: TotalTreatment; amountCents: string; currency: string }[];
+      const reviewCount = typed.filter(row => row.totalTreatment === "review_required").length;
+      const reversedCount = typed.filter(row => row.totalTreatment === "reversed").length;
+      if (reviewCount) missing.push({ code: "investor_activity_review_required", state: "partial", message: `${reviewCount} investor payment${reviewCount === 1 ? " needs" : "s need"} review and ${reviewCount === 1 ? "is" : "are"} excluded from recorded totals.`, count: reviewCount });
+      if (reversedCount) missing.push({ code: "investor_activity_reversed", state: "complete", message: `${reversedCount} reversed payment or reversal entr${reversedCount === 1 ? "y is" : "ies are"} shown but excluded from totals.`, count: reversedCount });
+      const currencies = Array.from(new Set(typed.map(row => row.currency)));
+      const activityTotals: ReportTotal[] = [];
+      if (currencies.length === 1) {
+        // Contributions come in; distributions, principal and interest go
+        // out. Each kind has its own total, and expected (planned/due)
+        // amounts are never added to recorded payments.
+        const sourceState: ReportTotal["state"] = input.coverage.state === "complete" ? "complete" : "partial";
+        for (const kind of Array.from(new Set(typed.map(row => row.kind))).sort()) {
+          const ofKind = typed.filter(row => row.kind === kind);
+          const sum = (treatment: TotalTreatment) => ofKind.filter(row => row.totalTreatment === treatment).reduce<bigint>((acc, row) => acc + centsToBigInt(row.amountCents), BigInt(0));
+          if (ofKind.some(row => row.totalTreatment === "recorded" || row.totalTreatment === "review_required")) activityTotals.push(totals(`${kind}_recorded`, sum("recorded"), currencies[0]!, ofKind.some(row => row.totalTreatment === "review_required") ? "partial" : sourceState));
+          if (ofKind.some(row => row.totalTreatment === "expected")) activityTotals.push(totals(`${kind}_expected`, sum("expected"), currencies[0]!, sourceState));
+        }
+      } else if (currencies.length > 1) missing.push({ code: "investor_activity_multiple_currencies", state: "partial", message: "Activity uses more than one currency, so no totals are shown." });
       const result = resultFromRecords(context, rows, { source: "company_investor_obligations_and_payments", basis: "mixed", missingData: missing, totals: activityTotals, columns: reportColumns([
         { id: "investorName", label: "Investor", type: "text" },
         { id: "occurredOn", label: "Date", type: "date" },
         { id: "kind", label: "Activity", type: "status" },
         { id: "status", label: "Status", type: "status" },
+        { id: "totalTreatment", label: "In totals", type: "status" },
         { id: "amountCents", label: "Amount", type: "money" },
         { id: "currency", label: "Currency", type: "text" },
         { id: "description", label: "Description", type: "text" },

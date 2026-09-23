@@ -14,11 +14,13 @@ export interface PropertyStatementReadResult {
   /** Rent-ops collections in the period by property. `null` means the rental source is unavailable. */
   readonly rentalCollections: readonly { readonly propertyId: string; readonly amountCents: string | null; readonly currency: string }[] | null;
   readonly rentalCoverage: SourceState;
-  /** PM settlements for the scoped properties whose periods end within the report period. */
+  /** PM settlements for the scoped properties whose periods overlap the report period; ones extending beyond it are flagged and excluded. */
   readonly settlements: readonly PmSettlementRecord[];
   readonly settlementCoverage: SourceState;
   /** QuickBooks actuals attributed to a property by a dated mapping. `null` means unavailable. */
   readonly bookActuals: readonly { readonly propertyId: string; readonly category: "income" | "expense"; readonly amountCents: string; readonly currency: string }[] | null;
+  /** Properties whose book actuals are unknown because some in-scope lines carry no property attribution. */
+  readonly bookUnknownPropertyIds?: readonly string[];
   readonly bookCoverage: SourceState;
 }
 
@@ -97,7 +99,9 @@ export function createPropertyStatementReportingEngine(read: PropertyStatementRe
           for (const measure of ["gross_collections", "pm_fees", "pm_expenses", "other_deductions", "net_to_owner", "owner_remittance", "pm_held_change"] as const) values.set(measure, null);
           missing.push({ code: "pm_settlement_missing", state: "unknown", message: `${property.propertyName ?? property.propertyId}: no PM settlement covers this period.`, scope: property.propertyId });
         }
-        const book = source.bookActuals === null ? null : source.bookActuals.filter(item => item.propertyId === property.propertyId);
+        const bookUnattributed = source.bookActuals !== null && (source.bookUnknownPropertyIds ?? []).includes(property.propertyId);
+        if (bookUnattributed) missing.push({ code: "book_actuals_not_attributed", state: "unknown", message: `${property.propertyName ?? property.propertyId}: QuickBooks lines are not attributed to this property by a single dated mapping, so book actuals are unknown.`, scope: property.propertyId });
+        const book = source.bookActuals === null || bookUnattributed ? null : source.bookActuals.filter(item => item.propertyId === property.propertyId);
         values.set("book_income", book === null ? null : book.filter(item => item.category === "income").reduce((sum, item) => sum + big(item.amountCents), BigInt(0)));
         values.set("book_expenses", book === null ? null : book.filter(item => item.category === "expense").reduce((sum, item) => sum + big(item.amountCents), BigInt(0)));
         const rental = values.get("rental_collections");
@@ -117,7 +121,14 @@ export function createPropertyStatementReportingEngine(read: PropertyStatementRe
       const totals: ReportTotal[] = [];
       if (currencies.size <= 1) {
         const currency = Array.from(currencies)[0] ?? null;
-        for (const [measure, value] of Array.from(totalsByMeasure.entries())) totals.push({ key: measure, amountCents: value.unknown ? null : centsFromBigInt(value.amount), currency: (value.currency ?? currency) as ReportTotal["currency"], state: value.unknown ? "unknown" : missing.some(item => item.state === "partial") ? "partial" : "complete" });
+        // A total is complete only when its own source is complete; a partial
+        // source (the QuickBooks mirror always is) never yields "complete".
+        const sourceState: Record<string, SourceState["state"]> = { rental_operational_records: source.rentalCoverage.state, pm_settlements: source.settlementCoverage.state, quickbooks_accounting_mirror: source.bookCoverage.state };
+        for (const [measure, value] of Array.from(totalsByMeasure.entries())) {
+          const measureSource = PROPERTY_STATEMENT_MEASURES.find(item => item.id === measure)!.source;
+          const partial = sourceState[measureSource] !== "complete" || missing.some(item => item.state === "partial");
+          totals.push({ key: measure, amountCents: value.unknown ? null : centsFromBigInt(value.amount), currency: (value.currency ?? currency) as ReportTotal["currency"], state: value.unknown ? "unknown" : partial ? "partial" : "complete" });
+        }
       } else missing.push({ code: "property_statement_multiple_currencies", state: "partial", message: "Properties use more than one currency, so no portfolio totals are shown." });
       const columns = reportColumns([
         { id: "propertyName", label: "Property", type: "text" }, { id: "measure", label: "Measure", type: "text" }, { id: "measureKind", label: "Kind", type: "status" },

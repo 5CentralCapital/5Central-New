@@ -2,6 +2,8 @@ import { getReportingDefinition, type ReportRunRecord } from "../../shared/repor
 import { centsToDecimalString, describeReportPeriod, formatReportTotal, formatReportValue, reportStatusLabel, reportTotalLabel } from "../../shared/reporting/format";
 
 const CENTS_PATTERN = /^-?(?:0|[1-9][0-9]*)$/;
+const PLAIN_NUMBER = /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+const NUMERIC_COLUMN_TYPES = new Set(["integer", "decimal", "percent"]);
 
 function scalar(value: unknown): string {
   if (value === null || value === undefined) return "";
@@ -21,7 +23,7 @@ export function neutralizeCsvFormula(text: string): string {
 
 export function csvCell(value: unknown, options: { readonly numeric?: boolean } = {}): string {
   const raw = scalar(value);
-  const text = options.numeric && /^-?\d+(?:\.\d+)?$/.test(raw) ? raw : neutralizeCsvFormula(raw);
+  const text = options.numeric && PLAIN_NUMBER.test(raw) ? raw : neutralizeCsvFormula(raw);
   return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
@@ -42,7 +44,9 @@ export function exportReportCsv(run: ReportRunRecord): string {
   const header = ["Row", ...run.columns.map(column => column.type === "money" ? `${column.label} (amount)` : column.label)];
   const lines = [header.map(value => csvCell(value)).join(",")];
   for (const row of run.rows) {
-    lines.push([csvCell(row.rowId), ...run.columns.map(column => column.type === "money" ? moneyCell(row.values[column.id]) : csvCell(row.values[column.id]))].join(","));
+    // Numeric columns keep a plain signed number numeric (e.g. -3154.40);
+    // any other text in them is still neutralized.
+    lines.push([csvCell(row.rowId), ...run.columns.map(column => column.type === "money" ? moneyCell(row.values[column.id]) : csvCell(row.values[column.id], { numeric: NUMERIC_COLUMN_TYPES.has(column.type) }))].join(","));
   }
   if (run.totals.length) {
     lines.push("");
