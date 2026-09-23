@@ -30,7 +30,7 @@ const roots = suite === "company"
     "scripts/deploy/start.test.ts",
   ]
   : suite === "all"
-    ? ["server", "shared", "client/src/features", "scripts", "client/src/components/account-entry.test.ts"]
+    ? ["server", "shared", "client/src", "scripts"]
     : null;
 if (!roots) throw new Error("Unknown test suite; choose company or all");
 const tests = [];
