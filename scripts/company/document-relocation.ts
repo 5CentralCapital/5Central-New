@@ -69,6 +69,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 function stringFlag(flags: ParsedArgs["flags"], name: string, fallback?: string): string {
   const value = flags[name];
   if (typeof value === "string") return value;
+  // A flag given without a value is a typo, not a request for the default.
+  if (value === true) throw new DocumentRelocationError("cli_usage", `--${name} needs a value`);
   if (fallback !== undefined) return fallback;
   throw new DocumentRelocationError("cli_usage", `--${name} is required`);
 }
