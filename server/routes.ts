@@ -68,7 +68,7 @@ export async function registerRoutes(app: Express, options: { onTenantPaymentSer
 
   const tenantPortal = registerTenantPortalRoutes(app, { repository: rentOpsRepository, database: rentOpsRuntimeDatabase, requireAdmin: requireRentOpsAdmin, ...(rentOpsObjectStores ? { documentStorage: rentOpsObjectStores.documentStorage } : {}) });
   const recurringBillingService = new RecurringBillingService(new PostgresBillingStore(rentOpsRuntimeDatabase));
-  const company = createCompanyServices(rentOpsRuntimeDatabase);
+  const company = createCompanyServices(rentOpsRuntimeDatabase, rentOpsObjectStores ? { documentStorage: rentOpsObjectStores.documentUploadStorage } : {}); // lane-c-review: documents, MRA packets, review evidence
   registerCompanyRoutes(app, { ...company, requireAdmin: requireRentOpsAdmin, hasAdminSession: hasRentOpsAdminSession });
   await registerRentOpsMcpRoutes(app, rentOpsRepository, process.env, { accountAdmin: tenantPortal.accountAdmin, billing: recurringBillingService, company });
   const tenantPaymentService = createTenantPaymentService({ executor: rentOpsRuntimeDatabase, rentOpsRepository, env: process.env });

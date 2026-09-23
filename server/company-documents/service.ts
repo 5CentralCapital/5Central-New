@@ -232,19 +232,30 @@ function linkRows(documentId: string, links: readonly CompanyDocumentLink[]): Ar
   return links.map((link) => [documentId, link.kind, link.id, link.label, link.versionId ?? ""]);
 }
 
+/**
+ * The runtime role has no DELETE on links: an unlinked row is marked removed
+ * and relinking clears the mark, so link history is retained.
+ */
 async function replaceLinks(executor: RentOpsQueryExecutor, documentId: string, links: readonly CompanyDocumentLink[]): Promise<void> {
-  await executor.query("DELETE FROM company_document_links WHERE document_id = $1", [documentId]);
+  const keep = links.map((link) => [link.kind, link.id, link.versionId ?? ""]);
+  await executor.query(
+    `UPDATE company_document_links SET removed_at = now()
+      WHERE document_id = $1 AND removed_at IS NULL
+        AND NOT ((link_kind, linked_id, linked_version_id) IN (SELECT * FROM jsonb_to_recordset($2::jsonb) AS k(kind text, id text, version text)))`,
+    [documentId, JSON.stringify(keep.map(([kind, id, version]) => ({ kind, id, version })))],
+  );
   for (const [id, kind, linkedId, label, versionId] of linkRows(documentId, links)) {
     await executor.query(
-      "INSERT INTO company_document_links (document_id, link_kind, linked_id, linked_label, linked_version_id) VALUES ($1,$2,$3,$4,$5)",
-    [id, kind, linkedId, label, versionId],
+      `INSERT INTO company_document_links (document_id, link_kind, linked_id, linked_label, linked_version_id) VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (document_id, link_kind, linked_id, linked_version_id) DO UPDATE SET linked_label = EXCLUDED.linked_label, removed_at = NULL`,
+      [id, kind, linkedId, label, versionId],
     );
   }
 }
 
 async function readLinks(executor: RentOpsQueryExecutor, documentId: string): Promise<Record<string, unknown>[]> {
   return (await executor.query<Record<string, unknown>>(
-    "SELECT link_kind, linked_id, linked_label, linked_version_id FROM company_document_links WHERE document_id = $1 ORDER BY link_kind, linked_id",
+    "SELECT link_kind, linked_id, linked_label, linked_version_id FROM company_document_links WHERE document_id = $1 AND removed_at IS NULL ORDER BY link_kind, linked_id",
     [documentId],
   )).rows;
 }
