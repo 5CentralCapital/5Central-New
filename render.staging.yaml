@@ -21,6 +21,9 @@ services:
         generateValue: true
       - key: RENT_OPS_SESSION_SECRET
         generateValue: true
+      # Accepted by the app only inside this exact Render service with QBO sandbox.
+      - key: RENT_OPS_ADMIN_OAUTH_ORIGIN
+        value: https://5central-ops-staging-web.onrender.com
       - key: QBO_WRITES_ENABLED
         value: "off"
       - key: QBO_PRODUCTION_WRITES

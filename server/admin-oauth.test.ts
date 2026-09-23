@@ -4,7 +4,7 @@ import express from "express";
 import session from "express-session";
 import { once } from "node:events";
 import { request as httpRequest } from "node:http";
-import { ADMIN_OAUTH_SUBJECT, ADMIN_OAUTH_CALLBACK, ADMIN_OAUTH_ISSUER, BRANDED_ADMIN_OAUTH_ORIGIN, managerOAuthAllowed, managerOAuthOrigin, consumeOAuthPending, registerManagerOAuthRoutes } from "./admin-oauth";
+import { ADMIN_OAUTH_SUBJECT, ADMIN_OAUTH_CALLBACK, ADMIN_OAUTH_ISSUER, BRANDED_ADMIN_OAUTH_ORIGIN, STAGING_ADMIN_OAUTH_ORIGIN, isStagingRenderService, managerOAuthAllowed, managerOAuthOrigin, consumeOAuthPending, registerManagerOAuthRoutes } from "./admin-oauth";
 const env = { RENT_OPS_ADMIN_OAUTH_CLIENT_ID: "synthetic-client", RENT_OPS_ADMIN_EMAIL: "michael@5central.capital", RENT_OPS_OAUTH_ADMIN_SUBJECTS: ADMIN_OAUTH_SUBJECT };
 test("state is expiring and one-use, allowlist is exact", () => {
  const s={rentOpsOAuthPending:{state:"opaque-state",verifier:"verifier",expiresAt:100}};
@@ -48,6 +48,17 @@ test("canonical origin rejects request-host and malformed URL configuration",()=
  assert.equal(managerOAuthOrigin(env),"https://5-central-new.replit.app");
  for(const origin of ["https://evil.example", "http://5central.capital", "https://www.5central.capital", "https://5central.capital/path", "https://5central.capital@evil.example", "https://5central.capital/"]){
   assert.throws(()=>managerOAuthOrigin({...env,RENT_OPS_ADMIN_OAUTH_ORIGIN:origin}),/approved canonical HTTPS origin/);
+ }
+});
+test("the Render staging origin is accepted only inside the staging service and never with QuickBooks production",()=>{
+ const staging={...env,RENT_OPS_ADMIN_OAUTH_ORIGIN:STAGING_ADMIN_OAUTH_ORIGIN,RENDER:"true",RENDER_SERVICE_NAME:"5central-ops-staging-web",RENDER_EXTERNAL_HOSTNAME:"5central-ops-staging-web.onrender.com",QBO_ENVIRONMENT:"sandbox"};
+ assert.equal(isStagingRenderService(staging),true);
+ assert.equal(managerOAuthOrigin(staging),STAGING_ADMIN_OAUTH_ORIGIN);
+ for(const override of [{RENDER:undefined},{RENDER_SERVICE_NAME:"5central-ops-web"},{RENDER_EXTERNAL_HOSTNAME:"5central-ops-web.onrender.com"},{QBO_ENVIRONMENT:"production"}]){
+  assert.throws(()=>managerOAuthOrigin({...staging,...override}),/approved canonical HTTPS origin/,JSON.stringify(override));
+ }
+ for(const origin of ["https://5central-ops-web.onrender.com","https://5central-ops-staging-web.onrender.com/","http://5central-ops-staging-web.onrender.com"]){
+  assert.throws(()=>managerOAuthOrigin({...staging,RENT_OPS_ADMIN_OAUTH_ORIGIN:origin}),/approved canonical HTTPS origin/,origin);
  }
 });
 for(const value of [{scopes:[]},{subject:"google-oauth2|wrong"},{admin:false}])test(`rejects missing scope, wrong subject or nonadmin ${JSON.stringify(value)}`,async()=>{const f=await fixture(value);try{const start=await fetch(`${f.base}/api/rent-ops/auth/oauth/start`,{redirect:"manual"});const cookie=start.headers.get("set-cookie")!.split(";")[0];const state=new URL(start.headers.get("location")!).searchParams.get("state");const result=await fetch(`${f.base}/api/rent-ops/auth/oauth/callback?state=${state}&iss=${encodeURIComponent(ADMIN_OAUTH_ISSUER)}&code=x`,{headers:{cookie},redirect:"manual"});assert.match(result.headers.get("location")!,/login=failed/);}finally{await f.close();}});

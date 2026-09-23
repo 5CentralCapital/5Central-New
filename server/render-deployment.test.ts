@@ -95,6 +95,8 @@ test("Render production and staging Blueprints use paid services and CI-gated de
   assert.match(productionWeb, /fivecentral-ops-production-651532007693/);
   assert.match(stagingWeb, /fivecentral-ops-staging-651532007693/);
   assert.match(productionWeb, /RENT_OPS_ADMIN_OAUTH_ORIGIN[\s\S]*?https:\/\/5central\.capital/);
+  assert.match(stagingWeb, /RENT_OPS_ADMIN_OAUTH_ORIGIN\s*\n\s*value:\s*https:\/\/5central-ops-staging-web\.onrender\.com/);
+  assert.doesNotMatch(productionBlueprint, /onrender\.com/);
   assert.match(stagingWeb, /mail-disabled\.invalid/);
   assert.match(stagingWeb, /key:\s*RENT_OPS_TENANT_EMAIL_ENABLED\s*\n\s*value:\s*["']false["']/);
   assert.match(hostingRunbook, /Google sender OAuth client creation is still in progress/i);
