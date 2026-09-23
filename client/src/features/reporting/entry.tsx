@@ -12,7 +12,7 @@ export function ReportingEntry({ identity, organizationId, reportId, presetId, o
   const organizations = context.data?.organizations ?? [];
   const organization = organizations.find(item => item.id === organizationId) ?? (!organizationId && organizations.length === 1 ? organizations[0] : undefined);
   if (!organization) return <div className="reporting-state">Choose a company to view reports.</div>;
-  return <Suspense fallback={<div className="reporting-state" role="status">Loading reports…</div>}><ReportingWorkspace identity={identity} organization={organization} initialReportId={reportId} initialPresetId={presetId} onNavigate={onNavigate} onOpenLegacy={onOpenLegacy} /></Suspense>;
+  return <Suspense fallback={<div className="reporting-state" role="status">Loading reports…</div>}><ReportingWorkspace key={organization.id} identity={identity} organization={organization} initialReportId={reportId} initialPresetId={presetId} onNavigate={onNavigate} onOpenLegacy={onOpenLegacy} /></Suspense>;
 }
 
 export { ReportingWorkspace } from "./workspace";
