@@ -3,6 +3,8 @@ import test from "node:test";
 import { normalizeTimeEntry, normalizeTimeJobcode, normalizeTimeUser, normalizeTimeDeleted } from "./normalize";
 import { createTimeStore } from "./store";
 import { createSyntheticCompanyDatabase, SYNTHETIC_COMPANY } from "../company/testing/synthetic-database";
+import { attestTransport, loadAuthenticatedPrincipal } from "../company/authorization";
+import { createTimeServices } from "./service";
 
 const scope = { organizationId: SYNTHETIC_COMPANY.organizationId, legalEntityId: SYNTHETIC_COMPANY.entityId, environment: "production" as const, providerCompanyId: "time-company" };
 const CONTACT_ID = "55000000-0000-4000-8000-000000000099";
@@ -146,5 +148,29 @@ test("time sync run idempotency returns the persisted run on replay", async () =
     const persisted = await database.db.query<{ id: string }>("SELECT id::text AS id FROM time_sync_runs WHERE idempotency_key=$1", ["time-sync-replay"]);
     assert.equal(count.rows[0]?.count, 1);
     assert.equal(persisted.rows[0]?.id, first);
+  } finally { await database.close(); }
+});
+
+test("a property-only grant cannot approve entity-wide time through the command runner", async () => {
+  const database = await createSyntheticCompanyDatabase();
+  try {
+    await timeSchema(database);
+    const store = createTimeStore(database.executor);
+    await store.upsertEntry(scope, providerEntry(), modified);
+    await store.mapEmployee({ scope, providerUserId: "employee-1", contactId: CONTACT_ID, effectiveFrom: "2026-01-01", effectiveTo: null, hourlyRateCents: "2250", currency: "USD", actorId: SYNTHETIC_COMPANY.actorId, operationId: "65000000-0000-4000-8000-000000000199" });
+    await store.mapJobcode({ scope, providerJobcodeId: "job-1", propertyId: null, projectId: null, costCode: null, actorId: SYNTHETIC_COMPANY.actorId, operationId: "65000000-0000-4000-8000-000000000200" });
+    const timesheet = await database.db.query<{ id: string }>("SELECT id FROM time_timesheets WHERE provider_timesheet_id='timesheet-1'");
+    const actorId = "property-pm";
+    await database.db.query("INSERT INTO company_access_grants(id,organization_id,actor_id,role,legal_entity_id,property_id) VALUES ('40000000-0000-4000-8000-000000000077',$1,$2,'project_manager',$3,$4)", [SYNTHETIC_COMPANY.organizationId, actorId, SYNTHETIC_COMPANY.entityId, SYNTHETIC_COMPANY.propertyId]);
+    const resolvePrincipal = (executor = database.executor) => loadAuthenticatedPrincipal(executor, { actorId, organizationId: SYNTHETIC_COMPANY.organizationId, role: "project_manager" });
+    const services = createTimeServices(database.executor, { env: {} });
+    const principal = await resolvePrincipal();
+    await assert.rejects(() => services.commands.execute("time.review_timesheet", {
+      operationId: "66000000-0000-4000-8000-000000000001", idempotencyKey: "time-property-scope-1",
+      scope: { organizationId: SYNTHETIC_COMPANY.organizationId, legalEntityId: SYNTHETIC_COMPANY.entityId, propertyId: SYNTHETIC_COMPANY.propertyId },
+      payload: { environment: scope.environment, providerCompanyId: scope.providerCompanyId, timesheetId: timesheet.rows[0]!.id, action: "approve" },
+    }, { principal, resolvePrincipal, transport: attestTransport("web") }), /scope level/);
+    const state = await database.db.query<{ review_state: string }>("SELECT review_state FROM time_timesheets WHERE provider_timesheet_id='timesheet-1'");
+    assert.notEqual(state.rows[0]?.review_state, "approved");
   } finally { await database.close(); }
 });

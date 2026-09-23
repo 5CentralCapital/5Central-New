@@ -20,13 +20,15 @@ import { timePayrollLinkPayloadSchema, timePayrollUnlinkPayloadSchema, type Proj
 const TIME_WRITE_ROLES = ["owner", "admin", "finance", "operations_pm", "project_manager"] as const;
 const TIME_READ_ROLES = ["owner", "admin", "finance", "operations_pm", "project_manager", "read_only_reviewer"] as const;
 const TIME_PAYROLL_ROLES = ["owner", "admin", "finance"] as const;
+// Time records, mappings and payroll links are entity-wide (a timesheet is
+// not bound to one property), so a property-only grant cannot write them.
 export const TIME_COMMAND_POLICIES: Readonly<Record<TimeCommandKind, CommandAuthorizationPolicy>> = Object.freeze({
-  "time.review_timesheet": { commandKind: "time.review_timesheet", allowedRoles: TIME_WRITE_ROLES },
-  "time.correct_timesheet": { commandKind: "time.correct_timesheet", allowedRoles: TIME_WRITE_ROLES },
-  "time.map_employee": { commandKind: "time.map_employee", allowedRoles: TIME_WRITE_ROLES },
-  "time.map_jobcode": { commandKind: "time.map_jobcode", allowedRoles: TIME_WRITE_ROLES },
-  "time.payroll.link": { commandKind: "time.payroll.link", allowedRoles: TIME_PAYROLL_ROLES },
-  "time.payroll.unlink": { commandKind: "time.payroll.unlink", allowedRoles: TIME_PAYROLL_ROLES },
+  "time.review_timesheet": { commandKind: "time.review_timesheet", allowedRoles: TIME_WRITE_ROLES, requiredScope: "legal_entity" },
+  "time.correct_timesheet": { commandKind: "time.correct_timesheet", allowedRoles: TIME_WRITE_ROLES, requiredScope: "legal_entity" },
+  "time.map_employee": { commandKind: "time.map_employee", allowedRoles: TIME_WRITE_ROLES, requiredScope: "legal_entity" },
+  "time.map_jobcode": { commandKind: "time.map_jobcode", allowedRoles: TIME_WRITE_ROLES, requiredScope: "legal_entity" },
+  "time.payroll.link": { commandKind: "time.payroll.link", allowedRoles: TIME_PAYROLL_ROLES, requiredScope: "legal_entity" },
+  "time.payroll.unlink": { commandKind: "time.payroll.unlink", allowedRoles: TIME_PAYROLL_ROLES, requiredScope: "legal_entity" },
 } satisfies Record<TimeCommandKind, CommandAuthorizationPolicy>);
 
 export interface TimeCommandAccess { readonly principal: AuthenticatedPrincipal; readonly resolvePrincipal: (executor: RentOpsQueryExecutor) => Promise<AuthenticatedPrincipal>; readonly transport: TransportAttestation; }
