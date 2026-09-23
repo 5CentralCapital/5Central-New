@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addIsoDays, compareCentsText, daysBetween, formatCentsText, formatMeasure, formatMonth } from "./format";
+import { addIsoDays, compareCentsText, daysBetween, formatCentsText, formatMeasure, formatMonth, opensInline } from "./format";
 
 test("exact cents render without floating point and unknown never becomes zero", () => {
   assert.equal(formatCentsText("0"), "$0.00");
@@ -32,4 +32,14 @@ test("sums of exact cents flag unknown contributors instead of treating them as 
   assert.deepEqual(sumCentsTexts(["100", null]), { total: "100", complete: false });
   assert.deepEqual(sumCentsTexts([null]), { total: null, complete: false });
   assert.deepEqual(sumCentsTexts([]), { total: "0", complete: true });
+});
+
+test("only PDFs and raster images open in a tab; other document types download", () => {
+  assert.equal(opensInline("application/pdf"), true);
+  assert.equal(opensInline("image/jpeg"), true);
+  assert.equal(opensInline("Application/PDF; charset=binary"), true);
+  assert.equal(opensInline("text/html"), false);
+  assert.equal(opensInline("image/svg+xml"), false);
+  assert.equal(opensInline("application/xhtml+xml"), false);
+  assert.equal(opensInline(""), false);
 });

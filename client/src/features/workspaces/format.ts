@@ -76,3 +76,13 @@ export function sumCentsTexts(values: ReadonlyArray<string | null>): { total: st
   }
   return { total: known === 0 && unknown > 0 ? null : total.toString(), complete: unknown === 0 };
 }
+
+/**
+ * File types a browser tab may render from a same-origin blob URL. Anything
+ * else (HTML, SVG, XML, unknown) could run script with the app's origin, so it
+ * is saved as a download instead of opened.
+ */
+export function opensInline(contentType: string): boolean {
+  const type = contentType.split(";")[0]!.trim().toLowerCase();
+  return type === "application/pdf" || type === "image/png" || type === "image/jpeg" || type === "image/gif" || type === "image/webp";
+}

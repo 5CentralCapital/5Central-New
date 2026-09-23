@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { CompanyContextOrganization } from "@shared/company/context";
 import { projectListResponseSchema } from "@shared/projects/contracts";
@@ -6,7 +7,7 @@ import { rentOpsAuthClient } from "../rent-ops/auth";
 import type { AdminSnapshot } from "../rent-ops/types";
 import { EntityLink, RecordLink } from "../rent-ops/workspace/entity-link";
 import { workspacesApi } from "./api";
-import { formatCentsText, formatIsoDate, humanize } from "./format";
+import { formatCentsText, formatIsoDate, humanize, opensInline } from "./format";
 import { Badge, ErrorState, Loading, Section, StatePanel, propertyEntity, selectOrganization, useCompanyContext } from "./page";
 import { useOpenWorkOrders } from "./work-data";
 
@@ -101,16 +102,30 @@ export function PropertyDocumentsTab({ identity, propertyId, organizationId, sna
     queryFn: ({ signal }) => workspacesApi.propertyDocuments(company.organization!.id, { asOf: asOfDate, propertyIds: [propertyId] }, signal),
     enabled: Boolean(company.organization), staleTime: 60_000, retry: false,
   });
+  const [downloadError, setDownloadError] = useState<string>();
+  const openDocument = async (documentId: string, fileName: string) => {
+    setDownloadError(undefined);
+    try {
+      const blob = await downloadRentOpsDocument(documentId);
+      const url = URL.createObjectURL(blob);
+      if (opensInline(blob.type)) window.open(url, "_blank", "noopener");
+      else { const anchor = window.document.createElement("a"); anchor.href = url; anchor.download = fileName; anchor.click(); }
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (cause) {
+      setDownloadError(cause instanceof Error ? cause.message : "Secure document download is unavailable.");
+    }
+  };
   const people = new Map(snapshot.snapshot.people.map(person => [person.id, person]));
   const rentalRows = (rental.data ?? []).filter(document => document.propertyId === propertyId);
   return <>
     <Section title="Tenant and lease documents" id="property-docs-rental" count={rental.data ? rentalRows.length : undefined}>
+      {downloadError && <p className="ws-note" role="alert">{downloadError}</p>}
       {rental.error ? <ErrorState error={rental.error} onRetry={() => void rental.refetch()} /> : !rental.data ? <Loading label="Loading documents…" />
         : !rentalRows.length ? <StatePanel title="No tenant documents" message="Leases and tenant files for this property appear here." />
         : <table className="ws-table">
           <thead><tr><th scope="col">File</th><th scope="col">Type</th><th scope="col">Tenant</th><th scope="col">Uploaded</th></tr></thead>
           <tbody>{rentalRows.map(document => { const person = document.personId ? people.get(document.personId) : undefined; return <tr key={document.id}>
-            <td>{document.id && document.downloadAvailable ? <button type="button" className="ws-link" onClick={() => void downloadRentOpsDocument(document.id!).then(blob => { const url = URL.createObjectURL(blob); window.open(url, "_blank", "noopener"); window.setTimeout(() => URL.revokeObjectURL(url), 60_000); })}>{document.fileName ?? "Document"}</button> : document.fileName ?? "Document"}</td>
+            <td>{document.id && document.downloadAvailable ? <button type="button" className="ws-link" onClick={() => void openDocument(document.id!, document.fileName ?? "document")}>{document.fileName ?? "Document"}</button> : document.fileName ?? "Document"}</td>
             <td>{humanize(document.type)}</td>
             <td>{person ? <EntityLink personId={person.id} tab="documents">{[person.firstName, person.lastName].filter(Boolean).join(" ") || "Tenant"}</EntityLink> : "—"}</td>
             <td>{formatIsoDate(document.uploadedAt)}</td>
