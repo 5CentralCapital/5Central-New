@@ -31,7 +31,7 @@ export class TenantAccountAdminService {
     return {deliveryAvailable:!!this.options.notifier,accounts:accounts.map(tenantAccountSummary),eligibleTenancies:eligibleTenantTenancies(snapshot)};
   }
   async listForMcp() {
-    return (await this.options.store.list()).map(record => ({...tenantAccountSummary(record),credentialRevision:record.sessionVersion}));
+    return (await this.options.store.list()).map(tenantAccountSummary);
   }
   private actor(context:TenantAccountAdminContext) {
     if(!context || typeof context.actorSubject!=="string" || !context.actorSubject.trim() || context.actorSubject.length>240 || /[\x00-\x1f\x7f]/.test(context.actorSubject)) throw new TenantPortalError(403,"Verified administrator identity is required.");
@@ -47,12 +47,12 @@ export class TenantAccountAdminService {
     const existing=await this.options.store.getById(id);
     if(existing) {
       if(existing.email!==value.email||existing.personId!==value.personId||existing.tenancyId!==value.tenancyId) throw new TenantPortalError(409,"Request identifier already belongs to another account grant.");
-      return {account:{...tenantAccountSummary(existing),credentialRevision:existing.sessionVersion}};
+      return {account:tenantAccountSummary(existing)};
     }
     const token=this.token(24*60*60*1000);
     const account=await this.options.store.auditedMutation!({action:"grant",id,...value,actorSubject,now:token.now,tokenHash:token.hash,expiresAt:token.expiresAt});
     if(!account) throw new TenantPortalError(409,"Account already exists. Read current accounts before retrying.");
-    return {account:{...tenantAccountSummary(account),credentialRevision:account.sessionVersion}};
+    return {account:tenantAccountSummary(account)};
   }
   async sendLinkForMcp(id:string,requestId:string,context:{actorSubject:string}) {
     const actorSubject=this.actor(context);
@@ -85,7 +85,7 @@ export class TenantAccountAdminService {
     const token=this.token(24*60*60*1000);
     const account=await this.options.store.auditedMutation!({action,id,actorSubject,personId:current.personId,tenancyId:current.tenancyId,expectedCredentialRevision,now:token.now,...(action==="reissue"?{tokenHash:token.hash,expiresAt:token.expiresAt}:{})});
     if(!account) throw new TenantPortalError(409,"Account access changed. Read the current account before retrying.");
-    return {account:{...tenantAccountSummary(account),credentialRevision:account.sessionVersion}};
+    return {account:tenantAccountSummary(account)};
   }
   reissueForMcp(id:string,expectedCredentialRevision:number,context:{actorSubject:string}) {return this.mutateForMcp("reissue",id,expectedCredentialRevision,context);}
   revokeForMcp(id:string,expectedCredentialRevision:number,context:{actorSubject:string}) {return this.mutateForMcp("revoke",id,expectedCredentialRevision,context);}
