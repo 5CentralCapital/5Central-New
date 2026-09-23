@@ -35,3 +35,39 @@ test("manager PDF upload resolves exact parents, rejects unauthorized/scoped/inv
   assert.equal((await fetch(base+"/documents",{method:"POST",headers:{...headers,"content-type":"application/json"},body:"{}"})).status,503);
  }finally{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));}
 });
+
+test("an interrupted manager upload fails the storage stream instead of hanging", async () => {
+ const snapshot=structuredClone(syntheticRentOpsSnapshot()); const tenancy=snapshot.tenancies[0];
+ const repo=new SyntheticRentOpsRepository(snapshot);
+ const storage=createInMemoryObjectStore(); let settled: Promise<string> | undefined;
+ const putIfAbsent=storage.putIfAbsent.bind(storage);
+ storage.putIfAbsent=(input)=>{const pending=putIfAbsent(input);settled=pending.then(()=>"resolved",()=>"rejected");return pending;};
+ const app=express();
+ registerRentOpsRoutes(app,{repository:repo,documentStorage:storage,documentUploadStorage:storage,requireAdmin:(req,_res,next)=>{req.rentOpsAdminUser={id:"manager"} as any;next();}});
+ const server=app.listen(0,"127.0.0.1");await new Promise<void>(r=>server.once("listening",r));const port=(server.address() as any).port;
+ try{
+  const { connect } = await import("node:net");
+  const socket=connect(port,"127.0.0.1");await new Promise<void>(r=>socket.once("connect",()=>r()));
+  socket.write(`POST /api/rent-ops/tenancies/${encodeURIComponent(tenancy.id)}/lease-files HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/pdf\r\nX-Document-Name: lease.pdf\r\nContent-Length: 1000\r\n\r\n%PDF-1.7\n`);
+  for(let i=0;i<50 && !settled;i++) await new Promise(r=>setTimeout(r,20));
+  assert.ok(settled,"upload reached storage");
+  socket.destroy();
+  const outcome=await Promise.race([settled!,new Promise<string>(r=>setTimeout(()=>r("hung"),2000))]);
+  assert.equal(outcome,"rejected");
+ }finally{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));}
+});
+
+test("a chunked manager upload over the byte limit is rejected without an uncaught stream error", async () => {
+ const snapshot=structuredClone(syntheticRentOpsSnapshot()); const tenancy=snapshot.tenancies[0];
+ const repo=new SyntheticRentOpsRepository(snapshot);
+ const storage=createInMemoryObjectStore(); const app=express();
+ registerRentOpsRoutes(app,{repository:repo,documentStorage:storage,documentUploadStorage:storage,documentUploadMaxBytes:100,requireAdmin:(req,_res,next)=>{req.rentOpsAdminUser={id:"manager"} as any;next();}});
+ const server=app.listen(0,"127.0.0.1");await new Promise<void>(r=>server.once("listening",r));const port=(server.address() as any).port;
+ try{
+  const chunk=Buffer.concat([Buffer.from("%PDF-1.7\n"),Buffer.alloc(191,0x20)]);
+  const response=await fetch(`http://127.0.0.1:${port}/api/rent-ops/tenancies/${encodeURIComponent(tenancy.id)}/lease-files`,{method:"POST",headers:{"content-type":"application/pdf","x-document-name":"lease.pdf"},
+   body:new ReadableStream({start(controller){controller.enqueue(new Uint8Array(chunk));controller.close();}}),duplex:"half"} as RequestInit & {duplex:"half"});
+  assert.equal(response.status,400);
+  assert.equal((await repo.getSnapshot()).documents.some(d=>d.fileName==="lease.pdf"),false);
+ }finally{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));}
+});

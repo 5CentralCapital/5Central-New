@@ -528,7 +528,16 @@ function boundedUploadStream(req: Request, maxBytes: number): { stream: Readable
       callback();
     },
   });
+  // The limit can trip before the storage consumer starts reading. The consumer
+  // still observes the failure through the destroyed stream's stored error;
+  // without a listener it would be an uncaught 'error' that stops the process.
+  limiter.on("error", () => {});
   req.pipe(limiter);
+  // pipe() does not forward a client abort; without this the storage consumer
+  // waits forever on a stream that never ends.
+  const interrupted = () => { if (!req.readableEnded) limiter.destroy(new RentOpsInvariantError("Document upload was interrupted")); };
+  req.once("error", interrupted);
+  req.once("close", interrupted);
   return { stream: limiter, ...(declaredSize !== undefined ? { sizeBytes: declaredSize } : {}) };
 }
 

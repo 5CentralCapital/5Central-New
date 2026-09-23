@@ -5,7 +5,7 @@ import { phoneMethodsSchema } from "../domain/phone-methods";
 import { correctChargeSchema, type CorrectChargeInput, correctPaymentSchema, type CorrectPaymentInput, manualPaymentSchema, createChargeDefinitionSchema, patchChargeDefinitionSchema, type CreateChargeDefinitionInput, type PatchChargeDefinitionInput, type ManualPaymentInput } from "./operational-inputs";
 import { postedReversalTargets } from "../domain/invariants";
 import { createHash, randomUUID } from "node:crypto";
-import { Readable, Transform } from "node:stream";
+import { pipeline, Readable, Transform } from "node:stream";
 import type {
   ApplicantSaveInput,
   ApplicantStartInput,
@@ -501,7 +501,9 @@ function validatedDocumentStream(source: StorageByteStream, mimeType: string): R
       callback();
     },
   });
-  return Readable.from(source as AsyncIterable<Uint8Array> | Readable).pipe(validator);
+  // pipeline(), unlike pipe(), forwards a source failure (size limit, client
+  // abort) to the returned stream instead of raising an uncaught 'error'.
+  return pipeline(Readable.from(source as AsyncIterable<Uint8Array> | Readable), validator, () => { /* surfaced on validator */ });
 }
 
 function bindingFromStorage(documentId: string, result: { backend: string; logicalKey: string; checksumSha256: string; sizeBytes: number; immutableGeneration?: string; immutableVersion?: string; verifiedAt?: string }): RentOpsDocumentObjectBinding {
