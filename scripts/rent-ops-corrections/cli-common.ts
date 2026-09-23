@@ -1,6 +1,6 @@
 /** Shared guards for the owner-correction CLIs. No scenario defaults; private outputs only. */
 import { open, mkdir, readFile } from "node:fs/promises";
-import { resolve, relative, isAbsolute, dirname } from "node:path";
+import { resolve, relative, isAbsolute, dirname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRentOpsRuntimeDatabase } from "../../server/rent-ops/runtime-database";
 import { createPostgresRentOpsRepository } from "../../server/rent-ops/repositories/postgres";
@@ -22,7 +22,8 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".
 export async function privateOutputDirectory(path: string) {
   const out = resolve(path);
   const inside = relative(repositoryRoot, out);
-  guard(inside.startsWith("..") || isAbsolute(inside), "output_directory_inside_repository");
+  // "..evidence" is a folder inside the repository, not a parent path.
+  guard(inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside), "output_directory_inside_repository");
   await mkdir(out, { recursive: true, mode: 0o700 });
   return out;
 }
