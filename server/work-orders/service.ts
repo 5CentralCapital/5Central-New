@@ -38,7 +38,10 @@ export const WORK_ORDER_READ_ROLES = ["owner", "admin", "finance", "operations_p
 export const WORK_ORDER_COST_CONSUMER_KIND = "work_order" as const;
 
 export const PRIORITY_RANK = `CASE w.priority WHEN 'emergency' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END`;
-export const TARGET_ON_SQL = `(w.reported_on + (CASE w.priority WHEN 'emergency' THEN 1 WHEN 'high' THEN 3 WHEN 'normal' THEN 7 ELSE 14 END))`;
+/** Reported date plus the priority response time, from the shared WORK_ORDER_TARGET_DAYS. */
+export const TARGET_ON_SQL = `(w.reported_on + (CASE w.priority ${
+  Object.entries(WORK_ORDER_TARGET_DAYS).map(([priority, days]) => `WHEN '${priority}' THEN ${Number(days)}`).join(" ")
+} ELSE ${Number(WORK_ORDER_TARGET_DAYS.low)} END))`;
 
 /**
  * Vendor, manual actual and attachment state are derived from the
@@ -190,9 +193,7 @@ function decodeCursor(value: string | undefined, sort: "priority" | "schedule"):
  * The agenda date the schedule view groups by: the scheduled date, else the
  * derived target date (reported date plus the priority response time).
  */
-const AGENDA_ON = `coalesce(w.scheduled_on, w.reported_on + (CASE w.priority ${
-  Object.entries(WORK_ORDER_TARGET_DAYS).map(([priority, days]) => `WHEN '${priority}' THEN ${Number(days)}`).join(" ")
-} ELSE ${Number(WORK_ORDER_TARGET_DAYS.low)} END))`;
+const AGENDA_ON = `coalesce(w.scheduled_on, ${TARGET_ON_SQL})`;
 
 function scopePredicates(scope: CompanyScope, values: unknown[]): string[] {
   values.push(scope.organizationId, scope.legalEntityId ?? null, scope.propertyId ?? null);
