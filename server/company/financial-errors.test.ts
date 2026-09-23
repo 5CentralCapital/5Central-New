@@ -27,3 +27,11 @@ test('allocation and connection failures communicate distinct recovery paths', (
   assert.equal(publicFinancialError(new QuickBooksIntegrationError('quickbooks_unauthorized', 'private'))?.recovery, 'reconnect');
   assert.equal(publicFinancialError(new Error('ordinary error')), undefined);
 });
+
+test("a retryable token-store conflict asks for a retry, not a reconnect", () => {
+  const retryable = publicFinancialError(new QuickBooksIntegrationError("quickbooks_token_store", "QuickBooks token refresh is already in progress", { retryable: true }));
+  assert.equal(retryable?.recovery, "retry_same_operation");
+  assert.equal(retryable?.retryable, true);
+  const broken = publicFinancialError(new QuickBooksIntegrationError("quickbooks_token_store", "store unavailable"));
+  assert.equal(broken?.recovery, "reconnect");
+});

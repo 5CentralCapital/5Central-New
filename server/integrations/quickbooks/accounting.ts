@@ -9,6 +9,7 @@ import type {
   QuickBooksTransportResponse,
   QuickBooksUpdateInput,
 } from "../../../shared/accounting/quickbooks";
+import { randomUUID } from "node:crypto";
 import { QuickBooksIntegrationError, isQuickBooksIntegrationError } from "./errors";
 import { parseJsonLosslessNumbers } from "./json-lossless";
 
@@ -16,6 +17,27 @@ export const QUICKBOOKS_SANDBOX_ACCOUNTING_BASE_URL = "https://sandbox-quickbook
 export const QUICKBOOKS_PRODUCTION_ACCOUNTING_BASE_URL = "https://quickbooks.api.intuit.com";
 /** Intuit retired minor versions below 75 on 2025-08-01; requests pin the supported baseline. */
 export const DEFAULT_QUICKBOOKS_MINOR_VERSION = "75";
+/** Intuit asks clients to back off 60 seconds after HTTP 429 when no Retry-After is supplied. */
+export const QUICKBOOKS_RATE_LIMIT_BACKOFF_MS = 60_000;
+/** Intuit's stale-object (SyncToken mismatch) fault code, returned with HTTP 400. */
+export const QUICKBOOKS_STALE_OBJECT_FAULT_CODE = "5010";
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,50}$/;
+
+/** Options for a provider write. `requestId` must be reused verbatim when retrying the same logical write. */
+export interface QuickBooksWriteOptions {
+  readonly requestId?: string;
+}
+
+/**
+ * Per-transport, per-realm 429 cooldown. The transport is shared by every
+ * client the root layer creates for this process, so a throttled realm stops
+ * sending requests until Intuit's back-off window has elapsed.
+ */
+const rateLimitCooldowns = new WeakMap<QuickBooksTransport, Map<string, number>>();
+
+function cooldownKey(scope: QuickBooksAccountingClientConfig["scope"]): string {
+  return `${scope.environment}:${scope.realmId}`;
+}
 
 const BLOCKED_CAPABILITY_NAMES = new Set([
   "Project",
@@ -77,10 +99,12 @@ function safeString(value: unknown, max = 240): string | undefined {
 
 function retryAfterMs(response: QuickBooksTransportResponse): number | undefined {
   const value = header(response, "retry-after");
-  if (!value) return undefined;
-  if (/^\d+(?:\.\d+)?$/.test(value)) return Math.max(0, Number(value) * 1_000);
-  const date = Date.parse(value);
-  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
+  let parsed: number | undefined;
+  if (value && /^\d+(?:\.\d+)?$/.test(value)) parsed = Math.max(0, Number(value) * 1_000);
+  else if (value && Number.isFinite(Date.parse(value))) parsed = Math.max(0, Date.parse(value) - Date.now());
+  // A 429 without a usable Retry-After still requires Intuit's 60-second back-off.
+  if (response.status === 429) return Math.max(parsed ?? 0, QUICKBOOKS_RATE_LIMIT_BACKOFF_MS);
+  return parsed;
 }
 
 function providerFault(body: string): { isFault: boolean; code?: string } {
@@ -96,12 +120,12 @@ function providerFault(body: string): { isFault: boolean; code?: string } {
   };
 }
 
-function responseError(response: QuickBooksTransportResponse, method: "GET" | "POST"): QuickBooksIntegrationError {
+function responseError(response: QuickBooksTransportResponse, method: "GET" | "POST", requestId?: string): QuickBooksIntegrationError {
   const transient = response.status === 408 || response.status === 429 || response.status >= 500;
   const fault = providerFault(response.body);
   // Keep only the stable provider code. Free-form Message/Detail fields can
   // echo request values and must not cross this safe error boundary.
-  const details = { providerCode: fault.code };
+  const details = { providerCode: fault.code, ...(requestId ? { requestId } : {}) };
   if (method === "POST" && transient) {
     return new QuickBooksIntegrationError("quickbooks_ambiguous_write", "QuickBooks write outcome is unknown; reconcile before retrying", {
       status: response.status,
@@ -114,7 +138,7 @@ function responseError(response: QuickBooksTransportResponse, method: "GET" | "P
   }
   const code = response.status === 401
     ? "quickbooks_unauthorized"
-    : response.status === 409
+    : response.status === 409 || fault.code === QUICKBOOKS_STALE_OBJECT_FAULT_CODE
       ? "quickbooks_conflict"
       : response.status === 429
         ? "quickbooks_rate_limited"
@@ -175,25 +199,31 @@ function assertPlainObject(value: unknown, field: string): asserts value is Quic
   }
 }
 
-function wrapUnknownWriteError(error: unknown): QuickBooksIntegrationError {
+function wrapUnknownWriteError(error: unknown, requestId: string): QuickBooksIntegrationError {
   if (isQuickBooksIntegrationError(error) && !["quickbooks_timeout", "quickbooks_transport"].includes(error.code)) return error;
-  if (isQuickBooksIntegrationError(error) && error.code === "quickbooks_timeout") {
-    return new QuickBooksIntegrationError("quickbooks_ambiguous_write", "QuickBooks write outcome is unknown; reconcile before retrying", {
-      ambiguous: true,
-      cause: error,
-    });
-  }
+  // The request may have reached Intuit. The same requestid lets a reconciled
+  // retry be de-duplicated by Intuit instead of creating a second object.
   return new QuickBooksIntegrationError("quickbooks_ambiguous_write", "QuickBooks write outcome is unknown; reconcile before retrying", {
     ambiguous: true,
     cause: error,
+    details: { requestId },
   });
+}
+
+function writeRequestId(options: QuickBooksWriteOptions | undefined): string {
+  if (options?.requestId === undefined) return randomUUID();
+  if (typeof options.requestId !== "string" || !REQUEST_ID_PATTERN.test(options.requestId)) {
+    throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks requestid is invalid");
+  }
+  return options.requestId;
 }
 
 export interface QuickBooksAccountingClient {
   read<T extends QuickBooksJsonObject = QuickBooksJsonObject>(entity: QuickBooksEntityName, id: string): Promise<QuickBooksApiResponse<T>>;
   query<T extends QuickBooksJsonObject = QuickBooksJsonObject>(query: string): Promise<QuickBooksQueryResponse<T>>;
-  create<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(entity: QuickBooksEntityName, fields: TFields): Promise<QuickBooksApiResponse<TResult>>;
-  update<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(input: QuickBooksUpdateInput<TFields>): Promise<QuickBooksApiResponse<TResult>>;
+  /** Every write carries a `requestid`; pass the same `requestId` when retrying the same logical write. */
+  create<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(entity: QuickBooksEntityName, fields: TFields, options?: QuickBooksWriteOptions): Promise<QuickBooksApiResponse<TResult>>;
+  update<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(input: QuickBooksUpdateInput<TFields>, options?: QuickBooksWriteOptions): Promise<QuickBooksApiResponse<TResult>>;
 }
 
 /** QBO REST resource paths are lowercase (`companyinfo`, `vendor`); entity names in bodies stay PascalCase. */
@@ -205,12 +235,13 @@ function baseUrl(environment: QuickBooksAccountingClientConfig["scope"]["environ
   return environment === "sandbox" ? QUICKBOOKS_SANDBOX_ACCOUNTING_BASE_URL : QUICKBOOKS_PRODUCTION_ACCOUNTING_BASE_URL;
 }
 
-function apiPath(scope: QuickBooksAccountingClientConfig["scope"], path: string, minorVersion?: string): string {
+function apiPath(scope: QuickBooksAccountingClientConfig["scope"], path: string, minorVersion?: string, requestId?: string): string {
   const url = new URL(`/v3/company/${encodeURIComponent(scope.realmId)}/${path.replace(/^\//, "")}`, baseUrl(scope.environment));
   if (minorVersion !== undefined) {
     if (!/^\d{1,4}$/.test(minorVersion)) throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks minor version is invalid");
     url.searchParams.set("minorversion", minorVersion);
   }
+  if (requestId !== undefined) url.searchParams.set("requestid", requestId);
   return url.toString();
 }
 
@@ -219,8 +250,28 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
   if (typeof config.getAccessToken !== "function") throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks access-token provider is required");
   if (typeof config.transport !== "function") throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks Accounting transport is required");
   const minorVersion = config.minorVersion ?? DEFAULT_QUICKBOOKS_MINOR_VERSION;
+  const cooldowns = rateLimitCooldowns.get(config.transport) ?? new Map<string, number>();
+  rateLimitCooldowns.set(config.transport, cooldowns);
+  const realmKey = cooldownKey(config.scope);
 
-  async function call(method: "GET" | "POST", path: string, body?: QuickBooksJsonObject): Promise<QuickBooksTransportResponse> {
+  function assertNotCoolingDown(): void {
+    const until = cooldowns.get(realmKey);
+    if (until === undefined) return;
+    const remaining = until - Date.now();
+    if (remaining <= 0) {
+      cooldowns.delete(realmKey);
+      return;
+    }
+    // Nothing was sent, so this is definitive for reads and writes alike.
+    throw new QuickBooksIntegrationError("quickbooks_rate_limited", "QuickBooks rate limit back-off is in effect for this company", {
+      status: 429,
+      retryable: true,
+      retryAfterMs: remaining,
+    });
+  }
+
+  async function call(method: "GET" | "POST", path: string, body?: QuickBooksJsonObject, requestId?: string): Promise<QuickBooksTransportResponse> {
+    assertNotCoolingDown();
     const accessToken = await config.getAccessToken();
     if (typeof accessToken !== "string" || accessToken.length === 0) {
       throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks access token is unavailable");
@@ -228,7 +279,7 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
     try {
       const response = await config.transport({
         method,
-        url: apiPath(config.scope, path, minorVersion),
+        url: apiPath(config.scope, path, minorVersion, requestId),
         headers: {
           Accept: "application/json",
           Authorization: `Bearer ${accessToken}`,
@@ -236,10 +287,11 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
       });
-      if (response.status < 200 || response.status >= 300) throw responseError(response, method);
+      if (response.status === 429) cooldowns.set(realmKey, Date.now() + (retryAfterMs(response) ?? QUICKBOOKS_RATE_LIMIT_BACKOFF_MS));
+      if (response.status < 200 || response.status >= 300) throw responseError(response, method, requestId);
       return response;
     } catch (error) {
-      if (method === "POST") throw wrapUnknownWriteError(error);
+      if (method === "POST") throw wrapUnknownWriteError(error, requestId ?? "");
       throw error;
     }
   }
@@ -268,24 +320,26 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
       return { ...parsed, status: response.status, intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") };
     },
 
-    async create<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(entity: QuickBooksEntityName, fields: TFields): Promise<QuickBooksApiResponse<TResult>> {
+    async create<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(entity: QuickBooksEntityName, fields: TFields, options?: QuickBooksWriteOptions): Promise<QuickBooksApiResponse<TResult>> {
       assertEntity(entity);
       assertPlainObject(fields, "create fields");
-      const response = await call("POST", entityPath(entity), fields);
+      const requestId = writeRequestId(options);
+      const response = await call("POST", entityPath(entity), fields, requestId);
       const parsed = entityFromEnvelope<TResult>(entity, response.body);
-      if (!parsed) throw new QuickBooksIntegrationError("quickbooks_ambiguous_write", "QuickBooks create response could not be confirmed; reconcile before retrying", { ambiguous: true, status: response.status });
+      if (!parsed) throw new QuickBooksIntegrationError("quickbooks_ambiguous_write", "QuickBooks create response could not be confirmed; reconcile before retrying", { ambiguous: true, status: response.status, details: { requestId } });
       return { ...parsed, status: response.status, intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") };
     },
 
-    async update<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(input: QuickBooksUpdateInput<TFields>): Promise<QuickBooksApiResponse<TResult>> {
+    async update<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(input: QuickBooksUpdateInput<TFields>, options?: QuickBooksWriteOptions): Promise<QuickBooksApiResponse<TResult>> {
       assertEntity(input.entity);
       assertIdentifier(input.id, "entity ID");
       assertIdentifier(input.syncToken, "SyncToken");
       assertPlainObject(input.fields, "update fields");
+      const requestId = writeRequestId(options);
       const payload = { ...input.fields, Id: input.id, SyncToken: input.syncToken };
-      const response = await call("POST", entityPath(input.entity), payload);
+      const response = await call("POST", entityPath(input.entity), payload, requestId);
       const parsed = entityFromEnvelope<TResult>(input.entity, response.body);
-      if (!parsed) throw new QuickBooksIntegrationError("quickbooks_ambiguous_write", "QuickBooks update response could not be confirmed; reconcile before retrying", { ambiguous: true, status: response.status });
+      if (!parsed) throw new QuickBooksIntegrationError("quickbooks_ambiguous_write", "QuickBooks update response could not be confirmed; reconcile before retrying", { ambiguous: true, status: response.status, details: { requestId } });
       return { ...parsed, status: response.status, intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") };
     },
   };

@@ -100,3 +100,45 @@ test("non-accounting provider scopes stay disabled", () => {
   const client = createQuickBooksOAuthClient(config(async () => response(500, {})));
   assert.throws(() => client.getAuthorizationUrl("state", ["com.intuit.quickbooks.payment"]), /OAuth scopes are invalid/);
 });
+
+test("redirect URIs follow Intuit's per-environment policy and fail closed as configuration errors", () => {
+  const transport = async () => response(500, {});
+  const build = (environment: "sandbox" | "production", redirectUri: string) => () => createQuickBooksOAuthClient({ ...config(transport), environment, redirectUri });
+  for (const uri of [
+    "http://rops.example.test/api/accounting/qbo/callback",
+    "https://localhost/api/accounting/qbo/callback",
+    "http://localhost:4178/api/accounting/qbo/callback",
+    "https://203.0.113.10/api/accounting/qbo/callback",
+    "https://[2001:db8::1]/api/accounting/qbo/callback",
+    "https://user:pass@rops.example.test/callback",
+    "https://rops.example.test/callback#fragment",
+    "not a url",
+  ]) {
+    assert.throws(build("production", uri), (error: unknown) => {
+      assert.ok(error instanceof QuickBooksIntegrationError);
+      assert.equal(error.code, "quickbooks_configuration");
+      return true;
+    }, uri);
+  }
+  assert.throws(build("sandbox", "http://rops.example.test/callback"), /not allowed for the sandbox/);
+  assert.throws(build("sandbox", "http://127.0.0.1:4178/callback"), /not allowed for the sandbox/);
+  assert.doesNotThrow(build("sandbox", "http://localhost:4178/api/accounting/qbo/callback"));
+  assert.doesNotThrow(build("production", "https://rops.example.test/api/accounting/qbo/callback"));
+});
+
+test("OAuth errors keep only a machine error code, never provider free text", async () => {
+  const client = createQuickBooksOAuthClient(config(async () => response(400, { error: "the refresh token refresh-secret-value is invalid", error_description: "refresh-secret-value" })));
+  await assert.rejects(() => client.refreshToken("refresh-secret-value"), (error: unknown) => {
+    assert.ok(error instanceof QuickBooksIntegrationError);
+    assert.equal(error.details.error, undefined);
+    assert.doesNotMatch(`${error.message} ${JSON.stringify(error)} ${JSON.stringify(error.details)}`, /refresh-secret-value/);
+    return true;
+  });
+  const grant = createQuickBooksOAuthClient(config(async () => response(400, { error: "invalid_grant", error_description: "refresh-secret-value" })));
+  await assert.rejects(() => grant.refreshToken("refresh-secret-value"), (error: unknown) => {
+    assert.ok(error instanceof QuickBooksIntegrationError);
+    assert.equal(error.details.error, "invalid_grant");
+    assert.doesNotMatch(JSON.stringify(error), /refresh-secret-value/);
+    return true;
+  });
+});

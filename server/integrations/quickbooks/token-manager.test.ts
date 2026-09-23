@@ -139,3 +139,62 @@ test("hard refresh-token expiry disables refresh and requests reconnect", async 
   assert.equal(reason, "refresh_token_hard_expired");
   assert.equal(refreshCalls, 0);
 });
+
+test("invalid_grant for a refresh token another worker already rotated does not disable the connection", async () => {
+  const stale: QuickBooksStoredToken = { accessToken: "old-access", refreshToken: "old-refresh", tokenType: "bearer", accessTokenExpiresAt: "2026-09-21T11:00:00.000Z", version: 5 };
+  const winner: QuickBooksStoredToken = { ...rotated, version: 6 };
+  let loads = 0;
+  let marked = 0;
+  const repository: QuickBooksTokenRepository = {
+    async load() { loads += 1; return loads === 1 ? stale : winner; },
+    async save() { throw new Error("unused"); },
+    async revoke() { throw new Error("unused"); },
+    async markNeedsReconnect() { marked += 1; },
+  };
+  const manager = createQuickBooksTokenManager({
+    repository,
+    oauth: {
+      async refreshToken() { throw new QuickBooksIntegrationError("quickbooks_oauth", "QuickBooks OAuth token refresh failed", { status: 400, details: { error: "invalid_grant" } }); },
+      async revokeToken() { return {}; },
+    },
+    now: () => current,
+  });
+  assert.equal(await manager.getAccessToken(scope), "new-access");
+  assert.equal(marked, 0);
+});
+
+test("a worker that loses the refresh lease waits for the winner's committed token instead of failing", async () => {
+  const expired: QuickBooksStoredToken = { accessToken: "old-access", refreshToken: "old-refresh", tokenType: "bearer", accessTokenExpiresAt: "2026-09-21T11:00:00.000Z", version: 2 };
+  let loads = 0;
+  let refreshes = 0;
+  const repository: QuickBooksTokenRepository = {
+    async load() { loads += 1; return loads < 4 ? expired : { ...rotated, version: 3 }; },
+    async save() { throw new Error("loser must not save"); },
+    async revoke() { throw new Error("unused"); },
+    async markNeedsReconnect() { throw new Error("unused"); },
+  };
+  const sleeps: number[] = [];
+  const manager = createQuickBooksTokenManager({
+    repository,
+    oauth: { async refreshToken() { refreshes += 1; return rotated; }, async revokeToken() { return {}; } },
+    now: () => current,
+    refreshLease: { async acquire() { return false; }, async release() { throw new Error("not held"); } },
+    refreshLeaseOwnerId: "worker-b",
+    refreshLeasePollMs: 5,
+    sleep: async ms => { sleeps.push(ms); },
+  });
+  assert.equal(await manager.getAccessToken(scope), "new-access");
+  assert.equal(refreshes, 0);
+  assert.deepEqual(sleeps, [5, 5]);
+
+  const stuck = createQuickBooksTokenManager({
+    repository: { ...repository, async load() { return expired; } },
+    oauth: { async refreshToken() { refreshes += 1; return rotated; }, async revokeToken() { return {}; } },
+    now: () => current,
+    refreshLease: { async acquire() { return false; }, async release() {} },
+    refreshLeaseOwnerId: "worker-c",
+    refreshLeaseWaitMs: 0,
+  });
+  await assert.rejects(() => stuck.getAccessToken(scope), (error: unknown) => error instanceof QuickBooksIntegrationError && error.code === "quickbooks_token_store" && error.retryable);
+  assert.equal(refreshes, 0);
+});

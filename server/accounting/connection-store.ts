@@ -262,18 +262,28 @@ export class PostgresQuickBooksTokenRepository implements QuickBooksTokenReposit
     return this.save(scope, token);
   }
 
-  async revoke(scope: QuickBooksConnectionScope): Promise<void> {
+  /**
+   * Tombstone the connection. With `expectedVersion`, only that exact stored
+   * credential is wiped; a concurrent rotation makes this a conflict so the
+   * caller revokes the newer token instead of silently orphaning it.
+   */
+  async revoke(scope: QuickBooksConnectionScope, expectedVersion?: number): Promise<void> {
     const parsed = sourceScope(scope);
-    await this.executor.query(
+    if (expectedVersion !== undefined && (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1)) throw new AccountingError("accounting_validation", "QBO token version is invalid");
+    const values: unknown[] = [parsed.organizationId, parsed.legalEntityId, parsed.environment, parsed.realmId, this.now().toISOString()];
+    if (expectedVersion !== undefined) values.push(expectedVersion);
+    const result = await this.executor.query<{ version: unknown }>(
       `UPDATE accounting_qbo_connections
           SET status = 'revoked', revoked_at = $5,
               encrypted_access_token = NULL, access_token_iv = NULL, access_token_auth_tag = NULL,
               encrypted_refresh_token = NULL, refresh_token_iv = NULL, refresh_token_auth_tag = NULL,
               encrypted_id_token = NULL, id_token_iv = NULL, id_token_auth_tag = NULL,
               version = version + 1, updated_at = $5
-        WHERE organization_id = $1 AND legal_entity_id = $2 AND environment = $3 AND realm_id = $4 AND status = 'active' AND revoked_at IS NULL`,
-      [parsed.organizationId, parsed.legalEntityId, parsed.environment, parsed.realmId, this.now().toISOString()],
+        WHERE organization_id = $1 AND legal_entity_id = $2 AND environment = $3 AND realm_id = $4 AND status = 'active' AND revoked_at IS NULL${expectedVersion !== undefined ? " AND version = $6" : ""}
+      RETURNING version`,
+      values,
     );
+    if (expectedVersion !== undefined && result.rows.length === 0) throw new AccountingError("accounting_conflict", "QBO connection changed before it could be disconnected");
   }
 
   async markNeedsReconnect(scope: QuickBooksConnectionScope, details: { readonly reason: "invalid_grant" | "refresh_token_expired" | "refresh_token_hard_expired"; readonly intuitTid?: string }): Promise<void> {

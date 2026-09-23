@@ -21,6 +21,13 @@ export interface QuickBooksTokenManagerOptions {
   readonly refreshLease?: QuickBooksRefreshLease;
   readonly refreshLeaseOwnerId?: string;
   readonly refreshLeaseTtlMs?: number;
+  /**
+   * How long a worker that lost the refresh lease waits for the winner's
+   * committed token before reporting a retryable conflict. Default 10s.
+   */
+  readonly refreshLeaseWaitMs?: number;
+  readonly refreshLeasePollMs?: number;
+  readonly sleep?: (ms: number) => Promise<void>;
 }
 
 export interface QuickBooksTokenManager extends QuickBooksTokenProvider {
@@ -71,6 +78,12 @@ export function createQuickBooksTokenManager(options: QuickBooksTokenManagerOpti
   if (options.refreshLease && (!options.refreshLeaseOwnerId || !/^[A-Za-z0-9_.:-]{1,160}$/.test(options.refreshLeaseOwnerId))) {
     throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks refresh lease owner is invalid");
   }
+  const refreshLeaseWaitMs = options.refreshLeaseWaitMs ?? 10_000;
+  const refreshLeasePollMs = options.refreshLeasePollMs ?? 250;
+  if (!Number.isSafeInteger(refreshLeaseWaitMs) || refreshLeaseWaitMs < 0 || refreshLeaseWaitMs > 120_000 || !Number.isSafeInteger(refreshLeasePollMs) || refreshLeasePollMs < 1 || refreshLeasePollMs > 10_000) {
+    throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks refresh lease wait is invalid");
+  }
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   const locks = new Map<string, Promise<unknown>>();
   // A database outage while recording a reconnect transition must not cause
   // this worker to call Intuit with the same rejected grant on every request.
@@ -168,13 +181,20 @@ export function createQuickBooksTokenManager(options: QuickBooksTokenManagerOpti
             throw tokenStoreFailure("QuickBooks refresh lease could not be acquired", error);
           }
           if (!leaseHeld) {
-            // Another worker owns the lease. Use its committed token if it has
-            // already won; do not refresh with a stale refresh token.
-            try {
-              const winner = await options.repository.load(scope);
-              if (winner && validUntil(winner.accessTokenExpiresAt, now(), expirySkewMs)) return winner.accessToken;
-            } catch (error) {
-              throw tokenStoreFailure("QuickBooks token could not be re-read after a refresh lease conflict", error);
+            // Another worker owns the lease. Wait a bounded time for its
+            // committed token; never refresh with a possibly stale token.
+            const deadline = Date.now() + refreshLeaseWaitMs;
+            for (;;) {
+              let winner: QuickBooksStoredToken | null | undefined;
+              try {
+                winner = await options.repository.load(scope);
+              } catch (error) {
+                throw tokenStoreFailure("QuickBooks token could not be re-read after a refresh lease conflict", error);
+              }
+              if (!winner) throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks connection is not authorized");
+              if (validUntil(winner.accessTokenExpiresAt, now(), expirySkewMs)) return winner.accessToken;
+              if (Date.now() + refreshLeasePollMs > deadline) break;
+              await sleep(refreshLeasePollMs);
             }
             throw new QuickBooksIntegrationError("quickbooks_token_store", "QuickBooks token refresh is already in progress", { retryable: true });
           }
@@ -195,7 +215,26 @@ export function createQuickBooksTokenManager(options: QuickBooksTokenManagerOpti
           try {
             rotated = await options.oauth.refreshToken(stored.refreshToken, stored.refreshTokenExpiresAt, stored.refreshTokenHardExpiresAt);
           } catch (error) {
-            if (isInvalidGrant(error)) return requireReconnect(scope, stored, "invalid_grant", error.intuitTid);
+            if (isInvalidGrant(error)) {
+              // Intuit rejects a refresh token that another worker has already
+              // rotated. Only a grant that is still the latest stored one is
+              // truly invalid; never disable a connection a winner just renewed.
+              let latest: QuickBooksStoredToken | null | undefined;
+              try {
+                latest = await options.repository.load(scope);
+              } catch {
+                latest = undefined;
+              }
+              const current = stored;
+              const superseded = latest && (latest.version !== undefined && current.version !== undefined
+                ? latest.version !== current.version
+                : latest.refreshToken !== current.refreshToken);
+              if (latest && superseded) {
+                if (validUntil(latest.accessTokenExpiresAt, now(), expirySkewMs)) return latest.accessToken;
+                throw new QuickBooksIntegrationError("quickbooks_token_store", "QuickBooks token changed during refresh; retry", { retryable: true });
+              }
+              return requireReconnect(scope, stored, "invalid_grant", error.intuitTid);
+            }
             throw error;
           }
           let saved: QuickBooksStoredToken;

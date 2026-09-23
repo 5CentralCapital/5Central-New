@@ -91,6 +91,9 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
    * organization-free redirect URI.
    */
   const completeCallback = async (request: Request, response: Response, expectedOrganizationId: string | null): Promise<void> => {
+    // The callback URL carries the one-time authorization code; never leak it
+    // through a Referer header from whatever this response renders.
+    response.setHeader("Referrer-Policy", "no-referrer");
     const query = callbackQuerySchema.parse(request.query);
     if (services.qbo.status !== "configured") throw new AccountingError("accounting_configuration", "QuickBooks is not configured");
     const pending = await services.qbo.oauthConnection.peek(query.state);
@@ -99,12 +102,11 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
     if (pending.actorId !== actorId) throw new AccountingError("accounting_conflict", "QuickBooks OAuth callback actor does not match the initiating session");
     await authorizedScope(executor, request, pending.organizationId, pending.legalEntityId, MUTATION_ROLES);
     const result = await services.qbo.oauthConnection.complete({ state: query.state, actorId, sessionBinding: browserSessionBinding(request), code: query.code, callbackRealmId: query.realmId, providerError: query.error });
-    if (result.status === "pending_confirmation") {
-      const search = new URLSearchParams({ section: "accounting", company: pending.organizationId, qboPending: result.pendingId, qboEntity: result.scope.legalEntityId });
-      response.redirect(303, `/ops?${search.toString()}`);
-      return;
-    }
-    response.json(result);
+    // Always leave the code-bearing callback URL for a clean application URL.
+    const search = result.status === "pending_confirmation"
+      ? new URLSearchParams({ section: "accounting", company: pending.organizationId, qboPending: result.pendingId, qboEntity: result.scope.legalEntityId })
+      : new URLSearchParams({ section: "accounting", company: pending.organizationId, qboConnected: result.scope.realmId, qboEntity: result.scope.legalEntityId });
+    response.redirect(303, `/ops?${search.toString()}`);
   };
   app.get("/api/company/:organizationId/accounting/qbo/configuration", requireAdmin, companyReadHandler(async (request, response) => {
     const organizationId = organizationIdSchema.parse(request.params.organizationId);

@@ -59,9 +59,15 @@ function positiveSeconds(value: unknown): number | undefined {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+/** OAuth error codes are short machine tokens; anything else is dropped so provider text never crosses the error boundary. */
+function oauthErrorCode(value: unknown): string | undefined {
+  const code = safeString(value, 64);
+  return code && /^[A-Za-z0-9_.-]{1,64}$/.test(code) ? code : undefined;
+}
+
 function oauthFailure(response: QuickBooksTransportResponse, operation: string): QuickBooksIntegrationError {
   const body = parsedObject(response.body);
-  const code = safeString(body?.error) ?? safeString(body?.errorCode);
+  const code = oauthErrorCode(body?.error) ?? oauthErrorCode(body?.errorCode);
   const transient = response.status === 408 || response.status === 429 || response.status >= 500;
   return new QuickBooksIntegrationError("quickbooks_oauth", `QuickBooks OAuth ${operation} failed`, {
     status: response.status,
@@ -136,6 +142,33 @@ function requiredHttpsUrl(value: unknown, field: string): string {
   return url.toString();
 }
 
+function isIpLiteral(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, "");
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) || host.includes(":");
+}
+
+/**
+ * Intuit matches redirect URIs exactly. Production URIs must be HTTPS on a
+ * DNS host (no IP literal, no localhost); only sandbox may use localhost.
+ */
+function assertRedirectUriPolicy(value: string, environment: QuickBooksOAuthClientConfig["environment"]): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks redirect URI is invalid");
+  }
+  const hostname = url.hostname.toLowerCase();
+  const localhost = hostname === "localhost" || hostname.endsWith(".localhost");
+  const invalid = url.username || url.password || url.hash
+    || (url.protocol !== "https:" && !(url.protocol === "http:" && environment === "sandbox" && localhost))
+    || (environment === "production" && (localhost || isIpLiteral(hostname)))
+    || (environment === "sandbox" && isIpLiteral(hostname));
+  if (invalid) {
+    throw new QuickBooksIntegrationError("quickbooks_configuration", `QuickBooks redirect URI is not allowed for the ${environment === "production" ? "production" : "sandbox"} environment`);
+  }
+}
+
 function defaultTransport(): QuickBooksTransport {
   throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks OAuth requires an injected transport");
 }
@@ -157,6 +190,8 @@ export function createQuickBooksOAuthClient(config: QuickBooksOAuthClientConfig)
   assertNonEmpty(config.clientSecret, "QuickBooks client secret");
   assertNonEmpty(config.redirectUri, "QuickBooks redirect URI");
   if (config.redirectUri.length > 2048) throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks redirect URI is too long");
+  if (config.environment !== "sandbox" && config.environment !== "production") throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks environment is invalid");
+  assertRedirectUriPolicy(config.redirectUri, config.environment);
   if (typeof config.transport !== "function") throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks OAuth transport is required");
   const transport = config.transport ?? defaultTransport();
   const now = config.now ?? (() => new Date());

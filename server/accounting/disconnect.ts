@@ -10,6 +10,7 @@ import { canonicalJsonSha256 } from "../company/commands/fingerprint";
 import { PostgresQuickBooksCapabilityStore } from "./capabilities";
 import { PostgresQuickBooksTokenRepository } from "./connection-store";
 import type { QboTokenCipher } from "./token-crypto";
+import { PostgresQuickBooksRefreshLease, newQuickBooksRefreshLeaseOwner, type QuickBooksRefreshLease } from "./refresh-lease";
 import { AccountingError } from "./errors";
 
 export const QBO_DISCONNECT_COMMAND_KIND = "accounting.qbo.disconnect";
@@ -47,7 +48,11 @@ export interface QuickBooksDisconnectDependencies {
   readonly cipher: QboTokenCipher;
   readonly oauth: Pick<QuickBooksOAuthClient, "revokeToken">;
   readonly now?: () => Date;
+  /** The same cross-worker lease that fences refresh rotation. */
+  readonly refreshLease?: QuickBooksRefreshLease;
 }
+
+const DISCONNECT_LEASE_TTL_MS = 180_000;
 
 function alreadyRevokedAtProvider(error: unknown): boolean {
   if (!isQuickBooksIntegrationError(error) || error.code !== "quickbooks_oauth") return false;
@@ -92,6 +97,23 @@ export async function disconnectQuickBooksConnection(deps: QuickBooksDisconnectD
   const connectionScope: QuickBooksConnectionScope = { organizationId: scope.organizationId, legalEntityId: scope.legalEntityId, environment: scope.environment, realmId: scope.realmId };
   const now = deps.now ?? (() => new Date());
   if (!deps.executor.transaction) throw new AccountingError("accounting_configuration", "QuickBooks disconnect requires an atomic company database transaction");
+  // Hold the refresh lease so no worker can rotate the refresh token between
+  // the provider revoke and the local wipe. Otherwise the revoke could target
+  // a superseded token while a newer, still-authorized grant is overwritten.
+  const lease = deps.refreshLease ?? new PostgresQuickBooksRefreshLease(deps.executor, now);
+  const leaseOwner = newQuickBooksRefreshLeaseOwner("disconnect");
+  if (!(await lease.acquire(connectionScope, leaseOwner, DISCONNECT_LEASE_TTL_MS))) {
+    throw new AccountingError("accounting_unavailable", "QuickBooks token refresh is in progress. The connection was kept; try again.", { reason: "qbo_disconnect_unconfirmed", retryable: true });
+  }
+  try {
+    return await disconnectUnderLease(deps, input, connectionScope, now);
+  } finally {
+    try { await lease.release(connectionScope, leaseOwner); } catch { /* lease expiry recovers */ }
+  }
+}
+
+async function disconnectUnderLease(deps: QuickBooksDisconnectDependencies, input: QuickBooksDisconnectInput, connectionScope: QuickBooksConnectionScope, now: () => Date): Promise<QuickBooksDisconnectResult> {
+  if (!deps.executor.transaction) throw new AccountingError("accounting_configuration", "QuickBooks disconnect requires an atomic company database transaction");
   const stored = await new PostgresQuickBooksTokenRepository(deps.executor, deps.cipher, now).load(connectionScope);
   if (!stored) throw new AccountingError("accounting_not_found", "No active QuickBooks connection exists for this legal entity and realm");
   const operationId = randomUUID();
@@ -118,7 +140,8 @@ export async function disconnectQuickBooksConnection(deps: QuickBooksDisconnectD
   }
   const disconnectedAt = now().toISOString();
   await deps.executor.transaction(async transaction => {
-    await new PostgresQuickBooksTokenRepository(transaction, deps.cipher, () => new Date(disconnectedAt)).revoke(connectionScope);
+    // Version-fenced: only the exact credential that was revoked at Intuit is wiped.
+    await new PostgresQuickBooksTokenRepository(transaction, deps.cipher, () => new Date(disconnectedAt)).revoke(connectionScope, stored.version);
     const capabilities = new PostgresQuickBooksCapabilityStore(transaction);
     for (const capability of DISCONNECT_CAPABILITIES) {
       if (!(await capabilities.load(connectionScope, capability))) continue;

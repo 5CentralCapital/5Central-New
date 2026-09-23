@@ -142,3 +142,83 @@ test("preserves large JSON monetary lexemes until the caller can validate them",
   assert.equal(result.entity.Id, "9007199254740993");
   assert.equal(result.entity.TotalAmt, "90071992547409.93");
 });
+
+test("every write carries a requestid, reuses a caller-supplied one, and reports it on an uncertain outcome", async () => {
+  const urls: string[] = [];
+  let status = 200;
+  const client = createQuickBooksAccountingClient({
+    scope,
+    getAccessToken: async () => "access-token",
+    transport: async request => {
+      urls.push(request.url);
+      if (status !== 200) throw new QuickBooksIntegrationError("quickbooks_timeout", "QuickBooks request timed out", { retryable: true });
+      return response(200, { Vendor: { Id: "7", SyncToken: "0", DisplayName: "Synthetic" } });
+    },
+  });
+  await client.create("Vendor", { DisplayName: "Synthetic" });
+  await client.update({ entity: "Vendor", id: "7", syncToken: "0", fields: { DisplayName: "Synthetic" } }, { requestId: "op-update-1" });
+  const generated = new URL(urls[0]!).searchParams.get("requestid");
+  assert.ok(generated && generated.length <= 50);
+  assert.equal(new URL(urls[0]!).searchParams.get("minorversion"), "75");
+  assert.equal(new URL(urls[1]!).searchParams.get("requestid"), "op-update-1");
+
+  status = 0;
+  await assert.rejects(() => client.create("Vendor", { DisplayName: "Synthetic" }, { requestId: "op-create-1" }), (error: unknown) => {
+    assert.ok(error instanceof QuickBooksIntegrationError);
+    assert.equal(error.code, "quickbooks_ambiguous_write");
+    assert.equal(error.details.requestId, "op-create-1");
+    return true;
+  });
+  assert.equal(new URL(urls[2]!).searchParams.get("requestid"), "op-create-1");
+  await assert.rejects(() => client.create("Vendor", {}, { requestId: "x".repeat(51) }), /requestid is invalid/);
+  await assert.rejects(() => client.create("Vendor", {}, { requestId: "bad id&x=1" }), /requestid is invalid/);
+  assert.equal(urls.length, 3, "invalid requestids are rejected before sending");
+});
+
+test("stale SyncToken fault 5010 is a definitive conflict, not a generic validation failure", async () => {
+  const client = createQuickBooksAccountingClient({
+    scope,
+    getAccessToken: async () => "access-token",
+    transport: async () => response(400, { Fault: { Error: [{ code: "5010", Message: "Stale Object Error", Detail: "synthetic detail" }], type: "ValidationFault" } }, { intuit_tid: "tid-stale" }),
+  });
+  await assert.rejects(() => client.update({ entity: "Vendor", id: "7", syncToken: "0", fields: { DisplayName: "Old" } }), (error: unknown) => {
+    assert.ok(error instanceof QuickBooksIntegrationError);
+    assert.equal(error.code, "quickbooks_conflict");
+    assert.equal(error.ambiguous, false);
+    assert.equal(error.details.providerCode, "5010");
+    assert.equal(error.intuitTid, "tid-stale");
+    assert.doesNotMatch(JSON.stringify(error), /synthetic detail/);
+    return true;
+  });
+});
+
+test("HTTP 429 backs off 60 seconds per realm without sending further requests", async () => {
+  let calls = 0;
+  const transport = async (): Promise<QuickBooksTransportResponse> => {
+    calls += 1;
+    return response(429, { Fault: { Error: [{ code: "003001" }] } });
+  };
+  const client = createQuickBooksAccountingClient({ scope, getAccessToken: async () => "access-token", transport });
+  await assert.rejects(() => client.read("Account", "1"), (error: unknown) => {
+    assert.ok(error instanceof QuickBooksIntegrationError);
+    assert.equal(error.code, "quickbooks_rate_limited");
+    assert.equal(error.retryable, true);
+    assert.equal(error.retryAfterMs, 60_000);
+    return true;
+  });
+  // A second client sharing the process transport honours the same back-off.
+  const sibling = createQuickBooksAccountingClient({ scope, getAccessToken: async () => "access-token", transport });
+  for (const operation of [() => sibling.query("select * from Account"), () => sibling.create("Account", { Name: "x" })]) {
+    await assert.rejects(operation, (error: unknown) => {
+      assert.ok(error instanceof QuickBooksIntegrationError);
+      assert.equal(error.code, "quickbooks_rate_limited");
+      assert.equal(error.ambiguous, false, "nothing was sent, so a blocked write is not ambiguous");
+      assert.ok((error.retryAfterMs ?? 0) > 59_000);
+      return true;
+    });
+  }
+  assert.equal(calls, 1);
+  // Another realm is not throttled by this realm's back-off.
+  const otherRealm = createQuickBooksAccountingClient({ scope: { ...scope, realmId: "999" }, getAccessToken: async () => "access-token", transport: async () => response(200, { Account: { Id: "1" } }) });
+  assert.equal((await otherRealm.read("Account", "1")).entity.Id, "1");
+});

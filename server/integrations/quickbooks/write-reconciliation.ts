@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { QuickBooksApiResponse, QuickBooksJsonObject } from "../../../shared/accounting/quickbooks";
 import { canonicalJsonSha256 } from "../../company/commands/fingerprint";
 import { QuickBooksIntegrationError } from "./errors";
@@ -44,7 +45,13 @@ export interface QuickBooksWriteReconciler {
   execute<TRequest extends QuickBooksJsonObject>(input: {
     readonly operationKey: string;
     readonly request: TRequest;
-    readonly write: () => Promise<QuickBooksApiResponse>;
+    /**
+     * Performs the provider write. It must forward `requestId` to the
+     * Accounting client (`create(..., { requestId })` / `update(..., { requestId })`)
+     * so that a reconciled retry of the same operation key is de-duplicated
+     * by Intuit rather than creating a second provider object.
+     */
+    readonly write: (context: { readonly requestId: string }) => Promise<QuickBooksApiResponse>;
     readonly readback: () => Promise<QuickBooksReadbackResult>;
   }): Promise<QuickBooksWriteExecutionResult>;
 }
@@ -52,6 +59,15 @@ export interface QuickBooksWriteReconciler {
 function operationKey(value: string): string {
   if (typeof value !== "string" || !/^[A-Za-z0-9_.:-]{1,255}$/.test(value)) throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks operation key is invalid");
   return value;
+}
+
+/**
+ * Intuit de-duplicates writes by `requestid` (at most 50 characters, unique
+ * per realm). Operation keys are unique per connection scope in the write
+ * journal, so a digest of the key is stable across retries and workers.
+ */
+export function quickBooksWriteRequestId(operationKeyValue: string): string {
+  return `rops-${createHash("sha256").update(operationKey(operationKeyValue), "utf8").digest("hex").slice(0, 40)}`;
 }
 
 function providerId(response: QuickBooksApiResponse): string | undefined {
@@ -116,6 +132,7 @@ export function createQuickBooksWriteReconciler(journal: QuickBooksWriteJournal)
   return {
     async execute(input) {
       const key = operationKey(input.operationKey);
+      const requestId = quickBooksWriteRequestId(key);
       const requestHash = canonicalJsonSha256(input.request);
       const existing = await journal.load(key);
       if (existing && existing.requestHash !== requestHash) throw new QuickBooksIntegrationError("quickbooks_conflict", "QuickBooks operation key is bound to different input");
@@ -141,7 +158,9 @@ export function createQuickBooksWriteReconciler(journal: QuickBooksWriteJournal)
       try { await journal.save({ operationKey: key, requestHash, state: "started" }); }
       catch (error) { throw new QuickBooksIntegrationError("quickbooks_token_store", "QuickBooks write journal could not be started", { cause: error }); }
       try {
-        const response = await input.write();
+        // A retry after a "not found" readback reuses the same requestid, so
+        // an original write that Intuit did commit is returned, not duplicated.
+        const response = await input.write({ requestId });
         // Provider success is not enough: a separate read proves the request
         // was committed under the expected identity and fields.
         let readback: QuickBooksReadbackResult;
