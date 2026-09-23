@@ -1974,4 +1974,3 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
   return { input, exceptions, recordCounts, confidence };
 }
 
-export const normalizeRmExport = normalizeRentManagerExport;
