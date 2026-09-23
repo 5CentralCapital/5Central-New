@@ -1,0 +1,8 @@
+/* Company selection and entry states shared by the review, MRA results and document entry points. */
+.rm-workspace.rops-modern .rc-company-picker { display: flex; margin-bottom: 12px; color: var(--ds-muted); font: var(--ds-callout); }
+.rm-workspace.rops-modern .rc-company-picker select { margin-left: 8px; }
+.rm-workspace.rops-modern .rc-state { display: grid; justify-items: center; gap: 6px; padding: 40px 20px; color: var(--ds-muted); text-align: center; }
+.rm-workspace.rops-modern .rc-state h3 { margin: 4px 0 0; color: var(--ds-ink); font: var(--ds-title-2); letter-spacing: -.018em; }
+.rm-workspace.rops-modern .rc-state p { margin: 0; font: var(--ds-body); }
+.rm-workspace.rops-modern .rc-state svg { color: var(--ds-faint); }
+.rm-workspace.rops-modern .rc-state .rm-button { margin-top: 8px; }

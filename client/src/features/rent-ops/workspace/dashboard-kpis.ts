@@ -1,4 +1,5 @@
 // Headline figures for the dashboard summary strip.
+import { reviewLabelForCodes, reviewReason, UNKNOWN_AMOUNT_LABEL, UNVERIFIED_LABEL } from "@shared/review-cases/reasons";
 // Derived only from rows the dashboard already loads. Unknown inputs never render as zero.
 
 type Row = Record<string, unknown>;
@@ -15,13 +16,21 @@ export interface DashboardKpi {
   share?: number;
 }
 
-const REVIEW = "Needs review";
+/** Unknown quantities read "Unknown", never zero; details carry the specific review label. */
+const REVIEW = UNKNOWN_AMOUNT_LABEL;
 const isCents = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value);
 const count = (value: unknown) => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined);
 
 export function formatWholeDollars(cents: number): string {
   const sign = cents < 0 ? "−" : "";
   return `${sign}$${Math.round(Math.abs(cents) / 100).toLocaleString("en-US")}`;
+}
+
+/** Most material review label across the balance rows that are not known. */
+function dueReviewLabel(rows: Row[]): string {
+  const codes = rows.filter(row => !isCents(row.operationalBalanceCents))
+    .flatMap(row => Array.isArray(row.balanceUncertaintyCodes) ? row.balanceUncertaintyCodes.filter((code): code is string => typeof code === "string") : []);
+  return reviewLabelForCodes(codes);
 }
 
 function sum(rows: Row[] | undefined, key: string): number | undefined {
@@ -72,7 +81,7 @@ export function dashboardKpis(input: {
 
   const rentTotal = sum(propertyRows, "rent");
   const rent: DashboardKpi = rentTotal === undefined || !occupancyKnown || rentUnknown || unknown
-    ? { key: "rent", label: "Occupied base rent", value: REVIEW, detail: "Some rents or occupancy are unconfirmed", tone: "review" }
+    ? { key: "rent", label: "Occupied base rent", value: REVIEW, detail: rentUnknown ? reviewReason("rent_amount_unknown").shortLabel : UNVERIFIED_LABEL, tone: "review" }
     : { key: "rent", label: "Occupied base rent", value: formatWholeDollars(rentTotal), detail: "Monthly, current tenancies", tone: "normal" };
 
   const receiptTotal = sum(receipts, "amountCents");
@@ -92,7 +101,7 @@ export function dashboardKpis(input: {
   const due: DashboardKpi = !dueRows
     ? { key: "due", label: "Balances due", value: REVIEW, detail: "Delinquency not loaded", tone: "review" }
     : dueTotal === undefined
-      ? { key: "due", label: "Balances due", value: REVIEW, detail: `${accounts} account${accounts === 1 ? " needs" : "s need"} review`, tone: "review" }
+      ? { key: "due", label: "Balances due", value: REVIEW, detail: `${dueReviewLabel(dueRows)} · ${accounts} account${accounts === 1 ? "" : "s"}`, tone: "review" }
       : {
           key: "due",
           label: "Balances due",

@@ -13,14 +13,14 @@ const columns: GridColumn<Row>[] = [
 test("money display preserves zero and marks unknown cents", () => {
   assert.equal(formatMoney(0), "$0.00");
   assert.equal(formatMoney(125050), "$1,250.50");
-  assert.equal(formatMoney(null), "Needs review");
-  assert.equal(formatMoney(""), "Needs review");
-  assert.equal(formatMoney(10.5), "Needs review");
+  assert.equal(formatMoney(null), "Unknown");
+  assert.equal(formatMoney(""), "Unknown");
+  assert.equal(formatMoney(10.5), "Unknown");
 });
 
 test("date and label display values are readable and deterministic", () => {
   assert.equal(formatDate("2026-01-05"), "Jan 5, 2026");
-  assert.equal(formatDate(undefined), "Needs review");
+  assert.equal(formatDate(undefined), "Unverified");
   assert.equal(formatLabel("future_preleased"), "Future Preleased");
   assert.equal(formatLabel("monthToMonth"), "Month To Month");
 });

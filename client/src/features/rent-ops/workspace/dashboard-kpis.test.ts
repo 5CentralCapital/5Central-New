@@ -31,19 +31,30 @@ test("unknown inputs are never shown as zero", () => {
     period: "2026-08",
   });
   assert.equal(occupancy.tone, "review");
-  assert.equal(rent.value, "Needs review");
-  assert.equal(receipts.value, "Needs review");
-  assert.equal(due.value, "Needs review");
-  assert.equal(due.detail, "1 account needs review");
+  assert.equal(rent.value, "Unknown");
+  assert.equal(rent.detail, "Rent amount unknown");
+  assert.equal(receipts.value, "Unknown");
+  assert.equal(due.value, "Unknown");
+  assert.equal(due.detail, "Unverified · 1 account");
 });
 
 test("missing collections read as review, empty delinquency as clear", () => {
   const kpis = dashboardKpis({ period: "2026-08", dueRows: [] });
-  assert.equal(kpis[0].value, "Needs review");
-  assert.equal(kpis[2].value, "Needs review");
+  assert.equal(kpis[0].value, "Unknown");
+  assert.equal(kpis[2].value, "Unknown");
   assert.equal(kpis[3].value, "$0");
   assert.equal(kpis[3].detail, "No open balances");
   assert.equal(kpis[3].tone, "normal");
+});
+
+test("unknown balances name the specific review reason", () => {
+  const due = dashboardKpis({ period: "2026-08", dueRows: [
+    { operationalBalanceCents: null, balanceUncertaintyCodes: ["ledger_amount_unknown"] },
+    { operationalBalanceCents: null, balanceUncertaintyCodes: ["imported_account_history_unverified"] },
+    { operationalBalanceCents: 1000 },
+  ] })[3];
+  assert.equal(due.value, "Unknown");
+  assert.equal(due.detail, "History incomplete · 3 accounts");
 });
 
 test("whole-dollar formatting rounds and signs", () => {

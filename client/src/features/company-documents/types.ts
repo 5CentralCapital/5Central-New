@@ -36,8 +36,10 @@ export interface CompanyDocumentMetadataUpdateInput {
 
 export interface CompanyDocumentsApi {
   list(organizationId: string, filter?: CompanyDocumentListFilter, signal?: AbortSignal): Promise<CompanyDocumentPage>;
+  get(organizationId: string, documentId: string, signal?: AbortSignal): Promise<CompanyDocument>;
   upload(organizationId: string, input: CompanyDocumentUploadInput, signal?: AbortSignal): Promise<CompanyDocument>;
   updateMetadata(organizationId: string, input: CompanyDocumentMetadataUpdateInput, signal?: AbortSignal): Promise<CompanyDocument>;
+  archive(organizationId: string, document: Pick<CompanyDocument, "id" | "recordRevision">, signal?: AbortSignal): Promise<void>;
   download(organizationId: string, documentId: string, signal?: AbortSignal): Promise<Blob>;
 }
 
