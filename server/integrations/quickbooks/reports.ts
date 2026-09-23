@@ -8,7 +8,15 @@ import type {
   QuickBooksTransportResponse,
 } from "../../../shared/accounting/quickbooks";
 import { QuickBooksIntegrationError } from "./errors";
-import { DEFAULT_QUICKBOOKS_MINOR_VERSION, QUICKBOOKS_PRODUCTION_ACCOUNTING_BASE_URL, QUICKBOOKS_SANDBOX_ACCOUNTING_BASE_URL, quickBooksProviderFaultError } from "./accounting";
+import {
+  assertQuickBooksRealmNotCoolingDown,
+  DEFAULT_QUICKBOOKS_MINOR_VERSION,
+  QUICKBOOKS_PRODUCTION_ACCOUNTING_BASE_URL,
+  QUICKBOOKS_SANDBOX_ACCOUNTING_BASE_URL,
+  quickBooksProviderFaultError,
+  quickBooksRetryAfterMs,
+  recordQuickBooksRateLimit,
+} from "./accounting";
 import { parseJsonLosslessNumbers } from "./json-lossless";
 
 export type QuickBooksReportAccountingMethod = "Cash" | "Accrual";
@@ -174,6 +182,7 @@ function apiError(response: QuickBooksTransportResponse): QuickBooksIntegrationE
     status: response.status,
     retryable: transient,
     intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid"),
+    retryAfterMs: quickBooksRetryAfterMs(response),
   });
 }
 
@@ -203,9 +212,12 @@ export function createQuickBooksReportsClient(config: QuickBooksAccountingClient
       if (!/^\d{1,4}$/.test(minorVersion)) throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks minor version is invalid");
       params.minorversion = minorVersion;
       for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+      // Reports share the realm's 429 back-off with the Accounting client.
+      assertQuickBooksRealmNotCoolingDown(config.transport, scope);
       const token = await config.getAccessToken();
       if (!token) throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks access token is unavailable");
       const response = await config.transport({ method: "GET", url: url.toString(), headers: { Accept: "application/json", Authorization: `Bearer ${token}` } });
+      recordQuickBooksRateLimit(config.transport, scope, response);
       if (response.status < 200 || response.status >= 300) throw apiError(response);
       const fault = quickBooksProviderFaultError(response);
       if (fault) throw fault;

@@ -60,6 +60,41 @@ function cooldownKey(scope: QuickBooksAccountingClientConfig["scope"]): string {
   return `${scope.environment}:${scope.realmId}`;
 }
 
+function cooldownsFor(transport: QuickBooksTransport): Map<string, number> {
+  const existing = rateLimitCooldowns.get(transport);
+  if (existing) return existing;
+  const created = new Map<string, number>();
+  rateLimitCooldowns.set(transport, created);
+  return created;
+}
+
+/**
+ * Refuse to send while this realm is inside an HTTP 429 back-off. Shared by
+ * the Accounting and Reports clients so a throttled realm stops all traffic.
+ */
+export function assertQuickBooksRealmNotCoolingDown(transport: QuickBooksTransport, scope: QuickBooksAccountingClientConfig["scope"]): void {
+  const cooldowns = cooldownsFor(transport);
+  const key = cooldownKey(scope);
+  const until = cooldowns.get(key);
+  if (until === undefined) return;
+  const remaining = until - Date.now();
+  if (remaining <= 0) {
+    cooldowns.delete(key);
+    return;
+  }
+  // Nothing was sent, so this is definitive for reads and writes alike.
+  throw new QuickBooksIntegrationError("quickbooks_rate_limited", "QuickBooks rate limit back-off is in effect for this company", {
+    status: 429,
+    retryable: true,
+    retryAfterMs: remaining,
+  });
+}
+
+/** Start the realm's back-off after an HTTP 429 (Retry-After, at least 60 seconds). */
+export function recordQuickBooksRateLimit(transport: QuickBooksTransport, scope: QuickBooksAccountingClientConfig["scope"], response: QuickBooksTransportResponse): void {
+  if (response.status === 429) cooldownsFor(transport).set(cooldownKey(scope), Date.now() + (quickBooksRetryAfterMs(response) ?? QUICKBOOKS_RATE_LIMIT_BACKOFF_MS));
+}
+
 const BLOCKED_CAPABILITY_NAMES = new Set([
   "Project",
   "ProjectItem",
@@ -118,7 +153,7 @@ function safeString(value: unknown, max = 240): string | undefined {
   return text ? text.slice(0, max) : undefined;
 }
 
-function retryAfterMs(response: QuickBooksTransportResponse): number | undefined {
+export function quickBooksRetryAfterMs(response: QuickBooksTransportResponse): number | undefined {
   const value = header(response, "retry-after");
   let parsed: number | undefined;
   if (value && /^\d+(?:\.\d+)?$/.test(value)) parsed = Math.max(0, Number(value) * 1_000);
@@ -153,7 +188,7 @@ function responseError(response: QuickBooksTransportResponse, method: "GET" | "P
       ambiguous: true,
       retryable: false,
       intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid"),
-      retryAfterMs: retryAfterMs(response),
+      retryAfterMs: quickBooksRetryAfterMs(response),
       details,
     });
   }
@@ -170,7 +205,7 @@ function responseError(response: QuickBooksTransportResponse, method: "GET" | "P
     status: response.status,
     retryable: method === "GET" && transient,
     intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid"),
-    retryAfterMs: retryAfterMs(response),
+    retryAfterMs: quickBooksRetryAfterMs(response),
     details,
   });
 }
@@ -308,30 +343,11 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
   if (typeof config.getAccessToken !== "function") throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks access-token provider is required");
   if (typeof config.transport !== "function") throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks Accounting transport is required");
   const minorVersion = config.minorVersion ?? DEFAULT_QUICKBOOKS_MINOR_VERSION;
-  const cooldowns = rateLimitCooldowns.get(config.transport) ?? new Map<string, number>();
-  rateLimitCooldowns.set(config.transport, cooldowns);
-  const realmKey = cooldownKey(config.scope);
-
-  function assertNotCoolingDown(): void {
-    const until = cooldowns.get(realmKey);
-    if (until === undefined) return;
-    const remaining = until - Date.now();
-    if (remaining <= 0) {
-      cooldowns.delete(realmKey);
-      return;
-    }
-    // Nothing was sent, so this is definitive for reads and writes alike.
-    throw new QuickBooksIntegrationError("quickbooks_rate_limited", "QuickBooks rate limit back-off is in effect for this company", {
-      status: 429,
-      retryable: true,
-      retryAfterMs: remaining,
-    });
-  }
 
   async function call(method: "GET" | "POST", path: string, body?: QuickBooksJsonObject, requestId?: string): Promise<QuickBooksTransportResponse> {
     let accessToken: string;
     try {
-      assertNotCoolingDown();
+      assertQuickBooksRealmNotCoolingDown(config.transport, config.scope);
       accessToken = await config.getAccessToken();
       if (typeof accessToken !== "string" || accessToken.length === 0) {
         throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks access token is unavailable");
@@ -351,7 +367,7 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
       });
-      if (response.status === 429) cooldowns.set(realmKey, Date.now() + (retryAfterMs(response) ?? QUICKBOOKS_RATE_LIMIT_BACKOFF_MS));
+      recordQuickBooksRateLimit(config.transport, config.scope, response);
       if (response.status < 200 || response.status >= 300) throw responseError(response, method, requestId);
       return response;
     } catch (error) {
