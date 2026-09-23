@@ -154,14 +154,15 @@ For the confirmed connection, `/__sandbox/acceptance` runs these steps:
 
 1. Reads CompanyInfo through the provider-sync bootstrap, which enables `accounting.read` from live read-back.
 2. Runs the provider sync catch-up for Purchase, Bill, BillPayment, Deposit, and Account (`maxPages`, default 3; `fullReplay: true` re-reads everything). It passes only when every stream is complete, nothing was rejected in this run, and no durable sync exception from any earlier run remains open. The notes list each open exception by provider ID with its normalizer reason.
-3. Runs one Accounting query (`SELECT * FROM Vendor MAXRESULTS 5`).
-4. Enables `accounting.create` and `accounting.update` for this sandbox realm only, using the existing capability store with the CompanyInfo read-back evidence. Only the harness does this.
-5. Creates a disposable Vendor named `R-ops sandbox test <timestamp>` and reads it back.
-6. Makes a sparse update of `CompanyName` with `Id` and `SyncToken`, then reads it back and confirms that `SyncToken` went up.
-7. Sends an update with the old `SyncToken`. Intuit must reject it after exactly one POST with no retry, and the record must be unchanged.
-8. Marks the access token expired in the repository, then reads. Expected: exactly one refresh, and the refresh token Intuit returned is the one persisted. The check compares hashes internally; the token is never printed.
-9. Disconnects through `POST /api/company/:org/accounting/qbo/disconnect`.
-10. Reads after the disconnect. The read must be refused with a reconnect requirement and no provider request.
+3. Runs `syncChanges()` twice (`change_data_capture`). The first run anchors the change chain (a scoped full replay when no watermark exists); the second must use change data capture (`/cdc`) since that watermark. Added 2026-09-23; not yet run against the live sandbox.
+4. Runs one Accounting query (`SELECT * FROM Vendor MAXRESULTS 5`).
+5. Enables `accounting.create` and `accounting.update` for this sandbox realm only, using the existing capability store with the CompanyInfo read-back evidence. Only the harness does this.
+6. Creates a disposable Vendor named `R-ops sandbox test <timestamp>` and reads it back.
+7. Makes a sparse update of `CompanyName` with `Id` and `SyncToken`, then reads it back and confirms that `SyncToken` went up.
+8. Sends an update with the old `SyncToken`. Intuit must reject it after exactly one POST with no retry, and the record must be unchanged.
+9. Marks the access token expired in the repository, then reads. Expected: exactly one refresh, and the refresh token Intuit returned is the one persisted. The check compares hashes internally; the token is never printed.
+10. Disconnects through `POST /api/company/:org/accounting/qbo/disconnect`.
+11. Reads after the disconnect. The read must be refused with a reconnect requirement and no provider request.
 
 Pass `{"disconnect": false}` to keep the connection. The evidence JSON is
 written to `$ROPS_EVIDENCE_DIR/acceptance-<timestamp>.json` and `latest.json`.
@@ -175,7 +176,12 @@ follow-up:
 - Wrong redirect URI and environment/realm mismatch rejections.
 - Reconnect after the disconnect. Run connect-url, authorize, replay, and confirm again, then repeat the acceptance run.
 - The OAuth and API failure matrices, which mocked tests cover.
-- A real signed webhook, which needs a public HTTPS endpoint.
+- A real signed webhook, which needs a public HTTPS endpoint. Register
+  `https://<public-host>/api/integrations/quickbooks/webhook/sandbox` in the
+  Intuit developer portal, set `QBO_WEBHOOK_VERIFIER_TOKEN_SANDBOX` on the web
+  service, run the worker (`npm run worker:dev`), change a sandbox Bill, and
+  confirm one `accounting_qbo_webhook_events` row, its fetch job, and the
+  mirrored revision.
 
 ### Sandbox verification recorded on 2026-09-22
 
