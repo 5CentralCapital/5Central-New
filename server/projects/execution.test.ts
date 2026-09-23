@@ -405,7 +405,8 @@ test("execution create commands persist through one idempotent company command p
       () => executeProjectExecutionCommand(fixture.executor, "project.draw_request.item.update", envelope({ drawRequestItemId: String(item.affectedRecordIds[0]), requestedCents: "66000" }, projectRevision), options),
       /Draw request exceeds the source eligibility|Draw item amounts are not eligible/,
     );
-    await update("project.draw_request.update", { drawRequestId: drawId, status: "submitted" });
+    // The edit form always resends the percent; item retainage stays authoritative.
+    await update("project.draw_request.update", { drawRequestId: drawId, status: "submitted", retainagePercent: "5" });
     const executionSnapshot = await createProjectExecutionStore(fixture.executor).read({ scope, projectId: PROJECT_ID, asOf: "2026-09-21" });
     assert.equal(executionSnapshot.assigneeOptions.some((option) => option.label === "Synthetic project manager" && option.type === "employee"), true);
     assert.equal(executionSnapshot.assignments[0]?.status, "accepted");

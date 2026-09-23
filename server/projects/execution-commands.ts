@@ -187,13 +187,6 @@ function rowCents(value: unknown, field: string): ReturnType<typeof dbCents> {
   return dbCents(value, field);
 }
 
-function decimalPercentOfCents(cents: string, percent: string): string {
-  const [whole, fraction = ""] = percent.split(".");
-  const scale = BigInt(10 ** fraction.length);
-  const percentNumerator = BigInt(whole) * scale + BigInt(fraction || "0");
-  return ((BigInt(cents) * percentNumerator) / (BigInt(100) * scale)).toString();
-}
-
 async function loadExecutionRow(context: CommandHandlerContext<unknown>, table: string, id: string, fields = "*"): Promise<Record<string, unknown>> {
   const result = await context.executor.query<Record<string, unknown>>(
     `SELECT ${fields} FROM ${table} WHERE organization_id = $1 AND id = $2`,
@@ -806,7 +799,9 @@ async function handleDrawRequestUpdate(context: CommandHandlerContext<ProjectExe
   if (payload.status !== undefined) addUpdate(updates, values, "status", payload.status);
   if (payload.periodFrom !== undefined) addUpdate(updates, values, "period_from", payload.periodFrom);
   if (payload.periodTo !== undefined) addUpdate(updates, values, "period_to", payload.periodTo);
-  if (payload.retainagePercent !== undefined) { addUpdate(updates, values, "retainage_percent", payload.retainagePercent); addUpdate(updates, values, "retainage_cents", decimalPercentOfCents(rowCents(row.gross_eligible_cents, "draw_gross"), payload.retainagePercent)); }
+  // The percent is the default for new items. Draw totals always come from
+  // the item amounts (recalculateDraw), so retainage_cents is not rewritten here.
+  if (payload.retainagePercent !== undefined) addUpdate(updates, values, "retainage_percent", payload.retainagePercent);
   if (payload.status !== undefined && ["submitted", "approved", "paid"].includes(payload.status) && (row.submitted_on === null || row.submitted_on === undefined)) addUpdate(updates, values, "submitted_on", resolveEffectiveDate(context.envelope.effectiveDate));
   if (payload.status !== undefined && ["approved", "paid"].includes(payload.status) && (row.approved_on === null || row.approved_on === undefined)) addUpdate(updates, values, "approved_on", resolveEffectiveDate(context.envelope.effectiveDate));
   if (payload.status === "paid" && (row.paid_on === null || row.paid_on === undefined)) addUpdate(updates, values, "paid_on", resolveEffectiveDate(context.envelope.effectiveDate));
