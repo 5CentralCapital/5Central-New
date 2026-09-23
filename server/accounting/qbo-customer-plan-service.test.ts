@@ -7,6 +7,7 @@ import { createQboAccountingMirrorStore } from "./mirror-store";
 import { readQboCustomerPlan } from "./qbo-customer-plan-service";
 import { registerAccountingMcpTools } from "./mcp";
 import type { QboCustomerPlan } from "./qbo-customer-plan";
+import { CustomerPlanCliError, parseCustomerPlanArgs, runCustomerPlanCli } from "../../scripts/company/qbo-customer-plan";
 
 const { organizationId, entityId: ENTITY_A, propertyId, unitId } = SYNTHETIC_COMPANY;
 const ENTITY_B = "20000000-0000-4000-8000-000000000002";
@@ -159,5 +160,22 @@ test("the HTTP route serves the read-only plan and validates its query", async (
   } finally {
     await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
     await demo.close();
+  }
+});
+
+test("the CLI reads the plan for the only organization and refuses bad arguments", async () => {
+  const h = await fixture();
+  try {
+    await mirrorNames(h.executor);
+    const plan = await runCustomerPlanCli(["--as-of", "2026-09-23"], h.executor, "2026-01-01");
+    assert.deepEqual([plan.environment, plan.asOf], ["production", "2026-09-23"]);
+    assert.equal(row(plan, "t-1").status, "create");
+    const onlyB = await runCustomerPlanCli(["--organization", organizationId, "--legal-entity", ENTITY_B, "--environment", "sandbox"], h.executor, "2026-09-23");
+    assert.deepEqual([onlyB.environment, onlyB.entities.map(group => [group.legalEntityId, group.realmId])], ["sandbox", [[ENTITY_B, "999"]]]);
+    assert.throws(() => parseCustomerPlanArgs(["--environment", "live"]), CustomerPlanCliError);
+    assert.throws(() => parseCustomerPlanArgs(["--as-of", "2026-02-30"]), CustomerPlanCliError);
+    assert.throws(() => parseCustomerPlanArgs(["--token", "x"]), CustomerPlanCliError);
+  } finally {
+    await h.close();
   }
 });
