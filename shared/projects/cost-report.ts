@@ -516,7 +516,8 @@ export function calculateProjectCostReport(input: ProjectCostReportInput): Proje
   const orderedLines = Array.from(lines.values()).sort((left, right) => (left.key === UNASSIGNED_KEY ? 1 : right.key === UNASSIGNED_KEY ? -1 : left.description.localeCompare(right.description) || left.key.localeCompare(right.key)));
   for (const line of orderedLines) {
     const incurred = line.actual + line.labor;
-    const override = line.scopeItemId ? overridesByScope.get(line.scopeItemId) : undefined;
+    // An override on an archived scope line is ignored (and warned about below), never applied.
+    const override = line.scopeItemId && scopeById.has(line.scopeItemId) ? overridesByScope.get(line.scopeItemId) : undefined;
     const lineCtc = override ? big(override.amountCents) : max(ZERO, line.revised - incurred, line.remainingCommitment);
     costToComplete += lineCtc;
     remainingCommitmentTotal += line.remainingCommitment;

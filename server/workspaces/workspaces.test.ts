@@ -11,11 +11,32 @@ import { createWorkOrderPort } from "../work-orders/port";
 import { PostgresRentOpsRepository } from "../rent-ops/repositories/postgres";
 import { RentOpsService } from "../rent-ops/services/service";
 import { propertyFinancialsSchema, propertyPerformanceSchema, entityDirectorySchema, peopleDirectorySchema, companySettingsSchema, costLibrarySchema, dashboardCompanySchema, propertyDocumentsSchema, type FinancialMeasure } from "../../shared/workspaces/contracts";
+import type { ProjectFinanceActual, ProjectFinanceCoverage, ProjectFinanceReadPort } from "../../shared/projects";
 import { registerWorkspaceRoutes } from "./routes";
 import { propertyReportFilters } from "./property-financials";
 
 const MONTH = "2026-08";
 const AS_OF = "2026-08-15";
+
+/** A project finance read port the test controls: coverage and bound QuickBooks lines per project. */
+function fakeFinance() {
+  const state: { coverage: ProjectFinanceCoverage; actuals: ProjectFinanceActual[]; byProject: Map<string, ProjectFinanceCoverage> } = { coverage: "complete", actuals: [], byProject: new Map() };
+  const port: ProjectFinanceReadPort = {
+    async getProjectActuals(input) {
+      const coverage = state.byProject.get(input.projectId) ?? state.coverage;
+      if (coverage === "unavailable") return { coverage, actuals: [] };
+      return { coverage, actuals: state.actuals.filter(actual => actual.projectId === input.projectId && (!input.asOf || actual.postedOn <= input.asOf)) };
+    },
+  };
+  return { state, port };
+}
+
+const qboActual = (projectId: string, amountCents: string, postedOn: string, objectId: string): ProjectFinanceActual => ({
+  id: randomUUID() as ProjectFinanceActual["id"], projectId: projectId as ProjectFinanceActual["projectId"], commitmentId: null, scopeItemId: null,
+  source: { provider: "qbo", organizationId: company.organizationId as never, legalEntityId: company.entityId as never, environment: "sandbox", realmId: "9130000000000001", objectType: "Bill", objectId, lineId: "1", version: "0" },
+  description: `Synthetic bill ${objectId}`, amountCents: amountCents as ProjectFinanceActual["amountCents"], currency: "USD" as ProjectFinanceActual["currency"],
+  postedOn: postedOn as ProjectFinanceActual["postedOn"], sourceRevision: "0",
+});
 
 async function fixture() {
   const database = await createSyntheticCompanyDatabase();
@@ -27,15 +48,16 @@ async function fixture() {
     req.rentOpsAdminUser = { id: req.get("x-test-actor") ?? company.actorId, role: "admin", email: "synthetic@example.test" } as User;
     next();
   };
+  const finance = fakeFinance();
   const app = express();
-  registerWorkspaceRoutes(app, { executor, requireAdmin, today: () => AS_OF });
+  registerWorkspaceRoutes(app, { executor, requireAdmin, today: () => AS_OF, projectFinanceFactory: () => finance.port });
   const listener = app.listen(0, "127.0.0.1");
   await new Promise<void>(resolve => listener.once("listening", resolve));
   const origin = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
   const get = (path: string, actor?: string) => fetch(`${origin}${path}`, { headers: actor ? { "x-test-actor": actor } : {} });
   const service = new RentOpsService(new PostgresRentOpsRepository(executor));
   return {
-    db: database.db, executor, get, service,
+    db: database.db, executor, get, service, finance: finance.state,
     close: async () => { await new Promise<void>(resolve => listener.close(() => resolve())); await database.close(); },
   };
 }
@@ -95,10 +117,21 @@ test("company measures keep PM collections, fees, remittances and project spendi
     const projectId = randomUUID();
     await context.db.query(`INSERT INTO company_projects (id, organization_id, legal_entity_id, property_id, name, project_type, status, currency)
       VALUES ($1,$2,$3,$4,'Synthetic roof','rehab','active','USD')`, [projectId, company.organizationId, company.entityId, company.propertyId]);
+    // A legacy importer row is not a posting: only bound QuickBooks lines through the finance port count.
     await context.db.query(`INSERT INTO company_project_posted_actuals (id, organization_id, project_id, provider, source_scope, external_id, description, amount_cents, currency, posted_on)
-      VALUES ($1,$2,$3,'qbo','synthetic-realm','Bill-1:1','Roofing deposit', 9007199254740993, 'USD', '2026-08-10')`, [randomUUID(), company.organizationId, projectId]);
+      VALUES ($1,$2,$3,'qbo','synthetic-realm','Bill-0:1','Legacy import', 777, 'USD', '2026-08-10')`, [randomUUID(), company.organizationId, projectId]);
+    context.finance.actuals.push(
+      qboActual(projectId, "9007199254740993", "2026-08-10", "Bill-1"),
+      qboActual(projectId, "4000", "2026-07-31", "Bill-2"),
+      qboActual(projectId, "5000", "2026-08-20", "Bill-3"),
+    );
+    // Draft costs: a user cost counts; a cost-to-complete override (reserved vendor) is forecasting input, not a cost.
+    await context.db.query(`INSERT INTO company_project_draft_costs (id, organization_id, project_id, vendor_name, description, amount_cents, currency, incurred_on)
+      VALUES ($1,$2,$3,NULL,'Dumpster',1500,'USD','2026-08-05'), ($4,$2,$3,'system:etc_override','Remaining roof work',999900,'USD','2026-08-06')`,
+      [randomUUID(), company.organizationId, projectId, randomUUID()]);
 
-    const response = await context.get(`/api/workspaces/properties/${company.propertyId}/financials?month=${MONTH}&asOf=${AS_OF}&company=${company.organizationId}`);
+    const path = `/api/workspaces/properties/${company.propertyId}/financials?month=${MONTH}&asOf=${AS_OF}&company=${company.organizationId}`;
+    const response = await context.get(path);
     assert.equal(response.status, 200, await response.clone().text());
     const body = propertyFinancialsSchema.parse(await response.json());
     assert.equal(body.company?.legalEntityId, company.entityId);
@@ -111,10 +144,35 @@ test("company measures keep PM collections, fees, remittances and project spendi
     const deducted = ["pm_fees", "pm_expenses", "owner_remittances"].reduce((total, key) => total + BigInt(measure(body.measures, key as FinancialMeasure["key"]).amountCents!), BigInt(0));
     assert.equal(BigInt(5000) + gross - deducted, BigInt(measure(body.measures, "manager_held_funds").amountCents!), "opening + gross − deductions − remittance = closing held");
     const spending = measure(body.measures, "project_spending_posted");
-    assert.equal(spending.amountCents, "9007199254740993", "posted project cost keeps exact bigint cents");
+    assert.equal(spending.amountCents, "9007199254740993", "only bound lines posted in the month up to the as-of date, in exact bigint cents");
+    assert.equal(spending.complete, true);
+    assert.equal(spending.recordCount, 1);
     assert.deepEqual(spending.records[0].link, { kind: "project", id: projectId });
     assert.ok(spending.records[0].sourceReferences[0].startsWith("QBO "), "QBO identity only in record detail");
-    assert.equal(measure(body.measures, "project_costs_recorded").amountCents, "0");
+    const recorded = measure(body.measures, "project_costs_recorded");
+    assert.equal(recorded.amountCents, "1500", "cost-to-complete overrides are not unposted project costs");
+    assert.equal(recorded.recordCount, 1);
+
+    // Partial QuickBooks coverage is a minimum, never a complete total.
+    context.finance.coverage = "partial";
+    const partial = measure(propertyFinancialsSchema.parse(await (await context.get(path)).json()).measures, "project_spending_posted");
+    assert.equal(partial.state, "available");
+    assert.equal(partial.amountCents, "9007199254740993");
+    assert.equal(partial.complete, false);
+    // One project unreadable and another complete is still partial.
+    const second = randomUUID();
+    await context.db.query(`INSERT INTO company_projects (id, organization_id, legal_entity_id, property_id, name, project_type, status, currency)
+      VALUES ($1,$2,$3,$4,'Synthetic siding','rehab','active','USD')`, [second, company.organizationId, company.entityId, company.propertyId]);
+    context.finance.coverage = "complete";
+    context.finance.byProject.set(second, "unavailable");
+    const mixed = measure(propertyFinancialsSchema.parse(await (await context.get(path)).json()).measures, "project_spending_posted");
+    assert.equal(mixed.complete, false, "an unreadable project makes the total a minimum");
+    // Nothing readable: unknown, never zero.
+    context.finance.coverage = "unavailable";
+    const none = measure(propertyFinancialsSchema.parse(await (await context.get(path)).json()).measures, "project_spending_posted");
+    assert.equal(none.state, "unavailable");
+    assert.equal(none.amountCents, null);
+    assert.ok(none.unavailableReason);
   } finally { await context.close(); }
 });
 
@@ -164,6 +222,24 @@ test("property performance uses report derivations and marks unmapped company fi
     assert.ok(open.rows[0].count > 0);
     assert.equal(mapped.openWorkOrders, open.rows[0].count);
     assert.equal(mapped.legalEntityName, "Example Property LLC");
+    assert.equal(mapped.projectPostedCents, "0"); assert.equal(mapped.projectPostedComplete, true, "no projects: nothing posted, exactly");
+
+    // Posted project costs come from the finance port (not the legacy importer table), up to the as-of date.
+    const projectId = randomUUID();
+    await context.db.query(`INSERT INTO company_projects (id, organization_id, legal_entity_id, property_id, name, project_type, status, currency)
+      VALUES ($1,$2,$3,$4,'Synthetic boiler','rehab','active','USD')`, [projectId, company.organizationId, company.entityId, company.propertyId]);
+    await context.db.query(`INSERT INTO company_project_posted_actuals (id, organization_id, project_id, provider, source_scope, external_id, description, amount_cents, currency, posted_on)
+      VALUES ($1,$2,$3,'qbo','synthetic-realm','Bill-0:1','Legacy import', 777, 'USD', '2026-08-01')`, [randomUUID(), company.organizationId, projectId]);
+    context.finance.actuals.push(qboActual(projectId, "12500", "2026-06-30", "Bill-9"), qboActual(projectId, "100", "2026-09-01", "Bill-10"));
+    const performancePath = `/api/workspaces/property-performance?month=${MONTH}&asOf=${AS_OF}&scope=all&company=${company.organizationId}`;
+    const posted = propertyPerformanceSchema.parse(await (await context.get(performancePath)).json()).rows.find(item => item.propertyId === company.propertyId)!;
+    assert.equal(posted.projectPostedCents, "12500"); assert.equal(posted.projectPostedComplete, true);
+    context.finance.coverage = "partial";
+    const partial = propertyPerformanceSchema.parse(await (await context.get(performancePath)).json()).rows.find(item => item.propertyId === company.propertyId)!;
+    assert.equal(partial.projectPostedCents, "12500"); assert.equal(partial.projectPostedComplete, false, "partial coverage is a minimum");
+    context.finance.coverage = "unavailable";
+    const unknown = propertyPerformanceSchema.parse(await (await context.get(performancePath)).json()).rows.find(item => item.propertyId === company.propertyId)!;
+    assert.equal(unknown.projectPostedCents, null, "unavailable QuickBooks postings are unknown, never zero");
     assert.equal((await context.get(`/api/workspaces/property-performance?scope=everything`)).status, 400);
   } finally { await context.close(); }
 });

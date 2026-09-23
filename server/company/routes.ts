@@ -33,6 +33,7 @@ import { registerProjectInsightRoutes } from '../projects/http'; // lane-f
 import type { ProjectInsightsPort } from '../projects/insights'; // lane-f
 // lane-e-nav: manager workspace read endpoints
 import { registerWorkspaceRoutes } from '../workspaces/routes';
+import { workspaceProjectFinanceFactory } from '../workspaces/port'; // lane-e-nav
 
 export interface CompanyProjectPort {
   list(principal: AuthenticatedPrincipal, query: ProjectListQuery): Promise<unknown>;
@@ -96,7 +97,7 @@ export function registerCompanyRoutes(app: Express, options: {
     }) }),
   });
   // lane-e-nav: manager workspace read endpoints
-  registerWorkspaceRoutes(app, { executor, requireAdmin });
+  registerWorkspaceRoutes(app, { executor, requireAdmin, projectFinanceFactory: workspaceProjectFinanceFactory(options.accounting) });
   const web = attestTransport('web');
   app.get('/api/company/context', requireAdmin, companyReadHandler(async (req, res) => {
     res.json(await readCompanyContext(executor, companyWebActor(req), 'admin'));

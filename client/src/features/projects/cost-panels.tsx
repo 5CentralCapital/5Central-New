@@ -5,7 +5,7 @@ import type { ProjectCostLine, ProjectCostReport } from "@shared/projects/cost-r
 import type { CostSourceLine, CostSourceLinePage } from "@shared/projects/source-lines";
 import type { ProjectLaborResponse } from "@shared/time/labor";
 import type { ProjectDetail, ProjectExecutionDetail } from "./types";
-import { formatInputValue, formatMoney, parseMoneyInput } from "./money";
+import { formatInputValue, formatMoney, formatQualifiedMoney, incurredLabel, paidLabel, parseMoneyInput } from "./money";
 
 function label(value: string): string { return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
 function dateLabel(value: string | null | undefined): string { if (!value) return "—"; const date = new Date(`${value.slice(0, 10)}T00:00:00`); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date); }
@@ -37,15 +37,15 @@ export function ProjectCostSummary({ report }: { report: ProjectCostReport }) {
       <div><span>Approved changes</span><strong>{formatMoney(summary.approvedChangeCents, currency)}</strong></div>
       <div><span>Revised budget</span><strong>{formatMoney(summary.revisedBudgetCents, currency)}</strong></div>
       <div><span>Committed</span><strong>{formatMoney(summary.committedCents, currency)}</strong></div>
-      <div><span>Incurred</span><strong>{money(incurred.totalCents, currency)}</strong></div>
-      <div><span>Paid</span><strong>{summary.paid.cents === null ? `At least ${formatMoney(summary.paid.knownCents, currency)}` : formatMoney(summary.paid.cents, currency)}</strong></div>
+      <div><span>Incurred</span><strong>{incurredLabel(summary)}</strong></div>
+      <div><span>Paid</span><strong>{paidLabel(summary)}</strong></div>
       <div><span>Remaining commitment</span><strong>{money(summary.remainingCommitmentCents, currency)}</strong></div>
       <div><span>Cost to complete</span><strong>{money(summary.costToCompleteCents, currency)}</strong></div>
       <div><span>Forecast final cost</span><strong>{money(summary.forecastFinalCostCents, currency)}</strong></div>
       <div><span>Variance</span><strong className={summary.varianceCents !== null && BigInt(summary.varianceCents) < BigInt(0) ? "projects-negative" : undefined}>{money(summary.varianceCents, currency)}</strong></div>
     </div>
     <dl className="projects-definition-list projects-cost-breakdown">
-      <div><dt>QBO actual</dt><dd>{money(incurred.verifiedActualCents, currency)}</dd></div>
+      <div><dt>QBO actual</dt><dd>{formatQualifiedMoney(incurred.verifiedActualCents, summary.actualCoverage, currency)}</dd></div>
       <div><dt>Posted payroll</dt><dd>{formatMoney(incurred.laborPostedCents, currency)}</dd></div>
       <div><dt>Estimated labor</dt><dd>{formatMoney(incurred.laborEstimatedCents, currency)}{incurred.unpricedLaborEntries > 0 && <small className="projects-table-subline">{incurred.unpricedLaborEntries} unpriced</small>}</dd></div>
       <div><dt>Draft costs</dt><dd>{formatMoney(summary.draftCostCents, currency)}</dd></div>
@@ -115,7 +115,7 @@ export function ProjectCostLinesPanel({ report, readOnly, saving, onSetEtc, onCl
         <td><strong>{item.description}</strong>{item.etcOverride && <small className="projects-table-subline">Override: {item.etcOverride.reason}</small>}</td>
         <td className="projects-number">{formatMoney(item.revisedBudgetCents, currency)}</td>
         <td className="projects-number">{formatMoney(item.committedCents, currency)}</td>
-        <td className="projects-number">{money(item.incurredCents, currency)}{BigInt(item.laborCents) !== BigInt(0) && <small className="projects-table-subline">Labor {formatMoney(item.laborCents, currency)}</small>}</td>
+        <td className="projects-number">{formatQualifiedMoney(item.incurredCents, report.summary.actualCoverage, currency)}{BigInt(item.laborCents) !== BigInt(0) && <small className="projects-table-subline">Labor {formatMoney(item.laborCents, currency)}</small>}</td>
         <td className="projects-number">{money(item.costToCompleteCents, currency)}</td>
         <td className="projects-number">{money(item.forecastFinalCostCents, currency)}</td>
         <td className="projects-number">{money(item.varianceCents, currency)}</td>

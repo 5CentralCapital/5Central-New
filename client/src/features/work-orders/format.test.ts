@@ -44,3 +44,16 @@ test("the schedule view orders work by date with one heading per day", () => {
   assert.deepEqual(rows.map(row => row.item.reference), ["WO-A", "WO-B", "WO-C"]);
   assert.deepEqual(rows.map(row => row.heading), ["Target Sep 24, 2026", "Sep 25, 2026", undefined]);
 });
+
+test("the schedule view asks the server for agenda order and pages by cursor", async () => {
+  const { workOrderListSearch, workOrderViewFilters } = await import("./api");
+  const schedule = workOrderViewFilters("schedule");
+  assert.deepEqual(schedule, { openOnly: true, statuses: ["scheduled", "in_progress"], sort: "schedule" });
+  const params = workOrderListSearch({ ...schedule, cursor: "next-page" });
+  assert.equal(params.get("sort"), "schedule");
+  assert.equal(params.get("status"), "scheduled,in_progress");
+  assert.equal(params.get("cursor"), "next-page");
+  assert.equal(workOrderListSearch(workOrderViewFilters("open")).get("sort"), null, "other views keep the default priority order");
+  assert.deepEqual(workOrderViewFilters("completed"), { openOnly: false, statuses: ["completed"] });
+  assert.deepEqual(workOrderViewFilters("all"), { openOnly: false });
+});

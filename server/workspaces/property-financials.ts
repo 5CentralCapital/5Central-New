@@ -3,8 +3,11 @@ import type {
 } from "../../shared/rent-ops-contracts";
 import type { FinancialMeasure, FinancialMeasureKey, FinancialMeasureRecord, PropertyFinancials, WorkspaceRecordLink } from "../../shared/workspaces/contracts";
 import { deriveFixedReport } from "../rent-ops/domain/reports";
+import { userDraftCostPredicate } from "../projects/helpers";
 import { RECORD_LIMIT, centsOf, monthBounds } from "./period";
+import type { ProjectFinanceReadPort } from "../../shared/projects";
 import { centsText, centsValue, dateText, type PropertyEntityMapping, type WorkspaceReadContext } from "./access";
+import { readProjectPostings, readWorkspaceProjects, type ProjectPostings } from "./project-postings";
 
 /**
  * Property financials join rental operating detail and company records for one
@@ -129,12 +132,15 @@ export function computeRentalMeasures(snapshot: RentOpsSnapshot, propertyId: str
 export interface CompanyPropertyRows {
   readonly mapping: PropertyEntityMapping;
   readonly settlements: ReadonlyArray<Record<string, unknown>>;
-  readonly actuals: ReadonlyArray<Record<string, unknown>>;
+  /** Posted project costs from the project finance read port, never the legacy importer table. */
+  readonly postings: ProjectPostings;
   readonly drafts: ReadonlyArray<Record<string, unknown>>;
 }
 
 /** Company records for one property and month. The caller has already checked the grant. */
-export async function readCompanyPropertyRows(context: WorkspaceReadContext, mapping: PropertyEntityMapping, from: string, to: string): Promise<CompanyPropertyRows> {
+export async function readCompanyPropertyRows(
+  context: WorkspaceReadContext, mapping: PropertyEntityMapping, from: string, to: string, through: string, finance: ProjectFinanceReadPort,
+): Promise<CompanyPropertyRows> {
   const organizationId = context.principal.organizationId;
   const settlements = await context.executor.query<Record<string, unknown>>(
     `SELECT id, manager_name, period_start::text AS period_start, period_end::text AS period_end, currency, gross_collections_cents,
@@ -145,23 +151,17 @@ export async function readCompanyPropertyRows(context: WorkspaceReadContext, map
       ORDER BY period_end, manager_name, id LIMIT 200`,
     [organizationId, mapping.propertyId, from, to],
   );
-  const actuals = await context.executor.query<Record<string, unknown>>(
-    `SELECT a.id, a.project_id, p.name AS project_name, a.description, a.amount_cents, a.currency, a.posted_on::text AS posted_on, a.source_scope, a.external_id
-       FROM company_project_posted_actuals a
-       JOIN company_projects p ON p.organization_id = a.organization_id AND p.id = a.project_id
-      WHERE a.organization_id = $1 AND p.property_id = $2 AND a.posted_on BETWEEN $3::date AND $4::date
-      ORDER BY a.posted_on, a.id LIMIT 500`,
-    [organizationId, mapping.propertyId, from, to],
-  );
+  const projects = await readWorkspaceProjects(context, [mapping.propertyId]);
+  const postings = await readProjectPostings(context, finance, projects.projects, { from, through, incomplete: projects.truncated || projects.uncovered > 0 });
   const drafts = await context.executor.query<Record<string, unknown>>(
     `SELECT d.id, d.project_id, p.name AS project_name, d.description, d.vendor_name, d.amount_cents, d.currency, d.incurred_on::text AS incurred_on
        FROM company_project_draft_costs d
        JOIN company_projects p ON p.organization_id = d.organization_id AND p.id = d.project_id
-      WHERE d.organization_id = $1 AND p.property_id = $2 AND d.archived_at IS NULL AND d.incurred_on BETWEEN $3::date AND $4::date
+      WHERE d.organization_id = $1 AND p.property_id = $2 AND d.archived_at IS NULL AND ${userDraftCostPredicate("d")} AND d.incurred_on BETWEEN $3::date AND $4::date
       ORDER BY d.incurred_on, d.id LIMIT 500`,
     [organizationId, mapping.propertyId, from, to],
   );
-  return { mapping, settlements: settlements.rows, actuals: actuals.rows, drafts: drafts.rows };
+  return { mapping, settlements: settlements.rows, postings, drafts: drafts.rows };
 }
 
 const COMPANY_MEASURES: ReadonlyArray<[FinancialMeasureKey, string, FinancialMeasure["group"], string]> = [
@@ -212,13 +212,15 @@ export function computeCompanyMeasures(rows: CompanyPropertyRows, currency = "US
     byKey.set("manager_held_funds", measure(held[0], held[1], held[2], held[3], heldValue));
   }
   const posted = accumulator();
-  for (const row of rows.actuals) {
-    const sameCurrency = row.currency === currency;
-    add(posted, sameCurrency ? centsValue(row.amount_cents) : null, {
-      label: String(row.project_name), detail: String(row.description), date: dateText(row.posted_on),
-      link: { kind: "project", id: String(row.project_id) }, sourceReferences: [`QBO ${String(row.source_scope)} · ${String(row.external_id)}`.slice(0, 200)],
+  for (const { project, actual } of rows.postings.actuals) {
+    add(posted, actual.currency === currency ? BigInt(actual.amountCents) : null, {
+      label: project.name, detail: actual.description, date: actual.postedOn,
+      link: { kind: "project", id: project.id },
+      sourceReferences: [`QBO ${actual.source.objectType} ${actual.source.objectId}${actual.source.lineId ? ` line ${actual.source.lineId}` : ""}`.slice(0, 200)],
     });
   }
+  // Partial QuickBooks coverage is a minimum ("At least"), never a complete total.
+  if (rows.postings.coverage !== "complete") posted.uncertain = true;
   const recorded = accumulator();
   for (const row of rows.drafts) {
     const sameCurrency = row.currency === currency;
@@ -228,7 +230,9 @@ export function computeCompanyMeasures(rows: CompanyPropertyRows, currency = "US
     });
   }
   const [postedKey, recordedKey] = COMPANY_MEASURES.slice(5);
-  byKey.set("project_spending_posted", measure(postedKey[0], postedKey[1], postedKey[2], postedKey[3], posted));
+  byKey.set("project_spending_posted", rows.postings.coverage === "unavailable"
+    ? unavailable(postedKey[0], postedKey[1], postedKey[2], postedKey[3], "QuickBooks postings for this property's projects are not available.")
+    : measure(postedKey[0], postedKey[1], postedKey[2], postedKey[3], posted));
   byKey.set("project_costs_recorded", measure(recordedKey[0], recordedKey[1], recordedKey[2], recordedKey[3], recorded));
   return COMPANY_MEASURES.map(([key]) => byKey.get(key)!);
 }

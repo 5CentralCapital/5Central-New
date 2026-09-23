@@ -37,6 +37,7 @@ import {
   decodeProjectCursor,
   encodeProjectCursor,
   resolveEffectiveDate,
+  userDraftCostPredicate,
 } from "./helpers";
 import { legalEntityIdSchema } from "../../shared/company";
 import {
@@ -234,7 +235,7 @@ const summarySelect = `
        WHERE c.organization_id = p.organization_id
          AND c.project_id = p.id
          AND c.archived_at IS NULL
-         AND c.vendor_name IS DISTINCT FROM 'system:etc_override'
+         AND ${userDraftCostPredicate("c")}
     ) dc ON true
     LEFT JOIN LATERAL (
       SELECT SUM(a.amount_cents) AS posted_actual_cents
@@ -378,7 +379,7 @@ export class ProjectReadService {
            FROM company_project_draft_costs c
            JOIN company_projects p ON p.organization_id = c.organization_id AND p.id = c.project_id
           WHERE c.organization_id = $1 AND c.project_id = $2 AND c.archived_at IS NULL
-            AND c.vendor_name IS DISTINCT FROM 'system:etc_override'
+            AND ${userDraftCostPredicate("c")}
           ORDER BY c.incurred_on DESC, c.id DESC`, projectValues),
       this.executor.query<Record<string, unknown>>(
         `SELECT a.id, a.project_id, a.scope_item_id, a.provider, a.source_scope, a.external_id, a.description,

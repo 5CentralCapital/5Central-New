@@ -4,7 +4,7 @@ import { syntheticRentOpsSnapshot } from '../../../../../server/rent-ops/fixture
 import { serializeWorkspaceBootstrap } from '../../../../../server/rent-ops/presentation/workspace-read';
 import { decodeRentOpsWorkspaceBootstrap } from '../api';
 import type { ViewFilters } from '../types';
-import { composeWorkspaceSnapshot, filterTenantDirectory, indexTenantViews, parseWorkspaceRoute, workspaceApiFilters, workspaceRouteSearch, workspaceRecordInScope, workspaceFiltersForRecord } from './workspace-state';
+import { companyReportNavigation, composeWorkspaceSnapshot, filterTenantDirectory, indexTenantViews, parseWorkspaceRoute, workspaceApiFilters, workspaceRouteSearch, workspaceRecordInScope, workspaceFiltersForRecord } from './workspace-state';
 
 const filters: ViewFilters = {propertyScope:'all',propertyId:'all',asOfDate:'2026-08-15',status:'all',search:''};
 
@@ -238,4 +238,19 @@ test('a saved report setup opens company reports with its preset and survives a 
   assert.match(workspaceRouteSearch(route), new RegExp(`preset=${preset}`));
   assert.equal(parseWorkspaceRoute(`?section=company-reports&company=${company}&preset=not-a-uuid`).presetId, undefined);
   assert.equal(parseWorkspaceRoute(`?section=dashboard&preset=${preset}`).presetId, undefined);
+});
+
+test('a saved report setup does not follow navigation to another report or company', () => {
+  const company = '11111111-1111-4111-8111-111111111111';
+  const other = '22222222-2222-4222-8222-222222222222';
+  const preset = '33333333-3333-4333-8333-333333333333';
+  const route = parseWorkspaceRoute(`?section=company-reports&company=${company}&reportId=income-statement&preset=${preset}`);
+  assert.equal(route.presetId, preset);
+  const otherReport = companyReportNavigation(route, company, 'balance-sheet');
+  assert.equal(otherReport.presetId, undefined);
+  assert.equal(otherReport.reportId, 'balance-sheet');
+  assert.doesNotMatch(workspaceRouteSearch(otherReport), /preset=/, 'the stale preset is gone from the URL');
+  assert.equal(companyReportNavigation(route, other, 'income-statement').presetId, undefined, 'another company never inherits the preset');
+  assert.equal(companyReportNavigation(route, company, undefined).presetId, undefined, 'back to the library clears it');
+  assert.equal(companyReportNavigation(route, company, 'income-statement').presetId, preset, 'same report keeps its setup');
 });

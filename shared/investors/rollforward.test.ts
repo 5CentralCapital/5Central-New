@@ -154,3 +154,36 @@ test("calendar states separate scheduled, overdue, posted and settled", () => {
   assert.equal(investorCalendarState({ status: "bank_settled", dueOn: "2026-09-01" }, "2026-09-23"), "settled");
   assert.equal(investorCalendarState({ status: "reversed", dueOn: "2026-09-01" }, "2026-09-23"), "reversed");
 });
+
+test("a maturity between scheduled due dates still ends the loan with a balloon on the maturity date", () => {
+  const schedule = buildAmortizationSchedule({
+    principalCents: "10000000", annualRate: "0.08", schedule: "quarterly", paymentDay: 15, monthEndRule: "calendar_day_or_month_end",
+    accrualStartOn: "2025-10-15", firstDueMonth: "2026-01-01", interestOnlyUntil: null, amortizationMonths: null,
+    maturityOn: "2026-11-15", balloonCents: "10000000", dayCount: "actual_360",
+  });
+  assert.equal(schedule.status, "ready");
+  assert.deepEqual(schedule.rows.map(row => [row.dueOn, row.phase]), [
+    ["2026-01-15", "interest_only"], ["2026-04-15", "interest_only"], ["2026-07-15", "interest_only"], ["2026-10-15", "interest_only"], ["2026-11-15", "maturity"],
+  ]);
+  const last = schedule.rows.at(-1)!;
+  assert.equal(last.periodMonth, "2026-11-01");
+  assert.equal(last.balloonCents, "10000000");
+  assert.equal(last.closingCents, "0");
+  // 31 days of interest from the previous due date: 10,000,000 × 0.08 × 31 / 360 = 68,888.89 → 68,889 cents.
+  assert.equal(last.interestCents, "68889");
+  assert.equal(schedule.computedBalloonCents, "10000000");
+  assert.equal(schedule.balloonMatches, true);
+  assert.equal(schedule.totalPrincipalCents, "10000000", "principal is conserved");
+
+  // Amortizing loan with an off-cycle maturity: the balloon is exactly the remaining balance.
+  const amortizing = buildAmortizationSchedule({
+    principalCents: "1200000", annualRate: "0.06", schedule: "quarterly", paymentDay: 1, monthEndRule: "calendar_day_or_month_end",
+    accrualStartOn: "2026-01-01", firstDueMonth: "2026-04-01", interestOnlyUntil: null, amortizationMonths: 60,
+    maturityOn: "2026-12-10", balloonCents: null, dayCount: "30_360",
+  });
+  const final = amortizing.rows.at(-1)!;
+  assert.equal(final.dueOn, "2026-12-10"); assert.equal(final.phase, "maturity"); assert.equal(final.principalCents, "0");
+  assert.equal(final.closingCents, "0");
+  assert.equal(BigInt(final.balloonCents), BigInt(amortizing.rows.at(-2)!.closingCents));
+  assert.equal(amortizing.totalPrincipalCents, "1200000");
+});

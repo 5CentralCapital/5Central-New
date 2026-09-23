@@ -73,3 +73,24 @@ export function assertCanonicalCents(value: string): MoneyCents {
   }
   return value as MoneyCents;
 }
+
+/**
+ * An amount qualified by how much of it is known: exact when complete,
+ * "At least $X" when some contributors are missing (partial QuickBooks
+ * coverage or unpriced labor), and "Unknown" when nothing could be read.
+ */
+export function formatQualifiedMoney(value: MoneyCents | string | null | undefined, completeness: "complete" | "partial" | "unavailable", currency = "USD"): string {
+  if (value === null || value === undefined || completeness === "unavailable") return "Unknown";
+  return completeness === "complete" ? formatMoney(value, currency) : `At least ${formatMoney(value, currency)}`;
+}
+
+/** Incurred on the cost summary: a minimum unless QuickBooks coverage is complete and all labor is priced. */
+export function incurredLabel(summary: { currency: string; completeness: "complete" | "partial" | "unavailable"; incurred: { totalCents: MoneyCents | string | null } }): string {
+  return formatQualifiedMoney(summary.incurred.totalCents, summary.completeness, summary.currency);
+}
+
+/** Paid on the cost summary: unknown when QuickBooks is unavailable, a minimum when coverage is partial. */
+export function paidLabel(summary: { currency: string; paid: { cents: MoneyCents | string | null; knownCents: MoneyCents | string; coverage: "complete" | "partial" | "unavailable" } }): string {
+  const { paid } = summary;
+  return paid.coverage === "complete" && paid.cents !== null ? formatMoney(paid.cents, summary.currency) : formatQualifiedMoney(paid.knownCents, paid.coverage === "complete" ? "partial" : paid.coverage, summary.currency);
+}

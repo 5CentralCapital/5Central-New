@@ -203,6 +203,11 @@ export const workOrderListQuerySchema = z.object({
   scheduledThrough: isoDateSchema.optional(),
   search: z.string().trim().max(200).optional(),
   openOnly: z.boolean().default(true),
+  /**
+   * priority: most urgent first, newest reported first.
+   * schedule: agenda order — scheduled date, or the target date when unscheduled — earliest first.
+   */
+  sort: z.enum(["priority", "schedule"]).default("priority").describe("priority (default) or schedule: earliest scheduled date, or target date when unscheduled, first"),
   limit: z.number().int().min(1).max(100).default(50),
   cursor: z.string().trim().min(1).max(512).optional(),
 }).strict();

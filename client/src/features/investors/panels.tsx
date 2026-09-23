@@ -90,12 +90,20 @@ export function CapitalPanel({ detail }: { detail: InvestorDetail }) {
   </div>;
 }
 
+/** The chosen debt instrument when it still belongs to this investor, else the first one ("" when there is none). */
+export function effectiveDebtSelection(instruments: ReadonlyArray<{ readonly id: unknown }>, stored: string): string {
+  return instruments.some((item) => String(item.id) === stored) ? stored : String(instruments[0]?.id ?? "");
+}
+
 /** Maturity ladder for this investor's debt and one instrument's schedule and rollforward. */
 export function DebtMaturitiesPanel({ api, organizationId, detail }: { api: InvestorsApi; organizationId: string; detail: InvestorDetail }) {
   const debtInstruments = useMemo(() => detail.instruments.filter((item) => item.kind === "private_loan" || item.kind === "member_loan"), [detail.instruments]);
   const [ladder, setLadder] = useState<readonly InvestorDebtMaturity[]>();
   const [ladderError, setLadderError] = useState<string>();
-  const [selected, setSelected] = useState(String(debtInstruments[0]?.id ?? ""));
+  const [storedSelection, setSelected] = useState("");
+  // Derived, not stored: after switching investor or adding the first loan the
+  // stored choice may no longer exist, and the schedule must still load.
+  const selected = effectiveDebtSelection(debtInstruments, storedSelection);
   const [financials, setFinancials] = useState<InvestorInstrumentFinancials>();
   const [financialsError, setFinancialsError] = useState<string>();
   const [attempt, setAttempt] = useState(0);

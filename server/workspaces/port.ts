@@ -5,6 +5,10 @@ import type {
 import { nowIsoDate } from "../rent-ops/domain/dates";
 import { PostgresRentOpsRepository, type RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { RentOpsService } from "../rent-ops/services/service";
+import { unavailableProjectFinanceReadPort, type ProjectFinanceReadPort } from "../../shared/projects";
+import type { AccountingServices } from "../accounting";
+import { createProjectFinanceReadPort } from "../projects/execution";
+import { createProjectFinanceBindingStore } from "../projects/execution-store";
 import { authorizedPropertyMappings, readAsPrincipal, type WorkspaceReadContext } from "./access";
 import { readCompanySettings, readCostLibrary, readEntityDirectory, readPeopleDirectory, readPropertyDocuments } from "./company-directory";
 import { readDashboardCompany } from "./dashboard";
@@ -37,6 +41,21 @@ export interface WorkspaceReadPortOptions {
   /** Report snapshot reader; defaults to the rental repository on the same database. */
   readonly readRentalSnapshot?: () => Promise<RentOpsSnapshot>;
   readonly today?: () => string;
+  /**
+   * Posted project costs come only from the project finance read port (bound
+   * QuickBooks lines), read inside the same snapshot. Without it they are
+   * unavailable, never zero.
+   */
+  readonly projectFinanceFactory?: (transaction: RentOpsQueryExecutor) => ProjectFinanceReadPort;
+}
+
+/** The production project finance port over the accounting mirror, as the project pages use it. */
+export function workspaceProjectFinanceFactory(accounting: AccountingServices | undefined): WorkspaceReadPortOptions["projectFinanceFactory"] {
+  if (!accounting) return undefined;
+  return transaction => {
+    const mirror = accounting.mirror.forExecutor(transaction);
+    return createProjectFinanceReadPort(mirror, createProjectFinanceBindingStore(transaction), mirror);
+  };
 }
 
 export function createWorkspaceReadPort(executor: RentOpsQueryExecutor, options: WorkspaceReadPortOptions = {}): WorkspaceReadPort {
@@ -50,6 +69,7 @@ export function createWorkspaceReadPort(executor: RentOpsQueryExecutor, options:
   };
   const asCompany = <T>(actorId: string, organizationId: string, work: (context: WorkspaceReadContext) => Promise<T>) =>
     readAsPrincipal(executor, { actorId, organizationId, role: "admin" }, work);
+  const financeFor = (context: WorkspaceReadContext) => options.projectFinanceFactory?.(context.executor) ?? unavailableProjectFinanceReadPort;
   return {
     async propertyFinancials(actorId, input) {
       const { asOf, month, from, to } = period(input);
@@ -58,14 +78,14 @@ export function createWorkspaceReadPort(executor: RentOpsQueryExecutor, options:
       const company = input.organizationId ? await asCompany(actorId, input.organizationId, async context => {
         const mapping = (await authorizedPropertyMappings(context, to < asOf ? to : asOf)).get(input.propertyId);
         return mapping
-          ? { organizationId: input.organizationId!, rows: await readCompanyPropertyRows(context, mapping, from, to) }
+          ? { organizationId: input.organizationId!, rows: await readCompanyPropertyRows(context, mapping, from, to, to < asOf ? to : asOf, financeFor(context)) }
           : { organizationId: input.organizationId!, unavailableReason: "This property is not assigned to a company entity you can read for this period." };
       }) : null;
       return assemblePropertyFinancials({ snapshot, propertyId: input.propertyId, month, asOf, company });
     },
     async propertyPerformance(actorId, input) {
       const { asOf, month } = period(input);
-      const company = input.organizationId ? await asCompany(actorId, input.organizationId, context => readCompanyPerformanceRows(context, asOf)) : undefined;
+      const company = input.organizationId ? await asCompany(actorId, input.organizationId, context => readCompanyPerformanceRows(context, asOf, financeFor(context))) : undefined;
       return computePropertyPerformance(await readRentalSnapshot(), { month, asOf, propertyScope: input.propertyScope, propertyIds: input.propertyIds }, company);
     },
     entities: (actorId, organizationId, asOf) => asCompany(actorId, organizationId, context => readEntityDirectory(context, asOf ?? today())),

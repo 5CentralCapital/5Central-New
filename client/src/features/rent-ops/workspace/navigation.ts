@@ -82,6 +82,7 @@ export const WORKSPACE_NAVIGATION: readonly WorkspaceNavigationGroup[] = Object.
     destination('investors.capital', 'Contributions & distributions', { section: 'investors', investorTab: 'capital' }),
     destination('investors.debt', 'Debt & maturities', { section: 'investors', investorTab: 'debt' }),
     destination('investors.agreements', 'Agreements', { section: 'investors', investorTab: 'contracts' }),
+    destination('investors.activity', 'Activity', { section: 'investors', investorTab: 'activity' }),
   ] },
   { label: 'Reporting', items: [
     destination('reporting.library', 'Report library', { section: 'report-library' }),

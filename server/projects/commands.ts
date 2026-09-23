@@ -75,6 +75,7 @@ import {
   dbRevision,
   dbString,
   resolveEffectiveDate,
+  userDraftCostPredicate,
 } from "./helpers";
 
 type AnyProjectCommandEnvelope = CommandEnvelope<Record<string, unknown>>;
@@ -630,7 +631,7 @@ async function handleCreateDraftCost(context: CommandHandlerContext<CreateDraftC
 }
 
 async function loadDraftCostForCommand(context: CommandHandlerContext<unknown>, draftCostId: string): Promise<{ projectId: string; projectRevision: Revision; revision: Revision }> {
-  const result = await context.executor.query<Record<string, unknown>>(`SELECT project_id, record_revision FROM company_project_draft_costs WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL AND vendor_name IS DISTINCT FROM 'system:etc_override'`, [context.envelope.scope.organizationId, draftCostId]);
+  const result = await context.executor.query<Record<string, unknown>>(`SELECT project_id, record_revision FROM company_project_draft_costs WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL AND ${userDraftCostPredicate("company_project_draft_costs")}`, [context.envelope.scope.organizationId, draftCostId]);
   const row = result.rows[0];
   if (!row) throw new ValidationCommandError("Draft cost was not found in the requested company scope", { reason: "draft_cost_not_found" });
   const projectId = dbString(row.project_id, "project_id");

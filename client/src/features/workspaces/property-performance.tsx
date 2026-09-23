@@ -48,7 +48,7 @@ export function PropertyPerformance({ identity, filters, organizationId, onOpenR
       { key: "openWorkOrders", label: "Open work", align: "right", render: row => row.openWorkOrders ?? "Not mapped" },
       { key: "activeProjects", label: "Active projects", align: "right", render: row => row.activeProjects ?? "Not mapped" },
       { key: "projectEstimateCents", label: "Project estimate", align: "right", render: row => row.legalEntityName === null ? "Not mapped" : formatCentsText(row.projectEstimateCents), sortValue: row => centsSortValue(row.projectEstimateCents) },
-      { key: "projectPostedCents", label: "Project costs posted", align: "right", render: row => row.legalEntityName === null ? "Not mapped" : formatCentsText(row.projectPostedCents), sortValue: row => centsSortValue(row.projectPostedCents) },
+      { key: "projectPostedCents", label: "Project costs posted", align: "right", render: row => row.legalEntityName === null ? "Not mapped" : formatMeasure(row.projectPostedCents, row.projectPostedComplete), sortValue: row => centsSortValue(row.projectPostedCents) },
     ] satisfies GridColumn<Row>[] : []),
   ];
   return <div className="ws-page">
