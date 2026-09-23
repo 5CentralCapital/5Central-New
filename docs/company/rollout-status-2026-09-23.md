@@ -4,7 +4,7 @@ This records the audit of the code against `rollout-roadmap-2026-09-23.md` and w
 
 ## Baseline (U00)
 
-Source: device checkout `/Users/michaelmcelwee/Projects/r-ops` at `7d97a2d` on `claude/rops-design-system`, plus its uncommitted QBO OAuth-discovery/callback changes and desktop package changes, captured as the first commit on this branch ("baseline: device working-tree snapshot"). The untracked Mac files (`desktop/`, `src-tauri/`, `docs/company/desktop-app.md`, `scripts/company/desktop-config.test.ts`) were not copied and were not touched. Baseline checks: typecheck clean, 239 company tests and 1,210 rental tests passing, 42 migrations.
+Source: device checkout `/Users/michaelmcelwee/Projects/r-ops` on `claude/rops-design-system`. The audit ran on `7d97a2d` plus its then-uncommitted QBO OAuth-discovery/callback changes; those were committed on the device as `e8f3e4c` during this work, and this branch is based on `e8f3e4c`. The Mac desktop workstream's files (`desktop/`, `src-tauri/`, the Tauri scripts and dependency in `package.json`, `docs/company/desktop-app.md`, `scripts/company/desktop-config.test.ts`) are not part of this branch and were not touched. Baseline checks: typecheck clean, 239 company tests and 1,210 rental tests passing, 42 migrations.
 
 Audit findings that shaped the build:
 
