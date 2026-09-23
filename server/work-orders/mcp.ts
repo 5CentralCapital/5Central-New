@@ -6,9 +6,11 @@ import {
   workOrderCommandPayloadSchemas,
   workOrderIdSchema,
   workOrderListQuerySchema,
+  workOrderReportQuerySchema,
   type WorkOrderCommandKind,
 } from "../../shared/work-orders";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
+import { costSourceLineQuerySchema } from "../../shared/projects/source-lines";
 import { attestTransport, loadAuthenticatedPrincipal } from "../company/authorization";
 import type { WorkOrderPort } from "./port";
 
@@ -22,6 +24,12 @@ const COMMAND_DESCRIPTIONS: Readonly<Record<WorkOrderCommandKind, string>> = {
   "work_order.project.link": "Link a work order to an existing project at the same property, or pass projectId null to unlink. Requires expectedRevision.",
   "work_order.chargeback.set": "Record the intent to charge the linked tenant (amount cents and description). Optionally link an already posted tenant charge by ledger transaction ID. This never posts a charge.",
   "work_order.chargeback.clear": "Remove the chargeback intent and any link to a tenant charge. The ledger charge itself is not changed.",
+  "work_order.vendor.assign": "Assign a vendor (a company contact with the vendor role, or a project vendor) from list_work_order_vendor_options, or pass vendor null to clear it. The free-text assignee is unchanged. Requires expectedRevision.",
+  "work_order.cost.link": "Link all or part of a posted QBO bill line (from search_work_order_cost_lines) as actual cost. The amount is reserved in the shared allocation ledger, so the line cannot also be counted on a project or another work order. Nothing is posted to QuickBooks.",
+  "work_order.cost.unlink": "Release a QBO bill line allocation from the work order.",
+  "work_order.actual.set": "Record or clear a draft manual actual cost. It stays operational until a QBO bill line is linked.",
+  "work_order.attachment.link": "Attach an existing verified company document (from list_work_order_document_options) to the work order.",
+  "work_order.attachment.unlink": "Remove a document attachment from the work order. The document itself is unchanged.",
 };
 
 /** Codex tools call the same port as the browser; there is no second mutation path. */
@@ -38,6 +46,18 @@ export function registerWorkOrderMcpTools(register: WorkOrderToolRegistrar, opti
   register("list_work_order_tenant_options", "List existing tenancies (tenant, unit, status) at one property for linking a work order or chargeback. Scope needs legalEntityId.",
     { scope: companyScopeSchema, propertyId: propertyReferenceIdSchema }, false,
     async ({ scope, propertyId }) => workOrders.tenantOptions(await principalFor(scope.organizationId), { scope, propertyId }));
+  register("list_work_order_vendor_options", "List vendors that can be assigned to work orders: company contacts with the vendor role and project vendor records.",
+    { scope: companyScopeSchema }, false,
+    async ({ scope }) => workOrders.vendorOptions(await principalFor(scope.organizationId), { scope }));
+  register("list_work_order_document_options", "List verified company documents that may be attached to a work order at one property. Scope needs legalEntityId.",
+    { scope: companyScopeSchema, propertyId: propertyReferenceIdSchema, search: z.string().trim().max(200).optional() }, false,
+    async ({ scope, propertyId, search }) => workOrders.documentOptions(await principalFor(scope.organizationId), { scope, propertyId, search }));
+  register("search_work_order_cost_lines", "Search current posted QBO bill and expense lines with their unallocated balance, for linking actual cost to a work order. Follow nextCursor to continue.",
+    { query: costSourceLineQuerySchema }, false,
+    async ({ query }) => workOrders.costSourceLines(await principalFor(query.organizationId), query));
+  register("list_work_orders_for_reporting", "Read bounded work order report rows with aging, target date, overdue flag, vendor, estimated cost, linked QBO actual and manual actual, and completion. Filters: property, status, priority, category, assignee, vendor, target and reported date windows. Follow nextCursor to continue.",
+    { query: workOrderReportQuerySchema }, false,
+    async ({ query }) => workOrders.listForReporting(await principalFor(query.scope.organizationId), query));
   for (const kind of WORK_ORDER_COMMAND_KINDS) {
     register(WORK_ORDER_MCP_TOOL_NAMES[kind], `${COMMAND_DESCRIPTIONS[kind]} Supply a stable operationId/idempotencyKey and retry an uncertain response with the identical envelope.`,
       { command: commandEnvelopeSchema(workOrderCommandPayloadSchemas[kind]) }, true,

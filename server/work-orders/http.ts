@@ -1,6 +1,7 @@
 import type { Express, RequestHandler } from "express";
 import { z } from "zod";
-import { commandEnvelopeSchema, companyScopeSchema, legalEntityIdSchema, organizationIdSchema, propertyReferenceIdSchema } from "../../shared/company";
+import { commandEnvelopeSchema, companyScopeSchema, isoDateSchema, legalEntityIdSchema, organizationIdSchema, propertyReferenceIdSchema } from "../../shared/company";
+import { costSourceLineQuerySchema } from "../../shared/projects/source-lines";
 import {
   WORK_ORDER_CATEGORIES,
   WORK_ORDER_COMMAND_KINDS,
@@ -9,6 +10,7 @@ import {
   workOrderCommandPayloadSchemas,
   workOrderIdSchema,
   workOrderListQuerySchema,
+  workOrderReportQuerySchema,
 } from "../../shared/work-orders";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { attestTransport, loadAuthenticatedPrincipal } from "../company/authorization";
@@ -28,6 +30,9 @@ const listQuery = z.object({
   priority: csv(WORK_ORDER_PRIORITIES).optional(),
   category: csv(WORK_ORDER_CATEGORIES).optional(),
   assignedTo: z.string().trim().min(1).max(200).optional(),
+  vendorId: z.string().uuid().optional(),
+  scheduledFrom: isoDateSchema.optional(),
+  scheduledThrough: isoDateSchema.optional(),
   search: z.string().trim().max(200).optional(),
   openOnly: z.enum(["true", "false"]).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -64,6 +69,41 @@ export function registerWorkOrderRoutes(app: Express, options: { executor: RentO
     const query = z.object({ legalEntityId: legalEntityIdSchema, propertyId: propertyReferenceIdSchema }).strict().parse(req.query);
     const principal = await principalFor(companyWebActor(req), organizationId);
     res.json(await workOrders.tenantOptions(principal, { scope: companyScopeSchema.parse({ organizationId, legalEntityId: query.legalEntityId }), propertyId: query.propertyId }));
+  }));
+  app.get("/api/company/:organizationId/work-orders/vendor-options", requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const query = scopeQuery.parse(req.query);
+    const principal = await principalFor(companyWebActor(req), organizationId);
+    res.json(await workOrders.vendorOptions(principal, { scope: companyScopeSchema.parse({ organizationId, ...query }) }));
+  }));
+  app.get("/api/company/:organizationId/work-orders/document-options", requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const query = z.object({ legalEntityId: legalEntityIdSchema, propertyId: propertyReferenceIdSchema, search: z.string().trim().max(200).optional() }).strict().parse(req.query);
+    const principal = await principalFor(companyWebActor(req), organizationId);
+    res.json(await workOrders.documentOptions(principal, { scope: companyScopeSchema.parse({ organizationId, legalEntityId: query.legalEntityId }), propertyId: query.propertyId, search: query.search }));
+  }));
+  app.get("/api/company/:organizationId/work-orders/cost-lines", requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const query = z.object({ legalEntityId: legalEntityIdSchema, search: z.string().trim().max(200).optional(), from: isoDateSchema.optional(), through: isoDateSchema.optional(), limit: z.coerce.number().int().min(1).max(100).default(50), cursor: z.string().trim().min(1).max(512).optional() }).strict().parse(req.query);
+    const principal = await principalFor(companyWebActor(req), organizationId);
+    res.json(await workOrders.costSourceLines(principal, costSourceLineQuerySchema.parse({ ...query, organizationId, purpose: "cost" })));
+  }));
+  app.get("/api/company/:organizationId/work-order-report", requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const query = z.object({
+      legalEntityId: legalEntityIdSchema.optional(), propertyId: propertyReferenceIdSchema.optional(),
+      propertyIds: z.string().trim().min(1).max(4_000).transform(value => value.split(",").map(item => item.trim()).filter(Boolean)).optional(),
+      status: csv(WORK_ORDER_STATUSES).optional(), priority: csv(WORK_ORDER_PRIORITIES).optional(), category: csv(WORK_ORDER_CATEGORIES).optional(),
+      assignee: z.string().trim().min(1).max(200).optional(), vendorId: z.string().uuid().optional(),
+      dueFrom: isoDateSchema.optional(), dueThrough: isoDateSchema.optional(), reportedFrom: isoDateSchema.optional(), reportedThrough: isoDateSchema.optional(), asOf: isoDateSchema.optional(),
+      limit: z.coerce.number().int().min(1).max(500).default(200), cursor: z.string().trim().min(1).max(512).optional(),
+    }).strict().parse(req.query);
+    const { legalEntityId, propertyId, status, priority, category, ...rest } = query;
+    const principal = await principalFor(companyWebActor(req), organizationId);
+    res.json(await workOrders.listForReporting(principal, workOrderReportQuerySchema.parse({
+      ...rest, scope: { organizationId, legalEntityId, propertyId },
+      ...(status ? { statuses: status } : {}), ...(priority ? { priorities: priority } : {}), ...(category ? { categories: category } : {}),
+    })));
   }));
   app.get("/api/company/:organizationId/work-orders/:workOrderId", requireAdmin, companyReadHandler(async (req, res) => {
     const organizationId = organizationIdSchema.parse(req.params.organizationId);

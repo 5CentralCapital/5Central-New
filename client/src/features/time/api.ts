@@ -1,6 +1,8 @@
 import { operationIdSchema, operationReceiptSchema } from "@shared/company";
 import { investorContactListResponseSchema } from "@shared/investors";
-import { projectListResponseSchema } from "@shared/projects";
+import { projectDetailSchema, projectListResponseSchema } from "@shared/projects";
+import { costSourceLinePageSchema } from "@shared/projects/source-lines";
+import { timePayrollLinkListSchema } from "@shared/time/labor";
 import {
   timeCoverageSchema,
   timeEmployeeMappingSchema,
@@ -158,6 +160,19 @@ function createApi(): TimeApi {
       const params = new URLSearchParams({ legalEntityId, status: "active", limit: "100" });
       const value = projectListResponseSchema.parse(await requestJson(`${basePath(organizationId).replace(/\/time$/, "")}/projects?${params.toString()}`, { signal }));
       return value.items.map(item => ({ id: String(item.id), name: item.name, legalEntityId: String(item.legalEntityId) }));
+    },
+    async listProjectScopeItems(organizationId, projectId, signal) {
+      const value = projectDetailSchema.parse(await requestJson(`${basePath(organizationId).replace(/\/time$/, "")}/projects/${encodeURIComponent(projectId)}`, { signal }));
+      return value.scopeItems.filter(item => item.archivedAt === null).map(item => ({ id: String(item.id), description: item.description }));
+    },
+    async listPayrollLinks(organizationId, legalEntityId, signal) {
+      return timePayrollLinkListSchema.parse(await requestJson(`${basePath(organizationId)}/payroll-links?${new URLSearchParams({ legalEntityId }).toString()}`, { signal })).items;
+    },
+    async searchPayrollLines(organizationId, query, signal) {
+      const params = new URLSearchParams({ legalEntityId: query.legalEntityId, purpose: "payroll", limit: "50" });
+      if (query.search?.trim()) params.set("search", query.search.trim());
+      if (query.cursor) params.set("cursor", query.cursor);
+      return costSourceLinePageSchema.parse(await requestJson(`${basePath(organizationId).replace(/\/time$/, "")}/cost-source-lines?${params.toString()}`, { signal }));
     },
     async listUsers(organizationId, scope, signal) {
       return parseUsers(await requestJson(`${basePath(organizationId)}/users?${queryForScope(scope)}`, { signal }));

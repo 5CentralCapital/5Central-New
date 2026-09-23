@@ -58,9 +58,36 @@ import {
   type InvestorRemittanceInstruction,
   type InvestorFinancialSourceResponse,
 } from "../../shared/investors";
-import { financialSourceReferenceKey, type FinancialSourceLineResolution, type FinancialSourceReadPort } from "../../shared/accounting/source";
+import { type FinancialSourceLineResolution, type FinancialSourceReadPort } from "../../shared/accounting/source";
+import { sameFinancialSourceReference } from "../../shared/projects/source-lines";
 import { companyScopeSchema, centsFromBigInt, centsToBigInt, type CompanyScope } from "../../shared/company";
-import { dbCents, dbDate, dbDecimal, dbNullableDate, dbNullableString, dbRevision, dbString, dbTimestamp, decodeCursor, encodeCursor, parseJson } from "./helpers";
+import { dbCents, dbDate, dbDecimal, dbNullableDate, dbNullableString, dbRevision, dbString, dbTimestamp, decodeCursor, encodeCursor, parseJson, resolveEffectiveDate } from "./helpers";
+import {
+  addMonths,
+  amortizationScheduleSchema,
+  buildAmortizationSchedule,
+  buildInstrumentRollforward,
+  investorCalendarState,
+  monthOf,
+  type AmortizationSchedule,
+  type InstrumentRollforwardInput,
+} from "../../shared/investors/rollforward";
+import {
+  investorDebtMaturityQuerySchema,
+  investorDebtMaturityResponseSchema,
+  investorDebtMaturitySchema,
+  investorInstrumentFinancialsQuerySchema,
+  investorInstrumentFinancialsSchema,
+  investorPaymentCalendarItemSchema,
+  investorPaymentCalendarQuerySchema,
+  investorPaymentCalendarResponseSchema,
+  type InvestorDebtMaturityQuery,
+  type InvestorDebtMaturityResponse,
+  type InvestorInstrumentFinancials,
+  type InvestorInstrumentFinancialsQuery,
+  type InvestorPaymentCalendarQuery,
+  type InvestorPaymentCalendarResponse,
+} from "../../shared/investors/reports";
 
 const READ_ROLES = ["owner", "admin", "finance", "operations_pm", "project_manager", "read_only_reviewer"] as const;
 
@@ -395,6 +422,117 @@ export class InvestorReadService {
     });
   }
 
+  /**
+   * One instrument's scheduled debt service and monthly balance rollforward.
+   * The derived outstanding balance is compared with the manual balance and a
+   * difference is flagged; nothing overwrites the manual value.
+   */
+  async instrumentFinancials(principal: AuthenticatedPrincipal, input: InvestorInstrumentFinancialsQuery): Promise<InvestorInstrumentFinancials> {
+    const query = investorInstrumentFinancialsQuerySchema.parse(input);
+    const scope = companyScopeSchema.parse(query.scope);
+    assertReadScope(principal, scope);
+    const asOf = query.asOf ?? resolveEffectiveDate(undefined);
+    const owner = await this.executor.query<Record<string, unknown>>(`SELECT account_id FROM company_investor_instruments WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL`, [scope.organizationId, query.instrumentId]);
+    const accountId = owner.rows[0] ? dbString(owner.rows[0], "account_id") : null;
+    const instrument = accountId ? (await this.loadInstruments(scope, accountId)).find(item => String(item.id) === query.instrumentId) : undefined;
+    if (!instrument) throw new ValidationCommandError("Investor instrument was not found in the requested company scope", { reason: "investor_instrument_not_found" });
+    const [debt] = await this.loadDebts(scope.organizationId, [query.instrumentId]);
+    const guaranteed = await this.guaranteedReturn(scope.organizationId, [query.instrumentId]);
+    const payments = await this.loadPayments(scope, { instrumentId: query.instrumentId });
+    const obligations = await this.loadObligations(scope, undefined, [query.instrumentId]);
+    const range = rollforwardRange(instrument.effectiveFrom, asOf, query.fromMonth, query.throughMonth);
+    const rollforward = buildInstrumentRollforward(rollforwardInput(instrument, debt ?? null, payments, obligations, guaranteed.get(query.instrumentId) ?? null, asOf, range));
+    return investorInstrumentFinancialsSchema.parse({
+      instrumentId: instrument.id, accountId: instrument.accountId, name: instrument.name, kind: instrument.kind, currency: instrument.currency,
+      effectiveFrom: instrument.effectiveFrom, maturityOn: debt?.maturityOn ?? instrument.maturityOn, fromMonth: range.fromMonth, throughMonth: range.throughMonth,
+      debt: debt ?? null, amortization: debt ? amortizationFor(instrument, debt) : null, rollforward,
+    });
+  }
+
+  /** Scheduled, partial, recorded, posted, settled and reversed obligations with the remaining amount. */
+  async paymentCalendar(principal: AuthenticatedPrincipal, input: InvestorPaymentCalendarQuery): Promise<InvestorPaymentCalendarResponse> {
+    const query = investorPaymentCalendarQuerySchema.parse(input);
+    const scope = companyScopeSchema.parse(query.scope);
+    assertReadScope(principal, scope);
+    const asOf = query.asOf ?? resolveEffectiveDate(undefined);
+    const cursor = decodeMonthlyPaymentCursor(query.cursor);
+    const obligations = await this.loadObligations(scope, query.accountId, undefined, query.fromMonth, query.throughMonth, query.limit + 1, cursor);
+    const page = obligations.slice(0, query.limit);
+    const names = await this.instrumentNames(scope.organizationId, Array.from(new Set(page.map(item => String(item.instrumentId)))));
+    const items = page.map(obligation => {
+      const name = names.get(String(obligation.instrumentId));
+      return investorPaymentCalendarItemSchema.parse({
+        obligationId: obligation.id, accountId: obligation.accountId, accountName: name?.accountName ?? "Investor", instrumentId: obligation.instrumentId,
+        instrumentName: name?.instrumentName ?? "Instrument", periodMonth: obligation.periodMonth, dueOn: obligation.dueOn, currency: obligation.currency,
+        expectedCents: obligation.totalExpectedCents, knownMinimumCents: obligation.knownMinimumCents, recordedCents: obligation.totalRecordedCents,
+        postedCents: obligation.totalPostedCents, settledCents: obligation.totalSettledCents, remainingCents: obligation.remainingDueCents,
+        status: obligation.status, state: investorCalendarState(obligation, asOf),
+      });
+    });
+    const last = page.at(-1);
+    // The state filter applies within the bounded page so paging stays stable.
+    return investorPaymentCalendarResponseSchema.parse({
+      asOf, items: query.state ? items.filter(item => item.state === query.state) : items,
+      nextCursor: obligations.length > query.limit && last ? encodeMonthlyPaymentCursor(last) : null,
+    });
+  }
+
+  /** Debt instruments ordered by maturity with balloons and derived vs manual outstanding. */
+  async debtMaturities(principal: AuthenticatedPrincipal, input: InvestorDebtMaturityQuery): Promise<InvestorDebtMaturityResponse> {
+    const query = investorDebtMaturityQuerySchema.parse(input);
+    const scope = companyScopeSchema.parse(query.scope);
+    assertReadScope(principal, scope);
+    const asOf = query.asOf ?? resolveEffectiveDate(undefined);
+    const instruments = (await this.loadInstruments(scope)).filter(item => item.kind === "private_loan" || item.kind === "member_loan").slice(0, 1_000);
+    const ids = instruments.map(item => String(item.id));
+    const debts = new Map((await this.loadDebts(scope.organizationId, ids)).map(item => [String(item.instrumentId), item] as const));
+    const guaranteed = await this.guaranteedReturn(scope.organizationId, ids);
+    const payments = ids.length ? await this.loadPayments(scope, { instrumentIds: ids }) : [];
+    const obligations = ids.length ? await this.loadObligations(scope, undefined, ids) : [];
+    const names = await this.instrumentNames(scope.organizationId, ids);
+    const items = instruments.map(instrument => {
+      const id = String(instrument.id);
+      const debt = debts.get(id) ?? null;
+      const range = rollforwardRange(instrument.effectiveFrom, asOf);
+      const rollforward = buildInstrumentRollforward(rollforwardInput(instrument, debt, payments.filter(item => String(item.instrumentId) === id), obligations.filter(item => String(item.instrumentId) === id), guaranteed.get(id) ?? null, asOf, range));
+      const maturityOn = debt?.maturityOn ?? instrument.maturityOn;
+      const amortization = debt ? amortizationFor(instrument, debt) : null;
+      const balloonSource = debt?.balloonCents !== null && debt?.balloonCents !== undefined ? "documented" : amortization?.computedBalloonCents ? "computed" : "none";
+      return investorDebtMaturitySchema.parse({
+        instrumentId: instrument.id, accountId: instrument.accountId, accountName: names.get(id)?.accountName ?? "Investor", instrumentName: instrument.name, kind: instrument.kind,
+        legalEntityId: instrument.legalEntityId, currency: instrument.currency, maturityOn, monthsToMaturity: maturityOn ? monthsBetween(monthOf(asOf), monthOf(maturityOn)) : null,
+        annualRate: debt?.annualRate ?? null,
+        balloonCents: balloonSource === "documented" ? debt!.balloonCents : balloonSource === "computed" ? amortization!.computedBalloonCents : null, balloonSource,
+        derivedOutstandingCents: rollforward.derivedOutstandingCents, manualOutstandingCents: rollforward.manualOutstandingCents, reconciliation: rollforward.reconciliation,
+      });
+    });
+    items.sort((left, right) => (left.maturityOn ?? "9999-12-31").localeCompare(right.maturityOn ?? "9999-12-31") || String(left.instrumentId).localeCompare(String(right.instrumentId)));
+    return investorDebtMaturityResponseSchema.parse({ asOf, items });
+  }
+
+  private async instrumentNames(organizationId: string, instrumentIds: readonly string[]): Promise<Map<string, { instrumentName: string; accountName: string }>> {
+    if (!instrumentIds.length) return new Map();
+    const result = await this.executor.query<Record<string, unknown>>(
+      `SELECT i.id, i.name, a.display_name FROM company_investor_instruments i JOIN company_investor_accounts a ON a.organization_id=i.organization_id AND a.id=i.account_id WHERE i.organization_id=$1 AND i.id=ANY($2::uuid[])`,
+      [organizationId, instrumentIds],
+    );
+    return new Map(result.rows.map(row => [dbString(row, "id"), { instrumentName: dbString(row, "name"), accountName: dbString(row, "display_name") }] as const));
+  }
+
+  /** Fixed contractual profit from the active version of an active contract, when documented. */
+  private async guaranteedReturn(organizationId: string, instrumentIds: readonly string[]): Promise<Map<string, string>> {
+    if (!instrumentIds.length) return new Map();
+    const result = await this.executor.query<Record<string, unknown>>(
+      `SELECT c.instrument_id, SUM(v.fixed_profit_cents)::text AS fixed_profit_cents
+         FROM company_investor_contracts c
+         JOIN company_investor_contract_versions v ON v.organization_id=c.organization_id AND v.contract_id=c.id AND v.id=c.current_version_id
+        WHERE c.organization_id=$1 AND c.instrument_id=ANY($2::uuid[]) AND c.status='active' AND c.archived_at IS NULL AND v.status='active' AND v.fixed_profit_cents IS NOT NULL
+        GROUP BY c.instrument_id`,
+      [organizationId, instrumentIds],
+    );
+    return new Map(result.rows.map(row => [dbString(row, "instrument_id"), dbCents(row.fixed_profit_cents, "fixed_profit_cents")] as const));
+  }
+
   private async loadAccountRollups(scope: CompanyScope, accountIds: readonly string[]): Promise<Map<string, InvestorAccountRollup[]>> {
     if (accountIds.length === 0) return new Map();
     const paymentRows = await Promise.all(accountIds.map(async accountId => [accountId, await this.loadPayments(scope, { accountId })] as const));
@@ -521,7 +659,7 @@ export class InvestorReadService {
       return { source, validity: "unavailable" };
     }
     if (!resolution) return { source, validity: "stale" };
-    if (financialSourceReferenceKey(resolution.source) !== financialSourceReferenceKey(reference)) return { source, validity: "stale" };
+    if (!sameFinancialSourceReference(resolution.source, reference)) return { source, validity: "stale" };
     if (resolution.postingState === "voided" || resolution.settlement.state === "voided") return { source, validity: "voided" };
     if (resolution.postingState !== "posted" || resolution.currency !== source.currency || centsToBigInt(resolution.amountCents) < centsToBigInt(source.amountCents)) return { source, validity: "stale" };
     // Keep the append-only attestation exactly as stored. The validity flag is
@@ -555,6 +693,56 @@ export class InvestorReadService {
       distributionCents: centsFromBigInt(BigInt(0)), feeCents: centsFromBigInt(BigInt(0)), balloonCents: centsFromBigInt(BigInt(0)), unclassifiedCents: centsFromBigInt(BigInt(0)),
     }, sources.get(dbString(row, "id"))?.postedSource ?? null, sources.get(dbString(row, "id"))?.postedSourceValidity ?? null, sources.get(dbString(row, "id"))?.settlementSource ?? null));
   }
+}
+
+function monthsBetween(from: string, to: string): number {
+  const [fy, fm] = from.split("-").map(Number);
+  const [ty, tm] = to.split("-").map(Number);
+  return (ty! - fy!) * 12 + (tm! - fm!);
+}
+
+/** Rollforward months from the instrument's first month through the as-of month, bounded to 480 months. */
+function rollforwardRange(effectiveFrom: string, asOf: string, fromMonth?: string, throughMonth?: string): { fromMonth: string; throughMonth: string } {
+  const start = monthOf(effectiveFrom);
+  let through = throughMonth ?? monthOf(asOf);
+  if (through < start && !fromMonth) through = start;
+  let from = fromMonth ?? start;
+  if (through < from) through = from;
+  if (monthsBetween(from, through) > 479) from = addMonths(through, -479);
+  return { fromMonth: from, throughMonth: through };
+}
+
+/** A posted payment whose QBO source is no longer current is treated as manually recorded evidence. */
+function evidenceStatus(payment: InvestorPayment): InvestorPayment["status"] {
+  if ((payment.status === "qbo_posted" || payment.status === "review_required") && (payment.postedSource === null || payment.postedSourceValidity !== "current")) return "manual_recorded";
+  if (payment.status === "bank_settled" && payment.settlementSource === null) return "manual_recorded";
+  return payment.status;
+}
+
+function rollforwardInput(instrument: InvestorInstrument, debt: InvestorDebt | null, payments: readonly InvestorPayment[], obligations: readonly InvestorObligation[], guaranteedReturnCents: string | null, asOf: string, range: { fromMonth: string; throughMonth: string }): InstrumentRollforwardInput {
+  return {
+    instrumentKind: instrument.kind, currency: instrument.currency, effectiveFrom: instrument.effectiveFrom, maturityOn: debt?.maturityOn ?? instrument.maturityOn, asOf,
+    documentedFundedCents: debt?.fundedCapitalCents ?? null, manualOutstandingCents: debt?.outstandingPrincipalCents ?? null, guaranteedReturnCents,
+    payments: payments.map(payment => ({
+      id: String(payment.id), kind: payment.kind, status: evidenceStatus(payment), paymentOn: payment.paymentOn, currency: payment.currency,
+      amountCents: payment.amountCents, amounts: payment.amounts, reversesPaymentId: payment.reversesPaymentId === null ? null : String(payment.reversesPaymentId),
+    })),
+    obligations: obligations.filter(item => item.currency === instrument.currency).map(item => ({
+      periodMonth: item.periodMonth, principalCents: item.principalCents, interestCents: item.interestCents, balloonCents: item.balloonCents, totalExpectedCents: item.totalExpectedCents,
+    })),
+    fromMonth: range.fromMonth, throughMonth: range.throughMonth,
+  };
+}
+
+/** Scheduled debt service from the stored debt terms on the funded principal (original principal when funding is undocumented). */
+function amortizationFor(instrument: InvestorInstrument, debt: InvestorDebt): AmortizationSchedule {
+  const schedule = buildAmortizationSchedule({
+    principalCents: debt.fundedCapitalCents ?? debt.originalPrincipalCents, annualRate: debt.annualRate, schedule: debt.schedule, paymentDay: debt.paymentDay,
+    monthEndRule: debt.monthEndRule, accrualStartOn: instrument.effectiveFrom, firstDueMonth: debt.firstDueMonth, interestOnlyUntil: debt.interestOnlyUntil,
+    amortizationMonths: debt.amortizationMonths, maturityOn: debt.maturityOn ?? instrument.maturityOn, balloonCents: debt.balloonCents, dayCount: debt.dayCount,
+  });
+  if (debt.fundedCapitalCents !== null || schedule.status !== "ready") return schedule;
+  return amortizationScheduleSchema.parse({ ...schedule, warnings: [...schedule.warnings, "Funded principal is not documented; the schedule uses the original principal."].slice(0, 20) });
 }
 
 function investorFinancialSourceFromJson(value: unknown): unknown {

@@ -115,6 +115,12 @@ export function registerTimeHttpRoutes(app: Express, options: TimeHttpRouteOptio
     const { principal } = await authorized(executor, request, scope.organizationId, scope.legalEntityId);
     response.json(await services.read.listJobcodeMappings(principal, scope));
   }));
+  app.get("/api/company/:organizationId/time/payroll-links", requireAdmin, timeHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const legalEntityId = legalEntityIdSchema.parse(queryString(request.query.legalEntityId, "legalEntityId"));
+    const { principal } = await authorized(executor, request, organizationId, legalEntityId);
+    response.json({ items: await services.read.listPayrollLinks(principal, { organizationId, legalEntityId }) });
+  }));
   app.get("/api/company/:organizationId/time/coverage", requireAdmin, timeHandler(async (request, response) => {
     const scope = scopeQuery(request);
     const { principal } = await authorized(executor, request, scope.organizationId, scope.legalEntityId);

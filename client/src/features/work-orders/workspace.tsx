@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarClock, ChevronLeft, CircleAlert, DoorOpen, LoaderCircle, Plus, Search, Wrench, X } from "lucide-react";
+import { CalendarClock, ChevronLeft, CircleAlert, DoorOpen, FileText, Link2, LoaderCircle, Plus, Search, Wrench, X } from "lucide-react";
+import type { FinancialSourceReference } from "@shared/accounting/source";
+import type { CostSourceLine } from "@shared/projects/source-lines";
 import type { CompanyContextEntity } from "@shared/company/context";
 import {
   WORK_ORDER_CATEGORIES,
@@ -15,14 +17,14 @@ import {
 } from "@shared/work-orders";
 import { formatInputValue, formatMoney, parseMoneyInput } from "../projects/money";
 import { WorkOrderApiError, revisionFrom, workOrderEnvelope, workOrdersApi, type WorkOrderCommandEnvelope } from "./api";
-import { PRIORITY_LABELS, STATUS_LABELS, categoryLabel, dateLabel, eventSummary, operatingToday, priorityClass, statusClass, timestampLabel } from "./format";
+import { PRIORITY_LABELS, STATUS_LABELS, categoryLabel, dateLabel, eventSummary, operatingToday, priorityClass, scheduleOrder, statusClass, timestampLabel } from "./format";
 import { PendingEnvelopes } from "./pending";
 import "./work-orders.css";
 
 import { WORK_ORDER_VIEWS, type WorkOrderView } from "./types";
 
 export type { WorkOrderView };
-const VIEW_LABELS: Record<WorkOrderView, string> = { open: "Open", all: "All", ...STATUS_LABELS };
+const VIEW_LABELS: Record<WorkOrderView, string> = { open: "Open", schedule: "Schedule", all: "All", ...STATUS_LABELS };
 
 export interface WorkOrdersWorkspaceProps {
   organizationId: string;
@@ -45,7 +47,11 @@ type DialogState =
   | { kind: "edit" }
   | { kind: "status"; to?: WorkOrderStatus }
   | { kind: "note" }
-  | { kind: "chargeback" };
+  | { kind: "chargeback" }
+  | { kind: "vendor" }
+  | { kind: "cost" }
+  | { kind: "manual" }
+  | { kind: "attachment" };
 
 interface PropertyChoice { entityId: string; propertyId: string; name: string; units: { id: string; unitNumber: string }[] }
 
@@ -347,12 +353,118 @@ function ChargebackDialog({ detail, onClose, onSaved, save }: { detail: WorkOrde
   </Dialog>;
 }
 
+function VendorDialog({ organizationId, detail, onClose, onSaved, save }: { organizationId: string; detail: WorkOrderDetail; onClose: () => void; onSaved: () => void; save: Save }) {
+  const options = useQuery({ queryKey: ["work-orders", "vendors", organizationId, detail.legalEntityId], queryFn: ({ signal }) => workOrdersApi.vendorOptions(organizationId, detail.legalEntityId, signal), retry: false });
+  const [choice, setChoice] = useState(detail.vendor ? `${detail.vendor.kind}|${detail.vendor.id}` : "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<unknown>();
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const [kind, id] = choice ? choice.split("|") : [];
+    setSaving(true); setError(undefined);
+    try { await save("work_order.vendor.assign", detail.legalEntityId, { workOrderId: detail.id, vendor: kind && id ? { kind, id } : null }, detail.recordRevision); onSaved(); }
+    catch (saveError) { setError(saveError); } finally { setSaving(false); }
+  };
+  return <Dialog title="Assign vendor" subtitle={detail.reference} onClose={onClose} onSubmit={submit} saving={saving} submitLabel="Save vendor">
+    <Notice error={error ?? options.error} />
+    <Field label="Vendor" wide><select data-autofocus value={choice} onChange={event => setChoice(event.currentTarget.value)} disabled={options.isLoading}>
+      <option value="">{options.isLoading ? "Loading vendors…" : "No vendor"}</option>
+      {(options.data ?? []).map(item => <option key={`${item.kind}|${item.id}`} value={`${item.kind}|${item.id}`}>{item.name}{item.kind === "project_vendor" ? " · Project vendor" : ""}</option>)}
+    </select></Field>
+  </Dialog>;
+}
+
+function lineKey(source: FinancialSourceReference): string { return `${source.realmId}|${source.objectType}|${source.objectId}|${source.lineId ?? ""}|${source.version}`; }
+
+function CostLinkDialog({ organizationId, detail, onClose, onSaved, save }: { organizationId: string; detail: WorkOrderDetail; onClose: () => void; onSaved: () => void; save: Save }) {
+  const [search, setSearch] = useState("");
+  const debounced = useDebounced(search, 300);
+  const lines = useQuery({ queryKey: ["work-orders", "cost-lines", organizationId, detail.legalEntityId, debounced], queryFn: ({ signal }) => workOrdersApi.costLines(organizationId, detail.legalEntityId, debounced, undefined, signal), retry: false });
+  const [selected, setSelected] = useState<CostSourceLine>();
+  const [amount, setAmount] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<unknown>();
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!selected) { setError(new Error("Choose a QBO bill line.")); return; }
+    let amountCents: string;
+    try {
+      amountCents = parseMoneyInput(amount, "Amount").cents;
+      if (BigInt(amountCents) <= BigInt(0)) throw new Error("Amount must be greater than zero.");
+      if (BigInt(amountCents) > BigInt(selected.availableCents)) throw new Error("The amount exceeds the unallocated balance of this line.");
+    } catch (parseError) { setError(parseError); return; }
+    setSaving(true); setError(undefined);
+    try { await save("work_order.cost.link", detail.legalEntityId, { workOrderId: detail.id, source: selected.source, amountCents }, detail.recordRevision); onSaved(); }
+    catch (saveError) { setError(saveError); } finally { setSaving(false); }
+  };
+  return <Dialog title="Link QBO bill line" subtitle={detail.reference} onClose={onClose} onSubmit={submit} saving={saving} submitLabel="Link cost">
+    <Notice error={error ?? lines.error} />
+    <label className="rm-search wo-search"><Search size={14} aria-hidden="true" /><input data-autofocus type="search" aria-label="Search QBO lines" placeholder="Description or document" value={search} onChange={event => setSearch(event.currentTarget.value)} /></label>
+    <div className="wo-line-picker" role="radiogroup" aria-label="QBO bill lines">
+      {lines.isLoading ? <div className="wo-state" role="status"><LoaderCircle size={16} className="wo-spin" />Loading QBO lines…</div>
+        : !(lines.data?.items.length) ? <div className="wo-state"><strong>No unallocated bill lines</strong></div>
+        : lines.data.items.map(item => <label key={lineKey(item.source)} className={`wo-line-option${selected && lineKey(selected.source) === lineKey(item.source) ? " is-selected" : ""}`}>
+          <input type="radio" name="wo-cost-line" checked={!!selected && lineKey(selected.source) === lineKey(item.source)} onChange={() => { setSelected(item); setAmount(formatInputValue(item.availableCents)); }} />
+          <span className="wo-line-option-main"><strong>{item.description ?? item.transactionType}</strong><small>{item.transactionType} · {dateLabel(item.postedOn, "long")}</small></span>
+          <span className="wo-amount">{formatMoney(item.availableCents, item.currency)}</span>
+        </label>)}
+    </div>
+    <Field label="Amount"><input inputMode="decimal" value={amount} onChange={event => setAmount(event.currentTarget.value)} placeholder="0.00" /></Field>
+  </Dialog>;
+}
+
+function ManualActualDialog({ detail, onClose, onSaved, save }: { detail: WorkOrderDetail; onClose: () => void; onSaved: () => void; save: Save }) {
+  const [amount, setAmount] = useState(detail.manualActual ? formatInputValue(detail.manualActual.amountCents) : "");
+  const [note, setNote] = useState(detail.manualActual?.note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<unknown>();
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    let amountCents: string;
+    try { amountCents = parseMoneyInput(amount, "Amount").cents; if (BigInt(amountCents) < BigInt(0)) throw new Error("Amount cannot be negative."); } catch (parseError) { setError(parseError); return; }
+    setSaving(true); setError(undefined);
+    try { await save("work_order.actual.set", detail.legalEntityId, { workOrderId: detail.id, amountCents, note: note.trim() || null }, detail.recordRevision); onSaved(); }
+    catch (saveError) { setError(saveError); } finally { setSaving(false); }
+  };
+  return <Dialog title="Manual actual cost" subtitle={detail.reference} onClose={onClose} onSubmit={submit} saving={saving} submitLabel="Save actual">
+    <Notice error={error} />
+    <div className="rm-form-grid">
+      <Field label="Amount"><input data-autofocus inputMode="decimal" value={amount} onChange={event => setAmount(event.currentTarget.value)} placeholder="0.00" /></Field>
+      <Field label="Note"><input value={note} maxLength={500} onChange={event => setNote(event.currentTarget.value)} /></Field>
+    </div>
+  </Dialog>;
+}
+
+function AttachmentDialog({ organizationId, detail, onClose, onSaved, save }: { organizationId: string; detail: WorkOrderDetail; onClose: () => void; onSaved: () => void; save: Save }) {
+  const documents = useQuery({ queryKey: ["work-orders", "documents", organizationId, detail.legalEntityId, detail.propertyId], queryFn: ({ signal }) => workOrdersApi.documentOptions(organizationId, detail.legalEntityId, detail.propertyId, signal), retry: false });
+  const attached = new Set(detail.attachments.map(item => item.documentId));
+  const available = (documents.data ?? []).filter(item => !attached.has(item.documentId));
+  const [documentId, setDocumentId] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<unknown>();
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!documentId) { setError(new Error("Choose a document.")); return; }
+    setSaving(true); setError(undefined);
+    try { await save("work_order.attachment.link", detail.legalEntityId, { workOrderId: detail.id, documentId }, detail.recordRevision); onSaved(); }
+    catch (saveError) { setError(saveError); } finally { setSaving(false); }
+  };
+  return <Dialog title="Attach document" subtitle={detail.reference} onClose={onClose} onSubmit={submit} saving={saving} submitLabel="Attach">
+    <Notice error={error ?? documents.error} />
+    <Field label="Document" wide><select data-autofocus value={documentId} onChange={event => setDocumentId(event.currentTarget.value)} disabled={documents.isLoading}>
+      <option value="">{documents.isLoading ? "Loading documents…" : available.length ? "Choose document" : "No documents available"}</option>
+      {available.map(item => <option key={item.documentId} value={item.documentId}>{item.title}{item.documentDate ? ` · ${dateLabel(item.documentDate, "long")}` : ""}</option>)}
+    </select></Field>
+  </Dialog>;
+}
+
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return <div className="wo-fact"><dt>{label}</dt><dd>{children}</dd></div>;
 }
 
-function Detail({ detail, onDialog, onClearChargeback, clearing, onBack, onOpenProperty, onOpenUnit, onOpenTenant }: {
+function Detail({ detail, onDialog, onClearChargeback, clearing, onBack, onOpenProperty, onOpenUnit, onOpenTenant, onQuickAction }: {
   detail: WorkOrderDetail; onDialog: (state: DialogState) => void; onClearChargeback: () => void; clearing: boolean; onBack: () => void;
+  onQuickAction: (kind: WorkOrderCommandKind, payload: Record<string, unknown>) => void;
   onOpenProperty?: (id: string) => void; onOpenUnit?: (id: string) => void; onOpenTenant?: (id: string) => void;
 }) {
   const headingId = `wo-title-${detail.id}`;
@@ -383,10 +495,37 @@ function Detail({ detail, onDialog, onClearChargeback, clearing, onBack, onOpenP
         <Fact label="Reported">{dateLabel(detail.reportedOn, "long")}</Fact>
         <Fact label="Scheduled">{dateLabel(detail.scheduledOn, "long")}</Fact>
         <Fact label="Completed">{dateLabel(detail.completedOn, "long")}</Fact>
+        <Fact label="Target">{dateLabel(detail.targetOn, "long")}{detail.status !== "completed" && detail.status !== "canceled" && <span className="wo-muted"> · {detail.agingDays} {detail.agingDays === 1 ? "day" : "days"} open</span>}</Fact>
         <Fact label="Assigned to">{detail.assignedTo ?? <span className="wo-muted">Unassigned</span>}</Fact>
-        <Fact label="Estimated cost">{detail.estimatedCostCents ? formatMoney(detail.estimatedCostCents, detail.currency) : <span className="wo-muted">None</span>}</Fact>
+        <Fact label="Vendor"><span className="wo-fact-action">{detail.vendor?.name ?? <span className="wo-muted">None</span>}<button type="button" className="rm-button rm-button--small rm-button--ghost" onClick={() => onDialog({ kind: "vendor" })}>{detail.vendor ? "Change" : "Assign"}</button></span></Fact>
         <Fact label="Project">{detail.projectName ?? <span className="wo-muted">None</span>}</Fact>
       </dl>
+    </section>
+    <section className="wo-section" aria-labelledby={`${headingId}-cost`}>
+      <div className="wo-section-heading">
+        <h3 id={`${headingId}-cost`}>Cost</h3>
+        <div className="wo-inline-actions">
+          <button type="button" className="rm-button rm-button--small" onClick={() => onDialog({ kind: "cost" })}><Link2 size={13} />Link QBO bill</button>
+          <button type="button" className="rm-button rm-button--small rm-button--ghost" onClick={() => onDialog({ kind: "manual" })}>{detail.manualActual ? "Edit manual actual" : "Manual actual"}</button>
+        </div>
+      </div>
+      <dl className="wo-facts">
+        <Fact label="Estimate">{detail.estimatedCostCents ? formatMoney(detail.estimatedCostCents, detail.currency) : <span className="wo-muted">None</span>}</Fact>
+        <Fact label="QBO actual">{detail.actualCost.linkedLineCount ? formatMoney(detail.actualCost.linkedCents, detail.currency) : <span className="wo-muted">None linked</span>}</Fact>
+        <Fact label="Manual actual">{detail.manualActual ? <span className="wo-fact-action">{formatMoney(detail.manualActual.amountCents, detail.currency)}<span className="rm-status rm-status--warning">Draft</span><button type="button" className="rm-button rm-button--small rm-button--ghost" onClick={() => onQuickAction("work_order.actual.set", { workOrderId: detail.id, amountCents: null })}>Clear</button></span> : <span className="wo-muted">None</span>}</Fact>
+      </dl>
+      {detail.costLines.length > 0 && <ul className="wo-cost-lines">{detail.costLines.map(line => <li key={lineKey(line.source)}>
+        <span className="wo-line-option-main"><strong>{line.description ?? line.transactionType ?? "QBO line"}</strong><small>{line.transactionType ?? line.source.objectType} {line.source.objectId} · {dateLabel(line.postedOn, "long")}{line.validity === "stale" ? " · changed in QBO" : ""}</small></span>
+        <span className="wo-amount">{formatMoney(line.allocatedCents, line.currency)}</span>
+        <button type="button" className="rm-button rm-button--small rm-button--ghost" onClick={() => onQuickAction("work_order.cost.unlink", { workOrderId: detail.id, source: line.source })}>Release</button>
+      </li>)}</ul>}
+    </section>
+    <section className="wo-section" aria-labelledby={`${headingId}-files`}>
+      <div className="wo-section-heading"><h3 id={`${headingId}-files`}>Documents</h3><div className="wo-inline-actions"><button type="button" className="rm-button rm-button--small" onClick={() => onDialog({ kind: "attachment" })}><FileText size={13} />Attach</button></div></div>
+      {detail.attachments.length ? <ul className="wo-cost-lines">{detail.attachments.map(item => <li key={item.documentId}>
+        <span className="wo-line-option-main"><strong>{item.title}</strong><small>{item.kind.replace(/_/g, " ").replace(/^\w/, letter => letter.toUpperCase())}{item.documentDate ? ` · ${dateLabel(item.documentDate, "long")}` : ""}{item.available ? "" : " · archived"}</small></span>
+        <button type="button" className="rm-button rm-button--small rm-button--ghost" onClick={() => onQuickAction("work_order.attachment.unlink", { workOrderId: detail.id, documentId: item.documentId })}>Remove</button>
+      </li>)}</ul> : <p className="wo-muted wo-empty-line">No documents attached.</p>}
     </section>
     <section className="wo-section" aria-labelledby={`${headingId}-chargeback`}>
       <div className="wo-section-heading">
@@ -439,8 +578,8 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
 
   const [filterEntityId, filterPropertyId] = propertyKey ? propertyKey.split("|") : [undefined, undefined];
   const listFilters = {
-    openOnly: view === "open",
-    ...(view !== "open" && view !== "all" ? { statuses: [view] } : {}),
+    openOnly: view === "open" || view === "schedule",
+    ...(view === "schedule" ? { statuses: ["scheduled", "in_progress"] as WorkOrderStatus[] } : view !== "open" && view !== "all" ? { statuses: [view] } : {}),
     ...(priority ? { priority } : {}),
     ...(filterEntityId ? { legalEntityId: filterEntityId, propertyId: filterPropertyId } : {}),
     search: debouncedSearch,
@@ -486,6 +625,12 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
 
   const closeDialog = useCallback(() => setDialog(null), []);
   const afterSave = useCallback(() => { setDialog(null); void refresh(); }, [refresh]);
+  const quickAction = async (kind: WorkOrderCommandKind, payload: Record<string, unknown>) => {
+    if (!detail.data) return;
+    setActionError(undefined);
+    try { await save(kind, detail.data.legalEntityId, payload, detail.data.recordRevision); await refresh(); }
+    catch (error) { setActionError(error); }
+  };
   const clearChargeback = async () => {
     if (!detail.data) return;
     setClearing(true); setActionError(undefined);
@@ -531,11 +676,11 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
           : list.isLoading ? <div className="wo-state" role="status"><LoaderCircle size={16} className="wo-spin" />Loading work orders…</div>
           : !items.length ? <div className="wo-state"><Wrench size={20} aria-hidden="true" /><strong>No work orders</strong><span>{search || priority || propertyKey ? "Nothing matches these filters." : view === "open" ? "Nothing open right now." : "Nothing in this view."}</span></div>
           : <div className="rm-record-list-items wo-list-items">
-            {items.map(item => <button key={item.id} type="button" className={`rm-record-list-item wo-list-item${item.id === selectedId ? " active" : ""}`} aria-current={item.id === selectedId ? "true" : undefined} onClick={() => onSelect(item.id)}>
+            {(view === "schedule" ? scheduleOrder(items) : items.map(item => ({ item, heading: undefined as string | undefined }))).map(({ item, heading }) => <Fragment key={item.id}>{heading && <h3 className="wo-day-heading">{heading}</h3>}<button key={item.id} type="button" className={`rm-record-list-item wo-list-item${item.id === selectedId ? " active" : ""}`} aria-current={item.id === selectedId ? "true" : undefined} onClick={() => onSelect(item.id)}>
               <span className="wo-list-item-top"><strong className="rm-record-list-item-title">{item.title}</strong><PriorityCapsule priority={item.priority} /></span>
               <span className="rm-record-list-item-meta">{item.propertyName ?? item.propertyId}{item.unitNumber ? ` · Unit ${item.unitNumber}` : ""}{item.personName ? ` · ${item.personName}` : ""}</span>
-              <span className="wo-list-item-foot"><StatusCapsule status={item.status} /><small>{item.reference} · {item.status === "scheduled" && item.scheduledOn ? `Scheduled ${dateLabel(item.scheduledOn)}` : item.status === "completed" && item.completedOn ? `Done ${dateLabel(item.completedOn)}` : `Reported ${dateLabel(item.reportedOn)}`}</small></span>
-            </button>)}
+              <span className="wo-list-item-foot"><StatusCapsule status={item.status} /><small>{item.reference} · {item.status === "scheduled" && item.scheduledOn ? `Scheduled ${dateLabel(item.scheduledOn)}` : item.status === "completed" && item.completedOn ? `Done ${dateLabel(item.completedOn)}` : `Reported ${dateLabel(item.reportedOn)}`}{item.vendor ? ` · ${item.vendor.name}` : ""}</small></span>
+            </button></Fragment>)}
           </div>}
       </section>
       <div className="rm-record-detail wo-detail-pane">
@@ -543,7 +688,7 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
         {!selectedId ? <div className="wo-state wo-detail-empty"><Wrench size={22} aria-hidden="true" /><span>Select a work order to see its details and history.</span></div>
           : detail.error ? <Notice error={detail.error} onRetry={() => void detail.refetch()} />
           : !current ? <div className="wo-state" role="status"><LoaderCircle size={16} className="wo-spin" />Loading work order…</div>
-          : <Detail detail={current} onDialog={setDialog} onClearChargeback={() => void clearChargeback()} clearing={clearing} onBack={() => onSelect(undefined)} onOpenProperty={props.onOpenProperty} onOpenUnit={props.onOpenUnit} onOpenTenant={props.onOpenTenant} />}
+          : <Detail detail={current} onDialog={setDialog} onClearChargeback={() => void clearChargeback()} clearing={clearing} onBack={() => onSelect(undefined)} onOpenProperty={props.onOpenProperty} onOpenUnit={props.onOpenUnit} onOpenTenant={props.onOpenTenant} onQuickAction={(kind, payload) => void quickAction(kind, payload)} />}
       </div>
     </div>
     {dialog?.kind === "create" && <EditDialog organizationId={organizationId} choices={choices} onClose={closeDialog} onSaved={() => setDialog(null)} save={save} />}
@@ -551,6 +696,10 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
     {dialog?.kind === "status" && current && <StatusDialog detail={current} initial={dialog.to} onClose={closeDialog} onSaved={afterSave} save={save} />}
     {dialog?.kind === "note" && current && <NoteDialog detail={current} onClose={closeDialog} onSaved={afterSave} save={save} />}
     {dialog?.kind === "chargeback" && current && <ChargebackDialog detail={current} onClose={closeDialog} onSaved={afterSave} save={save} />}
+    {dialog?.kind === "vendor" && current && <VendorDialog organizationId={organizationId} detail={current} onClose={closeDialog} onSaved={afterSave} save={save} />}
+    {dialog?.kind === "cost" && current && <CostLinkDialog organizationId={organizationId} detail={current} onClose={closeDialog} onSaved={afterSave} save={save} />}
+    {dialog?.kind === "manual" && current && <ManualActualDialog detail={current} onClose={closeDialog} onSaved={afterSave} save={save} />}
+    {dialog?.kind === "attachment" && current && <AttachmentDialog organizationId={organizationId} detail={current} onClose={closeDialog} onSaved={afterSave} save={save} />}
   </div>;
 }
 

@@ -11,6 +11,10 @@ import type {
   TimeJobcodeMapping,
   TimeUser,
 } from "@shared/time";
+import type { TimePayrollLink } from "@shared/time/labor";
+import type { CostSourceLinePage } from "@shared/projects/source-lines";
+
+export type { TimePayrollLink, CostSourceLinePage };
 
 export type TimeWorkspaceEntity = CompanyContextEntity;
 export type { TimeCoverage, TimeConnectionScope, TimeConnectionSummary, TimeEmployeeMapping, TimeEntry, TimeEnvironment, TimeJobcode, TimeJobcodeMapping, TimeUser };
@@ -51,6 +55,9 @@ export interface TimeApi {
   listJobcodeMappings(organizationId: string, scope: TimeConnectionScope, signal?: AbortSignal): Promise<readonly TimeJobcodeMapping[]>;
   sync(organizationId: string, scope: TimeConnectionScope, signal?: AbortSignal): Promise<{ readonly status: "complete" | "partial"; readonly streams: readonly TimeCoverage[]; readonly conflicts: readonly string[] }>;
   sendCommand<TPayload = unknown>(organizationId: string, kind: string, envelope: TimeCommandEnvelope<TPayload>): Promise<OperationReceipt>;
+  listProjectScopeItems?(organizationId: string, projectId: string, signal?: AbortSignal): Promise<readonly { readonly id: string; readonly description: string }[]>;
+  listPayrollLinks?(organizationId: string, legalEntityId: string, signal?: AbortSignal): Promise<readonly TimePayrollLink[]>;
+  searchPayrollLines?(organizationId: string, query: { legalEntityId: string; search?: string; cursor?: string }, signal?: AbortSignal): Promise<CostSourceLinePage>;
 }
 
 export interface TimeWorkspaceProps {

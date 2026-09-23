@@ -250,3 +250,24 @@
   .projects-execution-form-grid { grid-template-columns: 1fr; }
   .projects-execution-form-heading { align-items: flex-start; flex-direction: column; }
 }
+
+/* Cost report, ledgers and pickers */
+.projects-section-stack { display: grid; gap: 16px; }
+.projects-execution-metric-grid strong.projects-negative,
+.projects-negative { color: var(--projects-error); }
+.projects-cost-breakdown { border-top: 1px solid var(--projects-line); }
+.projects-warning-list { margin: 0; padding: 12px 20px; list-style: none; border-top: 1px solid var(--projects-line); color: var(--projects-warning); display: grid; gap: 6px; }
+.projects-warning-list li { display: flex; gap: 8px; align-items: flex-start; }
+.projects-checklist { margin: 0; padding: 8px 20px 16px; list-style: none; display: grid; gap: 10px; }
+.projects-checklist li { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 12px; align-items: start; min-height: 44px; }
+.projects-source-search { display: flex; gap: 8px; align-items: center; padding: 0 0 12px; }
+.projects-source-search .projects-search { flex: 1; }
+.projects-source-results { max-height: 320px; overflow: auto; border: 1px solid var(--projects-line); border-radius: 8px; margin-bottom: 12px; }
+.projects-table tr.is-selected td { background: var(--projects-soft); box-shadow: inset 2px 0 0 var(--projects-gold); }
+.projects-table input[type="radio"] { width: 20px; height: 20px; accent-color: var(--projects-charcoal); }
+.projects-table details summary { cursor: pointer; min-height: 32px; }
+.projects-table details summary:focus-visible { outline: 2px solid var(--projects-gold); outline-offset: 2px; }
+@media (max-width: 720px) {
+  .projects-checklist li { grid-template-columns: 1fr; }
+  .projects-source-search { flex-direction: column; align-items: stretch; }
+}

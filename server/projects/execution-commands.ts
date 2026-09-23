@@ -20,6 +20,7 @@ import {
   type FinancialSourceReference,
 } from "../../shared/accounting/source";
 import {
+  PROJECT_ETC_OVERRIDE_VENDOR,
   projectExecutionCommandKinds,
   projectExecutionCommandPayloadSchemas,
   projectIdSchema,
@@ -83,7 +84,7 @@ function savedExecutionResult(childId: string, projectId?: string, projectRevisi
     resultingRevisions: projectId === undefined || projectRevision === undefined
       ? []
       : [{ recordId: recordReferenceIdSchema.parse(projectId), revision: projectRevision }],
-    validationOutcomes: [{ code: "project.execution.saved_in_rops", severity: "info", message: "Project execution record saved in R-ops" }],
+    validationOutcomes: [{ code: "project.execution.saved_in_rops", severity: "info", message: "Project execution record saved in 5Central Ops" }],
   };
 }
 
@@ -318,12 +319,15 @@ async function assertDrawCapacity(
   projectId: string,
   project: Awaited<ReturnType<typeof lockProject>>,
   excludeItemId?: string,
+  retainageCents: string = "0",
 ): Promise<string> {
   const eligible = await resolveDrawSourceEligibility(context, sourceType, sourceId, projectId, project);
   const values: unknown[] = [context.envelope.scope.organizationId, projectId, sourceType, sourceId];
   const exclusion = excludeItemId === undefined ? "" : ` AND i.id <> $${values.push(excludeItemId)}`;
+  // Capacity is measured net of retainage: withheld retainage has not been
+  // paid, so a later draw may release it without exceeding the source.
   const result = await context.executor.query<{ requested_cents: unknown }>(
-    `SELECT COALESCE(SUM(i.requested_cents),0)::text AS requested_cents
+    `SELECT COALESCE(SUM(i.requested_cents - i.retainage_cents),0)::text AS requested_cents
        FROM company_project_draw_request_items i
        JOIN company_project_draw_requests d
          ON d.organization_id=i.organization_id AND d.project_id=i.project_id AND d.id=i.draw_request_id
@@ -332,7 +336,7 @@ async function assertDrawCapacity(
     values,
   );
   const alreadyRequested = rowCents(result.rows[0]?.requested_cents ?? "0", "draw_source_requested");
-  if (centsToBigInt(alreadyRequested) + centsToBigInt(requestedCents) > centsToBigInt(eligible)) {
+  if (centsToBigInt(alreadyRequested) + centsToBigInt(requestedCents) - centsToBigInt(retainageCents) > centsToBigInt(eligible)) {
     throw new ValidationCommandError("Draw request exceeds the source eligibility", { reason: "project_draw_source_overdrawn" });
   }
   return eligible;
@@ -363,12 +367,55 @@ async function assertCommitment(context: CommandHandlerContext<unknown>, commitm
 
 async function handleTemplateCreate(context: CommandHandlerContext<ProjectExecutionCommandPayload["project.template.create"]>): Promise<CommandHandlerResult> {
   const payload = projectExecutionCommandPayloadSchemas["project.template.create"].parse(context.envelope.payload);
+  const organizationId = context.envelope.scope.organizationId;
+  let scopeItems: { description: string; category: string | null; unitLabel: string | null; quantity: string; rateCents: string }[] = (payload.scopeItems ?? []).map((item) => ({ description: item.description, category: item.category ?? null, unitLabel: item.unitLabel ?? null, quantity: item.quantity, rateCents: item.rateCents }));
+  let tasks: { title: string; description: string | null; relativeDays: number }[] = (payload.tasks ?? []).map((task) => ({ title: task.title, description: task.description ?? null, relativeDays: task.relativeDays }));
+  let currency: string | null = payload.currency ?? null;
+  if (payload.fromProjectId !== undefined) {
+    // Copying reads the source project through the same scope check as edits,
+    // so a template can only be made from a project the actor may see.
+    const source = await assertProjectScope(context.executor, context.envelope.scope, payload.fromProjectId, resolveEffectiveDate(context.envelope.effectiveDate));
+    currency = currency ?? source.currency;
+    if (currency !== source.currency) throw new ValidationCommandError("Template currency does not match the source project", { reason: "project_template_currency_mismatch" });
+    const scopeRows = await context.executor.query<Record<string, unknown>>(
+      `SELECT description, category, unit_label, quantity::text AS quantity, rate_cents::text AS rate_cents
+         FROM company_project_scope_items WHERE organization_id=$1 AND project_id=$2 AND archived_at IS NULL ORDER BY created_at, id LIMIT 500`,
+      [organizationId, payload.fromProjectId],
+    );
+    scopeItems = scopeRows.rows.map((row) => ({ description: dbString(row.description, "template_source_description"), category: dbNullableString(row.category, "template_source_category"), unitLabel: dbNullableString(row.unit_label, "template_source_unit"), quantity: dbString(row.quantity, "template_source_quantity"), rateCents: rowCents(row.rate_cents, "template_source_rate") }));
+    const taskRows = await context.executor.query<Record<string, unknown>>(
+      `SELECT title, description, starts_on, due_on FROM company_project_tasks WHERE organization_id=$1 AND project_id=$2 AND archived_at IS NULL ORDER BY starts_on NULLS LAST, due_on NULLS LAST, id LIMIT 500`,
+      [organizationId, payload.fromProjectId],
+    );
+    const anchor = source.startOn;
+    tasks = taskRows.rows.map((row) => {
+      const dueOn = row.due_on === null || row.due_on === undefined ? null : dbDate(row.due_on, "template_source_due");
+      const relativeDays = anchor !== null && dueOn !== null ? Math.max(0, Math.round((Date.parse(`${dueOn}T00:00:00Z`) - Date.parse(`${anchor}T00:00:00Z`)) / 86_400_000)) : 0;
+      return { title: dbString(row.title, "template_source_title"), description: dbNullableString(row.description, "template_source_task_description"), relativeDays };
+    });
+  }
   const id = projectTemplateIdSchema.parse(newRecordId());
   await context.executor.query(
     `INSERT INTO company_project_templates (id, organization_id, name, project_type, description, currency, created_by)
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-    [id, context.envelope.scope.organizationId, payload.name, payload.projectType, payload.description ?? null, payload.currency ?? null, context.principal.actorId],
+    [id, organizationId, payload.name, payload.projectType, payload.description ?? null, currency, context.principal.actorId],
   );
+  for (let position = 0; position < scopeItems.length; position += 1) {
+    const item = scopeItems[position]!;
+    await context.executor.query(
+      `INSERT INTO company_project_template_scope_items (id, organization_id, template_id, description, category, unit_label, quantity, rate_cents, position)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::numeric,$8::bigint,$9)`,
+      [newRecordId(), organizationId, id, item.description, item.category, item.unitLabel, item.quantity, item.rateCents, position],
+    );
+  }
+  for (let position = 0; position < tasks.length; position += 1) {
+    const task = tasks[position]!;
+    await context.executor.query(
+      `INSERT INTO company_project_template_tasks (id, organization_id, template_id, title, description, relative_days, position)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [newRecordId(), organizationId, id, task.title, task.description, task.relativeDays, position],
+    );
+  }
   return savedExecutionResult(id);
 }
 
@@ -774,7 +821,7 @@ async function handleDrawItemCreate(context: CommandHandlerContext<ProjectExecut
   const projectId = asText(row.project_id, "draw_project_id");
   const project = await lockProject(context as unknown as CommandHandlerContext<unknown>, projectId);
   assertExpectedRevision(project.recordRevision, context.envelope.expectedRevision);
-  const eligibleCents = await assertDrawCapacity(context as unknown as CommandHandlerContext<unknown>, payload.sourceType, payload.sourceId, payload.requestedCents, projectId, project);
+  const eligibleCents = await assertDrawCapacity(context as unknown as CommandHandlerContext<unknown>, payload.sourceType, payload.sourceId, payload.requestedCents, projectId, project, undefined, payload.retainageCents);
   if (centsToBigInt(payload.eligibleCents) !== centsToBigInt(eligibleCents)) throw new ValidationCommandError("Draw source eligibility changed; reload the project", { reason: "project_draw_source_eligibility_stale" });
   const id = newRecordId();
   await context.executor.query(
@@ -794,10 +841,10 @@ async function handleDrawItemUpdate(context: CommandHandlerContext<ProjectExecut
   const project = await lockProject(context as unknown as CommandHandlerContext<unknown>, projectId);
   assertExpectedRevision(project.recordRevision, context.envelope.expectedRevision);
   const requested = payload.requestedCents ?? rowCents(item.requested_cents, "draw_item_requested");
-  const canonicalEligible = await assertDrawCapacity(context as unknown as CommandHandlerContext<unknown>, asText(item.source_type, "draw_item_source_type"), asText(item.source_id, "draw_item_source_id"), requested, projectId, project, payload.drawRequestItemId);
-  const eligible = rowCents(item.eligible_cents, "draw_item_eligible");
   const retainageEligible = payload.retainageEligible ?? item.retainage_eligible === true;
   const retainage = payload.retainageCents ?? rowCents(item.retainage_cents, "draw_item_retainage");
+  const canonicalEligible = await assertDrawCapacity(context as unknown as CommandHandlerContext<unknown>, asText(item.source_type, "draw_item_source_type"), asText(item.source_id, "draw_item_source_id"), requested, projectId, project, payload.drawRequestItemId, retainage);
+  const eligible = rowCents(item.eligible_cents, "draw_item_eligible");
   if (centsToBigInt(requested) > centsToBigInt(canonicalEligible) || centsToBigInt(retainage) > centsToBigInt(requested) || (!retainageEligible && centsToBigInt(retainage) !== BigInt(0))) throw new ValidationCommandError("Draw item amounts are not eligible", { reason: "project_draw_item_amounts" });
   const updates: string[] = [];
   const values: unknown[] = [];
@@ -862,6 +909,60 @@ async function handleFinanceBindingRelease(context: CommandHandlerContext<Projec
   return savedExecutionResult(payload.bindingId, projectId, await touchProject(context as unknown as CommandHandlerContext<unknown>, projectId));
 }
 
+async function activeEtcOverride(context: CommandHandlerContext<unknown>, projectId: string, scopeItemId: string): Promise<{ id: string; revision: Revision } | null> {
+  const result = await context.executor.query<Record<string, unknown>>(
+    `SELECT id, record_revision FROM company_project_draft_costs
+      WHERE organization_id=$1 AND project_id=$2 AND scope_item_id=$3 AND vendor_name=$4 AND archived_at IS NULL
+      ORDER BY updated_at DESC, id DESC FOR UPDATE`,
+    [context.envelope.scope.organizationId, projectId, scopeItemId, PROJECT_ETC_OVERRIDE_VENDOR],
+  );
+  const row = result.rows[0];
+  return row ? { id: dbString(row.id, "etc_override_id"), revision: dbRevision(row.record_revision) } : null;
+}
+
+/**
+ * An ETC override is a draft project cost row reserved by the
+ * "system:etc_override" vendor marker. It is operational forecasting input,
+ * never an incurred cost, and the project reads exclude it from draft costs.
+ */
+async function handleEtcOverrideSet(context: CommandHandlerContext<ProjectExecutionCommandPayload["project.etc_override.set"]>): Promise<CommandHandlerResult> {
+  const payload = projectExecutionCommandPayloadSchemas["project.etc_override.set"].parse(context.envelope.payload);
+  const project = await lockProject(context as unknown as CommandHandlerContext<unknown>, payload.projectId);
+  await assertScopeItemForProject(context.executor, { organizationId: context.envelope.scope.organizationId, projectId: payload.projectId, scopeItemId: payload.scopeItemId });
+  const existing = await activeEtcOverride(context as unknown as CommandHandlerContext<unknown>, payload.projectId, payload.scopeItemId);
+  const effectiveDate = resolveEffectiveDate(context.envelope.effectiveDate);
+  let id: string;
+  if (existing) {
+    id = existing.id;
+    await context.executor.query(
+      `UPDATE company_project_draft_costs SET amount_cents=$4::bigint, description=$5, incurred_on=$6::date, record_revision=record_revision+1, updated_at=now()
+        WHERE organization_id=$1 AND project_id=$2 AND id=$3 AND archived_at IS NULL`,
+      [context.envelope.scope.organizationId, payload.projectId, id, payload.amountCents, payload.reason, effectiveDate],
+    );
+  } else {
+    id = newRecordId();
+    await context.executor.query(
+      `INSERT INTO company_project_draft_costs (id, organization_id, project_id, scope_item_id, vendor_name, description, amount_cents, currency, incurred_on)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::bigint,$8,$9::date)`,
+      [id, context.envelope.scope.organizationId, payload.projectId, payload.scopeItemId, PROJECT_ETC_OVERRIDE_VENDOR, payload.reason, payload.amountCents, project.currency, effectiveDate],
+    );
+  }
+  return savedExecutionResult(id, payload.projectId, await touchProject(context as unknown as CommandHandlerContext<unknown>, payload.projectId));
+}
+
+async function handleEtcOverrideClear(context: CommandHandlerContext<ProjectExecutionCommandPayload["project.etc_override.clear"]>): Promise<CommandHandlerResult> {
+  const payload = projectExecutionCommandPayloadSchemas["project.etc_override.clear"].parse(context.envelope.payload);
+  await lockProject(context as unknown as CommandHandlerContext<unknown>, payload.projectId);
+  const existing = await activeEtcOverride(context as unknown as CommandHandlerContext<unknown>, payload.projectId, payload.scopeItemId);
+  if (!existing) throw new ValidationCommandError("This scope line has no cost-to-complete override", { reason: "project_etc_override_absent" });
+  await context.executor.query(
+    `UPDATE company_project_draft_costs SET archived_at=now(), updated_at=now(), record_revision=record_revision+1
+      WHERE organization_id=$1 AND project_id=$2 AND id=$3 AND archived_at IS NULL`,
+    [context.envelope.scope.organizationId, payload.projectId, existing.id],
+  );
+  return savedExecutionResult(existing.id, payload.projectId, await touchProject(context as unknown as CommandHandlerContext<unknown>, payload.projectId));
+}
+
 const handlers = {
   "project.template.create": handleTemplateCreate,
   "project.template.instantiate": handleTemplateInstantiate,
@@ -889,6 +990,8 @@ const handlers = {
   "project.draw_request.item.update": handleDrawItemUpdate,
   "project.finance_binding.create": handleFinanceBindingCreate,
   "project.finance_binding.release": handleFinanceBindingRelease,
+  "project.etc_override.set": handleEtcOverrideSet,
+  "project.etc_override.clear": handleEtcOverrideClear,
 } as const;
 
 export async function executeProjectExecutionCommand(

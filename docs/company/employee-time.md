@@ -60,3 +60,19 @@ Every read and sync request carries an explicit `production` or `sandbox` enviro
 Provider endpoint and object behavior were verified against the [QuickBooks Time API documentation](https://tsheetsteam.github.io/api_docs/) and [QuickBooks Time API guide](https://developers.tsheets.com/docs/api/). The implementation follows the documented token expiry and refresh-token grant flow, regular versus manual timesheet shapes, modified-since pagination, and deletion retention behavior.
 
 The schema is registered as migration 36, `036_company_employee_time.sql`. It is applied only by the reviewed migration process; production startup does not migrate.
+
+## Posted payroll and project labor (U12)
+
+`time.payroll.link` links one posted QBO payroll or journal line to the approved timesheets in a pay period (optionally limited to employees or named timesheets). The line is verified against the live mirror (posted, current revision, entity currency, debit expense/COGS account) and the amount is reserved in the central QBO allocation ledger under consumer `time_payroll`, so the same line cannot also be bound to a project or work order. The amount is split exactly across the timesheets by their estimates, or by hours when any estimate is missing. A timesheet can carry one active payroll link. `time.payroll.unlink` releases the allocation and marks the rows released (kept for audit); the estimate then applies again.
+
+Links are stored in `time_posted_payroll_sources` (`source_kind = qbo_payroll_line`, one row per timesheet, `evidence_state` verified or unverified, batch details in `provider_body`).
+
+Project labor reads approved time through jobcode mappings. A jobcode's cost code equal to a project scope line ID assigns the labor to that budget line; the time UI offers the project's budget lines as cost-code choices. Posted payroll replaces the estimate for the same timesheet in the project cost report.
+
+- `GET /api/company/:org/time/payroll-links?legalEntityId` — MCP `list_time_payroll_links`
+- `GET /api/company/:org/projects/:id/labor` — MCP `get_project_labor`
+- Payroll lines: `GET /api/company/:org/cost-source-lines?purpose=payroll`
+
+The time workspace shows payroll coverage for the listed entries (approved, posted payroll, estimate only, unpriced) and links or releases payroll batches. Duration is always elapsed time between offset timestamps, so overnight shifts and daylight-saving transitions are exact (`shared/time/labor.test.ts`).
+
+Schema follow-up: a dedicated payroll batch table instead of batch details in `provider_body`.

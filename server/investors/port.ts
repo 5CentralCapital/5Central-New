@@ -10,6 +10,14 @@ import type {
   InvestorMonthlyPaymentResponse,
   InvestorPaymentLogQuery,
 } from "../../shared/investors";
+import type {
+  InvestorDebtMaturityQuery,
+  InvestorDebtMaturityResponse,
+  InvestorInstrumentFinancials,
+  InvestorInstrumentFinancialsQuery,
+  InvestorPaymentCalendarQuery,
+  InvestorPaymentCalendarResponse,
+} from "../../shared/investors/reports";
 import type { FinancialSourceReadPort } from "../../shared/accounting/source";
 import { loadAuthenticatedPrincipal, type AuthenticatedPrincipal, type TransportAttestation } from "../company/authorization";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
@@ -24,6 +32,9 @@ export interface InvestorPort {
   listFinancialSources(principal: AuthenticatedPrincipal, input: { scope: CompanyScope & { legalEntityId: string }; from?: string; through?: string; limit?: number; cursor?: string }): Promise<InvestorFinancialSourceResponse>;
   get(principal: AuthenticatedPrincipal, input: { scope: CompanyScope; accountId: string }): Promise<InvestorDetail>;
   monthlyPayments(principal: AuthenticatedPrincipal, query: InvestorPaymentLogQuery): Promise<InvestorMonthlyPaymentResponse>;
+  instrumentFinancials(principal: AuthenticatedPrincipal, query: InvestorInstrumentFinancialsQuery): Promise<InvestorInstrumentFinancials>;
+  paymentCalendar(principal: AuthenticatedPrincipal, query: InvestorPaymentCalendarQuery): Promise<InvestorPaymentCalendarResponse>;
+  debtMaturities(principal: AuthenticatedPrincipal, query: InvestorDebtMaturityQuery): Promise<InvestorDebtMaturityResponse>;
   execute(kind: InvestorCommandKind, envelope: unknown, access: InvestorCommandExecutionOptions): Promise<OperationReceipt>;
 }
 
@@ -52,6 +63,9 @@ export function createInvestorPort(executor: RentOpsQueryExecutor, options: Crea
     listFinancialSources: (principal, input) => read(principal, (service, fresh) => service.listFinancialSources(fresh, input)),
     get: (principal, input) => read(principal, (service, fresh) => service.get(fresh, input)),
     monthlyPayments: (principal, query) => read(principal, (service, fresh) => service.monthlyPayments(fresh, query)),
+    instrumentFinancials: (principal, query) => read(principal, (service, fresh) => service.instrumentFinancials(fresh, query)),
+    paymentCalendar: (principal, query) => read(principal, (service, fresh) => service.paymentCalendar(fresh, query)),
+    debtMaturities: (principal, query) => read(principal, (service, fresh) => service.debtMaturities(fresh, query)),
     execute: (kind, envelope, access) => executeInvestorCommand(executor, kind, envelope, {
       ...access,
       sourceResolver: options.sourceResolver ?? access.sourceResolver,
