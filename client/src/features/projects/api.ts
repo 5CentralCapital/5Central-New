@@ -1,6 +1,9 @@
 import { operationIdSchema } from "@shared/company/identifiers";
 import { operationReceiptSchema } from "@shared/company/commands";
 import { projectDetailSchema, projectExecutionDetailSchema, projectListResponseSchema, type ProjectCommandKind, type ProjectExecutionCommandKind } from "@shared/projects";
+import { projectCostReportSchema } from "@shared/projects/cost-report";
+import { costSourceLinePageSchema } from "@shared/projects/source-lines";
+import { projectLaborResponseSchema } from "@shared/time/labor";
 import { rentOpsAuthClient } from "../rent-ops/auth";
 import type {
   ProjectCommandEnvelope,
@@ -154,6 +157,23 @@ function createApi(): ProjectsApi {
     const root = isRecord(payload) && isRecord(payload.data) ? payload.data : payload;
     const executionValue = isRecord(root) && root.execution !== undefined ? root.execution : root;
     return projectExecutionDetailSchema.parse(executionValue);
+  },
+
+  async getCostReport(organizationId, projectId, scope, signal) {
+    const params = new URLSearchParams({ legalEntityId: scope.legalEntityId, propertyId: scope.propertyId });
+    return projectCostReportSchema.parse(await requestJson(`${projectPath(organizationId, projectId)}/cost-report?${params.toString()}`, { signal }));
+  },
+
+  async getLabor(organizationId, projectId, scope, signal) {
+    const params = new URLSearchParams({ legalEntityId: scope.legalEntityId, propertyId: scope.propertyId });
+    return projectLaborResponseSchema.parse(await requestJson(`${projectPath(organizationId, projectId)}/labor?${params.toString()}`, { signal }));
+  },
+
+  async searchCostSourceLines(organizationId, query, signal) {
+    const params = new URLSearchParams({ legalEntityId: query.legalEntityId, purpose: query.purpose, limit: "50" });
+    if (query.search?.trim()) params.set("search", query.search.trim());
+    if (query.cursor) params.set("cursor", query.cursor);
+    return costSourceLinePageSchema.parse(await requestJson(`${basePath(organizationId).replace(/\/projects$/, "")}/cost-source-lines?${params.toString()}`, { signal }));
   },
 
   async sendCommand(organizationId, kind: ProjectCommandKind, envelope) {
