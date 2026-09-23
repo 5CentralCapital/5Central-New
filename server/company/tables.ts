@@ -111,6 +111,9 @@ export const COMPANY_APPLICATION_TABLES = [
   "company_forecast_scenarios",
   "company_forecast_assumption_versions",
   "company_forecast_snapshots",
+  "accounting_qbo_receivable_documents",
+  "accounting_qbo_receivable_effects",
+  "accounting_qbo_receivable_applications",
 ] as const;
 
 /** Grants are provisioned by the operator, never by ordinary app mutations. */

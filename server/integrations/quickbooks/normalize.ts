@@ -64,7 +64,7 @@ export interface QboNormalizationResult {
  * from normalizer-authored text plus provider identifiers, never from raw
  * provider values or third-party library messages.
  */
-class QboNormalizationError extends Error {}
+export class QboNormalizationError extends Error {}
 
 function reject(message: string): never {
   throw new QboNormalizationError(message);
@@ -138,7 +138,7 @@ function currencyCode(value: unknown, field: string): CurrencyCode {
  * currency read from the realm's Preferences with multicurrency confirmed off
  * may be applied; a missing currency is never assumed to be USD.
  */
-function currency(value: QuickBooksJsonObject, context: QboCurrencyContext | null | undefined): CurrencyCode {
+export function resolveQboCurrency(value: QuickBooksJsonObject, context: QboCurrencyContext | null | undefined): CurrencyCode {
   const supplied = record(value.CurrencyRef)?.value;
   if (supplied !== undefined && supplied !== null) return currencyCode(supplied, "CurrencyRef.value");
   if (!context) reject("QBO CurrencyRef is absent and no verified home currency is available");
@@ -373,7 +373,7 @@ export function normalizeQboTransaction(type: string, input: unknown, options: {
     const date = isoDateSchema.safeParse(text(body.TxnDate, `${objectType}.TxnDate`));
     if (!date.success) reject(`QBO ${objectType}.TxnDate is not a calendar date`);
     transactionDate = date.data;
-    currencyCodeValue = currency(body, options.currency);
+    currencyCodeValue = resolveQboCurrency(body, options.currency);
   } catch (error) {
     return { value: null, unsupportedReasons: [reasonOf(error, "QBO object identity is invalid")] };
   }

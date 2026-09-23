@@ -196,7 +196,7 @@ test("webhook object fetches apply updates, tombstone deletes and report objects
     assert.equal((await h.sync.applyObject({ objectType: "Bill", objectId: "40", operation: "created" })).status, "applied");
     assert.equal((await h.sync.applyObject({ objectType: "Vendor", objectId: "56", operation: "updated" })).status, "applied");
     assert.equal((await h.mirror.listProviderMirrors(scope, "vendors"))[0]?.displayName, "Synthetic Supply");
-    assert.equal((await h.sync.applyObject({ objectType: "Invoice", objectId: "9", operation: "created" })).status, "unsupported");
+    assert.equal((await h.sync.applyObject({ objectType: "Estimate", objectId: "9", operation: "created" })).status, "unsupported");
     h.reads.missing.add("Bill:41");
     assert.equal((await h.sync.applyObject({ objectType: "Bill", objectId: "41", operation: "updated" })).status, "not_found");
     const deleted = await h.sync.applyObject({ objectType: "Bill", objectId: "40", operation: "deleted", occurredAt: "2026-09-20T01:00:00Z" });

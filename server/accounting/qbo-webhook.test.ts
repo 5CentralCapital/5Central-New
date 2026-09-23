@@ -93,7 +93,7 @@ test("one delivery with several realms fans out to every active binding and dedu
       event(),
       event({ id: "evt-2", intuitaccountid: SECOND_REALM, type: "qbo.purchase.created.v1", intuitentityid: "77" }),
       event({ id: "evt-3", intuitaccountid: UNBOUND_REALM }),
-      event({ id: "evt-4", type: "qbo.invoice.created.v1", intuitentityid: "9" }),
+      event({ id: "evt-4", type: "qbo.estimate.created.v1", intuitentityid: "9" }),
       event({ id: "evt-5", type: "qbo.account.updated.v1", intuitentityid: undefined }),
     ]);
     const first = await ingestQuickBooksWebhookDelivery({ executor: h.executor, environment: "sandbox", rawBody: body, signature, verifierToken: VERIFIER, now: new Date("2026-09-23T10:00:05Z") });

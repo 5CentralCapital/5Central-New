@@ -21,6 +21,7 @@ const RECOVERY: Record<number, string> = {
   47: "Disable webhook intake, posting-policy and PM settlement commands; keep ledgers and tombstones, then apply a reviewed forward repair.",
   48: "Disable forecast commands; keep scenarios, immutable assumption versions and snapshots, then apply a reviewed forward repair.",
   49: "Keep the relocation history. Downloads follow each binding's latest relocation; correct a bad one by appending a reviewed relocation to a verified object (the source bucket is retained 30 days), never by deleting rows.",
+  50: "Stop receivable streams in the worker; keep mirrored documents and append-only revision effects, then apply a reviewed forward repair. QuickBooks remains the authority, so a full replay rebuilds the mirror.",
 };
 const path = new URL("../../server/company/migrations/registry.json", import.meta.url);
 const registry = JSON.parse(readFileSync(path, "utf8"));

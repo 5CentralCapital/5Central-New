@@ -340,6 +340,8 @@ export const RENT_OPS_APPEND_ONLY_TABLES = [
   "company_forecast_assumption_versions",
   "company_forecast_snapshots",
   "accounting_qbo_deletion_tombstones",
+  "accounting_qbo_receivable_effects",
+  "accounting_qbo_receivable_applications",
   "rent_ops_recurring_charge_schedules",
   "rent_ops_ledger_transactions",
   "rent_ops_payment_allocations",
