@@ -91,3 +91,48 @@ test("shared presets and packages are rechecked against every contained grant", 
   assert.equal((await service.listPackages(outsideAccess)).length, 0);
   await assert.rejects(() => service.getPackage(outsideAccess, pkg.id), /not authorized|outside/);
 });
+
+test("runs keep the engine's presentation order unless a sort is requested, and money sorts numerically", async () => {
+  // Row IDs are content hashes in most engines; ordering by them scrambles
+  // statements, T12 months and rental reports.
+  const rows = [
+    { rowId: "zz-income", values: { line: "Income", amountCents: "-5" } },
+    { rowId: "aa-expense", values: { line: "Expense", amountCents: "-100" } },
+    { rowId: "mm-net", values: { line: "Net", amountCents: "20" } },
+    { rowId: "bb-other", values: { line: "Other", amountCents: "3" } },
+  ];
+  const registry = createReportingRegistry({ engines: [{
+    key: "test.rental", reportIds: ["rent-roll"], ready: true,
+    async run() {
+      return { columns: [{ id: "line", label: "Line", type: "text", sortable: true, filterable: true, sensitive: false }, { id: "amountCents", label: "Amount", type: "money", sortable: true, filterable: true, sensitive: false }], rows, coverage: [], missingData: [] };
+    },
+  }] });
+  const service = new ReportingService({ registry, store: new InMemoryReportingStore(), now: () => new Date("2026-09-21T00:00:00.000Z") });
+  const unsorted = await service.run({ principal }, request());
+  assert.deepEqual(unsorted.page.rows.map(row => row.rowId), ["zz-income", "aa-expense", "mm-net", "bb-other"]);
+  const byAmount = await service.run({ principal }, { ...request(), sort: [{ field: "amountCents", direction: "asc" }] });
+  assert.deepEqual(byAmount.page.rows.map(row => row.values.amountCents), ["-100", "-5", "3", "20"]);
+  const byAmountDesc = await service.run({ principal }, { ...request(), sort: [{ field: "amountCents", direction: "desc" }] });
+  assert.deepEqual(byAmountDesc.page.rows.map(row => row.values.amountCents), ["20", "3", "-5", "-100"]);
+});
+
+test("a replayed request ID cannot return an expired run, and a forged drilldown cursor is rejected", async () => {
+  let now = new Date("2026-09-21T00:00:00.000Z");
+  const registry = createReportingRegistry({ engines: [{
+    key: "test.rental", reportIds: ["rent-roll"], ready: true,
+    async run() {
+      return {
+        columns: [{ id: "value", label: "Value", type: "text", sortable: true, filterable: true, sensitive: false }],
+        rows: [{ rowId: "row-a", values: { value: "a" } }], coverage: [], missingData: [],
+        drilldowns: [{ rowId: "row-a", items: ["x", "y", "z"].map(id => ({ id, kind: "source" as const, values: { value: id } })), nextCursor: null, coverage: [], missingData: [] }],
+      };
+    },
+  }] });
+  const service = new ReportingService({ registry, store: new InMemoryReportingStore(), now: () => now, runTtlMs: 60_000 });
+  const replayRequest = { ...request(), requestId: "replay-expiry-1" };
+  const first = await service.run({ principal }, replayRequest);
+  const forged = Buffer.from(JSON.stringify({ offset: -2, rowId: "row-a", runId: first.run.id }), "utf8").toString("base64url");
+  await assert.rejects(() => service.drilldown({ principal }, { runId: first.run.id, rowId: "row-a", cursor: forged, limit: 1 }), /cursor is invalid/);
+  now = new Date("2026-09-21T00:02:00.000Z");
+  await assert.rejects(() => service.run({ principal }, replayRequest), /expired/);
+});

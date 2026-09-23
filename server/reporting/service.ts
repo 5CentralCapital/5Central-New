@@ -160,8 +160,12 @@ function assertUnique<T extends { rowId: string }>(rows: readonly T[]): void {
   if (new Set(rows.map(row => row.rowId)).size !== rows.length) throw new ReportingError("report_validation", "Report engine returned duplicate row IDs", 400, { reason: "duplicate_row_id" });
 }
 
+/** Without an explicit sort the engine's own row order is kept: statements,
+ * T12 months and rental reports are produced in presentation order, and row
+ * IDs (often content hashes) are not a meaningful order. */
 function sortRows(rows: readonly ReportRow[], sort: readonly ReportSort[]): ReportRow[] {
   const output = [...rows];
+  if (!sort.length) return output;
   output.sort((left, right) => {
     for (const field of sort) {
       const comparison = compareValues(left.values[field.field], right.values[field.field]);
@@ -178,7 +182,7 @@ function sortFields(sort: readonly ReportSort[] | undefined): string[] {
 
 function defaultSort(definition: ReportDefinition): ReportSort[] {
   const first = definition.columns.find(column => column.sortable)?.id;
-  return first ? [{ field: first, direction: "asc" }] : [{ field: "rowId", direction: "asc" }];
+  return first ? [{ field: first, direction: "asc" }] : [];
 }
 
 function stringValue(value: unknown): string | undefined { return typeof value === "string" && value.length > 0 ? value : undefined; }
@@ -392,6 +396,7 @@ export class ReportingService {
       if (existing) {
         if (existing.permissionFingerprint !== this.permissionFingerprint(access.principal)) throw new ReportingError("report_forbidden", "Report run permissions have changed", 403, { requestId: request.requestId });
         if (!sameRunRequest(existing, request)) throw new ReportingError("report_conflict", "Request ID is already bound to a different report request", 409, { requestId: request.requestId });
+        if (isExpired(existing.expiresAt, isoNow(this.now))) throw new ReportingError("report_expired", "Report run has expired; run it again with a new request ID", 410, { requestId: request.requestId });
         return { run: existing, page: readPage(existing, 0, 100) };
       }
     }
@@ -471,7 +476,7 @@ export class ReportingService {
       : run.drilldowns.find(item => item.rowId === request.rowId);
     if (!stored) return reportDrilldownSchema.parse({ rowId: request.rowId, items: [], nextCursor: null, coverage: run.coverage, missingData: [{ code: "drilldown_unavailable", state: "unavailable", message: "This report engine did not provide a durable drilldown for the selected row." }] });
     const cursor = decodeCursor<{ runId: string; rowId: string; offset: number }>(request.cursor);
-    const offset = cursor?.runId === run.id && cursor.rowId === request.rowId && Number.isInteger(cursor.offset) ? cursor.offset : 0;
+    const offset = cursor?.runId === run.id && cursor.rowId === request.rowId && Number.isInteger(cursor.offset) && cursor.offset >= 0 ? cursor.offset : request.cursor ? (() => { throw new ReportingError("report_validation", "Report drilldown cursor is invalid", 400); })() : 0;
     const items = stored.items.slice(offset, offset + request.limit);
     const nextCursor = offset + items.length < stored.items.length ? encodeCursor({ runId: run.id, rowId: request.rowId, offset: offset + items.length }) : null;
     return reportDrilldownSchema.parse({ ...stored, items, nextCursor });
