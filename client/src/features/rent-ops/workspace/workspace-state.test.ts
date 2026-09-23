@@ -64,6 +64,7 @@ test('workspace links round-trip scoped records and tenant detail tabs without l
   const tenant=parseWorkspaceRoute('?section=tenants&record=person%3Aimport_123&tab=ledger');
   assert.equal(tenant.recordId,'person:import_123');
   assert.deepEqual(parseWorkspaceRoute(workspaceRouteSearch(tenant)),tenant);
+  assert.equal(parseWorkspaceRoute('?section=tenants&record=person-1&tab=quickbooks').tab,'quickbooks');
   const unit=parseWorkspaceRoute('?section=properties&kind=unit&record=unit-12');
   assert.deepEqual(parseWorkspaceRoute(workspaceRouteSearch(unit)),unit);
   const report=parseWorkspaceRoute('?section=reports&report=scheduled-vs-collected');

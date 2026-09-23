@@ -9,6 +9,7 @@ import {
   rentalPostingPolicyListSchema,
 } from "@shared/accounting/operations";
 import { rentOpsAuthClient } from "../rent-ops/auth";
+import { parseCustomerLedger } from "./customer-ledger";
 import type { AccountingApi, AccountingConnection, AccountingEnvironment, AccountingMirror, AccountingMirrorKind, AccountingPendingBinding, AccountingPeriod, AccountingScope, AccountingTransaction, AccountingTransactionPage } from "./types";
 
 type JsonRecord = Record<string, unknown>;
@@ -176,6 +177,22 @@ const api: AccountingApi = {
   async command(organizationId, kind, envelope, signal) {
     if (!/^[a-z][a-z0-9_.-]*$/.test(kind)) throw new AccountingApiError("That action is unavailable.", 400, "accounting_validation");
     return parsed(operationReceiptSchema, await requestJson(`${companyPath(organizationId)}/accounting-commands/${kind}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(envelope), signal }));
+  },
+  async tenancyLedger(organizationId, query, signal) {
+    const params = new URLSearchParams({ tenancyId: query.tenancyId, environment: query.environment, limit: String(query.limit ?? 200) });
+    if (query.cursor) params.set("cursor", query.cursor);
+    try {
+      return parsed({ parse: parseCustomerLedger }, await requestJson(`${basePath(organizationId)}/receivables/tenancy-ledger?${params}`, { signal }));
+    } catch (error) {
+      if (error instanceof AccountingApiError && error.status === 404 && error.code === "accounting_not_linked") return null;
+      throw error;
+    }
+  },
+  async linkTenancyCustomer(organizationId, input, signal) {
+    const value = record(await requestJson(`${basePath(organizationId)}/receivables/tenancy-links`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legalEntityId: input.scope.legalEntityId, environment: input.scope.environment, realmId: input.scope.realmId, tenancyId: input.tenancyId, customerId: input.customerId }), signal }));
+    const status = value.status;
+    if (status !== "linked" && status !== "already_linked") throw new AccountingApiError("The QuickBooks customer link could not be confirmed. Reload before trying again.", 0, "accounting_invalid_response");
+    return { status };
   },
   async disconnect(organizationId, scope, signal) {
     const value = record(await requestJson(`${basePath(organizationId)}/disconnect`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legalEntityId: scope.legalEntityId, realmId: scope.realmId }), signal }));

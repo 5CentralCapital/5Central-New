@@ -4,6 +4,7 @@ import { rentOpsAuthClient } from "../auth";
 import { ChargeEditDialog } from "./charge-edit-dialog";
 import { PaymentEditDialog } from "./payment-edit-dialog";
 import { TenantLedgerExportDialog } from "./tenant-ledger-export";
+import { TenantQuickBooksPanel } from "./tenant-quickbooks";
 import { ManagerTenancyActions } from './manager-tenancy-actions';
 import { useRecurringChargeTerms } from './use-recurring-charge-terms';
 import { currentPhoneMethods, phoneTypeLabel } from "../phone-methods-display";
@@ -68,6 +69,7 @@ export const TENANT_RECORD_TABS: TenantTab[] = [
   "tenancy",
   "charges",
   "ledger",
+  "quickbooks",
   "deposits",
   "housing-assistance",
   "documents",
@@ -80,6 +82,7 @@ const TAB_LABELS: Record<TenantTab, string> = {
   tenancy: "Tenancy & leases",
   charges: "Recurring charges",
   ledger: "Transactions",
+  quickbooks: "QuickBooks",
   deposits: "Deposits",
   "housing-assistance": "HAP",
   documents: "Documents",
@@ -413,6 +416,7 @@ function tabContent(tab: TenantTab, props: Omit<TenantRecordProps, "tab" | "onTa
     case "tenancy": return <TenancyTab {...props} />;
     case "charges": return <ChargesTab {...props} />;
     case "ledger": return <LedgerTab {...props} />;
+    case "quickbooks": return <TenantQuickBooksPanel key={props.tenant.person.id ?? "tenant"} tenant={props.tenant} snapshot={props.snapshot} readOnly={props.readOnly} />;
     case "deposits": return <DepositsTab {...props} />;
     case "housing-assistance": return <HapTab {...props} />;
     case "documents": return <DocumentsTab tenant={props.tenant} snapshot={props.snapshot} onChanged={props.onChanged} />;

@@ -77,7 +77,7 @@ export const COMPANY_SECTIONS: readonly WorkspaceSection[] = [
   'report-library', 'company-reports', 'saved-reports', 'report-packages', 'forecasting',
   'review-queue', 'entities', 'people', 'time', 'company-documents', 'mra-packets', 'settings',
 ];
-const tabs: TenantTab[] = ['summary','household','tenancy','charges','ledger','deposits','housing-assistance','documents','activity'];
+const tabs: TenantTab[] = ['summary','household','tenancy','charges','ledger','quickbooks','deposits','housing-assistance','documents','activity'];
 const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const recordPattern = /^[A-Za-z0-9:_-]{1,160}$/;
 const includes = <T extends string>(values: readonly T[], value: unknown): value is T => typeof value === 'string' && (values as readonly string[]).includes(value);

@@ -366,6 +366,7 @@ function TenantDetail({ tenant, tab, onTab, onEdit, onChanged, chargeDefinitions
     ledger: (tenant.ledger ?? []).map(row => ({ ...row.transaction, allocatedCents: row.allocatedCents, openCents: row.openCents, runningBalanceCents: row.runningBalanceCents, balanceComplete: row.balanceComplete, balanceUncertaintyCodes: row.balanceUncertaintyCodes })),
     deposits: (tenant.deposits ?? []).map((deposit) => ({ type: deposit.type, amountHeldCents: deposit.amountHeldCents, sourceBalanceCents: deposit.sourceBalanceCents, dispositionStatus: deposit.dispositionStatus, receivedOn: deposit.receivedOn, disposedOn: deposit.disposedOn, dispositionNotes: deposit.dispositionNotes })),
     "housing-assistance": tenant.subsidyContracts ?? [],
+    quickbooks: [],
     documents: tenant.documents ?? [],
     activity: tenant.activity ?? [],
   };

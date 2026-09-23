@@ -88,6 +88,7 @@ runtime-role grants. Migration 050 is a **reviewed proposal**: it must be applie
 | Customer/tenant ledger read service: complete-history running balance before paging, change detection between pages, totals, QuickBooks open items and aging, verification against `Customer.Balance`, coverage | QS04 (read) | `server/accounting/receivables-read.ts` |
 | Tenancy ↔ QuickBooks customer links through the immutable identity map | QS01/QS04 | `server/accounting/receivables-links.ts` |
 | HTTP routes and `get_qbo_customer_ledger` MCP tool on the same service | QS04 | `server/accounting/http.ts`, `mcp.ts` |
+| Manager tenant record "QuickBooks" tab: running-balance documents, totals, open items/aging, `Customer.Balance` check, coverage/staleness, link-to-customer (identity map only) | QS04 (UI) | `client/src/features/accounting/customer-ledger.ts`, `client/src/features/rent-ops/workspace/tenant-quickbooks.tsx` |
 | Record-only Invoice write guard with post-save verification (release branch) | QS03 | `server/accounting/qbo-write.ts` |
 
 ## Packet status (implementation, not acceptance)
@@ -98,7 +99,7 @@ runtime-role grants. Migration 050 is a **reviewed proposal**: it must be applie
 | QS01 | Existing identity/coverage contracts reused; receivables contracts added | Dated tenancy→property→entity attribution check on links |
 | QS02 | Receivables mirror implemented and tested; cash mirror unchanged | Apply 050 (after the cutover release, which ships 049); sandbox run against a real company; Item/Class/Department mirrors |
 | QS03 | Posting service existing; record-only Invoice guard added | Field-level edit maps per entity; `PrivateNote` source-event tagging; CreditMemo/Payment writes |
-| QS04 | Read path, links, API and MCP implemented | Manager/tenant UI wiring; RM export inventory and batch previews per entity-period (finding 6) |
+| QS04 | Read path, links, API and MCP implemented; manager tenant record has a read-only QuickBooks tab (ledger, coverage, verification, customer link) | Tenant portal wiring; RM export inventory and batch previews per entity-period (finding 6) |
 | QS05–QS12 | Not started | As listed in the plan, plus findings 5, 6 and 8 |
 | QS13 | Not started | Merchant/funding verification per company |
 | QS14 | Harness pieces exist (preflight, schema operator, CI) | Per-cohort cutover gates |

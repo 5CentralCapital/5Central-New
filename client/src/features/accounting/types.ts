@@ -10,6 +10,7 @@ import type {
   RentalBridgePreview,
   RentalPostingPolicy,
 } from "@shared/accounting/operations";
+import type { QboCustomerLedger } from "@shared/accounting/receivables";
 
 export type AccountingView = "overview" | "transactions" | "bills" | "banking" | "pm-settlements" | "close";
 export const ACCOUNTING_VIEWS: readonly { readonly value: AccountingView; readonly label: string }[] = [
@@ -102,6 +103,10 @@ export interface AccountingApi {
   bridgeCsvHref(organizationId: string, legalEntityId: string, period: AccountingPeriod): string;
   payables(organizationId: string, scope: AccountingScope, kind: "bills" | "payments", cursor?: string, signal?: AbortSignal): Promise<AccountingPayablesResponse>;
   command(organizationId: string, kind: AccountingOperationCommandKind, envelope: AccountingCommandEnvelope, signal?: AbortSignal): Promise<OperationReceipt>;
+  /** A tenancy's QuickBooks customer ledger from the receivables mirror; null when the tenancy is not linked to a customer. */
+  tenancyLedger(organizationId: string, query: { readonly tenancyId: string; readonly environment: AccountingEnvironment; readonly cursor?: string; readonly limit?: number }, signal?: AbortSignal): Promise<QboCustomerLedger | null>;
+  /** Records the tenancy ↔ QuickBooks customer link in the local identity map. Nothing is written to QuickBooks. */
+  linkTenancyCustomer(organizationId: string, input: { readonly scope: AccountingScope; readonly tenancyId: string; readonly customerId: string }, signal?: AbortSignal): Promise<{ readonly status: "linked" | "already_linked" }>;
 }
 
 export interface AccountingPeriod {
