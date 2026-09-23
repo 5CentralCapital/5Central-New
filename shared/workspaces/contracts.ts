@@ -87,6 +87,8 @@ export const propertyPerformanceRowSchema = z.object({
   activeProjects: z.number().int().min(0).nullable(),
   projectEstimateCents: cents.nullable(),
   projectPostedCents: cents.nullable(),
+  /** False when QuickBooks coverage is partial: the posted amount is then a minimum. */
+  projectPostedComplete: z.boolean(),
   legalEntityName: z.string().nullable(),
 }).strict();
 export type PropertyPerformanceRow = z.infer<typeof propertyPerformanceRowSchema>;

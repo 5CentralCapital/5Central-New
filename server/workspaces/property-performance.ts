@@ -2,7 +2,14 @@ import type { CollectedIncomeRow, DelinquencyRow, RentOpsFilters, RentOpsSnapsho
 import type { PropertyPerformance, PropertyPerformanceRow } from "../../shared/workspaces/contracts";
 import { deriveFixedReport } from "../rent-ops/domain/reports";
 import { centsOf } from "./period";
+import type { ProjectFinanceReadPort } from "../../shared/projects";
 import { authorizedPropertyMappings, centsValue, type PropertyEntityMapping, type WorkspaceReadContext } from "./access";
+import { readProjectPostings, readWorkspaceProjects, type WorkspaceProject } from "./project-postings";
+
+const ACTIVE_PROJECT_STATUSES = ["planning", "active", "on_hold"] as const;
+
+/** Active project exposure on one property. Posted costs come from the project finance read port. */
+export interface ProjectExposure { active: number; estimate: bigint | null; posted: bigint | null; postedComplete: boolean }
 
 interface Sum { known: bigint; unknown: number }
 const sum = (): Sum => ({ known: BigInt(0), unknown: 0 });
@@ -11,7 +18,7 @@ const addTo = (target: Sum | undefined, value: bigint | null) => { if (!target) 
 export interface CompanyPerformanceRows {
   readonly mappings: ReadonlyMap<string, PropertyEntityMapping>;
   readonly workOrders: ReadonlyMap<string, number>;
-  readonly projects: ReadonlyMap<string, { active: number; estimate: bigint | null; posted: bigint | null }>;
+  readonly projects: ReadonlyMap<string, ProjectExposure>;
 }
 
 /** Per-property operating summary for one month, from the same report derivations as the report pages. */
@@ -62,6 +69,7 @@ export function computePropertyPerformance(snapshot: RentOpsSnapshot, input: {
       activeProjects: mapping ? projects?.active ?? 0 : null,
       projectEstimateCents: mapping ? (projects ? projects.estimate?.toString() ?? null : "0") : null,
       projectPostedCents: mapping ? (projects ? projects.posted?.toString() ?? null : "0") : null,
+      projectPostedComplete: mapping ? (projects ? projects.posted !== null && projects.postedComplete : true) : false,
       legalEntityName: mapping?.legalEntityName ?? null,
     };
   }).sort((left, right) => left.propertyName.localeCompare(right.propertyName, undefined, { numeric: true, sensitivity: "base" }));
@@ -69,34 +77,47 @@ export function computePropertyPerformance(snapshot: RentOpsSnapshot, input: {
 }
 
 /** Open work and project exposure for the mapped properties the principal may read. */
-export async function readCompanyPerformanceRows(context: WorkspaceReadContext, asOf: string): Promise<CompanyPerformanceRows> {
+export async function readCompanyPerformanceRows(context: WorkspaceReadContext, asOf: string, finance: ProjectFinanceReadPort): Promise<CompanyPerformanceRows> {
   const mappings = await authorizedPropertyMappings(context, asOf);
   const organizationId = context.principal.organizationId;
   const ids = Array.from(mappings.keys());
   const workOrders = new Map<string, number>();
-  const projects = new Map<string, { active: number; estimate: bigint | null; posted: bigint | null }>();
+  const projects = new Map<string, ProjectExposure>();
   if (!ids.length) return { mappings, workOrders, projects };
   const open = await context.executor.query<{ property_id: string; count: unknown }>(
     `SELECT property_id, count(*) AS count FROM company_work_orders
       WHERE organization_id = $1 AND property_id = ANY($2::text[]) AND status NOT IN ('completed','canceled')
       GROUP BY property_id`, [organizationId, ids]);
   for (const row of open.rows) workOrders.set(row.property_id, Number(row.count));
-  const exposure = await context.executor.query<{ property_id: string; active: unknown; estimate: unknown; posted: unknown; foreign_currency: unknown }>(
+  const exposure = await context.executor.query<{ property_id: string; active: unknown; estimate: unknown; foreign_currency: unknown }>(
     `SELECT p.property_id, count(*) AS active,
             coalesce(sum(scope.estimate) FILTER (WHERE p.currency = 'USD'), 0)::text AS estimate,
-            coalesce(sum(actual.posted) FILTER (WHERE p.currency = 'USD'), 0)::text AS posted,
             count(*) FILTER (WHERE p.currency <> 'USD') AS foreign_currency
        FROM company_projects p
        LEFT JOIN LATERAL (SELECT sum(estimated_cents) AS estimate FROM company_project_scope_items s
                            WHERE s.organization_id = p.organization_id AND s.project_id = p.id AND s.archived_at IS NULL) scope ON true
-       LEFT JOIN LATERAL (SELECT sum(amount_cents) AS posted FROM company_project_posted_actuals a
-                           WHERE a.organization_id = p.organization_id AND a.project_id = p.id) actual ON true
-      WHERE p.organization_id = $1 AND p.property_id = ANY($2::text[]) AND p.status IN ('planning','active','on_hold')
+      WHERE p.organization_id = $1 AND p.property_id = ANY($2::text[]) AND p.status IN (${ACTIVE_PROJECT_STATUSES.map(status => `'${status}'`).join(",")})
       GROUP BY p.property_id`, [organizationId, ids]);
+  // Posted costs: the bound QuickBooks lines the project pages read, never the legacy importer table.
+  const active = await readWorkspaceProjects(context, ids, ACTIVE_PROJECT_STATUSES);
+  const byProperty = new Map<string, WorkspaceProject[]>();
+  for (const project of active.projects) byProperty.set(project.propertyId, [...(byProperty.get(project.propertyId) ?? []), project]);
   for (const row of exposure.rows) {
     // Amounts in another currency cannot be added to USD; the total is then unknown.
     const foreign = Number(row.foreign_currency) > 0;
-    projects.set(row.property_id, { active: Number(row.active), estimate: foreign ? null : centsValue(row.estimate), posted: foreign ? null : centsValue(row.posted) });
+    const postings = await readProjectPostings(context, finance, byProperty.get(row.property_id) ?? [], { through: asOf, incomplete: active.truncated || active.uncovered > 0 });
+    let posted: bigint | null = null;
+    if (!foreign && postings.coverage !== "unavailable") {
+      posted = BigInt(0);
+      for (const { actual } of postings.actuals) {
+        if (actual.currency !== "USD") { posted = null; break; }
+        posted += BigInt(actual.amountCents);
+      }
+    }
+    projects.set(row.property_id, {
+      active: Number(row.active), estimate: foreign ? null : centsValue(row.estimate),
+      posted, postedComplete: posted !== null && postings.coverage === "complete",
+    });
   }
   return { mappings, workOrders, projects };
 }

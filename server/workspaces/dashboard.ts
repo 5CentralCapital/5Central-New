@@ -8,6 +8,9 @@ const WORK_LIMIT = 25;
 /**
  * Compact company rows for the manager dashboard. Unknown amounts stay null;
  * obligations with unknown components expose only their known minimum.
+ * Paid is the signed sum of payment allocations to the obligation — the same
+ * rule the investor pages use — so a reversal (negative allocations) nets its
+ * original to zero and unapplied overpayment is not counted.
  */
 export async function readDashboardCompany(context: WorkspaceReadContext, asOf: string): Promise<DashboardCompany> {
   const organizationId = context.principal.organizationId;
@@ -19,9 +22,8 @@ export async function readDashboardCompany(context: WorkspaceReadContext, asOf: 
   }>(
     `SELECT o.id, o.account_id, a.display_name AS account_name, i.name AS instrument_name, o.due_on::text AS due_on, o.currency,
             o.total_expected_cents, o.known_minimum_cents, o.amount_complete,
-            coalesce((SELECT sum(p.amount_cents) FROM company_investor_payments p
-                       WHERE p.organization_id = o.organization_id AND p.obligation_id = o.id AND p.status <> 'reversed' AND p.reverses_payment_id IS NULL
-                         AND NOT EXISTS (SELECT 1 FROM company_investor_payments r WHERE r.organization_id = p.organization_id AND r.reverses_payment_id = p.id AND r.status <> 'reversed')), 0)::text AS paid_cents
+            coalesce((SELECT sum(a.allocated_cents) FROM company_investor_payment_allocations a
+                       WHERE a.organization_id = o.organization_id AND a.obligation_id = o.id), 0)::text AS paid_cents
        FROM company_investor_obligations o
        JOIN company_investor_accounts a ON a.organization_id = o.organization_id AND a.id = o.account_id
        JOIN company_investor_instruments i ON i.organization_id = o.organization_id AND i.id = o.instrument_id
