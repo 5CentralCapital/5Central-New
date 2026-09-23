@@ -348,7 +348,9 @@ async function runDesktop(page: Page, browserName: string): Promise<Record<strin
   await expect(page.getByRole('region', { name: 'Report library', exact: true })).toBeVisible();
   const library = page.getByRole('region', { name: 'Report library', exact: true });
   await library.getByRole('combobox', { name: 'Show reports' }).selectOption('available');
-  await expect(library.locator('[data-report-id]')).toHaveCount(11);
+  // Runtime availability: the 11 rental reports plus every company report whose engine can run for this company.
+  await expect(library.locator('[data-report-id="rent-roll"]')).toHaveCount(1);
+  expect(await library.locator('[data-report-id]').count(), 'available reports include at least the 11 rental reports').toBeGreaterThanOrEqual(11);
   await library.locator('[data-report-id="rent-roll"] .rops-report-open').click();
   await expect(setupRoot(page)).toHaveCount(1);
   expect(reportRequests.length, 'library report open does not auto-run').toBe(baselineAfterDashboard);
@@ -599,8 +601,9 @@ async function runMobile(page: Page, browserName: string): Promise<Record<string
 }
 
 try {
-  for (const [name, engine] of [['chromium', chromium], ['webkit', webkit]] as const) {
-    const browser = await engine.launch({ headless: true });
+  const engines = (process.env.ROPS_BROWSERS ?? 'chromium,webkit').split(',').map(value => value.trim()).filter(Boolean);
+  for (const [name, engine] of ([['chromium', chromium], ['webkit', webkit]] as const).filter(([name]) => engines.includes(name))) {
+    const browser = await engine.launch({ headless: true, ...(name === 'chromium' && process.env.ROPS_CHROMIUM_EXECUTABLE ? { executablePath: process.env.ROPS_CHROMIUM_EXECUTABLE } : {}) });
     try {
       const desktop = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
       try {
