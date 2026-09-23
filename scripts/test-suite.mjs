@@ -8,7 +8,7 @@ const suite = process.argv[2] ?? "all";
 const roots = suite === "company"
   ? [
     "server/company", "shared/company", "client/src/features/company",
-    "server/accounting", "shared/accounting", "server/integrations/quickbooks", "server/jobs",
+    "server/accounting", "shared/accounting", "server/integrations/quickbooks", "server/jobs", "client/src/features/accounting",
     "server/projects", "shared/projects", "client/src/features/projects",
     "server/investors", "shared/investors", "client/src/features/investors",
     "server/company-documents", "shared/company-documents", "client/src/features/company-documents",

@@ -1,4 +1,28 @@
 import type { CompanyContextEntity } from "@shared/company/context";
+import type { OperationReceipt } from "@shared/company";
+import type {
+  AccountingOperationCommandKind,
+  AccountingPayablesResponse,
+  ConnectorHealthResponse,
+  PeriodCloseChecklist,
+  PmSettlementDetail,
+  PmSettlementListResponse,
+  RentalBridgePreview,
+  RentalPostingPolicy,
+} from "@shared/accounting/operations";
+
+export type AccountingView = "overview" | "transactions" | "bills" | "banking" | "pm-settlements" | "close";
+export const ACCOUNTING_VIEWS: readonly { readonly value: AccountingView; readonly label: string }[] = [
+  { value: "overview", label: "Overview" },
+  { value: "transactions", label: "Transactions" },
+  { value: "bills", label: "Bills & payments" },
+  { value: "banking", label: "Banking & reconciliation" },
+  { value: "pm-settlements", label: "PM settlements" },
+  { value: "close", label: "Period close" },
+];
+export function isAccountingView(value: unknown): value is AccountingView {
+  return ACCOUNTING_VIEWS.some(view => view.value === value);
+}
 
 export type AccountingEnvironment = "sandbox" | "production";
 export type AccountingMirrorKind = "accounts" | "vendors" | "customers" | "employees";
@@ -66,8 +90,31 @@ export interface AccountingApi {
   beginConnection(organizationId: string, legalEntityId: string, signal?: AbortSignal): Promise<{ readonly authorizationUrl: string; readonly expiresAt: string }>;
   getPendingBinding(organizationId: string, legalEntityId: string, pendingId: string, signal?: AbortSignal): Promise<AccountingPendingBinding | null>;
   confirmConnection(organizationId: string, legalEntityId: string, pendingId: string, signal?: AbortSignal): Promise<void>;
-  sync(organizationId: string, scope: AccountingScope, signal?: AbortSignal): Promise<{ readonly status: "complete" | "partial"; readonly streams: readonly unknown[] }>;
+  /** Queues a background refresh; the worker performs it. */
+  sync(organizationId: string, scope: AccountingScope, signal?: AbortSignal): Promise<{ readonly status: "queued"; readonly message: string }>;
   disconnect(organizationId: string, scope: AccountingScope, signal?: AbortSignal): Promise<{ readonly providerOutcome: "revoked" | "already_revoked" }>;
+  health(organizationId: string, legalEntityId: string | undefined, signal?: AbortSignal): Promise<ConnectorHealthResponse>;
+  closeChecklist(organizationId: string, legalEntityId: string, period: AccountingPeriod, signal?: AbortSignal): Promise<PeriodCloseChecklist>;
+  postingPolicies(organizationId: string, legalEntityId: string, signal?: AbortSignal): Promise<readonly RentalPostingPolicy[]>;
+  pmSettlements(organizationId: string, query: { readonly legalEntityId: string; readonly states?: readonly ("draft" | "reconciled" | "exception")[]; readonly cursor?: string }, signal?: AbortSignal): Promise<PmSettlementListResponse>;
+  pmSettlement(organizationId: string, legalEntityId: string, settlementId: string, signal?: AbortSignal): Promise<PmSettlementDetail>;
+  bridgePreview(organizationId: string, legalEntityId: string, period: AccountingPeriod, signal?: AbortSignal): Promise<RentalBridgePreview>;
+  bridgeCsvHref(organizationId: string, legalEntityId: string, period: AccountingPeriod): string;
+  payables(organizationId: string, scope: AccountingScope, kind: "bills" | "payments", cursor?: string, signal?: AbortSignal): Promise<AccountingPayablesResponse>;
+  command(organizationId: string, kind: AccountingOperationCommandKind, envelope: AccountingCommandEnvelope, signal?: AbortSignal): Promise<OperationReceipt>;
+}
+
+export interface AccountingPeriod {
+  readonly periodStart: string;
+  readonly periodEnd: string;
+}
+
+export interface AccountingCommandEnvelope {
+  readonly operationId: string;
+  readonly idempotencyKey: string;
+  readonly scope: { readonly organizationId: string; readonly legalEntityId?: string; readonly propertyId?: string };
+  readonly expectedRevision?: number;
+  readonly payload: Record<string, unknown>;
 }
 
 export interface AccountingWorkspaceEntity extends CompanyContextEntity {}
@@ -77,4 +124,7 @@ export interface AccountingWorkspaceProps {
   readonly organizationName?: string;
   readonly entities?: readonly AccountingWorkspaceEntity[];
   readonly api?: AccountingApi;
+  /** Controlled sub-view, e.g. from `section=accounting&acctView=…`. */
+  readonly view?: AccountingView;
+  readonly onViewChange?: (view: AccountingView) => void;
 }

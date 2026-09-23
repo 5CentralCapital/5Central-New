@@ -1,5 +1,15 @@
+import { operationReceiptSchema } from "@shared/company";
+import {
+  accountingPayablesResponseSchema,
+  connectorHealthResponseSchema,
+  periodCloseChecklistSchema,
+  pmSettlementDetailSchema,
+  pmSettlementListResponseSchema,
+  rentalBridgePreviewSchema,
+  rentalPostingPolicyListSchema,
+} from "@shared/accounting/operations";
 import { rentOpsAuthClient } from "../rent-ops/auth";
-import type { AccountingApi, AccountingConnection, AccountingEnvironment, AccountingMirror, AccountingMirrorKind, AccountingPendingBinding, AccountingScope, AccountingTransaction, AccountingTransactionPage } from "./types";
+import type { AccountingApi, AccountingConnection, AccountingEnvironment, AccountingMirror, AccountingMirrorKind, AccountingPendingBinding, AccountingPeriod, AccountingScope, AccountingTransaction, AccountingTransactionPage } from "./types";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -32,9 +42,21 @@ async function requestJson(path: string, init: RequestInit = {}): Promise<unknow
   return responseData(payload);
 }
 
-function basePath(organizationId: string): string {
+function companyPath(organizationId: string): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9:_-]{0,159}$/.test(organizationId)) throw new AccountingApiError("Company is unavailable.", 400, "company_validation");
-  return `/api/company/${encodeURIComponent(organizationId)}/accounting/qbo`;
+  return `/api/company/${encodeURIComponent(organizationId)}`;
+}
+
+function basePath(organizationId: string): string {
+  return `${companyPath(organizationId)}/accounting/qbo`;
+}
+
+function parsed<T>(schema: { parse(value: unknown): T }, value: unknown): T {
+  try { return schema.parse(value); } catch { throw new AccountingApiError("Accounting records returned an unexpected shape. Reload and try again.", 0, "accounting_invalid_response"); }
+}
+
+function periodParams(legalEntityId: string, period: AccountingPeriod): URLSearchParams {
+  return new URLSearchParams({ legalEntityId, periodStart: period.periodStart, periodEnd: period.periodEnd });
 }
 
 function scopeParams(scope: AccountingScope): URLSearchParams {
@@ -117,7 +139,43 @@ const api: AccountingApi = {
   },
   async sync(organizationId, scope, signal) {
     const value = record(await requestJson(`${basePath(organizationId)}/sync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legalEntityId: scope.legalEntityId, environment: scope.environment, realmId: scope.realmId }), signal }));
-    return { status: value.status === "partial" ? "partial" : "complete", streams: Array.isArray(value.streams) ? value.streams : [] };
+    return { status: "queued", message: typeof value.message === "string" ? value.message : "QuickBooks refresh queued." };
+  },
+  async health(organizationId, legalEntityId, signal) {
+    const query = legalEntityId ? `?${new URLSearchParams({ legalEntityId })}` : "";
+    return parsed(connectorHealthResponseSchema, await requestJson(`${companyPath(organizationId)}/accounting/health${query}`, { signal }));
+  },
+  async closeChecklist(organizationId, legalEntityId, period, signal) {
+    return parsed(periodCloseChecklistSchema, await requestJson(`${companyPath(organizationId)}/accounting/period-close?${periodParams(legalEntityId, period)}`, { signal }));
+  },
+  async postingPolicies(organizationId, legalEntityId, signal) {
+    return parsed(rentalPostingPolicyListSchema, await requestJson(`${companyPath(organizationId)}/accounting/posting-policies?${new URLSearchParams({ legalEntityId })}`, { signal })).items;
+  },
+  async pmSettlements(organizationId, query, signal) {
+    const params = new URLSearchParams({ legalEntityId: query.legalEntityId, limit: "50" });
+    if (query.states?.length) params.set("state", query.states.join(","));
+    if (query.cursor) params.set("cursor", query.cursor);
+    return parsed(pmSettlementListResponseSchema, await requestJson(`${companyPath(organizationId)}/accounting/pm-settlements?${params}`, { signal }));
+  },
+  async pmSettlement(organizationId, legalEntityId, settlementId, signal) {
+    if (!/^[0-9a-f-]{36}$/i.test(settlementId)) throw new AccountingApiError("That statement is unavailable.", 400, "accounting_validation");
+    return parsed(pmSettlementDetailSchema, await requestJson(`${companyPath(organizationId)}/accounting/pm-settlements/${settlementId}?${new URLSearchParams({ legalEntityId })}`, { signal }));
+  },
+  async bridgePreview(organizationId, legalEntityId, period, signal) {
+    return parsed(rentalBridgePreviewSchema, await requestJson(`${companyPath(organizationId)}/accounting/rental-bridge?${periodParams(legalEntityId, period)}`, { signal }));
+  },
+  bridgeCsvHref(organizationId, legalEntityId, period) {
+    const params = periodParams(legalEntityId, period); params.set("format", "csv");
+    return `${companyPath(organizationId)}/accounting/rental-bridge?${params}`;
+  },
+  async payables(organizationId, scope, kind, cursor, signal) {
+    const params = new URLSearchParams({ legalEntityId: scope.legalEntityId, environment: scope.environment, realmId: scope.realmId, kind, limit: "50" });
+    if (cursor) params.set("cursor", cursor);
+    return parsed(accountingPayablesResponseSchema, await requestJson(`${basePath(organizationId)}/payables?${params}`, { signal }));
+  },
+  async command(organizationId, kind, envelope, signal) {
+    if (!/^[a-z][a-z0-9_.-]*$/.test(kind)) throw new AccountingApiError("That action is unavailable.", 400, "accounting_validation");
+    return parsed(operationReceiptSchema, await requestJson(`${companyPath(organizationId)}/accounting-commands/${kind}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(envelope), signal }));
   },
   async disconnect(organizationId, scope, signal) {
     const value = record(await requestJson(`${basePath(organizationId)}/disconnect`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legalEntityId: scope.legalEntityId, realmId: scope.realmId }), signal }));

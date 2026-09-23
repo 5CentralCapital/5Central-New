@@ -1,8 +1,9 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { RefreshCw, Unplug } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import type { AccountingApi, AccountingConnection, AccountingEnvironment, AccountingMirrorKind, AccountingPendingBinding, AccountingScope, AccountingWorkspaceEntity, AccountingWorkspaceProps } from "./types";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ACCOUNTING_VIEWS, isAccountingView, type AccountingApi, type AccountingConnection, type AccountingEnvironment, type AccountingMirrorKind, type AccountingPendingBinding, type AccountingScope, type AccountingView, type AccountingWorkspaceEntity, type AccountingWorkspaceProps } from "./types";
 import { accountingApi } from "./api";
+import { BankingView, EmptyState, OverviewPanel, PayablesView, PeriodCloseView, PmSettlementsView } from "./views";
 import "./accounting.css";
 
 const mirrorTabs: readonly [AccountingMirrorKind, string][] = [["accounts", "Accounts"], ["vendors", "Vendors"], ["customers", "Customers"], ["employees", "Employees"]];
@@ -50,8 +51,8 @@ function DisconnectDialog({ connection, entityName, saving, error, onCancel, onC
       <div className="accounting-dialog-body">
         <p>This disconnects <strong>{connection.name}</strong> ({environmentLabel(connection.scope.environment)}) from {entityName}.</p>
         <ul>
-          <li>R-ops asks Intuit to revoke its access. Nothing inside QuickBooks is changed or deleted.</li>
-          <li>Record refreshes stop until you reconnect. Records already copied into R-ops stay stored here.</li>
+          <li>5Central Ops asks Intuit to revoke its access. Nothing inside QuickBooks is changed or deleted.</li>
+          <li>Record refreshes stop until you reconnect. Records already copied into 5Central Ops stay stored here.</li>
           <li>If Intuit can't confirm the disconnect, the connection is kept so you can try again.</li>
           <li>You can reconnect the same QuickBooks company at any time.</li>
         </ul>
@@ -79,7 +80,7 @@ function ConnectCard({ api, organizationId, legalEntityId, environment, reconnec
       {reconnect && <p className="accounting-meta">QuickBooks needs to be reconnected for this legal entity. Accounting access is paused until you reconnect.</p>}
       <button className="accounting-button accounting-button-primary" disabled={starting} onClick={() => void connect()}>{starting ? "Opening QuickBooks…" : reconnect ? "Reconnect QuickBooks" : "Connect QuickBooks"}</button>
       {error !== null && <div className="accounting-message is-error" role="alert">{error instanceof Error ? error.message : "QuickBooks setup could not be started."}</div>}
-      <p className="accounting-meta">By connecting, you agree to the <a href="/legal/eula" target="_blank" rel="noopener noreferrer">End-User License Agreement</a> and <a href="/legal/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>. Need help? <a href="mailto:michael@5central.capital?subject=Rent%20Ops%20QuickBooks%20support">Contact support</a>.</p>
+      <p className="accounting-meta">By connecting, you agree to the <a href="/legal/eula" target="_blank" rel="noopener noreferrer">End-User License Agreement</a> and <a href="/legal/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a>. Need help? <a href="mailto:michael@5central.capital?subject=5Central%20Ops%20QuickBooks%20support">Contact support</a>.</p>
     </div>
   </div>;
 }
@@ -129,21 +130,27 @@ function TransactionTable({ api, organizationId, scope }: { readonly api: Accoun
 
 function callbackErrorMessage(code: string): string {
   switch (code) {
-    case "session_expired": return "Your Rent Ops sign-in expired while QuickBooks was authorizing. Sign in again, then choose Connect QuickBooks.";
+    case "session_expired": return "Your 5Central Ops sign-in expired while QuickBooks was authorizing. Sign in again, then choose Connect QuickBooks.";
     case "accounting_conflict": return "That QuickBooks authorization link was already used or has expired. Start Connect QuickBooks again.";
     case "accounting_configuration": return "QuickBooks is not configured on this server. Contact support.";
     default: return "QuickBooks could not be connected. Start Connect QuickBooks again or contact support.";
   }
 }
 
-export function AccountingWorkspace({ organizationId, organizationName, entities, api = accountingApi }: AccountingWorkspaceProps) {
+export function AccountingWorkspace({ organizationId, organizationName, entities, api = accountingApi, view: controlledView, onViewChange }: AccountingWorkspaceProps) {
   const entityOptions = legalEntityOptions(entities);
   const [legalEntityId, setLegalEntityId] = useState(() => {
     const pendingEntityId = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("qboEntity");
     return entityOptions.find(entity => entity.id === pendingEntityId)?.id ?? entityOptions[0]?.id ?? "";
   });
+  const [internalView, setInternalView] = useState<AccountingView>(() => {
+    const requested = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("acctView");
+    return isAccountingView(requested) ? requested : "overview";
+  });
+  const view = controlledView ?? internalView;
+  const setView = (next: AccountingView) => { if (onViewChange) onViewChange(next); else setInternalView(next); };
   const [selectedRealmId, setSelectedRealmId] = useState<string | null>(null);
-  const [tab, setTab] = useState<AccountingMirrorKind | "transactions">("accounts");
+  const [tab, setTab] = useState<AccountingMirrorKind | "transactions">("transactions");
   const [message, setMessage] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [disconnectOpen, setDisconnectOpen] = useState(false);
@@ -152,6 +159,7 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
   const [disconnectedEntities, setDisconnectedEntities] = useState<ReadonlySet<string>>(() => new Set());
   const [pendingId, setPendingId] = useState<string | null>(() => typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("qboPending"));
   const [callbackError, setCallbackError] = useState<string | null>(() => typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("qboError"));
+  const queryClient = useQueryClient();
   useEffect(() => {
     if (!callbackError || typeof window === "undefined") return;
     const url = new URL(window.location.href); url.searchParams.delete("qboError"); window.history.replaceState(window.history.state, "", url.toString());
@@ -163,8 +171,9 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
   useEffect(() => { if (!connections.data?.length) { setSelectedRealmId(null); return; } if (!connections.data.some(connection => connection.scope.realmId === selectedRealmId)) setSelectedRealmId(connections.data[0]!.scope.realmId); }, [connections.data, selectedRealmId]);
   const selectedConnection = connections.data?.find(connection => connection.scope.realmId === selectedRealmId) ?? connections.data?.[0] ?? null;
   const scope = useMemo<AccountingScope | null>(() => selectedConnection?.status === "needs_reconnect" ? null : selectedConnection?.scope ?? null, [selectedConnection]);
-  const mirrors = useQuery({ queryKey: ["accounting", "mirrors", scope, tab], queryFn: ({ signal }) => api.listMirrors(organizationId, scope!, tab as AccountingMirrorKind, signal), enabled: Boolean(scope && tab !== "transactions"), staleTime: 20_000 });
+  const mirrors = useQuery({ queryKey: ["accounting", "mirrors", scope, tab], queryFn: ({ signal }) => api.listMirrors(organizationId, scope!, tab as AccountingMirrorKind, signal), enabled: Boolean(scope && tab !== "transactions" && view === "transactions"), staleTime: 20_000 });
   const selectedEntity = entityOptions.find(entity => entity.id === legalEntityId);
+  const currency = selectedEntity?.currency ?? "USD";
   const clearPending = async () => {
     setPendingId(null);
     const url = new URL(window.location.href); url.searchParams.delete("qboPending"); url.searchParams.delete("qboEntity"); url.searchParams.delete("qboConnected"); window.history.replaceState(window.history.state, "", url.toString());
@@ -173,7 +182,7 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
   async function sync() {
     if (!scope) return;
     setSyncing(true); setMessage(null);
-    try { const result = await api.sync(organizationId, scope); setMessage(result.status === "complete" ? "QuickBooks records refreshed." : "QuickBooks records refreshed with some streams needing review."); await connections.refetch(); await mirrors.refetch(); }
+    try { const result = await api.sync(organizationId, scope); setMessage(result.message); await queryClient.invalidateQueries({ queryKey: ["accounting", "health"] }); }
     catch (error) { setMessage(error instanceof Error ? error.message : "QuickBooks records could not be refreshed."); }
     finally { setSyncing(false); }
   }
@@ -184,19 +193,31 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
       const result = await api.disconnect(organizationId, selectedConnection.scope);
       setDisconnectOpen(false);
       setDisconnectedEntities(current => new Set(current).add(selectedConnection.scope.legalEntityId));
-      setMessage(result.providerOutcome === "already_revoked" ? "QuickBooks was already disconnected at Intuit. R-ops cleared its connection." : "QuickBooks disconnected. Reconnect to resume record refreshes.");
+      setMessage(result.providerOutcome === "already_revoked" ? "QuickBooks was already disconnected at Intuit. 5Central Ops cleared its connection." : "QuickBooks disconnected. Reconnect to resume record refreshes.");
       await connections.refetch();
     } catch (error) { setDisconnectError(error); }
     finally { setDisconnecting(false); }
   }
+  const sidebar = <aside className="accounting-sidebar">{pending.data && selectedEntity && <PendingBindingCard api={api} organizationId={organizationId} legalEntityId={legalEntityId} entityName={selectedEntity.name} pending={pending.data} onConfirmed={clearPending} />}{pending.error && <ErrorBox error={pending.error} retry={() => void pending.refetch()} />}{!connections.isLoading && <ConnectionList connections={connections.data ?? []} selected={selectedConnection} onSelect={connection => setSelectedRealmId(connection.scope.realmId)} />}{!pending.data && configuration.data?.configured && legalEntityId && (!selectedConnection || selectedConnection.status === "needs_reconnect") && <ConnectCard api={api} organizationId={organizationId} legalEntityId={legalEntityId} environment={environment} reconnect={selectedConnection?.status === "needs_reconnect" || disconnectedEntities.has(legalEntityId)} />}{configuration.data && !configuration.data.configured && <div className="accounting-card"><div className="accounting-card-header"><h2>QuickBooks is not configured</h2></div><div className="accounting-card-body">QuickBooks connection isn't available.</div></div>}</aside>;
+  const notConnected = <EmptyState title={selectedConnection?.status === "needs_reconnect" ? "QuickBooks needs to be reconnected" : "QuickBooks isn't connected"} detail={selectedConnection?.status === "needs_reconnect" ? "Reconnect to restore accounting access for this legal entity." : "Connect this legal entity's QuickBooks company to see its records."} action={{ label: "Open overview", onClick: () => setView("overview") }} />;
+  const mirrorContent = scope ? <><nav className="accounting-tabs" aria-label="QuickBooks records">{[["transactions", "Transactions"] as const, ...mirrorTabs].map(([value, label]) => <button type="button" className={`accounting-tab ${tab === value ? "is-selected" : ""}`} aria-pressed={tab === value} key={value} onClick={() => setTab(value)}>{label}</button>)}</nav>{tab === "transactions" ? <TransactionTable api={api} organizationId={organizationId} scope={scope} /> : mirrors.isLoading ? <div className="accounting-empty">Loading {tab}…</div> : mirrors.error ? <ErrorBox error={mirrors.error} retry={() => void mirrors.refetch()} /> : <MirrorTable items={mirrors.data ?? []} kind={tab} />}</> : notConnected;
   return <div className="accounting-workspace">
-    <header className="accounting-toolbar"><div><h1>Accounting</h1><p>{organizationName ?? "Company"}</p></div><div className="accounting-actions"><EnvironmentBadge environment={environment} />{scope && <button className="accounting-button accounting-button-primary" disabled={syncing || disconnecting} onClick={() => void sync()}><RefreshCw size={14} />{syncing ? "Refreshing…" : "Refresh records"}</button>}{selectedConnection && selectedConnection.status !== "needs_reconnect" && <button className="accounting-button accounting-button-danger rm-button-danger" disabled={syncing || disconnecting} onClick={() => { setDisconnectError(null); setDisconnectOpen(true); }}><Unplug size={14} />Disconnect QuickBooks</button>}</div></header>
-    <div className="accounting-selectors"><label>Legal entity<select value={legalEntityId} onChange={event => { setLegalEntityId(event.currentTarget.value); setTab("accounts"); }}>{entityOptions.map(entity => <option key={entity.id} value={entity.id}>{entity.name}</option>)}</select></label><label>QuickBooks environment<span className="accounting-meta">{environmentLabel(environment)}</span></label><label>Currency<span className="accounting-meta">{selectedEntity?.currency ?? "—"}</span></label></div>
+    <header className="accounting-toolbar"><div><h1>Accounting</h1><p>{organizationName ?? "Company"}</p></div><div className="accounting-actions"><EnvironmentBadge environment={environment} />{scope && <button className="accounting-button accounting-button-primary" disabled={syncing || disconnecting} onClick={() => void sync()}><RefreshCw size={14} aria-hidden="true" />{syncing ? "Queuing…" : "Refresh records"}</button>}{selectedConnection && selectedConnection.status !== "needs_reconnect" && view === "overview" && <button className="accounting-button accounting-button-danger rm-button-danger" disabled={syncing || disconnecting} onClick={() => { setDisconnectError(null); setDisconnectOpen(true); }}><Unplug size={14} aria-hidden="true" />Disconnect QuickBooks</button>}</div></header>
+    <div className="accounting-selectors"><label>Legal entity<select value={legalEntityId} onChange={event => { setLegalEntityId(event.currentTarget.value); setTab("transactions"); }}>{entityOptions.map(entity => <option key={entity.id} value={entity.id}>{entity.name}</option>)}</select></label><label>QuickBooks environment<span className="accounting-meta">{environmentLabel(environment)}</span></label><label>Currency<span className="accounting-meta">{selectedEntity?.currency ?? "—"}</span></label></div>
+    <nav className="accounting-tabs accounting-view-tabs" aria-label="Accounting sections">{ACCOUNTING_VIEWS.map(item => <button type="button" key={item.value} className={`accounting-tab ${view === item.value ? "is-selected" : ""}`} aria-current={view === item.value ? "page" : undefined} onClick={() => setView(item.value)}>{item.label}</button>)}</nav>
     {message && <div className="accounting-message" role="status">{message}</div>}
     {callbackError && <div className="accounting-message" role="alert">{callbackErrorMessage(callbackError)} <button type="button" className="accounting-button" onClick={() => setCallbackError(null)}>Dismiss</button></div>}
     {connections.error && <ErrorBox error={connections.error} retry={() => void connections.refetch()} />}
-    <div className="accounting-grid"><aside className="accounting-sidebar">{pending.data && selectedEntity && <PendingBindingCard api={api} organizationId={organizationId} legalEntityId={legalEntityId} entityName={selectedEntity.name} pending={pending.data} onConfirmed={clearPending} />}{pending.error && <ErrorBox error={pending.error} retry={() => void pending.refetch()} />}{!connections.isLoading && <ConnectionList connections={connections.data ?? []} selected={selectedConnection} onSelect={connection => setSelectedRealmId(connection.scope.realmId)} />}{!pending.data && configuration.data?.configured && legalEntityId && (!selectedConnection || selectedConnection.status === "needs_reconnect") && <ConnectCard api={api} organizationId={organizationId} legalEntityId={legalEntityId} environment={environment} reconnect={selectedConnection?.status === "needs_reconnect" || disconnectedEntities.has(legalEntityId)} />}{configuration.data && !configuration.data.configured && <div className="accounting-card"><div className="accounting-card-header"><h2>QuickBooks is not configured</h2></div><div className="accounting-card-body">QuickBooks connection isn't available.</div></div>}</aside><main className="accounting-main">{scope ? <><nav className="accounting-tabs" aria-label="Accounting records">{[...mirrorTabs, ["transactions", "Transactions"] as const].map(([value, label]) => <button type="button" className={`accounting-tab ${tab === value ? "is-selected" : ""}`} key={value} onClick={() => setTab(value)}>{label}</button>)}</nav>{tab === "transactions" ? <TransactionTable api={api} organizationId={organizationId} scope={scope} /> : mirrors.isLoading ? <div className="accounting-empty">Loading {tab}…</div> : mirrors.error ? <ErrorBox error={mirrors.error} retry={() => void mirrors.refetch()} /> : <MirrorTable items={mirrors.data ?? []} kind={tab} />}</> : <div className="accounting-empty"><strong>{selectedConnection?.status === "needs_reconnect" ? "QuickBooks needs to be reconnected." : configuration.data?.configured && !connections.isLoading && !connections.data?.length ? "QuickBooks is not connected for this legal entity." : "Choose a QuickBooks connection."}</strong>{selectedConnection?.status === "needs_reconnect" ? <span>Use the reconnect action to restore accounting access.</span> : configuration.data?.configured && !connections.isLoading && !connections.data?.length && <span>Use {disconnectedEntities.has(legalEntityId) ? "Reconnect" : "Connect"} QuickBooks to link a company.</span>}</div>}</main></div>
+    {!legalEntityId ? <main className="accounting-main"><EmptyState title="No legal entity" detail="Add a legal entity to this company to use accounting." /></main>
+      : view === "overview" ? <div className="accounting-grid">{sidebar}<main className="accounting-main"><OverviewPanel api={api} organizationId={organizationId} legalEntityId={legalEntityId} currency={currency} onOpen={setView} /></main></div>
+      : view === "transactions" ? <div className="accounting-grid">{sidebar}<main className="accounting-main">{mirrorContent}</main></div>
+      : <main className="accounting-main is-wide">
+        {view === "bills" && (scope ? <PayablesView api={api} organizationId={organizationId} scope={scope} currency={currency} /> : notConnected)}
+        {view === "banking" && <BankingView api={api} organizationId={organizationId} legalEntityId={legalEntityId} currency={currency} onOpen={setView} />}
+        {view === "pm-settlements" && <PmSettlementsView api={api} organizationId={organizationId} legalEntityId={legalEntityId} />}
+        {view === "close" && <PeriodCloseView api={api} organizationId={organizationId} legalEntityId={legalEntityId} currency={currency} />}
+      </main>}
     {disconnectOpen && selectedConnection && <DisconnectDialog connection={selectedConnection} entityName={selectedEntity?.name ?? "this legal entity"} saving={disconnecting} error={disconnectError} onCancel={() => setDisconnectOpen(false)} onConfirm={() => void disconnect()} />}
-    <p className="accounting-meta accounting-support">QuickBooks connection help: <a href="mailto:michael@5central.capital?subject=Rent%20Ops%20QuickBooks%20support">Contact support</a> · <a href="/legal/eula" target="_blank" rel="noopener noreferrer">EULA</a> · <a href="/legal/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a></p>
+    <p className="accounting-meta accounting-support">QuickBooks connection help: <a href="mailto:michael@5central.capital?subject=5Central%20Ops%20QuickBooks%20support">Contact support</a> · <a href="/legal/eula" target="_blank" rel="noopener noreferrer">EULA</a> · <a href="/legal/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a></p>
   </div>;
 }
