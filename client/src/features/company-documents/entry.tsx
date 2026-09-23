@@ -5,8 +5,8 @@ import type { CompanyDocumentLinkOption } from "./types";
 type LinkId = CompanyDocumentLinkOption["id"];
 
 /** Navigation mount point (no required props): company documents for the signed-in manager's company. */
-export function CompanyDocumentsEntry({ organizationId, propertyId }: { organizationId?: string; propertyId?: string | null } = {}) {
-  return <CompanyGate organizationId={organizationId} loadingLabel="Loading documents…">
+export function CompanyDocumentsEntry({ organizationId, propertyId, onNavigate }: { organizationId?: string; propertyId?: string | null; onNavigate?: (organizationId: string) => void } = {}) {
+  return <CompanyGate organizationId={organizationId} onOrganization={onNavigate} loadingLabel="Loading documents…">
     {organization => {
       const legalEntityId = entityForProperty(organization, propertyId);
       // Links offered for new files: the company's legal entities and properties from the authorized context.

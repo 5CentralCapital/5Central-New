@@ -15,16 +15,16 @@ export interface LaneEntryProps {
   readonly propertyId?: string;
 }
 
-export function ReviewQueueEntry({ organizationId, propertyId }: LaneEntryProps) {
-  return <ReviewQueue organizationId={organizationId} propertyId={propertyId ?? null} />;
+export function ReviewQueueEntry({ organizationId, propertyId, onNavigate }: LaneEntryProps) {
+  return <ReviewQueue organizationId={organizationId} propertyId={propertyId ?? null} onNavigate={onNavigate} />;
 }
 
-export function IntakeResultsEntry({ organizationId, propertyId }: LaneEntryProps) {
-  return <IntakeResults organizationId={organizationId} propertyId={propertyId ?? null} />;
+export function IntakeResultsEntry({ organizationId, propertyId, onNavigate }: LaneEntryProps) {
+  return <IntakeResults organizationId={organizationId} propertyId={propertyId ?? null} onNavigate={onNavigate} />;
 }
 
-export function CompanyDocumentsEntry({ organizationId, propertyId }: LaneEntryProps) {
-  return <CompanyDocuments organizationId={organizationId} propertyId={propertyId ?? null} />;
+export function CompanyDocumentsEntry({ organizationId, propertyId, onNavigate }: LaneEntryProps) {
+  return <CompanyDocuments organizationId={organizationId} propertyId={propertyId ?? null} onNavigate={onNavigate} />;
 }
 
 /** Forecasting mount: each location change (tab, scenario or company) is one route update honoring replace. */

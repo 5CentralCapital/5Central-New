@@ -39,6 +39,8 @@ import "./review-cases.css";
 export interface ReviewQueueWorkspaceProps {
   readonly organizationId?: string;
   readonly propertyId?: string | null;
+  /** Route update when the manager picks a company; without it the choice is local. */
+  readonly onOrganization?: (organizationId: string) => void;
   /** Test seam; defaults to the browser API. */
   readonly api?: ReviewCasesApi;
 }
@@ -484,14 +486,16 @@ function ReviewQueue({ organizationId, legalEntityId, propertyId, api }: { organ
  * organization it resolves the signed-in manager's company; a property filter
  * resolves its legal entity from the same authorized context.
  */
-export function ReviewQueueWorkspace({ organizationId, propertyId, api = reviewCasesApi }: ReviewQueueWorkspaceProps) {
+export function ReviewQueueWorkspace({ organizationId, propertyId, onOrganization, api = reviewCasesApi }: ReviewQueueWorkspaceProps) {
   const context = useCompanyContext();
   const organization = context.data?.organizations.find(item => item.id === organizationId);
-  if (organizationId && (!propertyId || organization)) {
+  // Without a route owner (tests, standalone mounts) a known company renders at once;
+  // under the shell the gate keeps the company picker for managers with several companies.
+  if (organizationId && !onOrganization && (!propertyId || organization)) {
     const legalEntityId = entityForProperty(organization, propertyId);
     return <ReviewQueue key={`${organizationId}:${propertyId ?? ""}`} organizationId={organizationId} legalEntityId={legalEntityId} propertyId={legalEntityId ? propertyId ?? undefined : undefined} api={api} />;
   }
-  return <CompanyGate organizationId={organizationId} loadingLabel="Loading review cases…">
+  return <CompanyGate organizationId={organizationId} onOrganization={onOrganization} loadingLabel="Loading review cases…">
     {selected => {
       const legalEntityId = entityForProperty(selected, propertyId);
       return <ReviewQueue key={`${selected.id}:${propertyId ?? ""}`} organizationId={selected.id} legalEntityId={legalEntityId} propertyId={legalEntityId ? propertyId ?? undefined : undefined} api={api} />;

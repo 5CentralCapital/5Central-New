@@ -27,10 +27,13 @@ export function entityForProperty(organization: CompanyContextOrganization | und
 /**
  * Resolve the company for an entry point that has no required props. A
  * single authorized company is chosen automatically; otherwise a selector is
- * shown. Errors and empty access use the standard empty-state shape.
+ * shown. When the shell passes onOrganization the route owns the choice, so
+ * it survives moving between company pages and follows back/forward.
+ * Errors and empty access use the standard empty-state shape.
  */
-export function CompanyGate({ organizationId, loadingLabel, children }: {
+export function CompanyGate({ organizationId, onOrganization, loadingLabel, children }: {
   organizationId?: string;
+  onOrganization?: (id: string) => void;
   loadingLabel: string;
   children: (organization: CompanyContextOrganization, select: (id: string) => void) => ReactNode;
 }) {
@@ -42,25 +45,22 @@ export function CompanyGate({ organizationId, loadingLabel, children }: {
   const organizations = context.data.organizations;
   if (!organizations.length) return <div className="rc-state"><h3>No Company Access</h3><p>Ask an owner to grant access to a company.</p></div>;
   const chosen = organizations.find(item => item.id === organizationId) ?? (organizations.length === 1 ? organizations[0] : undefined);
-  return <CompanyChooser organizations={organizations} chosen={chosen} render={children} />;
+  return <CompanyChooser organizations={organizations} chosen={chosen} onOrganization={onOrganization} render={children} />;
 }
 
-function CompanyChooser({ organizations, chosen, render }: {
+function CompanyChooser({ organizations, chosen, onOrganization, render }: {
   organizations: readonly CompanyContextOrganization[];
   chosen: CompanyContextOrganization | undefined;
+  onOrganization?: (id: string) => void;
   render: (organization: CompanyContextOrganization, select: (id: string) => void) => ReactNode;
 }) {
-  const [selectedId, setSelectedId] = useSelectedCompany(chosen?.id);
-  const organization = organizations.find(item => item.id === selectedId) ?? chosen;
+  const [localId, setLocalId] = useState(chosen?.id);
+  const organization = onOrganization ? chosen : organizations.find(item => item.id === localId) ?? chosen;
+  const setSelectedId = onOrganization ?? setLocalId;
   return <>
     {(organizations.length > 1 || !organization) && <div className="rc-company-picker"><label>Company <select aria-label="Company" value={organization?.id ?? ""} onChange={event => setSelectedId(event.currentTarget.value)}>
       <option value="" disabled>Select company</option>{organizations.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
     </select></label></div>}
     {organization ? render(organization, setSelectedId) : null}
   </>;
-}
-
-function useSelectedCompany(initial: string | undefined): [string | undefined, (id: string) => void] {
-  const [value, setValue] = useState(initial);
-  return [value, setValue];
 }
