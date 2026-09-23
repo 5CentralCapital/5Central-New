@@ -286,6 +286,10 @@ test("the summary bridge preview reports control totals from the rental ledger a
     assert.equal(withUnknownDeposit.controlTotals.excludedUnknownCount, 2);
     assert.equal(withUnknownDeposit.controlTotals.depositsHeldAtEndCents, "50000");
     await h.raw.query(`DELETE FROM rent_ops_security_deposits WHERE id = 'dep-unknown'`);
+    // So is a posted ledger entry whose posting date is unknown.
+    await h.raw.query(`UPDATE rent_ops_ledger_transactions SET posted_on = NULL, posted_on_knowledge = 'unknown' WHERE id = 'tx-late'`);
+    assert.equal((await h.operations.previewBridge(admin.principal, period)).controlTotals.excludedUnknownCount, 2);
+    await h.raw.query(`UPDATE rent_ops_ledger_transactions SET posted_on = '2026-09-01', posted_on_knowledge = 'manual' WHERE id = 'tx-late'`);
     const exported = await h.operations.exportBridgeCsv(admin.principal, period);
     assert.match(exported.csv, /Preview only; nothing was posted to QuickBooks/);
     assert.match(exported.csv, new RegExp(preview.fingerprint));

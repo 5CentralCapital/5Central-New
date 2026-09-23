@@ -123,6 +123,13 @@ export async function previewRentalBridge(executor: RentOpsQueryExecutor, princi
       [mapping.property_id, from, through],
     );
     const totals = empty();
+    // A posted entry with no posting date could belong to this period: it is
+    // reported as unknown rather than silently left out of every period.
+    const undated = await executor.query<{ count: unknown }>(
+      `SELECT COUNT(*) AS count FROM rent_ops_ledger_transactions WHERE property_id = $1 AND posted_on IS NULL AND status IS DISTINCT FROM 'voided'`,
+      [mapping.property_id],
+    );
+    totals.unknown += Number(undated.rows[0]?.count ?? 0);
     for (const row of ledger.rows) {
       const amount = big(row.amount);
       const rows = Number(row.count ?? 0);
