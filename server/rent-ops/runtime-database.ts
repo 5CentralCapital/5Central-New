@@ -11,7 +11,8 @@ import type { RentOpsQueryExecutor } from "./repositories/postgres";
 
 export interface RentOpsRuntimePoolClient {
   query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<{ rows: T[] }>;
-  release(): void;
+  /** A truthy argument destroys the connection instead of returning it to the pool. */
+  release(destroy?: boolean | Error): void;
 }
 
 export interface RentOpsRuntimePool {
@@ -132,6 +133,9 @@ export function createRentOpsPoolExecutor(pool: RentOpsRuntimePool): RentOpsRunt
         },
       };
       let began = false;
+      // A connection whose transaction state is unknown must never be reused:
+      // the next borrower could run inside a stale, never-committed transaction.
+      let discard = false;
       try {
         await safeQuery(client.query.bind(client), `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ${options.readOnly ? " READ ONLY" : ""}`);
         began = true;
@@ -145,11 +149,12 @@ export function createRentOpsPoolExecutor(pool: RentOpsRuntimePool): RentOpsRunt
           } catch {
             // Preserve the original, already-redacted operation or application
             // error. Rollback diagnostics must not escape this boundary.
+            discard = true;
           }
-        }
+        } else discard = true;
         throw error;
       } finally {
-        client.release();
+        client.release(discard);
       }
     },
 

@@ -12,8 +12,10 @@ class FakePool implements RentOpsRuntimePool {
   readonly clientCalls: string[] = [];
   readonly rows: Record<string, unknown>[] = [{ ok: true }];
   released = 0;
+  destroyed = 0;
   ended = 0;
   failWithSecret = false;
+  failRollback = false;
 
   async query<T = Record<string, unknown>>(text: string): Promise<{ rows: T[] }> {
     this.poolCalls.push(text);
@@ -25,9 +27,10 @@ class FakePool implements RentOpsRuntimePool {
       query: async <T = Record<string, unknown>>(text: string): Promise<{ rows: T[] }> => {
         this.clientCalls.push(text);
         if (this.failWithSecret && text === "SELECT secret") throw new Error("postgres://runtime-secret@db.invalid/rent_ops");
+        if (this.failRollback && text === "ROLLBACK") throw new Error("connection terminated");
         return { rows: this.rows as T[] };
       },
-      release: () => { this.released += 1; },
+      release: (destroy?: boolean | Error) => { this.released += 1; if (destroy) this.destroyed += 1; },
     };
   }
 
@@ -138,6 +141,25 @@ test("driver errors are redacted and transactions roll back", async () => {
     "ROLLBACK",
   ]);
   assert.equal(pool.released, 1);
+});
+
+test("a connection whose rollback fails is destroyed instead of returned to the pool", async () => {
+  const pool = new FakePool();
+  pool.failWithSecret = true;
+  pool.failRollback = true;
+  const executor = createRentOpsPoolExecutor(pool);
+  await assert.rejects(() => executor.transaction(async (transactionExecutor) => {
+    await transactionExecutor.query("SELECT secret");
+  }), /database operation failed/);
+  assert.equal(pool.released, 1);
+  assert.equal(pool.destroyed, 1);
+
+  const healthy = new FakePool();
+  healthy.failWithSecret = true;
+  await assert.rejects(() => createRentOpsPoolExecutor(healthy).transaction(async (transactionExecutor) => {
+    await transactionExecutor.query("SELECT secret");
+  }));
+  assert.equal(healthy.destroyed, 0);
 });
 
 test("pool initialization errors are redacted", async () => {
