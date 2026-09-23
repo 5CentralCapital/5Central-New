@@ -39,7 +39,7 @@ import type {
 } from "../../../shared/rent-ops-contracts";
 import { activeTenancyViolations, assertNoOverlappingBaseRentSchedules, effectiveLedgerKind, effectiveScheduleIntervals, createEffectiveScheduleSelector, type EffectiveScheduleSelector, ledgerBalanceSign, RentOpsInvariantError } from "./invariants";
 import { financialProjectionControls, projectFinancialSchedules, resolveEffectiveScheduleVersions, type FinancialProjectionControls } from "./financial-projection";
-import { addDays, compareIsoDate, daysBetween, isDateOnOrBefore, isEffectiveOn, monthFromDate, monthStart, nowIsoDate } from "./dates";
+import { addDays, compareIsoDate, daysBetween, isDateOnOrBefore, isEffectiveOn, monthEnd, monthFromDate, monthStart, nowIsoDate } from "./dates";
 
 // Subsidy/HAP is reported separately from tenant collected income. A base
 // rent schedule represents the full contractual rent; adding a subsidy row to
@@ -939,6 +939,14 @@ function attachReportControls(rows: readonly unknown[], controls: FinancialRepor
 }
 
 function deriveTruthScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOpsFilters): ScheduledIncomeRow[] {
+  return deriveTruthScheduledProjection(snapshot, filters).rows;
+}
+
+function truthScheduleSelection(filters: RentOpsFilters): "as_of" | "month_forecast" {
+  return truthMonth(filters) === monthFromDate(asOfDate(filters)) ? "as_of" : "month_forecast";
+}
+
+function deriveTruthScheduledProjection(snapshot: RentOpsSnapshot, filters: RentOpsFilters): { rows: ScheduledIncomeRow[]; projection: ReturnType<typeof projectFinancialSchedules> } {
   const month = truthMonth(filters);
   const propertyIds = scopedPropertyIds(snapshot, filters);
   const projection = projectFinancialSchedules(snapshot, month, {
@@ -946,7 +954,7 @@ function deriveTruthScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
     unitId: filters.unitId,
     observationMonth: truthObservationMonth(snapshot, filters),
     asOfDate: asOfDate(filters),
-    selection: month === monthFromDate(asOfDate(filters)) ? "as_of" : "month_forecast",
+    selection: truthScheduleSelection(filters),
   });
   const matchesTenantStatus = createTenantStatusMatcher(snapshot, filters);
   const rows = projection.rows
@@ -967,11 +975,15 @@ function deriveTruthScheduledIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
     uncertaintyCodes: projection.exceptionCodes,
   };
   attachReportControls(rows, controls);
-  return rows;
+  return { rows, projection };
 }
 
 interface TruthCollectedResult {
   rows: CollectedIncomeRow[];
+  /** Per-row uncertainty for property-level reconciliation. */
+  rowCodes: Map<CollectedIncomeRow, string[]>;
+  /** Allocations with no property link: they cannot be attributed to a property row. */
+  unattributedCount: number;
   controls: Pick<FinancialReportControls, "collectedKnownCount" | "collectedUncertainCount" | "collectedUnknownAmountCount" | "collectedKnownCents" | "collectedUncertainCents" | "collectedUnknownAmountCents" | "uncertaintyCodes"> & { sourceRowCount: number };
 }
 
@@ -994,6 +1006,8 @@ function deriveTruthCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
   let knownCents = 0;
   let uncertainCents = 0;
   const uncertaintyCodes = new Set<string>();
+  const rowCodes = new Map<CollectedIncomeRow, string[]>();
+  let unattributedCount = 0;
   for (const allocation of snapshot.paymentAllocations) {
     if (allocation.kind === "transfer" || allocation.kind === "credit_allocation") continue;
     // Application visibility follows its own date, while receipt-month
@@ -1010,7 +1024,7 @@ function deriveTruthCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
     if (filters.personId && (charge?.personId ?? payment?.personId) !== filters.personId) continue;
     const sourceHasKnownProperty = typeof propertyId === "string" && propertyIds.has(propertyId);
     if (!sourceHasKnownProperty) {
-      if (propertyId === null || propertyId === undefined) { uncertainCount += 1; uncertaintyCodes.add("collected_property_unknown"); }
+      if (propertyId === null || propertyId === undefined) { uncertainCount += 1; unattributedCount += 1; uncertaintyCodes.add("collected_property_unknown"); }
       continue;
     }
     if (filters.unitId && (charge?.unitId ?? payment?.unitId) !== filters.unitId) continue;
@@ -1048,7 +1062,7 @@ function deriveTruthCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
     }
     const unit = units.get(charge?.unitId ?? payment?.unitId ?? "");
     const person = people.get(charge?.personId ?? payment?.personId ?? "");
-    rows.push({
+    const collectedRow: CollectedIncomeRow = {
       propertyId: propertyId as string,
       propertyName: properties.get(propertyId as string)?.name ?? "Unknown property",
       unitId: unit?.id,
@@ -1062,11 +1076,15 @@ function deriveTruthCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOpsF
       category,
       amountCents: amountKnown ? allocation.amountCents : null,
       description: charge?.description ?? null,
-    });
+    };
+    rows.push(collectedRow);
+    rowCodes.set(collectedRow, uncertainty);
   }
   const filteredRows = rows.filter((row) => searchMatches(`${row.propertyName} ${row.unitNumber ?? ""} ${row.tenantName ?? ""}`, filters.search));
   return {
     rows: filteredRows,
+    rowCodes,
+    unattributedCount,
     controls: {
       sourceRowCount: snapshot.paymentAllocations.length,
       collectedKnownCount: knownCount,
@@ -1262,84 +1280,117 @@ export function deriveCollectedIncome(snapshot: RentOpsSnapshot, filters: RentOp
   return rows.filter((row) => searchMatches(`${row.propertyName} ${row.unitNumber ?? ""} ${row.tenantName ?? ""}`, filters.search));
 }
 
+/** Scheduled vs collected with its pinned as-of date and per-property audit counts. */
+export interface ScheduledVsCollectedReportRow extends ScheduledVsCollectedRow {
+  asOfDate?: IsoDate;
+  scheduleBasis?: "as_of" | "month_forecast";
+  scheduleNotApplicableVacantCount: number;
+  scheduleNotApplicableOtherTenancyCount: number;
+  schedulePrecedenceSuppressedCount: number;
+}
+
 export function deriveScheduledVsCollected(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): ScheduledVsCollectedRow[] {
   if (snapshot.modelVersion === 3) {
-    const scheduledRows = deriveTruthScheduledIncome(snapshot, filters);
-    const scheduledControls = financialReportControls(scheduledRows);
-    const collected = deriveTruthCollectedIncome(snapshot, filters);
-    const month = truthMonth(filters);
+    // Both sides share one explicit as-of date: schedule versions are selected
+    // as of that date (current month) or for the whole month (earlier month),
+    // and collections count receipts dated in the month that were applied on
+    // or before it. The as-of date and schedule basis are returned per row.
+    const pinned: RentOpsFilters = { ...filters, asOfDate: asOfDate(filters) };
+    const { rows: scheduledRows, projection } = deriveTruthScheduledProjection(snapshot, pinned);
+    const collected = deriveTruthCollectedIncome(snapshot, pinned);
+    const month = truthMonth(pinned);
+    const scheduleBasis = truthScheduleSelection(pinned);
     const properties = propertyMap(snapshot);
-    const grouped = new Map<string, ScheduledVsCollectedRow>();
+    const grouped = new Map<string, ScheduledVsCollectedReportRow>();
+    const codesByGroup = new Map<string, Set<string>>();
     // A null property is a portfolio-level bucket.  JSON keeps it distinct
     // from a literal property id such as "null" and does not invent a name.
     const groupKey = (propertyId: string | null, rowMonth: IsoMonth): string => JSON.stringify([propertyId, rowMonth]);
-    const uncertaintyCodes = new Set<string>([
-      ...(scheduledControls?.uncertaintyCodes ?? []),
-      ...(collected.controls.uncertaintyCodes ?? []),
-    ]);
-    const empty = (propertyId: string | null, propertyName: string | null, month: IsoMonth): ScheduledVsCollectedRow => ({
-      propertyId,
-      propertyName,
-      month,
-      scheduledCents: 0,
-      collectedCents: 0,
-      varianceCents: null,
-      scheduledKnownCents: 0,
-      scheduledUncertainCents: 0,
-      scheduledUnknownAmountCount: 0,
-      collectedKnownCents: 0,
-      collectedUncertainCents: 0,
-      collectedUnknownAmountCount: 0,
-      complete: true,
-      uncertaintyCodes: [],
-    });
-    for (const row of scheduledRows) {
-      const key = groupKey(row.propertyId, row.month);
-      const existing = grouped.get(key) ?? empty(row.propertyId, row.propertyName, row.month);
-      if (row.known === true && typeof row.amountCents === "number") {
-        existing.scheduledKnownCents = (existing.scheduledKnownCents ?? 0) + row.amountCents;
-        existing.scheduledCents = existing.scheduledKnownCents;
-      } else {
-        if (typeof row.amountCents === "number") existing.scheduledUncertainCents = (existing.scheduledUncertainCents ?? 0) + row.amountCents;
-        if (row.amountCents === null) existing.scheduledUnknownAmountCount = (existing.scheduledUnknownAmountCount ?? 0) + 1;
-        existing.complete = false;
+    const entry = (propertyId: string | null, propertyName: string | null): { key: string; row: ScheduledVsCollectedReportRow; codes: Set<string> } => {
+      const key = groupKey(propertyId, month);
+      let row = grouped.get(key);
+      if (!row) {
+        row = {
+          propertyId,
+          propertyName,
+          month,
+          asOfDate: pinned.asOfDate!,
+          scheduleBasis,
+          scheduledCents: 0,
+          collectedCents: 0,
+          varianceCents: null,
+          scheduledKnownCents: 0,
+          scheduledUncertainCents: 0,
+          scheduledUnknownAmountCount: 0,
+          collectedKnownCents: 0,
+          collectedUncertainCents: 0,
+          collectedUnknownAmountCount: 0,
+          scheduleNotApplicableVacantCount: 0,
+          scheduleNotApplicableOtherTenancyCount: 0,
+          schedulePrecedenceSuppressedCount: 0,
+          complete: true,
+          uncertaintyCodes: [],
+        };
+        grouped.set(key, row);
       }
-      if (row.unclassified) { existing.complete = false; uncertaintyCodes.add("scheduled_category_unknown"); }
-      row.exceptionCodes?.forEach((code) => uncertaintyCodes.add(code));
-      grouped.set(key, existing);
-    }
-    for (const row of collected.rows) {
-      if (!row.paymentOn) continue;
-      const key = groupKey(row.propertyId, month);
-      const propertyName = row.propertyId === null ? null : properties.get(row.propertyId)?.name ?? row.propertyName;
-      const existing = grouped.get(key) ?? empty(row.propertyId, propertyName, month);
-      if (typeof row.amountCents === "number" && row.category !== null) {
-        existing.collectedKnownCents = (existing.collectedKnownCents ?? 0) + row.amountCents;
-        existing.collectedCents = existing.collectedKnownCents;
-      } else if (typeof row.amountCents === "number") {
-        existing.collectedUncertainCents = (existing.collectedUncertainCents ?? 0) + row.amountCents;
-        existing.complete = false;
-      } else {
-        existing.collectedUnknownAmountCount = (existing.collectedUnknownAmountCount ?? 0) + 1;
-        existing.complete = false;
+      const codes = codesByGroup.get(key) ?? new Set<string>();
+      codesByGroup.set(key, codes);
+      return { key, row, codes };
+    };
+    for (const scheduled of scheduledRows) {
+      const { row, codes } = entry(scheduled.propertyId, scheduled.propertyName);
+      if (scheduled.known === true && typeof scheduled.amountCents === "number") {
+        row.scheduledKnownCents = (row.scheduledKnownCents ?? 0) + scheduled.amountCents;
+        row.scheduledCents = row.scheduledKnownCents;
+        continue;
       }
-      grouped.set(key, existing);
+      // Unknown category and unresolved person assignment (and any other
+      // unresolved fact) belong to this property only.
+      if (typeof scheduled.amountCents === "number") row.scheduledUncertainCents = (row.scheduledUncertainCents ?? 0) + scheduled.amountCents;
+      else row.scheduledUnknownAmountCount = (row.scheduledUnknownAmountCount ?? 0) + 1;
+      row.complete = false;
+      scheduled.exceptionCodes?.forEach((code) => codes.add(code));
+      if (scheduled.unclassified) codes.add("charge_category_unknown");
     }
-    return Array.from(grouped.values()).map((row) => {
-      const complete = Boolean(row.complete)
-        && (scheduledControls?.complete ?? false)
-        && (collected.controls.collectedUncertainCount ?? 0) === 0
-        && (collected.controls.collectedUnknownAmountCount ?? 0) === 0;
-      return {
-        ...row,
-        collectedKnownCents: row.collectedKnownCents ?? 0,
-        collectedUncertainCents: row.collectedUncertainCents ?? 0,
-        collectedUnknownAmountCount: Math.max(row.collectedUnknownAmountCount ?? 0, collected.controls.collectedUnknownAmountCount ?? 0),
-        complete,
-        varianceCents: complete ? (row.collectedKnownCents ?? 0) - (row.scheduledKnownCents ?? 0) : null,
-        uncertaintyCodes: uncertaintyCodes.size > 0 ? Array.from(uncertaintyCodes).sort() : undefined,
-      };
-    });
+    for (const receipt of collected.rows) {
+      if (!receipt.paymentOn) continue;
+      const propertyName = receipt.propertyId === null ? null : properties.get(receipt.propertyId)?.name ?? receipt.propertyName;
+      const { row, codes } = entry(receipt.propertyId, propertyName);
+      const receiptCodes = collected.rowCodes.get(receipt) ?? [];
+      if (typeof receipt.amountCents === "number" && receipt.category !== null && receiptCodes.length === 0) {
+        row.collectedKnownCents = (row.collectedKnownCents ?? 0) + receipt.amountCents;
+        row.collectedCents = row.collectedKnownCents;
+        continue;
+      }
+      if (typeof receipt.amountCents === "number") row.collectedUncertainCents = (row.collectedUncertainCents ?? 0) + receipt.amountCents;
+      else row.collectedUnknownAmountCount = (row.collectedUnknownAmountCount ?? 0) + 1;
+      row.complete = false;
+      receiptCodes.forEach((code) => codes.add(code));
+    }
+    // Receipts without any property link cannot be attributed to a property;
+    // they stay visible in the portfolio-level bucket for an unfiltered view.
+    if (collected.unattributedCount > 0 && !filters.propertyId && !filters.propertyIds?.length) {
+      const { row, codes } = entry(null, null);
+      row.complete = false;
+      codes.add("collected_property_unknown");
+    }
+    // Vacant, other-tenancy and lower-precedence schedules are valid outcomes:
+    // counted for audit on the property's row, never a reason to mark the
+    // property incomplete and never a row of their own (a scoped report must
+    // not surface a property only because it has unbilled schedules).
+    for (const disposition of projection.dispositions) {
+      const row = grouped.get(groupKey(disposition.propertyId, month));
+      if (!row) continue;
+      if (disposition.code === "schedule_not_applicable_vacant") row.scheduleNotApplicableVacantCount += 1;
+      else if (disposition.code === "schedule_not_applicable_other_tenancy") row.scheduleNotApplicableOtherTenancyCount += 1;
+      else row.schedulePrecedenceSuppressedCount += 1;
+    }
+    return Array.from(grouped.entries()).map(([key, row]) => ({
+      ...row,
+      complete: row.complete,
+      varianceCents: row.complete ? (row.collectedKnownCents ?? 0) - (row.scheduledKnownCents ?? 0) : null,
+      uncertaintyCodes: Array.from(codesByGroup.get(key) ?? []).sort(),
+    }));
   }
   const scheduled = deriveScheduledIncome(snapshot, filters);
   const collected = deriveCollectedIncome(snapshot, filters);
@@ -1672,33 +1723,62 @@ export function deriveLeaseExpirations(snapshot: RentOpsSnapshot, filters: RentO
   return rows.filter((row) => searchMatches(`${row.propertyName} ${row.unitNumber} ${row.tenantName}`, filters.search));
 }
 
-export function deriveDepositLiability(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): DepositLiabilityRow[] {
+/** Deposit liability with separate type, date and unit-link facts. */
+export interface DepositLiabilityReportRow extends DepositLiabilityRow {
+  /** direct: the deposit names its unit; tenancy: shown through an exact,
+   * validated tenancy link; missing: no link; conflict: links disagree. */
+  unitLinkStatus: "direct" | "tenancy" | "missing" | "conflict";
+  /** Deposits with a known amount but no source type; the per-type split is unknown. */
+  typeUnknownCount: number;
+}
+
+function depositUnitThroughTenancy(snapshot: RentOpsSnapshot, deposit: RentOpsSnapshot["securityDeposits"][number], units: ReadonlyMap<string, RentOpsUnit>): { unit?: RentOpsUnit; status: DepositLiabilityReportRow["unitLinkStatus"] } {
+  const tenancy = deposit.tenancyId ? snapshot.tenancies.find((candidate) => candidate.id === deposit.tenancyId) : undefined;
+  if (deposit.unitId) {
+    const unit = units.get(deposit.unitId);
+    if (!unit || unit.propertyId !== deposit.propertyId || (tenancy && tenancy.unitId !== unit.id)) return { status: "conflict" };
+    return { unit, status: "direct" };
+  }
+  if (!tenancy) return { status: "missing" };
+  // Only an exact tenancy whose property and person agree with the deposit
+  // identifies its unit. Current occupancy alone never does.
+  if (!hasConfirmedTenancyLinks(tenancy)) return { status: "missing" };
+  if (tenancy.propertyId !== deposit.propertyId || tenancy.primaryPersonId !== deposit.personId) return { status: "conflict" };
+  const unit = units.get(tenancy.unitId);
+  if (!unit || unit.propertyId !== deposit.propertyId) return { status: "missing" };
+  return { unit, status: "tenancy" };
+}
+
+export function deriveDepositLiability(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): DepositLiabilityReportRow[] {
   const matchesTenantStatus = createTenantStatusMatcher(snapshot, filters);
   const asOf = asOfDate(filters);
   const properties = propertyMap(snapshot);
   const units = unitMap(snapshot);
   const people = personMap(snapshot);
   const propertyIds = scopedPropertyIds(snapshot, filters);
-  const grouped = new Map<string, DepositLiabilityRow>();
+  const grouped = new Map<string, DepositLiabilityReportRow>();
   for (const deposit of snapshot.securityDeposits) {
     if (!matchesTenantStatus(deposit)) continue;
     if (!matchesPropertyScope(deposit.propertyId, filters, propertyIds)) continue;
-    if (filters.unitId && deposit.unitId !== filters.unitId) continue;
     // A known future receipt is excluded at the as-of boundary. Unknown
     // receipt dates remain in held liability and are explicitly flagged.
     if (deposit.receivedOn && deposit.receivedOn > asOf) continue;
-    const unit = deposit.unitId ? units.get(deposit.unitId) : undefined;
+    const unitLink = depositUnitThroughTenancy(snapshot, deposit, units);
+    const unit = unitLink.unit;
+    if (filters.unitId && unit?.id !== filters.unitId) continue;
     const person = people.get(deposit.personId);
     const groupKey = deposit.tenancyId
       ? `tenancy:${deposit.tenancyId}`
       : deposit.unitId
         ? `person-unit:${deposit.personId}:${deposit.unitId}`
         : `person-property:${deposit.personId}:${deposit.propertyId}`;
-    const existing = grouped.get(groupKey) ?? {
+    const existing: DepositLiabilityReportRow = grouped.get(groupKey) ?? {
       propertyId: deposit.propertyId,
       propertyName: properties.get(deposit.propertyId)?.name ?? "Unknown property",
-      unitId: deposit.unitId,
+      unitId: unit?.id,
       unitNumber: unit?.unitNumber,
+      unitLinkStatus: unitLink.status,
+      typeUnknownCount: 0,
       tenancyId: deposit.tenancyId,
       personId: deposit.personId,
       tenantName: displayName(person),
@@ -1721,13 +1801,22 @@ export function deriveDepositLiability(snapshot: RentOpsSnapshot, filters: RentO
     if (held === null) {
       existing.unknownHeldCount = (existing.unknownHeldCount ?? 0) + 1;
       existing.securityHeldCents = existing.refundablePetHeldCents = existing.otherRefundableHeldCents = existing.totalHeldCents = null;
-      existing.temporalUncertainty = true;
     } else {
-      if (deposit.type === "security" && existing.securityHeldCents !== null) existing.securityHeldCents += held;
-      else if (deposit.type === "refundable_pet" && existing.refundablePetHeldCents !== null) existing.refundablePetHeldCents += held;
-      else if (deposit.type === "other_refundable" && existing.otherRefundableHeldCents !== null) existing.otherRefundableHeldCents += held;
-      else existing.temporalUncertainty = true;
+      if (deposit.type === "security") { if (existing.securityHeldCents !== null) existing.securityHeldCents += held; }
+      else if (deposit.type === "refundable_pet") { if (existing.refundablePetHeldCents !== null) existing.refundablePetHeldCents += held; }
+      else if (deposit.type === "other_refundable") { if (existing.otherRefundableHeldCents !== null) existing.otherRefundableHeldCents += held; }
+      else {
+        // A known amount without a source type: the total is known, the split
+        // by type is not. This is not a date question.
+        existing.typeUnknownCount += 1;
+        existing.securityHeldCents = existing.refundablePetHeldCents = existing.otherRefundableHeldCents = null;
+      }
       if (existing.totalHeldCents !== null) existing.totalHeldCents += held;
+    }
+    if (existing.unitLinkStatus !== unitLink.status) {
+      // Deposits grouped on one tenancy must agree on the unit shown.
+      if (existing.unitId !== unit?.id || unitLink.status === "conflict") { existing.unitId = undefined; existing.unitNumber = undefined; existing.unitLinkStatus = unitLink.status === "conflict" || existing.unitLinkStatus === "conflict" ? "conflict" : "missing"; }
+      else if (existing.unitLinkStatus === "tenancy" && unitLink.status === "direct") existing.unitLinkStatus = "direct";
     }
     if (unknownReceipt) {
       existing.unknownReceiptCount += 1;
@@ -1743,7 +1832,41 @@ export function deriveDepositLiability(snapshot: RentOpsSnapshot, filters: RentO
   return Array.from(grouped.values()).filter((row) => searchMatches(`${row.propertyName} ${row.unitNumber} ${row.tenantName}`, filters.search));
 }
 
-export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): HapRow[] {
+/** HAP row whose receipt total is unknown (null) when any receipt fact is unknown. */
+export interface HapReportRow extends Omit<HapRow, "receivedAgencyCents" | "varianceCents"> {
+  receivedAgencyCents: Cents | null;
+  /** Known agency receipts only; a lower bound when receipts are uncertain. */
+  receivedAgencyKnownCents: Cents;
+  varianceCents: Cents | null;
+  /** "none_received" is a known absence; "unknown" means a receipt fact is unresolved. */
+  agencyReceiptStatus: "received" | "none_received" | "unknown";
+  /** Where the month's expected portions came from. */
+  obligationSource: "contract" | "subsidy_tenant";
+}
+
+type SubsidyContract = RentOpsSubsidyContract;
+
+/** Expected agency/tenant portions for the month from effective-dated child
+ * rows with a source payer and known amount; otherwise the contract amounts. */
+function hapObligations(snapshot: RentOpsSnapshot, contract: SubsidyContract, on: IsoDate): { agencyCents: Cents; tenantCents: Cents; source: HapReportRow["obligationSource"] } {
+  const terms = snapshot.subsidyTenants.filter((term) =>
+    term.subsidyContractId === contract.id
+    && (term.subsidyContractLinkKnowledge === undefined || term.subsidyContractLinkKnowledge === "exact" || term.subsidyContractLinkKnowledge === "manual")
+    && (!term.tenancyId || term.tenancyId === contract.tenancyId)
+    && term.amountKnowledge === "known" && typeof term.amountCents === "number" && Number.isSafeInteger(term.amountCents)
+    && (term.payerKnowledge === "source" || term.payerKnowledge === "manual") && (term.payer === "agency" || term.payer === "tenant")
+    && !!term.effectiveFrom && isEffectiveOn(term.effectiveFrom, term.effectiveTo, on));
+  const agency = terms.filter((term) => term.payer === "agency");
+  const tenant = terms.filter((term) => term.payer === "tenant");
+  if (!agency.length && !tenant.length) return { agencyCents: contract.agencyObligationCents, tenantCents: contract.tenantObligationCents, source: "contract" };
+  return {
+    agencyCents: agency.length ? agency.reduce((sum, term) => sum + term.amountCents!, 0) : contract.agencyObligationCents,
+    tenantCents: tenant.length ? tenant.reduce((sum, term) => sum + term.amountCents!, 0) : contract.tenantObligationCents,
+    source: "subsidy_tenant",
+  };
+}
+
+export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): HapReportRow[] {
   const matchesTenantStatus = createTenantStatusMatcher(snapshot, filters);
   const month = reportMonth(filters);
   const properties = propertyMap(snapshot);
@@ -1753,7 +1876,14 @@ export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {
   // Match collected income: payment date selects the month, while an
   // explicit as-of date controls historical visibility of allocations.
   const reportCutoff = filters.asOfDate ?? nowIsoDate();
-  const rows: HapRow[] = [];
+  // Effective-dated contracts: a contract counts for the month when it is in
+  // effect on any day of the month through the report date. When versions
+  // follow one another inside the month, the version in effect at the end of
+  // that window supplies the month's expected portions.
+  const windowStart = monthStart(month);
+  const windowEnd = monthFromDate(reportCutoff) === month && reportCutoff < monthEnd(month) ? reportCutoff : monthEnd(month);
+  const overlapsWindow = (contract: SubsidyContract): boolean => !!contract.effectiveFrom && contract.effectiveFrom <= windowEnd && (!contract.effectiveTo || contract.effectiveTo >= windowStart);
+  const rows: HapReportRow[] = [];
   const effectiveContracts = snapshot.subsidyContracts.filter((contract) =>
     matchesTenantStatus(contract) &&
     matchesPropertyScope(contract.propertyId, filters, propertyIds) &&
@@ -1763,7 +1893,7 @@ export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {
     // A missing end date on an ended import is treated as an exception and is
     // not projected indefinitely.
     !(contract.status === "ended" && !contract.effectiveTo) &&
-    isEffectiveOn(contract.effectiveFrom, contract.effectiveTo, monthStart(month)),
+    overlapsWindow(contract),
   );
   // A non-null source contract with no normalized status cannot be safely
   // classified as active/ended/pending. Do not silently turn it into zero
@@ -1771,36 +1901,44 @@ export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {
   if (snapshot.subsidyContracts.some((contract) => matchesTenantStatus(contract) && !contract.status && matchesPropertyScope(contract.propertyId, filters, propertyIds))) {
     throw new RentOpsInvariantError("HAP report is blocked by an unknown subsidy contract status");
   }
-  const contractsByTenancy = new Map<string, RentOpsSubsidyContract[]>();
+  const contractsByTenancy = new Map<string, SubsidyContract[]>();
   for (const contract of effectiveContracts) {
     const existing = contractsByTenancy.get(contract.tenancyId) ?? [];
     existing.push(contract);
     contractsByTenancy.set(contract.tenancyId, existing);
   }
-  const duplicates = Array.from(contractsByTenancy.entries()).filter(([, contracts]) => contracts.length > 1);
+  // Sequential versions are allowed; two contracts in effect on the same day
+  // for one tenancy are a conflict.
+  const overlapping = (left: SubsidyContract, right: SubsidyContract): boolean =>
+    left.effectiveFrom <= (right.effectiveTo ?? "9999-12-31") && right.effectiveFrom <= (left.effectiveTo ?? "9999-12-31");
+  const duplicates = Array.from(contractsByTenancy.entries()).filter(([, contracts]) => contracts.some((left, index) => contracts.slice(index + 1).some((right) => overlapping(left, right))));
   if (duplicates.length) {
     throw new RentOpsInvariantError("More than one housing-assistance contract is effective for a tenancy and month", duplicates.flatMap(([tenancyId, contracts]) => contracts.map((contract) => ({ code: "overlapping_hap_contract", entityId: contract.id, message: `Tenancy ${tenancyId} has overlapping HAP contract ${contract.id}` }))));
   }
-  for (const contract of effectiveContracts) {
+  const selectedContracts = Array.from(contractsByTenancy.values()).map((contracts) => [...contracts].sort((left, right) => right.effectiveFrom.localeCompare(left.effectiveFrom) || left.id.localeCompare(right.id))[0]);
+  for (const contract of selectedContracts) {
     if (filters.propertyId && filters.propertyId !== contract.propertyId) continue;
-    if (!isEffectiveOn(contract.effectiveFrom, contract.effectiveTo, monthStart(month))) continue;
     const tenancy = snapshot.tenancies.find((candidate) => candidate.id === contract.tenancyId);
     const person = tenancy ? people.get(tenancy.primaryPersonId) : undefined;
     const unit = units.get(contract.unitId);
+    const obligationOn = contract.effectiveTo && contract.effectiveTo < windowEnd ? contract.effectiveTo : windowEnd;
+    const obligations = hapObligations(snapshot, contract, obligationOn < contract.effectiveFrom ? contract.effectiveFrom : obligationOn);
     const uncertaintyCodes = new Set<string>();
     let receivedAgencyCents = 0;
     let receiptCount = 0;
     let knownReceiptCount = 0;
     let unknownReceiptCount = 0;
+    const tenancyContractIds = new Set(snapshot.subsidyContracts.filter((candidate) => candidate.tenancyId === contract.tenancyId).map((candidate) => candidate.id));
     const childReceipts = snapshot.subsidyPayments.filter((payment) =>
-      payment.subsidyContractId === contract.id &&
+      !!payment.subsidyContractId && tenancyContractIds.has(payment.subsidyContractId) &&
       (!payment.propertyId || payment.propertyId === contract.propertyId) &&
       (!payment.tenancyId || payment.tenancyId === contract.tenancyId),
     );
     if (childReceipts.length > 0) {
       // Child rows are the authoritative HAP receipt projection whenever they
       // exist. This prevents a directly linked generic ledger allocation from
-      // being counted a second time.
+      // being counted a second time. Receipts are attributed by payer and by
+      // payment month.
       const seenReceiptIds = new Set<string>();
       for (const receipt of childReceipts) {
         if (seenReceiptIds.has(receipt.id)) {
@@ -1810,6 +1948,9 @@ export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {
         }
         seenReceiptIds.add(receipt.id);
         if (receipt.status === "pending" || receipt.status === "voided" || receipt.status === "reversed") continue;
+        // A source-confirmed tenant or owner payment is not agency cash.
+        if ((receipt.payer === "tenant" || receipt.payer === "owner") && (receipt.payerKnowledge === "source" || receipt.payerKnowledge === "manual")) continue;
+        if (receipt.paymentOn && (receipt.paymentOn > reportCutoff || monthFromDate(receipt.paymentOn) !== month)) continue;
         receiptCount += 1;
         if (receipt.status !== "received") {
           unknownReceiptCount += 1;
@@ -1826,8 +1967,6 @@ export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {
           uncertaintyCodes.add("subsidy_payment_date_unknown");
           continue;
         }
-        if (receipt.paymentOn > reportCutoff) continue;
-        if (monthFromDate(receipt.paymentOn) !== month) continue;
         receivedAgencyCents += receipt.amountCents;
         knownReceiptCount += 1;
       }
@@ -1852,6 +1991,7 @@ export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {
       }
     }
     const uncertainty = uncertaintyCodes.size > 0 || unknownReceiptCount > 0;
+    const received = uncertainty ? null : receivedAgencyCents;
     rows.push({
       propertyId: contract.propertyId,
       propertyName: properties.get(contract.propertyId)?.name ?? "Unknown property",
@@ -1861,18 +2001,21 @@ export function deriveHap(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {
       tenantName: displayName(person),
       agencyName: contract.agencyName,
       month,
-      agencyObligationCents: contract.agencyObligationCents,
-      tenantObligationCents: contract.tenantObligationCents,
-      expectedTotalCents: contract.agencyObligationCents + contract.tenantObligationCents,
-      receivedAgencyCents,
-      varianceCents: receivedAgencyCents - contract.agencyObligationCents,
-      exception: contract.status === "exception" || receivedAgencyCents < contract.agencyObligationCents || uncertainty,
+      agencyObligationCents: obligations.agencyCents,
+      tenantObligationCents: obligations.tenantCents,
+      expectedTotalCents: obligations.agencyCents + obligations.tenantCents,
+      obligationSource: obligations.source,
+      receivedAgencyCents: received,
+      receivedAgencyKnownCents: receivedAgencyCents,
+      agencyReceiptStatus: uncertainty ? "unknown" : knownReceiptCount > 0 ? "received" : "none_received",
+      varianceCents: received === null ? null : received - obligations.agencyCents,
+      exception: contract.status === "exception" || uncertainty || receivedAgencyCents < obligations.agencyCents,
       receiptCount,
       knownReceiptCount,
       unknownReceiptCount,
       uncertainty,
       uncertaintyCodes: uncertaintyCodes.size > 0 ? Array.from(uncertaintyCodes).sort() : undefined,
-  });
+    });
   }
   return rows.filter((row) => searchMatches(`${row.propertyName} ${row.unitNumber} ${row.tenantName} ${row.agencyName}`, filters.search));
 }
@@ -1910,13 +2053,21 @@ export function deriveApplicantPipeline(snapshot: RentOpsSnapshot, filters: Rent
     .filter((row) => searchMatches(`${row.displayName} ${row.propertyName ?? ""} ${row.unitInterest ?? ""}`, filters.search));
 }
 
+/** Accounts with a known amount due, kept apart from unresolved balances. */
+export interface DashboardDueRollup {
+  /** Current accounts whose operational balance is known and positive. */
+  operationalBalanceDueCount: number;
+  /** Sum of those known positive balances (never includes unresolved accounts). */
+  operationalBalanceDueKnownCents: Cents;
+}
+
 export interface DashboardWorkspaceResult {
-  summary: DashboardSummary;
+  summary: DashboardSummary & DashboardDueRollup;
   rentRoll: RentRollRow[];
   delinquency: DelinquencyRow[];
 }
 
-export function deriveDashboardSummary(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): DashboardSummary {
+export function deriveDashboardSummary(snapshot: RentOpsSnapshot, filters: RentOpsFilters = {}): DashboardSummary & DashboardDueRollup {
   return deriveDashboardWorkspace(snapshot, filters).summary;
 }
 
@@ -1965,11 +2116,14 @@ export function deriveDashboardWorkspace(snapshot: RentOpsSnapshot, filters: Ren
   const unresolvedOccupancyBalances = rentRoll.filter(row => row.occupancy === "unknown");
   const operationalBalanceUnresolvedCount = delinquency.filter(row => row.operationalBalanceCents == null).length + unresolvedOccupancyBalances.length;
   const balanceUnresolvedCount = delinquency.filter(row => row.balanceComplete === false).length + unresolvedOccupancyBalances.length;
+  const knownDueRows = delinquency.filter(row => typeof row.operationalBalanceCents === "number" && row.operationalBalanceCents > 0);
+  const operationalBalanceDueCount = knownDueRows.length;
+  const operationalBalanceDueKnownCents = knownDueRows.reduce((sum, row) => sum + row.operationalBalanceCents!, 0);
   const balanceUncertaintyCodes = Array.from(new Set([...delinquency.flatMap(row => row.balanceUncertaintyCodes ?? []), ...unresolvedOccupancyBalances.flatMap(row => row.balanceUncertaintyCodes ?? ["tenancy_balance_scope_unknown"])])).sort();
   const expiringIn30Days = expirations.filter((row) => row.actionStatus === "expiring" && row.contractEndOn && row.contractEndOn <= addDays(asOf, 30)).length;
   const expiringIn60Days = expirations.filter((row) => row.actionStatus === "expiring" && row.contractEndOn && row.contractEndOn <= addDays(asOf, 60)).length;
   const expiringIn90Days = expirations.filter((row) => row.actionStatus === "expiring").length;
-  const summary: DashboardSummary = {
+  const summary: DashboardSummary & DashboardDueRollup = {
     asOfDate: asOf,
     propertyCount: propertyIds.size,
     unitCount: activeUnits.length,
@@ -1987,6 +2141,8 @@ export function deriveDashboardWorkspace(snapshot: RentOpsSnapshot, filters: Ren
     scheduledRentCadenceComplete: scheduledCandidates.every(row => snapshot.recurringSchedules.find(schedule => schedule.id === row.scheduleId)?.billingFrequency === "monthly"),
     collectedRentCents,
     operationalBalanceUnresolvedCount,
+    operationalBalanceDueCount,
+    operationalBalanceDueKnownCents,
     operationalDelinquencyCents: operationalBalanceUnresolvedCount > 0 ? null : delinquency.reduce((sum, row) => sum + Math.max(0, row.operationalBalanceCents!), 0),
     balanceComplete: balanceUnresolvedCount === 0,
     balanceUnresolvedCount,

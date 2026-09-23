@@ -247,7 +247,7 @@ function HistoryParticipantsSection({ history }: { history: AdminApplicationHist
   const state = applicationHistorySectionState(history, "participants");
   return <section className="ro-case-section ro-history-section" aria-labelledby="application-history-participants">
     <SectionHeading id="application-history-participants" title="Participants" />
-    {state !== "full" ? <EmptySection message={state === "unknown" ? "Historical participant links need review." : "No historical participants were recorded."} /> : <div className="ro-case-member-list">
+    {state !== "full" ? <EmptySection message={state === "unknown" ? "Some historical participants could not be linked to this case." : "No historical participants were recorded."} /> : <div className="ro-case-member-list">
       {history.participants.map((participant, index) => <article className="ro-case-member" key={`historical-participant-${index}`}>
         <Users aria-hidden="true" />
         <div><strong>Participant {index + 1}</strong><span>{applicationCaseFact(participant.role, participant.roleKnowledge)} · {applicationCaseFact(participant.relationship, participant.relationshipKnowledge)}</span><small>{applicationCaseFact(participant.isMinor, participant.minorKnowledge)} minor · {applicationCaseFact(participant.isFinanciallyResponsible, participant.financialResponsibilityKnowledge)} financially responsible</small></div>
@@ -260,7 +260,7 @@ function HistoryRequirementsSection({ history }: { history: AdminApplicationHist
   const state = applicationHistorySectionState(history, "requirements");
   return <section className="ro-case-section ro-history-section" aria-labelledby="application-history-requirements">
     <SectionHeading id="application-history-requirements" title="Requirements" />
-    {state !== "full" ? <EmptySection message={state === "unknown" ? "Historical requirement links need review." : "No historical requirements were recorded."} /> : <div className="ro-case-requirement-list">
+    {state !== "full" ? <EmptySection message={state === "unknown" ? "Some historical requirements could not be linked to this case." : "No historical requirements were recorded."} /> : <div className="ro-case-requirement-list">
       {history.requirements.map((requirement, index) => <article className="ro-case-requirement" key={`historical-requirement-${index}`}>
         <div><strong>{applicationCaseFact(requirement.label)}</strong><span>{title(applicationCaseFact(requirement.status, requirement.statusKnowledge))}</span></div>
         <dl className="ro-case-facts ro-case-facts-compact">
@@ -426,7 +426,7 @@ export function ApplicationCaseDetail({ applicationId, summary, onClose, tenantP
         <RequirementsSection application={detail} />
         <DocumentsSection application={detail} />
         {detail.history && <HistoricalCaseSections history={detail.history} />}
-        {applicationCaseSectionState(detail, "overview") === "unknown" && <p className="ro-case-inline-warning"><AlertCircle aria-hidden="true" />Overview facts need review.</p>}
+        {applicationCaseSectionState(detail, "overview") === "unknown" && <p className="ro-case-inline-warning"><AlertCircle aria-hidden="true" />Some overview facts are unverified.</p>}
       </div>}
     </section>
   </div>;

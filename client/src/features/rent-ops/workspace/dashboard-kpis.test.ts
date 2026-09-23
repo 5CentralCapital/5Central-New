@@ -35,7 +35,7 @@ test("unknown inputs are never shown as zero", () => {
   assert.equal(rent.detail, "Rent amount unknown");
   assert.equal(receipts.value, "Unknown");
   assert.equal(due.value, "Unknown");
-  assert.equal(due.detail, "Unverified · 1 account");
+  assert.equal(due.detail, "Unverified balances: 1");
 });
 
 test("missing collections read as review, empty delinquency as clear", () => {
@@ -53,8 +53,9 @@ test("unknown balances name the specific review reason", () => {
     { operationalBalanceCents: null, balanceUncertaintyCodes: ["imported_account_history_unverified"] },
     { operationalBalanceCents: 1000 },
   ] })[3];
-  assert.equal(due.value, "Unknown");
-  assert.equal(due.detail, "History incomplete · 3 accounts");
+  // Known amounts due are totalled; unresolved balances are counted apart, not mixed in.
+  assert.equal(due.value, "$10");
+  assert.equal(due.detail, "across 1 account · Unverified balances: 2 (History incomplete)");
 });
 
 test("whole-dollar formatting rounds and signs", () => {

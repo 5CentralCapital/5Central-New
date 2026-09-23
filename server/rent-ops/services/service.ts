@@ -315,9 +315,9 @@ function autoAllocationPlan(snapshot: RentOpsSnapshot, payment: RentOpsLedgerTra
   const resolvedPaymentPostedOn = paymentPostedOn;
   const resolvedPaymentAmountCents = paymentAmountCents;
   if (!payment.tenancyId || payment.tenancyId !== tenancy.id || !payment.propertyId || payment.propertyId !== tenancy.propertyId || !payment.personId || payment.personId !== tenancy.primaryPersonId) {
-    throw new RentOpsInvariantError("Payment account links need review before auto-allocation");
+    throw new RentOpsInvariantError("Payment account links are unverified; confirm them before auto-allocation");
   }
-  if (!transactionLinksKnown(payment)) throw new RentOpsInvariantError("Payment account links need review before auto-allocation");
+  if (!transactionLinksKnown(payment)) throw new RentOpsInvariantError("Payment account links are unverified; confirm them before auto-allocation");
 
   const transactions = new Map(snapshot.ledgerTransactions.map((row) => [row.id, row]));
   const reversed = postedReversalTargets(snapshot.ledgerTransactions);
@@ -1573,7 +1573,7 @@ export class RentOpsService {
     const snapshot=await this.snapshot();
     const charge=snapshot.ledgerTransactions.find(row=>row.id===id);
     if (!charge || charge.kind!=="charge" || charge.status!=="posted" || !charge.propertyId || !charge.personId || charge.amountCents===null || !charge.postedOn) throw new RentOpsInvariantError("Only posted charges with a known account, amount and date can be edited");
-    if ([charge.propertyLinkKnowledge,charge.personLinkKnowledge,...(charge.unitId?[charge.unitLinkKnowledge]:[]),...(charge.tenancyId?[charge.tenancyLinkKnowledge]:[])].some(value=>value!=="manual"&&value!=="exact")) throw new RentOpsInvariantError("Charge account links need review before editing");
+    if ([charge.propertyLinkKnowledge,charge.personLinkKnowledge,...(charge.unitId?[charge.unitLinkKnowledge]:[]),...(charge.tenancyId?[charge.tenancyLinkKnowledge]:[])].some(value=>value!=="manual"&&value!=="exact")) throw new RentOpsInvariantError("Charge account links are unverified; confirm them before editing");
     const reversed=new Set(snapshot.ledgerTransactions.filter(row=>row.kind==="reversal"&&row.status==="posted").map(row=>row.reversalOfId));
     if (reversed.has(id)) throw new RentOpsInvariantError("This charge was already corrected or reversed");
     const history=snapshot.paymentAllocations.filter(row=>row.chargeTransactionId===id);
@@ -1626,7 +1626,7 @@ export class RentOpsService {
     if (/^tp_.*_ledger_/.test(id)) throw new RentOpsInvariantError("Online payments are managed by the payment processor");
     if (!payment.propertyId || !payment.personId || (payment.amountCents === null || payment.amountCents <= 0) || !payment.postedOn) throw new RentOpsInvariantError("Payment account or amount must be resolved before editing");
     if (snapshot.ledgerTransactions.some(row => row.reversalOfId === id && row.status === "posted")) throw new RentOpsInvariantError("This payment was already corrected or reversed");
-    if ([payment.propertyLinkKnowledge,payment.personLinkKnowledge,...(payment.unitId?[payment.unitLinkKnowledge]:[]),...(payment.tenancyId?[payment.tenancyLinkKnowledge]:[])].some(value=>value!=="manual"&&value!=="exact")) throw new RentOpsInvariantError("Payment account links need review before editing");
+    if ([payment.propertyLinkKnowledge,payment.personLinkKnowledge,...(payment.unitId?[payment.unitLinkKnowledge]:[]),...(payment.tenancyId?[payment.tenancyLinkKnowledge]:[])].some(value=>value!=="manual"&&value!=="exact")) throw new RentOpsInvariantError("Payment account links are unverified; confirm them before editing");
     const allocations = snapshot.paymentAllocations.filter(row => row.paymentTransactionId === id);
     if (allocations.some(row => (row.kind && row.kind !== "allocation") || !row.chargeTransactionId || row.amountCents === null || row.amountCents < 0)) throw new RentOpsInvariantError("This payment has transfers or unresolved allocations that require reconciliation");
     const expectedRevision = createHash("sha256").update(JSON.stringify({payment, allocations: [...allocations].sort((a,b)=>a.id.localeCompare(b.id))})).digest("hex");
@@ -1678,14 +1678,14 @@ export class RentOpsService {
     const payment = snapshot.ledgerTransactions.find((row) => row.id === id);
     if (!payment || payment.kind !== "payment" || payment.status !== "posted") throw new RentOpsInvariantError("Only a posted payment can be auto-allocated");
     if (/^tp_.*_ledger_/.test(payment.id)) throw new RentOpsInvariantError("Online payments are managed by the payment processor");
-    if (!payment.tenancyId || !payment.personId || !payment.propertyId) throw new RentOpsInvariantError("Payment account links need review before auto-allocation");
+    if (!payment.tenancyId || !payment.personId || !payment.propertyId) throw new RentOpsInvariantError("Payment account links are unverified; confirm them before auto-allocation");
     const tenancy = snapshot.tenancies.find((row) => row.id === payment.tenancyId);
     const unit = tenancy?.unitId ? snapshot.units.find((row) => row.id === tenancy.unitId) : undefined;
     if (!tenancy || !unit || tenancy.status === "cancelled" || tenancy.primaryPersonId !== payment.personId || tenancy.propertyId !== payment.propertyId || unit.propertyId !== tenancy.propertyId || payment.unitId && payment.unitId !== unit.id) {
       throw new RentOpsInvariantError("Exact payment tenancy required");
     }
     if ((snapshot.modelVersion === 3 || tenancy.source) && [tenancy.propertyLinkKnowledge, tenancy.unitLinkKnowledge, tenancy.primaryPersonLinkKnowledge, unit.propertyLinkKnowledge].some((value) => value !== "manual" && value !== "exact")) {
-      throw new RentOpsInvariantError("Payment tenancy links need review");
+      throw new RentOpsInvariantError("Payment tenancy links are unverified");
     }
 
     const activityId = autoAllocationActivityId(payment.id);
@@ -1743,7 +1743,7 @@ export class RentOpsService {
       const tenancy = snapshot.tenancies.find(row => row.id === input.tenancyId);
       const unit = snapshot.units.find(row => row.id === tenancy?.unitId);
       if (!tenancy || tenancy.primaryPersonId !== initial.primaryPersonId || !unit || unit.propertyId !== tenancy.propertyId || tenancy.status === "cancelled" || !snapshot.people.some(row => row.id === tenancy.primaryPersonId)) throw new RentOpsInvariantError("Exact payment tenancy required");
-      if ((snapshot.modelVersion === 3 || tenancy.source) && [tenancy.propertyLinkKnowledge, tenancy.unitLinkKnowledge, tenancy.primaryPersonLinkKnowledge, unit.propertyLinkKnowledge].some(value => value !== "manual" && value !== "exact")) throw new RentOpsInvariantError("Payment tenancy links need review");
+      if ((snapshot.modelVersion === 3 || tenancy.source) && [tenancy.propertyLinkKnowledge, tenancy.unitLinkKnowledge, tenancy.primaryPersonLinkKnowledge, unit.propertyLinkKnowledge].some(value => value !== "manual" && value !== "exact")) throw new RentOpsInvariantError("Payment tenancy links are unverified");
       const payment: RentOpsLedgerTransaction = { id: input.id, propertyId: tenancy.propertyId, unitId: unit.id, tenancyId: tenancy.id, personId: tenancy.primaryPersonId,
         kind: "payment", category: input.category, categoryKnowledge: "manual", amountCents: input.amountCents, amountKnowledge: "known", status: "posted", statusKnowledge: "manual",
         postedOn: input.postedOn, postedOnKnowledge: "manual", description: input.description, descriptionKnowledge: "manual", paymentMethod: input.paymentMethod, paymentMethodKnowledge: "manual",
@@ -1764,7 +1764,7 @@ export class RentOpsService {
       for (const allocation of allocations) {
         const charge = snapshot.ledgerTransactions.find(row => row.id === allocation.chargeTransactionId);
         if (!charge || charge.kind !== "charge" || charge.status !== "posted" || charge.tenancyId !== tenancy.id || charge.propertyId !== tenancy.propertyId || charge.unitId && charge.unitId !== unit.id || charge.personId !== tenancy.primaryPersonId || charge.payer !== "tenant" || charge.amountCents === null || !Number.isSafeInteger(charge.amountCents) || charge.amountKnowledge === "unknown") throw new RentOpsInvariantError("Allocation requires an exact posted tenant charge");
-        if ((snapshot.modelVersion === 3 || charge.source) && [charge.propertyLinkKnowledge, ...(charge.unitId ? [charge.unitLinkKnowledge] : []), charge.tenancyLinkKnowledge, charge.personLinkKnowledge].some(value => value !== "manual" && value !== "exact")) throw new RentOpsInvariantError("Charge links need review");
+        if ((snapshot.modelVersion === 3 || charge.source) && [charge.propertyLinkKnowledge, ...(charge.unitId ? [charge.unitLinkKnowledge] : []), charge.tenancyLinkKnowledge, charge.personLinkKnowledge].some(value => value !== "manual" && value !== "exact")) throw new RentOpsInvariantError("Charge links are unverified");
         if (snapshot.paymentAllocations.some(row => row.chargeTransactionId === charge.id && (row.amountCents === null || row.amountKnowledge === "unknown"))) throw new RentOpsInvariantError("Charge has an allocation with an unknown amount; correct that allocation first.");
       }
       await repository.saveLedgerTransaction(payment);

@@ -107,9 +107,12 @@ test("missing base rent, uncertain deposits and HAP exceptions never display fal
   assert.equal(rent.displayRows[0].totalScheduledCents, null);
   const deposits = createReportViewModel("security-deposit", [{ totalHeldCents: 10000, unknownHeldCount: 1 }]);
   assert.equal(deposits.displayRows[0].totalHeldCents, null);
-  const hap = createReportViewModel("hap", [{ expectedTotalCents: 0, receivedAgencyCents: 5000, exception: true }]);
-  assert.equal(hap.displayRows[0].expectedTotalCents, null);
+  // HAP obligations come from the effective contract and stay visible on an
+  // exception row; only the receipt-dependent variance is withheld.
+  const hap = createReportViewModel("hap", [{ agencyObligationCents: 40000, expectedTotalCents: 120000, receivedAgencyCents: 5000, varianceCents: -35000, exception: true, uncertainty: true }]);
+  assert.equal(hap.displayRows[0].expectedTotalCents, 120000);
   assert.equal(hap.displayRows[0].receivedAgencyCents, 5000);
+  assert.equal(hap.displayRows[0].varianceCents, null);
 });
 
 test("all eleven reports have explicit columns and ledger running balance is not additive", () => {

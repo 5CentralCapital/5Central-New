@@ -616,6 +616,18 @@ export interface FinancialScheduleProjection {
   notApplicableCents: Cents;
   unassignedRowCount: number;
   exceptionCodes: string[];
+  /** Valid classification outcomes that are not billed this month. They are
+   * audit counts per property, not unresolved facts. */
+  dispositions: FinancialScheduleDisposition[];
+}
+
+export const SCHEDULE_DISPOSITION_CODES = ["schedule_not_applicable_vacant", "schedule_not_applicable_other_tenancy", "schedule_precedence_suppressed"] as const;
+export type FinancialScheduleDispositionCode = (typeof SCHEDULE_DISPOSITION_CODES)[number];
+
+export interface FinancialScheduleDisposition {
+  scheduleId: string;
+  propertyId: string | null;
+  code: FinancialScheduleDispositionCode;
 }
 
 function definitionKey(schedule: RentOpsRecurringChargeSchedule): string {
@@ -719,7 +731,8 @@ export function projectFinancialSchedules(
   const candidatesByDefinitionUnit = new Map<string, RentOpsRecurringChargeSchedule[]>();
   const propertySchedules = new Map<string, RentOpsRecurringChargeSchedule[]>();
   const unassignedSchedules: Array<{ schedule: RentOpsRecurringChargeSchedule; code: string }> = [];
-  const notApplicableSchedules: Array<{ schedule: RentOpsRecurringChargeSchedule; code: string }> = [];
+  const notApplicableSchedules: Array<{ schedule: RentOpsRecurringChargeSchedule; code: "schedule_not_applicable_vacant" | "schedule_not_applicable_other_tenancy" }> = [];
+  const dispositions: FinancialScheduleDisposition[] = [];
   let propertyOnceCount = 0;
 
   // Count unknown amounts once over the filtered input.  This is a diagnostic
@@ -885,6 +898,7 @@ export function projectFinancialSchedules(
       if (candidate.id === chosen.id) continue;
       mark(candidate, "suppressed");
       exceptions.add("schedule_precedence_suppressed");
+      dispositions.push({ scheduleId: candidate.id, propertyId: candidate.propertyId ?? null, code: "schedule_precedence_suppressed" });
     }
   }
 
@@ -915,6 +929,7 @@ export function projectFinancialSchedules(
     if (bucketById.get(schedule.id) !== "selected") continue;
     exceptions.add(code);
     mark(schedule, "not_applicable");
+    dispositions.push({ scheduleId: schedule.id, propertyId: schedule.propertyId ?? null, code });
   }
   // Any selected version not classified by assignment is conservative: keep
   // it once at the property level as unresolved, never silently drop it.
@@ -980,6 +995,7 @@ export function projectFinancialSchedules(
     notApplicableCents: centsBucket("not_applicable"),
     unassignedRowCount,
     exceptionCodes: Array.from(exceptions).sort(),
+    dispositions,
   };
 }
 

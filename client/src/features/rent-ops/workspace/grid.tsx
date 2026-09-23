@@ -1,10 +1,10 @@
 import * as React from "react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
-import { formatDate, formatLabel, formatMoney } from "./display";
-import { reviewLabelForCodes, UNVERIFIED_LABEL } from "@shared/review-cases/reasons";
 import {
   clampGridPage,
   DEFAULT_GRID_PAGE_SIZE,
+  gridCellText,
+  moneyColumn,
   filterGridRows,
   getGridPageCount,
   paginateGridRows,
@@ -15,14 +15,6 @@ import {
 } from "./grid-model";
 
 export type { GridColumn } from "./grid-model";
-
-/** Specific review label from the row's uncertainty codes; "Unverified" only when no code explains it. */
-function reviewLabelForRow(row: object | undefined): string {
-  const record = (row ?? {}) as Record<string, unknown>;
-  const codes = [record.balanceUncertaintyCodes, record.exceptionCodes, record.uncertaintyCodes]
-    .flatMap(value => Array.isArray(value) ? value.filter((code): code is string => typeof code === "string") : []);
-  return reviewLabelForCodes(codes);
-}
 
 export interface DataGridProps<T extends object> {
   rows: T[];
@@ -104,43 +96,6 @@ function defaultRowKey<T extends object>(row: T, index: number): string {
   const record = row as Record<string, unknown>;
   const candidate = record.id ?? record.key ?? record.uuid ?? record.recordId;
   return candidate === null || candidate === undefined || candidate === "" ? String(index) : String(candidate);
-}
-
-function identifierColumn(key: string): boolean {
-  return /^(?:id|uuid|key)$/i.test(key) || /(?:Id|Uuid|UUID|ID|Key)$/.test(key) || /(?:^|_)(?:id|uuid|key)$/i.test(key);
-}
-
-function dateColumn(key: string): boolean {
-  return /(?:On|At|Date)$/.test(key) || /(?:_on|_at|_date)$/.test(key);
-}
-
-function moneyColumn(key: string): boolean {
-  return key === "cents" || /Cents$/.test(key) || /_cents$/.test(key);
-}
-
-function labelColumn(key: string): boolean {
-  return /(?:status|state|type|category|readiness|listing|occupancy|frequency|role|relationship|kind|direction|availability|method|source|confidence)$/i.test(key);
-}
-
-function knowledgeCellValue(value: unknown): string | undefined {
-  if (value === "unknown" || value === "ambiguous" || value === "inferred") return UNVERIFIED_LABEL;
-  if (value === "manual") return "Entered manually";
-  if (value === "source" || value === "exact" || value === "confirmed" || value === "known") return "Known";
-  return undefined;
-}
-
-function defaultCellValue(key: string, value: unknown, row?: object): ReactNode {
-  // Technical identifiers belong in detail views, not in grid cells.
-  if (identifierColumn(key)) return "—";
-  if (moneyColumn(key)) return formatMoney(value);
-  if (dateColumn(key)) return formatDate(value);
-  if (value === null || value === undefined || value === "") return reviewLabelForRow(row);
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (/knowledge$/i.test(key)) return knowledgeCellValue(value) ?? formatLabel(value);
-  if (labelColumn(key)) return formatLabel(value);
-  if (Array.isArray(value)) return value.length ? value.map(formatLabel).join(", ") : "—";
-  if (typeof value === "object") return UNVERIFIED_LABEL;
-  return String(value);
 }
 
 function interactiveTarget(target: EventTarget | null): boolean {
@@ -353,7 +308,7 @@ export function DataGrid<T extends object>({
                         className={column.align === "right" || moneyColumn(column.key) ? "rm-amount" : undefined}
                         style={{ width: widthStyle(column.width), textAlign: column.align }}
                       >
-                        {column.render ? column.render(row) : defaultCellValue(column.key, value, row)}
+                        {column.render ? column.render(row) : gridCellText(column.key, value)}
                       </td>
                     );
                   })}

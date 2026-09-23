@@ -33,6 +33,35 @@ function dueReviewLabel(rows: Row[]): string {
   return reviewLabelForCodes(codes);
 }
 
+export interface DueSplit {
+  /** Sum of known positive balances. */
+  knownCents: number;
+  /** Accounts with a known amount due. */
+  knownCount: number;
+  /** Accounts whose balance is unresolved; never counted as due or as zero. */
+  unverifiedCount: number;
+}
+
+/** Separate accounts with a known amount due from accounts with an unresolved balance. */
+export function splitDueRows(rows: Row[]): DueSplit {
+  let knownCents = 0, knownCount = 0, unverifiedCount = 0;
+  for (const row of rows) {
+    const value = row.operationalBalanceCents;
+    if (!isCents(value)) { unverifiedCount += 1; continue; }
+    if (value > 0) { knownCents += value; knownCount += 1; }
+  }
+  return { knownCents, knownCount, unverifiedCount };
+}
+
+function dueDetail(split: DueSplit, rows: Row[]): string {
+  if (!split.knownCount && !split.unverifiedCount) return "No open balances";
+  const reason = dueReviewLabel(rows);
+  const unverified = `Unverified balances: ${split.unverifiedCount}${reason && reason !== UNVERIFIED_LABEL ? ` (${reason})` : ""}`;
+  if (!split.knownCount) return unverified;
+  const known = `across ${split.knownCount} account${split.knownCount === 1 ? "" : "s"}`;
+  return split.unverifiedCount ? `${known} · ${unverified}` : known;
+}
+
 function sum(rows: Row[] | undefined, key: string): number | undefined {
   if (!rows) return undefined;
   let total = 0;
@@ -96,19 +125,18 @@ export function dashboardKpis(input: {
         ...(rentTotal !== undefined && rentTotal > 0 && rent.tone === "normal" ? { share: Math.min(1, receiptTotal / rentTotal) } : {}),
       };
 
-  const dueTotal = sum(dueRows, "operationalBalanceCents");
-  const accounts = dueRows?.length ?? 0;
-  const due: DashboardKpi = !dueRows
+  const dueSplit = dueRows ? splitDueRows(dueRows) : undefined;
+  const due: DashboardKpi = !dueRows || !dueSplit
     ? { key: "due", label: "Balances due", value: REVIEW, detail: "Delinquency not loaded", tone: "review" }
-    : dueTotal === undefined
-      ? { key: "due", label: "Balances due", value: REVIEW, detail: `${dueReviewLabel(dueRows)} · ${accounts} account${accounts === 1 ? "" : "s"}`, tone: "review" }
-      : {
-          key: "due",
-          label: "Balances due",
-          value: formatWholeDollars(dueTotal),
-          detail: accounts ? `${accounts} account${accounts === 1 ? "" : "s"}` : "No open balances",
-          tone: dueTotal > 0 ? "attention" : "normal",
-        };
+    : {
+        key: "due",
+        label: "Balances due",
+        // With no known amount due and some unverified balances the total is
+        // unknown, never "$0".
+        value: dueSplit.knownCount === 0 && dueSplit.unverifiedCount > 0 ? REVIEW : formatWholeDollars(dueSplit.knownCents),
+        detail: dueDetail(dueSplit, dueRows),
+        tone: dueSplit.unverifiedCount ? "review" : dueSplit.knownCents > 0 ? "attention" : "normal",
+      };
 
   return [occupancy, rent, collected, due];
 }

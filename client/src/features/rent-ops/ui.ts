@@ -62,3 +62,14 @@ export function balanceMetric(value: number | null, complete?: boolean): { amoun
   if (complete === false || value === null) return { amountCents: null };
   return { amountCents: value, tone: value ? "warn" : "good" };
 }
+
+/** Specific dashboard statements; counts that are unknown are not guessed. */
+export function unverifiedBalanceMessage(count: number | undefined): string {
+  if (count === undefined) return "Some balances are unverified because the account history is incomplete.";
+  return `${count} ${count === 1 ? "balance is" : "balances are"} unverified because the account history is incomplete.`;
+}
+
+export function unconfirmedScheduleMessage(count: number | undefined): string {
+  if (count === undefined) return "Some schedules are missing a confirmed amount, category or date.";
+  return `${count} ${count === 1 ? "schedule is" : "schedules are"} missing a confirmed amount, category or date.`;
+}

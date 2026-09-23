@@ -49,6 +49,9 @@ export interface ApiFilters {
 export interface DashboardSummary {
   operationalDelinquencyCents?: number | null;
   operationalBalanceUnresolvedCount?: number;
+  /** Accounts with a known positive balance, separate from unresolved ones. */
+  operationalBalanceDueCount?: number;
+  operationalBalanceDueKnownCents?: number;
   balanceUnresolvedCount?: number;
   balanceComplete?: boolean;
   balanceUncertaintyCodes?: string[];
@@ -759,6 +762,13 @@ export interface ScheduledVsCollectedRow {
   collectedKnownCents?: number | null;
   collectedUncertainCents?: number | null;
   collectedUnknownAmountCount?: number | null;
+  /** Audit counts: valid outcomes that do not make the property incomplete. */
+  scheduleNotApplicableVacantCount?: number;
+  scheduleNotApplicableOtherTenancyCount?: number;
+  schedulePrecedenceSuppressedCount?: number;
+  /** The as-of date both sides were pinned to, and how schedules were selected. */
+  asOfDate?: string;
+  scheduleBasis?: "as_of" | "month_forecast";
   complete?: boolean | null;
   uncertaintyCodes?: string[];
 }
@@ -820,6 +830,8 @@ export interface DepositLiabilityRow {
   totalHeldCents?: number | null;
   sourceBalanceCents?: number | null;
   unknownHeldCount?: number;
+  typeUnknownCount?: number;
+  unitLinkStatus?: "direct" | "tenancy" | "missing" | "conflict";
   dispositionStatus?: string;
   unknownReceiptCount?: number;
   hasUnknownReceiptDate?: boolean;
@@ -851,9 +863,17 @@ export interface HapRow {
   agencyObligationCents?: number;
   tenantObligationCents?: number;
   expectedTotalCents?: number;
-  receivedAgencyCents?: number;
-  varianceCents?: number;
+  obligationSource?: "contract" | "subsidy_tenant";
+  /** Null when any agency receipt fact is unresolved. */
+  receivedAgencyCents?: number | null;
+  receivedAgencyKnownCents?: number;
+  agencyReceiptStatus?: "received" | "none_received" | "unknown";
+  varianceCents?: number | null;
   exception?: boolean;
+  receiptCount?: number;
+  unknownReceiptCount?: number;
+  uncertainty?: boolean;
+  uncertaintyCodes?: string[];
 }
 
 export type ReportRow =

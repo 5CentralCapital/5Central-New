@@ -60,6 +60,6 @@ export function PropertyRecurringPanel({ snapshot, property, unit, asOfDate, rea
     <div className="rm-toolbar"><label>Show<select value={view} onChange={event => setView(event.target.value as RecurringRegisterView)}>{views.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
     {metadata.error ? <div className="rm-error" role="alert">Current charge classifications are unavailable. <button className="rm-button" onClick={() => void metadata.refetch()}>Try again</button></div>
       : !metadata.data || metadata.data.asOfDate !== asOfDate ? <p role="status">Loading current charge classifications…</p>
-      : <>{!metadata.data.complete && <p role="status">Current charges include only confirmed schedules. All schedules includes records needing review.</p>}<DataGrid rows={rows} columns={columns} getRowKey={row => row.key} emptyMessage="No recurring charges match this view." caption={unit ? 'Recurring charges for this unit' : 'Recurring charges at this property'} storageKey={unit ? 'rm-unit-recurring-v2' : 'rm-property-recurring-v2'} /></>}
+      : <>{!metadata.data.complete && <p role="status">Current charges include only confirmed schedules. All schedules also lists unconfirmed schedules.</p>}<DataGrid rows={rows} columns={columns} getRowKey={row => row.key} emptyMessage="No recurring charges match this view." caption={unit ? 'Recurring charges for this unit' : 'Recurring charges at this property'} storageKey={unit ? 'rm-unit-recurring-v2' : 'rm-property-recurring-v2'} /></>}
   </section>;
 }

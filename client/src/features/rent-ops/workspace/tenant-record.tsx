@@ -1,4 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { activityDisplay } from "./activity-display";
 import { rentOpsAuthClient } from "../auth";
 import { ChargeEditDialog } from "./charge-edit-dialog";
 import { PaymentEditDialog } from "./payment-edit-dialog";
@@ -401,7 +402,7 @@ function DocumentsTab({ tenant, snapshot, onChanged }: { tenant: TenantView; sna
 function ActivityTab({ tenant, onEdit, editActions }: { tenant: TenantView; onEdit: EditAction; editActions: TenantEditAction[] }) {
   const rows = [...(tenant.activity ?? [])].sort((left, right) => String(right.occurredAt ?? "").localeCompare(String(left.occurredAt ?? "")));
   return <div className="rm-tenant-tab-content"><Panel title="Activity">
-    {rows.length === 0 ? <Empty message="No activity is linked to this tenant." /> : <div className="rm-activity-list">{rows.map((event, index) => <article className="rm-activity-item" key={event.id ?? `activity-${index}`}><div className="rm-activity-meta"><span>{formatDate(event.occurredAt)}</span>{statusValue(event.type, !event.type)}</div><div><strong>{text(event.summary)}</strong><p>{valueOrDash(event.detail)}</p><small>{event.actor ? `By ${event.actor}` : "Actor unverified"}</small></div></article>)}</div>}
+    {rows.length === 0 ? <Empty message="No activity is linked to this tenant." /> : <div className="rm-activity-list">{rows.map((event, index) => { const shown = activityDisplay(event); return <article className="rm-activity-item" key={event.id ?? `activity-${index}`}><div className="rm-activity-meta"><span>{formatDate(event.occurredAt)}</span>{shown.typeKnown ? statusValue(event.type ?? undefined) : <span className="rm-muted">{shown.type}</span>}</div><div><strong>{shown.title}</strong>{shown.body && <p>{shown.body}</p>}<small>{shown.actor}</small></div></article>; })}</div>}
   </Panel></div>;
 }
 

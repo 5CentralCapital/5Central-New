@@ -92,6 +92,10 @@ function value(record: Raw, ...keys: string[]): unknown {
   return undefined;
 }
 
+function isRecordValue(candidate: unknown): candidate is Raw {
+  return typeof candidate === "object" && candidate !== null && !Array.isArray(candidate);
+}
+
 function text(record: Raw, ...keys: string[]): string | undefined {
   const found = value(record, ...keys);
   if (found === undefined) return undefined;
@@ -690,13 +694,61 @@ function normalizeLedger(record: Raw, collection: string, tenants: Map<string, R
   return normalized;
 }
 
+/** Activity kind from the RM collection the row came from; tenant History rows carry no kind. */
+const HISTORY_COLLECTION_TYPES: ReadonlyArray<[RegExp, string]> = [
+  [/^historyNotes$/i, "note"],
+  [/^historyCalls$/i, "call"],
+  [/^historySystemNotes$/i, "system"],
+  [/^(?:historyEmails|emailSentItems|emailChains)$/i, "email"],
+  [/^(?:outgoingTexts|incomingTexts|textMessagingConversations)$/i, "text"],
+];
+
+/** Exact RM type/category words that name one of the supported activity kinds. */
+function historyTypeFromSourceValue(raw: string | undefined): string | undefined {
+  const value = raw?.trim().toLowerCase().replace(/[\s_-]+/g, " ");
+  if (!value) return undefined;
+  if (value === "note" || value === "notes" || value === "history note") return "note";
+  if (value === "call" || value === "phone call" || value === "history call") return "call";
+  if (value === "email" || value === "e mail" || value === "history email") return "email";
+  if (value === "text" || value === "text message" || value === "sms") return "text";
+  if (value === "system" || value === "system note" || value === "history system note") return "system";
+  if (value === "notice") return "notice";
+  return undefined;
+}
+
+/** A display name from an embedded RM user object; numeric user IDs are never a name. */
+function embeddedUserName(record: Raw, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const candidate = record[key];
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const user = candidate as Raw;
+    const name = text(user, "Name", "DisplayName", "FullName") ?? ([text(user, "FirstName"), text(user, "LastName")].filter(Boolean).join(" ") || undefined) ?? text(user, "UserName");
+    if (name) return name;
+  }
+  return undefined;
+}
+
 function normalizeHistory(record: Raw, tenants: Map<string, Raw>, properties: Map<string, Raw>, units: Map<string, Raw>, exceptions: NormalizationException[]): Raw {
   const normalized = augment(record, ["HistoryID", "HistoryNoteID", "HistoryEmailID", "EmailSentItemID", "EmailChainID", "OutgoingTextID", "IncomingTextID", "TextID", "ConversationID"], {
     occurredAt: ["OccurredAt", "Date", "HistoryDate"],
     summary: ["Subject", "Summary", "Description"],
-    detail: ["Body", "Notes", "Description"],
+    // RM History and HistoryNotes carry the body as Note; texts as Message.
+    detail: ["Body", "Note", "Notes", "Message", "MessageText", "Description"],
   }, undefined, "activity");
   const sourceCollection = text(normalized, "sourceCollection") ?? "";
+  if (normalized.activityType === undefined) {
+    const explicit = historyTypeFromSourceValue(text(normalized, "HistoryType", "Type", "ActivityType"))
+      ?? historyTypeFromSourceValue(isRecordValue(normalized.HistoryCategory) ? text(normalized.HistoryCategory as Raw, "Name", "Description") : text(normalized, "HistoryCategoryName"));
+    const fromCollection = HISTORY_COLLECTION_TYPES.find(([pattern]) => pattern.test(sourceCollection))?.[1];
+    const type = explicit ?? fromCollection;
+    if (type) normalized.activityType = type;
+  }
+  if (normalized.actor === undefined) {
+    const actor = text(normalized, "CreateUserName", "CreatedByName", "SentUserName", "UserName") ?? embeddedUserName(normalized, "CreateUser", "CreatedBy", "SentUser", "User");
+    if (actor) normalized.actor = actor;
+  }
+  // A body identical to the title is one fact, not two.
+  if (normalized.detail !== undefined && normalized.summary !== undefined && String(normalized.detail).trim() === String(normalized.summary).trim()) delete normalized.detail;
   const requestTenantParent = /^tenantHistory\.(?:current|future|former)$/i.test(sourceCollection)
     ? text(normalized, "_parentSourceId", "parentSourceId")
     : undefined;
