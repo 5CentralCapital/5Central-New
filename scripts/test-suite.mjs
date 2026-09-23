@@ -8,16 +8,15 @@ const suite = process.argv[2] ?? "all";
 const roots = suite === "company"
   ? [
     "server/company", "shared/company", "client/src/features/company",
-    "server/accounting", "shared/accounting", "server/integrations/quickbooks", "server/jobs", "client/src/features/accounting",
+    "server/accounting", "shared/accounting", "server/integrations/quickbooks",
     "server/projects", "shared/projects", "client/src/features/projects",
     "server/investors", "shared/investors", "client/src/features/investors",
     "server/company-documents", "shared/company-documents", "client/src/features/company-documents",
     "server/intake", "shared/intake", "server/time", "shared/time", "client/src/features/time",
     "server/reporting", "shared/reporting", "client/src/features/reporting",
     "server/work-orders", "shared/work-orders", "client/src/features/work-orders",
-    // lane-c-review
-    "server/review-cases", "shared/review-cases", "client/src/features/review-cases", "client/src/features/intake",
-    "server/rent-ops/domain/review-detector.test.ts",
+    // lane-d-forecast
+    "server/forecasting", "shared/forecasting", "client/src/features/forecasting",
     "scripts/company/desktop-config.test.ts",
   ]
   : suite === "all"

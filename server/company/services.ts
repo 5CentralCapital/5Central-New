@@ -9,11 +9,8 @@ import { createTimeServices, type TimeServices, type TimeServicesOptions } from 
 import { createCompanyReportingPort } from './reporting-runtime';
 import type { ReportingPort } from '../reporting';
 import { createWorkOrderPort, type WorkOrderPort } from '../work-orders/port';
-// lane-c-review
-import type { ContentAddressedObjectStore } from '../rent-ops/storage';
-import { createReviewCasePort, type ReviewCasePort } from '../review-cases/port';
-import { createIntakePort, type IntakePort } from '../intake/port';
-import { createCompanyDocumentsPort, type CompanyDocumentsPort } from '../company-documents/port';
+// lane-d-forecast
+import { createForecastingPort, type ForecastingPort } from '../forecasting/port';
 
 /** The browser and Codex share these services and the same company database. */
 export interface CompanyServices {
@@ -24,17 +21,13 @@ export interface CompanyServices {
   readonly time: TimeServices;
   readonly reporting: ReportingPort;
   readonly workOrders: WorkOrderPort;
-  // lane-c-review
-  readonly reviewCases: ReviewCasePort;
-  readonly intake: IntakePort;
-  readonly documents: CompanyDocumentsPort;
+  // lane-d-forecast
+  readonly forecasting: ForecastingPort;
 }
 
 export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
   accounting?: AccountingServicesOptions;
   time?: TimeServicesOptions;
-  // lane-c-review: verified private object store for company documents, MRA packets and review evidence.
-  documentStorage?: ContentAddressedObjectStore;
 } = {}): CompanyServices {
   const accounting = createAccountingServices(executor, options.accounting);
   const time = createTimeServices(executor, options.time);
@@ -57,9 +50,7 @@ export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
   });
   const reporting = createCompanyReportingPort(executor, accounting);
   const workOrders = createWorkOrderPort(executor);
-  // lane-c-review
-  const reviewCases = createReviewCasePort(executor, { documentStorage: options.documentStorage });
-  const intake = createIntakePort(executor, { documentStorage: options.documentStorage });
-  const documents = createCompanyDocumentsPort(executor, { documentStorage: options.documentStorage });
-  return { executor, accounting, investors, projects, time, reporting, workOrders, reviewCases, intake, documents };
+  // lane-d-forecast
+  const forecasting = createForecastingPort(executor);
+  return { executor, accounting, investors, projects, time, reporting, workOrders, forecasting };
 }

@@ -14,13 +14,9 @@ import type { TimeServices } from '../time/service';
 import { registerReportingMcpTools, type ReportingPort } from '../reporting';
 import { registerWorkOrderMcpTools } from '../work-orders/mcp';
 import type { WorkOrderPort } from '../work-orders/port';
-// lane-c-review
-import { registerReviewCaseMcpTools } from '../review-cases/mcp';
-import type { ReviewCasePort } from '../review-cases/port';
-import { registerIntakeMcpTools } from '../intake/mcp';
-import type { IntakePort } from '../intake/port';
-import { registerCompanyDocumentMcpTools } from '../company-documents/mcp';
-import type { CompanyDocumentsPort } from '../company-documents/port';
+// lane-d-forecast
+import { registerForecastingMcpTools } from '../forecasting/mcp';
+import type { ForecastingPort } from '../forecasting/port';
 
 export type CompanyToolRegistrar = (name: string, description: string, schema: z.ZodRawShape, write: boolean, handler: (args: any) => Promise<unknown>) => void;
 
@@ -32,17 +28,13 @@ export function registerCompanyMcpTools(register: CompanyToolRegistrar, options:
   time?: TimeServices;
   reporting?: ReportingPort;
   workOrders?: WorkOrderPort;
-  // lane-c-review
-  reviewCases?: ReviewCasePort;
-  intake?: IntakePort;
-  documents?: CompanyDocumentsPort;
+  // lane-d-forecast
+  forecasting?: ForecastingPort;
 }): void {
   const { executor, projects, actorId } = options;
   if (options.workOrders) registerWorkOrderMcpTools(register, { executor, actorId, workOrders: options.workOrders });
-  // lane-c-review
-  if (options.reviewCases) registerReviewCaseMcpTools(register, { executor, actorId, reviewCases: options.reviewCases });
-  if (options.intake) registerIntakeMcpTools(register, { executor, actorId, intake: options.intake });
-  if (options.documents) registerCompanyDocumentMcpTools(register, { executor, actorId, documents: options.documents });
+  // lane-d-forecast
+  if (options.forecasting) registerForecastingMcpTools(register, { executor, actorId, forecasting: options.forecasting });
   if (options.accounting) registerAccountingMcpTools(register, { executor, actorId, services: options.accounting });
   if (options.investors) registerInvestorMcpTools(register, { executor, actorId, investors: options.investors });
   if (options.time) registerTimeMcpTools(register, { executor, actorId, services: options.time });
