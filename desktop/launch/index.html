@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src https:; img-src data:">
+<title>5Central Ops</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f4ef; --ink:#1d1d1f; --muted:#6e6e73; --fill:rgb(58 50 38/6%); --fill2:rgb(58 50 38/10%); --gold:#d4a843; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1e1e1c; --ink:#f5f5f7; --muted:#a1a1a6; --fill:rgb(255 255 255/8%); --fill2:rgb(255 255 255/13%); } }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { display: grid; place-items: center; background: var(--bg); color: var(--ink);
+    font: 400 14px/20px -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, system-ui, sans-serif; -webkit-font-smoothing: antialiased; user-select: none; -webkit-user-select: none; }
+  main { display: grid; justify-items: center; gap: 14px; padding: 24px; text-align: center; max-width: 420px; }
+  .mark { width: 56px; height: 56px; }
+  h1 { margin: 6px 0 0; font: 600 20px/25px -apple-system, BlinkMacSystemFont, "SF Pro Display", Inter, sans-serif; letter-spacing: -.018em; }
+  p { margin: 0; color: var(--muted); text-wrap: balance; }
+  .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--fill2); border-top-color: var(--muted); animation: spin .8s linear infinite; }
+  button { min-height: 36px; padding: 0 16px; border: 0; border-radius: 10px; background: var(--fill); color: var(--ink); font: 500 13px/1 inherit; cursor: default; }
+  button:hover { background: var(--fill2); }
+  button:focus-visible { outline: none; box-shadow: 0 0 0 3px rgb(212 168 67 / 45%); }
+  #offline { display: grid; justify-items: center; gap: 6px; }
+  #offline .actions { margin-top: 18px; }
+  #detail { max-width: 300px; line-height: 1.45; }
+  [hidden] { display: none !important; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+</style>
+</head>
+<body>
+<main>
+  <svg class="mark" viewBox="272 200 480 600" aria-hidden="true">
+    <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ecc96f"/><stop offset="1" stop-color="#c3922c"/></linearGradient></defs>
+    <g fill="url(#g)">
+      <rect x="300" y="520" width="112" height="222" rx="14"/>
+      <path d="M444 742 V372 a14 14 0 0 1 14 -14 H472 V310 a10 10 0 0 1 10 -10 H500 V214 a12 12 0 0 1 24 0 V300 H542 a10 10 0 0 1 10 10 V358 H566 a14 14 0 0 1 14 14 V742 Z"/>
+      <rect x="612" y="440" width="112" height="302" rx="14"/>
+      <rect x="272" y="760" width="480" height="28" rx="14"/>
+    </g>
+  </svg>
+  <section id="connecting" aria-live="polite">
+    <div class="spinner" role="status" aria-label="Connecting"></div>
+  </section>
+  <section id="offline" hidden aria-live="polite">
+    <h1>Can't reach 5Central Ops</h1>
+    <p id="detail">Check your connection. 5Central Ops will try again automatically.</p>
+    <p class="actions"><button id="retry" type="button">Try Again</button></p>
+  </section>
+</main>
+<script>
+(() => {
+  const target = window.__ROPS_TARGET__ || "https://5central.capital/ops";
+  const connecting = document.getElementById("connecting");
+  const offline = document.getElementById("offline");
+  let timer;
+
+  async function reachable() {
+    const controller = new AbortController();
+    const abort = setTimeout(() => controller.abort(), 8000);
+    try {
+      // Opaque no-cors request: proves the host answers without reading anything.
+      await fetch(target, { mode: "no-cors", cache: "no-store", credentials: "omit", signal: controller.signal });
+      return true;
+    } catch { return false; }
+    finally { clearTimeout(abort); }
+  }
+
+  async function attempt() {
+    clearTimeout(timer);
+    connecting.hidden = false; offline.hidden = true;
+    if (navigator.onLine !== false && await reachable()) { window.location.replace(target); return; }
+    connecting.hidden = true; offline.hidden = false;
+    timer = setTimeout(attempt, 10000);
+  }
+
+  document.getElementById("retry").addEventListener("click", attempt);
+  window.addEventListener("online", attempt);
+  attempt();
+})();
+</script>
+</body>
+</html>
