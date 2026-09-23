@@ -1,12 +1,10 @@
 import { lazy, Suspense } from "react";
-import { useQuery } from "@tanstack/react-query";
-import type { CompanyContext } from "@shared/company/context";
-import { rentOpsAuthClient } from "../rent-ops/auth";
+import { useCompanyContext } from "../workspaces/page";
 
 const ReportingWorkspace = lazy(() => import("./workspace").then(module => ({ default: module.ReportingWorkspace })));
 
 export function ReportingEntry({ identity, organizationId, reportId, presetId, onNavigate, onOpenLegacy }: { identity: string; organizationId?: string; reportId?: string; presetId?: string; onNavigate?: (organizationId: string, reportId?: string) => void; onOpenLegacy?: (reportId: string) => void }) {
-  const context = useQuery({ queryKey: ["rent-ops-workspace", "company-context", identity], queryFn: async ({ signal }): Promise<CompanyContext> => { const response = await rentOpsAuthClient.request("/api/company/context", { signal }); if (!response.ok) throw new Error("Company records could not be loaded."); return response.json(); }, staleTime: 30_000, retry: false });
+  const context = useCompanyContext(identity);
   if (context.isLoading) return <div className="reporting-state" role="status">Loading reports…</div>;
   if (context.error) return <div className="reporting-state reporting-error" role="alert">{context.error instanceof Error ? context.error.message : "Company records could not be loaded."}</div>;
   const organizations = context.data?.organizations ?? [];

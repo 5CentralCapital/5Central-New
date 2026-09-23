@@ -1,10 +1,9 @@
 import React from "react";
+import { useCompanyContext } from "../workspaces/page";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle } from "lucide-react";
-import type { CompanyContext } from "@shared/company/context";
 import { FORECAST_SCENARIO_KIND_LABELS, type ForecastCommandKind, type ForecastRunSource } from "@shared/forecasting/contracts";
-import { rentOpsAuthClient } from "../rent-ops/auth";
 import { PendingEnvelopes } from "../work-orders/pending";
 import { ForecastApiError, forecastApi, forecastEnvelope, type ForecastCommandEnvelope, type ForecastRunView } from "./api";
 import { AssumptionsView } from "./assumptions-editor";
@@ -180,15 +179,7 @@ export function ForecastingEntry({ identity, organizationId, location, onNavigat
   location: ForecastingLocation;
   onNavigate: (location: ForecastingLocation, options: ForecastingNavigation) => void;
 }) {
-  const context = useQuery({
-    queryKey: ["rent-ops-workspace", "company-context", identity],
-    queryFn: async ({ signal }): Promise<CompanyContext> => {
-      const response = await rentOpsAuthClient.request("/api/company/context", { signal });
-      if (!response.ok) throw new Error("Company records could not be loaded.");
-      return response.json();
-    },
-    staleTime: 30_000, retry: false,
-  });
+  const context = useCompanyContext(identity);
   const [chosen, setChosen] = useState<string | undefined>(organizationId);
   if (context.error) return <div className="rm-notice" role="alert">{context.error.message} <button type="button" className="rm-button" onClick={() => void context.refetch()}>Try Again</button></div>;
   if (!context.data) return <div className="rm-empty" role="status">Loading forecasts…</div>;

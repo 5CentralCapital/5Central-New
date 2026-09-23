@@ -1,22 +1,11 @@
 import { lazy, Suspense } from "react";
-import { useQuery } from "@tanstack/react-query";
-import type { CompanyContext } from "@shared/company/context";
-import { rentOpsAuthClient } from "../rent-ops/auth";
+import { useCompanyContext } from "../workspaces/page";
 import type { AccountingView, AccountingWorkspaceProps } from "./types";
 
 const AccountingWorkspace = lazy(() => import("./workspace").then(module => ({ default: module.AccountingWorkspace })));
 
 export function AccountingEntry({ identity, organizationId, onNavigate, view, onViewChange }: { readonly identity: string; readonly organizationId?: string; readonly onNavigate: (organizationId: string) => void; readonly view?: AccountingView; readonly onViewChange?: (view: AccountingView) => void }) {
-  const context = useQuery({
-    queryKey: ["rent-ops-workspace", "company-context", identity],
-    queryFn: async ({ signal }): Promise<CompanyContext> => {
-      const response = await rentOpsAuthClient.request("/api/company/context", { signal });
-      if (!response.ok) throw new Error("Company records could not be loaded.");
-      return response.json();
-    },
-    staleTime: 30_000,
-    retry: false,
-  });
+  const context = useCompanyContext(identity);
   if (context.error) return <div className="rm-notice" role="alert">{context.error.message} <button className="rm-button" onClick={() => void context.refetch()}>Retry</button></div>;
   if (!context.data) return <div className="rm-empty" role="status">Loading accounting…</div>;
   const organizations = context.data.organizations;
