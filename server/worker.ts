@@ -2,13 +2,14 @@ import "dotenv/config";
 import { createAccountingServices } from "./accounting";
 import { createAccountingJobHandlers, qboPeriodicSyncJobs } from "./accounting/worker-handlers";
 import { createSystemJobHandlers, systemPeriodicJobs } from "./jobs/system-handlers";
+import { createReviewJobHandlers, reviewPeriodicJobs } from "./review-cases/worker";
 import { createWorkerRuntime, newWorkerId, type JobLogger } from "./jobs/worker-runtime";
 import { createRentOpsRuntimeDatabase, type RentOpsRuntimeDatabase } from "./rent-ops/runtime-database";
 
 /*
  * 5Central Ops background worker: a separate process that runs durable jobs
  * (QuickBooks sync, webhook object fetches, reconciled writes, outbox
- * dispatch and lease reaping). It never depends on a web request, and it
+ * dispatch, lease reaping and daily review-case detection). It never depends on a web request, and it
  * stops cleanly on SIGTERM by finishing or releasing its leased jobs.
  */
 
@@ -41,8 +42,8 @@ async function main(): Promise<void> {
     batchSize: positiveInteger(process.env.WORKER_BATCH_SIZE, 4, 10),
     pollIntervalMs: positiveInteger(process.env.WORKER_POLL_MS, 1_000, 60_000),
     maxIdleIntervalMs: positiveInteger(process.env.WORKER_MAX_IDLE_MS, 15_000, 300_000),
-    handlers: { ...createSystemJobHandlers(), ...createAccountingJobHandlers({ services }) },
-    periodic: [...systemPeriodicJobs(), ...qboPeriodicSyncJobs({ executor, services })],
+    handlers: { ...createSystemJobHandlers(), ...createAccountingJobHandlers({ services }), ...createReviewJobHandlers({ executor }) },
+    periodic: [...systemPeriodicJobs(), ...qboPeriodicSyncJobs({ executor, services }), ...reviewPeriodicJobs({ executor })],
     logger,
   });
   let stopping = false;

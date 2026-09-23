@@ -119,7 +119,9 @@ test('configuration tools enforce revisions, strict patches and write scopes',as
   }
  }finally{await ctx.close();}
  const readonly=await connect([READ_SCOPE]);try{
-  const tools=await readonly.client.listTools();for(const tool of tools.tools.filter(t=>t.annotations?.readOnlyHint===false))assert.equal(tool.annotations?.idempotentHint,false);
+  const tools=await readonly.client.listTools();for(const tool of tools.tools.filter(t=>t.annotations?.readOnlyHint===false))assert.equal(tool.annotations?.idempotentHint,/^(record_manual_payment|create_recurring_schedule|create_charge_definition|replace_recurring_schedule|end_recurring_schedule|post_recurring_billing)$/.test(tool.name),tool.name);
+  for(const tool of tools.tools.filter(t=>t.annotations?.readOnlyHint===true)){assert.equal(tool.annotations?.idempotentHint,true);assert.equal(tool.annotations?.destructiveHint,false);}
+  assert.equal(tools.tools.find(t=>t.name==='update_unit')?.annotations?.destructiveHint,false);assert.equal(tools.tools.find(t=>t.name==='end_recurring_schedule')?.annotations?.destructiveHint,true);
   const row=(await readonly.service.snapshot()).units[0];assert.equal((await readonly.client.callTool({name:'update_unit',arguments:{id:row.id,revision:1,patch:{readiness:'off_market'}}})).isError,true);
  }finally{await readonly.close();}
 });
@@ -127,7 +129,7 @@ test('configuration tools enforce revisions, strict patches and write scopes',as
 test('recurring tools expose curated records and reject missing IDs or invalid successor amounts',async()=>{
  const ctx=await connect([READ_SCOPE,WRITE_SCOPE]);try{
   const snapshot=await ctx.service.snapshot();const propertyId=snapshot.properties[0].id;
-  for(const [name,args] of [['list_charge_definitions',{}],['list_recurring_schedules',{propertyId}]] as const){const result=await ctx.client.callTool({name,arguments:args});assert.notEqual(result.isError,true);const data=(result.structuredContent as any).data;assert.ok(Array.isArray(data));for(const row of data)assert.equal('source' in row,false);}
+  for(const [name,args] of [['list_charge_definitions',{}],['list_recurring_schedules',{propertyId}]] as const){const result=await ctx.client.callTool({name,arguments:args});assert.notEqual(result.isError,true);const data=(result.structuredContent as any).data;assert.ok(Array.isArray(data.rows));assert.equal(typeof data.page.totalRows,'number');for(const row of data.rows)assert.equal('source' in row,false);}
   assert.equal((await ctx.client.callTool({name:'get_recurring_schedule',arguments:{id:'missing'}})).isError,true);
   assert.equal((await ctx.client.callTool({name:'replace_recurring_schedule',arguments:{predecessorId:'missing',successorId:'qa:new',revision:1,effectiveFrom:'2026-10-01',amountCents:-1}})).isError,true);
   assert.equal((await ctx.client.callTool({name:'end_recurring_schedule',arguments:{predecessorId:'missing',successorId:'qa:new',revision:1,effectiveFrom:'2026-10-01'}})).isError,true);
@@ -178,4 +180,13 @@ test('optional account and billing adapters require write scopes and server-owne
   assert.equal((await ctx.client.callTool({name:'reissue_tenant_access',arguments:{id:'qa:account',credentialRevision:3}})).isError,true);
   assert.equal((await ctx.client.callTool({name:'post_recurring_billing',arguments:{month:'2026-09',scope:{},previewToken:'bad'}})).isError,true);
  }finally{await ctx.close();}
+});
+
+test('large row sets are paged with a stable cursor', async () => {
+  const { pageRows } = await import('./tools');
+  const rows = Array.from({ length: 450 }, (_, index) => ({ index }));
+  const first = pageRows(rows);
+  assert.equal(first.rows.length, 200); assert.equal(first.page.nextCursor, '200'); assert.equal(first.page.totalRows, 450);
+  const last = pageRows(rows, 200, '400');
+  assert.equal(last.rows.length, 50); assert.equal(last.page.nextCursor, null);
 });
