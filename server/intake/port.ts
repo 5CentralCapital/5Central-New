@@ -1,6 +1,6 @@
-import type { CompanyScope, OperationReceipt } from "../../shared/company";
+import { companyScopeSchema, type CompanyScope, type OperationReceipt } from "../../shared/company";
 import type { IntakeListQuery, IntakePage, MraIngestionActionName, MraPacketReadModel } from "../../shared/intake";
-import { loadAuthenticatedPrincipal, type AuthenticatedPrincipal, type TransportAttestation } from "../company/authorization";
+import { MRA_INGESTION_POLICY, authorizeCompanyRead, loadAuthenticatedPrincipal, type AuthenticatedPrincipal, type TransportAttestation } from "../company/authorization";
 import { ValidationCommandError } from "../company/commands/errors";
 import { PostgresRentOpsRepository, type RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { RentOpsService } from "../rent-ops/services/service";
@@ -35,15 +35,27 @@ export interface IntakePortOptions {
 
 const MAX_STAGE_BYTES = 50 * 1024 * 1024;
 
-async function readDocumentBytes(executor: RentOpsQueryExecutor, storage: ContentAddressedObjectStore | undefined, organizationId: string, documentId: string): Promise<{ bytes: Uint8Array; fileName: string; declaredContentType: string }> {
+async function readDocumentBytes(executor: RentOpsQueryExecutor, storage: ContentAddressedObjectStore | undefined, principal: AuthenticatedPrincipal, organizationId: string, documentId: string): Promise<{ bytes: Uint8Array; fileName: string; declaredContentType: string }> {
   if (!storage) throw new ValidationCommandError("The verified private document store is unavailable.", { reason: "document_storage_unconfigured" });
   const result = await executor.query<Record<string, unknown>>(
-    `SELECT file_name, declared_content_type, size_bytes, checksum_sha256, logical_key, immutable_generation, immutable_version
+    `SELECT file_name, declared_content_type, size_bytes, checksum_sha256, logical_key, immutable_generation, immutable_version, legal_entity_id, property_id
        FROM company_documents WHERE organization_id = $1 AND id = $2 AND state = 'verified'`,
     [organizationId, documentId],
   );
   const row = result.rows[0];
-  if (!row) throw new ValidationCommandError("The source document is not a verified company document in this company.", { reason: "source_document_missing" });
+  const missing = () => new ValidationCommandError("The source document is not a verified company document in this company.", { reason: "source_document_missing" });
+  if (!row) throw missing();
+  // The parsed packet becomes readable to the stager, so the stager must be
+  // able to read the source document's own entity/property scope.
+  try {
+    authorizeCompanyRead(principal, companyScopeSchema.parse({
+      organizationId,
+      ...(row.legal_entity_id ? { legalEntityId: String(row.legal_entity_id) } : {}),
+      ...(row.legal_entity_id && row.property_id ? { propertyId: String(row.property_id) } : {}),
+    }), MRA_INGESTION_POLICY.allowedRoles);
+  } catch {
+    throw missing();
+  }
   const opened = await storage.openVerified(String(row.logical_key), {
     ...(row.immutable_generation ? { immutableGeneration: String(row.immutable_generation) } : {}),
     ...(row.immutable_version ? { immutableVersion: String(row.immutable_version) } : {}),
@@ -91,7 +103,7 @@ export function createIntakePort(executor: RentOpsQueryExecutor, options: Intake
       let fileName = String(envelope.payload.fileName ?? "");
       let declaredContentType = String(envelope.payload.declaredContentType ?? "");
       if (source.documentId !== undefined) {
-        const document = await readDocumentBytes(executor, options.documentStorage, envelope.scope.organizationId, source.documentId);
+        const document = await readDocumentBytes(executor, options.documentStorage, access.principal, envelope.scope.organizationId, source.documentId);
         bytes = document.bytes; fileName = fileName || document.fileName; declaredContentType = declaredContentType || document.declaredContentType;
       } else {
         bytes = source.bytes!;

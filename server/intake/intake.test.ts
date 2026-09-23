@@ -191,6 +191,27 @@ test("a packet can be staged from an existing verified company document", async 
   } finally { await fixture.close(); }
 });
 
+test("a packet cannot be staged from a document in a legal entity the stager cannot read", async () => {
+  const { fixture, db, runtime, storage, intake, principalFor } = await setup();
+  try {
+    const otherEntityId = "20000000-0000-4000-8000-000000000002";
+    await db.query("INSERT INTO company_legal_entities(id,organization_id,name,entity_type,currency) VALUES ($1,$2,'Other Property LLC','llc','USD')", [otherEntityId, organizationId]);
+    const documents = createCompanyDocumentsPort(runtime, { documentStorage: storage });
+    const principal = await principalFor();
+    const input = { context: { organizationId, legalEntityId: otherEntityId }, kind: "other" as const, title: "Other entity owner packet", tags: [], links: [] };
+    const staged = await documents.prepareUpload(principal, input, { bytes: packetBytes([line("tx-other-1", "acct-1", "42.00")]), fileName: "other-packet.json", declaredContentType: "application/json" });
+    await documents.execute("company_document.create", { operationId: randomUUID(), idempotencyKey: `doc:${randomUUID()}`, scope: { organizationId, legalEntityId: otherEntityId }, payload: { action: "create", stageId: staged.stageId, input } },
+      { principal, transport: attestTransport("web"), resolvePrincipal: tx => principalFor(tx) });
+    const restrictedActor = "entity-one-operator";
+    await db.query("INSERT INTO company_access_grants(id,organization_id,actor_id,role,legal_entity_id) VALUES ('40000000-0000-4000-8000-000000000055',$1,$2,'admin',$3)", [organizationId, restrictedActor, SYNTHETIC_COMPANY.entityId]);
+    const restrictedFor = (connection: RentOpsQueryExecutor = runtime) => loadAuthenticatedPrincipal(connection, { actorId: restrictedActor, organizationId, role: "admin" });
+    const restricted = { principal: await restrictedFor(), transport: codex, resolvePrincipal: (tx: RentOpsQueryExecutor) => restrictedFor(tx) };
+    await commandError(intake.stage(envelope({ action: "stage", fileName: "other-packet.json", declaredContentType: "application/json" }), { documentId: staged.document.id }, restricted), 400, "source_document_missing");
+    const packets = await db.query<{ count: number }>("SELECT count(*)::int AS count FROM company_intake_packets");
+    assert.equal(packets.rows[0]?.count, 0);
+  } finally { await fixture.close(); }
+});
+
 async function stageMapPreview(intake: Awaited<ReturnType<typeof setup>>["intake"], access: Awaited<ReturnType<typeof setup>>["access"], principalFor: Awaited<ReturnType<typeof setup>>["principalFor"], bytes: Uint8Array, fileName: string) {
   const staged = await intake.stage(envelope({ action: "stage", fileName, declaredContentType: "application/json" }), { bytes }, await access());
   const packetId = String(staged.affectedRecordIds[0]);
