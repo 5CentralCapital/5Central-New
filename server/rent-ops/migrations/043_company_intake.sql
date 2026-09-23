@@ -56,6 +56,10 @@ CREATE TABLE company_intake_line_registry (
 );
 CREATE INDEX company_intake_line_registry_latest
   ON company_intake_line_registry (organization_id, source_line_key, observed_at DESC, packet_id DESC);
+-- A source line's money is applied by at most one packet per organization; a
+-- revised packet that re-observes it records overlap instead of a second post.
+CREATE UNIQUE INDEX company_intake_line_registry_applied_once
+  ON company_intake_line_registry (organization_id, source_line_key) WHERE outcome = 'applied';
 
 CREATE TABLE company_intake_account_outcomes (
   organization_id uuid NOT NULL REFERENCES company_organizations(id),

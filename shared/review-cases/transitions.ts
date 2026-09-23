@@ -80,11 +80,23 @@ export const REVIEW_CASE_MCP_TOOL_NAMES: Readonly<Record<ReviewCaseCommandKind, 
   "review_case.note": "add_review_case_note",
 });
 
-/** Commands available to a person for a case in this state (UI and detail reads). */
-export function allowedReviewCaseCommands(state: ReviewCaseState): ReviewCaseCommandKind[] {
+/** The parts of a proposed fix that decide whether it can be applied here. */
+export interface ReviewCaseProposalShape {
+  readonly input: { readonly kind: "operational" | "financial" | "connection" };
+  readonly routing?: unknown;
+}
+
+/**
+ * Commands available to a person for a case in this state (UI and detail
+ * reads). Apply is offered only when the server can act on the proposal: a
+ * connection fix is made outside the case, and a financial fix is routed to
+ * Accounting once.
+ */
+export function allowedReviewCaseCommands(state: ReviewCaseState, proposal?: ReviewCaseProposalShape | null): ReviewCaseCommandKind[] {
   const commands: ReviewCaseCommandKind[] = [];
   for (const target of REVIEW_CASE_TRANSITIONS[state]) {
     const command = REVIEW_CASE_TRANSITION_COMMANDS[target];
+    if (command === "review_case.apply" && (!proposal || proposal.input.kind === "connection" || (proposal.input.kind === "financial" && proposal.routing))) continue;
     if (command && !commands.includes(command)) commands.push(command);
   }
   if (!isResolvedReviewCaseState(state)) commands.push("review_case.add_evidence");
@@ -92,11 +104,12 @@ export function allowedReviewCaseCommands(state: ReviewCaseState): ReviewCaseCom
   return commands;
 }
 
-export function nextReviewAction(state: ReviewCaseState, resolution: "operational" | "financial" | "connection", blockedOn: string | null): string {
+export function nextReviewAction(state: ReviewCaseState, resolution: "operational" | "financial" | "connection", blockedOn: string | null, proposal?: ReviewCaseProposalShape | null): string {
+  const kind = proposal?.input.kind ?? resolution;
   switch (state) {
     case "open": return "Start research";
     case "researching": return "Propose a fix or record the missing fact";
-    case "proposed": return resolution === "financial" ? "Post the correction in Accounting" : resolution === "connection" ? "Fix the connection, then verify" : "Apply the proposed fix";
+    case "proposed": return kind === "financial" ? (proposal?.routing ? "Post the correction in Accounting" : "Route the fix to Accounting") : kind === "connection" ? "Fix the connection, then check again" : "Apply the proposed fix";
     case "blocked": return blockedOn ? `Obtain: ${blockedOn}` : "Obtain the missing fact";
     case "applied": return "Verify";
     case "verified": return "None";

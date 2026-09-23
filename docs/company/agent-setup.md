@@ -23,7 +23,7 @@ Add the server to `~/.codex/config.toml`:
 url = "https://5central.capital/mcp"
 ```
 
-Then sign in with `codex mcp login 5central-ops`. MRA packet staging, mapping, preview and apply are available only on this Codex channel and only for a principal with the `mra_ingestion` capability.
+Then sign in with `codex mcp login 5central-ops`. MRA packet staging, mapping, preview and apply are offered only to the Codex OAuth client: the server reads the client identity from the verified access token (`client_id`, or `azp` for Auth0) and registers those tools, with the `mra_ingestion` capability, only when that client ID is listed in `RENT_OPS_MCP_MRA_CLIENT_IDS` (comma-separated). Register Codex as its own OAuth client at the issuer and put only that client's ID in the list. Claude Code, ChatGPT and any token without a listed client see `list_mra_packets` and `get_mra_packet` only. With the variable unset, no client can stage or apply MRA packets.
 
 ## First calls
 

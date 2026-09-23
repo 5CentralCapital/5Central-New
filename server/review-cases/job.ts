@@ -26,14 +26,16 @@ export interface ReviewDetectionJobResult extends Record<string, unknown> {
  * a retried job reconciles to the same case state. The job runs as the
  * server-internal detector actor; it performs no user-requested mutation.
  */
-export function reviewDetectionJobHandler(options: { readonly executor: RentOpsQueryExecutor; readonly actorId?: string }) {
+export function reviewDetectionJobHandler(options: { readonly executor: RentOpsQueryExecutor; readonly actorId?: string; readonly now?: () => Date }) {
   return async function handleReviewDetectionJob(job: ReviewDetectionJob): Promise<ReviewDetectionJobResult> {
     const payload = jobPayloadSchema.parse(job.payload ?? {});
     const organizationId = organizationIdSchema.parse(job.organizationId ?? payload.organizationId);
     if (job.organizationId && payload.organizationId && job.organizationId !== payload.organizationId) {
       throw new Error("review_detection_job_organization_mismatch");
     }
-    const summary = await runReviewDetection(options.executor, organizationId, { actorId: options.actorId ?? REVIEW_DETECTOR_ACTOR, asOf: payload.asOf });
+    // Live cases always reflect the operating date; a queued asOf is ignored so
+    // a delayed or replayed job can never rewrite live state for another date.
+    const summary = await runReviewDetection(options.executor, organizationId, { actorId: options.actorId ?? REVIEW_DETECTOR_ACTOR, ...(options.now ? { now: options.now } : {}) });
     return { summary };
   };
 }

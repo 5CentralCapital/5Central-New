@@ -15,9 +15,12 @@ import { createReviewCasePort, reviewDetectionJobHandler, runReviewDetection, su
 const organizationId = SYNTHETIC_COMPANY.organizationId;
 const web = attestTransport("web");
 
-async function setup() {
+async function setup(options: { degraded?: boolean } = {}) {
   const fixture = await createSyntheticCompanyDatabase();
   await seedRentalDemo({ executor: fixture.executor, actorId: SYNTHETIC_COMPANY.actorId, actorRole: "owner" });
+  // The demo's "future" tenancy has already moved in, so the rent roll refuses to compute and
+  // detection is incomplete. Confirm it current unless a test needs the degraded state.
+  if (!options.degraded) await fixture.db.query("UPDATE rent_ops_tenancies SET status = 'current', status_knowledge = 'manual' WHERE id = 'demo-tenancy-2'");
   const runtime = await createSyntheticRuntimeExecutor(fixture.db);
   const storage = createInMemoryObjectStore();
   const port = createReviewCasePort(runtime, { documentStorage: storage });
@@ -56,6 +59,12 @@ async function removeImportedAccounts(db: PGlite): Promise<void> {
 async function historyCase(db: PGlite) {
   const result = await db.query<Record<string, unknown>>(`SELECT ${REVIEW_CASE_COLUMNS} FROM company_review_cases c WHERE c.reason_code = 'history_incomplete'`);
   assert.equal(result.rows.length, 1);
+  return mapReviewCaseRow(result.rows[0]!);
+}
+
+async function caseBy(db: PGlite, reasonCode: string, scopeKey: string) {
+  const result = await db.query<Record<string, unknown>>(`SELECT ${REVIEW_CASE_COLUMNS} FROM company_review_cases c WHERE c.reason_code = $1 AND c.scope_key = $2`, [reasonCode, scopeKey]);
+  assert.equal(result.rows.length, 1, `${reasonCode} ${scopeKey}`);
   return mapReviewCaseRow(result.rows[0]!);
 }
 
@@ -214,30 +223,35 @@ test("financial fixes are routed to accounting and never applied; connection fix
   } finally { await fixture.close(); }
 });
 
+async function addEvidenceDocument(db: PGlite, storage: ReturnType<typeof createInMemoryObjectStore>, id = "company-document:evidence-9z") {
+  const bytes = Buffer.from("Synthetic move-out inspection for unit 9Z, 2026-09-01.");
+  const checksum = createHash("sha256").update(bytes).digest("hex");
+  const prepared = await prepareVerifiedImportedDocument(storage, {
+    documentId: id, type: "other", fileName: "inspection.txt", mimeType: "application/octet-stream", bytes, sizeBytes: bytes.byteLength, checksumSha256: checksum,
+    sourceBinaryBinding: { bindingId: `b-${id}`, importRunId: `r-${id}`, sourceSystem: "company_documents", sourceCollection: "uploads", sourceIdHash: checksum },
+  });
+  await db.query(`INSERT INTO company_documents (id, organization_id, kind, state, title, file_name, declared_content_type, size_bytes, checksum_sha256, backend, logical_key, immutable_generation, immutable_version, verified_at)
+    VALUES ($1,$2,'other','verified','Inspection 9Z','inspection.txt','text/plain',$3,$4,$5,$6,$7,$8,$9)`,
+  [id, organizationId, bytes.byteLength, checksum, prepared.binding.backend, prepared.binding.logicalKey, prepared.binding.immutableGeneration ?? null, prepared.binding.immutableVersion ?? null, prepared.binding.verifiedAt]);
+}
+
 test("operational fixes dry-run on propose, refuse stale sources, apply through the guarded writer and verify by readback", async () => {
   const { fixture, db, runtime, storage, port, accessFor } = await setup();
   try {
-    await addImportedAccounts(db, 0, 2);
     await asImporter(db, async () => { await db.query("INSERT INTO rent_ops_units(id,property_id,unit_number,property_link_knowledge,source_system,source_id) VALUES ('rm-unit-9','demo-property-a','9Z','exact','rent_manager','unit:9')"); });
     await runReviewDetection(runtime, organizationId);
     const access = await accessFor();
-
     // A verified company document is the evidence the guarded writer re-hashes.
-    const bytes = Buffer.from("Synthetic move-out inspection for unit 9Z, 2026-09-01.");
-    const checksum = createHash("sha256").update(bytes).digest("hex");
-    const prepared = await prepareVerifiedImportedDocument(storage, {
-      documentId: "company-document:evidence-9z", type: "other", fileName: "inspection.txt", mimeType: "application/octet-stream", bytes, sizeBytes: bytes.byteLength, checksumSha256: checksum,
-      sourceBinaryBinding: { bindingId: "b-9z", importRunId: "r-9z", sourceSystem: "company_documents", sourceCollection: "uploads", sourceIdHash: checksum },
-    });
-    await db.query(`INSERT INTO company_documents (id, organization_id, kind, state, title, file_name, declared_content_type, size_bytes, checksum_sha256, backend, logical_key, immutable_generation, immutable_version, verified_at)
-      VALUES ($1,$2,'other','verified','Inspection 9Z','inspection.txt','text/plain',$3,$4,$5,$6,$7,$8,$9)`,
-    ["company-document:evidence-9z", organizationId, bytes.byteLength, checksum, prepared.binding.backend, prepared.binding.logicalKey, prepared.binding.immutableGeneration ?? null, prepared.binding.immutableVersion ?? null, prepared.binding.verifiedAt]);
+    await addEvidenceDocument(db, storage);
 
     const unit = async () => (await new PostgresRentOpsRepository(runtime).getSnapshot()).units.find(row => row.id === "rm-unit-9")!;
     const operation = async () => ({ kind: "vacancy-confirm", targetId: "rm-unit-9", sourceId: "unit:9", expectedRevision: 1, beforeSha256: reconciliationHash(await unit()), vacancyConfirmedOn: "2026-09-01" });
-    let current = await historyCase(db);
+    // The market-rent case at property A names unit 9Z, so a fix to that unit belongs to it.
+    const marketCase = () => caseBy(db, "market_rent_missing", "property:demo-property-a");
+    let current = await marketCase();
+    assert.ok(current.affectedRecords.some(record => record.id === "rm-unit-9"));
     await port.execute("review_case.propose", envelope({ caseId: current.id, correction: { kind: "operational", summary: "Confirm unit 9Z vacant from the inspection", operation: await operation(), evidenceDocumentId: "company-document:evidence-9z" } }, current.recordRevision), access);
-    current = await historyCase(db);
+    current = await marketCase();
     assert.equal(current.state, "proposed");
     assert.match(current.proposedCorrection?.preview?.planToken ?? "", /^[a-f0-9]{64}$/);
     assert.equal((await unit()).vacancyConfirmedOn ?? null, null, "propose is a dry run");
@@ -245,14 +259,14 @@ test("operational fixes dry-run on propose, refuse stale sources, apply through 
     // The unit changes after the proposal: apply refuses the stale source and changes nothing.
     await db.query("UPDATE rent_ops_units SET unit_number = '9Z-A' WHERE id = 'rm-unit-9'");
     await expectCommandError(port.execute("review_case.apply", envelope({ caseId: current.id }, current.recordRevision), access), 409, "review_case_source_stale");
-    assert.equal((await historyCase(db)).state, "proposed");
+    assert.equal((await marketCase()).state, "proposed");
     assert.equal((await unit()).vacancyConfirmedOn ?? null, null);
 
     await port.execute("review_case.propose", envelope({ caseId: current.id, correction: { kind: "operational", summary: "Confirm unit 9Z vacant from the inspection", operation: await operation(), evidenceDocumentId: "company-document:evidence-9z" } }, current.recordRevision), access);
-    current = await historyCase(db);
+    current = await marketCase();
     const applied = await port.execute("review_case.apply", envelope({ caseId: current.id }, current.recordRevision), access);
     assert.ok(applied.affectedRecordIds.includes("rm-unit-9"));
-    current = await historyCase(db);
+    current = await marketCase();
     assert.equal(current.state, "applied");
     assert.equal((await unit()).vacancyConfirmedOn, "2026-09-01");
     const ledger = await db.query<{ count: string | number }>("SELECT count(*) AS count FROM rent_ops_ledger_transactions WHERE id LIKE 'review%'");
@@ -260,15 +274,152 @@ test("operational fixes dry-run on propose, refuse stale sources, apply through 
 
     // Readback: the cause is still detected, so verify refuses.
     await expectCommandError(port.execute("review_case.verify", envelope({ caseId: current.id }, current.recordRevision), access), 400, "review_case_cause_present");
-    await removeImportedAccounts(db);
+    await db.query("UPDATE rent_ops_units SET market_rent_cents = 120000 WHERE property_id = 'demo-property-a' AND market_rent_cents IS NULL");
     await port.execute("review_case.verify", envelope({ caseId: current.id }, current.recordRevision), access);
-    current = await historyCase(db);
+    current = await marketCase();
     assert.equal(current.state, "verified");
-    await port.execute("review_case.reopen", envelope({ caseId: current.id, reason: "New archive page found" }, current.recordRevision), access);
-    current = await historyCase(db);
+    await port.execute("review_case.reopen", envelope({ caseId: current.id, reason: "New rent survey found" }, current.recordRevision), access);
+    current = await marketCase();
     assert.equal(current.state, "open");
     assert.equal(current.reopenedCount, 1);
     assert.deepEqual((await events(db, current.id)).map(event => event.event_kind), ["detected", "proposed", "proposed", "applied", "verified", "reopened"]);
+  } finally { await fixture.close(); }
+});
+
+test("an operational fix must target a record of its own case, inside the case's company scope", async () => {
+  const { fixture, db, runtime, storage, port, accessFor } = await setup();
+  try {
+    await addImportedAccounts(db, 0, 2);
+    await asImporter(db, async () => { await db.query("INSERT INTO rent_ops_units(id,property_id,unit_number,property_link_knowledge,source_system,source_id) VALUES ('rm-unit-9','demo-property-a','9Z','exact','rent_manager','unit:9')"); });
+    await runReviewDetection(runtime, organizationId);
+    await addEvidenceDocument(db, storage);
+    const access = await accessFor();
+    const snapshotUnit = async (id: string) => (await new PostgresRentOpsRepository(runtime).getSnapshot()).units.find(row => row.id === id)!;
+    const vacancy = async (targetId: string, sourceId: string) => ({ kind: "operational", summary: "Confirm vacant", evidenceDocumentId: "company-document:evidence-9z",
+      operation: { kind: "vacancy-confirm", targetId, sourceId, expectedRevision: 1, beforeSha256: reconciliationHash(await snapshotUnit(targetId)), vacancyConfirmedOn: "2026-09-01" } });
+
+    // An organization-level history case about imported tenants cannot change an unrelated unit.
+    const history = await historyCase(db);
+    await expectCommandError(port.execute("review_case.propose", envelope({ caseId: history.id, correction: await vacancy("rm-unit-9", "unit:9") }, history.recordRevision), access), 400, "review_case_target_unrelated");
+    // A case scoped to property B cannot change a unit at property A.
+    const propertyB = await caseBy(db, "schedule_unconfirmed", "property:demo-property-b");
+    await expectCommandError(port.execute("review_case.propose", envelope({ caseId: propertyB.id, correction: await vacancy("rm-unit-9", "unit:9") }, propertyB.recordRevision), access), 403, "review_case_target_out_of_scope");
+    // Rental tables are not organization-scoped: a unit at a property this company does not own is refused
+    // even when a case names it.
+    await db.query("INSERT INTO rent_ops_properties(id,name,slug) VALUES ('other-company-property','Other Co','other-co')");
+    await asImporter(db, async () => { await db.query("INSERT INTO rent_ops_units(id,property_id,unit_number,property_link_knowledge,source_system,source_id) VALUES ('rm-unit-x','other-company-property','X1','exact','rent_manager','unit:77')"); });
+    await db.query(`UPDATE company_review_cases SET affected_records = affected_records || '[{"kind":"unit","id":"rm-unit-x","label":null,"propertyId":"other-company-property","unitId":"rm-unit-x","tenancyId":null,"personId":null,"codes":["market_rent_unknown"]}]'::jsonb WHERE id = $1`, [history.id]);
+    const tampered = await historyCase(db);
+    await expectCommandError(port.execute("review_case.propose", envelope({ caseId: tampered.id, correction: await vacancy("rm-unit-x", "unit:77") }, tampered.recordRevision), access), 403, "review_case_target_out_of_scope");
+    assert.equal((await historyCase(db)).state, "open", "nothing was proposed");
+    assert.equal((await snapshotUnit("rm-unit-9")).vacancyConfirmedOn ?? null, null);
+  } finally { await fixture.close(); }
+});
+
+test("detection that cannot compute a rental report never verifies cases, and verify is refused until it can", async () => {
+  const { fixture, db, runtime, port, accessFor } = await setup({ degraded: true });
+  try {
+    await addImportedAccounts(db, 0, 2);
+    const first = await runReviewDetection(runtime, organizationId);
+    assert.equal(first.complete, false);
+    assert.ok(first.incompleteReasons.some(reason => /rent roll/.test(reason)), JSON.stringify(first.incompleteReasons));
+    // The cause disappears, but the run is incomplete: the case stays open.
+    await removeImportedAccounts(db);
+    const second = await runReviewDetection(runtime, organizationId);
+    assert.equal(second.autoVerified, 0);
+    assert.equal((await historyCase(db)).state, "open");
+    // Detect command reports the incomplete state as a warning.
+    const receipt = await port.execute("review_case.detect", envelope({}), await accessFor());
+    assert.ok(receipt.validationOutcomes.some(outcome => outcome.code === "review_case.detection.incomplete" && outcome.severity === "warning" && /Detection incomplete/.test(outcome.message)));
+    // Verify is refused with a conflict while detection is incomplete.
+    await db.query("UPDATE company_review_cases SET state='applied', resolved_at=now(), record_revision=record_revision+1 WHERE reason_code='history_incomplete'");
+    let current = await historyCase(db);
+    await expectCommandError(port.execute("review_case.verify", envelope({ caseId: current.id }, current.recordRevision), await accessFor()), 409, "review_case_readback_incomplete");
+    // Once the rental records compute again, verification works.
+    await db.query("UPDATE rent_ops_tenancies SET status = 'current', status_knowledge = 'manual' WHERE id = 'demo-tenancy-2'");
+    current = await historyCase(db);
+    await port.execute("review_case.verify", envelope({ caseId: current.id }, current.recordRevision), await accessFor());
+    assert.equal((await historyCase(db)).state, "verified");
+  } finally { await fixture.close(); }
+});
+
+test("detection for another date is a read-only preview; the job always detects as of today", async () => {
+  const { fixture, db, runtime, port, accessFor } = await setup();
+  try {
+    await addImportedAccounts(db, 0, 2);
+    const preview = await runReviewDetection(runtime, organizationId, { asOf: "2026-01-15", now: () => new Date("2026-09-23T15:00:00Z") });
+    assert.equal(preview.mode, "preview");
+    assert.ok(preview.opened >= 1, "the preview counts what would open");
+    assert.deepEqual(preview.changedCaseIds, []);
+    assert.equal(Number((await db.query<{ count: string | number }>("SELECT count(*) AS count FROM company_review_cases")).rows[0]!.count), 0, "nothing was written");
+    const live = await runReviewDetection(runtime, organizationId, { now: () => new Date("2026-09-23T15:00:00Z") });
+    assert.equal(live.mode, "live");
+    await removeImportedAccounts(db);
+    // A past-date preview never auto-verifies or rewrites live cases.
+    const later = await runReviewDetection(runtime, organizationId, { asOf: "2026-01-15", now: () => new Date("2026-09-23T15:00:00Z") });
+    assert.equal(later.autoVerified, 0);
+    assert.equal((await historyCase(db)).state, "open");
+    const receipt = await port.execute("review_case.detect", envelope({ asOf: "2026-01-15" }), await accessFor());
+    assert.equal(receipt.validationOutcomes[0]!.code, "review_case.detection.preview");
+    assert.match(receipt.validationOutcomes[0]!.message, /Nothing was changed/);
+    assert.equal((await historyCase(db)).state, "open");
+    // A queued job carrying another date still reconciles today's state.
+    const job = reviewDetectionJobHandler({ executor: runtime });
+    const result = await job({ organizationId, payload: { asOf: "2026-01-15" } });
+    assert.equal(result.summary.mode, "live");
+    assert.equal((await historyCase(db)).state, "verified");
+  } finally { await fixture.close(); }
+});
+
+test("detection inputs beyond their read bound are incomplete, so nothing is verified from a truncated read", async () => {
+  const { fixture, db, runtime } = await setup();
+  try {
+    await addImportedAccounts(db, 0, 2);
+    await runReviewDetection(runtime, organizationId);
+    await removeImportedAccounts(db);
+    await db.query(`INSERT INTO accounting_qbo_sync_exceptions (organization_id, legal_entity_id, environment, realm_id, stream, object_type, object_id, exception_kind, reasons, first_seen_at, last_seen_at)
+      SELECT $1, $2, 'sandbox', '123', 'invoices', 'Invoice', i::text, 'unsupported', '["synthetic"]'::jsonb, now(), now() FROM generate_series(1, 5001) AS i`, [organizationId, SYNTHETIC_COMPANY.entityId]);
+    const truncated = await runReviewDetection(runtime, organizationId);
+    assert.equal(truncated.complete, false);
+    assert.ok(truncated.incompleteReasons.some(reason => /sync exceptions/.test(reason)));
+    assert.equal(truncated.autoVerified, 0);
+    assert.equal((await historyCase(db)).state, "open", "a cause missing from a truncated read is not verified");
+    await db.query("DELETE FROM accounting_qbo_sync_exceptions WHERE organization_id = $1 AND object_id::int > 10", [organizationId]);
+    await db.query(`INSERT INTO company_intake_packets (id, organization_id, state, source_document_id, source_file_name, source_content_type, source_size_bytes, source_checksum_sha256, source_backend, source_logical_key, source_immutable_generation, source_verified_at, candidate_json, lines_json, reconciliation_json)
+      SELECT gen_random_uuid(), $1, 'previewed', 'mra-packet:' || i, 'p' || i || '.json', 'application/json', 10, md5(i::text) || md5(i::text), 'memory', 'sha256:' || md5(i::text) || md5(i::text), '1', now(), '{}'::jsonb, '[]'::jsonb, '{}'::jsonb
+        FROM generate_series(1, 501) AS i`, [organizationId]);
+    const packets = await runReviewDetection(runtime, organizationId);
+    assert.equal(packets.complete, false);
+    assert.ok(packets.incompleteReasons.some(reason => /MRA packets/.test(reason)));
+    assert.equal((await historyCase(db)).state, "open");
+    await db.query("DELETE FROM company_intake_packets WHERE organization_id = $1", [organizationId]);
+    const complete = await runReviewDetection(runtime, organizationId);
+    assert.equal(complete.complete, true);
+    assert.equal((await historyCase(db)).state, "verified");
+  } finally { await fixture.close(); }
+});
+
+test("a detail offers Apply only when the proposal can be applied here", async () => {
+  const { fixture, db, runtime, port, principalFor, accessFor } = await setup();
+  try {
+    await addImportedAccounts(db, 0, 2);
+    await runReviewDetection(runtime, organizationId);
+    const access = await accessFor();
+    const principal = await principalFor(SYNTHETIC_COMPANY.actorId);
+    let current = await historyCase(db);
+    await port.execute("review_case.propose", envelope({ caseId: current.id, correction: { kind: "connection", summary: "Importer skipped a partition", action: "Rerun the past-tenant export" } }, current.recordRevision), access);
+    let detail = await port.get(principal, { scope: { organizationId }, caseId: current.id });
+    assert.ok(!detail.allowedCommands.includes("review_case.apply"), "connection fixes are made outside the case");
+    assert.match(detail.nextAction, /check again/i);
+    current = await historyCase(db);
+    await port.execute("review_case.propose", envelope({ caseId: current.id, correction: { kind: "financial", summary: "Post opening balances", route: "accounting.journal_entry", amountCents: null } }, current.recordRevision), access);
+    detail = await port.get(principal, { scope: { organizationId }, caseId: current.id });
+    assert.ok(detail.allowedCommands.includes("review_case.apply"), "an unrouted financial fix can be routed");
+    current = await historyCase(db);
+    await port.execute("review_case.apply", envelope({ caseId: current.id }, current.recordRevision), access);
+    detail = await port.get(principal, { scope: { organizationId }, caseId: current.id });
+    assert.ok(!detail.allowedCommands.includes("review_case.apply"), "a routed fix is not routed again");
+    assert.equal(detail.nextAction, "Post the correction in Accounting");
   } finally { await fixture.close(); }
 });
 

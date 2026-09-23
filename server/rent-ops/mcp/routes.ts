@@ -5,6 +5,7 @@ import { RentOpsService } from '../services/service';
 import type { RentOpsRepository } from '../../../shared/rent-ops-contracts';
 import { createRentOpsMcpServer, type McpOperationalOptions } from './tools';
 import { oauthConfigFromEnv, READ_SCOPE, WRITE_SCOPE, validateIssuer, verifyOAuthToken } from './oauth';
+import { mcpOptionsForClient } from '../../intake/mcp';
 
 export async function registerRentOpsMcpRoutes(app: Express, repository: RentOpsRepository, env: NodeJS.ProcessEnv = process.env, options: McpOperationalOptions = {}): Promise<void> {
   const config = oauthConfigFromEnv(env);
@@ -34,7 +35,9 @@ export async function registerRentOpsMcpRoutes(app: Express, repository: RentOps
     // This deployment explicitly maps its allowlisted OAuth subjects to the
     // configured administrator. Company records and private presets therefore
     // keep the same owner in the browser and Codex.
-    const server = createRentOpsMcpServer(new RentOpsService(repository),principal,config.resource,{ ...options, companyActorId });
+    // One /mcp endpoint serves ChatGPT, Claude Code and Codex: MRA ingestion is
+    // attested only for the allowlisted Codex OAuth client of the verified token.
+    const server = createRentOpsMcpServer(new RentOpsService(repository),principal,config.resource,{ ...mcpOptionsForClient(principal, config, options), companyActorId });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator:undefined,enableJsonResponse:true });
     res.on('close',() => { void transport.close(); void server.close(); });
     try { await server.connect(transport); await transport.handleRequest(req,res,req.body); }

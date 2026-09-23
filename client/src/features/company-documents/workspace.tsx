@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { CircleAlert, Download, FileText, Pencil, RefreshCw, Upload, X } from "lucide-react";
 import { COMPANY_DOCUMENT_KINDS, type CompanyDocument, type CompanyDocumentKind } from "@shared/company-documents";
-import { companyDocumentsApi } from "./api";
+import { companyDocumentsApi, documentScope } from "./api";
 import type { CompanyDocumentLinkOption, CompanyDocumentsWorkspaceProps } from "./types";
 import "./company-documents.css";
 
@@ -57,7 +57,7 @@ export function CompanyDocumentsWorkspace({ organizationId, organizationName, le
   async function saveEdit() {
     if (!editing || !editTitle.trim()) { setSaveError(new Error("Enter a document title.")); return; }
     setSaving(true); setSaveError(undefined);
-    try { await api.updateMetadata(organizationId, { documentId: String(editing.id), expectedRevision: editing.recordRevision, title: editTitle.trim(), description: editDescription.trim() || null, tags: editTags.split(",").map(value => value.trim()).filter(Boolean) }); setEditing(null); await reload(); }
+    try { await api.updateMetadata(organizationId, { documentId: String(editing.id), scope: documentScope(editing), expectedRevision: editing.recordRevision, title: editTitle.trim(), description: editDescription.trim() || null, tags: editTags.split(",").map(value => value.trim()).filter(Boolean) }); setEditing(null); await reload(); }
     catch (nextError) { setSaveError(nextError); }
     finally { setSaving(false); }
   }
@@ -71,7 +71,7 @@ export function CompanyDocumentsWorkspace({ organizationId, organizationName, le
 
   async function download(document: CompanyDocument) {
     setSaveError(undefined);
-    try { const blob = await api.download(organizationId, String(document.id)); const url = URL.createObjectURL(blob); const anchor = window.document.createElement("a"); anchor.href = url; anchor.download = document.source.fileName; anchor.click(); URL.revokeObjectURL(url); }
+    try { const blob = await api.download(organizationId, String(document.id), undefined, documentScope(document)); const url = URL.createObjectURL(blob); const anchor = window.document.createElement("a"); anchor.href = url; anchor.download = document.source.fileName; anchor.click(); URL.revokeObjectURL(url); }
     catch (nextError) { setSaveError(nextError); }
   }
 

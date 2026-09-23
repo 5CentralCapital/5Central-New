@@ -401,7 +401,7 @@
     {
       "version": 43,
       "fileName": "043_company_intake.sql",
-      "sha256": "4d7be44cc7eacd872dcc9b9a1fbf97c9dfbfd2d19edea2392b5f4c7ac94bcd59",
+      "sha256": "720d625821703fa450a7e60585a48375d147a096c5f3cd7c458b18e05daa4ad6",
       "predecessor": 42,
       "minimumServerContract": 1,
       "minimumClientContract": 1,

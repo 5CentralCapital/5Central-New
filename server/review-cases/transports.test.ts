@@ -55,7 +55,7 @@ test("browser HTTP and Codex MCP read and change the same review cases", async (
 });
 
 test("MRA results are read-only on the web; staging and apply are Codex tools", async () => {
-  const app = await createLaneTestApp();
+  const app = await createLaneTestApp({ mcpClientId: "codex-oauth-client", mraClientIds: ["codex-oauth-client"] });
   try {
     const names = (await app.client.listTools()).tools.map(item => item.name);
     for (const name of ["stage_mra_packet", "map_mra_packet", "preview_mra_packet", "apply_mra_packet", "list_mra_packets", "get_mra_packet"]) assert.ok(names.includes(name), `${name} is registered`);

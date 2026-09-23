@@ -257,6 +257,11 @@ export const reviewDetectionSummarySchema = z.object({
   autoVerified: z.number().int().nonnegative(),
   unchanged: z.number().int().nonnegative(),
   changedCaseIds: z.array(reviewCaseIdSchema).max(1_000),
+  /** "preview" for a date other than the operating date: nothing was written. */
+  mode: z.enum(["live", "preview"]),
+  /** False when a rental report or input could not be read completely; nothing was verified by readback. */
+  complete: z.boolean(),
+  incompleteReasons: z.array(z.string().max(500)).max(20),
 }).strict();
 export type ReviewDetectionSummary = z.infer<typeof reviewDetectionSummarySchema>;
 

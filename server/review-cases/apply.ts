@@ -3,11 +3,15 @@ import { mkdtemp, rm, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
-import type { ReviewOperation } from "../../shared/review-cases";
-import { ConflictCommandError, ValidationCommandError } from "../company/commands/errors";
+import type { CommandRole, CompanyScope } from "../../shared/company";
+import type { RentOpsSnapshot } from "../../shared/rent-ops-contracts";
+import type { ReviewAffectedRecord, ReviewOperation } from "../../shared/review-cases";
+import { authorizeCompanyRead, type AuthenticatedPrincipal } from "../company/authorization";
+import { ConflictCommandError, ForbiddenCommandError, ValidationCommandError } from "../company/commands/errors";
 import { reconcileImportedRecords, type ReconciliationManifest, type ReconciliationOperation, type ReconciliationPlan } from "../rent-ops/reconciliation/operator";
 import { PostgresRentOpsRepository, type RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import type { StorageReadAdapter } from "../rent-ops/storage";
+import type { ReviewCaseRow } from "./store";
 
 /**
  * Bridge from a review case to the existing guarded reconciliation writer.
@@ -153,4 +157,97 @@ export async function applyGuardedCorrection(input: GuardedPlanInput & { readonl
     }
     return execute("apply", plan.token);
   });
+}
+
+/** The rental records an operation changes, resolved from current records. */
+interface OperationTargetFacts {
+  readonly targetId: string;
+  readonly propertyIds: readonly string[];
+  readonly unitId: string | null;
+  readonly tenancyId: string | null;
+  readonly personId: string | null;
+}
+
+function resolveOperationTarget(snapshot: RentOpsSnapshot, operation: ReviewOperation): OperationTargetFacts | undefined {
+  const tenancyFacts = (tenancy: RentOpsSnapshot["tenancies"][number] | undefined) => tenancy
+    ? { targetId: operation.targetId, propertyIds: tenancy.propertyId ? [tenancy.propertyId] : [], unitId: tenancy.unitId ?? null, tenancyId: tenancy.id, personId: tenancy.primaryPersonId ?? null }
+    : undefined;
+  switch (operation.kind) {
+    case "vacancy-confirm": {
+      const unit = snapshot.units.find(row => row.id === operation.targetId);
+      return unit ? { targetId: unit.id, propertyIds: unit.propertyId ? [unit.propertyId] : [], unitId: unit.id, tenancyId: null, personId: null } : undefined;
+    }
+    case "metered-utility": case "tenancy-status": case "tenancy-expected-departure": case "balance-review": case "schedule-establish": case "subsidy-establish":
+      return tenancyFacts(snapshot.tenancies.find(row => row.id === operation.targetId));
+    case "occupancy-establish": {
+      const person = snapshot.people.find(row => row.id === operation.targetId);
+      if (!person) return undefined;
+      const properties = Array.from(new Set(snapshot.tenancies.filter(row => row.primaryPersonId === person.id && row.propertyId).map(row => row.propertyId)));
+      return { targetId: person.id, propertyIds: properties, unitId: null, tenancyId: null, personId: person.id };
+    }
+    case "lease-review": case "lease-term-correction": {
+      const term = (snapshot.leaseTerms ?? []).find(row => row.id === operation.targetId);
+      const facts = tenancyFacts(term?.tenancyId ? snapshot.tenancies.find(row => row.id === term.tenancyId) : undefined);
+      return facts ? { ...facts, targetId: operation.targetId } : undefined;
+    }
+    default: {
+      const schedule = (snapshot.recurringSchedules ?? []).find(row => row.id === operation.targetId);
+      if (!schedule) return undefined;
+      const tenancy = schedule.tenancyId ? snapshot.tenancies.find(row => row.id === schedule.tenancyId) : undefined;
+      const propertyIds = Array.from(new Set([schedule.propertyId, tenancy?.propertyId].filter((id): id is string => Boolean(id))));
+      return { targetId: schedule.id, propertyIds, unitId: schedule.unitId ?? tenancy?.unitId ?? null, tenancyId: schedule.tenancyId ?? null, personId: schedule.personId ?? tenancy?.primaryPersonId ?? null };
+    }
+  }
+}
+
+function relatedToCase(facts: OperationTargetFacts, records: readonly ReviewAffectedRecord[]): boolean {
+  return records.some(record => record.id === facts.targetId
+    || (facts.tenancyId !== null && record.tenancyId === facts.tenancyId)
+    || (facts.unitId !== null && (record.unitId === facts.unitId || (record.kind === "unit" && record.id === facts.unitId)))
+    || (facts.personId !== null && record.personId === facts.personId));
+}
+
+export interface CorrectionTargetCheck {
+  readonly executor: RentOpsQueryExecutor;
+  readonly principal: AuthenticatedPrincipal;
+  readonly allowedRoles: readonly CommandRole[];
+  readonly reviewCase: Pick<ReviewCaseRow, "organizationId" | "legalEntityId" | "propertyId" | "affectedRecords">;
+  readonly operation: ReviewOperation;
+  readonly asOf: string;
+}
+
+/**
+ * An operational fix may only change a record this case is about, inside the
+ * case's scope, and only where the caller holds a grant. Rental tables are not
+ * organization-scoped, so the target's property is resolved from current
+ * records and checked against the organization's property mapping.
+ */
+export async function assertCorrectionTargetInCase(input: CorrectionTargetCheck): Promise<void> {
+  const snapshot = await new PostgresRentOpsRepository(input.executor, true).getSnapshot();
+  const facts = resolveOperationTarget(snapshot, input.operation);
+  if (!facts) throw new ValidationCommandError("The record this fix changes was not found", { reason: "review_case_target_missing" });
+  if (!facts.propertyIds.length) throw new ForbiddenCommandError("The record this fix changes has no property, so its company scope cannot be confirmed", { reason: "review_case_target_out_of_scope" });
+  const mapped = await input.executor.query<{ property_id: string; legal_entity_id: string }>(
+    `SELECT property_id, legal_entity_id FROM company_property_entity_periods
+      WHERE organization_id = $1 AND property_id = ANY($2::text[])
+        AND effective_from <= $3::date AND (effective_until IS NULL OR effective_until > $3::date)`,
+    [input.reviewCase.organizationId, facts.propertyIds, input.asOf],
+  );
+  const entities = new Map(mapped.rows.map(row => [String(row.property_id), String(row.legal_entity_id)]));
+  for (const propertyId of facts.propertyIds) {
+    const legalEntityId = entities.get(propertyId);
+    if (!legalEntityId
+      || (input.reviewCase.propertyId && input.reviewCase.propertyId !== propertyId)
+      || (input.reviewCase.legalEntityId && input.reviewCase.legalEntityId !== legalEntityId)) {
+      throw new ForbiddenCommandError("The record this fix changes is outside this case's company scope", { reason: "review_case_target_out_of_scope" });
+    }
+    try {
+      authorizeCompanyRead(input.principal, { organizationId: input.reviewCase.organizationId, legalEntityId, propertyId } as CompanyScope, input.allowedRoles);
+    } catch {
+      throw new ForbiddenCommandError("Your access does not cover the record this fix changes", { reason: "review_case_target_scope" });
+    }
+  }
+  if (!relatedToCase(facts, input.reviewCase.affectedRecords)) {
+    throw new ValidationCommandError("A fix must change a record this case is about (or the same tenancy, unit or tenant)", { reason: "review_case_target_unrelated" });
+  }
 }

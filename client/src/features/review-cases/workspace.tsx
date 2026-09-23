@@ -394,7 +394,7 @@ function ReviewQueue({ organizationId, legalEntityId, propertyId, api }: { organ
   }, [items, list.isPlaceholderData, selectedId]);
   const detail = useQuery({
     queryKey: ["review-cases", "detail", organizationId, selectedId],
-    queryFn: ({ signal }) => api.get(organizationId, selectedId!, signal),
+    queryFn: ({ signal }) => api.get(organizationId, selectedId!, signal, items.find(item => item.id === selectedId)),
     enabled: Boolean(selectedId), retry: false,
   });
   const refresh = useCallback(async () => {
@@ -403,7 +403,10 @@ function ReviewQueue({ organizationId, legalEntityId, propertyId, api }: { organ
   }, [client, organizationId, selectedId]);
   const save: Save = useCallback(async (kind, payload, expectedRevision) => {
     const key = PendingEnvelopes.key(kind, payload, expectedRevision);
-    const envelope = pending.current.envelopeFor(key, () => reviewCaseEnvelope(organizationId, payload, expectedRevision));
+    // Address the case at its own entity/property so scoped users stay within their grant.
+    const caseId = typeof payload.caseId === "string" ? payload.caseId : undefined;
+    const target = caseId ? (detail.data?.id === caseId ? detail.data : items.find(item => item.id === caseId)) : undefined;
+    const envelope = pending.current.envelopeFor(key, () => reviewCaseEnvelope(organizationId, payload, expectedRevision, target));
     try {
       const receipt = await api.command(organizationId, kind, envelope);
       pending.current.settle(key);
@@ -414,7 +417,7 @@ function ReviewQueue({ organizationId, legalEntityId, propertyId, api }: { organ
       if (error instanceof ReviewCaseApiError && error.conflict) void refresh();
       throw error;
     }
-  }, [api, organizationId, refresh]);
+  }, [api, detail.data, items, organizationId, refresh]);
   const checkAgain = async () => {
     setChecking(true); setActionError(undefined); setNotice(undefined);
     try { await save("review_case.detect", {}); await refresh(); }

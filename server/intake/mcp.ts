@@ -20,13 +20,30 @@ function decodeBase64(value: string): Uint8Array {
   return new Uint8Array(Buffer.from(value, "base64"));
 }
 
+/** Ports the server has attested for a verified Codex OAuth client. Module-private: nothing else can add to it. */
+const mraClientPorts = new WeakSet<IntakePort>();
+
 /**
- * Codex-only MRA tools. The transport attests the codex_mcp channel and the
- * mra_ingestion capability; the shared MRA policy rejects any other transport.
+ * Server-side attestation that this MCP session belongs to the allowlisted
+ * Codex OAuth client. Only the /mcp route calls it, after verifying the
+ * token's client identity; a tool argument or packet can never reach it.
+ */
+export function mraIngestionPort(intake: IntakePort): IntakePort {
+  const attested: IntakePort = { list: intake.list, get: intake.get, stage: intake.stage, execute: intake.execute };
+  mraClientPorts.add(attested);
+  return attested;
+}
+
+/**
+ * MRA tools. Every client may read packets. Stage/map/preview/apply are
+ * registered only for a port the /mcp route attested for the Codex client,
+ * and only that session's transport carries the mra_ingestion capability; the
+ * shared MRA policy rejects any other transport.
  */
 export function registerIntakeMcpTools(register: IntakeToolRegistrar, options: { executor: RentOpsQueryExecutor; intake: IntakePort; actorId: string }): void {
   const { executor, intake, actorId } = options;
-  const transport = attestTransport("codex_mcp", ["mra_ingestion"]);
+  const mraClient = mraClientPorts.has(intake);
+  const transport = mraClient ? attestTransport("codex_mcp", ["mra_ingestion"]) : attestTransport("codex_mcp");
   const principalFor = (organizationId: string, connection = executor) => loadAuthenticatedPrincipal(connection, { actorId, organizationId, role: "admin" });
   const access = async (organizationId: string) => ({
     principal: await principalFor(organizationId), transport,
@@ -38,6 +55,7 @@ export function registerIntakeMcpTools(register: IntakeToolRegistrar, options: {
   register("get_mra_packet", "Read one MRA packet: normalized lines with evidence, mappings, outcomes, held and failed groups, and control totals.",
     { scope: companyScopeSchema, packetId: recordReferenceIdSchema }, false,
     async ({ scope, packetId }) => intake.get(await principalFor(scope.organizationId), { scope, packetId }));
+  if (!mraClient) return;
   register("stage_mra_packet", "Stage an MRA owner packet from base64 bytes (contentBase64, up to about 10 MB) or an existing verified company document (documentId). The server binds the bytes' SHA-256 into the command so a replayed key with different bytes is rejected. Nothing is applied to tenant accounts.",
     {
       command: commandEnvelopeSchema(mraStagePayloadSchema),
@@ -58,4 +76,18 @@ export function registerIntakeMcpTools(register: IntakeToolRegistrar, options: {
       { command: commandEnvelopeSchema(actionPayload(action)) }, true,
       async ({ command }) => intake.execute(action, command, await access(organizationIdSchema.parse(command.scope.organizationId))));
   }
+}
+
+/**
+ * The one /mcp endpoint serves ChatGPT, Claude Code and Codex. MRA ingestion is
+ * Codex-only: its mutation tools are registered, and its transport attested,
+ * only when the verified token was issued to an allowlisted OAuth client
+ * (RENT_OPS_MCP_MRA_CLIENT_IDS). Every other client keeps the read tools.
+ */
+export function mcpOptionsForClient<T extends { readonly company?: unknown }>(principal: { readonly clientId?: string }, config: { readonly mraClientIds?: readonly string[] }, options: T): T {
+  const company = options.company as { readonly intake?: IntakePort } | undefined;
+  if (!company?.intake) return options;
+  const allowed = principal.clientId !== undefined && (config.mraClientIds ?? []).includes(principal.clientId);
+  if (!allowed) return options;
+  return { ...options, company: { ...company, intake: mraIngestionPort(company.intake) } };
 }

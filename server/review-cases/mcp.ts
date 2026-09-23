@@ -15,7 +15,7 @@ import type { ReviewCasePort } from "./port";
 export type ReviewCaseToolRegistrar = (name: string, description: string, schema: z.ZodRawShape, write: boolean, handler: (args: any) => Promise<unknown>) => void;
 
 const COMMAND_DESCRIPTIONS: Readonly<Record<ReviewCaseCommandKind, string>> = {
-  "review_case.detect": "Run review detection for the whole company (scope needs only organizationId). Opens one case per cause and scope, refreshes changed cases, reopens resolved cases whose cause returned and verifies cases whose cause is gone. Safe to repeat.",
+  "review_case.detect": "Run review detection for the whole company (scope needs only organizationId). Opens one case per cause and scope, refreshes changed cases, reopens resolved cases whose cause returned and verifies cases whose cause is gone, unless detection is incomplete (then nothing is verified). payload.asOf other than today is a read-only preview. Safe to repeat.",
   "review_case.start_research": "Move an open, blocked or proposed case to researching. Supply expectedRevision from get_review_case.",
   "review_case.add_evidence": "Attach evidence (company document ID, source record, dated email or observation) to an unresolved case. Document evidence must be a verified company document; its checksum is recorded.",
   "review_case.propose": "Propose a fix. operational: a guarded reconciliation operation (kind, targetId, expectedRevision, beforeSha256 and fields) plus evidenceDocumentId; it is dry-run checked and nothing changes. financial: an accounting route; it is never applied here. connection: the configuration or code fix. Requires expectedRevision.",
