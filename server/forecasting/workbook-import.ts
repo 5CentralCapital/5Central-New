@@ -146,6 +146,10 @@ function slug(value: string): string {
 
 export async function parseWorkbookCashflow(bytes: Uint8Array, options: { fileName: string }): Promise<WorkbookCashflowDraft> {
   const format: "xlsx" | "csv" = /\.csv$/i.test(options.fileName) ? "csv" : "xlsx";
+  const header = Buffer.from(bytes.subarray(0, 4)).toString("hex");
+  if (format === "xlsx" && header !== "504b0304" && header !== "d0cf11e0") {
+    throw new ValidationCommandError("The file could not be read as a workbook or CSV.", { reason: "forecast_workbook_unreadable" });
+  }
   let workbook: WorkBook;
   try {
     workbook = format === "csv"
@@ -192,8 +196,8 @@ export async function parseWorkbookCashflow(bytes: Uint8Array, options: { fileNa
   periods.forEach((period, index) => {
     const next = periods[index + 1];
     const previous = periods[index - 1];
-    const gap = next ? dayNumber(next.date) - dayNumber(period.date) : previous ? dayNumber(period.date) - dayNumber(previous.date) : 7;
-    period.kind = gap >= 28 ? "month" : "week";
+    const gaps = [next ? dayNumber(next.date) - dayNumber(period.date) : null, previous ? dayNumber(period.date) - dayNumber(previous.date) : null].filter((gap): gap is number => gap !== null);
+    period.kind = gaps.length && Math.min(...gaps) >= 28 ? "month" : "week";
     if (previous && period.date <= previous.date) warnings.push(`Column ${period.column} is not after column ${previous.column}.`);
   });
 
