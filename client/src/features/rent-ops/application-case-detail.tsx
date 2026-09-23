@@ -7,6 +7,7 @@ import { downloadRentOpsDocument, loadRentOpsApplication } from "./api";
 import {
   applicationCaseDisplayName,
   applicationCaseFact,
+  applicationCaseFactResolved,
   applicationCaseSectionState,
   applicationHistorySectionState,
   applicationDocumentDownloadable,
@@ -35,7 +36,7 @@ function title(value: unknown): string {
 
 function moneyFact(value: unknown, knowledge?: string): string {
   const fact = applicationCaseFact(value, knowledge);
-  if (fact === "Unknown" || fact === "Needs review") return fact;
+  if (!applicationCaseFactResolved(value, knowledge)) return fact;
   const cents = Number(value);
   return Number.isFinite(cents)
     ? usdCurrencyFormatter.format(cents / 100)
@@ -43,9 +44,7 @@ function moneyFact(value: unknown, knowledge?: string): string {
 }
 
 function dateFact(value: unknown, knowledge?: string): string {
-  const fact = applicationCaseFact(value, knowledge);
-  if (fact === "Unknown" || fact === "Needs review") return fact;
-  return fact;
+  return applicationCaseFact(value, knowledge);
 }
 
 function Fact({ label, value, knowledge, className = "" }: { label: string; value: unknown; knowledge?: string; className?: string }) {
@@ -137,7 +136,7 @@ function HouseholdSection({ application }: { application: AdminApplicationDetail
       <Fact label="Children" value={summary?.children} />
       <Fact label="Total occupants" value={summary?.totalOccupants} />
     </dl>
-    {!members.length ? <EmptySection message="No household members recorded. Needs review if additional occupants are expected." /> : <div className="ro-case-member-list">
+    {!members.length ? <EmptySection message="No household members recorded. Confirm occupants if others are expected." /> : <div className="ro-case-member-list">
       {members.map((member, index) => <article className="ro-case-member" key={member.id ?? `${member.firstName ?? "member"}-${index}`}>
         <Users aria-hidden="true" />
         <div><strong>{[member.firstName, member.lastName].filter(Boolean).join(" ") || "Unknown household member"}</strong><span>{applicationCaseFact(member.relationship)} · {applicationCaseFact(member.isMinor)}</span><small>{applicationCaseFact(member.email)} · {applicationCaseFact(member.phone)}</small></div>

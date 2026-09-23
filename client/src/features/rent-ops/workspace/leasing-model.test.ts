@@ -90,8 +90,8 @@ test("unknown document type can be filtered without inventing a type", () => {
 
 test("linked records use available human labels and retain unresolved links", () => {
   assert.equal(linkedRecordLabel(snapshot, { propertyId: property.id, unitId: unit.id, personId: "person:one" }), "Alex Resident · Active Homes · 1A");
-  assert.equal(linkedRecordLabel(snapshot, { applicationId: "application:missing" }), "Application needs review");
-  assert.equal(linkedRecordLabel(snapshot, { propertyId: "property:missing" }), "Property needs review");
+  assert.equal(linkedRecordLabel(snapshot, { applicationId: "application:missing" }), "Application missing");
+  assert.equal(linkedRecordLabel(snapshot, { propertyId: "property:missing" }), "Property missing");
 });
 
 test("application sorting is newest first without merging rows", () => {

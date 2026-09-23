@@ -255,7 +255,7 @@ test("grouping retains accounts with blank or missing property identity", () => 
   const view = createReportViewModel("delinquency", [{ propertyName: "", personId: "one" }, { personId: "two" }]);
   const groups = groupReportRows("delinquency", view.displayRows);
   assert.equal(groups.length, 1);
-  assert.equal(groups[0].label, "Needs review");
+  assert.equal(groups[0].label, "Property missing");
   assert.equal(groups[0].rows.length, 2);
 });
 

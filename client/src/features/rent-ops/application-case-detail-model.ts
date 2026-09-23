@@ -1,4 +1,5 @@
 import type { AdminApplicationDetailView, AdminApplicationHistoryCaseView, AdminDocumentView } from "./types";
+import { APPLICANT_NAME_MISSING_LABEL, UNVERIFIED_LABEL } from "@shared/review-cases/display-labels";
 
 export type ApplicationCaseSectionKey = "overview" | "household" | "requirements" | "documents";
 export type ApplicationCaseSectionState = "ready" | "empty" | "unknown";
@@ -7,9 +8,16 @@ export type ApplicationHistorySectionState = "full" | "empty" | "unknown" | "res
 
 const REVIEW_KNOWLEDGE = new Set(["unknown", "ambiguous", "inferred"]);
 
-/** Keep missing facts distinct from facts that need operator verification. */
+/** True when a fact has a usable value whose knowledge is not unknown, ambiguous or inferred. */
+export function applicationCaseFactResolved(value: unknown, knowledge?: string): boolean {
+  if (knowledge && REVIEW_KNOWLEDGE.has(knowledge)) return false;
+  if (value === undefined || value === null || value === "") return false;
+  return typeof value !== "number" || Number.isFinite(value);
+}
+
+/** Keep missing facts ("Unknown") distinct from facts that need operator verification ("Unverified"). */
 export function applicationCaseFact(value: unknown, knowledge?: string): string {
-  if (knowledge && REVIEW_KNOWLEDGE.has(knowledge)) return "Needs review";
+  if (knowledge && REVIEW_KNOWLEDGE.has(knowledge)) return UNVERIFIED_LABEL;
   if (value === undefined || value === null || value === "") return "Unknown";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (typeof value === "number" && !Number.isFinite(value)) return "Unknown";
@@ -18,7 +26,7 @@ export function applicationCaseFact(value: unknown, knowledge?: string): string 
 
 export function applicationCaseDisplayName(application: Pick<AdminApplicationDetailView, "firstName" | "lastName">): string {
   const name = [application.firstName, application.lastName].filter((part): part is string => Boolean(part?.trim())).join(" ");
-  return name || "Applicant needs review";
+  return name || APPLICANT_NAME_MISSING_LABEL;
 }
 
 export function applicationCaseSectionState(detail: AdminApplicationDetailView | undefined, section: ApplicationCaseSectionKey): ApplicationCaseSectionState {

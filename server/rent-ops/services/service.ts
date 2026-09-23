@@ -377,7 +377,7 @@ function autoAllocationPlan(snapshot: RentOpsSnapshot, payment: RentOpsLedgerTra
       if (!Number.isSafeInteger(appliedToPayment)) throw new RentOpsInvariantError("Payment allocation balance exceeds safe integer range");
     }
   }
-  if (paymentHistoryUncertain) throw new RentOpsInvariantError("Payment allocation history needs review before auto-allocation");
+  if (paymentHistoryUncertain) throw new RentOpsInvariantError("Payment allocation history is incomplete; allocate manually.");
   if (appliedToPayment > resolvedPaymentAmountCents) throw new RentOpsInvariantError("Payment allocations exceed the payment amount");
 
   let remaining = resolvedPaymentAmountCents - appliedToPayment;
@@ -437,13 +437,13 @@ function paymentAllocatedCents(snapshot: RentOpsSnapshot, payment: RentOpsLedger
   for (const allocation of snapshot.paymentAllocations) {
     if (allocation.paymentTransactionId !== payment.id || allocation.kind === "transfer" || allocation.kind === "credit_allocation") continue;
     const charge = allocation.chargeTransactionId ? transactions.get(allocation.chargeTransactionId) : undefined;
-    if (!charge || charge.kind !== "charge") throw new RentOpsInvariantError("Payment allocation history needs review before auto-allocation");
+    if (!charge || charge.kind !== "charge") throw new RentOpsInvariantError("Payment allocation history is incomplete; allocate manually.");
     if (reversed.has(charge.id)) continue;
     if (!Number.isSafeInteger(allocation.amountCents) || !sourceAllocationFactsKnown(allocation) || allocation.amountCents! <= 0 && !isSourceAllocationReversal(allocation) || allocation.amountCents! > 0 && allocation.kind === "reversal") {
-      throw new RentOpsInvariantError("Payment allocation history needs review before auto-allocation");
+      throw new RentOpsInvariantError("Payment allocation history is incomplete; allocate manually.");
     }
     allocated += allocation.amountCents!;
-    if (!Number.isSafeInteger(allocated) || allocated < 0) throw new RentOpsInvariantError("Payment allocation balance needs review before auto-allocation");
+    if (!Number.isSafeInteger(allocated) || allocated < 0) throw new RentOpsInvariantError("Payment allocation balance is invalid; allocate manually.");
   }
   return allocated;
 }
@@ -1665,7 +1665,7 @@ export class RentOpsService {
       await repository.saveLedgerTransaction(payment);
       for (const allocation of input.allocations) {
         const charge = snapshot.ledgerTransactions.find(row=>row.id===allocation.chargeTransactionId);
-        if (!charge?.postedOn) throw new RentOpsInvariantError("Allocation charge date needs review");
+        if (!charge?.postedOn) throw new RentOpsInvariantError("Allocation charge has no posted date; set the charge date first.");
         await service.savePaymentAllocationRecord({id:`corrected-allocation:${createHash("sha256").update(operation+allocation.chargeTransactionId).digest("hex")}`,kind:"allocation",paymentTransactionId:payment.id,chargeTransactionId:charge.id,amountCents:allocation.amountCents,amountKnowledge:"known",allocatedOn:input.postedOn > charge.postedOn ? input.postedOn : charge.postedOn,allocatedOnKnowledge:"manual",paymentLinkKnowledge:"manual",chargeLinkKnowledge:"manual"});
       }
       await repository.saveActivity({id:`payment-correction:${operation}`,propertyId:original.propertyId!,unitId:original.unitId??undefined,tenancyId:original.tenancyId??undefined,personId:original.personId!,type:"system",actor:"admin",occurredAt:context.occurredAt,summary:`Payment ${originalId} corrected by ${context.actorSubject}; request ${requestHash}`});
@@ -1765,7 +1765,7 @@ export class RentOpsService {
         const charge = snapshot.ledgerTransactions.find(row => row.id === allocation.chargeTransactionId);
         if (!charge || charge.kind !== "charge" || charge.status !== "posted" || charge.tenancyId !== tenancy.id || charge.propertyId !== tenancy.propertyId || charge.unitId && charge.unitId !== unit.id || charge.personId !== tenancy.primaryPersonId || charge.payer !== "tenant" || charge.amountCents === null || !Number.isSafeInteger(charge.amountCents) || charge.amountKnowledge === "unknown") throw new RentOpsInvariantError("Allocation requires an exact posted tenant charge");
         if ((snapshot.modelVersion === 3 || charge.source) && [charge.propertyLinkKnowledge, ...(charge.unitId ? [charge.unitLinkKnowledge] : []), charge.tenancyLinkKnowledge, charge.personLinkKnowledge].some(value => value !== "manual" && value !== "exact")) throw new RentOpsInvariantError("Charge links need review");
-        if (snapshot.paymentAllocations.some(row => row.chargeTransactionId === charge.id && (row.amountCents === null || row.amountKnowledge === "unknown"))) throw new RentOpsInvariantError("Charge allocation amount needs review");
+        if (snapshot.paymentAllocations.some(row => row.chargeTransactionId === charge.id && (row.amountCents === null || row.amountKnowledge === "unknown"))) throw new RentOpsInvariantError("Charge has an allocation with an unknown amount; correct that allocation first.");
       }
       await repository.saveLedgerTransaction(payment);
       for (const allocation of allocations) await service.savePaymentAllocationRecord(allocation);

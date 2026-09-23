@@ -13,6 +13,7 @@ import {
   type ReportSetupValue,
 } from "./report-setup-model";
 import { REPORT_PERIODS } from "./report-model";
+import { NAME_MISSING_LABEL, PROPERTY_MISSING_LABEL, STATUS_UNVERIFIED_LABEL } from "@shared/review-cases/display-labels";
 import "./report-setup.css";
 
 export interface ReportSetupProps {
@@ -31,11 +32,11 @@ function optionLabel(field: ReportSetupField, value: string): string {
 
 function personLabel(person: ReportSetupDirectory["people"][number]): string {
   const name = [person.firstName, person.lastName].filter(Boolean).join(" ").trim();
-  return name || person.email || person.phone || person.id || "Tenant needs review";
+  return name || person.email || person.phone || person.id || NAME_MISSING_LABEL;
 }
 
 function propertyLabel(property: ReportSetupDirectory["properties"][number]): string {
-  return property.name || property.slug || property.id || "Property needs review";
+  return property.name || property.slug || property.id || PROPERTY_MISSING_LABEL;
 }
 
 function emptyReferenceSummary(field: ReportSetupField): string {
@@ -83,7 +84,7 @@ function referenceOptions(field: ReportSetupField, value: ReportSetupState, dire
     const units = new Map(directory.units.map(unit => [unit.id, unit.unitNumber ?? unit.id ?? "Unit"]));
     return directory.tenancies.filter(tenancy => tenancyMatches(tenancy))
       .sort((left, right) => `${left.id}`.localeCompare(`${right.id}`))
-      .map(tenancy => ({ value: tenancy.id!, label: `${properties.get(tenancy.propertyId) ?? "Property"} · ${units.get(tenancy.unitId) ?? "Unit"} · ${tenancy.status ?? "Needs review"}` }));
+      .map(tenancy => ({ value: tenancy.id!, label: `${properties.get(tenancy.propertyId) ?? "Property"} · ${units.get(tenancy.unitId) ?? "Unit"} · ${tenancy.status ?? STATUS_UNVERIFIED_LABEL}` }));
   }
   const hasParentRestriction = value.propertyScope !== "all" || propertyIds.size > 0 || selectedUnitIds.size > 0;
   if (!hasParentRestriction) {

@@ -23,7 +23,7 @@ function Loading({ text }: { text: string }) { return <div className="investors-
 function Failure({ message, onRetry }: { message: string; onRetry: () => void }) { return <div className="investors-error" role="alert"><CircleAlert size={17} /><span>{message}</span><button type="button" className="investors-button investors-button-secondary" onClick={onRetry}>Retry</button></div>; }
 function shiftMonth(month: string, offset: number): string { const [year, monthNumber] = month.split("-").map(Number); const index = year! * 12 + monthNumber! - 1 + offset; return `${String(Math.floor(index / 12)).padStart(4, "0")}-${String(index % 12 + 1).padStart(2, "0")}-01`; }
 
-export const CALENDAR_STATE_LABELS: Readonly<Record<InvestorCalendarState, string>> = { scheduled: "Scheduled", overdue: "Overdue", partial: "Partial", recorded: "Recorded", posted: "Posted", settled: "Settled", overpaid: "Overpaid", review: "Needs review", reversed: "Reversed" };
+export const CALENDAR_STATE_LABELS: Readonly<Record<InvestorCalendarState, string>> = { scheduled: "Scheduled", overdue: "Overdue", partial: "Partial", recorded: "Recorded", posted: "Posted", settled: "Settled", overpaid: "Overpaid", review: "Payment unverified", reversed: "Reversed" };
 
 /** Month-by-month obligations for one investor across its legal entities. */
 export function PaymentCalendarPanel({ api, organizationId, detail, month }: { api: InvestorsApi; organizationId: string; detail: InvestorDetail; month: string }) {

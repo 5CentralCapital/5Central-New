@@ -44,6 +44,7 @@ import "./tenant-record.css";
 import "./tenant-clean.css";
 import { EntityLink } from "./entity-link";
 import { reviewLabelForCodes, reviewLabelsForCodes, reviewReason, UNKNOWN_AMOUNT_LABEL, UNVERIFIED_LABEL } from "@shared/review-cases/reasons";
+import { STATUS_UNVERIFIED_LABEL } from "@shared/review-cases/display-labels";
 
 export type EditAction = (action: QuickAction, values?: FormValues) => void;
 
@@ -83,12 +84,6 @@ const TAB_LABELS: Record<TenantTab, string> = {
   documents: "Documents",
   activity: "Activity",
 };
-
-/** Status text from the tenant model; its generic UNVERIFIED_LABEL is shown as "Unverified". */
-const MODEL_REVIEW_STATUS = ["Needs", "review"].join(" ");
-function displayStatus(value: string | undefined): string | undefined {
-  return value === MODEL_REVIEW_STATUS ? UNVERIFIED_LABEL : value;
-}
 
 function text(value: unknown, fallback = UNVERIFIED_LABEL): string {
   if (typeof value !== "string") return fallback;
@@ -152,8 +147,8 @@ function amountCell(value: number | null, applicable = true): string {
 }
 
 function statusValue(value: string | undefined, warning = false): ReactNode {
-  const shown = displayStatus(value);
-  return <span className={statusClass(shown, warning || !shown || shown === UNVERIFIED_LABEL)}>{shown ? label(shown) : UNVERIFIED_LABEL}</span>;
+  const shown = value?.trim() ? value : undefined;
+  return <span className={statusClass(shown, warning || !shown)}>{shown ? label(shown) : STATUS_UNVERIFIED_LABEL}</span>;
 }
 
 function SummaryTab({ tenant, snapshot, onChanged }: { tenant: TenantView; snapshot: AdminSnapshot; onChanged: () => void }) {
@@ -170,7 +165,7 @@ function SummaryTab({ tenant, snapshot, onChanged }: { tenant: TenantView; snaps
           <Field label="Resident">{summary.displayName}</Field>
           <Field label="Property">{summary.propertyName}</Field>
           <Field label="Unit">{summary.unitLabel}</Field>
-          <Field label="Status">{statusValue(summary.status, displayStatus(summary.status) === UNVERIFIED_LABEL)}</Field>
+          <Field label="Status">{statusValue(summary.statusVerified ? summary.status : undefined, !summary.statusVerified)}</Field>
           {review && <Field label={review.label} warning={Boolean(review.warning)}><strong className="rm-amount">{review.amount}</strong><small>{review.date}</small>{review.warning && <small className="rm-warning-copy" role="status">{review.warning}</small>}{review.qualification && <small>{review.qualification}</small>}<small>{review.payerSplit}</small></Field>}
           <Field label="Posted ledger balance" warning={balanceWarning}><span className={balanceWarning ? "rm-muted" : summary.balance.amountCents ? "rm-amount rm-amount-warning" : "rm-amount"}>{summary.balance.complete ? formatMoney(summary.balance.amountCents) : reviewLabelForCodes(summary.balance.uncertaintyCodes)}</span>{balanceWarning && summary.balance.uncertaintyCodes.length > 1 && <small className="rm-warning-copy">{reviewLabelsForCodes(summary.balance.uncertaintyCodes).join(" · ")}</small>}</Field>
           <Field label="As of date">{formatDate(summary.asOfDate)}</Field>
@@ -440,7 +435,7 @@ export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged, 
     {addPaymentOpen && paymentTenancy?.id && <PaymentEditDialog id="new" tenancyId={paymentTenancy.id} businessDate={businessDate??summary.asOfDate} tenantName={summary.displayName} onClose={()=>setAddPaymentOpen(false)} onSaved={onMoveRefresh??(async()=>{await onChanged();})}/>}
     <header className="rm-record-summary">
       <div className="rm-record-summary-main"><h2>{summary.displayName}</h2><p>{summary.propertyName} · Unit {summary.unitLabel}</p></div>
-      <div className="rm-record-summary-meta"><span className={statusClass(displayStatus(summary.status), displayStatus(summary.status) === UNVERIFIED_LABEL)}>{label(displayStatus(summary.status))}</span><span className={`rm-record-balance${review ? tenant.balanceReview?.stale || tenant.balanceReview?.reviewedBalanceCents ? " rm-record-balance-warning" : "" : summary.balance.complete && summary.balance.amountCents ? " rm-record-balance-warning" : ""}`}><small>{review ? review.label : "Posted ledger balance"}</small><strong>{review ? review.amount : summary.balance.complete ? formatMoney(summary.balance.amountCents) : reviewLabelForCodes(summary.balance.uncertaintyCodes)}</strong></span><span className="rm-record-as-of"><small>As of</small><strong>{formatDate(review ? tenant.balanceReview?.asOfDate : summary.asOfDate)}</strong></span></div>
+      <div className="rm-record-summary-meta"><span className={statusClass(summary.statusVerified ? summary.status : undefined, !summary.statusVerified)}>{summary.statusVerified ? label(summary.status) : summary.status}</span><span className={`rm-record-balance${review ? tenant.balanceReview?.stale || tenant.balanceReview?.reviewedBalanceCents ? " rm-record-balance-warning" : "" : summary.balance.complete && summary.balance.amountCents ? " rm-record-balance-warning" : ""}`}><small>{review ? review.label : "Posted ledger balance"}</small><strong>{review ? review.amount : summary.balance.complete ? formatMoney(summary.balance.amountCents) : reviewLabelForCodes(summary.balance.uncertaintyCodes)}</strong></span><span className="rm-record-as-of"><small>As of</small><strong>{formatDate(review ? tenant.balanceReview?.asOfDate : summary.asOfDate)}</strong></span></div>
     </header>
     {!readOnly && businessDate && <div className="rm-toolbar"><button className="rm-button" onClick={() => onManageMoves ? onManageMoves() : setMovesOpen(true)}>Move-in / move-out</button></div>}
     {movesOpen && !readOnly && businessDate && <ManagerTenancyActions key={tenant.person.id} snapshot={snapshot} personId={tenant.person.id} businessDate={businessDate} onSaved={onMoveRefresh ?? (async () => { await onChanged(); })} onClose={() => setMovesOpen(false)} />}

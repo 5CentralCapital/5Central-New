@@ -120,7 +120,7 @@ test("historical sections distinguish full, empty, unknown, and restricted state
 
 test("unknown facts remain safe and explicit", () => {
   assert.equal(applicationCaseFact(undefined), "Unknown");
-  assert.equal(applicationCaseFact("old value", "unknown"), "Needs review");
+  assert.equal(applicationCaseFact("old value", "unknown"), "Unverified");
   assert.equal(applicationCaseFact(false), "No");
 });
 
