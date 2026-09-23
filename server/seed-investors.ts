@@ -252,6 +252,8 @@ const investorData: InvestorData[] = [
 ];
 
 async function seed() {
+  // Creates missing accounts with fixed well-known passwords (including the administrator).
+  if (process.env.NODE_ENV === "production") throw new Error("Investor seeding is forbidden in production");
   console.log('Seeding real investor data...\n');
 
   const defaultPassword = await hashPassword('investor123');
