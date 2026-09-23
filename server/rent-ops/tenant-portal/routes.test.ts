@@ -364,6 +364,15 @@ test("public recovery and login rate limits are shared across clients and reset 
 });
 
 
+test("a rate-limited address stops creating per-account limiter rows", async (t) => {
+  const f = await fixture(t);
+  for (let attempt = 0; attempt < 25; attempt++) {
+    await f.client().request(`${tenantPath}/auth/login`, { method: "POST", body: { email: `sprayed${attempt}@example.test`, password: initialPassword } });
+  }
+  // One address row plus one row per account while the address was still admitted (20).
+  assert.equal(f.store.limits.size, 21);
+});
+
 test("configured reset is nonenumerating, preserves access until use, and rejects replay", async t => {
   const deliveries: TenantAccessDelivery[] = [];
   let fail = false;

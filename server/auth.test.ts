@@ -54,6 +54,12 @@ test("host login limiter bounds account attempts across IPs and expires", () => 
   assert.equal(limit("one-ip", "new-account"), 900);
 });
 
+test("host login limiter: one blocked address cannot fill the table and lock out everyone", () => {
+  const limit = auth.createLoginAttemptLimiter(() => 0);
+  for (let i = 0; i < 12000; i++) limit("attacker-ip", `sprayed-${i}@example.test`);
+  assert.equal(limit("administrator-ip", "admin@example.test"), 0);
+});
+
 test("OAuth manager session rejects a removed subject allowlist before loading the host user", async () => {
   const prior = process.env.RENT_OPS_OAUTH_ADMIN_SUBJECTS;
   process.env.RENT_OPS_OAUTH_ADMIN_SUBJECTS = "";

@@ -74,14 +74,15 @@ export function createLoginAttemptLimiter(now: () => number = Date.now) {
     if (email) keys.push({ key: `account:${createHash("sha256").update(email).digest("hex")}`, maximum: 10 });
     const missing = keys.filter(({ key }) => !attempts.has(key)).length;
     if (attempts.size + missing > maximumEntries) return Math.ceil(windowMs / 1000);
-    let retryAfter = 0;
     for (const { key, maximum } of keys) {
       const entry = attempts.get(key) ?? { count: 0, expiresAt: currentTime + windowMs };
       entry.count = Math.min(entry.count + 1, maximum + 1);
       attempts.set(key, entry);
-      if (entry.count > maximum) retryAfter = Math.max(retryAfter, Math.ceil((entry.expiresAt - currentTime) / 1000));
+      // Stop at the first exhausted key: a blocked address must not keep adding
+      // account entries until the shared table is full for every other client.
+      if (entry.count > maximum) return Math.ceil((entry.expiresAt - currentTime) / 1000);
     }
-    return retryAfter;
+    return 0;
   };
 }
 

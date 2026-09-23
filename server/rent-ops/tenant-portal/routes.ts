@@ -113,7 +113,8 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
   async function limit(req: Request, scope: string, max = 20, identity?: string) {
     const timestamp = now().toISOString();
     const accepted = await store.consumeRateLimit(digest(`${scope}:ip:${req.ip ?? req.socket.remoteAddress ?? "unknown"}`), max, AUTH_WINDOW_MS, timestamp);
-    const accountAccepted = !identity || await store.consumeRateLimit(digest(`${scope}:account:${identity}`), 10, AUTH_WINDOW_MS, timestamp);
+    // A rejected address adds no per-account rows, so one client cannot grow the table without bound.
+    const accountAccepted = accepted && (!identity || await store.consumeRateLimit(digest(`${scope}:account:${identity}`), 10, AUTH_WINDOW_MS, timestamp));
     if (!accepted || !accountAccepted) throw new TenantPortalError(429, "Too many attempts. Please try again in 15 minutes.");
   }
 
