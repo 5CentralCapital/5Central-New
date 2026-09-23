@@ -83,7 +83,7 @@ export function RecurringBillingPanel({ onPosted, businessDate, propertyId }: { 
     {result && <p role="status" style={{ padding: "0 20px" }}>{result}</p>}
     {preview && <>
       <div className="ro-panel-heading">
-        <p>{preview.readyCount} ready · {money(preview.readyCents)} · {preview.blockedCount} need review · {preview.postedCount} already posted</p>
+        <p>{preview.readyCount} ready · {money(preview.readyCents)} · {preview.blockedCount} blocked · {preview.postedCount} already posted</p>
         <button type="button" className="primary" disabled={busy || preview.readyCount === 0} onClick={() => void post()}>Post {preview.readyCount} ready charges · {money(preview.readyCents)}</button>
       </div>
       <p style={{ padding: "0 20px" }}>Charges post and become due on {preview.billingOn}. Partial months need a confirmed manual charge. Subsidies, deposits, and one-time fees use their separate workflows.</p>

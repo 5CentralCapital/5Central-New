@@ -2418,9 +2418,11 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
     const linkedPerson = personBySource.get(sourceLink(record, "tenantId", "personId", "tenantSourceId") ?? "");
     const linkedTenancy = tenancyBySource.get(sourceLink(record, "tenancyId", "leaseId", "TenancyID", "LeaseID") ?? "");
     const occurredAt = optionalTimestamp(record, ["occurredAt", "occurred_at", "sentDate", "receivedDate", "historyDate", "updatedAt", "updated_at"], exceptions, "activity", "occurredAt");
-    const actor = stringValue(record, "actor", "user", "createdBy", "createUserId", "sentUserId");
-    const summary = stringValue(record, "summary", "subject", "description", "historyType", "result");
+    // A user ID is not an actor name; only a returned name is shown.
+    const actor = stringValue(record, "actor", "actorName", "createUserName", "CreateUserName");
+    const summary = stringValue(record, "summary", "subject", "Subject", "Summary", "description", "result");
     const typeText = stringValue(record, "type", "activityType")?.toLowerCase();
+    const detail = stringValue(record, "detail", "notes", "note", "Note", "body", "Body", "message", "Message", "messageBody");
     if (!occurredAt) exception(exceptions, "activity_occurred_at_missing", "Activity was retained with an explicit unknown source event timestamp", "activity", record, undefined, isV3(context) ? "warning" : "error");
     if (!actor) exception(exceptions, "activity_actor_unknown", "Activity actor was not returned by RM; retained as explicit unknown", "activity", record, undefined, "warning");
     if (!summary) exception(exceptions, "activity_summary_unknown", "Activity summary was not returned by RM; retained as explicit unknown", "activity", record, undefined, "warning");
@@ -2438,7 +2440,7 @@ export function mapRentManagerExport(input: RentManagerImportInput, options: {
       occurredAt: occurredAt ?? null,
       actor: actor ?? (isV3(context) ? null : "Unknown actor"),
       summary: summary ?? (isV3(context) ? null : "Unknown activity"),
-      detail: stringValue(record, "detail", "notes", "note", "body", "message", "messageBody"),
+      detail: detail && detail !== summary ? detail : undefined,
       occurredAtKnowledge: occurredAt ? "source" : "unknown",
       actorKnowledge: actor ? "source" : "unknown",
       summaryKnowledge: summary ? "source" : "unknown",

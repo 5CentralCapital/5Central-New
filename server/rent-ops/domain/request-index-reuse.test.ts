@@ -73,7 +73,7 @@ test("request indexes preserve reviewed financial outputs and ordered violations
   const results = indexReuseResults();
   // Source-backed reviews are additive and tested separately. Preserve every
   // financial field and ordered violation after the canonical dashboard change.
-  const financialOnly = JSON.stringify(results, (key, value) => ["operationalBalanceCents", "operationalDelinquencyCents", "operationalBalanceUnresolvedCount", "balanceReview"].includes(key) ? undefined : value);
+  const financialOnly = JSON.stringify(results, (key, value) => ["operationalBalanceCents", "operationalDelinquencyCents", "operationalBalanceUnresolvedCount", "operationalBalanceDueCount", "operationalBalanceDueKnownCents", "balanceReview"].includes(key) ? undefined : value);
   assert.equal(createHash("sha256").update(financialOnly).digest("hex"), "1428751590f1fbd4f5663f7d5a17b15c212d54edf9b26a5dd19e184843719e68");
 });
 

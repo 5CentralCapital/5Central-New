@@ -32,6 +32,18 @@ export const APPLICANT_NAME_MISSING_LABEL = "Applicant name missing";
 export const DESCRIPTION_MISSING_LABEL = "Description missing";
 export const CHARGE_TYPE_MISSING_LABEL = "Charge type missing";
 export const ADDRESS_MISSING_LABEL = "Address missing";
+/** A list of review codes that was checked and is empty: nothing is uncertain. */
+export const NONE_LABEL = "None";
+/** No unpaid rent, so there is no overdue date (not a missing date). */
+export const NOT_OVERDUE_LABEL = "Not overdue";
+/** No notice is recorded for the tenancy. */
+export const NO_NOTICE_LABEL = "No notice";
+/** An imported record whose link (for example to a unit) was not returned. */
+export const LINK_MISSING_LABEL = "Link missing";
+/** A source amount is known but its date could not be confirmed. */
+export const DATE_UNVERIFIED_LABEL = "Date unverified";
+/** An imported activity with neither a title nor a body in the source. */
+export const DETAILS_UNAVAILABLE_LABEL = "Details unavailable";
 
 /** "<Subject> missing" in sentence case, for example missingLabel("Unit type") → "Unit type missing". */
 export function missingLabel(subject: string): string {

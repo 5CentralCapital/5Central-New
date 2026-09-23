@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { activityDisplay } from "./activity-display";
 import { Activity, AlertCircle, Download, FileClock, FileText, Search } from "lucide-react";
 
 import { downloadRentOpsDocument } from "../api";
@@ -209,7 +210,7 @@ export function DocumentsWorkspace({ snapshot, filters, onEdit, onChanged: _onCh
     recordKey: activityRecordKey(activity, index),
     date: activityDateValue(activity),
     type: activity.type,
-    summary: activity.summary ?? "Unknown activity",
+    summary: activityDisplay(activity).title,
     actor: leasingFact(activity.actor, activity.actorKnowledge),
     linked: linkedRecordLabel(snapshot, activity),
     linkedPerson:linkedRecordPerson(snapshot,activity),

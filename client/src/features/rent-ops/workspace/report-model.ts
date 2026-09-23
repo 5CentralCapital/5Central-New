@@ -9,7 +9,7 @@ import type {
 } from "../types";
 import { REPORT_KEYS, REPORT_LABELS } from "../types";
 import { formatDate, formatLabel, formatMoney } from "./display";
-import { DATE_MISSING_LABEL, PERIOD_MISSING_LABEL, PROPERTY_MISSING_LABEL, STATUS_UNVERIFIED_LABEL, UNKNOWN_AMOUNT_LABEL, UNKNOWN_COUNT_LABEL, UNVERIFIED_LABEL } from "@shared/review-cases/display-labels";
+import { DATE_MISSING_LABEL, DATE_UNVERIFIED_LABEL, LINK_MISSING_LABEL, NO_NOTICE_LABEL, NONE_LABEL, NOT_OVERDUE_LABEL, PERIOD_MISSING_LABEL, PROPERTY_MISSING_LABEL, STATUS_UNVERIFIED_LABEL, UNKNOWN_AMOUNT_LABEL, UNKNOWN_COUNT_LABEL, UNVERIFIED_LABEL } from "@shared/review-cases/display-labels";
 
 export { formatDate, formatLabel, formatMoney } from "./display";
 
@@ -30,6 +30,11 @@ export interface ReportColumnDefinition {
   /** Safe additive fields may receive a property subtotal. */
   subtotal?: boolean;
   read: (row: ReportRow, snapshot?: AdminSnapshot) => unknown;
+  /**
+   * Context-specific text when the value is absent (for example "Not overdue"
+   * when there is no unpaid rent). Without it the format's generic label is used.
+   */
+  absent?: (row: ReportRow) => string;
 }
 
 export interface ReportConfig {
@@ -101,7 +106,7 @@ const REPORT_SOURCE_NOTES: Record<ReportKey, string> = {
   occupancy: "Rows are derived by the 5Central Ops domain service as of the selected date.",
   "scheduled-income": "Rows are derived from server-recognized recurring schedules; unresolved facts stay visible, labeled with what is missing.",
   "collected-income": "Rows are derived from posted ledger receipts; this view does not establish bank settlement.",
-  "scheduled-vs-collected": "Rows compare server-derived schedules and posted receipts; incomplete inputs remain unresolved.",
+  "scheduled-vs-collected": "Scheduled uses schedule versions in effect on the report date for the current month, or for the whole month for an earlier month. Collected counts receipts dated in the month and applied on or before the report date. Completeness and review flags are per property; schedules for vacant units, other tenancies or lower-precedence versions are counted separately and do not make a property incomplete.",
   delinquency: "Rows are derived from the server account ledger; incomplete balances are never treated as zero.",
   "tenant-ledger": "Rows are derived from the server account ledger and retain opening-balance uncertainty.",
   "lease-expiration": "Rows are derived from current lease terms and tenancy dates.",
@@ -171,6 +176,44 @@ function integer(key: string, label?: string): ReportColumnDefinition {
   return field(key, "integer", label);
 }
 
+function withAbsent(column: ReportColumnDefinition, absent: (row: ReportRow) => string): ReportColumnDefinition {
+  return { ...column, absent };
+}
+
+/** Review-code lists: the server omits an empty list, so absence means none. */
+function reviewCodes(key: string, label: string): ReportColumnDefinition {
+  return text(key, label, (row) => readRaw(row, key) ?? []);
+}
+
+function knownCents(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value);
+}
+
+/** Label for a delinquency row without an oldest-unpaid-rent date. */
+export function overdueDateAbsentLabel(row: ReportRow): string {
+  const rent = readRaw(row, "rentOnlyBalanceCents");
+  if (knownCents(rent)) return rent <= 0 ? NOT_OVERDUE_LABEL : DATE_MISSING_LABEL;
+  const operational = readRaw(row, "operationalBalanceCents");
+  if (knownCents(operational) && operational <= 0) return NOT_OVERDUE_LABEL;
+  return UNKNOWN_AMOUNT_LABEL;
+}
+
+function lastPaymentAbsentLabel(row: ReportRow): string {
+  return readRaw(row, "balanceComplete") === true ? "None recorded" : UNKNOWN_AMOUNT_LABEL;
+}
+
+function scheduleDispositionText(row: ReportRow): string {
+  const parts: string[] = [];
+  const count = (key: string) => { const value = readRaw(row, key); return typeof value === "number" && Number.isSafeInteger(value) ? value : 0; };
+  if (count("scheduleNotApplicableVacantCount")) parts.push(`${count("scheduleNotApplicableVacantCount")} vacant unit`);
+  if (count("scheduleNotApplicableOtherTenancyCount")) parts.push(`${count("scheduleNotApplicableOtherTenancyCount")} other tenancy`);
+  if (count("schedulePrecedenceSuppressedCount")) parts.push(`${count("schedulePrecedenceSuppressedCount")} lower precedence`);
+  return parts.length ? parts.join(" · ") : NONE_LABEL;
+}
+
+const DEPOSIT_UNIT_LINK_LABELS: Record<string, string> = { direct: "Direct", tenancy: "Via tenancy", missing: LINK_MISSING_LABEL, conflict: "Link conflict" };
+const HAP_RECEIPT_LABELS: Record<string, string> = { received: "Received", none_received: "None received", unknown: "Receipt status unknown" };
+
 function reportColumns(key: ReportKey): ReportColumnDefinition[] {
   switch (key) {
     case "rent-roll":
@@ -229,15 +272,17 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
         text("propertyName", "Property", propertyName),
         text("month", "Month"),
         currency("scheduledCents", "Scheduled"),
+        field("scheduledUncertainCents", "currency", "Uncertain scheduled"),
         currency("collectedCents", "Collected"),
         currency("varianceCents", "Variance"),
         status("complete", "Complete"),
-        text("uncertaintyCodes", "Review flags"),
+        reviewCodes("uncertaintyCodes", "Review flags"),
+        text("scheduleDispositions", "Schedules not counted", scheduleDispositionText),
       ];
     case "delinquency":
       return [
         text("propertyName", "Property", propertyName),
-        text("unitNumber", "Unit", unitNumber),
+        withAbsent(text("unitNumber", "Unit", unitNumber), () => LINK_MISSING_LABEL),
         text("tenantName", "Tenant", tenantName),
         status("tenancyStatus", "Tenant status"),
         currency("operationalBalanceCents", "Operational balance"),
@@ -247,9 +292,9 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
           currency("nonRentBalanceCents", "Posted non-rent balance"),
           text("reviewedOperationalBalance", "Reviewed operational balance", (row) => balanceReviewReportText("balanceReview" in row ? row.balanceReview : undefined)),
           currency("unappliedCashCents", "Unapplied cash"),
-          date("oldestUnpaidRentOn", "Oldest unpaid rent"),
-          date("lastPaymentOn", "Last payment"),
-          status("noticeStatus", "Notice status"),
+          withAbsent(date("oldestUnpaidRentOn", "Oldest unpaid rent"), overdueDateAbsentLabel),
+          withAbsent(date("lastPaymentOn", "Last payment"), lastPaymentAbsentLabel),
+          withAbsent(status("noticeStatus", "Notice status"), () => NO_NOTICE_LABEL),
         ].map(column => ({ ...column, curated: false })),
       ];
     case "tenant-ledger":
@@ -282,7 +327,7 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
     case "security-deposit":
       return [
         text("propertyName", "Property", propertyName),
-        text("unitNumber", "Unit", unitNumber),
+        withAbsent(text("unitNumber", "Unit", unitNumber), (row) => readRaw(row, "unitLinkStatus") === "conflict" ? "Link conflict" : LINK_MISSING_LABEL),
         text("tenantName", "Resident", tenantName),
         currency("securityHeldCents", "Security held"),
         currency("refundablePetHeldCents", "Pet held"),
@@ -290,7 +335,8 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
         currency("totalHeldCents", "Total held"),
         status("dispositionStatus", "Disposition"),
         integer("unknownHeldCount", "Unknown amounts"),
-        status("temporalUncertainty", "Date review"),
+        text("temporalUncertainty", "Date review", (row) => { const value = readRaw(row, "temporalUncertainty"); return value === true ? DATE_UNVERIFIED_LABEL : value === false ? NONE_LABEL : undefined; }),
+        text("unitLinkStatus", "Unit link", (row) => { const value = readRaw(row, "unitLinkStatus"); return typeof value === "string" ? DEPOSIT_UNIT_LINK_LABELS[value] ?? formatLabel(value) : undefined; }),
       ];
     case "applicant-pipeline":
       return [
@@ -313,6 +359,7 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
         currency("tenantObligationCents", "Tenant obligation"),
         currency("expectedTotalCents", "Expected total"),
         currency("receivedAgencyCents", "Agency received"),
+        text("agencyReceiptStatus", "Agency receipt", (row) => { const value = readRaw(row, "agencyReceiptStatus"); return typeof value === "string" ? HAP_RECEIPT_LABELS[value] ?? formatLabel(value) : undefined; }),
         currency("varianceCents", "Variance"),
         status("exception", "Exception"),
       ];
@@ -436,7 +483,10 @@ export function discoverOptionalReportColumns(key: ReportKey, rows: readonly Rep
         format,
         align: format === "currency" || format === "integer" || format === "percent" ? "right" : undefined,
         curated: false,
-        read: (row: ReportRow, currentSnapshot?: AdminSnapshot) => readReportValue(row, candidate, currentSnapshot),
+        // Review-code lists are omitted by the server when empty: absence is "None".
+        read: /Codes$/.test(candidate)
+          ? (row: ReportRow, currentSnapshot?: AdminSnapshot) => readReportValue(row, candidate, currentSnapshot) ?? []
+          : (row: ReportRow, currentSnapshot?: AdminSnapshot) => readReportValue(row, candidate, currentSnapshot),
       } satisfies ReportColumnDefinition;
     });
 }
@@ -546,8 +596,13 @@ function guardedMoney(row: ReportRow, key: string): unknown {
   if (key === "baseRentCents" && isVacantWithoutObligation(row)) return 0;
   if (BALANCE_TOTAL_KEYS.has(key) && readRaw(row, "balanceComplete") === false) return null;
   if (key === "totalScheduledCents" && readRaw(row, "baseRentCents") == null && !isVacantWithoutObligation(row)) return null;
-  if (/HeldCents$/.test(key) && (Number(readRaw(row, "unknownHeldCount")) > 0 || readRaw(row, "temporalUncertainty") === true)) return null;
-  if (["agencyObligationCents", "tenantObligationCents", "expectedTotalCents", "varianceCents"].includes(key) && readRaw(row, "exception") === true) return null;
+  // A held amount is unknown only when the source amount is unknown. A known
+  // amount whose receipt date is unverified stays visible; the "Date review"
+  // column marks its as-of inclusion as unresolved.
+  if (/HeldCents$/.test(key) && Number(readRaw(row, "unknownHeldCount")) > 0) return null;
+  // HAP obligations come from the effective contract and stay visible; only
+  // the variance depends on receipts, so uncertain receipts hide it.
+  if (key === "varianceCents" && readRaw(row, "agencyObligationCents") !== undefined && (readRaw(row, "uncertainty") === true || readRaw(row, "agencyReceiptStatus") === "unknown")) return null;
   return value;
 }
 
@@ -616,10 +671,10 @@ export function formatReportValue(value: unknown, format?: ReportColumn["format"
   if (format === "integer") return typeof value === "number" && Number.isSafeInteger(value) ? value.toLocaleString("en-US") : absentReportValue(format);
   if (format === "status") {
     if (typeof value === "boolean") return value ? "Yes" : "No";
-    if (Array.isArray(value)) return value.length ? value.map(formatLabel).join(", ") : absentReportValue(format);
+    if (Array.isArray(value)) return value.length ? value.map(formatLabel).join(", ") : NONE_LABEL;
     return formatLabel(value);
   }
-  if (Array.isArray(value)) return value.length ? value.map(formatLabel).join(", ") : absentReportValue(format);
+  if (Array.isArray(value)) return value.length ? value.map(formatLabel).join(", ") : NONE_LABEL;
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : absentReportValue(format);
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (isRecord(value)) return absentReportValue(format);
@@ -628,7 +683,9 @@ export function formatReportValue(value: unknown, format?: ReportColumn["format"
 
 export function formatReportCellValue(row: DisplayReportRow, column: ReportColumnDefinition): string {
   if (column.key === "baseRentCents" && isVacantWithoutObligation(row.__source)) return "—";
-  return formatReportValue(row[column.key], column.format);
+  const value = row[column.key];
+  if ((value === null || value === undefined || value === "") && column.absent) return column.absent(row.__source);
+  return formatReportValue(value, column.format);
 }
 
 export function buildReportCsv(rows: readonly DisplayReportRow[], columns: readonly ReportColumnDefinition[]): string {

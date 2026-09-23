@@ -1062,6 +1062,8 @@ export function serializeAdminApplicationView(input: AdminApplicationContext): A
 export interface AdminDashboardSummaryView {
   operationalDelinquencyCents?: number | null;
   operationalBalanceUnresolvedCount?: number;
+  operationalBalanceDueCount?: number;
+  operationalBalanceDueKnownCents?: number;
   balanceComplete?: boolean;
   balanceUncertaintyCodes?: string[];
   balanceUnresolvedCount?: number;
@@ -1188,6 +1190,8 @@ export function serializeDashboardSummary(value: DashboardSummary): AdminDashboa
     balanceUnresolvedCount: number(input, "balanceUnresolvedCount"),
     operationalDelinquencyCents: nullableNumberValue(input.operationalDelinquencyCents),
     operationalBalanceUnresolvedCount: number(input, "operationalBalanceUnresolvedCount"),
+    operationalBalanceDueCount: number(input, "operationalBalanceDueCount"),
+    operationalBalanceDueKnownCents: number(input, "operationalBalanceDueKnownCents"),
     rentOnlyDelinquencyCents: nullableNumberValue(input.rentOnlyDelinquencyCents),
     totalDelinquencyCents: nullableNumberValue(input.totalDelinquencyCents),
     unappliedCashCents: nullableNumberValue(input.unappliedCashCents),

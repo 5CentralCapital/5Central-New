@@ -5,13 +5,13 @@ import { loadDashboardCash, loadDashboardTrends, loadRentOpsReport, loadRentOpsW
 import { useRentOpsAuth } from "../auth-ui";
 import type { DashboardWorkspaceProps } from "./dashboard-workspace";
 import { EntityLink, RecordLink, entityHref, shouldHandleEntityClick } from "./entity-link";
-import { createReportViewModel, formatReportValue, readReportValue, reportQueryFilters, reportQueryKey } from "./report-model";
+import { createReportViewModel, formatReportValue, overdueDateAbsentLabel, readReportValue, reportQueryFilters, reportQueryKey } from "./report-model";
 import { workspaceApiFilters } from "./workspace-state";
 import { DashboardChart } from "./dashboard-chart";
 import { useReportSearch } from "./use-report-search";
 import { recentOnlineApplications, dashboardMovements } from "./dashboard-tiles";
 import { ApplicationCaseDetail } from "../application-case-detail";
-import { dashboardKpis } from "./dashboard-kpis";
+import { dashboardKpis, splitDueRows } from "./dashboard-kpis";
 import "./rm-dashboard.css";
 import { UNKNOWN_AMOUNT_LABEL } from "@shared/review-cases/display-labels";
 
@@ -64,6 +64,7 @@ export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenU
   };
   const rentRoll = rowsFor("rent-roll");
   const dueRows = rowsFor("delinquency")?.filter(row => !numeric(row.operationalBalanceCents) || row.operationalBalanceCents > 0).sort((a, b) => (numeric(b.operationalBalanceCents) ? b.operationalBalanceCents : -1) - (numeric(a.operationalBalanceCents) ? a.operationalBalanceCents : -1));
+  const dueSplit = dueRows ? splitDueRows(dueRows) : undefined;
   const receiptRows = rowsFor("collected-income");
   const receiptGroups = new Map<string, Row>();
   for (const row of receiptRows ?? []) {
@@ -117,7 +118,7 @@ export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenU
       {cashReady ? <Panel title="Cash Account" className="rmd-cash"><Table rows={[cashReady]} columns={[{ key: "name", label: "Account", render: row => <>{text(row.name)} · {text(row.mask)}</> }, amountColumn("currentCents", "Balance")]} /><div className="rmd-cash-available"><span>Available</span><strong>{money(cashReady.availableCents)}</strong></div><div className="rmd-cash-date">Company cash · {new Date(cashReady.checkedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}<button type="button" title="Refresh cash balance" aria-label="Refresh cash balance" disabled={cash.isFetching} onClick={() => void cash.refetch()}><RefreshCw size={12} /></button></div></Panel>
       : <Panel title="Rent Roll by Property" className="rmd-cash" onOpen={() => onReport("rent-roll")}><Table rows={propertyRows} columns={[propertyColumn, { key: "rent", label: "Base rent", number: true, render: row => row.rentUnknown || row.unknown ? UNKNOWN_AMOUNT_LABEL : money(row.rent) }]} footer={<><span>Occupied base rent</span><strong>{propertyRows?.some(row => row.rentUnknown || row.unknown) ? UNKNOWN_AMOUNT_LABEL : money(total(propertyRows, "rent"))}</strong></>} /></Panel>}
       <Panel title="Vacancy by Property" className="rmd-vacancy-property" onOpen={() => onReport("occupancy")}><Table rows={propertyRows} columns={[propertyColumn, { key: "vacant", label: "Vacant", number: true }, { key: "unitCount", label: "Units", number: true }, { key: "vacancyRate", label: "% Vacant", number: true, render: row => row.unknown ? "—" : `${(100 * Number(row.vacant) / Number(row.unitCount)).toFixed(0)}%` }]} footer={<><span>Total vacant</span><strong>{total(propertyRows, "vacant") ?? "—"} / {total(propertyRows, "unitCount") ?? "—"}</strong></>} /></Panel>
-      <Panel title="Delinquency List" className="rmd-delinquency" onOpen={() => onReport("delinquency")}><Table rows={dueRows} empty="No balances due." columns={[{ key: "tenantName", label: "Name", render: personLink }, propertyColumn, unitColumn, { key: "oldestUnpaidRentOn", label: "Date" }, { ...amountColumn("operationalBalanceCents", "Amount"), render: row => numeric(row.operationalBalanceCents) ? <EntityLink personId={String(row.personId ?? "")} tab="ledger" onOpen={onOpenTenant}>{money(row.operationalBalanceCents)}</EntityLink> : UNKNOWN_AMOUNT_LABEL }]} footer={<><span>{dueRows?.length ?? "—"} accounts</span><strong>{dueRows?.some(row => !numeric(row.operationalBalanceCents)) ? UNKNOWN_AMOUNT_LABEL : money(total(dueRows, "operationalBalanceCents"))}</strong></>} /></Panel>
+      <Panel title="Delinquency List" className="rmd-delinquency" onOpen={() => onReport("delinquency")}><Table rows={dueRows} empty="No balances due." columns={[{ key: "tenantName", label: "Name", render: personLink }, propertyColumn, unitColumn, { key: "oldestUnpaidRentOn", label: "Date", render: row => row.oldestUnpaidRentOn ? text(row.oldestUnpaidRentOn) : overdueDateAbsentLabel((row.__source ?? row) as Row) }, { ...amountColumn("operationalBalanceCents", "Amount"), render: row => numeric(row.operationalBalanceCents) ? <EntityLink personId={String(row.personId ?? "")} tab="ledger" onOpen={onOpenTenant}>{money(row.operationalBalanceCents)}</EntityLink> : UNKNOWN_AMOUNT_LABEL }]} footer={dueSplit ? <><span>{dueSplit.knownCount} {dueSplit.knownCount === 1 ? "account" : "accounts"} due{dueSplit.unverifiedCount ? ` · ${dueSplit.unverifiedCount} unverified` : ""}</span><strong>{money(dueSplit.knownCents)}</strong></> : <><span>—</span><strong>{UNKNOWN_AMOUNT_LABEL}</strong></>} /></Panel>
       <Notes identity={identity} />
       <Panel title="Posted Rent Receipts" className="rmd-receipts" onOpen={() => onReport("collected-income")}><Table rows={receipts} empty="No posted rent receipts this month." columns={[{ key: "tenantName", label: "Tenant", render: personLink }, { key: "paymentOn", label: "Date" }, amountColumn("amountCents", "Amount")]} footer={<><span>{filters.asOfDate.slice(0, 7)}</span><strong>{money(total(receipts, "amountCents"))}</strong></>} /></Panel>
       <Panel title="Occupancy by Property" className="rmd-occupancy-property" onOpen={() => onReport("occupancy")}><Table rows={propertyRows} columns={[propertyColumn, { key: "occupied", label: "Occupied", number: true }, { key: "preleased", label: "Preleased", number: true }, { key: "unknown", label: "Unknown", number: true }]} footer={<><span>Occupied units</span><strong>{total(propertyRows, "occupied") ?? "—"} / {total(propertyRows, "unitCount") ?? "—"}</strong></>} /></Panel>
