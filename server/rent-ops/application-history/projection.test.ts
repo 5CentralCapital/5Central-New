@@ -309,3 +309,14 @@ test("unknown and sensitive answer types retain exact linkage without exposing s
   const missing = project(input({ applicationAnswerRecords: [raw({ sourceId: "answer-1", ApplicationID: "application-1", FieldID: "missing" })] }));
   assert.equal(missing.unknownRestricted.unmappedAnswerCount, 1);
 });
+
+test("an unparseable source date or number is unknown, never a source fact with no value", () => {
+  const snapshot = project(input({
+    applications: [raw({ sourceId: "application-1", ProspectID: "prospect-1", SubmittedDate: "03/01/2024", CreatedDate: "2024-02-28T09:00:00" })],
+    interestedRentals: [raw({ sourceId: "interest-1", ApplicationID: "application-1", Bedrooms: "2.5" })],
+  }));
+  const application = snapshot.applications[0];
+  assert.deepEqual([application.submittedOn, application.submittedOnKnowledge], [null, "unknown"]);
+  assert.deepEqual([application.createdOn, application.createdOnKnowledge], ["2024-02-28", "source"]);
+  assert.deepEqual([snapshot.interests[0].bedrooms, snapshot.interests[0].bedroomsKnowledge], [null, "unknown"]);
+});
