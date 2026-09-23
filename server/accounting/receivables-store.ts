@@ -7,7 +7,7 @@ import { AccountingError } from "./errors";
 import { versionCompare } from "./mirror-store";
 
 /*
- * Persistence for the QuickBooks receivables mirror (migration 049).
+ * Persistence for the QuickBooks receivables mirror (migration 050).
  *
  * The document row is the current provider revision; effects and
  * applications are written once per revision (append-only). A revision older

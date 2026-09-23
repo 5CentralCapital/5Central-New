@@ -76,12 +76,12 @@ importing native history into books that are still being cleaned up, and (4) the
 ## What was implemented on `claude/qbo-financial-source`
 
 Built on the release branch (`claude/qbo-production-release`), tested on PGlite with the real
-runtime-role grants. Migration 049 is a **reviewed proposal**: it must be applied with
+runtime-role grants. Migration 050 is a **reviewed proposal**: it must be applied with
 `npm run company:production-schema` after 043–048 are live, never with the release.
 
 | Piece | Packet | Files |
 |---|---|---|
-| Receivables mirror schema: current revision per document; append-only effects and payment applications per revision; runtime grants in the manifest | QS02 | `server/rent-ops/migrations/049_accounting_qbo_receivables.sql` |
+| Receivables mirror schema: current revision per document; append-only effects and payment applications per revision; runtime grants in the manifest | QS02 | `server/rent-ops/migrations/050_accounting_qbo_receivables.sql` |
 | Normalizer for Invoice, CreditMemo, Payment, SalesReceipt, RefundReceipt and A/R JournalEntry lines, following QuickBooks' customer-balance rules; exact cents; whole-document refusal on anything not understood | QS02 | `server/integrations/quickbooks/normalize-receivables.ts` |
 | Sync: customers and receivables in catch-up, CDC, webhooks and full replays (after Account identity); stale revisions ignored; deletions and unsupported revisions stop counting; anchor requires every stream | QS02 | `server/accounting/provider-sync.ts`, `receivables-store.ts` |
 | Inactive-record query fix | QS02 | `server/accounting/provider-sync.ts` |
@@ -96,7 +96,7 @@ runtime-role grants. Migration 049 is a **reviewed proposal**: it must be applie
 |---|---|---|
 | QS00 | Done: baseline facts, deployed/DB state, gaps (this document, compliance review, cutover audit) | — |
 | QS01 | Existing identity/coverage contracts reused; receivables contracts added | Dated tenancy→property→entity attribution check on links |
-| QS02 | Receivables mirror implemented and tested; cash mirror unchanged | Apply 049; sandbox run against a real company; Item/Class/Department mirrors |
+| QS02 | Receivables mirror implemented and tested; cash mirror unchanged | Apply 050 (after the cutover release, which ships 049); sandbox run against a real company; Item/Class/Department mirrors |
 | QS03 | Posting service existing; record-only Invoice guard added | Field-level edit maps per entity; `PrivateNote` source-event tagging; CreditMemo/Payment writes |
 | QS04 | Read path, links, API and MCP implemented | Manager/tenant UI wiring; RM export inventory and batch previews per entity-period (finding 6) |
 | QS05–QS12 | Not started | As listed in the plan, plus findings 5, 6 and 8 |

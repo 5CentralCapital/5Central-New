@@ -21,7 +21,7 @@ export const QBO_CDC_ENTITIES = [...TRANSACTION_ENTITY_TYPES, "Account"] as cons
 /** Named provider records mirrored for display and mapping. */
 export const QBO_NAMED_ENTITIES = ["Vendor", "Customer", "Employee"] as const;
 /**
- * Receivables mirror (migration 049): customers first so names and provider
+ * Receivables mirror (migration 050): customers first so names and provider
  * balances exist, then the customer-linked transaction types.
  */
 export const QBO_RECEIVABLE_CDC_ENTITIES = ["Customer", ...QBO_RECEIVABLE_DOCUMENT_TYPES] as const;
