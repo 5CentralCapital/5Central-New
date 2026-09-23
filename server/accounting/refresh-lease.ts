@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { QuickBooksConnectionScope } from "../../shared/accounting/quickbooks";
-import { financialSourceScopeKey, financialSourceScopeSchema } from "../../shared/accounting";
+import { financialSourceScopeSchema } from "../../shared/accounting";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { AccountingError } from "./errors";
 
@@ -54,9 +54,5 @@ export class PostgresQuickBooksRefreshLease implements QuickBooksRefreshLease {
 
 export function newQuickBooksRefreshLeaseOwner(prefix = "rops"): string {
   return `${prefix}:${randomUUID()}`;
-}
-
-export function refreshLeaseKey(scope: QuickBooksConnectionScope): string {
-  return financialSourceScopeKey(parsed(scope));
 }
 

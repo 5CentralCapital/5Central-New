@@ -8,7 +8,7 @@ import {
   type CurrencyCode,
   type MoneyCents,
 } from "../../../shared/company";
-import type { QuickBooksConnectionScope, QuickBooksJsonObject } from "../../../shared/accounting/quickbooks";
+import type { QuickBooksJsonObject } from "../../../shared/accounting/quickbooks";
 import type { FinancialProviderPaymentSubtype, FinancialSourceFlow, FinancialSourceLineRole } from "../../../shared/accounting/source";
 
 const SUPPORTED_TRANSACTION_TYPES = ["Purchase", "Bill", "BillPayment", "Deposit"] as const;
@@ -408,8 +408,4 @@ export function normalizeQboTransaction(type: string, input: unknown, options: {
     },
     unsupportedReasons: unsupported,
   };
-}
-
-export function qboSourceScope(scope: QuickBooksConnectionScope) {
-  return scope;
 }

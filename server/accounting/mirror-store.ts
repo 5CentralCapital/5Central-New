@@ -847,7 +847,6 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
     const accountBody = account.rows[0]?.provider_body;
     if (!accountBody || typeof accountBody !== "object" || Array.isArray(accountBody)) return null;
     const accountType = (accountBody as Record<string, unknown>).AccountType;
-    const detailType = (accountBody as Record<string, unknown>).AccountSubType ?? (accountBody as Record<string, unknown>).DetailType;
     const acceptedAccount = typeof accountType === "string" && ["Bank", "Credit Card", "CashOnHand"].includes(accountType);
     if (!acceptedAccount) return null;
     let lineAccountType: string | null = null;
