@@ -37,3 +37,19 @@
 @media (min-width: 1800px) { .rmd-top-grid { grid-template-rows: 178px 178px; }.rm-workspace .rmd-dashboard table { font-size: 12px; }.rm-workspace .rmd-dashboard td { padding-block: 2px; }.rmd-chart { height: 210px; }.rmd-trend-panel { min-height: 300px; } }
 @media (max-width: 1250px) { .rmd-top-grid { grid-template-columns: 1fr 1fr; grid-template-rows: 175px 180px 235px; }.rmd-delinquency { grid-column: 1; grid-row: 3; }.rmd-notes { grid-column: 2; grid-row: 3; }.rmd-trend-grid { grid-template-columns: 1fr; }.rmd-chart { height: 235px; }.rmd-trend-panel { min-height: 320px; }.rmd-bottom-grid { grid-template-columns: 1fr 1fr; }.rmd-bottom-grid > :last-child { grid-column: 1 / -1; } }
 @media (max-width: 650px) { .rmd-top-grid { display: flex; flex-direction: column; }.rmd-top-grid > .rmd-panel { height: 205px; }.rmd-top-grid > .rmd-delinquency, .rmd-top-grid > .rmd-notes { height: 250px; }.rmd-bottom-grid { grid-template-columns: 1fr; }.rmd-chart-scroll { width: 100%; }.rmd-chart text { font-size: 18px; }.rmd-chart .rmd-chart-year { font-size: 15px; }.rmd-chart-filters select { font-size: 12px; min-height: 32px; }.rm-workspace .rmd-panel-header { flex-basis: 28px; }.rm-workspace .rmd-dashboard td { padding-block: 6px; } }
+/* Company rows: obligations, exceptions, work due and the cash-outlook entry, below the operating panels. */
+.rmd-company-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; min-width: 0; }
+.rmd-company-grid > .rmd-load-error { grid-column: 1 / -1; }
+.rmd-compact { min-height: 132px; }
+.rmd-rows { flex: 1; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.rmd-rows > li { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 34px; padding: 5px 10px; border-bottom: 1px solid #deddd8; font-variant-numeric: tabular-nums; }
+.rmd-rows > li > span:first-child { display: grid; min-width: 0; }
+.rmd-rows > li strong, .rmd-row-link { overflow: hidden; color: #29292b; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.rmd-rows small { overflow: hidden; color: #656568; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.rmd-rows .number { flex: 0 0 auto; text-align: right; }
+.rmd-row-link { padding: 0; border: 0; background: none; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
+.rmd-row-link:hover { text-decoration: underline; }
+.rmd-row-link:focus-visible { outline: 2px solid var(--ds-focus-color, #8a6716); outline-offset: 2px; }
+.rmd-overdue { color: var(--ds-critical, #c0352b); font-weight: 600; }
+@media (max-width: 1250px) { .rmd-company-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 650px) { .rmd-company-grid { grid-template-columns: 1fr; } }

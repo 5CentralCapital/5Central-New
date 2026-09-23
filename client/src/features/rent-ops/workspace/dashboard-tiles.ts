@@ -26,7 +26,14 @@ export function recentOnlineApplications(applications: AdminApplicationView[], s
 export function dashboardMovements(snapshot: AdminSnapshot, filters: ViewFilters) {
   const start = `${filters.asOfDate.slice(0, 7)}-01`;
   const endDate = new Date(`${start}T12:00:00Z`); endDate.setUTCMonth(endDate.getUTCMonth() + 1); endDate.setUTCDate(0);
-  const end = endDate.toISOString().slice(0, 10);
+  return tenancyMovements(snapshot, filters, start, endDate.toISOString().slice(0, 10));
+}
+
+/**
+ * Move events between two inclusive dates. Actual moves count only on or
+ * before the workspace date; planned and expected moves keep their state.
+ */
+export function tenancyMovements(snapshot: AdminSnapshot, filters: ViewFilters, start: string, end: string) {
   const inPeriod = (date?: string) => !!date && date >= start && date <= end;
   return snapshot.snapshot.tenancies.flatMap(tenancy => {
     if (![tenancy.propertyLinkKnowledge, tenancy.unitLinkKnowledge, tenancy.primaryPersonLinkKnowledge].every(exact)) return [];

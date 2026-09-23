@@ -44,7 +44,7 @@ function Notes({ identity }: { identity: string }) {
   return <Panel title="Notes" className="rmd-notes"><textarea aria-label="Dashboard notes" placeholder="Add a dashboard note…" value={value} onChange={event => { setValue(event.target.value); setMessage(""); }} maxLength={10000} /><div className="rmd-note-actions"><span role="status">{message || "This browser"}</span><button type="button" disabled={value === saved} onClick={() => { try { localStorage.setItem(key, value); setSaved(value); setMessage("Saved in this browser"); } catch { setMessage("Could not save. Try again."); } }}>Save</button><button type="button" disabled={value === saved} onClick={() => { setValue(saved); setMessage(""); }}>Cancel</button></div></Panel>;
 }
 
-export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenUnit, onOpenProperty, previews, refreshing = false, onManageMoves }: DashboardWorkspaceProps) {
+export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenUnit, onOpenProperty, previews, refreshing = false, onManageMoves, companyPanels }: DashboardWorkspaceProps) {
   const auth = useRentOpsAuth();
   const enabled = auth.status === "authenticated" && !!auth.user?.id;
   const identity = auth.user?.id ?? "";
@@ -109,7 +109,7 @@ export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenU
   const movements = dashboardMovements(snapshot, filters);
   const errors = requests.flatMap((request, index) => request.error && !(bundled && index < 2) ? [reports[index]] : []);
   const cashReady = cash.data?.state === "ready" ? cash.data : undefined;
-  return <section className="rm-dashboard-workspace rmd-dashboard" aria-label="Rent Operations dashboard">
+  return <section className="rm-dashboard-workspace rmd-dashboard" aria-label="Dashboard">
     {errors.length > 0 && <div className="rmd-load-error" role="alert">Some tables could not be loaded. <button onClick={() => { requests.forEach(request => { if (request.error) void request.refetch(); }); }}>Retry</button></div>}
     <ul className="rops-kpis" aria-label="Portfolio summary">{dashboardKpis({ propertyRows, dueRows, receipts, period: filters.asOfDate.slice(0, 7) }).map(kpi => <li key={kpi.key} className="rops-kpi" data-tone={kpi.tone}><span className="rops-kpi-label">{kpi.label}</span><strong className="rops-kpi-value">{kpi.value}</strong>{kpi.share !== undefined && <span className="rops-kpi-meter" aria-hidden="true"><i style={{ width: `${Math.round(kpi.share * 100)}%` }} /></span>}<span className="rops-kpi-detail">{kpi.detail}</span></li>)}</ul>
     <div className="rmd-top-grid">
@@ -121,6 +121,7 @@ export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenU
       <Panel title="Posted Rent Receipts" className="rmd-receipts" onOpen={() => onReport("collected-income")}><Table rows={receipts} empty="No posted rent receipts this month." columns={[{ key: "tenantName", label: "Tenant", render: personLink }, { key: "paymentOn", label: "Date" }, amountColumn("amountCents", "Amount")]} footer={<><span>{filters.asOfDate.slice(0, 7)}</span><strong>{money(total(receipts, "amountCents"))}</strong></>} /></Panel>
       <Panel title="Occupancy by Property" className="rmd-occupancy-property" onOpen={() => onReport("occupancy")}><Table rows={propertyRows} columns={[propertyColumn, { key: "occupied", label: "Occupied", number: true }, { key: "preleased", label: "Preleased", number: true }, { key: "unknown", label: "Unknown", number: true }]} footer={<><span>Occupied units</span><strong>{total(propertyRows, "occupied") ?? "—"} / {total(propertyRows, "unitCount") ?? "—"}</strong></>} /></Panel>
     </div>
+    {companyPanels}
     <div className="rmd-trend-grid">{(["vacancy", "occupancy", "rent"] as const).map(metric => <DashboardChart key={metric} metric={metric} data={trends.data} loading={trends.isFetching} error={trends.error?.message} onRetry={() => void trends.refetch()} />)}</div>
     <div className="rmd-bottom-grid">
       <Panel title="Vacancy List" onOpen={() => onReport("occupancy")}><Table rows={vacancy} empty="No vacant units." columns={[propertyColumn, unitColumn, { key: "type", label: "Type" }, amountColumn("marketRentCents", "Rent"), { key: "daysVacant", label: "Days vacant", number: true }]} footer={<span>{vacancy?.length ?? "—"} vacant units · {total(propertyRows, "preleased") ?? "—"} preleased</span>} /></Panel>

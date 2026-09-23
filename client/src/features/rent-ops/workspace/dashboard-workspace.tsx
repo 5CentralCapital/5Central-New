@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { EntityLink, RecordLink } from "./entity-link";
 import type { RentOpsWorkspaceDashboard } from "../api";
 import type { GridColumn } from "./grid";
@@ -15,6 +16,8 @@ export interface DashboardWorkspaceProps {
   previews?: RentOpsWorkspaceDashboard["reports"];
   refreshing?: boolean;
   onManageMoves?: () => void;
+  /** Company rows (obligations, exceptions, work due, cash outlook) placed below the operating panels. */
+  companyPanels?: ReactNode;
 }
 
 type MetricTone = "normal" | "good" | "warn";

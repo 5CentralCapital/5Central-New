@@ -166,6 +166,24 @@
 .rops-menu-item { min-height: 36px; padding: 8px 10px; border-radius: 8px; font-size: 13px; }
 .rops-menu-item[data-highlighted], .rops-menu-item[data-state="open"] { background: var(--ds-menu-highlight, rgb(58 50 38 / 7%)); }
 .rops-menu-label { font-size: 11px; font-weight: 600; letter-spacing: .02em; color: var(--ds-muted, #8a8a8e); }
+.rops-menu-item[aria-current="page"] { font-weight: 600; }
+.rops-menu-item[aria-current="page"] > svg { color: var(--ds-gold-ink, #8a6716); }
+.rops-account-name { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Dashboard opens directly: the category is a link styled like its siblings. */
+.rm-workspace.rops-modern .rops-nav-direct { text-decoration: none; }
+/* Account menu: initials on the trailing edge of the bar. */
+.rm-workspace.rops-modern .rops-account-trigger {
+  display: inline-grid; place-items: center; flex: 0 0 auto; width: 34px; height: 34px; margin-left: 4px; padding: 0;
+  border: 1px solid var(--ds-hairline); border-radius: 999px; background: var(--ds-surface-2); color: var(--ds-ink-2);
+  font: 600 12px/1 var(--ds-font); letter-spacing: .02em; cursor: pointer;
+  transition: background-color 160ms var(--ds-ease), border-color 160ms var(--ds-ease);
+}
+.rm-workspace.rops-modern .rops-account-trigger:hover,
+.rm-workspace.rops-modern .rops-account-trigger[data-state="open"] { background: var(--ds-fill-hover); border-color: var(--ds-hairline-strong); }
+.rm-workspace.rops-modern :is(.rops-account-trigger, .rops-nav-trigger, .rops-mobile-toggle, .rops-wordmark):focus-visible { outline: 2px solid var(--ds-focus-color); outline-offset: 2px; }
+.rm-workspace.rops-modern .rops-mobile-location { display: grid; justify-items: start; gap: 2px; text-align: left; }
+.rm-workspace.rops-modern .rops-mobile-location small { color: var(--ds-muted); font: 500 11px/1 var(--ds-font); }
+@media (pointer: coarse) { .rm-workspace.rops-modern .rops-account-trigger { width: 44px; height: 44px; } }
 
 /* ── Page frame ── */
 .rm-workspace.rops-modern .rm-main { padding: 20px var(--rm-page-inset) 48px; }
@@ -483,7 +501,7 @@
 
 /* ── Refinements after visual review ── */
 .rm-workspace.rops-modern .rops-primary-navigation { justify-content: flex-start; gap: 2px; margin-left: 8px; }
-@media (min-width: 1101px) { .rm-workspace.rops-modern .rops-primary-navigation { justify-content: center; margin-left: 0; margin-right: 96px; } }
+@media (min-width: 1101px) { .rm-workspace.rops-modern .rops-primary-navigation { justify-content: center; margin-left: 0; margin-right: 60px; } }
 .rm-workspace.rops-modern .rmd-dashboard .rmd-chart-filters select {
   min-height: 30px;
   border: 0;
@@ -657,6 +675,7 @@
   }
   .rm-workspace.rops-modern .rops-wordmark { color: var(--ds-ink); }
   .rm-workspace.rops-modern .rops-wordmark > span { color: var(--ds-gold-ink); }
+  .rm-workspace.rops-modern .rops-account-trigger { background: var(--ds-fill); border-color: var(--ds-hairline-strong); color: var(--ds-ink); }
   .rm-workspace.rops-modern .rops-nav-trigger,
   .rm-workspace.rops-modern .rops-mobile-toggle { color: var(--ds-muted); }
   .rm-workspace.rops-modern .rops-nav-trigger:hover,
@@ -673,8 +692,7 @@
   }
   .rops-nav-menu .rops-menu-item[data-highlighted],
   .rops-nav-menu .rops-menu-item[data-state="open"] { background: var(--ds-fill-hover); color: var(--ds-ink); }
-  .rops-nav-menu .rops-menu-label,
-  .rops-nav-menu .rops-menu-status { color: var(--ds-muted); }
+  .rops-nav-menu .rops-menu-label { color: var(--ds-muted); }
   .rops-nav-menu .rops-menu-separator { background: var(--ds-hairline); }
   .rops-nav-menu .rops-menu-item:focus-visible { outline-color: var(--ds-focus-color); }
 
