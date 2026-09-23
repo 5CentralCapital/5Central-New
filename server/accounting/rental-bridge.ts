@@ -162,12 +162,18 @@ export async function previewRentalBridge(executor: RentOpsQueryExecutor, princi
         default: break;
       }
     }
-    const deposits = await executor.query<{ received: unknown; held: unknown }>(
+    // A deposit with an unknown held amount (signed Rent Manager balance) or
+    // receipt date is excluded and counted as unknown, never summed as zero.
+    const deposits = await executor.query<{ received: unknown; held: unknown; unknown: unknown }>(
       `SELECT COALESCE(SUM(amount_held_cents) FILTER (WHERE received_on BETWEEN $2::date AND $3::date), 0)::bigint::text AS received,
-              COALESCE(SUM(amount_held_cents) FILTER (WHERE received_on <= $3::date AND (disposition_status = 'held' OR disposed_on > $3::date)), 0)::bigint::text AS held
+              COALESCE(SUM(amount_held_cents) FILTER (WHERE received_on <= $3::date AND (disposition_status = 'held' OR disposed_on > $3::date)), 0)::bigint::text AS held,
+              COUNT(*) FILTER (WHERE (amount_held_cents IS NULL OR received_on IS NULL)
+                AND (received_on IS NULL OR received_on <= $3::date)
+                AND (received_on IS NULL OR received_on >= $2::date OR disposition_status = 'held' OR disposed_on IS NULL OR disposed_on > $3::date)) AS unknown
          FROM rent_ops_security_deposits WHERE property_id = $1`,
       [mapping.property_id, from, through],
     );
+    totals.unknown += Number(deposits.rows[0]?.unknown ?? 0);
     totals.depositsReceived += big(deposits.rows[0]?.received);
     // Held deposits are a point-in-time balance; take it once per property at the latest mapped day.
     totals.depositsHeld = big(deposits.rows[0]?.held);
@@ -188,7 +194,7 @@ export async function previewRentalBridge(executor: RentOpsQueryExecutor, princi
     organizationId: query.organizationId, legalEntityId: query.legalEntityId, periodStart: query.periodStart, periodEnd: query.periodEnd,
     currency: entity.rows[0].currency, postingMethod: policy.method,
     status: incomplete ? "incomplete_source" : policy.status,
-    reason: incomplete ? `${overall.unknown} rental ledger entr${overall.unknown === 1 ? "y has" : "ies have"} an unknown amount, status or category and are excluded from these totals.` : policy.reason,
+    reason: incomplete ? `${overall.unknown} rental ledger or deposit record${overall.unknown === 1 ? " has" : "s have"} an unknown amount, date, status or category and ${overall.unknown === 1 ? "is" : "are"} excluded from these totals.` : policy.reason,
     controlTotals, byProperty: properties, fingerprint, generatedAt: now().toISOString(),
   });
 }

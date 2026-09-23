@@ -280,6 +280,12 @@ test("the summary bridge preview reports control totals from the rental ledger a
     assert.equal(preview.byProperty.length, 1);
     assert.match(preview.fingerprint, /^[a-f0-9]{64}$/);
     assert.equal((await h.operations.previewBridge(admin.principal, period)).fingerprint, preview.fingerprint, "the preview is deterministic");
+    // A deposit whose receipt date is unknown is excluded and counted, never summed as zero.
+    await h.raw.query(`INSERT INTO rent_ops_security_deposits (id, property_id, unit_id, tenancy_id, person_id, type, amount_held_cents, received_on) VALUES ('dep-unknown',$1,$2,'tenancy-1','person-1','security',25000,NULL)`, [PROPERTY, UNIT]);
+    const withUnknownDeposit = await h.operations.previewBridge(admin.principal, period);
+    assert.equal(withUnknownDeposit.controlTotals.excludedUnknownCount, 2);
+    assert.equal(withUnknownDeposit.controlTotals.depositsHeldAtEndCents, "50000");
+    await h.raw.query(`DELETE FROM rent_ops_security_deposits WHERE id = 'dep-unknown'`);
     const exported = await h.operations.exportBridgeCsv(admin.principal, period);
     assert.match(exported.csv, /Preview only; nothing was posted to QuickBooks/);
     assert.match(exported.csv, new RegExp(preview.fingerprint));
