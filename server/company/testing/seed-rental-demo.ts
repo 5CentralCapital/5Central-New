@@ -140,7 +140,27 @@ export async function seedRentalDemo(options: SeedRentalDemoOptions): Promise<vo
     for (const member of snapshot.applicationHouseholdMembers) await repository.saveApplicationHouseholdMember(member);
     for (const requirement of snapshot.applicationRequirements) await repository.saveApplicationRequirement(requirement);
 
-    for (const tenancy of snapshot.tenancies) await repository.saveTenancy(tenancy);
+    // The in-memory fixture leaves tenancy knowledge markers implicit, which
+    // the in-memory model reads as known. A durable row without markers reads
+    // as unconfirmed, so tenant-status filters would drop every demo resident.
+    // Record the synthetic relationships and dates as manually entered.
+    for (let tenancy of snapshot.tenancies) {
+      const manual = <T,>(value: T | null | undefined, present: unknown) => value ?? (present ? "manual" : "unknown");
+      // A future tenancy has not moved in: the fixture's date is its planned start.
+      const planned = tenancy.status === "future" && !tenancy.plannedMoveInOn && tenancy.actualMoveInOn
+        ? { plannedMoveInOn: tenancy.actualMoveInOn, actualMoveInOn: null }
+        : {};
+      tenancy = { ...tenancy, ...planned } as typeof tenancy;
+      await repository.saveTenancy({
+        ...tenancy,
+        propertyLinkKnowledge: manual(tenancy.propertyLinkKnowledge, tenancy.propertyId),
+        unitLinkKnowledge: manual(tenancy.unitLinkKnowledge, tenancy.unitId),
+        primaryPersonLinkKnowledge: manual(tenancy.primaryPersonLinkKnowledge, tenancy.primaryPersonId),
+        statusKnowledge: manual(tenancy.statusKnowledge, tenancy.status),
+        actualMoveInKnowledge: manual(tenancy.actualMoveInKnowledge, tenancy.actualMoveInOn),
+        plannedMoveInKnowledge: manual(tenancy.plannedMoveInKnowledge, tenancy.plannedMoveInOn),
+      } as typeof tenancy);
+    }
     for (const membership of snapshot.householdMemberships) await repository.saveHouseholdMembership(membership);
     for (const term of snapshot.leaseTerms) await repository.saveLeaseTerm(term);
 

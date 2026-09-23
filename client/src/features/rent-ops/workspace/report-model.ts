@@ -9,7 +9,7 @@ import type {
 } from "../types";
 import { REPORT_KEYS, REPORT_LABELS } from "../types";
 import { formatDate, formatLabel, formatMoney } from "./display";
-import { DATE_MISSING_LABEL, DATE_UNVERIFIED_LABEL, LINK_MISSING_LABEL, NO_NOTICE_LABEL, NONE_LABEL, NOT_OVERDUE_LABEL, PERIOD_MISSING_LABEL, PROPERTY_MISSING_LABEL, STATUS_UNVERIFIED_LABEL, UNKNOWN_AMOUNT_LABEL, UNKNOWN_COUNT_LABEL, UNVERIFIED_LABEL } from "@shared/review-cases/display-labels";
+import { DATE_MISSING_LABEL, DATE_UNVERIFIED_LABEL, LINK_MISSING_LABEL, NO_NOTICE_LABEL, NONE_LABEL, NOT_OVERDUE_LABEL, PERIOD_MISSING_LABEL, PROPERTY_MISSING_LABEL, STATUS_UNVERIFIED_LABEL, UNIT_MISSING_LABEL, UNKNOWN_AMOUNT_LABEL, UNKNOWN_COUNT_LABEL, UNVERIFIED_LABEL } from "@shared/review-cases/display-labels";
 
 export { formatDate, formatLabel, formatMoney } from "./display";
 
@@ -180,6 +180,11 @@ function withAbsent(column: ReportColumnDefinition, absent: (row: ReportRow) => 
   return { ...column, absent };
 }
 
+/** Tenant-ledger opening-balance rows carry no unit, entry type or category; those fields do not apply. */
+function ledgerOpeningAbsent(otherwise: string, opening = "—"): (row: ReportRow) => string {
+  return (row) => readRaw(row, "rowType") === "opening_balance" ? opening : otherwise;
+}
+
 /** Review-code lists: the server omits an empty list, so absence means none. */
 function reviewCodes(key: string, label: string): ReportColumnDefinition {
   return text(key, label, (row) => readRaw(row, key) ?? []);
@@ -300,12 +305,13 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
     case "tenant-ledger":
       return [
         text("propertyName", "Property", propertyName),
-        text("unitNumber", "Unit", unitNumber),
+        withAbsent(text("unitNumber", "Unit", unitNumber), ledgerOpeningAbsent(UNIT_MISSING_LABEL)),
         text("tenantName", "Resident", tenantName),
         date("postedOn", "Posted", (row) => readNestedTransaction(row, "postedOn")),
-        date("dueOn", "Due", (row) => readNestedTransaction(row, "dueOn")),
-        status("kind", "Entry", (row) => readNestedTransaction(row, "kind")),
-        status("category", "Category", (row) => readNestedTransaction(row, "category")),
+        // Only a charge has a due date; a payment, credit or opening balance has none to be missing.
+        withAbsent(date("dueOn", "Due", (row) => readNestedTransaction(row, "dueOn")), (row) => readNestedTransaction(row, "kind") === "charge" ? DATE_MISSING_LABEL : "—"),
+        withAbsent(status("kind", "Entry", (row) => readNestedTransaction(row, "kind")), ledgerOpeningAbsent(STATUS_UNVERIFIED_LABEL, "Opening balance")),
+        withAbsent(status("category", "Category", (row) => readNestedTransaction(row, "category")), ledgerOpeningAbsent(STATUS_UNVERIFIED_LABEL)),
         text("description", "Description", (row) => readNestedTransaction(row, "description")),
         currency("amountCents", "Amount"),
         currency("allocatedCents", "Allocated"),

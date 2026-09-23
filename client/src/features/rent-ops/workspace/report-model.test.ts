@@ -337,3 +337,18 @@ test("tenant defaults do not impose tenant status on vacancies, rent-roll occupa
   assert.equal(defaultReportOccupancy("rent-roll"), "current");
   assert.equal(defaultReportOccupancy("occupancy"), "vacant");
 });
+
+test("tenant ledger labels fields that do not apply instead of calling them missing", () => {
+  const columns = getReportConfig("tenant-ledger").columns;
+  const column = (key: string) => columns.find((item) => item.key === key)!;
+  const cell = (source: Record<string, unknown>, key: string) => formatReportCellValue({ __source: source } as never, column(key));
+  const payment = { rowType: "transaction", transaction: { kind: "payment", dueOn: null } };
+  const charge = { rowType: "transaction", transaction: { kind: "charge", dueOn: null } };
+  const opening = { rowType: "opening_balance" };
+  assert.equal(cell(payment, "dueOn"), "—");
+  assert.equal(cell(charge, "dueOn"), "Date missing");
+  assert.equal(cell(opening, "kind"), "Opening balance");
+  assert.equal(cell(opening, "category"), "—");
+  assert.equal(cell(opening, "unitNumber"), "—");
+  assert.equal(cell(charge, "category"), "Status unverified");
+});

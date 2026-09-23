@@ -262,8 +262,9 @@ async function settleScreenshot(page: Page): Promise<void> {
       if (element instanceof HTMLElement) element.blur();
     });
   });
-  await page.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: 'instant' }));
-  await expect.poll(() => page.evaluate(() => window.scrollY), { timeout: 5_000 }).toBe(0);
+  // The workspace restores a route's saved scroll position on the next frame,
+  // which can land after a single scrollTo. Re-issue it until it holds.
+  await expect.poll(() => page.evaluate(() => { window.scrollTo({ top: 0, left: 0, behavior: 'instant' }); return new Promise<number>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(window.scrollY)))); }), { timeout: 5_000 }).toBe(0);
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }
 

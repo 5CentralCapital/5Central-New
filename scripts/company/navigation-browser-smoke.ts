@@ -114,8 +114,8 @@ try {
       await expect(nav.locator('[aria-current]')).toHaveText('Units');
       await page.goBack(); await expect(page).toHaveURL(/acctView=banking/);
 
-      // Old bookmarks still open their views.
-      for (const [legacy, expected] of [['section=income', /section=collections/], ['section=banking', /acctView=banking/], ['section=documents', /section=property-documents/], ['section=projects&projectTab=costs', /projectTab=budget/], ['section=investors&investorTab=activity', /investorTab=capital/]] as const) {
+      // Old bookmarks still open their views. Investor Activity is now a real tab, so its link stays put.
+      for (const [legacy, expected] of [['section=income', /section=collections/], ['section=banking', /acctView=banking/], ['section=documents', /section=property-documents/], ['section=projects&projectTab=costs', /projectTab=budget/], ['section=investors&investorTab=activity', /investorTab=activity/]] as const) {
         await page.goto(`${origin}/ops?${legacy}&asOf=2026-08-15&scope=all`);
         await expect(page).toHaveURL(expected);
         await expect(page.locator('#rops-content')).not.toBeEmpty();

@@ -87,8 +87,9 @@ export async function seedCompanyDemo(executor: RentOpsQueryExecutor, services: 
   const rental = new RentOpsService(new PostgresRentOpsRepository(executor));
   const today = nowIsoDate();
   for (const tenancy of (await rental.snapshot()).tenancies) {
-    if (tenancy.status === "future" && tenancy.actualMoveInOn && tenancy.actualMoveInOn <= today) {
-      await rental.patchRecord("tenancy", tenancy.id, tenancy.recordRevision ?? 1, { status: "current" }, { actorSubject: actorId, occurredAt: new Date().toISOString() });
+    const start = tenancy.actualMoveInOn ?? tenancy.plannedMoveInOn;
+    if (tenancy.status === "future" && start && start <= today) {
+      await rental.patchRecord("tenancy", tenancy.id, tenancy.recordRevision ?? 1, { status: "current", actualMoveInOn: start }, { actorSubject: actorId, occurredAt: new Date().toISOString() });
     }
   }
   await runReviewDetection(executor, organizationId, { actorId: REVIEW_DETECTOR_ACTOR });
