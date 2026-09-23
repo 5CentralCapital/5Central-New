@@ -1,19 +1,16 @@
-import { useQuery } from "@tanstack/react-query";
-import { type Property } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Building2 } from "lucide-react";
 import { Link } from "wouter";
+import { publicAllProperties } from "@/lib/public-portfolio-data";
 
 export default function Founder() {
-  const { data: allProperties = [], isLoading } = useQuery<Property[]>({
-    queryKey: ["/api/properties"],
-  });
+  // Public page: /api/properties requires sign-in, so visitors saw $0 and 0
+  // properties. Use the same published figures as the portfolio page.
+  const allProperties = publicAllProperties;
 
   // Calculate dynamic statistics
   const totalProperties = allProperties.length;
-  const currentProperties = allProperties.filter(p => p.status === "current");
-  const soldProperties = allProperties.filter(p => p.status === "sold");
   
   const totalPortfolioValue = allProperties.reduce((sum, p) => {
     const value = parseFloat(p.currentValue || p.salePrice || "0");
@@ -21,11 +18,6 @@ export default function Founder() {
   }, 0);
   
   const totalUnits = allProperties.reduce((sum, p) => sum + p.units, 0);
-  
-  const totalCashflow = allProperties.reduce((sum, p) => {
-    const cashflow = parseFloat(p.totalCashflow || "0");
-    return sum + cashflow;
-  }, 0);
   
   const averageIRR = allProperties.length > 0 ? 
     allProperties.reduce((sum, p) => sum + parseFloat(p.irr || "0"), 0) / allProperties.length : 0;
@@ -42,9 +34,6 @@ export default function Founder() {
     return `$${value.toLocaleString()}`;
   };
 
-  if (isLoading) {
-    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
-  }
   return (
     <div className="min-h-screen pt-16" data-testid="founder-page">
       {/* Hero Section */}
