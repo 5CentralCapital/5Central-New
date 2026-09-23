@@ -4,6 +4,8 @@ import test from "node:test";
 import { createFinancialSemanticCrosswalkEntry, type RentManagerFinancialSemanticCrosswalk } from "../../../shared/rent-ops-contracts";
 import { serializeAdminRecurringSchedule } from "../presentation";
 import { mapRentManagerExport, reconcileRentManagerImport, type RentOpsTargetIdFactory } from "./rm-mapper";
+import { normalizeRentManagerExport } from "../export/normalizer";
+import { syntheticExportPayload } from "../export/fixtures";
 
 const deterministicTestTargetIdFactory: RentOpsTargetIdFactory = (entityType, sourceId) => `test:${entityType}:${createHash("sha256").update(`${entityType}\u0000${sourceId}`).digest("hex")}`;
 
@@ -655,4 +657,18 @@ test("raw RM account status and posting bounds survive separately from lease occ
  const unknown=mapRentManagerExport({...data,tenants:[{...data.tenants[0],Status:"Unmapped",PostingEndDate:"bad-date"}]},options).snapshot.people[0].sourceAccountFacts!;
  assert.equal(unknown.rawStatus,"Unmapped"); assert.equal(unknown.status,null); assert.equal(unknown.postingEndOn,null); assert.equal(unknown.postingEndKnowledge,"unknown");
  assert.equal(mapRentManagerExport(data,{...options,artifactSha256:"b".repeat(64)}).snapshot.people[0].sourceAccountFacts?.status,null);
+});
+
+test("RM dollar amounts on HAP and recurring rows become exact cents, never cents-as-dollars or dollars-as-cents", () => {
+  const payload = syntheticExportPayload();
+  // The fixture subsidy carries RM's dollar fields AgencyAmount: 700 and TenantAmount: 500.
+  payload.subsidyTenants = [{ SubsidyTenantID: 1, SubsidyID: 1601, TenantID: 201, Amount: 500 }];
+  payload.subsidyPayments = [{ SubsidyPaymentID: 2, SubsidyID: 1601, PaymentAmount: 700.25, PaymentDate: "2025-02-01" }];
+  payload.recurringSchedules = [...(payload.recurringSchedules ?? []), { RecurringChargeID: 9901, EntityType: "Unit", EntityKeyID: 11, UnitID: 11, PropertyID: 1, AmountCents: 1234, FromDate: "2025-01-01" }];
+  const normalized = normalizeRentManagerExport(payload, { asOfDate: "2025-06-01" });
+  const mapped = mapRentManagerExport(normalized.input, { now: new Date("2025-06-01T00:00:00.000Z") });
+  assert.deepEqual(mapped.snapshot.subsidyContracts.map((row) => [row.agencyObligationCents, row.tenantObligationCents]), [[70000, 50000]]);
+  assert.deepEqual(mapped.snapshot.subsidyTenants.map((row) => row.amountCents), [50000]);
+  assert.deepEqual(mapped.snapshot.subsidyPayments.map((row) => [row.amountCents, row.amountKnowledge]), [[70025, "known"]]);
+  assert.equal(mapped.snapshot.recurringSchedules.find((row) => row.source?.sourceId?.endsWith("9901"))?.amountCents, 1234);
 });

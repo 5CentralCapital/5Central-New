@@ -967,8 +967,12 @@ function normalizeSubsidy(
     propertyId: ["PropertyID"],
     unitId: ["UnitID"],
     agencyName: ["AgencyName", "Agency", "HousingAuthority"],
-    agencyObligationCents: ["AgencyObligationCents", "AgencyAmountCents", "AgencyAmount"],
-    tenantObligationCents: ["TenantObligationCents", "TenantAmountCents", "TenantAmount"],
+    // RM amounts are decimal dollars. Keep them under dollar keys; only
+    // explicitly cents-named source fields may populate a *Cents key.
+    agencyObligationCents: ["AgencyObligationCents", "AgencyAmountCents"],
+    agencyAmount: ["AgencyAmount"],
+    tenantObligationCents: ["TenantObligationCents", "TenantAmountCents"],
+    tenantAmount: ["TenantAmount"],
     effectiveFrom: ["EffectiveFrom", "StartDate", "BeginDate"],
     effectiveTo: ["EffectiveTo", "EndDate", "ExpireDate"],
   }, undefined, "subsidy");
@@ -995,7 +999,8 @@ function normalizeSubsidyTenant(
     unitId: ["UnitID", "UnitId"],
     effectiveFrom: ["EffectiveFrom", "StartDate", "BeginDate"],
     effectiveTo: ["EffectiveTo", "EndDate", "ExpireDate"],
-    amountCents: ["AmountCents", "Amount", "TenantAmount", "TenantAmountCents"],
+    amountCents: ["AmountCents", "TenantAmountCents"],
+    amount: ["Amount", "TenantAmount"],
     payer: ["Payer", "PayerType", "PayerCategory"],
   }, "subsidy_tenant", "subsidy_tenant");
   normalized.sourceCollection = "SubsidyTenants";
@@ -1018,7 +1023,8 @@ function normalizeSubsidyPayment(
     unitId: ["UnitID", "UnitId"],
     paymentSourceId: ["PaymentID", "PaymentId", "PaymentTransactionID", "PaymentTransactionId"],
     paymentOn: ["PaymentOn", "PaymentDate", "PaidOn", "TransactionDate", "Date"],
-    amountCents: ["AmountCents", "Amount", "PaymentAmount", "PaymentAmountCents"],
+    amountCents: ["AmountCents", "PaymentAmountCents"],
+    amount: ["Amount", "PaymentAmount"],
     payer: ["Payer", "PayerType", "PayerCategory"],
   }, "subsidy_payment", "subsidy_payment");
   normalized.sourceCollection = "SubsidyPayments";
@@ -1514,7 +1520,8 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
       propertyId: ["PropertyID", "PropertyId"],
       unitId: ["UnitID", "UnitId"],
       leaseId: ["LeaseID", "LeaseId", "TenancyID", "TenancyId"],
-      amount: ["Amount", "MonthlyAmount", "RecurringAmount", "AmountCents"],
+      amountCents: ["AmountCents"],
+      amount: ["Amount", "MonthlyAmount", "RecurringAmount"],
       description: ["Description", "Name", "ChargeTypeName"],
       scopeType: ["EntityType", "EntityTypeName", "ScopeType"],
       scopeId: ["EntityKeyID", "EntityKeyId"],
@@ -1920,7 +1927,7 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
   } else if (normalizedHapRows.length > 0) {
     const complete = normalizedHapRows.every((record) => {
       const row = record as Raw;
-      return Boolean(text(row, "agencyName")) && text(row, "effectiveFrom") !== undefined && value(row, "agencyObligationCents") !== undefined && value(row, "tenantObligationCents") !== undefined;
+      return Boolean(text(row, "agencyName")) && text(row, "effectiveFrom") !== undefined && value(row, "agencyObligationCents", "agencyAmount") !== undefined && value(row, "tenantObligationCents", "tenantAmount") !== undefined;
     });
     const subsidyIds = new Set(normalizedHapRows.map((record) => text(record as Raw, "SubsidyID", "subsidyId", "sourceId")));
     const unjoinedRawHap = rawHapRows.filter((row) => {
