@@ -35,6 +35,7 @@
     "company:browser-smoke": "tsx scripts/company/browser-smoke.ts",
     "company:performance-smoke": "tsx scripts/company/performance-smoke.ts",
     "company:navigation-smoke": "tsx scripts/company/navigation-browser-smoke.ts",
+    "company:qbo-preflight": "tsx scripts/company/qbo-production-preflight.ts",
     "company:report-setup-smoke": "tsx scripts/company/report-setup-browser-smoke.ts"
   },
   "dependencies": {

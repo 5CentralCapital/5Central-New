@@ -7,6 +7,9 @@ the README acceptance checklist
 can be exercised end to end. It uses the in-memory synthetic database only. No
 private company data, tenant records, or production realm is involved.
 
+For the live deployment's switch to production keys, see
+[qbo-production.md](qbo-production.md).
+
 ## Required environment
 
 | Variable | Value |
