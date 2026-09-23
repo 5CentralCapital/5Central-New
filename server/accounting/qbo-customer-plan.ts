@@ -289,7 +289,7 @@ export function buildQboCustomerPlan(input: QboCustomerPlanInput): QboCustomerPl
 
   const groups: QboCustomerPlanEntityGroup[] = [];
   const knownIds = input.entities.map(entity => entity.legalEntityId);
-  const otherIds = [...new Set(finalRows.map(item => item.legalEntityId).filter((id): id is string => id !== null && !entities.has(id)))];
+  const otherIds = Array.from(new Set(finalRows.map(item => item.legalEntityId).filter((id): id is string => id !== null && !entities.has(id))));
   const byName = (id: string) => entities.get(id)?.name ?? id;
   const groupIds: (string | null)[] = [...knownIds, ...otherIds].sort((left, right) => (byName(left) < byName(right) ? -1 : byName(left) > byName(right) ? 1 : 0));
   if (finalRows.some(item => item.legalEntityId === null)) groupIds.push(null);
