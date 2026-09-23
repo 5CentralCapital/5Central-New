@@ -405,9 +405,10 @@ async function handleCreatePartyMapping(context: CommandHandlerContext<CreateInv
 
 async function handleUpdatePartyMapping(context: CommandHandlerContext<UpdateInvestorPartyMappingPayload>): Promise<CommandHandlerResult> {
   const payload = investorCommandPayloadSchemas["investor.party_mapping.update"].parse(context.envelope.payload);
-  const rowResult = await context.executor.query<Record<string, unknown>>(`SELECT party_kind,source_document_id,effective_from,record_revision FROM company_investor_party_mappings WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`, [context.envelope.scope.organizationId, payload.mappingId]);
+  const rowResult = await context.executor.query<Record<string, unknown>>(`SELECT legal_entity_id,party_kind,source_document_id,effective_from,record_revision FROM company_investor_party_mappings WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`, [context.envelope.scope.organizationId, payload.mappingId]);
   const row = rowResult.rows[0];
   if (!row) throw new ValidationCommandError("Investor party mapping was not found in the requested company scope", { reason: "investor_party_mapping_not_found" });
+  assertScopeEntity(context as unknown as CommandHandlerContext<unknown>, dbString(row, "legal_entity_id"));
   const revision = dbRevision(row.record_revision);
   assertExpectedRevision(revision, context.envelope.expectedRevision);
   const updates: string[] = []; const values: unknown[] = [];
@@ -430,8 +431,9 @@ async function handleUpdatePartyMapping(context: CommandHandlerContext<UpdateInv
 
 async function handleArchivePartyMapping(context: CommandHandlerContext<unknown>): Promise<CommandHandlerResult> {
   const payload = investorCommandPayloadSchemas["investor.party_mapping.archive"].parse(context.envelope.payload);
-  const row = await context.executor.query<{ record_revision: number }>(`SELECT record_revision FROM company_investor_party_mappings WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`, [context.envelope.scope.organizationId, payload.mappingId]);
+  const row = await context.executor.query<{ record_revision: number; legal_entity_id: string }>(`SELECT record_revision,legal_entity_id FROM company_investor_party_mappings WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`, [context.envelope.scope.organizationId, payload.mappingId]);
   if (!row.rows.length) throw new ValidationCommandError("Investor party mapping was not found in the requested company scope", { reason: "investor_party_mapping_not_found" });
+  assertScopeEntity(context, dbString(row.rows[0]!, "legal_entity_id"));
   const revision = dbRevision(row.rows[0]!.record_revision); assertExpectedRevision(revision, context.envelope.expectedRevision);
   const updated = await context.executor.query<{ record_revision: number }>(`UPDATE company_investor_party_mappings SET status='archived',archived_at=now(),record_revision=record_revision+1,updated_at=now() WHERE organization_id=$1 AND id=$2 AND record_revision=$3 RETURNING record_revision`, [context.envelope.scope.organizationId, payload.mappingId, revision]);
   if (!updated.rows.length) throw new ConflictCommandError("Investor party mapping changed while it was being archived", { reason: "revision_conflict" });
@@ -457,8 +459,9 @@ async function handleCreateRemittance(context: CommandHandlerContext<CreateInves
 
 async function handleUpdateRemittance(context: CommandHandlerContext<UpdateInvestorRemittanceInstructionPayload>): Promise<CommandHandlerResult> {
   const payload = investorCommandPayloadSchemas["investor.remittance.update"].parse(context.envelope.payload);
-  const result = await context.executor.query<Record<string, unknown>>(`SELECT record_revision,effective_from FROM company_investor_remittance_instructions WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`, [context.envelope.scope.organizationId, payload.instructionId]);
+  const result = await context.executor.query<Record<string, unknown>>(`SELECT record_revision,effective_from,legal_entity_id FROM company_investor_remittance_instructions WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`, [context.envelope.scope.organizationId, payload.instructionId]);
   const row = result.rows[0]; if (!row) throw new ValidationCommandError("Investor remittance instruction was not found in the requested company scope", { reason: "investor_remittance_not_found" });
+  assertScopeEntity(context as unknown as CommandHandlerContext<unknown>, dbString(row, "legal_entity_id"));
   const revision = dbRevision(row.record_revision); assertExpectedRevision(revision, context.envelope.expectedRevision);
   if (payload.effectiveTo !== undefined && payload.effectiveTo !== null && payload.effectiveTo < dbDate(row, "effective_from")) throw new ValidationCommandError("Remittance effectiveTo must follow effectiveFrom", { reason: "investor_remittance_dates" });
   const updates: string[] = []; const values: unknown[] = []; const set = (column: string, value: unknown) => { updates.push(`${column}=$${values.length + 1}`); values.push(value); };
@@ -474,8 +477,9 @@ async function handleUpdateRemittance(context: CommandHandlerContext<UpdateInves
 
 async function handleArchiveRemittance(context: CommandHandlerContext<unknown>): Promise<CommandHandlerResult> {
   const payload = investorCommandPayloadSchemas["investor.remittance.archive"].parse(context.envelope.payload);
-  const result = await context.executor.query<{ record_revision: number }>(`SELECT record_revision FROM company_investor_remittance_instructions WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`, [context.envelope.scope.organizationId, payload.instructionId]);
+  const result = await context.executor.query<{ record_revision: number; legal_entity_id: string }>(`SELECT record_revision,legal_entity_id FROM company_investor_remittance_instructions WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE`, [context.envelope.scope.organizationId, payload.instructionId]);
   if (!result.rows.length) throw new ValidationCommandError("Investor remittance instruction was not found in the requested company scope", { reason: "investor_remittance_not_found" });
+  assertScopeEntity(context, dbString(result.rows[0]!, "legal_entity_id"));
   const revision = dbRevision(result.rows[0]!.record_revision); assertExpectedRevision(revision, context.envelope.expectedRevision);
   const updated = await context.executor.query<{ record_revision: number }>(`UPDATE company_investor_remittance_instructions SET status='archived',archived_at=now(),record_revision=record_revision+1,updated_at=now() WHERE organization_id=$1 AND id=$2 AND record_revision=$3 RETURNING record_revision`, [context.envelope.scope.organizationId, payload.instructionId, revision]);
   if (!updated.rows.length) throw new ConflictCommandError("Investor remittance instruction changed while it was being archived", { reason: "revision_conflict" });
@@ -596,7 +600,7 @@ async function handleUpdateDebt(context: CommandHandlerContext<unknown>): Promis
   return savedResult([payload.debtId], [{ id: payload.debtId, revision: dbRevision(updated.rows[0]!.record_revision) }]);
 }
 
-async function obligationOpening(context: CommandHandlerContext<unknown>, instrumentId: string, terms: InvestorContractTerms): Promise<string | null> {
+async function obligationOpening(context: CommandHandlerContext<unknown>, instrumentId: string): Promise<string | null> {
   const debt = await context.executor.query<Record<string, unknown>>(`SELECT funded_capital_cents FROM company_investor_debt WHERE organization_id=$1 AND instrument_id=$2 AND archived_at IS NULL`, [context.envelope.scope.organizationId, instrumentId]);
   if (debt.rows.length) {
     const funded = debt.rows[0]!.funded_capital_cents;
@@ -605,7 +609,6 @@ async function obligationOpening(context: CommandHandlerContext<unknown>, instru
   // Contractual original principal is evidence of the agreed face amount,
   // never proof that capital was funded. Rate-based forecasts therefore stay
   // unresolved until a debt funding fact is recorded.
-  if (terms.annualRate !== null) return null;
   return null;
 }
 
@@ -625,10 +628,9 @@ async function handleGenerateObligations(context: CommandHandlerContext<Generate
   if (requestedSpan > 240) throw new ValidationCommandError("Generate at most 240 investor obligation months per command", { reason: "investor_obligation_range_too_large" });
   const effectiveFrom = dbDate(version, "effective_from");
   const anchorMonth = `${effectiveFrom.slice(0, 7)}-01`;
-  const anchoredSpan = monthDistance(anchorMonth, payload.throughMonth);
-  if (anchoredSpan > 240) throw new ValidationCommandError("Generate at most 240 investor obligation months from the contract effective month", { reason: "investor_obligation_anchor_range_too_large" });
   const generationSpan = monthDistance(anchorMonth, payload.throughMonth);
-  let opening = await obligationOpening(context as unknown as CommandHandlerContext<unknown>, payload.instrumentId, terms);
+  if (generationSpan > 240) throw new ValidationCommandError("Generate at most 240 investor obligation months from the contract effective month", { reason: "investor_obligation_anchor_range_too_large" });
+  let opening = await obligationOpening(context as unknown as CommandHandlerContext<unknown>, payload.instrumentId);
   const affected: string[] = [];
   for (let index = 0; index <= generationSpan; index += 1) {
     const periodMonth = addMonths(anchorMonth, index);
@@ -758,12 +760,20 @@ async function loadPayment(context: CommandHandlerContext<unknown>, paymentId: s
   return { id: paymentId, accountId: dbString(row, "account_id"), instrumentId: dbString(row, "instrument_id"), contractId: row.contract_id === null || row.contract_id === undefined ? null : dbString(row, "contract_id"), obligationId: row.obligation_id === null || row.obligation_id === undefined ? null : dbString(row, "obligation_id"), remittanceInstructionId: row.remittance_instruction_id === null || row.remittance_instruction_id === undefined ? null : dbString(row, "remittance_instruction_id"), paymentOn: dbDate(row, "payment_on"), periodMonth: row.period_month === null || row.period_month === undefined ? null : dbDate(row, "period_month"), legalEntityId: dbString(row, "legal_entity_id"), currency: dbString(row, "currency"), amountCents: dbCents(row.amount_cents, "amount_cents"), amounts: investorPaymentAmountsSchema.parse({ principalCents: dbCents(row.principal_cents, "principal_cents"), interestCents: dbCents(row.interest_cents, "interest_cents"), returnOfCapitalCents: dbCents(row.return_of_capital_cents, "return_of_capital_cents"), distributionCents: dbCents(row.distribution_cents, "distribution_cents"), feeCents: dbCents(row.fee_cents, "fee_cents"), balloonCents: dbCents(row.balloon_cents, "balloon_cents"), unclassifiedCents: dbCents(row.unclassified_cents, "unclassified_cents") }), kind: dbString(row, "kind") as InvestorPaymentKind, status: dbString(row, "status"), method: dbString(row, "method"), revision: dbRevision(row.record_revision), postedSource };
 }
 
+/** A reversed payment is economically void: it cannot gain QBO or settlement evidence. */
+async function assertPaymentNotReversed(context: CommandHandlerContext<unknown>, payment: LoadedInvestorPayment): Promise<void> {
+  if (payment.status === "reversed") throw new ConflictCommandError("Investor payment is already reversed", { reason: "investor_payment_already_reversed" });
+  const existingReversal = await context.executor.query(`SELECT id FROM company_investor_payments WHERE organization_id=$1 AND reverses_payment_id=$2`, [context.envelope.scope.organizationId, payment.id]);
+  if (existingReversal.rows.length) throw new ConflictCommandError("Investor payment already has a reversal", { reason: "investor_payment_already_reversed" });
+}
+
 async function handleLinkQbo(context: CommandHandlerContext<unknown>): Promise<CommandHandlerResult> {
   const payload = investorCommandPayloadSchemas["investor.payment.link_qbo"].parse(context.envelope.payload);
   const payment = await loadPayment(context, payload.paymentId);
   assertScopeEntity(context, payment.legalEntityId);
   assertExpectedRevision(payment.revision, context.envelope.expectedRevision);
   if (payment.status !== "manual_recorded" || payment.postedSource !== null) throw new ConflictCommandError("Only an unposted manual investor payment can receive a QBO link", { reason: "investor_payment_already_posted" });
+  await assertPaymentNotReversed(context, payment);
   const instrument = await assertAccountInstrument(context as unknown as CommandHandlerContext<unknown>, payment.accountId, payment.instrumentId);
   const resolver = (context as unknown as { sourceResolver?: InvestorSourceResolver }).sourceResolver ?? new FailClosedInvestorSourceResolver();
   const verification = await maybeVerifyPostedSource(context as unknown as CommandHandlerContext<unknown>, resolver, payload.paymentId, { accountId: payment.accountId, instrumentId: payment.instrumentId, obligationId: payment.obligationId ?? undefined, amountCents: payment.amountCents, currency: payment.currency, kind: payment.kind, amounts: payment.amounts, source: payload.source, paymentOn: payment.paymentOn, remittanceInstructionId: payment.remittanceInstructionId });
@@ -780,6 +790,7 @@ async function handleSettlePayment(context: CommandHandlerContext<unknown>): Pro
   assertScopeEntity(context, payment.legalEntityId);
   assertExpectedRevision(payment.revision, context.envelope.expectedRevision);
   if (payment.status !== "manual_recorded" && payment.status !== "qbo_posted") throw new ConflictCommandError("Only an open or QBO-posted investor payment can receive settlement evidence", { reason: "investor_payment_settlement_state" });
+  await assertPaymentNotReversed(context, payment);
   if (payload.source.currency !== payment.currency || centsToBigInt(payload.source.amountCents) < centsToBigInt(payment.amountCents)) throw new ValidationCommandError("Settlement evidence currency or amount does not cover the payment", { reason: "investor_settlement_amount_mismatch" });
   const instrument = await assertAccountInstrument(context as unknown as CommandHandlerContext<unknown>, payment.accountId, payment.instrumentId);
   const resolver = (context as unknown as { sourceResolver?: InvestorSourceResolver }).sourceResolver ?? new FailClosedInvestorSourceResolver();
@@ -794,9 +805,7 @@ async function handleSettlePayment(context: CommandHandlerContext<unknown>): Pro
 type LoadedInvestorPayment = Awaited<ReturnType<typeof loadPayment>>;
 
 async function appendPaymentReversal(context: CommandHandlerContext<unknown>, payment: LoadedInvestorPayment, paymentOn: string, reason: string): Promise<string> {
-  if (payment.status === "reversed") throw new ConflictCommandError("Investor payment is already reversed", { reason: "investor_payment_already_reversed" });
-  const existingReversal = await context.executor.query(`SELECT id FROM company_investor_payments WHERE organization_id=$1 AND reverses_payment_id=$2`, [context.envelope.scope.organizationId, payment.id]);
-  if (existingReversal.rows.length) throw new ConflictCommandError("Investor payment already has a reversal", { reason: "investor_payment_already_reversed" });
+  await assertPaymentNotReversed(context, payment);
   const allocations = await context.executor.query<Record<string, unknown>>(`SELECT obligation_id,principal_cents,interest_cents,return_of_capital_cents,distribution_cents,fee_cents,balloon_cents,unclassified_cents,allocated_cents FROM company_investor_payment_allocations WHERE organization_id=$1 AND payment_id=$2`, [context.envelope.scope.organizationId, payment.id]);
   const reversalId = newRecordId();
   const negative = negatePaymentAmounts(payment.amounts);

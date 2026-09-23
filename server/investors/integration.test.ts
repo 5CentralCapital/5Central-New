@@ -61,6 +61,11 @@ test("investor payment allocation and reversal preserve append-only history", as
     assert.equal(after.obligations[0]?.totalRecordedCents, "0");
     assert.equal(after.obligations[0]?.status, "expected");
     await assert.rejects(() => execute("investor.payment.reverse", envelope({ paymentId, reason: "Duplicate correction", paymentOn: "2026-02-03" })), /already has a reversal|already reversed/);
+    // A reversed payment is void; it cannot later consume a QBO line or gain settlement evidence.
+    const qboSource = { provider: "qbo", currency: "USD", amountCents: "500", reference: { provider: "qbo", organizationId, legalEntityId: entityId, environment: "sandbox", realmId: "123", objectType: "Check", objectId: "check-1", lineId: "1", version: "v1" } };
+    await assert.rejects(() => execute("investor.payment.link_qbo", envelope({ paymentId, source: qboSource })), /already has a reversal/);
+    const bankSource = { provider: "bank", sourceScope: "synthetic-bank", externalTransactionId: "txn-1", externalLineId: "1", sourceRevision: "r1", currency: "USD", amountCents: "500" };
+    await assert.rejects(() => execute("investor.payment.settle", envelope({ paymentId, source: bankSource })), /already has a reversal/);
 
     const editable = await execute("investor.payment.record", envelope({ accountId, instrumentId, contractId, obligationId, kind: "principal", method: "manual", paymentOn: "2026-02-04", periodMonth: "2026-02-01", currency: "USD", amounts: { principalCents: "300", interestCents: "0", returnOfCapitalCents: "0", distributionCents: "0", feeCents: "0", balloonCents: "0" } }));
     const editableId = String(editable.affectedRecordIds[0]);
@@ -76,6 +81,46 @@ test("investor payment allocation and reversal preserve append-only history", as
     assert.equal(editedReplacement.amounts.principalCents, "700");
     assert.equal(editedReplacement.allocatedAmounts.principalCents, "700");
     assert.equal(editedDetail.obligations[0]?.totalRecordedCents, "700");
+  } finally {
+    await database.close();
+  }
+});
+
+test("investor party mapping edits stay inside the principal's legal entity grant", async () => {
+  const fixture = await createSyntheticCompanyDatabase();
+  const database = { ...fixture, executor: await createSyntheticRuntimeExecutor(fixture.db) };
+  try {
+    const services = createCompanyServices(database.executor, { accounting: { environment: {} }, time: { env: {} } });
+    const { organizationId, entityId, actorId } = SYNTHETIC_COMPANY;
+    const otherEntityId = "20000000-0000-4000-8000-000000000002";
+    await database.db.query("INSERT INTO company_legal_entities(id,organization_id,name,entity_type,currency) VALUES ($1,$2,'Other Property LLC','llc','USD')", [otherEntityId, organizationId]);
+    const restrictedActor = "entity-one-admin";
+    await database.db.query("INSERT INTO company_access_grants(id,organization_id,actor_id,role,legal_entity_id) VALUES ('40000000-0000-4000-8000-000000000009',$1,$2,'admin',$3)", [organizationId, restrictedActor, entityId]);
+    const adminResolve = (executor = database.executor) => loadAuthenticatedPrincipal(executor, { actorId, organizationId, role: "admin" });
+    const admin = { principal: await adminResolve(), resolvePrincipal: adminResolve, transport: attestTransport("web") };
+    const restrictedResolve = (executor = database.executor) => loadAuthenticatedPrincipal(executor, { actorId: restrictedActor, organizationId, role: "admin" });
+    const restricted = { principal: await restrictedResolve(), resolvePrincipal: restrictedResolve, transport: attestTransport("web") };
+    const envelope = (payload: Record<string, unknown>, legalEntityId?: string, expectedRevision?: number) => {
+      const operationId = randomUUID();
+      return { operationId, idempotencyKey: `investor-scope:${operationId}`, scope: companyScopeSchema.parse({ organizationId, ...(legalEntityId ? { legalEntityId } : {}) }), ...(expectedRevision === undefined ? {} : { expectedRevision }), payload };
+    };
+    const account = await services.investors.execute("investor.account.create", envelope({ displayName: "Scoped investor", newContact: { kind: "person", displayName: "Scoped contact" } }), admin);
+    const accountId = String(account.affectedRecordIds[0]);
+    const mapping = await services.investors.execute("investor.party_mapping.create", envelope({
+      accountId, partyKind: "investor", displayName: "Other entity payee", effectiveFrom: "2026-01-01",
+      providerParty: { provider: "qbo", organizationId, legalEntityId: otherEntityId, environment: "sandbox", realmId: "123", objectType: "Vendor", objectId: "vendor-9" },
+    }, otherEntityId), admin);
+    const mappingId = String(mapping.affectedRecordIds[0]);
+    await assert.rejects(
+      () => services.investors.execute("investor.party_mapping.update", envelope({ mappingId, displayName: "Renamed across entities" }, entityId, 1), restricted),
+      /outside the requested legal entity scope/,
+    );
+    await assert.rejects(
+      () => services.investors.execute("investor.party_mapping.archive", envelope({ mappingId }, entityId, 1), restricted),
+      /outside the requested legal entity scope/,
+    );
+    const stored = await database.db.query<{ display_name: string; status: string }>("SELECT display_name,status FROM company_investor_party_mappings WHERE id=$1", [mappingId]);
+    assert.deepEqual(stored.rows[0], { display_name: "Other entity payee", status: "active" });
   } finally {
     await database.close();
   }
