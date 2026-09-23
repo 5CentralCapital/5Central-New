@@ -209,6 +209,7 @@ export const RENT_OPS_RUNTIME_EPHEMERAL_TABLES = [
   "accounting_qbo_coverage_gaps",
   "accounting_qbo_source_line_allocations",
   "time_refresh_leases",
+  "company_worker_heartbeats",
 ] as const;
 
 /** All tables created by the current Rent Ops migration, including restricted tables. */
@@ -332,6 +333,10 @@ export const RENT_OPS_APPEND_ONLY_TABLES = [
   "company_report_package_revisions",
   "company_report_package_runs",
   "company_work_order_events",
+  "company_review_case_events",
+  "company_forecast_assumption_versions",
+  "company_forecast_snapshots",
+  "accounting_qbo_deletion_tombstones",
   "rent_ops_recurring_charge_schedules",
   "rent_ops_ledger_transactions",
   "rent_ops_payment_allocations",
