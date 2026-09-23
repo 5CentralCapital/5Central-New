@@ -10,6 +10,7 @@ import type {
 } from "../types";
 import type { FormValues } from "../form-payload";
 import { unitReadinessDisplay } from "./unit-readiness-model";
+import { PROPERTY_MISSING_LABEL, SCOPE_MISSING_LABEL, UNIT_MISSING_LABEL } from "@shared/review-cases/display-labels";
 import { scheduleDisplayInterval } from "./schedule-display";
 
 export type PropertyUnitRecordKind = "property" | "unit";
@@ -231,7 +232,7 @@ export function propertyUnitListItems(
       key: `property:${propertyId ?? propertyIndex}`,
       kind: "property",
       id: propertyId,
-      title: text(property.name) || "Needs review",
+      title: text(property.name) || PROPERTY_MISSING_LABEL,
       subtitle: [`${propertyUnits.length} ${propertyUnits.length === 1 ? "unit" : "units"}`, addressLines(property.address).join(", ")].filter(Boolean).join(" · "),
       searchText: [property.name, property.slug, formatAddress(property.address)].filter(Boolean).join(" "),
     });
@@ -244,7 +245,7 @@ export function propertyUnitListItems(
         kind: "unit",
         id: unitId,
         propertyId,
-        title: text(unit.unitNumber) || "Needs review",
+        title: text(unit.unitNumber) || UNIT_MISSING_LABEL,
         subtitle: [text(unit.unitType), occupancy ? unitReadinessDisplay(unit, occupancy.get(unit.id ?? "")).label : !propertyUnitFieldUnverified(unit.readinessKnowledge) && text(unit.readiness) !== "unknown" ? text(unit.readiness).replaceAll("_", " ") : ""].filter(Boolean).join(" · "),
         searchText: [unit.unitNumber, unit.unitType, unit.readiness, unit.listing, unit.amenities?.join(" "), unit.accessNotes].filter(Boolean).join(" "),
       });
@@ -256,7 +257,7 @@ export function propertyUnitListItems(
 function selectedPropertyForUnit(snapshot: AdminSnapshot, unit?: AdminUnitView): AdminPropertyView | undefined {
   // Keep a unit record open when the source supplied a candidate property id
   // but marked the relationship uncertain. The detail view shows that link as
-  // Needs review; dropping the record would hide useful positive unit facts.
+  // Unverified; dropping the record would hide useful positive unit facts.
   if (!unit?.propertyId) return undefined;
   return snapshot.snapshot.properties.find((property) => property.id === unit.propertyId);
 }
@@ -460,7 +461,7 @@ function relationshipLabel(relationship: RecurringRelationship): string {
     case "inherited": return "Inherited · property";
     case "tenant-linked": return "Tenant-linked";
     case "linked": return "Linked record";
-    default: return "Needs review";
+    default: return SCOPE_MISSING_LABEL;
   }
 }
 

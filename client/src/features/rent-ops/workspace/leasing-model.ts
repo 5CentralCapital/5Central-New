@@ -1,5 +1,6 @@
 import { APPLICATION_STATUS_TRANSITIONS } from "../../../../../shared/application-status-transitions";
 import { applicationDocumentDownloadable } from "../application-case-detail-model";
+import { APPLICANT_NAME_MISSING_LABEL, NAME_MISSING_LABEL, PROPERTY_MISSING_LABEL, STATUS_UNVERIFIED_LABEL, UNIT_MISSING_LABEL, UNVERIFIED_LABEL } from "@shared/review-cases/display-labels";
 import type {
   AdminActivityView,
   AdminApplicationView,
@@ -34,9 +35,16 @@ function hasValue(value: unknown): boolean {
   return value !== undefined && value !== null && value !== "";
 }
 
-/** Keep missing values and facts requiring review visibly different. */
+/** True when a fact has a usable value whose knowledge is not unknown, ambiguous or inferred. */
+export function leasingFactResolved(value: unknown, knowledge?: string): boolean {
+  if (knowledge && REVIEW_KNOWLEDGE.has(normalized(knowledge))) return false;
+  if (!hasValue(value)) return false;
+  return typeof value !== "number" || Number.isFinite(value);
+}
+
+/** Keep missing values ("Unknown") and facts requiring verification ("Unverified") visibly different. */
 export function leasingFact(value: unknown, knowledge?: string): string {
-  if (knowledge && REVIEW_KNOWLEDGE.has(normalized(knowledge))) return "Needs review";
+  if (knowledge && REVIEW_KNOWLEDGE.has(normalized(knowledge))) return UNVERIFIED_LABEL;
   if (!hasValue(value)) return "Unknown";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (typeof value === "number" && !Number.isFinite(value)) return "Unknown";
@@ -45,7 +53,7 @@ export function leasingFact(value: unknown, knowledge?: string): string {
 
 export function leasingLabel(value: unknown, knowledge?: string): string {
   const fact = leasingFact(value, knowledge);
-  if (fact === "Unknown" || fact === "Needs review") return fact;
+  if (!leasingFactResolved(value, knowledge)) return fact;
   return fact
     .replace(/([a-z])([A-Z])/g, "$1 $2")
     .replace(/[_-]+/g, " ")
@@ -57,19 +65,19 @@ export function applicationDisplayName(application: Pick<AdminApplicationView, "
     .map((value) => value?.trim())
     .filter((value): value is string => Boolean(value))
     .join(" ");
-  return name || "Applicant needs review";
+  return name || APPLICANT_NAME_MISSING_LABEL;
 }
 
 export function propertyDisplayName(snapshot: AdminSnapshot, propertyId?: string): string {
   if (!propertyId) return "Unknown property";
   const name = snapshot.snapshot.properties.find((property) => property.id === propertyId)?.name?.trim();
-  return name || "Needs review";
+  return name || PROPERTY_MISSING_LABEL;
 }
 
 export function unitDisplayName(snapshot: AdminSnapshot, unitId?: string): string {
   if (!unitId) return "Unknown unit";
   const unit = snapshot.snapshot.units.find((candidate) => candidate.id === unitId);
-  return unit?.unitNumber?.trim() || "Needs review";
+  return unit?.unitNumber?.trim() || UNIT_MISSING_LABEL;
 }
 
 export function applicationUnitDisplayName(snapshot: AdminSnapshot, application: Pick<AdminApplicationView, "unitId">): string {
@@ -183,7 +191,7 @@ export function documentAvailabilityLabel(document: Pick<AdminDocumentView, "id"
   if (document.availability === "unavailable") return "File unavailable";
   if (applicationDocumentDownloadable(document)) return "Verified secure file";
   if (document.availability === "verified") return "Verified metadata · file unavailable";
-  if (document.downloadAvailable) return "File availability needs review";
+  if (document.downloadAvailable) return "File unverified";
   return "Secure file unavailable";
 }
 
@@ -216,13 +224,13 @@ export function linkedRecordLabel(snapshot: AdminSnapshot, record: Pick<AdminDoc
     ? snapshot.snapshot.tenancies.find((candidate) => candidate.id === record.tenancyId)
     : undefined;
   const name = application ? applicationDisplayName(application)
-    : person ? [person.firstName, person.lastName].filter((value): value is string => Boolean(value?.trim())).join(" ") || "Person needs review"
-      : record.applicationId ? "Application needs review"
-        : record.personId ? "Person needs review"
+    : person ? [person.firstName, person.lastName].filter((value): value is string => Boolean(value?.trim())).join(" ") || NAME_MISSING_LABEL
+      : record.applicationId ? "Application missing"
+        : record.personId ? "Person missing"
           : undefined;
-  const propertyName = property?.name ?? (record.propertyId ? "Property needs review" : undefined);
-  const unitName = unit?.unitNumber ?? (record.unitId ? "Unit needs review" : undefined);
-  const tenancyName = tenancy && !unitName ? `Tenancy ${tenancy.status ?? "needs review"}` : undefined;
+  const propertyName = property?.name ?? (record.propertyId ? PROPERTY_MISSING_LABEL : undefined);
+  const unitName = unit?.unitNumber ?? (record.unitId ? UNIT_MISSING_LABEL : undefined);
+  const tenancyName = tenancy && !unitName ? `Tenancy ${tenancy.status ?? STATUS_UNVERIFIED_LABEL.toLowerCase()}` : undefined;
   const parts = [name, propertyName, unitName, tenancyName].filter((value): value is string => Boolean(value));
   if (parts.length) return parts.join(" · ");
   return "Unlinked record";

@@ -5,6 +5,7 @@ import { Building2, Home, Pencil, Plus, Search } from "lucide-react";
 import {EntityLink,RecordLink} from "./entity-link";
 import { DataGrid, type GridColumn } from "./grid";
 import { formatDate, formatLabel, formatMoney } from "./display";
+import { DATE_MISSING_LABEL, PROPERTY_MISSING_LABEL, STATUS_UNVERIFIED_LABEL, UNIT_MISSING_LABEL, UNKNOWN_AMOUNT_LABEL, UNVERIFIED_LABEL, missingLabel } from "@shared/review-cases/display-labels";
 import {
   addUnitValues,
   addressLines,
@@ -65,34 +66,40 @@ const TAB_LABELS: Record<PropertyUnitTab, string> = {
 type GridRow = Record<string, unknown>;
 
 function label(value: unknown): string {
-  if (value == null || value === "") return "Needs review";
+  if (value == null || value === "") return UNVERIFIED_LABEL;
   return formatLabel(String(value));
 }
 
 function date(value: unknown): string {
-  if (value == null || value === "") return "Needs review";
+  if (value == null || value === "") return DATE_MISSING_LABEL;
   return formatDate(String(value));
 }
 
 function money(value: unknown): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) return "Needs review";
+  if (typeof value !== "number" || !Number.isFinite(value)) return UNKNOWN_AMOUNT_LABEL;
   return formatMoney(value);
 }
 
-function value(value: unknown, knowledge?: unknown): string {
-  if (value == null || value === "") return "Needs review";
-  if (["unknown", "ambiguous", "inferred"].includes(String(knowledge ?? ""))) return "Needs review";
+function knownValue(value: unknown, knowledge?: unknown): boolean {
+  return value != null && value !== "" && !["unknown", "ambiguous", "inferred"].includes(String(knowledge ?? ""));
+}
+
+/** A value, or what is wrong with it: `missing` when absent, "Unverified" when its knowledge is uncertain. */
+function value(value: unknown, knowledge?: unknown, missing = UNVERIFIED_LABEL): string {
+  if (value == null || value === "") return missing;
+  if (!knownValue(value, knowledge)) return UNVERIFIED_LABEL;
   return String(value);
 }
 
 function statusValue(valueToShow: unknown, knowledge?: unknown): ReactNode {
-  const textValue = value(valueToShow, knowledge);
-  return <span className={`rm-status ${textValue === "Needs review" ? "unknown" : String(valueToShow ?? "unknown")}`}>{textValue === "Needs review" ? textValue : label(textValue)}</span>;
+  const known = knownValue(valueToShow, knowledge);
+  return <span className={`rm-status ${known ? String(valueToShow) : "unknown"}`}>{known ? label(String(valueToShow)) : STATUS_UNVERIFIED_LABEL}</span>;
 }
 
 function recordedOptionalStatus(status: unknown, knowledge?: unknown): boolean {
-  const raw = typeof status === "string" ? status.trim().toLowerCase() : "";
-  return Boolean(raw) && !["unknown", "ambiguous", "inferred", "needs_review", "needs review"].includes(raw) && !propertyUnitFieldUnverified(knowledge);
+  // Source placeholder statuses (including "needs_review", spaced or not) are not recorded statuses.
+  const raw = typeof status === "string" ? status.trim().toLowerCase().replace(/\s+/g, "_") : "";
+  return Boolean(raw) && !["unknown", "ambiguous", "inferred", "needs_review"].includes(raw) && !propertyUnitFieldUnverified(knowledge);
 }
 
 function optionalStatus(status: unknown, knowledge?: unknown, omitUnknown = false): ReactNode {
@@ -105,7 +112,7 @@ function EmptyState({ message }: { message: string }) {
 
 function Field({ label: fieldLabel, value: fieldValue, knowledge, required = false }: { label: string; value: ReactNode; knowledge?: unknown; required?: boolean }) {
   const empty = fieldValue == null || fieldValue === "";
-  const display = empty ? required ? "Needs review" : "—" : typeof fieldValue === "string" || typeof fieldValue === "number" ? propertyUnitFieldValue(fieldValue) : fieldValue;
+  const display = empty ? required ? missingLabel(fieldLabel) : "—" : typeof fieldValue === "string" || typeof fieldValue === "number" ? propertyUnitFieldValue(fieldValue) : fieldValue;
   const unverified = !empty && propertyUnitFieldUnverified(knowledge);
   return <div className="rm-field"><dt>{fieldLabel}</dt><dd className={empty && !required ? "rm-property-unit-absent" : undefined}>{display}{unverified && <small className="rm-property-unit-unverified">Unverified</small>}</dd></div>;
 }
@@ -173,7 +180,7 @@ function UnitGrid({ units, onSelect, onEdit }: { units: AdminUnitView[]; onSelec
   const { occupancy } = useUnitReadiness();
   const rows: UnitGridRow[] = units.map((unit, index) => ({ id: unit.id ?? `unit:${index}`, unit }));
   const columns: GridColumn<UnitGridRow>[] = [
-    { key: "unitNumber", label: "Unit", render: (row) => <RecordLink kind="unit" recordId={row.unit.id} onOpen={onSelect}>{value(row.unit.unitNumber, row.unit.unitNumberKnowledge)}</RecordLink>, sortValue: (row) => row.unit.unitNumber ?? "" },
+    { key: "unitNumber", label: "Unit", render: (row) => <RecordLink kind="unit" recordId={row.unit.id} onOpen={onSelect}>{value(row.unit.unitNumber, row.unit.unitNumberKnowledge, UNIT_MISSING_LABEL)}</RecordLink>, sortValue: (row) => row.unit.unitNumber ?? "" },
     { key: "unitType", label: "Type", render: (row) => propertyUnitFieldValue(row.unit.unitType), sortValue: (row) => row.unit.unitType ?? "" },
     { key: "layout", label: "Layout", render: (row) => unitLayoutLabel(row.unit), sortValue: (row) => `${row.unit.bedrooms ?? ""}-${row.unit.bathrooms ?? ""}` },
     { key: "squareFeet", label: "Area", render: (row) => row.unit.squareFeet == null ? "—" : `${row.unit.squareFeet.toLocaleString()} sq ft`, sortValue: (row) => row.unit.squareFeet },
@@ -220,7 +227,7 @@ function UnitSummary({ unit, property, propertyUnitCount, onSelect, onEdit }: { 
     <div className="rm-property-unit-summary-heading">
       <div className="rm-property-unit-identity">
         <div className="rm-property-unit-title-row"><h2 id="unit-record-title">Unit {propertyUnitFieldValue(unit.unitNumber)}</h2><UnitReadinessBadge unit={unit} />{optionalStatus(unit.listing, unit.listingKnowledge, true)}</div>
-        <p className="rm-property-unit-context rm-unit-property-context">{property?.id ? <button type="button" className="rm-link-button" onClick={() => onSelect("property", property.id!)}>{propertyUnitFieldValue(property.name)}</button> : <span>Property needs review</span>}<span>{propertyUnitCount} {propertyUnitCount === 1 ? "unit" : "units"}</span></p>
+        <p className="rm-property-unit-context rm-unit-property-context">{property?.id ? <button type="button" className="rm-link-button" onClick={() => onSelect("property", property.id!)}>{propertyUnitFieldValue(property.name)}</button> : <span>{PROPERTY_MISSING_LABEL}</span>}<span>{propertyUnitCount} {propertyUnitCount === 1 ? "unit" : "units"}</span></p>
         <dl className="rm-unit-summary-facts">
           {layout !== "—" && <div><dt>Layout</dt><dd>{layout}</dd></div>}
           {unit.squareFeet != null && <div><dt>Area</dt><dd>{unit.squareFeet.toLocaleString()} sq ft</dd></div>}
@@ -234,7 +241,7 @@ function UnitSummary({ unit, property, propertyUnitCount, onSelect, onEdit }: { 
 
 function UnitGeneral({ unit, property, onSelect }: { unit: AdminUnitView; property?: AdminPropertyView; onSelect: (kind: "property" | "unit", id: string) => void }) {
   return <div className="rm-property-unit-groups rm-unit-general-groups">
-    <FieldGroup title="Unit details"><Field label="Unit" value={unit.unitNumber} knowledge={unit.unitNumberKnowledge} required /><Field label="Type" value={unit.unitType} knowledge={unit.unitTypeKnowledge} /><Field label="Bedrooms" value={unit.bedrooms} /><Field label="Bathrooms" value={unit.bathrooms} /><Field label="Area" value={unit.squareFeet == null ? undefined : `${unit.squareFeet.toLocaleString()} sq ft`} /><Field label="Property" value={property?.id ? <button type="button" className="rm-link-button" onClick={() => onSelect("property", property.id!)}>{propertyUnitFieldValue(property.name)}</button> : undefined} required />{!knownLink(unit.propertyId, unit.propertyLinkKnowledge) && <Field label="Property relationship" value="Needs review" />}</FieldGroup>
+    <FieldGroup title="Unit details"><Field label="Unit" value={unit.unitNumber} knowledge={unit.unitNumberKnowledge} required /><Field label="Type" value={unit.unitType} knowledge={unit.unitTypeKnowledge} /><Field label="Bedrooms" value={unit.bedrooms} /><Field label="Bathrooms" value={unit.bathrooms} /><Field label="Area" value={unit.squareFeet == null ? undefined : `${unit.squareFeet.toLocaleString()} sq ft`} /><Field label="Property" value={property?.id ? <button type="button" className="rm-link-button" onClick={() => onSelect("property", property.id!)}>{propertyUnitFieldValue(property.name)}</button> : undefined} required />{!knownLink(unit.propertyId, unit.propertyLinkKnowledge) && <Field label="Property relationship" value={UNVERIFIED_LABEL} />}</FieldGroup>
     <FieldGroup title="Pricing and access"><Field label="Market rent" value={unit.marketRentCents == null ? undefined : money(unit.marketRentCents)} /><Field label="Default deposit" value={unit.defaultDepositCents == null ? undefined : money(unit.defaultDepositCents)} /><Field label="Access notes" value={unit.accessNotes} /></FieldGroup>
     <section className="rm-property-unit-group rm-unit-amenities" aria-labelledby="unit-amenities-title">
       <h3 id="unit-amenities-title">Amenities</h3>
@@ -258,7 +265,7 @@ function UnitRecord({ snapshot, asOfDate, readOnly, unit, property, activeTab, o
   return <div className="rm-property-unit-detail"><UnitSummary unit={unit} property={property} propertyUnitCount={units.length} onSelect={onSelect} onEdit={onEdit} /><RecordTabs tabs={tabs} labels={TAB_LABELS} selected={tab} onSelect={onTab} /><div className="rm-property-unit-tab-content" role="tabpanel" aria-label={TAB_LABELS[tab]}>
     {tab === "general" && <UnitGeneral unit={unit} property={property} onSelect={onSelect} />}
     {tab === "occupancy" && <UnitOccupancy asOfDate={asOfDate} snapshot={snapshot} unit={unit} onSelect={(id) => onSelect("unit", id)} />}
-    {tab === "recurring" && (property ? <PropertyRecurringPanel key={`unit:${unit.id}`} onEdit={onEdit} asOfDate={asOfDate} snapshot={snapshot} property={property} unit={unit} readOnly={readOnly} /> : <EmptyState message="The unit’s property link needs review before recurring charges can be shown." />)}
+    {tab === "recurring" && (property ? <PropertyRecurringPanel key={`unit:${unit.id}`} onEdit={onEdit} asOfDate={asOfDate} snapshot={snapshot} property={property} unit={unit} readOnly={readOnly} /> : <EmptyState message="The unit’s property link is missing, so recurring charges cannot be shown." />)}
     {tab === "marketing" && <UnitMarketing unit={unit} />}
   </div></div>;
 }

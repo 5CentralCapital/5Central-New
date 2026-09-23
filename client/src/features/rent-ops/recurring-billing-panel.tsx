@@ -1,4 +1,5 @@
 import { usdCurrencyFormatter } from '../../lib/rent-ops-formatters';
+import { BLOCKED_LABEL, UNKNOWN_AMOUNT_LABEL } from '@shared/review-cases/display-labels';
 import {EntityLink,EntityNavigationContext} from "./workspace/entity-link";
 import React, { useState, useContext } from "react";
 import { z } from "zod";
@@ -24,8 +25,8 @@ const errorMessages: Record<string, string> = {
   no_ready_charges: "There are no new charges ready to post.",
   billing_unavailable: "Billing is unavailable. The database setup must be complete before charges can be posted.",
 };
-const money = (value: number | null): string => value === null ? "Needs review" : usdCurrencyFormatter.format(value / 100);
-const statusLabels = { ready: "Ready", blocked: "Needs review", posted: "Posted", excluded: "Separate workflow" };
+const money = (value: number | null): string => value === null ? UNKNOWN_AMOUNT_LABEL : usdCurrencyFormatter.format(value / 100);
+const statusLabels = { ready: "Ready", blocked: BLOCKED_LABEL, posted: "Posted", excluded: "Separate workflow" };
 
 async function requestBilling(path: string, body?: { month: string; previewToken: string; scope?: { propertyId?: string } }): Promise<unknown> {
   const response = await rentOpsAuthClient.request(`/api/rent-ops/billing/${path}`, body ? {

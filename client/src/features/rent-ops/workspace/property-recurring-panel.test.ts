@@ -46,8 +46,8 @@ test('past, future and all retain originals and label unclassified schedules for
   assert.deepEqual(propertyRecurringRows(snapshot, 'p', undefined, metadata, 'future').map(row => row.id), ['future']);
   const all = propertyRecurringRows(snapshot, 'p', undefined, metadata, 'all');
   assert.equal(all.length, 8);
-  assert.equal(all.find(row => row.id === 'unclassified')?.displayStatus, 'Needs review');
-  assert.equal(all.find(row => row.id === 'unknown')?.displayStatus, 'Needs review');
+  assert.equal(all.find(row => row.id === 'unclassified')?.displayStatus, 'Unconfirmed');
+  assert.equal(all.find(row => row.id === 'unknown')?.displayStatus, 'Unconfirmed');
   assert.equal(past[0].description, 'Retain original source description');
   assert.equal(JSON.stringify(snapshot), before);
 });

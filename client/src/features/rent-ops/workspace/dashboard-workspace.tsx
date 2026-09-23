@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { UNKNOWN_AMOUNT_LABEL, UNKNOWN_COUNT_LABEL } from "@shared/review-cases/display-labels";
 import { EntityLink, RecordLink } from "./entity-link";
 import type { RentOpsWorkspaceDashboard } from "../api";
 import type { GridColumn } from "./grid";
@@ -34,20 +35,20 @@ function isValidCount(value: unknown): value is number {
 }
 
 function countValue(value: unknown): string {
-  return isValidCount(value) ? value.toLocaleString("en-US") : "Needs review";
+  return isValidCount(value) ? value.toLocaleString("en-US") : UNKNOWN_COUNT_LABEL;
 }
 
 function ratioValue(value: unknown): string {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "Needs review";
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return UNKNOWN_AMOUNT_LABEL;
   return `${(Math.abs(value) <= 1 ? value * 100 : value).toFixed(1)}%`;
 }
 
 function moneyValue(value: unknown, known = true): string {
-  return known ? formatReportValue(value, "currency") : "Needs review";
+  return known ? formatReportValue(value, "currency") : UNKNOWN_AMOUNT_LABEL;
 }
 
 function occupiedValue(summary: DashboardSummary): string {
-  if (!Number.isSafeInteger(summary.occupiedUnits) || !Number.isSafeInteger(summary.unitCount) || summary.occupiedUnits < 0 || summary.unitCount < 0) return "Needs review";
+  if (!Number.isSafeInteger(summary.occupiedUnits) || !Number.isSafeInteger(summary.unitCount) || summary.occupiedUnits < 0 || summary.unitCount < 0) return UNKNOWN_COUNT_LABEL;
   return `${summary.occupiedUnits.toLocaleString("en-US")} / ${summary.unitCount.toLocaleString("en-US")}`;
 }
 

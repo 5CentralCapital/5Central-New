@@ -31,7 +31,7 @@ const taskStatus = multi("status", "Status", ["open", "in_progress", "complete",
 const projectStatus = multi("status", "Status", ["planned", "in_progress", "complete", "blocked", "cancelled"]);
 /** Matches InvestorActivity.status exactly; the engine filters on these values. */
 export const INVESTOR_ACTIVITY_STATUS_FILTER_VALUES = ["planned", "due", "manual_recorded", "qbo_posted", "bank_settled", "review_required", "reversed"] as const;
-const investorStatus = multi("status", "Status", INVESTOR_ACTIVITY_STATUS_FILTER_VALUES, { qbo_posted: "Posted in QuickBooks", bank_settled: "Bank settled", manual_recorded: "Recorded manually", review_required: "Needs review" });
+const investorStatus = multi("status", "Status", INVESTOR_ACTIVITY_STATUS_FILTER_VALUES, { qbo_posted: "Posted in QuickBooks", bank_settled: "Bank settled", manual_recorded: "Recorded manually", review_required: "Payment unverified" });
 
 const FINANCIAL_SCOPES: readonly ReportingScopeKind[] = ["organization", "legal_entity", "property"];
 

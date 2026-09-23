@@ -135,7 +135,7 @@ test("recurring scope labels flag missing identity instead of showing an opaque 
   const tenant = snapshot.tenants[0];
   const scope = recurringChargeScope({ id: "scope-unknown", amountCents: 1000, effectiveFrom: "2026-08-01", active: true }, tenant, snapshot);
   assert.equal(scope.type, "unknown");
-  assert.equal(scope.label, "Needs review");
+  assert.equal(scope.label, "Scope missing");
   assert.equal(scope.identitySource, "unknown");
   assert.ok(scope.warning);
 });

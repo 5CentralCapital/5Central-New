@@ -9,6 +9,7 @@ import type {
 } from "../types";
 import { REPORT_KEYS, REPORT_LABELS } from "../types";
 import { formatDate, formatLabel, formatMoney } from "./display";
+import { DATE_MISSING_LABEL, PERIOD_MISSING_LABEL, PROPERTY_MISSING_LABEL, STATUS_UNVERIFIED_LABEL, UNKNOWN_AMOUNT_LABEL, UNKNOWN_COUNT_LABEL, UNVERIFIED_LABEL } from "@shared/review-cases/display-labels";
 
 export { formatDate, formatLabel, formatMoney } from "./display";
 
@@ -98,7 +99,7 @@ const REPORT_DESCRIPTIONS: Record<ReportKey, string> = {
 const REPORT_SOURCE_NOTES: Record<ReportKey, string> = {
   "rent-roll": "Rows are derived by the Rent Operations domain service as of the selected date.",
   occupancy: "Rows are derived by the Rent Operations domain service as of the selected date.",
-  "scheduled-income": "Rows are derived from server-recognized recurring schedules; unresolved facts stay visible as Needs review.",
+  "scheduled-income": "Rows are derived from server-recognized recurring schedules; unresolved facts stay visible, labeled with what is missing.",
   "collected-income": "Rows are derived from posted ledger receipts; this view does not establish bank settlement.",
   "scheduled-vs-collected": "Rows compare server-derived schedules and posted receipts; incomplete inputs remain unresolved.",
   delinquency: "Rows are derived from the server account ledger; incomplete balances are never treated as zero.",
@@ -566,8 +567,8 @@ export function buildPropertySubtotals(key: ReportKey, rows: readonly ReportRow[
     const nameValue = readReportValue(row, "propertyName", snapshot);
     const openingBalance = key === "tenant-ledger" && readRaw(row, "rowType") === "opening_balance" && !id;
     const label = openingBalance ? "Account opening balances · selected report scope" : typeof nameValue === "string" && nameValue.trim() ? nameValue : id && snapshot
-      ? snapshot.snapshot.properties.find((property) => property.id === id)?.name ?? "Needs review"
-      : "Needs review";
+      ? snapshot.snapshot.properties.find((property) => property.id === id)?.name ?? PROPERTY_MISSING_LABEL
+      : PROPERTY_MISSING_LABEL;
     const groupKey = openingBalance ? "tenant-ledger:opening-balance" : id ?? `name:${label}`;
     const existing = groups.get(groupKey);
     if (existing) existing.rows.push(row);
@@ -593,24 +594,35 @@ function csvCell(value: unknown): string {
   return /[",\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
 }
 
+/** The label for an absent or unusable report value; an unknown amount is never shown as zero. */
+function absentReportValue(format?: ReportColumn["format"]): string {
+  switch (format) {
+    case "currency": case "percent": return UNKNOWN_AMOUNT_LABEL;
+    case "integer": return UNKNOWN_COUNT_LABEL;
+    case "date": return DATE_MISSING_LABEL;
+    case "status": return STATUS_UNVERIFIED_LABEL;
+    default: return UNVERIFIED_LABEL;
+  }
+}
+
 export function formatReportValue(value: unknown, format?: ReportColumn["format"]): string {
-  if (value === null || value === undefined || value === "") return "Needs review";
+  if (value === null || value === undefined || value === "") return absentReportValue(format);
   if (format === "currency") return formatMoney(value);
   if (format === "date") return formatDate(value);
   if (format === "percent") {
-    if (typeof value !== "number" || !Number.isFinite(value)) return "Needs review";
+    if (typeof value !== "number" || !Number.isFinite(value)) return absentReportValue(format);
     return `${(Math.abs(value) <= 1 ? value * 100 : value).toFixed(1)}%`;
   }
-  if (format === "integer") return typeof value === "number" && Number.isSafeInteger(value) ? value.toLocaleString("en-US") : "Needs review";
+  if (format === "integer") return typeof value === "number" && Number.isSafeInteger(value) ? value.toLocaleString("en-US") : absentReportValue(format);
   if (format === "status") {
     if (typeof value === "boolean") return value ? "Yes" : "No";
-    if (Array.isArray(value)) return value.length ? value.map(formatLabel).join(", ") : "Needs review";
+    if (Array.isArray(value)) return value.length ? value.map(formatLabel).join(", ") : absentReportValue(format);
     return formatLabel(value);
   }
-  if (Array.isArray(value)) return value.length ? value.map(formatLabel).join(", ") : "Needs review";
-  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "Needs review";
+  if (Array.isArray(value)) return value.length ? value.map(formatLabel).join(", ") : absentReportValue(format);
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : absentReportValue(format);
   if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (isRecord(value)) return "Needs review";
+  if (isRecord(value)) return absentReportValue(format);
   return String(value);
 }
 
@@ -654,7 +666,7 @@ export function reportQueryKey(report: ReportKey, filters: ApiFilters, authentic
   return ["rent-ops-workspace", "report", authenticatedUserId, report, filters] as const;
 }
 
-export const occupancyReportStatusOptions = [["all", "All"], ["current", "Current"], ["future_preleased", "Future preleased"], ["vacant", "Vacant"], ["unknown", "Needs review"]] as const;
+export const occupancyReportStatusOptions = [["all", "All"], ["current", "Current"], ["future_preleased", "Future preleased"], ["vacant", "Vacant"], ["unknown", STATUS_UNVERIFIED_LABEL]] as const;
 export function isOccupancyReport(key: ReportKey): boolean {
   return key === "rent-roll" || key === "occupancy";
 }
@@ -718,9 +730,9 @@ function isIsoDate(value: string): boolean {
 
 export function reportPeriodLabel(key: ReportKey, asOfDate: string, month: string, fromDate: string, toDate: string): string {
   switch (REPORT_PERIODS[key]) {
-    case "month": return month || asOfDate.slice(0, 7) || "Needs review";
+    case "month": return month || asOfDate.slice(0, 7) || PERIOD_MISSING_LABEL;
     case "range": return fromDate && toDate ? `${fromDate} through ${toDate}` : "Choose activity range";
-    default: return asOfDate ? `As of ${asOfDate}` : "Needs review";
+    default: return asOfDate ? `As of ${asOfDate}` : DATE_MISSING_LABEL;
   }
 }
 
@@ -775,7 +787,7 @@ export function groupReportRows(key: ReportKey, rows: readonly DisplayReportRow[
   const grouped=new Map<string,DisplayReportRow[]>();
   for(const row of rows){
     const id=propertyId(row.__source);const openingBalance=key === "tenant-ledger" && readRaw(row.__source, "rowType") === "opening_balance" && !id;const name=id?undefined:propertyName(row.__source,snapshot);
-    const groupKey=openingBalance ? "tenant-ledger:opening-balance" : id ? `id:${id}` : `name:${typeof name==='string'&&name.trim()?name:'Needs review'}`;
+    const groupKey=openingBalance ? "tenant-ledger:opening-balance" : id ? `id:${id}` : `name:${typeof name==='string'&&name.trim()?name:PROPERTY_MISSING_LABEL}`;
     const group=grouped.get(groupKey)??[];group.push(row);grouped.set(groupKey,group);
   }
   return buildPropertySubtotals(key, rows.map(row => row.__source), snapshot).map(subtotal => ({

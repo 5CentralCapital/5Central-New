@@ -139,7 +139,7 @@ export function serializeScheduledIncomeRow(value: unknown): JsonObject {
   const input = inputOf(value);
   // Charge-definition identifiers and keys are deliberately not part of a
   // report row. The report keeps nullable v8 facts visible so the client can
-  // render Needs review instead of filling in a category or amount.
+  // label them as missing or unknown instead of filling in a category or amount.
   return row(input, {
     propertyId: nullableStringValue(input.propertyId),
     propertyName: nullableStringValue(input.propertyName),

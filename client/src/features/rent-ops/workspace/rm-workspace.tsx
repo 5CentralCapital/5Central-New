@@ -32,6 +32,7 @@ import { ApplicationsWorkspace } from './applications-workspace';
 import { WorkspaceEditor } from './editor';
 import { DataGrid } from './grid';
 import { formatMoney, formatLabel } from './display';
+import { CHARGE_TYPE_MISSING_LABEL, PROPERTY_MISSING_LABEL, STATUS_UNVERIFIED_LABEL } from '@shared/review-cases/display-labels';
 import { filterTenantDirectory, parseWorkspaceFilters, selectedWorkspaceProperties, workspacePropertyMatches, parseWorkspaceRoute, workspaceApiFilters, workspaceCollectionsFor, workspaceFiltersForRecord, workspaceRouteSearch, type TenantDirectoryStatus, type WorkspaceRoute, type WorkspaceSection } from './workspace-state';
 import { recurringRegisterQueryKey, recurringRegisterViews, selectRecurringRegisterRows, type RecurringRegisterView } from './recurring-register-model';
 import { useWorkspaceData } from './use-workspace-data';
@@ -53,7 +54,7 @@ import { EntitiesPage, PeoplePage, SettingsPage } from '../../workspaces/company
 import { CostLibrary } from '../../workspaces/cost-library';
 import { ReportPackages, SavedReports } from '../../workspaces/report-collections';
 
-const tenantStatuses=[['current','Current'],['all','All tenants'],['future','Future'],['former','Former'],['contact','Account contacts'],['unknown','Status needs review']];
+const tenantStatuses=[['current','Current'],['all','All tenants'],['future','Future'],['former','Former'],['contact','Account contacts'],['unknown',STATUS_UNVERIFIED_LABEL]];
 const applicationStatuses=[['all','All applications'],['submitted','Submitted'],['missing_information','Missing information'],['under_review','Under review'],['approved','Approved'],['declined','Declined'],['withdrawn','Withdrawn'],['converted','Converted']];
 function Busy({label='Loading records…'}:{label?:string}){return <div className="rm-empty" role="status"><RefreshCw size={18} className="spin"/><span>{label}</span></div>;}
 function ErrorNotice({error,retry}:{error:unknown;retry?:()=>void}){return <div className="rm-error" role="alert"><span>{error instanceof Error?error.message:'Records could not be loaded.'}</span>{retry&&<button className="rm-button" onClick={retry}>Try again</button>}</div>;}
@@ -76,7 +77,7 @@ function RecurringRegister({snapshot,filters,onEdit}:{snapshot:AdminSnapshot;fil
  const rows=selectRecurringRegisterRows(scoped,metadata.data,state).map(row=>{
   const person=people.get(row.personId??undefined);const definition=definitions.get(row.chargeDefinitionId??undefined);
   const display=scheduleDisplayInterval(row,filters.asOfDate);
-  return {...row,displayEnd:display.effectiveTo,propertyName:properties.get(row.propertyId??undefined)?.name??'Property needs review',unitName:units.get(row.unitId??undefined)?.unitNumber??'—',tenantName:person?`${person.firstName??''} ${person.lastName??''}`.trim():'—',chargeName:definition?.displayName??row.description??'Charge type needs review'};
+  return {...row,displayEnd:display.effectiveTo,propertyName:properties.get(row.propertyId??undefined)?.name??PROPERTY_MISSING_LABEL,unitName:units.get(row.unitId??undefined)?.unitNumber??'—',tenantName:person?`${person.firstName??''} ${person.lastName??''}`.trim():'—',chargeName:definition?.displayName??row.description??CHARGE_TYPE_MISSING_LABEL};
  });
  return <section className="rm-panel"><div className="rm-toolbar"><label>Show<select value={state} onChange={e=>changeView(e.target.value as RecurringRegisterView)}>{recurringRegisterViews.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><button className="rm-button rm-button-primary" onClick={()=>onEdit('save-recurring-schedule',{...(filters.propertyId!=='all'?{propertyId:filters.propertyId}:{})})}><Plus size={14}/>Add recurring charge</button></div>
  {!metadata.data.complete&&<p role="status">Some schedules need review. Current charges include only confirmed schedules.</p>}

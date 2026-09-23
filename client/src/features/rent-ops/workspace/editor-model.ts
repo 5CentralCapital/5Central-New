@@ -1,4 +1,5 @@
 import { usdCurrencyFormatter } from '../../../lib/rent-ops-formatters';
+import { DATE_MISSING_LABEL, DESCRIPTION_MISSING_LABEL, NAME_MISSING_LABEL, PROPERTY_MISSING_LABEL, STATUS_UNVERIFIED_LABEL, UNIT_MISSING_LABEL, UNKNOWN_AMOUNT_LABEL } from "@shared/review-cases/display-labels";
 import type { AdminSnapshot, AdminLedgerTransactionView } from "../types";
 import type { FormValues, QuickAction } from "../form-payload";
 function title(value: unknown): string {
@@ -8,9 +9,9 @@ function title(value: unknown): string {
 }
 
 function money(cents: unknown): string {
-  if (cents == null || cents === "") return "Needs review";
+  if (cents == null || cents === "") return UNKNOWN_AMOUNT_LABEL;
   const amount = typeof cents === "number" ? cents : Number(cents);
-  if (!Number.isFinite(amount)) return "Needs review";
+  if (!Number.isFinite(amount)) return UNKNOWN_AMOUNT_LABEL;
   return usdCurrencyFormatter.format(amount / 100);
 }
 
@@ -18,13 +19,13 @@ type Field = { name: string; label: string; type?: "text" | "date" | "datetime-l
 
 export function baseOptions(snapshot: AdminSnapshot) {
   return {
-    properties: snapshot.snapshot.properties.map((item) => [item.id, item.name ?? "Needs review"] as [string, string]),
-    units: snapshot.snapshot.units.map((item) => [item.id, `${snapshot.snapshot.properties.find((p) => p.id === item.propertyId)?.name ?? "Needs review"} · ${item.unitNumber ?? "Needs review"}`] as [string, string]),
-    people: snapshot.snapshot.people.map((item) => [item.id, `${item.firstName ?? "Needs review"} ${item.lastName ?? "Needs review"}`] as [string, string]),
-    tenancies: snapshot.snapshot.tenancies.map((item) => [item.id, `${snapshot.snapshot.properties.find(p => p.id === item.propertyId)?.name ?? "Needs review"} · Unit ${snapshot.snapshot.units.find(unit => unit.id === item.unitId)?.unitNumber ?? "Needs review"} · ${snapshot.snapshot.people.filter(p => p.id === item.primaryPersonId).map(p => [p.firstName, p.lastName].filter(Boolean).join(" ")).join("") || "Tenant needs review"} · ${title(item.status)}`] as [string, string]),
-    payments: snapshot.snapshot.ledgerTransactions.filter((item) => item.kind === "payment").map((item) => [item.id, `${item.postedOn ?? "Needs review"} · ${money(item.amountCents)} · ${item.description ?? "Needs review"}`] as [string, string]),
-    charges: snapshot.snapshot.ledgerTransactions.filter((item) => item.kind === "charge").map((item) => [item.id, `${item.postedOn ?? "Needs review"} · ${money(item.amountCents)} · ${item.description ?? "Needs review"}`] as [string, string]),
-    ledger: snapshot.snapshot.ledgerTransactions.filter((item) => item.status === "posted").map((item) => [item.id, `${title(item.kind)} · ${item.postedOn ?? "Needs review"} · ${money(item.amountCents)}`] as [string, string]),
+    properties: snapshot.snapshot.properties.map((item) => [item.id, item.name ?? PROPERTY_MISSING_LABEL] as [string, string]),
+    units: snapshot.snapshot.units.map((item) => [item.id, `${snapshot.snapshot.properties.find((p) => p.id === item.propertyId)?.name ?? PROPERTY_MISSING_LABEL} · ${item.unitNumber ?? UNIT_MISSING_LABEL}`] as [string, string]),
+    people: snapshot.snapshot.people.map((item) => [item.id, [item.firstName, item.lastName].filter(part => part != null && part.trim() !== "").join(" ") || NAME_MISSING_LABEL] as [string, string]),
+    tenancies: snapshot.snapshot.tenancies.map((item) => [item.id, `${snapshot.snapshot.properties.find(p => p.id === item.propertyId)?.name ?? PROPERTY_MISSING_LABEL} · Unit ${snapshot.snapshot.units.find(unit => unit.id === item.unitId)?.unitNumber ?? UNIT_MISSING_LABEL} · ${snapshot.snapshot.people.filter(p => p.id === item.primaryPersonId).map(p => [p.firstName, p.lastName].filter(Boolean).join(" ")).join("") || NAME_MISSING_LABEL} · ${item.status ? title(item.status) : STATUS_UNVERIFIED_LABEL}`] as [string, string]),
+    payments: snapshot.snapshot.ledgerTransactions.filter((item) => item.kind === "payment").map((item) => [item.id, `${item.postedOn ?? DATE_MISSING_LABEL} · ${money(item.amountCents)} · ${item.description ?? DESCRIPTION_MISSING_LABEL}`] as [string, string]),
+    charges: snapshot.snapshot.ledgerTransactions.filter((item) => item.kind === "charge").map((item) => [item.id, `${item.postedOn ?? DATE_MISSING_LABEL} · ${money(item.amountCents)} · ${item.description ?? DESCRIPTION_MISSING_LABEL}`] as [string, string]),
+    ledger: snapshot.snapshot.ledgerTransactions.filter((item) => item.status === "posted").map((item) => [item.id, `${title(item.kind)} · ${item.postedOn ?? DATE_MISSING_LABEL} · ${money(item.amountCents)}`] as [string, string]),
   };
 }
 
@@ -36,9 +37,9 @@ function rawActionFields(action: QuickAction, snapshot: AdminSnapshot, initialVa
   const person: Field = { name: "personId", label: "Resident", type: "select", options: options.people };
   const dollars: Field = { name: "amountDollars", label: "Amount", type: "number", required: true };
   const confirmedDefinitions = snapshot.chargeDefinitions.filter((definition) => definition.id && definition.category && definition.active === true && (definition.activeKnowledge === "source" || definition.activeKnowledge === "manual") && (definition.categoryKnowledge === "source" || definition.categoryKnowledge === "manual"));
-  const definitionOptions: Array<[string, string]> = confirmedDefinitions.map((definition) => [definition.id!, `${definition.displayName ?? "Needs review"} · ${title(definition.category)}`]);
+  const definitionOptions: Array<[string, string]> = confirmedDefinitions.map((definition) => [definition.id!, `${definition.displayName ?? NAME_MISSING_LABEL} · ${title(definition.category)}`]);
   const categoryOptions: Array<[string, string]> = Array.from(new Set(confirmedDefinitions.map((definition) => definition.category).filter((category): category is string => Boolean(category)))).map((category) => [category, title(category)]);
-  const conversionDefinitionOptions: Array<[string, string]> = confirmedDefinitions.filter((definition) => definition.category === "base_rent").map((definition) => [definition.id!, `${definition.displayName ?? "Needs review"} · Base rent`]);
+  const conversionDefinitionOptions: Array<[string, string]> = confirmedDefinitions.filter((definition) => definition.category === "base_rent").map((definition) => [definition.id!, `${definition.displayName ?? NAME_MISSING_LABEL} · Base rent`]);
   const scopeOptions: Array<[string, string]> = [
     ...options.properties.map(([id, label]) => [id, `Property · ${label}`] as [string, string]),
     ...options.units.map(([id, label]) => [id, `Unit · ${label}`] as [string, string]),
@@ -156,7 +157,7 @@ export function scopedFields(action: QuickAction, snapshot: AdminSnapshot, initi
     if (!field.options) return field;
     const current = String(values[field.name] ?? "");
     const options = field.options.filter(([id]) => !allowed || allowed.has(id) || id === current);
-    if (current && !options.some(([id]) => id === current)) options.push([current, "Existing selection · needs review"]);
+    if (current && !options.some(([id]) => id === current)) options.push([current, "Existing selection · record missing"]);
     return { ...field, options: transactionField ? options.map(([id, label]): [string, string] => [id, allowed?.has(id) ? label : `${label} · outside selected context`]) : options };
   });
 }
@@ -191,8 +192,8 @@ export function chargeAccountLabel(snapshot: AdminSnapshot, initial: FormValues)
   const unit = snapshot.snapshot.units.find(item => item.id === initial.unitId);
   const person = snapshot.snapshot.people.find(item => item.id === initial.personId);
   return [
-    initial.propertyId ? property?.name || "Property needs review" : undefined,
-    initial.unitId ? unit?.unitNumber ? `Unit ${unit.unitNumber}` : "Unit needs review" : undefined,
-    initial.personId ? [person?.firstName, person?.lastName].filter(Boolean).join(" ") || "Resident needs review" : undefined,
+    initial.propertyId ? property?.name || PROPERTY_MISSING_LABEL : undefined,
+    initial.unitId ? unit?.unitNumber ? `Unit ${unit.unitNumber}` : UNIT_MISSING_LABEL : undefined,
+    initial.personId ? [person?.firstName, person?.lastName].filter(Boolean).join(" ") || NAME_MISSING_LABEL : undefined,
   ].filter(Boolean).join(" · ");
 }

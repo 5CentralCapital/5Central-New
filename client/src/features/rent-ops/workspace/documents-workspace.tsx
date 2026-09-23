@@ -16,6 +16,7 @@ import {
   filterActivities,
   filterDocuments,
   leasingFact,
+  leasingFactResolved,
   linkedRecordLabel,
   linkedRecordPerson,
   propertyDisplayName,
@@ -25,6 +26,7 @@ import {
   type LeasingRegisterFilters,
 } from "./leasing-model";
 import { formatDate, formatLabel } from "./display";
+import { PROPERTY_MISSING_LABEL, UNIT_MISSING_LABEL } from "@shared/review-cases/display-labels";
 import "./leasing.css";
 
 export type DocumentsEditAction = (action: QuickAction, values?: FormValues) => void;
@@ -82,7 +84,7 @@ function initialFilterState(filters: ViewFilters): RecordFilterState {
 
 function knownDate(value: string | undefined, knowledge?: string): string {
   const fact = leasingFact(value, knowledge);
-  return fact === "Unknown" || fact === "Needs review" ? fact : formatDate(value);
+  return leasingFactResolved(value, knowledge) ? formatDate(value) : fact;
 }
 
 function statusClass(value?: string): string {
@@ -92,14 +94,14 @@ function statusClass(value?: string): string {
 
 function propertyOptions(snapshot: AdminSnapshot): Array<[string, string]> {
   return snapshot.snapshot.properties
-    .map((property) => [property.id ?? "", property.name ?? "Needs review"] as [string, string])
+    .map((property) => [property.id ?? "", property.name ?? PROPERTY_MISSING_LABEL] as [string, string])
     .filter(([id]) => Boolean(id));
 }
 
 function unitOptions(snapshot: AdminSnapshot, propertyId: string): Array<[string, string]> {
   return snapshot.snapshot.units
     .filter((unit) => propertyId === "all" || unit.propertyId === propertyId)
-    .map((unit) => [unit.id ?? "", unit.unitNumber ?? "Needs review"] as [string, string])
+    .map((unit) => [unit.id ?? "", unit.unitNumber ?? UNIT_MISSING_LABEL] as [string, string])
     .filter(([id]) => Boolean(id));
 }
 

@@ -13,5 +13,5 @@ test("tenant CSV exports inclusive property slice while retaining the full accou
   assert.match(csv, /5Central Capital/); assert.match(csv, /First day/); assert.match(csv, /Last day/);
   assert.doesNotMatch(csv, /Before range|Other property/); assert.match(csv, /"300"/); assert.match(csv, /"250"/);
   const all = tenantLedgerExportCsv(rows, "Resident", "All", "", "", "", []);
-  assert.match(all, /Before range/); assert.match(all, /Needs review/);
+  assert.match(all, /Before range/); assert.match(all, /"Other property","","","Unknown"/);
 });

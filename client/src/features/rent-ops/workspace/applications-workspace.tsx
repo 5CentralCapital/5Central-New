@@ -21,12 +21,14 @@ import {
   applicationUnitDisplayName,
   filterApplications,
   leasingFact,
+  leasingFactResolved,
   leasingLabel,
   propertyDisplayName,
   sortApplicationsByDate,
   type LeasingRegisterFilters,
 } from "./leasing-model";
 import { formatDate, formatLabel } from "./display";
+import { PROPERTY_MISSING_LABEL, UNIT_MISSING_LABEL } from "@shared/review-cases/display-labels";
 import "./leasing.css";
 
 export type EditAction = (action: QuickAction, values?: FormValues) => void;
@@ -67,7 +69,7 @@ function normalized(value: unknown): string {
 
 function knownDate(value: string | undefined, knowledge?: string): string {
   const fact = leasingFact(value, knowledge);
-  return fact === "Unknown" || fact === "Needs review" ? fact : formatDate(value);
+  return leasingFactResolved(value, knowledge) ? formatDate(value) : fact;
 }
 
 function statusClass(status?: string): string {
@@ -78,7 +80,7 @@ function statusClass(status?: string): string {
 function propertyOptions(snapshot: AdminSnapshot, scope: ViewFilters["propertyScope"]): Array<[string, string]> {
   return snapshot.snapshot.properties
     .filter((property) => scope !== "active" || property.state === "active")
-    .map((property) => [property.id ?? "", property.name ?? "Needs review"] as [string, string])
+    .map((property) => [property.id ?? "", property.name ?? PROPERTY_MISSING_LABEL] as [string, string])
     .filter(([id]) => Boolean(id));
 }
 
@@ -102,7 +104,7 @@ function applicationStatusFilter(value: string | undefined, applications: readon
 function unitOptions(snapshot: AdminSnapshot, propertyId: string): Array<[string, string]> {
   return snapshot.snapshot.units
     .filter((unit) => propertyId === "all" || unit.propertyId === propertyId)
-    .map((unit) => [unit.id ?? "", unit.unitNumber ?? "Needs review"] as [string, string])
+    .map((unit) => [unit.id ?? "", unit.unitNumber ?? UNIT_MISSING_LABEL] as [string, string])
     .filter(([id]) => Boolean(id));
 }
 
@@ -228,8 +230,8 @@ function ApplicationActions({ application, snapshot, onChanged, onEdit, onError,
       <button type="button" className="rm-button" disabled={rowBusy || !id} onClick={() => { void requestInformation(); }}>Request information</button>
     </div>
     {assignmentOpen && <div className="rm-leasing-assignment rm-form-grid">
-      <label className="rm-field">Property<select aria-label="Application property" value={assignmentProperty} disabled={rowBusy} onChange={(event) => { setAssignmentProperty(event.target.value); setAssignmentUnit(""); }}><option value="">Choose property</option>{snapshot.snapshot.properties.map((property) => <option key={property.id} value={property.id}>{property.name ?? "Needs review"}</option>)}</select></label>
-      <label className="rm-field">Unit<select aria-label="Application unit" value={assignmentUnit} disabled={rowBusy || !assignmentProperty} onChange={(event) => setAssignmentUnit(event.target.value)}><option value="">Choose unit</option>{assignedUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.unitNumber ?? "Needs review"}</option>)}</select></label>
+      <label className="rm-field">Property<select aria-label="Application property" value={assignmentProperty} disabled={rowBusy} onChange={(event) => { setAssignmentProperty(event.target.value); setAssignmentUnit(""); }}><option value="">Choose property</option>{snapshot.snapshot.properties.map((property) => <option key={property.id} value={property.id}>{property.name ?? PROPERTY_MISSING_LABEL}</option>)}</select></label>
+      <label className="rm-field">Unit<select aria-label="Application unit" value={assignmentUnit} disabled={rowBusy || !assignmentProperty} onChange={(event) => setAssignmentUnit(event.target.value)}><option value="">Choose unit</option>{assignedUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.unitNumber ?? UNIT_MISSING_LABEL}</option>)}</select></label>
       <div className="rm-leasing-assignment-buttons"><button type="button" className="rm-button rm-button-primary" disabled={rowBusy || !assignmentProperty || !assignmentUnit} onClick={() => { void assignUnit(); }}>Save assignment</button><button type="button" className="rm-button" disabled={rowBusy} onClick={() => setAssignmentOpen(false)}>Cancel</button></div>
     </div>}
   </div>;
