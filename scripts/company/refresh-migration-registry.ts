@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { rentOpsMigrationDefinitions } from "../../server/rent-ops/persistence";
 
-const RELEASED_THROUGH = 42;
+const RELEASED_THROUGH = 48;
 const RECOVERY: Record<number, string> = {
   43: "Disable MRA intake commands; keep staged packets, line registry and account outcomes, then apply a reviewed forward repair.",
   44: "Disable company document commands; keep verified immutable sources and links, then apply a reviewed forward repair.",
