@@ -346,6 +346,30 @@ test("collector resumes from a page checkpoint after a transient collection fail
   assert.equal(secondResult.checkpoint.complete, true);
 });
 
+test("a failed page write is not counted, so resume re-fetches it and still reaches the last page", async () => {
+  const archive = createMemoryArchive();
+  const writePage = archive.writePage.bind(archive);
+  let failNextWrite = true;
+  archive.writePage = async (...args) => {
+    if (failNextWrite) {
+      failNextWrite = false;
+      throw Object.assign(new Error("synthetic disk failure"), { code: "ENOSPC" });
+    }
+    return writePage(...args);
+  };
+  const registry: readonly CollectionDefinition[] = [{ name: "properties", path: "/Properties", idFields: ["PropertyID"], entityType: "property", outputKey: "properties", required: true }];
+  const rows = [{ PropertyID: 1 }, { PropertyID: 2 }];
+  const firstResult = await new RentManagerExportCollector({ transport: fixtureTransport({ "/Properties": rows }), archive, registry, pageSize: 1, sleep: async () => undefined, runId: "write-failure" }).collect();
+  assert.equal(firstResult.checkpoint.complete, false);
+  assert.equal(firstResult.checkpoint.collections.properties.received, 0);
+  assert.deepEqual(firstResult.checkpoint.collections.properties.hashes, []);
+  const secondResult = await new RentManagerExportCollector({ transport: fixtureTransport({ "/Properties": rows }), archive, registry, pageSize: 1, sleep: async () => undefined, runId: "write-failure" }).collect();
+  assert.equal(secondResult.envelope.payload.properties?.length, 2);
+  assert.equal(secondResult.checkpoint.collections.properties.received, 2);
+  const fresh = await new RentManagerExportCollector({ transport: fixtureTransport({ "/Properties": rows }), archive: createMemoryArchive(), registry, pageSize: 1, sleep: async () => undefined, runId: "write-failure-fresh" }).collect();
+  assert.deepEqual(secondResult.checkpoint.collections.properties.hashes, fresh.checkpoint.collections.properties.hashes);
+});
+
 test("resume revalidates an old missing-source gate after composite IDs are archived", async () => {
   const archive = createMemoryArchive();
   const registry: readonly CollectionDefinition[] = [

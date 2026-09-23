@@ -526,13 +526,18 @@ export class RentManagerExportCollector {
         if (expected !== undefined) state.sourceTotal = expected;
         coverage.expected = expected;
         const prepared: RentManagerRawRecord[] = [];
-        for (let index = 0; index < items.length; index += 1) prepared.push(await this.prepareRecord(items[index], definition, state, undefined, index));
+        const pageHashes: string[] = [];
+        for (let index = 0; index < items.length; index += 1) prepared.push(await this.prepareRecord(items[index], definition, state, pageHashes, undefined, index));
+        // Count a page only after its archive write succeeds. A failed write is
+        // re-fetched on resume; counting it first would double-count received
+        // rows and could end pagination before the last page.
+        const pageFile = await this.archive.writePage(definition.name, page, prepared);
+        state.hashes.push(...pageHashes);
         coverage.pages += 1;
         state.pages += 1;
         coverage.requested += items.length;
         coverage.received += items.length;
         state.received += items.length;
-        const pageFile = await this.archive.writePage(definition.name, page, prepared);
         state.pageFiles.push(pageFile);
         state.nextPage = page + 1;
         await this.updateCheckpoint();
@@ -568,14 +573,12 @@ export class RentManagerExportCollector {
     }
   }
 
-  private async prepareRecord(item: RentManagerRawRecord, definition: CollectionDefinition, state: CollectionCheckpoint, parentSourceId?: string, index?: number): Promise<RentManagerRawRecord> {
+  private async prepareRecord(item: RentManagerRawRecord, definition: CollectionDefinition, state: CollectionCheckpoint, pageHashes: string[], parentSourceId?: string, index?: number): Promise<RentManagerRawRecord> {
     assertNoCredentialShapedFields(item);
     const normalized = normalizeRecord(item, definition, parentSourceId, index);
     assertNoCredentialShapedFields(normalized);
     const id = sourceId(normalized, definition);
-    const hash = hashRecord(normalized);
-    state.hashes.push(hash);
-    this.coverage.get(definition.name)!.recordHashes.push(hash);
+    pageHashes.push(hashRecord(normalized));
     if (!id) this.addException(definition, state, { code: "missing_source_id", collection: definition.name, detail: "record_source_id_missing" });
     if (definition.partitionBy) {
       const partitionValue = (normalized as Record<string, unknown>)[definition.partitionBy];
@@ -683,14 +686,16 @@ export class RentManagerExportCollector {
           const items = recordsFromBody(body, response.status);
           parentExpected = numberValue(header(response.headers, "x-total-results")) ?? totalFromBody(body) ?? parentExpected;
           const prepared: RentManagerRawRecord[] = [];
-          for (let index = 0; index < items.length; index += 1) prepared.push(await this.prepareRecord(items[index], definition, state, parentId, index));
+          const pageHashes: string[] = [];
+          for (let index = 0; index < items.length; index += 1) prepared.push(await this.prepareRecord(items[index], definition, state, pageHashes, parentId, index));
+          const pageFile = await this.archive.writePage(definition.name, page, prepared, pageKey);
+          state.hashes.push(...pageHashes);
           coverage.pages += 1;
           state.pages += 1;
           coverage.requested += items.length;
           coverage.received += items.length;
           state.received += items.length;
           parentReceived += items.length;
-          const pageFile = await this.archive.writePage(definition.name, page, prepared, pageKey);
           state.pageFiles.push(pageFile);
           state.nextPage = page + 1;
           state.nextParentIndex = parentIndex;
