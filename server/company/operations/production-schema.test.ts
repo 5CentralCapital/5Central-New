@@ -141,6 +141,30 @@ test("grants refuse missing roles and roll back", async () => {
   await db.close();
 });
 
+test("a runtime-only plan manages the web role and PUBLIC without touching other roles", async () => {
+  const db = await migratedTo(latest);
+  const s = session(db);
+  await db.exec('CREATE ROLE "ops_web" NOLOGIN NOINHERIT');
+  await db.exec('CREATE ROLE "legacy_reader" NOLOGIN');
+  await db.exec('GRANT SELECT ON public.rent_ops_properties TO "legacy_reader"');
+  const attestation = { backup: "neon:rops-pre-v48", review: "operator-review", authorization: "owner-20260923" };
+  assert.throws(() => planRuntimeGrants({ runtimeRole: "ops_web", importerRole: "ops_importer" }, attestation, "rent_ops_production"), rejects("grant_role_invalid"));
+  const plan = planRuntimeGrants({ runtimeRole: "ops_web" }, attestation, "rent_ops_production");
+  assert.equal(plan.runtimeOnly, true);
+  assert.deepEqual(plan.managedRoles, ["ops_web"]);
+  assert.ok(!plan.sql.includes("placeholder"), "placeholder roles never reach the SQL");
+  assert.ok(plan.statements.some(statement => statement.endsWith("FROM PUBLIC;")));
+  assert.deepEqual(Array.from(expectedTablePrivileges(plan.statements).keys()), ["ops_web"]);
+  const result = await applyRuntimeGrants(s, plan, plan.grantSha256);
+  assert.ok(result.verifiedTables > 50);
+  assert.deepEqual(await verifyRuntimeGrants(s, plan), []);
+  const other = await db.query<{ granted: boolean }>("SELECT has_table_privilege('legacy_reader', 'public.rent_ops_properties', 'SELECT') AS granted");
+  assert.equal(other.rows[0]!.granted, true, "roles outside the plan keep their privileges");
+  const full = planRuntimeGrants({ runtimeRole: "ops_web", importerRole: "ops_importer", auditorRole: "ops_auditor" }, attestation, "rent_ops_production");
+  assert.notEqual(full.grantSha256, plan.grantSha256);
+  await db.close();
+});
+
 test("backup comparison proves the copy has the same ledger and row counts", async () => {
   const source = await migratedTo(42);
   const backup = await migratedTo(42);

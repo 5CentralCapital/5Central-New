@@ -13,9 +13,12 @@
  *   npm run company:production-schema -- inspect         --url-env RENT_OPS_MIGRATION_DATABASE_URL --through 48
  *   npm run company:production-schema -- compare-backup  --url-env RENT_OPS_MIGRATION_DATABASE_URL --backup-url-env RENT_OPS_BACKUP_DATABASE_URL
  *   npm run company:production-schema -- apply           --url-env ... --through 48 --confirm <planSha256> --apply-reviewed
- *   npm run company:production-schema -- grants-plan     --url-env ... --runtime-role R --importer-role I --auditor-role A --backup <ref> --review <ref> --authorization <ref>
+ *   npm run company:production-schema -- grants-plan     --url-env ... --runtime-role R [--importer-role I --auditor-role A] --backup <ref> --review <ref> --authorization <ref>
  *   npm run company:production-schema -- grants-apply    ...same... --confirm <grantSha256> --apply-reviewed
  *   npm run company:production-schema -- grants-verify   ...same...
+ *
+ * Omit --importer-role and --auditor-role together for a runtime-only plan
+ * (production today has only the web runtime role); PUBLIC revocations still apply.
  *
  * `apply` and `grants-apply` refuse to run without the digest printed by the
  * matching read-only command and the explicit --apply-reviewed flag.
@@ -165,12 +168,16 @@ export async function runCommand(parsed: ParsedArgs, env: NodeJS.ProcessEnv = pr
         const describe = await describeSession(session);
         const databaseName = stringFlag(flags, "database", String(describe.database ?? ""));
         const plan = planRuntimeGrants(
-          { runtimeRole: stringFlag(flags, "runtime-role"), importerRole: stringFlag(flags, "importer-role"), auditorRole: stringFlag(flags, "auditor-role") },
+          {
+            runtimeRole: stringFlag(flags, "runtime-role"),
+            ...(flags["importer-role"] !== undefined ? { importerRole: stringFlag(flags, "importer-role") } : {}),
+            ...(flags["auditor-role"] !== undefined ? { auditorRole: stringFlag(flags, "auditor-role") } : {}),
+          },
           { backup: stringFlag(flags, "backup"), review: stringFlag(flags, "review"), authorization: stringFlag(flags, "authorization") },
           databaseName,
         );
         if (command === "grants-plan") {
-          return { command, connection: urlEnv, database: databaseName, grantSha256: plan.grantSha256, statementCount: plan.statements.length, sql: plan.sql };
+          return { command, connection: urlEnv, database: databaseName, runtimeOnly: plan.runtimeOnly, managedRoles: plan.managedRoles, grantSha256: plan.grantSha256, statementCount: plan.statements.length, sql: plan.sql };
         }
         if (command === "grants-verify") {
           const mismatches = await verifyRuntimeGrants(session, plan);

@@ -190,9 +190,17 @@ export async function applySchemaMigration(
 
 export interface GrantRoles {
   readonly runtimeRole: string;
-  readonly importerRole: string;
-  readonly auditorRole: string;
+  /**
+   * Importer and auditor roles are provisioned together or not at all. When
+   * both are omitted the plan is runtime-only: it manages the web/worker role
+   * and PUBLIC revocations and leaves every other role's privileges untouched.
+   */
+  readonly importerRole?: string;
+  readonly auditorRole?: string;
 }
+
+/** Names that exist only while rendering a runtime-only plan; never executed. */
+const RUNTIME_ONLY_PLACEHOLDERS = { importerRole: "rent_ops_unmanaged_importer_placeholder", auditorRole: "rent_ops_unmanaged_auditor_placeholder" } as const;
 
 export interface GrantAttestation {
   /** e.g. the Neon backup branch name and its verified ledger digest. */
@@ -208,6 +216,10 @@ export interface GrantPlan {
   readonly sql: string;
   readonly grantSha256: string;
   readonly manifest: RentOpsSecurityManifest;
+  /** True when only the runtime role (and PUBLIC) is managed. */
+  readonly runtimeOnly: boolean;
+  /** Roles the statements grant to; each must exist before applying. */
+  readonly managedRoles: readonly string[];
 }
 
 const ROLE = /^[a-z_][a-z0-9_]{0,62}$/;
@@ -215,16 +227,29 @@ const ROLE = /^[a-z_][a-z0-9_]{0,62}$/;
 const ATTESTATION = /^[A-Za-z0-9_.:/-]{3,160}$/;
 
 export function planRuntimeGrants(roles: GrantRoles, attestation: GrantAttestation, databaseName: string): GrantPlan {
-  for (const [field, value] of Object.entries(roles)) {
-    if (!ROLE.test(value)) throw new ProductionSchemaError("grant_role_invalid", `${field} is not a valid role name`);
+  const hasImporter = roles.importerRole !== undefined;
+  const hasAuditor = roles.auditorRole !== undefined;
+  if (hasImporter !== hasAuditor) throw new ProductionSchemaError("grant_role_invalid", "Pass both --importer-role and --auditor-role, or neither for a runtime-only plan");
+  const runtimeOnly = !hasImporter;
+  const resolved = {
+    runtimeRole: roles.runtimeRole,
+    importerRole: roles.importerRole ?? RUNTIME_ONLY_PLACEHOLDERS.importerRole,
+    auditorRole: roles.auditorRole ?? RUNTIME_ONLY_PLACEHOLDERS.auditorRole,
+  };
+  for (const [field, value] of Object.entries(resolved)) {
+    if (typeof value !== "string" || !ROLE.test(value)) throw new ProductionSchemaError("grant_role_invalid", `${field} is not a valid role name`);
   }
+  if (!runtimeOnly && Object.values(RUNTIME_ONLY_PLACEHOLDERS).some(name => name === resolved.importerRole || name === resolved.auditorRole)) {
+    throw new ProductionSchemaError("grant_role_invalid", "Reserved placeholder role name");
+  }
+  if (new Set(Object.values(resolved)).size !== 3) throw new ProductionSchemaError("grant_role_invalid", "Runtime, importer and auditor roles must be distinct");
   if (!ROLE.test(databaseName)) throw new ProductionSchemaError("grant_database_invalid", "Database name is invalid");
   if (![attestation.backup, attestation.review, attestation.authorization].every(value => typeof value === "string" && ATTESTATION.test(value))) {
     throw new ProductionSchemaError("grant_attestation_invalid", "Backup, review and authorization references are required (letters, digits and _ . : / - only)");
   }
   const definitions = rentOpsMigrationDefinitions();
   const manifest = createRentOpsSecurityManifest("production", {
-    target: { databaseName, runtimeRole: roles.runtimeRole, importerRole: roles.importerRole, auditorRole: roles.auditorRole },
+    target: { databaseName, runtimeRole: resolved.runtimeRole, importerRole: resolved.importerRole, auditorRole: resolved.auditorRole },
     gates: {
       backupVerified: true,
       backupAttestation: attestation.backup,
@@ -243,8 +268,16 @@ export function planRuntimeGrants(roles: GrantRoles, attestation: GrantAttestati
   });
   const rendered = renderRentOpsSecuritySql(manifest, { mode: "apply" });
   if (!rendered.canApply) throw new ProductionSchemaError("grant_manifest_blocked", "The security manifest is not applicable", { reasons: rendered.blockingReasons });
+  let statements = rendered.statements;
+  if (runtimeOnly) {
+    const placeholders = Object.values(RUNTIME_ONLY_PLACEHOLDERS).map(name => `"${name}"`);
+    statements = statements.filter(statement => !placeholders.some(name => statement.includes(name)));
+    statements = [statements[0]!, "-- Runtime-only plan: importer and auditor role privileges are not managed by these statements.", ...statements.slice(1)];
+  }
+  const sql = `${statements.join("\n")}\n`;
+  const managedRoles = runtimeOnly ? [resolved.runtimeRole] : [resolved.runtimeRole, resolved.importerRole, resolved.auditorRole];
   // Hash only the SQL (not the attestation text) so the digest identifies the privileges.
-  return { statements: rendered.statements, sql: rendered.sql, grantSha256: sha256(rendered.statements.filter(s => !s.startsWith("--")).join("\n")), manifest };
+  return { statements, sql, grantSha256: sha256(statements.filter(s => !s.startsWith("--")).join("\n")), manifest, runtimeOnly, managedRoles };
 }
 
 type Privilege = "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "TRUNCATE" | "REFERENCES" | "TRIGGER";
@@ -317,7 +350,7 @@ export async function verifyRuntimeGrants(session: SchemaSession, plan: GrantPla
 
 export async function applyRuntimeGrants(session: SchemaSession, plan: GrantPlan, confirmGrantSha256: string): Promise<{ readonly verifiedTables: number }> {
   if (plan.grantSha256 !== confirmGrantSha256) throw new ProductionSchemaError("grant_plan_changed", "The rendered grants differ from the reviewed digest");
-  const roles = [plan.manifest.target.runtimeRole, plan.manifest.target.importerRole, plan.manifest.target.auditorRole];
+  const roles = [...plan.managedRoles];
   await beginGuarded(session);
   try {
     const present = (await session.query<{ rolname: string }>("SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])", [roles])).rows.map(row => row.rolname);
