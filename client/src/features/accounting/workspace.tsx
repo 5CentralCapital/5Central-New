@@ -3,6 +3,7 @@ import { RefreshCw, Unplug } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ACCOUNTING_VIEWS, isAccountingView, type AccountingApi, type AccountingConnection, type AccountingEnvironment, type AccountingMirrorKind, type AccountingPendingBinding, type AccountingScope, type AccountingView, type AccountingWorkspaceEntity, type AccountingWorkspaceProps } from "./types";
 import { accountingApi } from "./api";
+import { dateLabel, dateTimeLabel, formatCents } from "./format";
 import { BankingView, EmptyState, OverviewPanel, PayablesView, PeriodCloseView, PmSettlementsView } from "./views";
 import "./accounting.css";
 
@@ -12,18 +13,6 @@ function ErrorBox({ error, retry }: { readonly error: unknown; readonly retry?: 
   return <div className="accounting-message is-error" role="alert">{error instanceof Error ? error.message : "Accounting records could not be loaded."}{retry && <button className="accounting-button" onClick={retry}>Try again</button>}</div>;
 }
 
-function dateLabel(value: string | null | undefined): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(date);
-}
-
-function centsLabel(value: string, currency: string): string {
-  try {
-    const amount = BigInt(value); const negative = amount < BigInt(0); const absolute = (negative ? -amount : amount).toString().padStart(3, "0");
-    return `${negative ? "-" : ""}${currency} ${absolute.slice(0, -2)}.${absolute.slice(-2)}`;
-  } catch { return `${currency} —`; }
-}
 
 function legalEntityOptions(entities: readonly AccountingWorkspaceEntity[] | undefined): readonly AccountingWorkspaceEntity[] { return entities ?? []; }
 
@@ -116,7 +105,7 @@ function ConnectionList({ connections, selected, onSelect }: { readonly connecti
 
 function MirrorTable({ items, kind }: { readonly items: readonly { displayName: string; active: boolean; providerUpdatedAt: string | null }[]; readonly kind: AccountingMirrorKind }) {
   if (!items.length) return <div className="accounting-empty"><strong>No {kind} mirrored yet</strong><span>Run a source sync after the connection is ready.</span></div>;
-  return <div className="accounting-table-wrap"><table className="accounting-table"><thead><tr><th>Name</th><th>Status</th><th>Updated</th></tr></thead><tbody>{items.map(item => <tr key={`${item.displayName}:${item.providerUpdatedAt}`}><td>{item.displayName}</td><td>{item.active ? "Active" : "Inactive"}</td><td>{dateLabel(item.providerUpdatedAt)}</td></tr>)}</tbody></table></div>;
+  return <div className="accounting-table-wrap"><table className="accounting-table"><thead><tr><th>Name</th><th>Status</th><th>Updated</th></tr></thead><tbody>{items.map(item => <tr key={`${item.displayName}:${item.providerUpdatedAt}`}><td>{item.displayName}</td><td>{item.active ? "Active" : "Inactive"}</td><td>{dateTimeLabel(item.providerUpdatedAt)}</td></tr>)}</tbody></table></div>;
 }
 
 function TransactionTable({ api, organizationId, scope }: { readonly api: AccountingApi; readonly organizationId: string; readonly scope: AccountingScope }) {
@@ -125,7 +114,7 @@ function TransactionTable({ api, organizationId, scope }: { readonly api: Accoun
   if (query.error) return <ErrorBox error={query.error} retry={() => void query.refetch()} />;
   const page = query.data;
   if (!page?.items.length) return <div className="accounting-empty"><strong>No mirrored transactions</strong><span>Run a source sync to load the current source records.</span></div>;
-  return <><div className="accounting-meta" role="status">Coverage: {page.coverage.status} · {page.coverage.evidence}{page.coverage.status !== "complete" ? <> — incomplete mirror; QuickBooks remains the accounting record.{page.coverage.reason ? ` ${page.coverage.reason}` : ""}</> : null}</div><div className="accounting-table-wrap"><table className="accounting-table"><thead><tr><th>Date</th><th>Type</th><th>Amount</th><th>Status</th><th>Settlement</th></tr></thead><tbody>{page.items.map(item => <tr key={`${item.source.objectType}:${item.source.objectId}:${item.source.lineId ?? ""}:${item.source.version}`}><td>{item.postedOn ?? "—"}</td><td>{item.transactionType}</td><td>{centsLabel(item.amountCents, item.currency)}</td><td>{item.postingState}</td><td>{item.settlement.state}</td></tr>)}</tbody></table></div></>;
+  return <><div className="accounting-meta" role="status">Coverage: {page.coverage.status} · {page.coverage.evidence}{page.coverage.status !== "complete" ? <> — incomplete mirror; QuickBooks remains the accounting record.{page.coverage.reason ? ` ${page.coverage.reason}` : ""}</> : null}</div><div className="accounting-table-wrap"><table className="accounting-table"><thead><tr><th>Date</th><th>Type</th><th className="is-number">Amount</th><th>Status</th><th>Settlement</th></tr></thead><tbody>{page.items.map(item => <tr key={`${item.source.objectType}:${item.source.objectId}:${item.source.lineId ?? ""}:${item.source.version}`}><td>{dateLabel(item.postedOn)}</td><td>{item.transactionType}</td><td className="is-number">{formatCents(item.amountCents, item.currency)}</td><td>{item.postingState}</td><td>{item.settlement.state}</td></tr>)}</tbody></table></div></>;
 }
 
 function callbackErrorMessage(code: string): string {
