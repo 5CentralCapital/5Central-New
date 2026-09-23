@@ -62,6 +62,13 @@ async function historyCase(db: PGlite) {
   return mapReviewCaseRow(result.rows[0]!);
 }
 
+/** Any one case scoped to this key; the test needs the scope, not a particular reason. */
+async function caseInScope(db: PGlite, scopeKey: string) {
+  const result = await db.query<Record<string, unknown>>(`SELECT ${REVIEW_CASE_COLUMNS} FROM company_review_cases c WHERE c.scope_key = $1 ORDER BY c.reason_code LIMIT 1`, [scopeKey]);
+  assert.equal(result.rows.length, 1, `a case scoped to ${scopeKey}`);
+  return mapReviewCaseRow(result.rows[0]!);
+}
+
 async function caseBy(db: PGlite, reasonCode: string, scopeKey: string) {
   const result = await db.query<Record<string, unknown>>(`SELECT ${REVIEW_CASE_COLUMNS} FROM company_review_cases c WHERE c.reason_code = $1 AND c.scope_key = $2`, [reasonCode, scopeKey]);
   assert.equal(result.rows.length, 1, `${reasonCode} ${scopeKey}`);
@@ -290,7 +297,7 @@ test("an operational fix must target a record of its own case, inside the case's
   const { fixture, db, runtime, storage, port, accessFor } = await setup();
   try {
     await addImportedAccounts(db, 0, 2);
-    await asImporter(db, async () => { await db.query("INSERT INTO rent_ops_units(id,property_id,unit_number,property_link_knowledge,source_system,source_id) VALUES ('rm-unit-9','demo-property-a','9Z','exact','rent_manager','unit:9')"); });
+    await asImporter(db, async () => { await db.query("INSERT INTO rent_ops_units(id,property_id,unit_number,property_link_knowledge,source_system,source_id) VALUES ('rm-unit-9','demo-property-b','9Z','exact','rent_manager','unit:9')"); });
     await runReviewDetection(runtime, organizationId);
     await addEvidenceDocument(db, storage);
     const access = await accessFor();
@@ -301,9 +308,9 @@ test("an operational fix must target a record of its own case, inside the case's
     // An organization-level history case about imported tenants cannot change an unrelated unit.
     const history = await historyCase(db);
     await expectCommandError(port.execute("review_case.propose", envelope({ caseId: history.id, correction: await vacancy("rm-unit-9", "unit:9") }, history.recordRevision), access), 400, "review_case_target_unrelated");
-    // A case scoped to property B cannot change a unit at property A.
-    const propertyB = await caseBy(db, "schedule_unconfirmed", "property:demo-property-b");
-    await expectCommandError(port.execute("review_case.propose", envelope({ caseId: propertyB.id, correction: await vacancy("rm-unit-9", "unit:9") }, propertyB.recordRevision), access), 403, "review_case_target_out_of_scope");
+    // A case scoped to property A cannot change a unit at property B.
+    const propertyA = await caseInScope(db, "property:demo-property-a");
+    await expectCommandError(port.execute("review_case.propose", envelope({ caseId: propertyA.id, correction: await vacancy("rm-unit-9", "unit:9") }, propertyA.recordRevision), access), 403, "review_case_target_out_of_scope");
     // Rental tables are not organization-scoped: a unit at a property this company does not own is refused
     // even when a case names it.
     await db.query("INSERT INTO rent_ops_properties(id,name,slug) VALUES ('other-company-property','Other Co','other-co')");

@@ -143,14 +143,13 @@ export async function seedRentalDemo(options: SeedRentalDemoOptions): Promise<vo
     // The in-memory fixture leaves tenancy knowledge markers implicit, which
     // the in-memory model reads as known. A durable row without markers reads
     // as unconfirmed, so tenant-status filters would drop every demo resident.
-    // Record the synthetic relationships and dates as manually entered.
-    for (let tenancy of snapshot.tenancies) {
+    // Record the synthetic current and past relationships as manually entered.
+    // The fixture's future tenancy stays unconfirmed: its dated start is fixed
+    // in August 2026, and confirming it would make every later "today" read
+    // report an elapsed move-in.
+    for (const tenancy of snapshot.tenancies) {
+      if (tenancy.status === "future") { await repository.saveTenancy(tenancy); continue; }
       const manual = <T,>(value: T | null | undefined, present: unknown) => value ?? (present ? "manual" : "unknown");
-      // A future tenancy has not moved in: the fixture's date is its planned start.
-      const planned = tenancy.status === "future" && !tenancy.plannedMoveInOn && tenancy.actualMoveInOn
-        ? { plannedMoveInOn: tenancy.actualMoveInOn, actualMoveInOn: null }
-        : {};
-      tenancy = { ...tenancy, ...planned } as typeof tenancy;
       await repository.saveTenancy({
         ...tenancy,
         propertyLinkKnowledge: manual(tenancy.propertyLinkKnowledge, tenancy.propertyId),
