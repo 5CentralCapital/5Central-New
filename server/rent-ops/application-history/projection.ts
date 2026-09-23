@@ -200,13 +200,20 @@ function decimalCents(row: Raw, ...keys: string[]): number | undefined {
   }
   if (candidate === undefined) return undefined;
   const normalized = String(candidate).trim().replace(/^\$/, "").replace(/,/g, "");
-  const amount = Number(normalized);
-  if (!Number.isFinite(amount) || amount < 0) return undefined;
+  // Parse the decimal text exactly: `19.99 * 100` is 1998.9999999999998 in
+  // floating point, which would silently discard a valid amount.
+  const match = /^(\d+)(?:\.(\d*))?$/.exec(normalized);
+  if (!match) return undefined;
+  const [, whole, fraction = ""] = match;
   // The matched source field, rather than the JavaScript representation,
   // determines units. RM may return either 1250 or "1250" for dollars, and
   // either 125000 or "125000" for an explicitly cents-named field.
   const centsInput = matchedKey?.toLowerCase().includes("cents") === true;
-  const cents = centsInput ? amount : amount * 100;
+  const scale = centsInput ? 0 : 2;
+  // Sub-cent precision is never rounded; only trailing zeros are accepted.
+  if (/[^0]/.test(fraction.slice(scale))) return undefined;
+  // An integer digit string converts exactly while it remains a safe integer.
+  const cents = Number(`${whole}${fraction.slice(0, scale).padEnd(scale, "0")}`);
   return Number.isSafeInteger(cents) ? cents : undefined;
 }
 
@@ -546,7 +553,6 @@ function buildApplications(rows: readonly Raw[], prospects: ReadonlyMap<string, 
     const personSource = rawPersonId(row);
     const personId = personSource ? linkedTarget(options, "person", personSource) : undefined;
     const mappedStatus = statusFromCrosswalk(row, rowCollection(row), options);
-    const rawStatus = value(row, "status", "Status", "applicationStatus", "ApplicationStatus");
     return [{
       id,
       source: sourceRef(row, rowCollection(row), "application", source),
@@ -557,7 +563,7 @@ function buildApplications(rows: readonly Raw[], prospects: ReadonlyMap<string, 
       email: text(row, "email", "Email", "EmailAddress") ?? null,
       phone: text(row, "phone", "Phone", "PhoneNumber", "Mobile") ?? null,
       status: mappedStatus ?? null,
-      statusKnowledge: mappedStatus ? "source" as const : rawStatus === undefined ? "unknown" as const : "unknown" as const,
+      statusKnowledge: mappedStatus ? "source" as const : "unknown" as const,
       submittedOn: dateValue(row, "submittedOn", "SubmittedOn", "SubmittedDate", "ApplicationDate", "ApplicationSubmissionDate") ?? null,
       submittedOnKnowledge: fact(value(row, "submittedOn", "SubmittedOn", "SubmittedDate", "ApplicationDate", "ApplicationSubmissionDate")),
       createdOn: dateValue(row, "createdOn", "CreatedOn", "CreatedDate", "CreateDate") ?? null,
