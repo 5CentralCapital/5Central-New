@@ -1842,10 +1842,10 @@ export class RentOpsService {
     const original = snapshot.ledgerTransactions.find((transaction) => transaction.id === originalId);
     if (!original) throw new RentOpsInvariantError("Original ledger transaction not found");
     if (!original.kind || !original.category || !original.propertyId || original.amountCents === null || !original.postedOn || !original.description) throw new RentOpsInvariantError("Original ledger transaction has unresolved financial facts");
-    const reversal = buildReversal(original, { ...input, id: input.id ?? `reversal:${randomUUID()}` });
+    const reversal = withOperatorProvenance(buildReversal(original, { ...input, id: input.id ?? `reversal:${randomUUID()}` }), input);
     const existing = snapshot.ledgerTransactions.find((transaction) => transaction.kind === "reversal" && transaction.status === "posted" && transaction.reversalOfId === originalId);
     if (existing) {
-      if (input.id === existing.id && JSON.stringify(existing) === JSON.stringify(reversal)) return existing;
+      if (input.id === existing.id && sameLedgerFacts(existing, reversal)) return existing;
       throw new RentOpsInvariantError("Ledger transaction has already been reversed");
     }
     const saved = await this.repository.saveLedgerTransaction(reversal);
@@ -1894,4 +1894,33 @@ export class RentOpsService {
     return saved;
   }
   async saveActivity(event: RentOpsActivityEvent): Promise<RentOpsActivityEvent> { if (event.id.startsWith(chargeTermsPrefix) || /recurring_charge_terms_v1/.test(event.detail ?? "")) throw new RentOpsInvariantError("Dedicated charge terms review endpoint required"); if ((await this.snapshot()).activityEvents.some((candidate) => candidate.id === event.id)) throw new RentOpsInvariantError("Activity already exists; use PATCH for an existing record"); const saved = await this.repository.saveActivity(event); await this.recordAdminChange(`Activity ${event.id} recorded`, { propertyId: event.propertyId, unitId: event.unitId, tenancyId: event.tenancyId, personId: event.personId, applicationId: event.applicationId }); return saved; }
+}
+
+
+// A reversal entered through the admin path is an operator entry, not imported
+// evidence. It inherits the original's financial facts but must not claim the
+// original's source binding, source-derived knowledge or due date: an imported
+// charge's markers would violate the ledger source-binding check, and its due
+// date can precede the reversal's posting date. Markers the caller sets
+// explicitly are kept.
+function withOperatorProvenance(reversal: RentOpsLedgerTransaction, input: Partial<RentOpsLedgerTransaction>): RentOpsLedgerTransaction {
+  const next: RentOpsLedgerTransaction = { ...reversal };
+  const record = next as unknown as Record<string, unknown>;
+  const explicit = input as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!key.endsWith("Knowledge") || key in explicit) continue;
+    if (record[key] === "source" || record[key] === "exact") record[key] = "manual";
+  }
+  if (!("sourceArtifactSha256" in explicit)) record.sourceArtifactSha256 = null;
+  if (!("artifactObservationOn" in explicit)) record.artifactObservationOn = null;
+  if (!("dueOn" in explicit)) { next.dueOn = null; record.dueOnKnowledge = "unknown"; }
+  else if (next.dueOn && next.postedOn && next.dueOn < next.postedOn) throw new RentOpsInvariantError("A reversal's due date cannot precede its posted date");
+  return next;
+}
+
+// Replay comparison: a stored row reads back with null where the built entry
+// has undefined, and with its own key order; neither is a different fact.
+function sameLedgerFacts(left: RentOpsLedgerTransaction, right: RentOpsLedgerTransaction): boolean {
+  const canonical = (row: RentOpsLedgerTransaction) => JSON.stringify(Object.entries(row).filter(([, value]) => value !== null && value !== undefined).sort(([a], [b]) => a.localeCompare(b)));
+  return canonical(left) === canonical(right);
 }
