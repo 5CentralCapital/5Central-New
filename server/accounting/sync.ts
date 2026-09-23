@@ -141,6 +141,11 @@ export interface QboCatchUpOptions<T> {
   /** Optional final mirror/coverage work performed before checkpoint save. */
   readonly finalize?: (executor: RentOpsQueryExecutor, context: { readonly pages: readonly QboCatchUpPage<T>[]; readonly itemsApplied: number }) => Promise<void>;
   readonly maxPages?: number;
+  /**
+   * Full replay: fetch from the beginning instead of the stored watermark.
+   * The saved watermark never moves backwards.
+   */
+  readonly ignoreStoredWatermark?: boolean;
 }
 
 /** Fetches first, then applies all pages in one transaction before advancing the watermark. */
@@ -149,16 +154,19 @@ export async function runQboCatchUp<T>(options: QboCatchUpOptions<T>): Promise<Q
   if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 100_000) throw new AccountingError("accounting_validation", "QBO catch-up page limit is invalid");
   const before = await options.checkpointStore.load(options.scope, options.stream);
   const pages: QboCatchUpPage<T>[] = [];
-  let cursor = before?.cursor ?? null;
+  const since = options.ignoreStoredWatermark ? null : before?.watermark ?? null;
+  // An interrupted run never commits a cursor (pages are applied atomically
+  // at the end), so every run restarts from the committed watermark.
+  let cursor: string | null = null;
   let watermark = before?.watermark ?? null;
   try {
     for (;;) {
       if (pages.length >= maxPages) throw new AccountingError("accounting_unavailable", "QBO catch-up exceeded the page limit");
-      const page = await options.fetchPage({ sinceWatermark: before?.watermark ?? null, cursor });
+      const page = await options.fetchPage({ sinceWatermark: since, cursor });
       if (!page || !Array.isArray(page.items) || (page.watermark !== null && (typeof page.watermark !== "string" || page.watermark.length === 0))) throw new AccountingError("accounting_unavailable", "QBO catch-up returned an invalid page");
       if (page.nextCursor !== null && (typeof page.nextCursor !== "string" || page.nextCursor.length === 0 || page.nextCursor === cursor)) throw new AccountingError("accounting_unavailable", "QBO catch-up returned a non-advancing cursor");
       pages.push(page);
-      if (page.watermark !== null) watermark = page.watermark;
+      if (page.watermark !== null && (watermark === null || page.watermark > watermark)) watermark = page.watermark;
       cursor = page.nextCursor;
       if (cursor === null) break;
     }

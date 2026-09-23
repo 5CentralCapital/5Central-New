@@ -388,6 +388,15 @@
       "minimumServerContract": 1,
       "minimumClientContract": 1,
       "recovery": "Disable affected QuickBooks access and reconnect commands; preserve scoped lifecycle events and apply a reviewed forward repair."
+    },
+    {
+      "version": 42,
+      "fileName": "042_qbo_sync_exceptions.sql",
+      "sha256": "55a0065696f0bf02c2221c3560bb15c89b79320b32b8852e73ac5679cf7579dc",
+      "predecessor": 41,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Stop QuickBooks mirror catch-up; keep recorded sync exceptions and coverage as partial, then apply a reviewed forward repair."
     }
   ]
 }

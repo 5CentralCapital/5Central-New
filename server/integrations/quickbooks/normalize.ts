@@ -48,9 +48,30 @@ export interface NormalizedQboObject {
   readonly unsupportedReasons: readonly string[];
 }
 
+/** Home currency evidence read from the realm's Preferences.CurrencyPrefs. */
+export interface QboCurrencyContext {
+  readonly homeCurrency: string;
+  readonly multiCurrencyEnabled: boolean | null;
+}
+
 export interface QboNormalizationResult {
   readonly value: NormalizedQboObject | null;
   readonly unsupportedReasons: readonly string[];
+}
+
+/**
+ * Rejection reasons are persisted and shown to operators. They are built only
+ * from normalizer-authored text plus provider identifiers, never from raw
+ * provider values or third-party library messages.
+ */
+class QboNormalizationError extends Error {}
+
+function reject(message: string): never {
+  throw new QboNormalizationError(message);
+}
+
+function reasonOf(error: unknown, fallback: string): string {
+  return error instanceof QboNormalizationError ? error.message : fallback;
 }
 
 function record(value: unknown): QuickBooksJsonObject | null {
@@ -59,7 +80,7 @@ function record(value: unknown): QuickBooksJsonObject | null {
 
 function text(value: unknown, field: string, max = 255): string {
   if (typeof value !== "string" || value.trim().length === 0 || value.length > max || /[\u0000-\u001f\u007f]/.test(value)) {
-    throw new Error(`QBO ${field} is invalid`);
+    reject(`QBO ${field} is invalid`);
   }
   return value.trim();
 }
@@ -72,7 +93,7 @@ function optionalText(value: unknown, field: string, max = 255): string | null {
 function providerTimestamp(value: unknown): string {
   const raw = text(value, "provider update timestamp", 100);
   const parsed = new Date(raw);
-  if (!Number.isFinite(parsed.getTime())) throw new Error("QBO provider update timestamp is invalid");
+  if (!Number.isFinite(parsed.getTime())) reject("QBO provider update timestamp is invalid");
   return isoTimestampSchema.parse(parsed.toISOString());
 }
 
@@ -85,13 +106,18 @@ export function qboAmountToCents(value: unknown, field: string): MoneyCents {
   let decimal: string;
   if (typeof value === "string") decimal = value;
   else if (typeof value === "number") {
-    if (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER) throw new Error(`QBO ${field} exceeds the safe numeric boundary`);
+    if (!Number.isFinite(value) || Math.abs(value) > Number.MAX_SAFE_INTEGER) reject(`QBO ${field} exceeds the safe numeric boundary`);
     decimal = legacyNumberToDecimal(value);
-  } else throw new Error(`QBO ${field} is missing or not a decimal`);
-  const parts = parseDecimalParts(decimal);
+  } else reject(`QBO ${field} is missing or not a decimal`);
+  let parts: ReturnType<typeof parseDecimalParts>;
+  try {
+    parts = parseDecimalParts(decimal);
+  } catch {
+    reject(`QBO ${field} is not a plain decimal`);
+  }
   // QBO accounting amounts are represented at cent precision for this mirror.
   // Refuse hidden rounding instead of silently changing a provider amount.
-  if (parts.scale > 2) throw new Error(`QBO ${field} has unsupported sub-cent precision`);
+  if (parts.scale > 2) reject(`QBO ${field} has unsupported sub-cent precision`);
   const cents = parts.coefficient * BigInt(100) / BigInt(10 ** parts.scale);
   return centsFromBigInt(parts.sign < 0 ? -cents : cents);
 }
@@ -101,21 +127,29 @@ function referenceId(value: unknown): string | null {
   return ref ? optionalText(ref.value ?? ref.Id, "provider reference", 200) : null;
 }
 
-function currency(value: QuickBooksJsonObject, fallback?: string | null): CurrencyCode {
+function currencyCode(value: unknown, field: string): CurrencyCode {
+  const parsed = currencyCodeSchema.safeParse(text(value, field, 3).toUpperCase());
+  if (!parsed.success) reject(`QBO ${field} is not an ISO currency code`);
+  return parsed.data;
+}
+
+/**
+ * CurrencyRef is authoritative when present. When it is absent, only a home
+ * currency read from the realm's Preferences with multicurrency confirmed off
+ * may be applied; a missing currency is never assumed to be USD.
+ */
+function currency(value: QuickBooksJsonObject, context: QboCurrencyContext | null | undefined): CurrencyCode {
   const supplied = record(value.CurrencyRef)?.value;
-  if (supplied !== undefined && supplied !== null) return currencyCodeSchema.parse(text(supplied, "CurrencyRef.value", 3).toUpperCase());
-  if (fallback !== undefined && fallback !== null) return currencyCodeSchema.parse(text(fallback, "verified HomeCurrency", 3).toUpperCase());
-  throw new Error("QBO CurrencyRef is absent and no verified HomeCurrency is available");
+  if (supplied !== undefined && supplied !== null) return currencyCode(supplied, "CurrencyRef.value");
+  if (!context) reject("QBO CurrencyRef is absent and no verified home currency is available");
+  if (context.multiCurrencyEnabled !== false) reject("QBO CurrencyRef is absent in a realm where multicurrency is not verified off");
+  return currencyCode(context.homeCurrency, "verified home currency");
 }
 
 function rawLineItems(value: unknown): readonly unknown[] {
   if (value === undefined || value === null) return [];
   const values = Array.isArray(value) ? value : [value];
   return values;
-}
-
-function lineItems(value: unknown): readonly QuickBooksJsonObject[] {
-  return rawLineItems(value).filter((item): item is QuickBooksJsonObject => Boolean(record(item)));
 }
 
 function postingState(body: QuickBooksJsonObject): "posted" | "voided" | "unknown" {
@@ -125,32 +159,11 @@ function postingState(body: QuickBooksJsonObject): "posted" | "voided" | "unknow
   return "posted";
 }
 
-function transactionAccount(type: SupportedQboTransactionType, body: QuickBooksJsonObject): string | null {
-  if (type === "BillPayment") return paymentCashAccount(type, body);
-  if (type === "Deposit") return referenceId(body.DepositToAccountRef) ?? referenceId(body.AccountRef);
-  return referenceId(body.AccountRef);
-}
-
 function transactionCounterparty(type: SupportedQboTransactionType, body: QuickBooksJsonObject): string | null {
   if (type === "Bill" || type === "BillPayment") return referenceId(body.VendorRef) ?? referenceId(body.EntityRef);
   // Purchase.EntityRef is the provider payee. CustomerRef belongs to a
   // reporting dimension and is intentionally not used as a payee identity.
   return referenceId(body.EntityRef) ?? referenceId(body.VendorRef);
-}
-
-function lineAccount(type: SupportedQboTransactionType, body: QuickBooksJsonObject, line: QuickBooksJsonObject): string | null {
-  const detail = record(line.AccountBasedExpenseLineDetail) ?? record(line.ItemBasedExpenseLineDetail) ?? record(line.Detail);
-  return referenceId(detail?.AccountRef) ?? transactionAccount(type, body);
-}
-
-function lineCounterparty(type: SupportedQboTransactionType, body: QuickBooksJsonObject): string | null {
-  return transactionCounterparty(type, body);
-}
-
-function depositLineCounterparty(line: QuickBooksJsonObject): string | null {
-  const detail = record(line.DepositLineDetail);
-  const entity = record(detail?.Entity) ?? record(detail?.EntityRef);
-  return referenceId(entity);
 }
 
 function lineDescription(body: QuickBooksJsonObject, line: QuickBooksJsonObject): string | null {
@@ -164,10 +177,9 @@ function paymentCashAccount(type: SupportedQboTransactionType, body: QuickBooksJ
     return referenceId(checkPayment?.BankAccountRef)
       ?? referenceId(creditCardPayment?.CCAccountRef)
       ?? referenceId(body.BankAccountRef)
-      ?? referenceId(body.CCAccountRef)
-      ?? referenceId(body.AccountRef);
+      ?? referenceId(body.CCAccountRef);
   }
-  if (type === "Deposit") return referenceId(body.DepositToAccountRef) ?? referenceId(body.AccountRef);
+  if (type === "Deposit") return referenceId(body.DepositToAccountRef);
   return referenceId(body.AccountRef);
 }
 
@@ -196,23 +208,123 @@ function lineDirection(type: SupportedQboTransactionType): "debit" | "credit" {
   return type === "BillPayment" ? "credit" : "debit";
 }
 
-function settled(type: SupportedQboTransactionType, _body: QuickBooksJsonObject, _amount: MoneyCents, _date: string, state: "posted" | "voided" | "unknown") {
-  if (state === "voided") return { settlementState: "voided" as const, settledOn: null, settledAmountCents: null };
-  // QBO posting and a payment method do not prove bank clearing. Settlement
-  // is filled only by a separate bank/reconciliation evidence pipeline.
-  return { settlementState: "unknown" as const, settledOn: null, settledAmountCents: null };
+interface LinkedTransaction {
+  readonly txnId: string;
+  readonly txnType: string;
+}
+
+function linkedTransactions(line: QuickBooksJsonObject, lineLabel: string): readonly LinkedTransaction[] {
+  return rawLineItems(line.LinkedTxn).map((raw, index) => {
+    const linked = record(raw);
+    if (!linked) reject(`QBO ${lineLabel} LinkedTxn ${index + 1} is not a JSON object`);
+    const txnId = text(linked.TxnId, `${lineLabel} LinkedTxn.TxnId`, 100);
+    const txnType = text(linked.TxnType, `${lineLabel} LinkedTxn.TxnType`, 60);
+    if (!/^[A-Za-z]{1,60}$/.test(txnType)) reject(`QBO ${lineLabel} LinkedTxn.TxnType is invalid`);
+    return { txnId, txnType };
+  });
+}
+
+/**
+ * QBO omits Line.Id on BillPayment lines and on Deposit lines that move an
+ * existing Payment/SalesReceipt out of Undeposited Funds. Those lines are
+ * identified by their single linked transaction, which is stable across
+ * provider revisions. A line with neither an Id nor exactly one link is
+ * rejected rather than given a positional identity that could drift.
+ */
+function lineIdentity(type: SupportedQboTransactionType, line: QuickBooksJsonObject, index: number, links: readonly LinkedTransaction[]): string {
+  if (line.Id !== undefined && line.Id !== null) return text(line.Id, `${type} line ${index + 1} Id`, 200);
+  if (type !== "BillPayment" && type !== "Deposit") reject(`QBO ${type} line ${index + 1} has no Line.Id`);
+  if (links.length !== 1) reject(`QBO ${type} line ${index + 1} has no Line.Id and ${links.length === 0 ? "no" : "more than one"} linked transaction`);
+  return `linked:${links[0].txnType}:${links[0].txnId}`;
+}
+
+const DEPOSIT_LINKED_TYPES = new Set(["Payment", "SalesReceipt"]);
+
+function sumCents(values: readonly MoneyCents[]): bigint {
+  return values.reduce((total, value) => total + BigInt(value), BigInt(0));
+}
+
+function optionalAmount(value: unknown, field: string): MoneyCents | null {
+  return value === undefined || value === null ? null : qboAmountToCents(value, field);
+}
+
+/**
+ * Object-level checks that make a partially understood transaction
+ * unsupported as a whole. Mirroring a subset of lines, or lines whose total
+ * cannot be reconciled to the provider TotalAmt, would misstate cash.
+ */
+function objectLevelReasons(type: SupportedQboTransactionType, body: QuickBooksJsonObject, lines: readonly NormalizedQboLine[], rawLineCount: number): string[] {
+  const reasons: string[] = [];
+  const label = `QBO ${type}`;
+  if (type === "Purchase" && body.Credit === true) reasons.push(`${label} is a credit (refund); refunds are not mirrored as outgoing expense`);
+  if (type === "Purchase" && body.PaymentType !== undefined && paymentSubtype(type, body) === null) reasons.push(`${label} has unsupported PaymentType`);
+  if ((type === "BillPayment" || type === "Deposit") && paymentCashAccount(type, body) === null) reasons.push(`${label} has no actual cash account reference`);
+  if (type === "BillPayment" && body.PayType !== undefined && body.PayType !== "Check" && body.PayType !== "CreditCard") reasons.push(`${label} has unsupported PayType`);
+  let cashBack: MoneyCents | null = null;
+  let totalTax: MoneyCents | null = null;
+  let total: MoneyCents | null = null;
+  try {
+    total = optionalAmount(body.TotalAmt, `${type}.TotalAmt`);
+    totalTax = optionalAmount(record(body.TxnTaxDetail)?.TotalTax, `${type}.TxnTaxDetail.TotalTax`);
+    cashBack = type === "Deposit" ? optionalAmount(record(body.CashBack)?.Amount, "Deposit.CashBack.Amount") : null;
+  } catch (error) {
+    reasons.push(reasonOf(error, `${label} totals are invalid`));
+  }
+  if (totalTax !== null && BigInt(totalTax) !== BigInt(0)) reasons.push(`${label} carries transaction tax, which is not mirrored as a source line`);
+  if (cashBack !== null && BigInt(cashBack) !== BigInt(0)) reasons.push(`${label} has cash back, which is not mirrored as a source line`);
+  if (rawLineCount === 0) reasons.push(`${label} has no transaction lines`);
+  const ids = lines.map(line => line.lineId);
+  if (new Set(ids).size !== ids.length) reasons.push(`${label} has duplicate line identities`);
+  // Reconcile only when every line was understood; otherwise the line-level
+  // reasons already explain the gap.
+  if (total !== null && lines.length === rawLineCount && rawLineCount > 0 && reasons.length === 0) {
+    const lineTotal = sumCents(lines.map(line => line.amountCents));
+    if (lineTotal !== BigInt(total)) reasons.push(`${label} line amounts do not reconcile to TotalAmt`);
+  }
+  return reasons;
 }
 
 function normalizeLine(type: SupportedQboTransactionType, body: QuickBooksJsonObject, line: QuickBooksJsonObject, index: number, date: string, currencyCode: CurrencyCode, state: "posted" | "voided" | "unknown"): NormalizedQboLine {
-  const lineId = text(line.Id, "line Id", 200);
-  const amount = qboAmountToCents(line.Amount, `line ${lineId} Amount`);
-  if (BigInt(amount) < BigInt(0)) throw new Error(`QBO line ${lineId} amount is negative`);
-  const typePaymentAccount = paymentCashAccount(type, body);
-  if (type === "Purchase" && body.PaymentType !== undefined && paymentSubtype(type, body) === null) {
-    throw new Error(`QBO Purchase has unsupported PaymentType`);
-  }
-  if ((type === "BillPayment" || type === "Deposit") && typePaymentAccount === null) {
-    throw new Error(`QBO ${type} line ${lineId} has no actual cash account reference`);
+  const lineLabel = `${type} line ${index + 1}`;
+  const links = linkedTransactions(line, lineLabel);
+  const lineId = lineIdentity(type, line, index, links);
+  const amount = qboAmountToCents(line.Amount, `${lineLabel} Amount`);
+  if (BigInt(amount) < BigInt(0)) reject(`QBO ${lineLabel} amount is negative`);
+  const cashAccount = paymentCashAccount(type, body);
+  let accountObjectId: string | null;
+  let counterpartyObjectId: string | null;
+  if (type === "BillPayment") {
+    // Only Bill applications move cash. Vendor credits or journal entries
+    // applied inside a payment reduce its cash total and are not supported.
+    if (links.length !== 1 || links[0].txnType !== "Bill") reject(`QBO ${lineLabel} applies a linked ${links.length === 1 ? links[0].txnType : "transaction set"}; only Bill applications are mirrored`);
+    accountObjectId = cashAccount;
+    counterpartyObjectId = transactionCounterparty(type, body);
+  } else if (type === "Deposit") {
+    const detail = record(line.DepositLineDetail);
+    // Intuit returns linked Undeposited Funds lines with a DepositLineDetail
+    // that carries only payment metadata (PaymentMethodRef, CheckNum). Only a
+    // detail that names its own offset account or payer is a detail line.
+    const detailHasPosting = detail !== null && (detail.AccountRef !== undefined || detail.Entity !== undefined || detail.EntityRef !== undefined);
+    if (detail && detailHasPosting) {
+      if (links.length > 0) reject(`QBO ${lineLabel} has both a posting DepositLineDetail and LinkedTxn`);
+      // The deposit line's own AccountRef is the offset (income, equity,
+      // liability...). The bank account is the separate cash account.
+      accountObjectId = referenceId(detail.AccountRef);
+      if (accountObjectId === null) reject(`QBO ${lineLabel} DepositLineDetail has no AccountRef`);
+      counterpartyObjectId = referenceId(record(detail.Entity) ?? record(detail.EntityRef));
+    } else {
+      // A linked line moves an existing customer Payment or SalesReceipt out
+      // of Undeposited Funds. Its income or receivable was recognized by that
+      // linked transaction, so no offset account is inferred here.
+      if (links.length !== 1 || !DEPOSIT_LINKED_TYPES.has(links[0].txnType)) reject(`QBO ${lineLabel} links ${links.length === 1 ? links[0].txnType : "an unsupported transaction set"}; only a single Payment or SalesReceipt link is mirrored`);
+      accountObjectId = null;
+      counterpartyObjectId = null;
+    }
+  } else {
+    const detail = record(line.AccountBasedExpenseLineDetail) ?? record(line.ItemBasedExpenseLineDetail);
+    if (!detail) reject(`QBO ${lineLabel} has unsupported DetailType`);
+    accountObjectId = referenceId(detail.AccountRef);
+    counterpartyObjectId = transactionCounterparty(type, body);
   }
   return {
     lineId,
@@ -225,17 +337,25 @@ function normalizeLine(type: SupportedQboTransactionType, body: QuickBooksJsonOb
     currency: currencyCode,
     postingState: state,
     postedOn: date,
-    ...settled(type, body, amount, date, state),
-    accountObjectId: lineAccount(type, body, line),
-    counterpartyObjectId: type === "Deposit" ? depositLineCounterparty(line) : lineCounterparty(type, body),
-    cashAccountObjectId: typePaymentAccount,
+    // QBO posting and a payment method do not prove bank clearing. Settlement
+    // is filled only by a separate bank/reconciliation evidence pipeline.
+    ...(state === "voided"
+      ? { settlementState: "voided" as const, settledOn: null, settledAmountCents: null }
+      : { settlementState: "unknown" as const, settledOn: null, settledAmountCents: null }),
+    accountObjectId,
+    counterpartyObjectId,
+    cashAccountObjectId: cashAccount,
     paymentSubtype: paymentSubtype(type, body),
     description: lineDescription(body, line),
   };
 }
 
-/** Normalize only provider-shaped QBO Purchase, Bill and BillPayment bodies. */
-export function normalizeQboTransaction(type: string, input: unknown, options: { readonly defaultCurrency?: string | null } = {}): QboNormalizationResult {
+/**
+ * Normalize provider-shaped QBO Purchase, Bill, BillPayment and Deposit
+ * bodies. A result with any unsupported reason must be treated as unsupported
+ * as a whole: callers must not mirror its partial line list.
+ */
+export function normalizeQboTransaction(type: string, input: unknown, options: { readonly currency?: QboCurrencyContext | null } = {}): QboNormalizationResult {
   const unsupported: string[] = [];
   if (!(SUPPORTED_TRANSACTION_TYPES as readonly string[]).includes(type)) return { value: null, unsupportedReasons: [`Unsupported QBO object type ${type}`] };
   const objectType = type as SupportedQboTransactionType;
@@ -245,15 +365,17 @@ export function normalizeQboTransaction(type: string, input: unknown, options: {
   let version: string;
   let updatedAt: string;
   let transactionDate: string;
-  let currencyCode: CurrencyCode;
+  let currencyCodeValue: CurrencyCode;
   try {
     objectId = text(body.Id, `${objectType}.Id`, 200);
     version = text(body.SyncToken, `${objectType}.SyncToken`, 120);
     updatedAt = providerTimestamp(record(body.MetaData)?.LastUpdatedTime);
-    transactionDate = isoDateSchema.parse(text(body.TxnDate, `${objectType}.TxnDate`));
-    currencyCode = currency(body, options.defaultCurrency);
+    const date = isoDateSchema.safeParse(text(body.TxnDate, `${objectType}.TxnDate`));
+    if (!date.success) reject(`QBO ${objectType}.TxnDate is not a calendar date`);
+    transactionDate = date.data;
+    currencyCodeValue = currency(body, options.currency);
   } catch (error) {
-    return { value: null, unsupportedReasons: [error instanceof Error ? error.message : "QBO object identity is invalid"] };
+    return { value: null, unsupportedReasons: [reasonOf(error, "QBO object identity is invalid")] };
   }
   const state = postingState(body);
   const lines: NormalizedQboLine[] = [];
@@ -265,12 +387,12 @@ export function normalizeQboTransaction(type: string, input: unknown, options: {
       return;
     }
     try {
-      lines.push(normalizeLine(objectType, body, line, index, transactionDate, currencyCode, state));
+      lines.push(normalizeLine(objectType, body, line, index, transactionDate, currencyCodeValue, state));
     } catch (error) {
-      unsupported.push(error instanceof Error ? error.message : `QBO ${objectType} line ${index + 1} is unsupported`);
+      unsupported.push(reasonOf(error, `QBO ${objectType} line ${index + 1} is unsupported`));
     }
   });
-  if (rawLines.length === 0) unsupported.push(`QBO ${objectType} has no transaction lines`);
+  unsupported.push(...objectLevelReasons(objectType, body, lines, rawLines.length));
   return {
     value: {
       objectType,
@@ -279,7 +401,7 @@ export function normalizeQboTransaction(type: string, input: unknown, options: {
       providerUpdatedAt: updatedAt,
       transactionDate,
       postingState: state,
-      currency: currencyCode,
+      currency: currencyCodeValue,
       providerBody: body,
       lines,
       unsupportedReasons: unsupported,

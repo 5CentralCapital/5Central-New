@@ -112,7 +112,7 @@ test("provider sync orders only by LastUpdatedTime and preserves overlap paginat
       EntityRef: { value: "vendor-1" }, AccountRef: { value: "bank-1" }, MetaData: { LastUpdatedTime: updated },
       Line: [{ Id: "1", Amount: "125.40", AccountBasedExpenseLineDetail: { AccountRef: { value: "expense-1" } }, Description: "Materials" }],
     } as QuickBooksJsonObject;
-    const unsupported = { MetaData: { LastUpdatedTime: updated } } as QuickBooksJsonObject;
+    const unsupported = { Id: "900", MetaData: { LastUpdatedTime: updated } } as QuickBooksJsonObject;
     const client = {
       read: async () => ({ entity: { Id: "1", CompanyName: "Synthetic QBO" }, raw: {}, status: 200 }),
       query: async (query: string) => {

@@ -33,6 +33,7 @@ export const COMPANY_APPLICATION_TABLES = [
   "accounting_qbo_sync_checkpoints",
   "accounting_qbo_coverage",
   "accounting_qbo_coverage_gaps",
+  "accounting_qbo_sync_exceptions",
   "accounting_qbo_write_attempts",
   "company_project_templates",
   "company_project_template_scope_items",

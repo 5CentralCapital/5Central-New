@@ -362,6 +362,48 @@ function mapCoverage(scope: FinancialSourceScope, row: CoverageRow | null, gaps:
   });
 }
 
+export type QboSyncExceptionKind = "unsupported" | "missing_from_full_replay";
+
+export interface QboSyncExceptionInput {
+  readonly scope: QuickBooksConnectionScope;
+  readonly stream: string;
+  readonly objectType: string;
+  readonly objectId: string;
+  readonly version: string | null;
+  readonly kind: QboSyncExceptionKind;
+  readonly reasons: readonly string[];
+  readonly observedAt: string;
+}
+
+export interface QboSyncExceptionResolution {
+  readonly scope: QuickBooksConnectionScope;
+  readonly stream: string;
+  readonly objectType: string;
+  readonly objectId: string;
+  readonly version: string;
+  readonly observedAt: string;
+}
+
+export interface QboSyncException {
+  readonly stream: string;
+  readonly objectType: string;
+  readonly objectId: string;
+  readonly version: string | null;
+  readonly kind: QboSyncExceptionKind;
+  readonly reasons: readonly string[];
+  readonly firstSeenAt: string;
+  readonly lastSeenAt: string;
+}
+
+const STREAM_PATTERN = /^[a-z][a-z0-9_.:-]*$/;
+const MAX_EXCEPTION_REASON_LENGTH = 300;
+
+function exceptionReasons(reasons: readonly string[]): string[] {
+  const cleaned = Array.from(new Set(reasons.map(reason => String(reason).replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, MAX_EXCEPTION_REASON_LENGTH)).filter(reason => reason.length > 0))).slice(0, 50);
+  if (cleaned.length === 0) throw new AccountingError("accounting_validation", "QBO sync exception needs at least one reason");
+  return cleaned;
+}
+
 export interface QboAccountingMirrorStore extends FinancialSourceReadPort, FinancialSourceAllocationPort, FinancialProviderPaymentContextPort, FinancialProviderCostContextPort {
   readonly purposeMappings: AccountingPurposeMappingPort;
   forExecutor(executor: RentOpsQueryExecutor): QboAccountingMirrorStore;
@@ -372,6 +414,13 @@ export interface QboAccountingMirrorStore extends FinancialSourceReadPort, Finan
   linkSourceLine(input: QboSourceLineLinkInput): Promise<void>;
   summarizeStream(scope: QuickBooksConnectionScope, stream: string): Promise<QboCoverageSummary>;
   recordCoverage(input: QboCoverageInput): Promise<void>;
+  /** Durable per-object mirror exception; survives checkpoint advances and later runs. */
+  recordSyncException(input: QboSyncExceptionInput): Promise<void>;
+  /** Resolve an exception once the same or a newer provider revision mirrors completely. */
+  resolveSyncException(input: QboSyncExceptionResolution): Promise<boolean>;
+  listOpenSyncExceptions(scope: QuickBooksConnectionScope, stream?: string): Promise<readonly QboSyncException[]>;
+  /** Mirrored transaction object IDs for a type, used to detect objects absent from a full replay. */
+  listMirroredObjectIds(scope: QuickBooksConnectionScope, objectType: string): Promise<readonly string[]>;
   listProviderMirrors(scope: QuickBooksConnectionScope, kind: QboProviderMirrorKind): Promise<readonly QboProviderMirror[]>;
 }
 
@@ -865,6 +914,99 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
     }).sort((left, right) => left.displayName.localeCompare(right.displayName) || left.providerObjectId.localeCompare(right.providerObjectId));
   }
 
+  async recordSyncException(input: QboSyncExceptionInput): Promise<void> {
+    const scope = scopeOf(input.scope);
+    const stream = z.string().trim().min(1).max(120).regex(STREAM_PATTERN).parse(input.stream);
+    if (!/^[A-Z][A-Za-z0-9_]{0,119}$/.test(input.objectType)) throw new AccountingError("accounting_validation", "QBO object type is invalid");
+    const objectId = stringValue(input.objectId, "object ID", 200);
+    const version = input.version === null ? null : stringValue(input.version, "object version", 120);
+    const observedAt = isoTimestampSchema.parse(input.observedAt);
+    const reasons = exceptionReasons(input.reasons);
+    // An exception is reopened whenever the provider still returns an object
+    // that cannot be mirrored, whatever happened to earlier revisions.
+    await this.executor.query(
+      `INSERT INTO accounting_qbo_sync_exceptions
+        (organization_id, legal_entity_id, environment, realm_id, stream, object_type, object_id, object_version, exception_kind, reasons, first_seen_at, last_seen_at, resolved_at, resolved_version)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$11,NULL,NULL)
+       ON CONFLICT (organization_id, legal_entity_id, environment, realm_id, stream, object_type, object_id)
+       DO UPDATE SET object_version = EXCLUDED.object_version, exception_kind = EXCLUDED.exception_kind, reasons = EXCLUDED.reasons,
+         first_seen_at = CASE WHEN accounting_qbo_sync_exceptions.resolved_at IS NULL THEN accounting_qbo_sync_exceptions.first_seen_at ELSE EXCLUDED.first_seen_at END,
+         last_seen_at = GREATEST(accounting_qbo_sync_exceptions.last_seen_at, EXCLUDED.last_seen_at),
+         resolved_at = NULL, resolved_version = NULL`,
+      [...scopeParts(scope), stream, input.objectType, objectId, version, input.kind, JSON.stringify(reasons), observedAt],
+    );
+  }
+
+  async resolveSyncException(input: QboSyncExceptionResolution): Promise<boolean> {
+    const scope = scopeOf(input.scope);
+    const stream = z.string().trim().min(1).max(120).regex(STREAM_PATTERN).parse(input.stream);
+    const objectId = stringValue(input.objectId, "object ID", 200);
+    const version = stringValue(input.version, "object version", 120);
+    const observedAt = isoTimestampSchema.parse(input.observedAt);
+    const open = await this.executor.query<{ object_version: string | null; exception_kind: string }>(
+      `SELECT object_version, exception_kind FROM accounting_qbo_sync_exceptions
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream=$5 AND object_type=$6 AND object_id=$7
+          AND resolved_at IS NULL FOR UPDATE`,
+      [...scopeParts(scope), stream, input.objectType, objectId],
+    );
+    const row = open.rows[0];
+    if (!row) return false;
+    // An overlapping re-read of an older revision cannot clear an exception
+    // raised by a newer one.
+    if (row.exception_kind === "unsupported" && row.object_version !== null && versionCompare(version, row.object_version) < 0) return false;
+    await this.executor.query(
+      `UPDATE accounting_qbo_sync_exceptions SET resolved_at = $8, resolved_version = $9, last_seen_at = GREATEST(last_seen_at, $8)
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream=$5 AND object_type=$6 AND object_id=$7 AND resolved_at IS NULL`,
+      [...scopeParts(scope), stream, input.objectType, objectId, observedAt, version],
+    );
+    return true;
+  }
+
+  async listOpenSyncExceptions(scopeInput: QuickBooksConnectionScope, streamInput?: string): Promise<readonly QboSyncException[]> {
+    const scope = scopeOf(scopeInput);
+    const stream = streamInput === undefined ? null : z.string().trim().min(1).max(120).regex(STREAM_PATTERN).parse(streamInput);
+    const result = await this.executor.query<Record<string, unknown>>(
+      `SELECT stream, object_type, object_id, object_version, exception_kind, reasons, first_seen_at, last_seen_at
+         FROM accounting_qbo_sync_exceptions
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND resolved_at IS NULL
+          AND ($5::varchar IS NULL OR stream = $5)
+        ORDER BY stream, object_type, object_id`,
+      [...scopeParts(scope), stream],
+    );
+    return result.rows.map(row => ({
+      stream: String(row.stream),
+      objectType: String(row.object_type),
+      objectId: String(row.object_id),
+      version: row.object_version === null || row.object_version === undefined ? null : String(row.object_version),
+      kind: row.exception_kind === "missing_from_full_replay" ? "missing_from_full_replay" as const : "unsupported" as const,
+      reasons: Array.isArray(row.reasons) ? row.reasons.map(String) : typeof row.reasons === "string" ? (JSON.parse(row.reasons) as unknown[]).map(String) : [],
+      firstSeenAt: timestampValue(row.first_seen_at, "exception first seen"),
+      lastSeenAt: timestampValue(row.last_seen_at, "exception last seen"),
+    }));
+  }
+
+  async listMirroredObjectIds(scopeInput: QuickBooksConnectionScope, objectType: string): Promise<readonly string[]> {
+    const scope = scopeOf(scopeInput);
+    if (!/^[A-Z][A-Za-z0-9_]{0,119}$/.test(objectType)) throw new AccountingError("accounting_validation", "QBO object type is invalid");
+    const result = await this.executor.query<{ object_id: string }>(
+      `SELECT DISTINCT object_id FROM accounting_qbo_source_objects
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND deleted_at IS NULL`,
+      [...scopeParts(scope), objectType],
+    );
+    return result.rows.map(row => String(row.object_id));
+  }
+
+  private async openExceptionCounts(scope: FinancialSourceScope, stream?: string): Promise<Map<string, number>> {
+    const result = await this.executor.query<{ stream: string; open_count: unknown }>(
+      `SELECT stream, COUNT(*) AS open_count FROM accounting_qbo_sync_exceptions
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND resolved_at IS NULL
+          AND ($5::varchar IS NULL OR stream = $5)
+        GROUP BY stream`,
+      [...scopeParts(scope), stream ?? null],
+    );
+    return new Map(result.rows.map(row => [String(row.stream), Number(row.open_count ?? 0)]));
+  }
+
   async recordCoverage(input: QboCoverageInput): Promise<void> {
     const scope = scopeOf(input.scope);
     const stream = z.string().trim().min(1).max(120).regex(/^[a-z][a-z0-9_.:-]*$/).parse(input.stream);
@@ -892,20 +1034,23 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
     if (stream) {
       const rows = await this.executor.query<CoverageRow>(`SELECT stream,status,evidence,basis,watermark,covered_from,covered_through,observed_at,object_count,transaction_count,line_count,reason FROM accounting_qbo_coverage WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream=$5`, [...scopeParts(scope), stream]);
       const gaps = await this.executor.query<{ gap_from: string; gap_through: string }>(`SELECT gap_from,gap_through FROM accounting_qbo_coverage_gaps WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream=$5 ORDER BY gap_from`, [...scopeParts(scope), stream]);
-      return mapCoverage(scope, rows.rows[0] ?? null, gaps.rows.map((gap) => ({ from: dateValue(gap.gap_from, "gap start"), through: dateValue(gap.gap_through, "gap end") })), stream);
+      const openCount = (await this.openExceptionCounts(scope, stream)).get(stream) ?? 0;
+      const coverage = mapCoverage(scope, rows.rows[0] ?? null, gaps.rows.map((gap) => ({ from: dateValue(gap.gap_from, "gap start"), through: dateValue(gap.gap_through, "gap end") })), stream);
+      return openCount > 0 && coverage.status === "complete" ? financialSourceCoverageSchema.parse({ ...coverage, status: "partial", reason: `${openCount} QBO object(s) have unresolved mirror exceptions` }) : coverage;
     }
     const rows = await this.executor.query<CoverageRow>(`SELECT stream,status,evidence,basis,watermark,covered_from,covered_through,observed_at,object_count,transaction_count,line_count,reason FROM accounting_qbo_coverage WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 ORDER BY stream`, scopeParts(scope));
     const required = ["accounts", "transactions.purchase", "transactions.bill", "transactions.billpayment", "transactions.deposit"];
     if (rows.rows.length === 0) return mapCoverage(scope, null, [], "aggregate");
     const byStream = new Map(rows.rows.map(row => [String(row.stream), row]));
     const missing = required.filter(name => !byStream.has(name));
-    const partial = rows.rows.some(row => row.status !== "complete" || row.evidence !== "live_provider_readback");
+    const openExceptions = Array.from((await this.openExceptionCounts(scope)).values()).reduce((sum, count) => sum + count, 0);
+    const partial = openExceptions > 0 || rows.rows.some(row => row.status !== "complete" || row.evidence !== "live_provider_readback");
     const status = missing.length > 0 || partial ? "partial" : "complete";
     const values = rows.rows.map(row => row.watermark === null || row.watermark === undefined ? null : String(row.watermark)).filter((value): value is string => value !== null);
     const observed = rows.rows.map(row => timestampValue(row.observed_at, "coverage timestamp")).sort();
     const coveredFrom = rows.rows.map(row => row.covered_from).filter((value): value is string => value !== null && value !== undefined).map(value => dateValue(value, "coverage start")).sort()[0] ?? null;
     const coveredThroughValues = rows.rows.map(row => row.covered_through).filter((value): value is string => value !== null && value !== undefined).map(value => dateValue(value, "coverage end")).sort();
-    const reason = [...(missing.length ? [`Missing required QBO streams: ${missing.join(", ")}`] : []), ...(partial ? ["One or more QBO streams have partial or non-live evidence"] : [])].join("; ") || null;
+    const reason = [...(missing.length ? [`Missing required QBO streams: ${missing.join(", ")}`] : []), ...(openExceptions > 0 ? [`${openExceptions} QBO object(s) have unresolved mirror exceptions`] : []), ...(partial ? ["One or more QBO streams have partial or non-live evidence"] : [])].join("; ") || null;
     return financialSourceCoverageSchema.parse({
       scope, stream: "aggregate", status, evidence: rows.rows.every(row => row.evidence === "live_provider_readback") ? "live_provider_readback" : "unverified", basis: "source_transactions",
       watermark: values.length ? { value: values.sort().at(-1)!, observedAt: observed.at(-1)! } : null,
