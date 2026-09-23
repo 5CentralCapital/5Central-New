@@ -3,11 +3,12 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import type { ForecastCommandKind } from "../../shared/forecasting/contracts";
 import { FORECAST_MODEL_VERSION } from "../../shared/forecasting/result";
-import { reportRunRequestSchema } from "../../shared/reporting";
+import { getReportingDefinition, reportRunRequestSchema, type ReportingEngineContext } from "../../shared/reporting";
 import { attestTransport, loadAuthenticatedPrincipal } from "../company/authorization";
 import { createCompanyServices } from "../company/services";
 import { createSyntheticCompanyDatabase, createSyntheticRuntimeExecutor, SYNTHETIC_COMPANY } from "../company/testing/synthetic-database";
 import { ReportingError } from "../reporting/errors";
+import { createForecastReportingEngine, type ForecastReportingReadResult } from "../reporting/forecast-engine";
 import { syntheticForecastAssumptionsInput, SYNTHETIC_FORECAST_START } from "./testing/fixture";
 
 const { organizationId, entityId, actorId, propertyId } = SYNTHETIC_COMPANY;
@@ -79,4 +80,23 @@ test("company forecast reports enforce forecast authorization and read only appr
   } finally {
     await fixture.close();
   }
+});
+
+test("the 13-week engine keeps unknown balances unknown and still refuses partially missing balances", async () => {
+  const weeks = Array.from({ length: 13 }, (_, index) => ({ weekStart: new Date(Date.UTC(2026, 11, 28 + index * 7)).toISOString().slice(0, 10), inflowsCents: "500", outflowsCents: "200", currency: "USD", openingCashCents: null, closingCashCents: null }));
+  const source: ForecastReportingReadResult = { actuals: [{ date: "2026-12-27", category: "opening:deposits_held", amountCents: "100", currency: "USD", sourceId: "s1" }], weeks, coverage: { state: "partial", evidence: "reproducible_snapshot", watermark: null, reason: null } };
+  const context: ReportingEngineContext = {
+    runId: "11111111-1111-4111-8111-111111111112", snapshotId: "11111111-1111-4111-8111-111111111113", now: "2026-12-28T12:00:00.000Z" as never,
+    request: reportRunRequestSchema.parse({ reportId: "cash-forecast-13-week", definitionVersion: "1", scope: { organizationId }, filters: {}, period: { mode: "custom", fromDate: "2026-12-28", toDate: "2027-03-28" }, basis: "mixed", currency: "USD", forecast: { scenarioId: "base", inputVersion: "v1", modelVersion: "m1" } }),
+    definition: getReportingDefinition("cash-forecast-13-week")!,
+  };
+  let probed = 0;
+  const engine = createForecastReportingEngine({ async read() { return source; }, async probe() { probed += 1; return { status: "missing_data", reason: "No approved forecast scenario.", dependency: "approved_forecast_scenario" }; } });
+  const result = await engine.run(context);
+  assert.equal(result.rows.length, 13);
+  assert.ok(result.rows.every(row => row.values.openingCashCents === null && row.values.closingCashCents === null && row.values.netCents === "300"));
+  assert.deepEqual(await engine.probe!({ organizationId, reportId: "cash-forecast-13-week" }), { status: "missing_data", reason: "No approved forecast scenario.", dependency: "approved_forecast_scenario" });
+  assert.equal(probed, 1);
+  const mixed = createForecastReportingEngine({ async read() { return { ...source, weeks: weeks.map((week, index) => index === 3 ? { ...week, openingCashCents: "0", closingCashCents: "300" } : week) }; } });
+  await assert.rejects(mixed.run(context), /missing an explicit opening or closing cash balance/);
 });
