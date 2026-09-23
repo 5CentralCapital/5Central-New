@@ -64,11 +64,22 @@ export interface ReviewCaseCommandEnvelope {
   readonly payload: Record<string, unknown>;
 }
 
-export function reviewCaseEnvelope(organizationId: string, payload: Record<string, unknown>, expectedRevision?: number): ReviewCaseCommandEnvelope {
+/** A case's own entity/property, so entity- or property-scoped users address it within their grant. */
+export interface ReviewCaseScopeHint {
+  readonly legalEntityId?: string | null;
+  readonly propertyId?: string | null;
+}
+
+function scopeFields(hint: ReviewCaseScopeHint | undefined): { legalEntityId?: string; propertyId?: string } {
+  if (!hint?.legalEntityId) return {};
+  return { legalEntityId: hint.legalEntityId, ...(hint.propertyId ? { propertyId: hint.propertyId } : {}) };
+}
+
+export function reviewCaseEnvelope(organizationId: string, payload: Record<string, unknown>, expectedRevision?: number, scope?: ReviewCaseScopeHint): ReviewCaseCommandEnvelope {
   const randomUUID = globalThis.crypto?.randomUUID;
   if (!randomUUID) throw new ReviewCaseApiError("Secure action IDs are unavailable in this browser.", 0, "review_case_security_unavailable");
   const operationId = operationIdSchema.parse(randomUUID.call(globalThis.crypto));
-  return { operationId, idempotencyKey: `review-case:${operationId}`, scope: { organizationId }, ...(expectedRevision === undefined ? {} : { expectedRevision }), payload };
+  return { operationId, idempotencyKey: `review-case:${operationId}`, scope: { organizationId, ...scopeFields(scope) }, ...(expectedRevision === undefined ? {} : { expectedRevision }), payload };
 }
 
 function scopeParams(filters: { legalEntityId?: string; propertyId?: string }): URLSearchParams {
@@ -80,7 +91,7 @@ function scopeParams(filters: { legalEntityId?: string; propertyId?: string }): 
 
 export interface ReviewCasesApi {
   list(organizationId: string, filters: ReviewCaseListFilters, signal?: AbortSignal): Promise<ReviewCaseListResponse>;
-  get(organizationId: string, caseId: string, signal?: AbortSignal): Promise<ReviewCaseDetail>;
+  get(organizationId: string, caseId: string, signal?: AbortSignal, scope?: ReviewCaseScopeHint): Promise<ReviewCaseDetail>;
   inventory(organizationId: string, filters?: { legalEntityId?: string; propertyId?: string }, signal?: AbortSignal): Promise<ReviewInventory>;
   command(organizationId: string, kind: ReviewCaseCommandKind, envelope: ReviewCaseCommandEnvelope): Promise<OperationReceipt>;
 }
@@ -95,8 +106,9 @@ export const reviewCasesApi: ReviewCasesApi = {
     if (filters.cursor) params.set("cursor", filters.cursor);
     return reviewCaseListResponseSchema.parse(await requestJson(`${companyPath(organizationId)}/review-cases?${params}`, { signal }));
   },
-  async get(organizationId, caseId, signal) {
-    return reviewCaseDetailSchema.parse(await requestJson(`${companyPath(organizationId)}/review-cases/${encodeURIComponent(caseId)}`, { signal }));
+  async get(organizationId, caseId, signal, scope) {
+    const params = scopeParams(scopeFields(scope));
+    return reviewCaseDetailSchema.parse(await requestJson(`${companyPath(organizationId)}/review-cases/${encodeURIComponent(caseId)}${params.toString() ? `?${params}` : ""}`, { signal }));
   },
   async inventory(organizationId, filters = {}, signal) {
     const params = scopeParams(filters);

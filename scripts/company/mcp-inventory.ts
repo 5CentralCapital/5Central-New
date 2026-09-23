@@ -8,6 +8,7 @@ import { writeFileSync } from "node:fs";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createRentOpsMcpServer } from "../../server/rent-ops/mcp/tools";
+import { mcpOptionsForClient } from "../../server/intake/mcp";
 import { READ_SCOPE, WRITE_SCOPE } from "../../server/rent-ops/mcp/oauth";
 import { RentOpsService } from "../../server/rent-ops/services/service";
 import { createSyntheticRentOpsRepository } from "../../server/rent-ops/fixtures/synthetic";
@@ -21,10 +22,12 @@ export async function collectMcpInventory(): Promise<{ tools: InventoryTool[]; i
   try {
     const company = createCompanyServices(database.executor);
     const service = new RentOpsService(createSyntheticRentOpsRepository());
-    const server = createRentOpsMcpServer(service, { subject: "inventory", scopes: [READ_SCOPE, WRITE_SCOPE] }, "https://5central.capital/mcp", {
+    // Inventory the full surface, as the allowlisted Codex client sees it (MRA mutation tools are Codex-only).
+    const principal = { subject: "inventory", scopes: [READ_SCOPE, WRITE_SCOPE], clientId: "inventory-codex-client" };
+    const server = createRentOpsMcpServer(service, principal, "https://5central.capital/mcp", mcpOptionsForClient(principal, { mraClientIds: [principal.clientId] }, {
       company, companyActorId: SYNTHETIC_COMPANY.actorId,
       billing: {} as never, accountAdmin: {} as never,
-    });
+    }));
     const client = new Client({ name: "inventory", version: "1" });
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(a); await client.connect(b);

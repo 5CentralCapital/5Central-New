@@ -6,7 +6,7 @@ import test from "node:test";
 import { emptyRentOpsSnapshot, type DelinquencyRow, type RentRollRow } from "../../../shared/rent-ops-contracts";
 import { classifyReviewCode, reviewLabelForCodes, reviewReason } from "../../../shared/review-cases";
 import { syntheticRentOpsSnapshot } from "../fixtures/synthetic";
-import { detectReviewCases, reviewCandidateKey } from "./review-detector";
+import { detectReviewCases, detectReviewCasesWithStatus, reviewCandidateKey } from "./review-detector";
 
 const asOf = "2026-09-23";
 
@@ -170,4 +170,50 @@ test("short labels come from the reason registry; Unverified only without a code
   assert.equal(reviewLabelForCodes(undefined), "Unverified");
   assert.equal(reviewReason(classifyReviewCode("current_move_in_missing").reason).shortLabel, "Move-in date missing");
   assert.equal(reviewReason(classifyReviewCode("schedule_lineage_branch").reason).shortLabel, "Charge schedule unconfirmed");
+});
+
+test("a rental report that fails to compute marks detection incomplete instead of dropping its causes silently", () => {
+  const healthy = detectReviewCasesWithStatus({ asOf: "2026-08-15", snapshot: syntheticRentOpsSnapshot() });
+  assert.equal(healthy.complete, true);
+  assert.deepEqual(healthy.incompleteReports, []);
+  // On this date the future tenancy's move-in has elapsed: the rent roll and scheduled income refuse to compute.
+  const degraded = detectReviewCasesWithStatus({ asOf, snapshot: syntheticRentOpsSnapshot() });
+  assert.equal(degraded.complete, false);
+  assert.deepEqual(degraded.incompleteReports.map(item => item.report), ["rent_roll", "scheduled_income"]);
+  assert.ok(degraded.incompleteReports.every(item => item.codes.includes("future_move_in_elapsed")));
+  assert.ok(degraded.candidates.some(candidate => candidate.codes.includes("future_move_in_elapsed")), "the violation itself is still a case");
+  assert.deepEqual(detectReviewCases({ asOf, snapshot: syntheticRentOpsSnapshot() }), degraded.candidates);
+});
+
+test("one unit-less tenancy is one case naming that tenancy, not one case per unit of its property", () => {
+  const asOfDate = "2026-08-15";
+  const key = (candidate: { reasonCode: string; causeKey: string; scopeKey: string }) => `${candidate.reasonCode}|${candidate.causeKey}|${candidate.scopeKey}`;
+  const before = new Set(detectReviewCases({ asOf: asOfDate, snapshot: syntheticRentOpsSnapshot() }).map(key));
+  const snapshot = syntheticRentOpsSnapshot();
+  const propertyId = snapshot.tenancies[0]!.propertyId;
+  snapshot.people.push({ id: "p-unlinked", firstName: "Unlinked", lastName: "Tenant" } as never);
+  snapshot.tenancies.push({ id: "t-unlinked", propertyId, primaryPersonId: "p-unlinked", status: "current", actualMoveInOn: "2026-02-01", unitLinkKnowledge: "unknown", createdAt: snapshot.tenancies[0]!.createdAt } as never);
+  const result = detectReviewCasesWithStatus({ asOf: asOfDate, snapshot });
+  assert.equal(result.complete, true);
+  const added = result.candidates.filter(candidate => !before.has(key(candidate)));
+  assert.equal(added.length, 1, JSON.stringify(added.map(key)));
+  assert.deepEqual(added[0]!.affectedRecords.map(record => `${record.kind}:${record.id}`), ["tenancy:t-unlinked"]);
+  assert.ok(added[0]!.codes.includes("unit_link_unknown"));
+  assert.ok(!result.candidates.some(candidate => candidate.affectedRecords.some(record => record.id !== "t-unlinked" && record.codes.includes("unit_link_unknown"))), "no unit or other tenancy carries the unlinked tenancy's codes");
+});
+
+test("records without a property are only reported to an organization that provably owns them", () => {
+  const snapshot = snapshotWithPeople(3);
+  snapshot.units = [{ id: "u-a", propertyId: "p-a", unitNumber: "1" } as never, { id: "u-b", propertyId: "p-b", unitNumber: "2" } as never];
+  snapshot.tenancies = [
+    { id: "t-a", propertyId: "p-a", unitId: "u-a", primaryPersonId: "person-0", status: "current" } as never,
+    { id: "t-b", propertyId: "p-b", unitId: "u-b", primaryPersonId: "person-1", status: "current" } as never,
+  ];
+  // Account rows with no property: person-0 lives at p-a, person-1 at p-b, person-2 has no rental link at all.
+  const delinquency = ["person-0", "person-1", "person-2"].map(personId => delinquencyRow(personId, null, ["imported_account_history_unverified"]));
+  const detect = (propertyIds: string[]) => detectReviewCases({ asOf, snapshot, propertyIds: new Set(propertyIds), reports: { rentRoll: [], delinquency, scheduledIncome: [], violations: [] } })
+    .flatMap(candidate => candidate.affectedRecords.map(record => record.id)).sort();
+  assert.deepEqual(detect(["p-a"]), ["person-0"], "org A sees only its own tenant");
+  assert.deepEqual(detect(["p-b"]), ["person-1"], "org B sees only its own tenant");
+  assert.deepEqual(detect(["p-a", "p-b"]), ["person-0", "person-1", "person-2"], "an organization owning every rental property owns unlinked records");
 });

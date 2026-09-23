@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ReviewCaseSummary } from "@shared/review-cases";
+import { allowedReviewCaseCommands, type ReviewCaseSummary } from "@shared/review-cases";
 import { ageLabel, formatImpact, groupQueue, impactTotal, primaryCommand, recordLinkTarget } from "./model";
 
 function summary(overrides: Partial<ReviewCaseSummary>): ReviewCaseSummary {
@@ -48,4 +48,12 @@ test("one primary action per state and links resolve to rental records", () => {
   assert.deepEqual(recordLinkTarget({ kind: "unit", id: "u1", label: null, propertyId: "p1", unitId: "u1", tenancyId: null, personId: null, codes: [] }), { kind: "unit", id: "u1" });
   assert.deepEqual(recordLinkTarget({ kind: "legal_entity", id: "e1", label: null, propertyId: null, unitId: null, tenancyId: null, personId: null, codes: [] }), { kind: "none" });
   assert.equal(ageLabel("2026-09-20T12:00:00.000Z", new Date("2026-09-23T13:00:00.000Z")), "3 days");
+});
+
+test("a proposal that cannot be applied here has no Apply action", () => {
+  assert.equal(primaryCommand("proposed", allowedReviewCaseCommands("proposed", { input: { kind: "operational" } })), "review_case.apply");
+  assert.equal(primaryCommand("proposed", allowedReviewCaseCommands("proposed", { input: { kind: "connection" } })), undefined, "connection fixes are made outside the case");
+  assert.ok(allowedReviewCaseCommands("proposed", { input: { kind: "financial" }, routing: null }).includes("review_case.apply"), "an unrouted financial fix can be routed");
+  assert.ok(!allowedReviewCaseCommands("proposed", { input: { kind: "financial" }, routing: { status: "routed_to_accounting" } }).includes("review_case.apply"), "a routed fix is not routed again");
+  assert.ok(!allowedReviewCaseCommands("proposed").includes("review_case.apply"), "no proposal, no apply");
 });

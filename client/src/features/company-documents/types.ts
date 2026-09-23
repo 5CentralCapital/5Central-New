@@ -24,8 +24,15 @@ export interface CompanyDocumentUploadInput {
   readonly file: File;
 }
 
+/** The document's own legal entity/property (from its context); omit for organization documents. */
+export interface CompanyDocumentScopeHint {
+  readonly legalEntityId?: string;
+  readonly propertyId?: string;
+}
+
 export interface CompanyDocumentMetadataUpdateInput {
   readonly documentId: string;
+  readonly scope?: CompanyDocumentScopeHint;
   readonly expectedRevision: number;
   readonly title?: string;
   readonly description?: string | null;
@@ -36,11 +43,11 @@ export interface CompanyDocumentMetadataUpdateInput {
 
 export interface CompanyDocumentsApi {
   list(organizationId: string, filter?: CompanyDocumentListFilter, signal?: AbortSignal): Promise<CompanyDocumentPage>;
-  get(organizationId: string, documentId: string, signal?: AbortSignal): Promise<CompanyDocument>;
+  get(organizationId: string, documentId: string, signal?: AbortSignal, scope?: CompanyDocumentScopeHint): Promise<CompanyDocument>;
   upload(organizationId: string, input: CompanyDocumentUploadInput, signal?: AbortSignal): Promise<CompanyDocument>;
   updateMetadata(organizationId: string, input: CompanyDocumentMetadataUpdateInput, signal?: AbortSignal): Promise<CompanyDocument>;
-  archive(organizationId: string, document: Pick<CompanyDocument, "id" | "recordRevision">, signal?: AbortSignal): Promise<void>;
-  download(organizationId: string, documentId: string, signal?: AbortSignal): Promise<Blob>;
+  archive(organizationId: string, document: Pick<CompanyDocument, "id" | "recordRevision" | "context">, signal?: AbortSignal): Promise<void>;
+  download(organizationId: string, documentId: string, signal?: AbortSignal, scope?: CompanyDocumentScopeHint): Promise<Blob>;
 }
 
 export interface CompanyDocumentsWorkspaceProps {

@@ -38,6 +38,22 @@ function metadataHeader(value: unknown): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+/** A document's own entity/property, so entity- or property-scoped users address it within their grant. */
+export function documentScope(document: Pick<CompanyDocument, "context"> | undefined): { legalEntityId?: string; propertyId?: string } {
+  const context = document?.context;
+  if (!context?.legalEntityId) return {};
+  return { legalEntityId: context.legalEntityId, ...(context.propertyId ? { propertyId: context.propertyId } : {}) };
+}
+
+function scopeQuery(scope: { legalEntityId?: string; propertyId?: string } | undefined): string {
+  const params = new URLSearchParams();
+  if (scope?.legalEntityId) {
+    params.set("legalEntityId", scope.legalEntityId);
+    if (scope.propertyId) params.set("propertyId", scope.propertyId);
+  }
+  return params.toString() ? `?${params}` : "";
+}
+
 function envelope(organizationId: string, payload: Record<string, unknown>, scope: { legalEntityId?: string; propertyId?: string } = {}) {
   const randomUUID = globalThis.crypto?.randomUUID;
   if (!randomUUID) throw new CompanyDocumentsApiError("Secure action IDs are unavailable in this browser.", 0, "company_document_security_unavailable");
@@ -62,8 +78,8 @@ function createApi(): CompanyDocumentsApi {
       const response = await rentOpsAuthClient.request(`${basePath(organizationId)}/documents${query(filter)}`, { signal, headers: { Accept: "application/json" } });
       return companyDocumentPageSchema.parse(await parseResponse(response, "Company documents could not be loaded."));
     },
-    async get(organizationId, documentId, signal) {
-      const response = await rentOpsAuthClient.request(`${basePath(organizationId)}/documents/${encodeURIComponent(documentId)}`, { signal, headers: { Accept: "application/json" } });
+    async get(organizationId, documentId, signal, scope) {
+      const response = await rentOpsAuthClient.request(`${basePath(organizationId)}/documents/${encodeURIComponent(documentId)}${scopeQuery(scope)}`, { signal, headers: { Accept: "application/json" } });
       return companyDocumentSchema.parse(await parseResponse(response, "The company document could not be loaded."));
     },
     /** Prepare (verify and stage the bytes), then commit the metadata through the command runner. */
@@ -96,15 +112,15 @@ function createApi(): CompanyDocumentsApi {
         ...(input.documentDate !== undefined ? { documentDate: input.documentDate } : {}), ...(input.tags !== undefined ? { tags: [...input.tags] } : {}),
         ...(input.links !== undefined ? { links: input.links.map(link => ({ kind: link.kind, id: link.id, label: link.label, ...(link.versionId ? { versionId: link.versionId } : {}) })) } : {}),
       };
-      await command(organizationId, "company_document.update", envelope(organizationId, { action: "update", patch }), signal);
-      return api.get(organizationId, input.documentId, signal);
+      await command(organizationId, "company_document.update", envelope(organizationId, { action: "update", patch }, input.scope), signal);
+      return api.get(organizationId, input.documentId, signal, input.scope);
     },
     async archive(organizationId, document, signal) {
-      const body = { ...envelope(organizationId, { action: "archive", documentId: document.id }), expectedRevision: document.recordRevision };
+      const body = { ...envelope(organizationId, { action: "archive", documentId: document.id }, documentScope(document)), expectedRevision: document.recordRevision };
       await command(organizationId, "company_document.archive", body, signal);
     },
-    async download(organizationId, documentId, signal) {
-      const response = await rentOpsAuthClient.request(`${basePath(organizationId)}/documents/${encodeURIComponent(documentId)}/download`, { signal, headers: { Accept: "application/octet-stream" } });
+    async download(organizationId, documentId, signal, scope) {
+      const response = await rentOpsAuthClient.request(`${basePath(organizationId)}/documents/${encodeURIComponent(documentId)}/download${scopeQuery(scope)}`, { signal, headers: { Accept: "application/octet-stream" } });
       if (!response.ok) await parseResponse(response, "The company document could not be downloaded.");
       return response.blob();
     },

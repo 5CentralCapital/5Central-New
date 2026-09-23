@@ -6,7 +6,7 @@ import {
   type ReviewEvidence,
 } from "../../shared/review-cases";
 import { isoDateSchema, organizationIdSchema, type IsoDate } from "../../shared/company";
-import { detectReviewCases, reviewCandidateKey, type ReviewCaseCandidate, type ReviewDetectorInput, type ReviewDetectorIntakePacket, type ReviewDetectorQboConnection, type ReviewDetectorSyncException } from "../rent-ops/domain/review-detector";
+import { detectReviewCasesWithStatus, reviewCandidateKey, type ReviewCaseCandidate, type ReviewDetectorInput, type ReviewDetectorIntakePacket, type ReviewDetectorQboConnection, type ReviewDetectorSyncException } from "../rent-ops/domain/review-detector";
 import { RentOpsInvariantError } from "../rent-ops/domain/invariants";
 import { PostgresRentOpsRepository, type RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { ValidationCommandError } from "../company/commands/errors";
@@ -30,9 +30,17 @@ export function operatingDate(now: Date = new Date()): IsoDate {
 
 export interface LoadedDetectionInput {
   readonly input: ReviewDetectorInput;
-  /** False when the rental snapshot could not be read; auto-resolution is then suppressed. */
+  /** False when the rental snapshot could not be read or an input was truncated; auto-resolution is then suppressed. */
   readonly complete: boolean;
+  /** Why the input is incomplete (bounded, human-readable). */
+  readonly incompleteReasons: readonly string[];
 }
+
+/** Bounded detector inputs: a result at the bound means more rows exist and the input is incomplete. */
+export const REVIEW_DETECTION_MAX_SYNC_EXCEPTIONS = 5_000;
+export const REVIEW_DETECTION_MAX_INTAKE_PACKETS = 500;
+
+const INCOMPLETE_REPORT_LABELS = { rent_roll: "rent roll", delinquency: "delinquency report", scheduled_income: "scheduled income" } as const;
 
 function parseJson(value: unknown): unknown {
   if (typeof value !== "string") return value;
@@ -49,6 +57,7 @@ export async function loadReviewDetectionInput(executor: RentOpsQueryExecutor, o
   const propertyEntities = new Map(properties.rows.map(row => [String(row.property_id), String(row.legal_entity_id)]));
   let snapshot: RentOpsSnapshot;
   let complete = true;
+  const incompleteReasons: string[] = [];
   let violations: { code: string; entityId: string; message?: string }[] | undefined;
   try {
     snapshot = await new PostgresRentOpsRepository(executor, true).getSnapshot();
@@ -58,6 +67,7 @@ export async function loadReviewDetectionInput(executor: RentOpsQueryExecutor, o
     // auto-verify other cases from a partial read.
     snapshot = emptyRentOpsSnapshot();
     complete = false;
+    incompleteReasons.push("Rental records could not be read.");
     violations = (error.violations ?? []).filter(item => item.entityId).map(item => ({ code: item.code, entityId: item.entityId!, message: item.message }));
   }
   const connections = await executor.query<Record<string, unknown>>(
@@ -73,28 +83,59 @@ export async function loadReviewDetectionInput(executor: RentOpsQueryExecutor, o
        JOIN company_legal_entities e ON e.organization_id = x.organization_id AND e.id = x.legal_entity_id
       WHERE x.organization_id = $1 AND x.resolved_at IS NULL
       ORDER BY x.legal_entity_id, x.stream, x.object_type, x.object_id
-      LIMIT 5000`,
-    [organizationId],
+      LIMIT $2`,
+    [organizationId, REVIEW_DETECTION_MAX_SYNC_EXCEPTIONS + 1],
   );
+  if (exceptions.rows.length > REVIEW_DETECTION_MAX_SYNC_EXCEPTIONS) {
+    complete = false;
+    incompleteReasons.push(`More than ${REVIEW_DETECTION_MAX_SYNC_EXCEPTIONS} QuickBooks sync exceptions are open; only the first ${REVIEW_DETECTION_MAX_SYNC_EXCEPTIONS} were read.`);
+    exceptions.rows.length = REVIEW_DETECTION_MAX_SYNC_EXCEPTIONS;
+  }
+  // Newest staged packet first: a later packet's observation of a source line supersedes an earlier one.
   const packets = await executor.query<Record<string, unknown>>(
     `SELECT id, source_file_name, legal_entity_id, property_id, lines_json
        FROM company_intake_packets
       WHERE organization_id = $1 AND reconciliation_json IS NOT NULL
-      ORDER BY updated_at DESC, id DESC
-      LIMIT 500`,
-    [organizationId],
+      ORDER BY created_at DESC, id DESC
+      LIMIT $2`,
+    [organizationId, REVIEW_DETECTION_MAX_INTAKE_PACKETS + 1],
   );
-  const intakePackets: ReviewDetectorIntakePacket[] = packets.rows.map(row => {
-    const lines = parseJson(row.lines_json);
-    return {
+  if (packets.rows.length > REVIEW_DETECTION_MAX_INTAKE_PACKETS) {
+    complete = false;
+    incompleteReasons.push(`More than ${REVIEW_DETECTION_MAX_INTAKE_PACKETS} MRA packets exist; only the newest ${REVIEW_DETECTION_MAX_INTAKE_PACKETS} were read.`);
+    packets.rows.length = REVIEW_DETECTION_MAX_INTAKE_PACKETS;
+  }
+  const parsedPackets = packets.rows.map(row => ({ row, lines: (() => { const lines = parseJson(row.lines_json); return Array.isArray(lines) ? lines : []; })() }));
+  // Source lines whose money any packet applied are verified history, never an open intake cause.
+  const openKeys = new Set<string>();
+  for (const { lines } of parsedPackets) for (const line of lines) {
+    const value = line as Record<string, unknown> | null;
+    if (value && typeof value === "object" && typeof value.sourceLineKey === "string" && value.outcome !== "applied") openKeys.add(value.sourceLineKey);
+  }
+  const appliedKeys = new Set<string>();
+  if (openKeys.size) {
+    const applied = await executor.query<{ source_line_key: string }>(
+      `SELECT DISTINCT source_line_key FROM company_intake_line_registry
+        WHERE organization_id = $1 AND outcome = 'applied' AND source_line_key = ANY($2::text[])`,
+      [organizationId, Array.from(openKeys)],
+    );
+    for (const row of applied.rows) appliedKeys.add(String(row.source_line_key));
+  }
+  const observedLater = new Set<string>();
+  const intakePackets: ReviewDetectorIntakePacket[] = parsedPackets.map(({ row, lines }) => {
+    const packetKeys: string[] = [];
+    const packet = {
       id: String(row.id),
       fileName: String(row.source_file_name),
       legalEntityId: row.legal_entity_id ? String(row.legal_entity_id) : null,
       propertyId: row.property_id ? String(row.property_id) : null,
-      lines: (Array.isArray(lines) ? lines : []).flatMap(line => {
+      lines: lines.flatMap(line => {
         if (!line || typeof line !== "object") return [];
         const value = line as Record<string, unknown>;
         if (typeof value.sourceLineKey !== "string" || typeof value.amountCents !== "string") return [];
+        packetKeys.push(value.sourceLineKey);
+        // A revised packet re-observes the same source line: only the newest observation can open a case.
+        if (observedLater.has(value.sourceLineKey) || appliedKeys.has(value.sourceLineKey)) return [];
         return [{
           sourceLineKey: value.sourceLineKey,
           outcome: typeof value.outcome === "string" ? value.outcome : null,
@@ -106,9 +147,12 @@ export async function loadReviewDetectionInput(executor: RentOpsQueryExecutor, o
         }];
       }),
     };
+    for (const key of packetKeys) observedLater.add(key);
+    return packet;
   });
   return {
     complete,
+    incompleteReasons,
     input: {
       asOf,
       snapshot,
@@ -169,6 +213,10 @@ export interface ReconcileOptions {
   readonly asOf: IsoDate;
   /** When false, cases missing from the candidates are left untouched. */
   readonly allowAutoResolve: boolean;
+  /** Read-only: count what would change without writing anything. */
+  readonly preview?: boolean;
+  /** Carried into the summary when the input or a report was incomplete. */
+  readonly incompleteReasons?: readonly string[];
 }
 
 /**
@@ -178,11 +226,12 @@ export interface ReconcileOptions {
 export async function reconcileReviewCases(executor: RentOpsQueryExecutor, options: ReconcileOptions): Promise<ReviewDetectionSummary> {
   const organizationId = organizationIdSchema.parse(options.organizationId);
   const now = new Date().toISOString();
+  const preview = options.preview === true;
   const existingResult = await executor.query<Record<string, unknown>>(
     `SELECT ${REVIEW_CASE_COLUMNS} FROM company_review_cases c
       WHERE c.organization_id = $1 AND c.detected_by <> 'manual'
       ORDER BY c.id
-      FOR UPDATE`,
+      ${preview ? "" : "FOR UPDATE"}`,
     [organizationId],
   );
   const existing = new Map(existingResult.rows.map(row => {
@@ -208,6 +257,13 @@ export async function reconcileReviewCases(executor: RentOpsQueryExecutor, optio
       scopeLabel: candidate.scopeLabel,
       ...(candidate.legalEntityId ? { legalEntityId: candidate.legalEntityId } : {}),
     };
+    if (preview) {
+      if (!current) summary.opened += 1;
+      else if (current.state === "verified" || (current.state === "applied" && current.sourceFingerprint !== candidate.sourceFingerprint)) summary.reopened += 1;
+      else if (current.sourceFingerprint === candidate.sourceFingerprint) summary.refreshed += 1;
+      else summary.updated += 1;
+      continue;
+    }
     if (!current) {
       const id = await insertReviewCase(executor, {
         organizationId, legalEntityId: candidate.legalEntityId, propertyId: candidate.propertyId, reasonCode: candidate.reasonCode,
@@ -255,7 +311,7 @@ export async function reconcileReviewCases(executor: RentOpsQueryExecutor, optio
     });
     summary.updated += 1; changed.push(current.id);
   }
-  if (options.allowAutoResolve) {
+  if (options.allowAutoResolve && !preview) {
     for (const [key, current] of Array.from(existing.entries())) {
       if (seen.has(key)) continue;
       if (!REVIEW_CASE_AUTO_RESOLVABLE_STATES.includes(current.state)) { summary.unchanged += 1; continue; }
@@ -269,23 +325,48 @@ export async function reconcileReviewCases(executor: RentOpsQueryExecutor, optio
   } else {
     for (const key of Array.from(existing.keys())) if (!seen.has(key)) summary.unchanged += 1;
   }
+  const incompleteReasons = (options.incompleteReasons ?? []).slice(0, 20).map(reason => reason.slice(0, 500));
   return reviewDetectionSummarySchema.parse({
     organizationId, asOf: options.asOf, candidateCount: options.candidates.length, ...summary, changedCaseIds: changed.slice(0, 1_000),
+    mode: preview ? "preview" : "live", complete: incompleteReasons.length === 0 && options.allowAutoResolve, incompleteReasons,
   });
 }
 
 export interface RunReviewDetectionOptions {
   readonly actorId?: string;
+  /**
+   * Operating date to detect as of. Live cases always reflect the operating
+   * date; any other date is a read-only preview that writes nothing.
+   */
   readonly asOf?: string;
+  readonly now?: () => Date;
+}
+
+interface DetectionRun {
+  readonly candidates: ReviewCaseCandidate[];
+  readonly complete: boolean;
+  readonly incompleteReasons: string[];
+  readonly asOf: IsoDate;
+}
+
+async function detectForDate(executor: RentOpsQueryExecutor, organizationId: string, asOf: IsoDate): Promise<DetectionRun> {
+  const loaded = await loadReviewDetectionInput(executor, organizationId, asOf);
+  const detected = detectReviewCasesWithStatus(loaded.input);
+  const incompleteReasons = [
+    ...loaded.incompleteReasons,
+    ...detected.incompleteReports.map(item => `The ${INCOMPLETE_REPORT_LABELS[item.report]} could not be computed${item.codes.length ? ` (${item.codes.slice(0, 5).join(", ")})` : ""}.`),
+  ];
+  return { candidates: detected.candidates, complete: loaded.complete && detected.complete, incompleteReasons, asOf };
 }
 
 /** Detect and reconcile inside an existing transaction (command handler or job). */
 export async function runReviewDetectionInTransaction(executor: RentOpsQueryExecutor, organizationId: string, options: RunReviewDetectionOptions = {}): Promise<ReviewDetectionSummary> {
-  const asOf = options.asOf ? isoDateSchema.parse(options.asOf) : operatingDate();
-  const loaded = await loadReviewDetectionInput(executor, organizationId, asOf);
-  const candidates = detectReviewCases(loaded.input);
+  const today = operatingDate(options.now?.() ?? new Date());
+  const asOf = options.asOf ? isoDateSchema.parse(options.asOf) : today;
+  const run = await detectForDate(executor, organizationId, asOf);
   return reconcileReviewCases(executor, {
-    organizationId, actorId: options.actorId ?? REVIEW_DETECTOR_ACTOR, candidates, asOf, allowAutoResolve: loaded.complete,
+    organizationId, actorId: options.actorId ?? REVIEW_DETECTOR_ACTOR, candidates: run.candidates, asOf,
+    allowAutoResolve: run.complete, preview: asOf !== today, incompleteReasons: run.incompleteReasons,
   });
 }
 
@@ -296,8 +377,7 @@ export async function runReviewDetection(executor: RentOpsQueryExecutor, organiz
 }
 
 /** Candidates for the current state without writing (used by verify readback). */
-export async function detectCurrentCandidates(executor: RentOpsQueryExecutor, organizationId: string, asOf?: string): Promise<{ candidates: ReviewCaseCandidate[]; complete: boolean; asOf: IsoDate }> {
+export async function detectCurrentCandidates(executor: RentOpsQueryExecutor, organizationId: string, asOf?: string): Promise<{ candidates: ReviewCaseCandidate[]; complete: boolean; incompleteReasons: string[]; asOf: IsoDate }> {
   const date = asOf ? isoDateSchema.parse(asOf) : operatingDate();
-  const loaded = await loadReviewDetectionInput(executor, organizationId, date);
-  return { candidates: detectReviewCases(loaded.input), complete: loaded.complete, asOf: date };
+  return detectForDate(executor, organizationId, date);
 }

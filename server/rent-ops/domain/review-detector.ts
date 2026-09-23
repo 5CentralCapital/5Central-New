@@ -114,9 +114,29 @@ interface Observation {
   readonly impactCents: bigint | null;
   readonly currency?: string;
   readonly message?: string;
+  /** Loaded per organization (QuickBooks, intake): owned even without a property. */
+  readonly orgOwned?: boolean;
+}
+
+/** A report the detector could not compute; its codes are missing from this run. */
+export interface ReviewDetectorIncompleteReport {
+  readonly report: "rent_roll" | "delinquency" | "scheduled_income";
+  readonly codes: readonly string[];
+}
+
+export interface ReviewDetectionResult {
+  readonly candidates: ReviewCaseCandidate[];
+  /**
+   * False when any rental report failed to compute: the candidates may be
+   * missing causes, so callers must not auto-verify or verify from this run.
+   */
+  readonly complete: boolean;
+  readonly incompleteReports: readonly ReviewDetectorIncompleteReport[];
 }
 
 const MAX_STORED_RECORDS = 500;
+/** Unit-less tenancies attributed by an individual rent-roll derivation; beyond this, by property. */
+const MAX_PER_TENANCY_ATTRIBUTION = 250;
 const HIGH_IMPACT_CENTS = BigInt(100_000);
 
 function recordKey(record: Pick<ReviewAffectedRecord, "kind" | "id">): string { return `${record.kind}:${record.id}`; }
@@ -204,22 +224,109 @@ function accountKey(personId: string, propertyId: string | null): string {
 /** Rent roll and invariant codes that describe a unit rather than one tenancy. */
 const UNIT_LEVEL_CODES = new Set(["market_rent_unknown", "multiple_current_tenancies", "multiple_future_tenancies", "occupancy_conflict", "overlapping_current_tenancies"]);
 
-function reportObservations(input: ReviewDetectorInput, index: SnapshotIndex): Observation[] {
+/**
+ * Codes the rent roll derives from unresolved tenancies. A tenancy whose unit
+ * link is unknown stamps these on every unit of its property; the detector
+ * attributes them back to the offending tenancy instead.
+ */
+const UNRESOLVED_TENANCY_CODES = new Set(["unit_link_unknown", "tenancy_link_unknown", "tenancy_status_unknown", "tenancy_account_status_conflict", "actual_move_in_unknown", "planned_move_in_unknown"]);
+
+function unitLinkUnknown(tenancy: RentOpsSnapshot["tenancies"][number]): boolean {
+  return !tenancy.unitId || tenancy.unitLinkKnowledge === "unknown" || tenancy.unitLinkKnowledge === "ambiguous";
+}
+
+function propertyLinkKnown(tenancy: RentOpsSnapshot["tenancies"][number]): boolean {
+  return Boolean(tenancy.propertyId) && tenancy.propertyLinkKnowledge !== "unknown" && tenancy.propertyLinkKnowledge !== "ambiguous";
+}
+
+function unresolvedCodesByUnit(rows: readonly RentRollRow[]): Map<string, Set<string>> {
+  const result = new Map<string, Set<string>>();
+  for (const row of rows) result.set(row.unitId, new Set((row.exceptionCodes ?? []).filter(code => UNRESOLVED_TENANCY_CODES.has(code))));
+  return result;
+}
+
+function addedUnresolvedCodes(rows: readonly RentRollRow[], baseline: ReadonlyMap<string, Set<string>>): Set<string> {
+  const added = new Set<string>();
+  for (const row of rows) for (const code of row.exceptionCodes ?? []) if (UNRESOLVED_TENANCY_CODES.has(code) && !baseline.get(row.unitId)?.has(code)) added.add(code);
+  return added;
+}
+
+/**
+ * Split unresolved-tenancy codes stamped by unit-less tenancies off the unit
+ * rows and attribute them to the tenancies that caused them. Returns the rows
+ * with only their own codes plus one code set per offending tenancy, or
+ * undefined when the attribution cannot be computed (rows are then kept).
+ */
+function attributeUnitlessTenancyCodes(snapshot: RentOpsSnapshot, rentRoll: readonly RentRollRow[], asOf: string): { rows: RentRollRow[]; tenancies: Map<string, Set<string>> } | undefined {
+  const unitless = snapshot.tenancies.filter(unitLinkUnknown);
+  if (!unitless.length) return undefined;
+  const unitlessIds = new Set(unitless.map(tenancy => tenancy.id));
+  const baselineSnapshot: RentOpsSnapshot = { ...snapshot, tenancies: snapshot.tenancies.filter(tenancy => !unitlessIds.has(tenancy.id)) };
+  let baseline: Map<string, Set<string>>;
+  try { baseline = unresolvedCodesByUnit(deriveRentRoll(baselineSnapshot, { asOfDate: asOf as never })); } catch { return undefined; }
+  const rows = rentRoll.map(row => ({ ...row, exceptionCodes: (row.exceptionCodes ?? []).filter(code => !UNRESOLVED_TENANCY_CODES.has(code) || baseline.get(row.unitId)?.has(code)) }));
+  const tenancies = new Map<string, Set<string>>();
+  if (unitless.length <= MAX_PER_TENANCY_ATTRIBUTION) {
+    for (const tenancy of unitless) {
+      const filters = { asOfDate: asOf as never, ...(propertyLinkKnown(tenancy) ? { propertyId: tenancy.propertyId } : {}) };
+      let codes: Set<string>;
+      try { codes = addedUnresolvedCodes(deriveRentRoll({ ...baselineSnapshot, tenancies: [...baselineSnapshot.tenancies, tenancy] }, filters), baseline); } catch { codes = new Set(["unit_link_unknown"]); }
+      if (codes.size) tenancies.set(tenancy.id, codes);
+    }
+  } else {
+    // Bounded fallback: every unit-less tenancy at a property carries the codes added there.
+    const added = new Map<string, Set<string>>();
+    for (const row of rentRoll) for (const code of row.exceptionCodes ?? []) if (UNRESOLVED_TENANCY_CODES.has(code) && !baseline.get(row.unitId)?.has(code)) {
+      const set = added.get(row.propertyId) ?? new Set<string>(); set.add(code); added.set(row.propertyId, set);
+    }
+    const all = new Set(Array.from(added.values()).flatMap(set => Array.from(set)));
+    for (const tenancy of unitless) {
+      const codes = propertyLinkKnown(tenancy) ? added.get(tenancy.propertyId) : all;
+      if (codes?.size) tenancies.set(tenancy.id, new Set(codes));
+    }
+  }
+  return { rows, tenancies };
+}
+
+function reportObservations(input: ReviewDetectorInput, index: SnapshotIndex): { observations: Observation[]; incomplete: ReviewDetectorIncompleteReport[] } {
   const observations: Observation[] = [];
+  const incomplete: ReviewDetectorIncompleteReport[] = [];
   const filters = { asOfDate: input.asOf } as const;
   const violations: ReviewDetectorViolation[] = [...(input.reports?.violations ?? [])];
-  const capture = <T>(work: () => T[]): T[] => {
+  const capture = <T>(report: ReviewDetectorIncompleteReport["report"], work: () => T[]): T[] => {
     try { return work(); } catch (error) {
       if (error instanceof RentOpsInvariantError) {
-        for (const violation of error.violations ?? []) if (violation.entityId) violations.push({ code: violation.code, entityId: violation.entityId, message: violation.message });
+        // Report the violations as cases, and mark the run incomplete: every
+        // other cause this report would have produced is missing, so nothing
+        // may be verified from its absence.
+        const codes = new Set<string>();
+        for (const violation of error.violations ?? []) {
+          codes.add(violation.code);
+          if (violation.entityId) violations.push({ code: violation.code, entityId: violation.entityId, message: violation.message });
+        }
+        incomplete.push({ report, codes: Array.from(codes).sort().slice(0, 20) });
         return [];
       }
       throw error;
     }
   };
-  const rentRoll = input.reports?.rentRoll ?? capture(() => deriveRentRoll(input.snapshot, filters));
-  const delinquency = input.reports?.delinquency ?? capture(() => deriveDelinquency(input.snapshot, { ...filters, tenantStatus: "all" }));
-  const scheduled = input.reports?.scheduledIncome ?? capture(() => deriveScheduledIncome(input.snapshot, filters));
+  const computedRentRoll = input.reports?.rentRoll ?? capture("rent_roll", () => deriveRentRoll(input.snapshot, filters));
+  const delinquency = input.reports?.delinquency ?? capture("delinquency", () => deriveDelinquency(input.snapshot, { ...filters, tenantStatus: "all" }));
+  const scheduled = input.reports?.scheduledIncome ?? capture("scheduled_income", () => deriveScheduledIncome(input.snapshot, filters));
+
+  let rentRoll: readonly RentRollRow[] = computedRentRoll;
+  if (computedRentRoll.length) {
+    const attributed = attributeUnitlessTenancyCodes(input.snapshot, computedRentRoll, input.asOf);
+    if (attributed) {
+      rentRoll = attributed.rows;
+      for (const [tenancyId, codes] of Array.from(attributed.tenancies.entries())) {
+        const record = index.tenancyRecord(tenancyId);
+        for (const code of Array.from(codes).sort()) {
+          observations.push({ code, record, accountKey: record.personId ? accountKey(record.personId, record.propertyId) : undefined, impactCents: null });
+        }
+      }
+    }
+  }
 
   for (const row of rentRoll) {
     for (const code of Array.from(new Set(row.exceptionCodes ?? []))) {
@@ -259,7 +366,7 @@ function reportObservations(input: ReviewDetectorInput, index: SnapshotIndex): O
     const record = index.entityRecord(violation.entityId);
     observations.push({ code: violation.code, record, accountKey: record.personId ? accountKey(record.personId, record.propertyId) : undefined, impactCents: null, message: violation.message });
   }
-  return observations;
+  return { observations, incomplete };
 }
 
 function coverageObservations(input: ReviewDetectorInput, index: SnapshotIndex): Observation[] {
@@ -285,7 +392,7 @@ function qboObservations(input: ReviewDetectorInput): Observation[] {
       observations.push({
         code: connection.status === "revoked" ? "qbo_revoked" : "qbo_needs_reconnect",
         record: { kind: "legal_entity", id: legalEntityId, label: connection.legalEntityName ?? null, propertyId: null, unitId: null, tenancyId: null, personId: null },
-        legalEntityId, impactCents: null, message: `QuickBooks ${connection.environment} company ${connection.realmId} is ${connection.status.replace("_", " ")}.`,
+        legalEntityId, impactCents: null, orgOwned: true, message: `QuickBooks ${connection.environment} company ${connection.realmId} is ${connection.status.replace("_", " ")}.`,
       });
     }
   }
@@ -293,7 +400,7 @@ function qboObservations(input: ReviewDetectorInput): Observation[] {
     observations.push({
       code: exception.exceptionKind === "unsupported" ? "qbo_sync_unsupported" : "qbo_sync_missing_from_full_replay",
       record: { kind: "qbo_object", id: `${exception.objectType}:${exception.objectId}`, label: exception.objectType, propertyId: null, unitId: null, tenancyId: null, personId: null },
-      legalEntityId: exception.legalEntityId, packetLabel: exception.legalEntityName ?? undefined, impactCents: null,
+      legalEntityId: exception.legalEntityId, packetLabel: exception.legalEntityName ?? undefined, impactCents: null, orgOwned: true,
       message: exception.reasons.slice(0, 3).join("; ") || undefined, accountKey: exception.stream,
     });
   }
@@ -315,7 +422,7 @@ function intakeObservations(input: ReviewDetectorInput): Observation[] {
       observations.push({
         code,
         record: { kind: "intake_line", id: line.sourceLineKey, label: line.tenantDisplayName ?? line.sourceAccountId, propertyId: packet.propertyId ?? null, unitId: null, tenancyId: null, personId: null },
-        packetId: packet.id, packetLabel: packet.fileName, legalEntityId: packet.legalEntityId ?? null,
+        packetId: packet.id, packetLabel: packet.fileName, legalEntityId: packet.legalEntityId ?? null, orgOwned: true,
         impactCents: impact, currency: line.currency, message: line.outcomeReason ?? undefined,
       });
     }
@@ -378,19 +485,58 @@ function scopeFor(observation: Observation, level: ReviewScopeLevel, index: Snap
   }
 }
 
+/**
+ * Rental tables are not organization-scoped. A record without a property
+ * belongs to this organization only when it is tied to one of its properties
+ * (through its tenancy, unit or person), or when every rental property in the
+ * snapshot is this organization's so no other company can own it.
+ */
+function ownershipCheck(input: ReviewDetectorInput, index: SnapshotIndex): (observation: Observation) => boolean {
+  const propertyIds = input.propertyIds;
+  if (!propertyIds) return () => true;
+  const ownsAll = input.snapshot.properties.every(property => propertyIds.has(property.id));
+  const personProperties = new Map<string, Set<string>>();
+  for (const tenancy of input.snapshot.tenancies) {
+    if (!tenancy.primaryPersonId || !tenancy.propertyId) continue;
+    const set = personProperties.get(tenancy.primaryPersonId) ?? new Set<string>();
+    set.add(tenancy.propertyId); personProperties.set(tenancy.primaryPersonId, set);
+  }
+  for (const transaction of input.snapshot.ledgerTransactions ?? []) {
+    if (!transaction.personId || !transaction.propertyId) continue;
+    const set = personProperties.get(transaction.personId) ?? new Set<string>();
+    set.add(transaction.propertyId); personProperties.set(transaction.personId, set);
+  }
+  const owned = (id: string | null | undefined) => Boolean(id && propertyIds.has(id));
+  return (observation) => {
+    const record = observation.record;
+    if (record.propertyId) return propertyIds.has(record.propertyId);
+    if (observation.orgOwned || ownsAll) return true;
+    if (record.tenancyId && owned(index.tenancies.get(record.tenancyId)?.propertyId)) return true;
+    if (record.unitId && owned(index.units.get(record.unitId)?.propertyId)) return true;
+    if (record.personId && Array.from(personProperties.get(record.personId) ?? []).some(owned)) return true;
+    return false;
+  };
+}
+
 /** Detect deduplicated review case candidates. Deterministic for identical input. */
 export function detectReviewCases(input: ReviewDetectorInput): ReviewCaseCandidate[] {
+  return detectReviewCasesWithStatus(input).candidates;
+}
+
+/** Candidates plus whether every rental report was computed. */
+export function detectReviewCasesWithStatus(input: ReviewDetectorInput): ReviewDetectionResult {
   const index = new SnapshotIndex(input.snapshot);
+  const reports = reportObservations(input, index);
   const observations = [
-    ...reportObservations(input, index),
+    ...reports.observations,
     ...coverageObservations(input, index),
     ...qboObservations(input),
     ...intakeObservations(input),
   ];
+  const inScope = ownershipCheck(input, index);
   const groups = new Map<string, Group>();
   for (const observation of observations) {
-    const propertyId = observation.record.propertyId;
-    if (propertyId && input.propertyIds && !input.propertyIds.has(propertyId)) continue;
+    if (!inScope(observation)) continue;
     const reason = reviewReason(classifyReviewCode(observation.code).reason);
     const causeKey = reason.causeBy === "code"
       ? (reason.code === "sync_exception" && observation.accountKey ? `${observation.code}:${observation.accountKey}` : observation.code)
@@ -460,7 +606,8 @@ export function detectReviewCases(input: ReviewDetectorInput): ReviewCaseCandida
       evidence: codes.map(code => ({ code, count: group.codes.get(code)!.count, message: group.codes.get(code)!.message ?? `${code.replace(/_/g, " ")} on ${group.codes.get(code)!.count} record${group.codes.get(code)!.count === 1 ? "" : "s"}` })),
     });
   }
-  return candidates.sort((left, right) => left.reasonCode.localeCompare(right.reasonCode) || left.causeKey.localeCompare(right.causeKey) || left.scopeKey.localeCompare(right.scopeKey));
+  candidates.sort((left, right) => left.reasonCode.localeCompare(right.reasonCode) || left.causeKey.localeCompare(right.causeKey) || left.scopeKey.localeCompare(right.scopeKey));
+  return { candidates, complete: reports.incomplete.length === 0, incompleteReports: reports.incomplete };
 }
 
 /** Stable identity of a candidate within an organization. */

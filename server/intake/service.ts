@@ -78,6 +78,8 @@ export interface TenantAccountApplyResult {
   readonly affectedRecordIds: readonly RecordReferenceId[];
   readonly appliedCents: MoneyCents;
   readonly eventKey?: string;
+  /** True when the stable payment already existed (another packet applied this source line). */
+  readonly replayed?: boolean;
 }
 
 export interface TenantAccountApplyPort {
@@ -96,7 +98,7 @@ interface RentOpsTenantAccountCommandService {
     category: "base_rent" | "recurring_fee" | "one_time_fee" | "unapplied_cash" | "other";
     allocations: readonly { chargeTransactionId: string; amountCents: number }[];
     autoAllocate?: boolean;
-  }, context: { actorSubject: string; occurredAt: string }): Promise<{ payment: { id: string; amountCents: number | null } }>;
+  }, context: { actorSubject: string; occurredAt: string }): Promise<{ payment: { id: string; amountCents: number | null }; replayed?: boolean }>;
   saveLedgerTransaction(transaction: RentOpsLedgerTransaction): Promise<RentOpsLedgerTransaction>;
 }
 
@@ -169,8 +171,13 @@ function assertMappingScope(line: IntakeLineRecord, mapping: MraMapping, snapsho
   return { tenancy, unit };
 }
 
-function mraPaymentId(packet: MraPacketRecord, line: IntakeLineRecord): string {
-  return `mra-payment:${createHash("sha256").update(`${packet.id}\u0000${line.sourceLineKey}`).digest("hex")}`;
+/**
+ * Stable per (organization, source line): a revised packet that re-observes the
+ * same source line derives the same payment ID, so a second post replays or
+ * conflicts in the append-only ledger instead of creating a second payment.
+ */
+export function mraPaymentId(packet: Pick<MraPacketRecord, "scope">, line: Pick<IntakeLineRecord, "sourceLineKey">): string {
+  return `mra-payment:${createHash("sha256").update(`${packet.scope.organizationId}\u0000${line.sourceLineKey}`).digest("hex")}`;
 }
 
 /**
@@ -215,7 +222,7 @@ export function createTenantAccountApplyPort(options: TenantAccountApplyAdapterO
           allocations: [],
           autoAllocate: true,
         }, actorContext);
-        return { affectedRecordIds: [saved.payment.id as RecordReferenceId], appliedCents: context.sourceLine.amountCents, eventKey: `mra:${context.packet.id}:${context.sourceLine.sourceLineKey}` };
+        return { affectedRecordIds: [saved.payment.id as RecordReferenceId], appliedCents: context.sourceLine.amountCents, eventKey: `mra:${context.packet.scope.organizationId}:${context.sourceLine.sourceLineKey}`, replayed: (saved as { replayed?: boolean }).replayed === true };
       }
       const transaction: RentOpsLedgerTransaction = {
         id: mraPaymentId(context.packet, context.sourceLine),
@@ -247,8 +254,9 @@ export function createTenantAccountApplyPort(options: TenantAccountApplyAdapterO
         chargeDefinitionId: null,
         chargeDefinitionLinkKnowledge: "unknown",
       };
+      const replayed = snapshot.ledgerTransactions.some(row => row.id === transaction.id);
       const saved = await service.saveLedgerTransaction(transaction);
-      return { affectedRecordIds: [saved.id as RecordReferenceId], appliedCents: context.sourceLine.amountCents, eventKey: `mra:${context.packet.id}:${context.sourceLine.sourceLineKey}` };
+      return { affectedRecordIds: [saved.id as RecordReferenceId], appliedCents: context.sourceLine.amountCents, eventKey: `mra:${context.packet.scope.organizationId}:${context.sourceLine.sourceLineKey}`, replayed };
     },
   };
 }
@@ -614,16 +622,34 @@ export function createIntakeService(options: IntakeServiceOptions) {
       const groupKeys = new Set(group.map((line) => line.sourceLineKey));
       const groupAffected: RecordReferenceId[] = [];
       let groupAppliedCount = 0;
+      const groupOverlaps: string[] = [];
       try {
         await withTransaction(options.executor, async (executor) => {
           const txPacket = await store.get(scopeForIntake(scope), packet.id, executor) ?? packet;
           const rentOpsService = options.rentOpsFactory?.(executor);
-          const nextLines = txPacket.lines.map((line) => groupKeys.has(line.sourceLineKey) ? line : line);
+          const nextLines = [...txPacket.lines];
+          groupOverlaps.length = 0;
           for (const line of group) {
+            const index = nextLines.findIndex((candidate) => candidate.sourceLineKey === line.sourceLineKey);
+            // Re-check the registry inside the group savepoint: another packet
+            // (an earlier original or a later revision) may have applied this
+            // source line after this packet was previewed. Applied money is
+            // verified history and is never posted a second time.
+            const previous = await store.findLine(scopeForIntake(scope), line.sourceLineKey, executor, packet.id);
+            if (previous?.outcome === "applied") {
+              if (index >= 0) nextLines[index] = updateLine(nextLines[index]!, { outcome: "overlap", outcomeReason: "Another packet already applied this source line; correct applied money through Accounting." });
+              groupOverlaps.push(line.sourceLineKey);
+              continue;
+            }
             const result = await options.tenantAccountWriter!.applyLine({ executor, packet: txPacket, sourceLine: line, idempotencyKey: `${envelope.idempotencyKey}:${line.sourceLineKey}`, rentOpsService });
+            if (result.replayed) {
+              // The stable payment already exists (a concurrent packet posted it); nothing new was applied.
+              if (index >= 0) nextLines[index] = updateLine(nextLines[index]!, { outcome: "overlap", outcomeReason: "This source line's payment was already recorded by another packet." });
+              groupOverlaps.push(line.sourceLineKey);
+              continue;
+            }
             groupAffected.push(...result.affectedRecordIds);
             groupAppliedCount += 1;
-            const index = nextLines.findIndex((candidate) => candidate.sourceLineKey === line.sourceLineKey);
             if (index >= 0) nextLines[index] = updateLine(nextLines[index]!, { outcome: "applied", outcomeReason: null });
           }
           const next = readModel({ ...txPacket, state: "partially_applied", lines: nextLines, reconciliation: reconciliation(nextLines), updatedAt: isoNow(clock), revision: revisionSchema.parse(txPacket.revision + 1) });
@@ -632,6 +658,7 @@ export function createIntakeService(options: IntakeServiceOptions) {
         }, options.transactionBound);
         affected.push(...groupAffected);
         appliedCount += groupAppliedCount;
+        for (const lineKey of groupOverlaps) validationOutcomes.push({ code: "intake.line.overlap", message: "Another packet already applied this source line; it was not applied again.", lineKey });
       } catch (error) {
         failedCount += group.length;
         const message = error instanceof Error ? error.message : "Tenant account update failed.";
@@ -750,7 +777,7 @@ export async function executeMraIngestionCommand(
         resultingRevisions: [{ recordId: result.packet.id as RecordReferenceId, revision: revisionSchema.parse(result.packet.revision) }],
         validationOutcomes: [
           { code: "intake.apply.saved", severity: result.failedLineCount || result.heldLineCount ? "warning" : "info", message: `MRA apply: ${result.appliedLineCount} lines applied, ${result.failedLineCount} failed, ${result.heldLineCount} held. Packet ${result.packet.state.replace("_", " ")}.` },
-          ...result.validationOutcomes.slice(0, 100).map(outcome => ({ code: "intake.account.apply_failed", severity: "warning" as const, message: `${outcome.lineKey ?? "group"}: ${outcome.message}`.slice(0, 2_000) })),
+          ...result.validationOutcomes.slice(0, 100).map(outcome => ({ code: outcome.code, severity: "warning" as const, message: `${outcome.lineKey ?? "group"}: ${outcome.message}`.slice(0, 2_000) })),
         ],
       };
     },

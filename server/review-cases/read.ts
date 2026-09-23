@@ -158,7 +158,7 @@ export class ReviewCaseReadService {
       evidence: row.evidence,
       proposedCorrection: row.proposedCorrection,
       history: await readReviewCaseEvents(this.executor, row.organizationId, row.id),
-      allowedCommands: allowedReviewCaseCommands(row.state),
+      allowedCommands: allowedReviewCaseCommands(row.state, row.proposedCorrection),
       researchGuidance: reason.researchGuidance,
       requiredVerification: reason.requiredVerification,
       resolution: reason.resolution,
@@ -224,7 +224,7 @@ export function summarizeReviewCaseRows(organizationId: string, rows: readonly R
       caseId: row.id, reasonCode: row.reasonCode, shortLabel: reason.shortLabel, scopeLabel: row.scopeLabel, propertyId: row.propertyId,
       state: row.state, materiality: row.materiality, affectedCount: row.affectedCount, impactCents: row.impactCents,
       missingEvidence: row.state === "blocked" && row.blockedOn ? row.blockedOn : reason.requiredVerification,
-      nextAction: nextReviewAction(row.state, reason.resolution, row.blockedOn),
+      nextAction: nextReviewAction(row.state, reason.resolution, row.blockedOn, row.proposedCorrection),
     };
   });
   return reviewInventorySchema.parse({

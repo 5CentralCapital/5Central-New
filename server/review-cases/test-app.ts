@@ -9,6 +9,7 @@ import { createSyntheticCompanyDatabase, createSyntheticRuntimeExecutor, SYNTHET
 import { seedRentalDemo } from "../company/testing/seed-rental-demo";
 import { createRentOpsMcpServer } from "../rent-ops/mcp/tools";
 import { READ_SCOPE, WRITE_SCOPE } from "../rent-ops/mcp/oauth";
+import { mcpOptionsForClient } from "../intake/mcp";
 import { RentOpsService } from "../rent-ops/services/service";
 import { createSyntheticRentOpsRepository } from "../rent-ops/fixtures/synthetic";
 import { createInMemoryObjectStore } from "../rent-ops/storage";
@@ -18,7 +19,14 @@ import { createInMemoryObjectStore } from "../rent-ops/storage";
  * routes (browser) and the real MCP server (Codex), sharing one set of
  * services and an in-memory verified object store. Never used by production.
  */
-export async function createLaneTestApp() {
+export interface LaneTestAppOptions {
+  /** OAuth client the MCP session's token was issued to (Codex, Claude Code, ChatGPT). */
+  readonly mcpClientId?: string;
+  /** RENT_OPS_MCP_MRA_CLIENT_IDS for this synthetic deployment. */
+  readonly mraClientIds?: readonly string[];
+}
+
+export async function createLaneTestApp(options: LaneTestAppOptions = {}) {
   if (process.env.NODE_ENV === "production") throw new Error("Synthetic test app is unavailable in production");
   const fixture = await createSyntheticCompanyDatabase();
   await seedRentalDemo({ executor: fixture.executor, actorId: SYNTHETIC_COMPANY.actorId, actorRole: "owner" });
@@ -36,8 +44,10 @@ export async function createLaneTestApp() {
   const listener = app.listen(0, "127.0.0.1");
   await new Promise<void>(resolve => listener.once("listening", resolve));
   const origin = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
-  const server = createRentOpsMcpServer(new RentOpsService(createSyntheticRentOpsRepository()), { subject: "verified-admin-subject", scopes: [READ_SCOPE, WRITE_SCOPE] },
-    "https://example.test/mcp", { company: services, companyActorId: SYNTHETIC_COMPANY.actorId });
+  const principal = { subject: "verified-admin-subject", scopes: [READ_SCOPE, WRITE_SCOPE], ...(options.mcpClientId ? { clientId: options.mcpClientId } : {}) };
+  // The same client gating the /mcp route applies after verifying the token.
+  const mcpOptions = mcpOptionsForClient(principal, { mraClientIds: [...(options.mraClientIds ?? [])] }, { company: services, companyActorId: SYNTHETIC_COMPANY.actorId });
+  const server = createRentOpsMcpServer(new RentOpsService(createSyntheticRentOpsRepository()), principal, "https://example.test/mcp", mcpOptions);
   const client = new Client({ name: "lane-c-review-test", version: "1" });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(a); await client.connect(b);

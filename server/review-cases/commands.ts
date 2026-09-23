@@ -24,8 +24,8 @@ import { ConflictCommandError, ForbiddenCommandError, ValidationCommandError } f
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import type { StorageReadAdapter } from "../rent-ops/storage";
 import { reviewCandidateKey } from "../rent-ops/domain/review-detector";
-import { applyGuardedCorrection, loadEvidenceDocument, planGuardedCorrection } from "./apply";
-import { detectCurrentCandidates, runReviewDetectionInTransaction } from "./detection";
+import { applyGuardedCorrection, assertCorrectionTargetInCase, loadEvidenceDocument, planGuardedCorrection } from "./apply";
+import { detectCurrentCandidates, operatingDate, runReviewDetectionInTransaction } from "./detection";
 import { loadReviewCaseForUpdate, recordReviewCaseEvent, saveReviewCase, type ReviewCaseChanges, type ReviewCaseRow } from "./store";
 
 type AnyEnvelope = CommandEnvelope<Record<string, unknown>>;
@@ -116,15 +116,19 @@ function handlers(options: ReviewCaseCommandOptions): Record<ReviewCaseCommandKi
   return {
     async "review_case.detect"(context) {
       const payload = reviewCaseCommandPayloadSchemas["review_case.detect"].parse(context.envelope.payload);
-      const summary = await runReviewDetectionInTransaction(context.executor, context.envelope.scope.organizationId, { actorId: context.principal.actorId, asOf: payload.asOf });
+      // Another date than the operating date is a read-only preview: nothing is opened, reopened or verified.
+      const summary = await runReviewDetectionInTransaction(context.executor, context.envelope.scope.organizationId, { actorId: context.principal.actorId, asOf: payload.asOf, ...(options.now ? { now: options.now } : {}) });
+      const outcomes: Array<NonNullable<CommandHandlerResult["validationOutcomes"]>[number]> = [summary.mode === "preview"
+        ? { code: "review_case.detection.preview", severity: "info", message: `Preview as of ${summary.asOf}: ${summary.candidateCount} active causes; ${summary.opened} would open, ${summary.reopened} would reopen. Nothing was changed.` }
+        : { code: "review_case.detection.completed", severity: "info", message: `Review detection as of ${summary.asOf}: ${summary.candidateCount} active causes, ${summary.opened} opened, ${summary.updated} updated, ${summary.reopened} reopened, ${summary.autoVerified} verified by readback.` }];
+      if (!summary.complete) {
+        outcomes.push({ code: "review_case.detection.incomplete", severity: "warning", message: `Detection incomplete: ${summary.incompleteReasons.join(" ") || "some records could not be read."} No case was verified.`.slice(0, 2_000) });
+      }
       return {
         state: "saved_in_rops",
         affectedRecordIds: summary.changedCaseIds,
         resultingRevisions: [],
-        validationOutcomes: [{
-          code: "review_case.detection.completed", severity: "info",
-          message: `Review detection as of ${summary.asOf}: ${summary.candidateCount} active causes, ${summary.opened} opened, ${summary.updated} updated, ${summary.reopened} reopened, ${summary.autoVerified} verified by readback.`,
-        }],
+        validationOutcomes: outcomes,
       };
     },
     async "review_case.start_research"(context) {
@@ -171,6 +175,10 @@ function handlers(options: ReviewCaseCommandOptions): Record<ReviewCaseCommandKi
       }
       let preview: ReviewProposedCorrection["preview"] = null;
       if (correction.kind === "operational") {
+        await assertCorrectionTargetInCase({
+          executor: context.executor, principal: context.principal, allowedRoles: REVIEW_CASE_WRITE_ROLES, reviewCase: current,
+          operation: correction.operation, asOf: operatingDate(now(options)),
+        });
         // Dry run through the guarded writer: every action runs inside a savepoint and rolls back.
         const plan = await planGuardedCorrection({
           executor: context.executor, storage: options.documentStorage, organizationId: current.organizationId, caseId: current.id,
@@ -231,6 +239,11 @@ function handlers(options: ReviewCaseCommandOptions): Record<ReviewCaseCommandKi
         throw new ForbiddenCommandError("Your role cannot apply operational record fixes", { reason: "role", commandKind: "review_case.apply" });
       }
       if (!proposal.preview) throw new ValidationCommandError("Propose the fix again so it can be checked with a dry run", { reason: "review_case_preview_missing" });
+      // Re-check against current records and grants: the proposer's access is not the applier's.
+      await assertCorrectionTargetInCase({
+        executor: context.executor, principal: context.principal, allowedRoles: REVIEW_CASE_OPERATIONAL_APPLY_ROLES, reviewCase: current,
+        operation: input.operation, asOf: operatingDate(now(options)),
+      });
       const plan = await applyGuardedCorrection({
         executor: context.executor, storage: options.documentStorage, organizationId: current.organizationId, caseId: current.id,
         caseRevision: current.recordRevision, actorId: context.principal.actorId, operation: input.operation,
@@ -251,8 +264,11 @@ function handlers(options: ReviewCaseCommandOptions): Record<ReviewCaseCommandKi
       requireRevision(context, current.recordRevision);
       assertTransition(current, "verified");
       // Saved readback: rerun detection against the committed records in this transaction.
-      const readback = await detectCurrentCandidates(context.executor, current.organizationId);
-      if (!readback.complete) throw new ValidationCommandError("Rental records could not be read completely; verification is not possible yet", { reason: "review_case_readback_incomplete" });
+      const readback = await detectCurrentCandidates(context.executor, current.organizationId, operatingDate(now(options)));
+      if (!readback.complete) {
+        // A cause missing from an incomplete readback proves nothing.
+        throw new ConflictCommandError(`Detection is incomplete, so the case cannot be verified yet. ${readback.incompleteReasons[0] ?? ""}`.trim().slice(0, 350), { reason: "review_case_readback_incomplete", incompleteReasons: readback.incompleteReasons.slice(0, 20) });
+      }
       const key = reviewCandidateKey(current);
       if (readback.candidates.some(candidate => reviewCandidateKey(candidate) === key)) {
         throw new ValidationCommandError("The cause is still detected. The case stays applied until the readback is clean.", { reason: "review_case_cause_present" });

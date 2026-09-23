@@ -133,7 +133,7 @@ export function toReviewCaseSummary(row: ReviewCaseRow): ReviewCaseSummary {
     lastDetectedAt: row.lastDetectedAt,
     resolvedAt: row.resolvedAt,
     updatedAt: row.updatedAt,
-    nextAction: nextReviewAction(row.state, reason.resolution, row.blockedOn),
+    nextAction: nextReviewAction(row.state, reason.resolution, row.blockedOn, row.proposedCorrection),
   });
 }
 
