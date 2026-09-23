@@ -9,6 +9,7 @@ import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { createInMemoryObjectStore } from "../rent-ops/storage";
 import { runReviewDetection } from "../review-cases/detection";
 import { createIntakePort } from "./port";
+import { createCompanyDocumentsPort } from "../company-documents/port";
 
 const organizationId = SYNTHETIC_COMPANY.organizationId;
 const scope = { organizationId, legalEntityId: SYNTHETIC_COMPANY.entityId };
@@ -42,10 +43,11 @@ async function setup() {
       VALUES ('mra-tenancy-1','demo-property-a','mra-unit-1','mra-person-1','current',NOW(),'manual','manual','manual','manual','2026-01-01','manual'),
              ('mra-tenancy-2','demo-property-a','mra-unit-2','mra-person-2','current',NOW(),'manual','manual','manual','manual','2026-02-01','manual');`);
   const runtime = await createSyntheticRuntimeExecutor(fixture.db);
-  const intake = createIntakePort(runtime, { documentStorage: createInMemoryObjectStore() });
+  const storage = createInMemoryObjectStore();
+  const intake = createIntakePort(runtime, { documentStorage: storage });
   const principalFor = (connection: RentOpsQueryExecutor = runtime) => loadAuthenticatedPrincipal(connection, { actorId: SYNTHETIC_COMPANY.actorId, organizationId, role: "admin" });
   const access = async (transport = codex) => ({ principal: await principalFor(), transport, resolvePrincipal: (tx: RentOpsQueryExecutor) => principalFor(tx) });
-  return { fixture, db: fixture.db, runtime, intake, principalFor, access };
+  return { fixture, db: fixture.db, runtime, storage, intake, principalFor, access };
 }
 
 function envelope(payload: Record<string, unknown>) {
@@ -166,5 +168,23 @@ test("apply keeps held and failed groups, conserves control totals, resumes with
     const listed = await intake.list(await principalFor(), { scope: { organizationId } });
     assert.equal(listed.items.length, 2);
     assert.ok(listed.items.every(item => !("candidate" in item)));
+  } finally { await fixture.close(); }
+});
+
+test("a packet can be staged from an existing verified company document", async () => {
+  const { fixture, runtime, storage, intake, principalFor, access } = await setup();
+  try {
+    const documents = createCompanyDocumentsPort(runtime, { documentStorage: storage });
+    const principal = await principalFor();
+    const input = { context: { organizationId, legalEntityId: SYNTHETIC_COMPANY.entityId }, kind: "other" as const, title: "MRA owner packet September", tags: [], links: [] };
+    const bytes = packetBytes([line("tx-doc-1", "acct-1", "42.00")]);
+    const staged = await documents.prepareUpload(principal, input, { bytes, fileName: "owner-packet.json", declaredContentType: "application/json" });
+    await documents.execute("company_document.create", { operationId: randomUUID(), idempotencyKey: `doc:${randomUUID()}`, scope, payload: { action: "create", stageId: staged.stageId, input } },
+      { principal, transport: attestTransport("web"), resolvePrincipal: tx => principalFor(tx) });
+    const receipt = await intake.stage(envelope({ action: "stage", fileName: "owner-packet.json", declaredContentType: "application/json" }), { documentId: staged.document.id }, await access());
+    const packet = await intake.get(await principalFor(), { scope, packetId: String(receipt.affectedRecordIds[0]) });
+    assert.equal(packet.lines.length, 1);
+    assert.equal(packet.lines[0]!.amountCents, "4200");
+    await commandError(intake.stage(envelope({ action: "stage", fileName: "x.json", declaredContentType: "application/json" }), { documentId: "company-document:missing" }, await access()), 400, "source_document_missing");
   } finally { await fixture.close(); }
 });
