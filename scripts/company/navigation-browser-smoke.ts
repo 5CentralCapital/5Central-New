@@ -58,12 +58,12 @@ try {
     try {
       const started = performance.now();
       await page.goto(`${origin}/ops?section=dashboard&asOf=2026-08-15&scope=all`);
-      await expect(page.locator('.rmd-top-grid > section')).toHaveCount(6);
-      await expect(page.locator('.rmd-trend-grid > section')).toHaveCount(3);
+      await expect(page.locator('.rops-dash-row--attention > section')).toHaveCount(2);
+      await expect(page.locator('.rmd-trend-panel')).toHaveCount(1);
       const dashboardReadyMs = performance.now() - started;
       await expect(page).toHaveTitle('5Central Ops — Dashboard');
       await expect(page.locator('.rm-sidebar, .rm-open-tabs, .rm-ribbon')).toHaveCount(0);
-      await expect(page.locator('.rmd-company-grid')).toBeVisible();
+      await expect(page.locator('.rops-attention')).toBeVisible();
       const nav = page.getByRole('navigation', { name: 'Main navigation' });
       await expect(nav.getByRole('link', { name: 'Dashboard', exact: true })).toHaveAttribute('aria-current', 'page');
       await expect(nav.getByRole('button')).toHaveText(menus);
@@ -72,7 +72,7 @@ try {
       // Keyboard: open a menu, move within it, choose with Enter; Escape returns focus to the trigger.
       const accounting = nav.getByRole('button', { name: 'Accounting', exact: true });
       await accounting.focus(); await page.keyboard.press('ArrowDown');
-      await expect(page.getByRole('menuitem', { name: 'Overview', exact: true })).toBeFocused();
+      await expect(page.getByRole('menuitem', { name: 'Dashboard', exact: true })).toBeFocused();
       await page.keyboard.press('Escape'); await expect(accounting).toBeFocused();
       const properties = nav.getByRole('button', { name: 'Properties', exact: true });
       await properties.focus(); await page.keyboard.press('Enter');
@@ -150,9 +150,9 @@ try {
       await page.reload(); await expect(page.locator('.rops-topbar')).toHaveAttribute('data-transparency', 'reduced');
       await setTransparency(page, 'System');
       await page.goto(`${origin}/ops?section=dashboard&asOf=2026-08-15&scope=all`);
-      await expect(page.locator('.rmd-top-grid > section')).toHaveCount(6);
+      await expect(page.locator('.rops-dash-row--attention > section')).toHaveCount(2);
       await expect(page.locator('.rm-main')).not.toContainText('Loading portfolio summary…');
-      await expect(page.locator('.rmd-chart')).toHaveCount(3);
+      await expect(page.locator('.rmd-chart')).toHaveCount(1);
       await page.screenshot({ path: resolve(output, `dashboard-${name}.png`), fullPage: true });
       await openMenu(page, 'Accounting');
       await page.screenshot({ path: resolve(output, `accounting-menu-${name}.png`) });
@@ -181,7 +181,7 @@ try {
       await expect(page.getByRole('region', { name: 'Report library' }).locator('[data-report-id="rent-roll"]')).toBeVisible();
       await noOverflow(page);
       await openDashboard(page);
-      await expect(page.locator('.rmd-top-grid > section')).toHaveCount(6);
+      await expect(page.locator('.rops-dash-row--attention > section')).toHaveCount(2);
       await page.screenshot({ path: resolve(output, `dashboard-mobile-${name}.png`), fullPage: true });
       await setTransparency(page, 'Reduced');
       await expect(page.locator('.rops-topbar')).toHaveAttribute('data-transparency', 'reduced');

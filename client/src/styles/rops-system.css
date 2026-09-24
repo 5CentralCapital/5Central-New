@@ -1002,3 +1002,6 @@
 .rm-workspace.rops-modern .rm-grid-columns > summary.rm-button { background: transparent; color: var(--ds-muted); list-style: none; }
 .rm-workspace.rops-modern .rm-grid-columns > summary.rm-button:hover { background: var(--ds-fill); color: var(--ds-ink); }
 .rm-workspace.rops-modern .rm-grid-columns > summary::-webkit-details-marker { display: none; }
+/* Tenant portal account card inside the tenant record: its create button is secondary to Record payment */
+.rm-workspace.rops-modern .tp-admin-accounts .tp-primary { background: var(--ds-fill); color: var(--ds-ink); font-weight: 600; }
+.rm-workspace.rops-modern .tp-admin-accounts .tp-primary:hover:not(:disabled) { background: var(--ds-fill-hover); }
