@@ -9,7 +9,7 @@ export const PROFIT_LINES = [
   ["Expenses", "Operating expenses"], ["NetOperatingIncome", "Operating income"],
   ["OtherIncome", "Other income"], ["OtherExpenses", "Other expenses"], ["NetIncome", "Net income"],
 ] as const;
-export const BALANCE_LINES = [["Assets", "Assets"], ["Liabilities", "Liabilities"], ["Equity", "Equity"], ["LiabilitiesAndEquity", "Liabilities & equity"]] as const;
+export const BALANCE_LINES = [["TotalAssets", "Assets"], ["Liabilities", "Liabilities"], ["Equity", "Equity"], ["TotalLiabilitiesAndEquity", "Liabilities & equity"]] as const;
 
 export function financialRequest(organizationId: string, legalEntityId: string, currency: string, reportId: FinancialReport, setup: DashboardSetup): ReportRunRequest {
   return reportRunRequestSchema.parse({ reportId, definitionVersion: "1", scope: { organizationId, legalEntityIds: [legalEntityId] }, filters: { grouping: "none" },
