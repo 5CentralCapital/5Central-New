@@ -34,7 +34,7 @@
 .rm-workspace.rops-modern .rc-groups { display: block; padding: 4px 0; }
 .rm-workspace.rops-modern .rc-group + .rc-group { margin-top: 6px; padding-top: 6px; box-shadow: 0 -1px 0 var(--ds-hairline); }
 .rm-workspace.rops-modern .rc-group-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 8px 14px 4px; }
-.rm-workspace.rops-modern .rc-group-heading strong { color: var(--ds-ink); font: var(--ds-overline); letter-spacing: .02em; text-transform: uppercase; }
+.rm-workspace.rops-modern .rc-group-heading strong { color: var(--ds-ink); font: var(--ds-overline); letter-spacing: .02em; text-transform: none; }
 .rm-workspace.rops-modern .rc-group-heading small { margin-left: auto; color: var(--ds-faint); font: var(--ds-caption); font-variant-numeric: tabular-nums; }
 .rm-workspace.rops-modern .rc-row { display: grid; gap: 4px; width: calc(100% - 12px); border-bottom: 0; background: transparent; color: var(--ds-ink); text-align: left; cursor: pointer; }
 .rm-workspace.rops-modern .rc-row:focus-visible { outline: none; box-shadow: var(--ds-focus); }
@@ -61,7 +61,7 @@
 .rm-workspace.rops-modern .rc-detail { min-width: 0; padding: 22px 24px 16px; border-radius: var(--ds-r-l); background: var(--ds-surface); box-shadow: var(--ds-shadow-panel), 0 0 0 1px var(--ds-hairline); }
 .rm-workspace.rops-modern .rc-detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px 24px; flex-wrap: wrap; }
 .rm-workspace.rops-modern .rc-detail-heading { display: grid; gap: 6px; flex: 1 1 300px; min-width: 0; }
-.rm-workspace.rops-modern .rc-overline { color: var(--ds-muted); font: var(--ds-overline); letter-spacing: .03em; text-transform: uppercase; }
+.rm-workspace.rops-modern .rc-overline { color: var(--ds-muted); font: var(--ds-overline); letter-spacing: .03em; text-transform: none; }
 .rm-workspace.rops-modern .rc-detail-heading h2 { margin: 0; color: var(--ds-ink); font: var(--ds-title-2); letter-spacing: -.018em; overflow-wrap: anywhere; }
 .rm-workspace.rops-modern .rc-badges { display: flex; flex-wrap: wrap; gap: 6px; }
 .rm-workspace.rops-modern .rc-scope { margin: 2px 0 0; color: var(--ds-muted); font: var(--ds-body); overflow-wrap: anywhere; }

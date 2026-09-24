@@ -4,9 +4,9 @@
 .rm-apps-heading .rm-muted { font-size: 13px; }
 
 .rm-apps-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 0 0 14px; }
-.rm-apps-field { display: inline-flex; align-items: center; gap: 6px; margin: 0; color: var(--ds-muted, var(--rm-muted, #727273)); font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0; }
+.rm-apps-field { display: inline-flex; align-items: center; gap: 6px; margin: 0; color: var(--ds-muted, var(--ds-muted, #727273)); font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0; }
 .rm-apps-field select,
-.rm-apps-field input { min-height: 30px; padding: 0 8px; border: 1px solid var(--ds-hairline, var(--rm-line, #e5e5e3)); border-radius: 7px; background: var(--ds-surface, #fff); color: var(--ds-ink, var(--rm-ink, #232323)); font: inherit; font-size: 12px; }
+.rm-apps-field input { min-height: 30px; padding: 0 8px; border: 1px solid var(--ds-hairline, var(--ds-hairline, #e5e5e3)); border-radius: 7px; background: var(--ds-surface, #fff); color: var(--ds-ink, var(--ds-ink, #232323)); font: inherit; font-size: 12px; }
 .rm-apps-field select { max-width: 11rem; padding-right: 24px; }
 .rm-apps-field :is(select, input):focus-visible { outline: 2px solid var(--ds-focus-color, #d4a843); outline-offset: 2px; }
 .rm-workspace.rops-modern .rm-apps-filters .rm-apps-clear { min-height: 30px; padding: 0 10px; font-size: 12px; }

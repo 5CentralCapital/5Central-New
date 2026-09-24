@@ -4,7 +4,7 @@
 .rm-tenant-record .rm-charge-table { min-width: 980px; }
 .rm-tenant-record .rm-reference { white-space: nowrap; }
 
-.rm-charge-context { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin: 0 0 .75rem; padding: .75rem 0; border-top: 1px solid var(--rm-line, #e5e5e3); border-bottom: 1px solid var(--rm-line, #e5e5e3); color: #3a3a3c; font-size: .8125rem; }
+.rm-charge-context { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin: 0 0 .75rem; padding: .75rem 0; border-top: 1px solid var(--ds-hairline, #e5e5e3); border-bottom: 1px solid var(--ds-hairline, #e5e5e3); color: #3a3a3c; font-size: .8125rem; }
 
 /* Tenant records get a compact desktop header and filter row.  Mobile keeps
    the full-size targets supplied by the workspace touch rules. */
@@ -47,12 +47,12 @@
   gap: 12px;
   min-height: 32px;
   padding: 6px 8px;
-  border: 1px solid var(--rm-border);
+  border: 1px solid var(--ds-hairline-strong);
   border-top: 0;
   border-radius: 0 0 4px 4px;
-  background: var(--rm-cream);
-  color: var(--rm-muted);
-  font-size: .68rem;
+  background: var(--ds-bg);
+  color: var(--ds-muted);
+  font-size: .6875rem;
 }
 
 .rm-tenant-record .rm-list-totals-count {
@@ -76,7 +76,7 @@
 
 .rm-tenant-record .rm-list-totals-metrics dd {
   margin: 0;
-  color: var(--rm-charcoal);
+  color: var(--ds-ink-2);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
 }

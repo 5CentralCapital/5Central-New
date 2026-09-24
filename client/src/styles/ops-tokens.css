@@ -1,0 +1,63 @@
+/*
+ * 5Central Ops design tokens (design audit F1): the one place manager colors,
+ * type, radii and shadows are defined. Feature stylesheets read --ds-* directly;
+ * the per-module token sets (--rm-*, --investors-*, --projects-*, …) are retired.
+ * These :root values are the light defaults for content portaled outside the
+ * manager root (menus, dialogs). rops-system.css re-declares them on
+ * .rm-workspace.rops-modern and switches them for dark appearance.
+ */
+:root {
+  /* Type */
+  --ds-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter var", Inter, "Segoe UI", system-ui, sans-serif;
+  --ds-font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter var", Inter, "Segoe UI", system-ui, sans-serif;
+  --ds-title: 600 28px/34px var(--ds-font-display);
+  --ds-title-2: 600 20px/25px var(--ds-font-display);
+  --ds-headline: 600 15px/20px var(--ds-font);
+  --ds-body: 400 14px/20px var(--ds-font);
+  --ds-callout: 500 13px/18px var(--ds-font);
+  --ds-caption: 400 12px/16px var(--ds-font);
+  --ds-overline: 600 11px/14px var(--ds-font);
+  /* Color — light */
+  --ds-bg: #f6f4ef;
+  --ds-surface: #ffffff;
+  --ds-surface-2: #fbfaf8;
+  --ds-surface-muted: #f3f2ee;
+  --ds-fill: rgb(58 50 38 / 5.5%);
+  --ds-fill-hover: rgb(58 50 38 / 9%);
+  --ds-fill-press: rgb(58 50 38 / 13%);
+  --ds-menu-highlight: rgb(58 50 38 / 7%);
+  --ds-row-hover: rgb(58 50 38 / 3.5%);
+  --ds-table-hairline: rgb(58 50 38 / 7%);
+  --ds-ink: #1d1d1f;
+  --ds-ink-2: #3a3a3c;
+  --ds-muted: #6e6e73;
+  --ds-faint: #a1a1a6;
+  --ds-hairline: rgb(58 50 38 / 11%);
+  --ds-hairline-strong: rgb(58 50 38 / 20%);
+  --ds-gold: #d4a843;
+  --ds-gold-ink: #8a6716;
+  --ds-gold-wash: rgb(212 168 67 / 14%);
+  --ds-positive: #2d7a4f;
+  --ds-positive-wash: rgb(45 122 79 / 10%);
+  --ds-warning: #9a6a0f;
+  --ds-warning-wash: rgb(212 168 67 / 16%);
+  --ds-critical: #c0352b;
+  --ds-critical-wash: rgb(192 53 43 / 9%);
+  --ds-info: #36607e;
+  --ds-info-wash: rgb(54 96 126 / 9%);
+  --ds-primary-bg: var(--ds-ink-2);
+  --ds-primary-fg: #ffffff;
+  --ds-primary-hover: var(--ds-ink);
+  --ds-focus-color: var(--ds-gold-ink);
+  /* Shape, depth, motion */
+  --ds-r-s: 8px;
+  --ds-r-m: 10px;
+  --ds-r-l: 14px;
+  --ds-r-xl: 20px;
+  --ds-control: 36px;
+  --ds-shadow-panel: 0 1px 2px rgb(28 25 20 / 4%);
+  --ds-shadow-float: 0 10px 34px rgb(28 25 20 / 10%), 0 1px 3px rgb(28 25 20 / 6%);
+  --ds-ease: cubic-bezier(.2, .8, .2, 1);
+  --ds-focus: 0 0 0 3px rgb(212 168 67 / 45%);
+  /* Remap existing module tokens onto the system */
+}

@@ -45,6 +45,7 @@ import '../rent-ops.css';
 import './workspace.css';
 import './workspace-modern.css';
 import './dashboard-modern.css';
+import '../../../styles/ops-tokens.css';
 import '../../../styles/rops-system.css';
 import { TopNavigation, useWorkspaceAppearance } from './top-navigation';
 import { ScopeBar } from './scope-bar';

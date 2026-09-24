@@ -70,36 +70,7 @@
   --ds-focus: 0 0 0 3px rgb(212 168 67 / 45%);
 
   /* Remap existing module tokens onto the system */
-  --rm-charcoal: var(--ds-ink-2);
-  --rm-gold: var(--ds-gold);
-  --rm-cream: var(--ds-bg);
-  --rm-ink: var(--ds-ink);
-  --rm-surface: var(--ds-surface);
-  --rm-surface-subtle: var(--ds-surface-2);
-  --rm-surface-muted: var(--ds-surface-muted);
-  --rm-line: var(--ds-hairline);
-  --rm-line-strong: var(--ds-hairline-strong);
-  --rm-muted: var(--ds-muted);
-  --rm-faint: var(--ds-faint);
-  --rm-success: var(--ds-positive);
-  --rm-success-surface: var(--ds-positive-wash);
-  --rm-warning: var(--ds-warning);
-  --rm-warning-surface: var(--ds-warning-wash);
-  --rm-error: var(--ds-critical);
-  --rm-error-surface: var(--ds-critical-wash);
-  --rm-info: var(--ds-info);
-  --rm-info-surface: var(--ds-info-wash);
-  --rm-focus: var(--ds-gold-ink);
-  --rm-radius: var(--ds-r-l);
-  --rm-radius-small: var(--ds-r-m);
-  --rm-control-height: var(--ds-control);
   --rm-section-gap: 20px;
-  --rmd-ink: var(--ds-ink);
-  --rmd-muted: var(--ds-muted);
-  --rmd-line: var(--ds-hairline);
-  --rmd-surface: var(--ds-surface);
-  --rmd-subtle: var(--ds-surface-2);
-  --rmd-cream: var(--ds-bg);
   color-scheme: light;
 
   background: var(--ds-bg);
@@ -108,20 +79,7 @@
   letter-spacing: -.006em;
 }
 
-.rm-workspace.rops-modern :is(.investors-workspace, .investors-dialog) {
-  --investors-charcoal: var(--ds-ink-2); --investors-ink: var(--ds-ink); --investors-muted: var(--ds-muted);
-  --investors-faint: var(--ds-faint); --investors-line: var(--ds-hairline); --investors-line-strong: var(--ds-hairline-strong);
-  --investors-surface: var(--ds-surface); --investors-soft: var(--ds-surface-2); --investors-cream: var(--ds-bg);
-  --investors-gold: var(--ds-gold); --investors-positive: var(--ds-positive); --investors-warning: var(--ds-warning); --investors-error: var(--ds-critical);
-}
 .rm-workspace.rops-modern .accounting-workspace {
-  --accounting-ink: var(--ds-ink); --accounting-muted: var(--ds-muted); --accounting-line: var(--ds-hairline);
-  --accounting-surface: var(--ds-surface); --accounting-soft: var(--ds-surface-2); --accounting-positive: var(--ds-positive); --accounting-warning: var(--ds-warning);
-}
-.rm-workspace.rops-modern .time-workspace {
-  --time-ink: var(--ds-ink); --time-muted: var(--ds-muted); --time-line: var(--ds-hairline); --time-line-strong: var(--ds-hairline-strong);
-  --time-surface: var(--ds-surface); --time-soft: var(--ds-surface-2); --time-charcoal: var(--ds-ink-2); --time-gold: var(--ds-gold);
-  --time-positive: var(--ds-positive); --time-warning: var(--ds-warning); --time-error: var(--ds-critical);
 }
 
 /* One typeface everywhere in the manager, including modules that set their own. */
@@ -647,8 +605,6 @@
 
   .rm-workspace.rops-modern {
     color-scheme: dark;
-    --rm-surface-muted: var(--ds-surface-2);
-    --rm-focus: var(--ds-focus-color);
   }
 
   .rm-workspace.rops-modern .rops-topbar {
@@ -705,56 +661,9 @@
 
   /* Feature modules keep their existing token names while drawing from the
      manager palette. */
-  .rm-workspace.rops-modern :is(.projects-workspace, .projects-dialog) {
-    --projects-charcoal: var(--ds-ink-2);
-    --projects-gold: var(--ds-gold);
-    --projects-cream: var(--ds-bg);
-    --projects-ink: var(--ds-ink);
-    --projects-muted: var(--ds-muted);
-    --projects-faint: var(--ds-faint);
-    --projects-line: var(--ds-hairline);
-    --projects-line-strong: var(--ds-hairline-strong);
-    --projects-surface: var(--ds-surface);
-    --projects-soft: var(--ds-surface-2);
-    --projects-error: var(--ds-critical);
-    --projects-error-surface: var(--ds-critical-wash);
-    --projects-warning: var(--ds-warning);
-    --projects-warning-surface: var(--ds-warning-wash);
-    --projects-success: var(--ds-positive);
-    --projects-success-surface: var(--ds-positive-wash);
-  }
   .rm-workspace.rops-modern .intake-workspace {
-    --intake-ink: var(--ds-ink);
-    --intake-muted: var(--ds-muted);
-    --intake-faint: var(--ds-faint);
-    --intake-line: var(--ds-hairline);
-    --intake-surface: var(--ds-surface);
-    --intake-soft: var(--ds-surface-2);
-    --intake-gold: var(--ds-gold);
-  }
-  .rm-workspace.rops-modern .company-documents-workspace {
-    --docs-ink: var(--ds-ink);
-    --docs-muted: var(--ds-muted);
-    --docs-line: var(--ds-hairline);
-    --docs-surface: var(--ds-surface);
-    --docs-soft: var(--ds-surface-2);
   }
   .rm-workspace.rops-modern .rm-tenant-record {
-    --rm-charcoal: var(--ds-ink-2);
-    --rm-gold: var(--ds-gold);
-    --rm-cream: var(--ds-bg);
-    --rm-ink: var(--ds-ink);
-    --rm-muted: var(--ds-muted);
-    --rm-border: var(--ds-hairline-strong);
-    --rm-panel-bg: var(--ds-surface);
-  }
-  .rm-workspace.rops-modern .rmd-dashboard {
-    --rmd-ink: var(--ds-ink);
-    --rmd-muted: var(--ds-muted);
-    --rmd-line: var(--ds-hairline);
-    --rmd-surface: var(--ds-surface);
-    --rmd-subtle: var(--ds-surface-2);
-    --rmd-cream: var(--ds-bg);
   }
 
   /* Dashboard and rental report tables keep their existing structure while
