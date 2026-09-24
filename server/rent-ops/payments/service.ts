@@ -118,7 +118,7 @@ export class TenantPaymentService {
         // when a tenant has already started a replacement checkout.
         const lateSuccess = event.state === 'success' && (
           p.status === 'failed' || p.status === 'cancelled' ||
-          ((p.status === 'creating' || p.status === 'pending' || p.status === 'processing') && p.expiresAt <= this.now().toISOString())
+          ((p.status === 'creating' || p.status === 'pending') && p.expiresAt <= this.now().toISOString())
         );
         const invalidAdjustment=event.adjustment && (!Number.isSafeInteger(event.adjustment.amountCents) || event.adjustment.amountCents<=0 || event.adjustment.amountCents>p.amountCents);
         if(mismatch || lateSuccess || invalidAdjustment || (event.state==='success' && (event.amountCents!==p.amountCents || event.currency!=='usd'))) {p.status='review_required';outcome='review_required';}

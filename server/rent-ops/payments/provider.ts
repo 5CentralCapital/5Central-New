@@ -27,12 +27,12 @@ export function normalizeStripeEvent(event: Stripe.Event): ProcessorEvent {
   }
   return result;
 }
-export function stripeProvider(env: NodeJS.ProcessEnv): PaymentProvider | undefined {
+export function stripeProvider(env: NodeJS.ProcessEnv, stripeClient?: Stripe): PaymentProvider | undefined {
   const key=env.STRIPE_SECRET_KEY, secret=env.STRIPE_WEBHOOK_SECRET, origin=env.TENANT_PORTAL_ORIGIN || env.RENT_OPS_PUBLIC_APP_URL;
   if(!key || !/^sk_(test|live)_/.test(key) || !secret?.startsWith('whsec_') || !origin) return;
   let url:URL;try{url=new URL(origin);}catch{return;}
   if(url.username || url.password) return; if(url.protocol!=='https:' && !(env.NODE_ENV!=='production' && ['localhost','127.0.0.1'].includes(url.hostname))) return;
-  const stripe=new Stripe(key);
+  const stripe=stripeClient ?? new Stripe(key);
   const reconciliationEvent = (payment: TenantPayment, object: Record<string, any>, state: ProcessorEvent['state'], type: string, ids: { checkoutSessionId?: string; paymentIntentId?: string }): ProcessorEvent => {
     const objectId = typeof object.id === 'string' ? object.id : 'unknown';
     const status = typeof object.status === 'string' ? object.status : state;
@@ -74,12 +74,13 @@ export function stripeProvider(env: NodeJS.ProcessEnv): PaymentProvider | undefi
         }
         if (intent) {
           const intentTruth = paymentIntentTruth(payment, intent, session.id);
-          // A processing PaymentIntent is not safe to release even when the
-          // Checkout Session has expired locally. Only a terminal canceled
-          // intent, or an expired session with no live intent, is unpaid.
+          // A processing or otherwise nonterminal PaymentIntent is not safe
+          // to release even when the Checkout Session has expired locally.
+          // Only a terminal canceled intent, or an expired session with no
+          // PaymentIntent, is unpaid.
           if (intentTruth.state !== 'unknown') return intentTruth;
         }
-        if (session.status === 'expired') {
+        if (session.status === 'expired' && (!intent || intent.status === 'canceled')) {
           return { state: 'terminal_unpaid', event: reconciliationEvent(payment, session as unknown as Record<string, any>, 'cancelled', 'checkout.session.expired', { checkoutSessionId: session.id, ...(intent ? { paymentIntentId: intent.id } : {}) }) };
         }
         return { state: 'unknown' };
