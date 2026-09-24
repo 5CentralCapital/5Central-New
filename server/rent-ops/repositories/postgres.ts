@@ -65,6 +65,7 @@ export interface RentOpsQueryExecutor {
 }
 
 export class RentOpsTablesMissingError extends Error {
+  readonly code = "rent_ops_runtime_tables_missing";
   readonly missingTables: string[];
 
   constructor(missingTables: string[]) {
@@ -75,6 +76,8 @@ export class RentOpsTablesMissingError extends Error {
 }
 
 export class RentOpsRuntimePrivilegeError extends Error {
+  readonly code = "rent_ops_runtime_privilege_invalid";
+
   constructor() {
     super("5Central Ops runtime role has a forbidden table privilege");
     this.name = "RentOpsRuntimePrivilegeError";

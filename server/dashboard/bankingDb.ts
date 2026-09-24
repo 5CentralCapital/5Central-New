@@ -1,7 +1,13 @@
 import fs from "fs";
 import path from "path";
+import { createRequire } from "node:module";
 import { BankAccount, BankTransaction, PlaidConnection } from "./types";
 
+// The production server is bundled as ESM. A bare `require()` is rewritten by
+// esbuild to a dynamic-require shim, which fails at runtime because the ESM
+// bundle has no CommonJS `require`. Keep native-module resolution explicit so
+// better-sqlite3 can load its platform binding in the deployed bundle.
+const require = createRequire(import.meta.url);
 const dbPath = path.join(process.cwd(), "data", "banking.db");
 let db: any = null;
 let sqliteAvailable = false;
