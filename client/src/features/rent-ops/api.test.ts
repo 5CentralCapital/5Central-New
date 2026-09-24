@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { serializeAdminDashboard } from "../../../../server/rent-ops/presentation/dashboard";
 import { createDemoAdminSnapshot } from "./demo";
-import { filterReportRows, buildRentOpsQuery, currentLocalIsoDate, loadRentOpsAdminSnapshot, loadRentOpsChargeDefinitions, loadRentOpsPreviewContext, loadRentOpsReport, postRentOpsMutation, reportCell, RentOpsApiError } from "./api";
+import { filterReportRows, buildRentOpsQuery, currentLocalIsoDate, loadRentOpsAdminSnapshot, loadRentOpsChargeDefinitions, loadRentOpsPaymentReviewQueue, loadRentOpsPreviewContext, loadRentOpsReport, postRentOpsMutation, reportCell, RentOpsApiError } from "./api";
 import type { ReportKey } from "./types";
 import { parseCentsInput, requireAppliedCents, requireCentsInput } from "./money";
 import { mutationPayload } from "./form-payload";
@@ -125,6 +125,43 @@ test("charge-definition catalog decodes only positive nullable fields", async ()
   const polluted = stubJsonResponse([{ id: "charge-definition:rent", source: "provider-row" }]);
   try {
     await assert.rejects(loadRentOpsChargeDefinitions(), /invalid response/);
+  } finally {
+    polluted();
+  }
+});
+
+test("payment review queue is visible to managers and rejects unsafe response fields", async () => {
+  const row = {
+    id: "tp_review",
+    accountId: "account:one",
+    personId: "person:one",
+    tenancyId: "tenancy:one",
+    propertyId: "property:one",
+    unitId: "unit:one",
+    requestId: "request:one",
+    amountCents: 10000,
+    currency: "usd",
+    status: "review_required",
+    expiresAt: "2026-09-07T12:35:00.000Z",
+    createdAt: "2026-09-07T12:00:00.000Z",
+    updatedAt: "2026-09-07T12:36:00.000Z",
+    currentLedgerCents: 0,
+    ledgerRevision: 0,
+    adjustments: [],
+  };
+  const restore = stubJsonResponse([row]);
+  try {
+    const [decoded] = await loadRentOpsPaymentReviewQueue();
+    assert.equal(decoded?.id, row.id);
+    assert.equal(decoded?.status, row.status);
+    assert.equal(decoded?.amountCents, row.amountCents);
+    assert.deepEqual(decoded?.adjustments, []);
+  } finally {
+    restore();
+  }
+  const polluted = stubJsonResponse([{ ...row, checkoutUrl: "https://checkout.example.invalid" }]);
+  try {
+    await assert.rejects(loadRentOpsPaymentReviewQueue(), /invalid response/);
   } finally {
     polluted();
   }

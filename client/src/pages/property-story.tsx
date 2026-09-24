@@ -1,3 +1,4 @@
+import MarketingImage from "@/components/marketing-image";
 import { Link, useRoute } from "wouter";
 import { ArrowLeft, Camera, FileText, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -143,12 +144,12 @@ export default function PropertyStory() {
           <div className="grid lg:grid-cols-3 gap-8">
             <div className="lg:col-span-2">
               <div className="aspect-[16/9] bg-muted overflow-hidden mb-4">
-                <img src={getPublicPropertyImage(property)} alt={property.name} className="w-full h-full object-cover" />
+                <MarketingImage loading="eager" fetchPriority="high" sizes="(max-width: 1024px) 100vw, 66vw" src={getPublicPropertyImage(property)} alt={property.name} className="w-full h-full object-cover" />
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {gallery.slice(1).map((photo) => (
                   <div key={photo} className="aspect-square bg-muted overflow-hidden">
-                    <img src={photo} alt={`${property.name} gallery`} className="w-full h-full object-cover" />
+                    <MarketingImage src={photo} alt={`${property.name} gallery`} className="w-full h-full object-cover" />
                   </div>
                 ))}
               </div>

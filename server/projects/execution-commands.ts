@@ -70,7 +70,13 @@ export interface ProjectExecutionCommandOptions {
 const EXECUTION_WRITE_ROLES = ["owner", "admin", "operations_pm", "project_manager", "finance"] as const;
 
 export const PROJECT_EXECUTION_COMMAND_POLICIES: Readonly<Record<ProjectExecutionCommandKind, CommandAuthorizationPolicy>> = Object.freeze(
-  Object.fromEntries(projectExecutionCommandKinds.map((commandKind) => [commandKind, { commandKind, allowedRoles: EXECUTION_WRITE_ROLES }])) as unknown as Record<ProjectExecutionCommandKind, CommandAuthorizationPolicy>,
+  Object.fromEntries(projectExecutionCommandKinds.map((commandKind) => [commandKind, {
+    commandKind,
+    allowedRoles: EXECUTION_WRITE_ROLES,
+    // Vendors are organization-wide registry records. Require an explicit
+    // organization command scope before creating or editing one.
+    ...(commandKind === "project.vendor.create" || commandKind === "project.vendor.update" ? { requiredScope: "organization" as const } : {}),
+  }])) as unknown as Record<ProjectExecutionCommandKind, CommandAuthorizationPolicy>,
 );
 
 type AnyExecutionEnvelope = CommandEnvelope<Record<string, unknown>>;
@@ -195,6 +201,12 @@ async function loadExecutionRow(context: CommandHandlerContext<unknown>, table: 
   const row = result.rows[0];
   if (!row) throw new ValidationCommandError("Execution record was not found in the requested company scope", { reason: "project_execution_record_not_found" });
   return row;
+}
+
+function assertDrawMutable(row: Record<string, unknown>): void {
+  if (dbString(row.status, "draw_status") === "paid") {
+    throw new ConflictCommandError("Paid draw requests are immutable; use a correction workflow", { reason: "project_paid_draw_immutable" });
+  }
 }
 
 async function executionProject(context: CommandHandlerContext<unknown>, table: string, id: string): Promise<{ row: Record<string, unknown>; project: Awaited<ReturnType<typeof lockProject>> }> {
@@ -789,6 +801,7 @@ async function handlePurchaseOrderUpdate(context: CommandHandlerContext<ProjectE
 async function handleDrawRequestUpdate(context: CommandHandlerContext<ProjectExecutionCommandPayload["project.draw_request.update"]>): Promise<CommandHandlerResult> {
   const payload = projectExecutionCommandPayloadSchemas["project.draw_request.update"].parse(context.envelope.payload);
   const { row, project } = await executionProject(context as unknown as CommandHandlerContext<unknown>, "company_project_draw_requests", payload.drawRequestId);
+  assertDrawMutable(row);
   assertExpectedRevision(project.recordRevision, context.envelope.expectedRevision);
   const projectId = asText(row.project_id, "draw_project_id");
   const periodFrom = payload.periodFrom ?? dbDate(row.period_from, "draw_period_from");
@@ -813,6 +826,7 @@ async function handleDrawRequestUpdate(context: CommandHandlerContext<ProjectExe
 async function handleDrawItemCreate(context: CommandHandlerContext<ProjectExecutionCommandPayload["project.draw_request.item.create"]>): Promise<CommandHandlerResult> {
   const payload = projectExecutionCommandPayloadSchemas["project.draw_request.item.create"].parse(context.envelope.payload);
   const row = await loadExecutionRow(context as unknown as CommandHandlerContext<unknown>, "company_project_draw_requests", payload.drawRequestId, "*");
+  assertDrawMutable(row);
   const projectId = asText(row.project_id, "draw_project_id");
   const project = await lockProject(context as unknown as CommandHandlerContext<unknown>, projectId);
   assertExpectedRevision(project.recordRevision, context.envelope.expectedRevision);
@@ -832,6 +846,9 @@ async function handleDrawItemCreate(context: CommandHandlerContext<ProjectExecut
 async function handleDrawItemUpdate(context: CommandHandlerContext<ProjectExecutionCommandPayload["project.draw_request.item.update"]>): Promise<CommandHandlerResult> {
   const payload = projectExecutionCommandPayloadSchemas["project.draw_request.item.update"].parse(context.envelope.payload);
   const item = await loadExecutionRow(context as unknown as CommandHandlerContext<unknown>, "company_project_draw_request_items", payload.drawRequestItemId, "*");
+  const drawRequestId = asText(item.draw_request_id, "draw_item_request_id");
+  const draw = await loadExecutionRow(context as unknown as CommandHandlerContext<unknown>, "company_project_draw_requests", drawRequestId, "*");
+  assertDrawMutable(draw);
   const projectId = asText(item.project_id, "draw_item_project_id");
   const project = await lockProject(context as unknown as CommandHandlerContext<unknown>, projectId);
   assertExpectedRevision(project.recordRevision, context.envelope.expectedRevision);
@@ -848,7 +865,6 @@ async function handleDrawItemUpdate(context: CommandHandlerContext<ProjectExecut
   if (payload.retainageEligible !== undefined) addUpdate(updates, values, "retainage_eligible", retainageEligible);
   if (payload.retainageCents !== undefined) addUpdate(updates, values, "retainage_cents", retainage);
   if (hasOwn(payload, "notes")) addUpdate(updates, values, "notes", payload.notes ?? null);
-  const drawRequestId = asText(item.draw_request_id, "draw_item_request_id");
   const revision = await updateExecutionRow(context as unknown as CommandHandlerContext<unknown>, "company_project_draw_request_items", payload.drawRequestItemId, projectId, updates, values, false);
   await recalculateDraw(context as unknown as CommandHandlerContext<unknown>, drawRequestId, projectId);
   return savedExecutionResult(payload.drawRequestItemId, projectId, revision);

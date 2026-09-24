@@ -164,6 +164,57 @@ function sameSecret(left: string | undefined, right: string | undefined): boolea
   }
 }
 
+const SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+function originOf(value: string | undefined): string | undefined {
+  if (!value || value === "null") return undefined;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+    return parsed.origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function requestOrigin(req: Request): string | undefined {
+  const host = req.get?.("host");
+  if (!host) return undefined;
+  return originOf(`${req.protocol || "http"}://${host}`);
+}
+
+/**
+ * Browser cookie requests must prove they originated at this application.
+ * Same-origin fetches and forms supply Origin; Referer is the compatibility
+ * fallback for older browsers. API-key automation is handled separately.
+ */
+export function requestHasSameOrigin(req: Request): boolean {
+  const originHeader = req.get?.("origin");
+  // An explicit Origin header is authoritative, even when it is malformed or
+  // the browser supplies the opaque `null` origin. Never downgrade that signal
+  // to a same-origin Referer value.
+  const candidate = originHeader !== undefined ? originOf(originHeader) : originOf(req.get?.("referer"));
+  if (!candidate) return false;
+
+  const allowed = new Set<string>();
+  const localOrigin = requestOrigin(req);
+  if (localOrigin) allowed.add(localOrigin);
+  for (const configuredOrigin of [process.env.RENT_OPS_PUBLIC_APP_URL, process.env.RENT_OPS_ADMIN_OAUTH_ORIGIN]) {
+    const normalized = originOf(configuredOrigin);
+    if (normalized) allowed.add(normalized);
+  }
+  return allowed.has(candidate);
+}
+
+/** Same-origin guard for legacy cookie-authenticated mutations and public forms. */
+export function requireSameOriginForMutation(req: Request, res: Response, next: NextFunction) {
+  if (SAFE_HTTP_METHODS.has(req.method) || requestHasSameOrigin(req)) {
+    next();
+    return;
+  }
+  res.status(403).json({ code: "csrf_required" });
+}
+
 export function createRentOpsCsrfToken(): string {
   return randomBytes(32).toString("base64url");
 }
@@ -219,6 +270,9 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   if (req.user.role !== "admin") {
     return res.status(403).json({ message: "Admin access required" });
   }
+  if (!SAFE_HTTP_METHODS.has(req.method) && !hasValidApiKey(req) && !requestHasSameOrigin(req)) {
+    return res.status(403).json({ code: "csrf_required" });
+  }
   next();
 }
 
@@ -262,15 +316,20 @@ export async function requireRentOpsAdmin(req: Request, res: Response, next: Nex
 
 // Middleware: accept admin session OR X-API-Key header (for OpenClaw / external agents)
 export function requireAdminOrApiKey(req: Request, res: Response, next: NextFunction) {
-  // Path 1: already authenticated via session
-  if (req.user && req.user.role === "admin") {
+  // Path 1: explicit API-key automation. API keys are not browser cookies and
+  // therefore do not need an Origin check; production startup rejects these
+  // legacy keys unless a deployment explicitly keeps the non-production path.
+  if (hasValidApiKey(req)) {
+    // Mark request as API-key-authenticated (no user object, but authorized).
+    (req as any).apiKeyAuth = true;
     return next();
   }
 
-  // Path 2: API key in header
-  if (hasValidApiKey(req)) {
-    // Mark request as API-key-authenticated (no user object, but authorized)
-    (req as any).apiKeyAuth = true;
+  // Path 2: already authenticated via a browser session.
+  if (req.user && req.user.role === "admin") {
+    if (!SAFE_HTTP_METHODS.has(req.method) && !requestHasSameOrigin(req)) {
+      return res.status(403).json({ code: "csrf_required" });
+    }
     return next();
   }
 
@@ -390,7 +449,7 @@ export function registerAuthRoutes(app: Express) {
   });
 
   // Logout route
-  app.post("/api/auth/logout", (req: Request, res: Response) => {
+  app.post("/api/auth/logout", requireSameOriginForMutation, (req: Request, res: Response) => {
     req.session.destroy((err) => {
       if (err) {
         return res.status(500).json({ message: "Logout failed" });

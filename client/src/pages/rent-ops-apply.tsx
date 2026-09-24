@@ -93,6 +93,7 @@ function ApplyShell({ children }: { children: React.ReactNode }) {
           <span className="apply-mark">Residential application</span>
         </header>
         {children}
+        <footer className="apply-footer"><a href="/legal/privacy">Privacy policy</a></footer>
       </div>
     </div>
   );

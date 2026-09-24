@@ -6,7 +6,7 @@ projects:
           - type: web
             name: 5central-ops-web
             runtime: node
-            plan: starter
+            plan: standard
             region: virginia
             branch: production
             numInstances: 1
@@ -70,5 +70,7 @@ projects:
                 value: "off"
               - key: QBO_PRODUCTION_WRITES
                 value: "off"
+              - key: WORKER_START_GATE
+                value: "hold"
               - key: WORKER_SHUTDOWN_GRACE_MS
                 value: "25000"

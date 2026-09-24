@@ -4,7 +4,8 @@
  */
 
 import type { Express, Request, Response } from "express";
-import { requireAdmin, requireAuth } from "../auth";
+import { requireAdmin, requireAuth, requireSameOriginForMutation } from "../auth";
+import { createInvestorSignupRateLimiter, parseInvestorSignupInput } from "../legacy-security";
 import {
   workerStorage, payrollStorage, rehabStorage, leaseUpStorage,
   pmStorage, documentStorage, distributionStorage, capitalAccountStorage,
@@ -19,6 +20,7 @@ export function err(res: Response, error: unknown, status = 500) {
 }
 
 export function registerModuleRoutes(app: Express) {
+  const limitInvestorSignup = createInvestorSignupRateLimiter();
 
   // ============================================================
   // WORKERS & PAYROLL
@@ -393,21 +395,19 @@ export function registerModuleRoutes(app: Express) {
   // PUBLIC: INVESTOR SIGNUP (replaces fake form)
   // ============================================================
 
-  app.post("/api/investor-signup", async (req: Request, res: Response) => {
+  app.post("/api/investor-signup", requireSameOriginForMutation, async (req: Request, res: Response) => {
     try {
-      const { firstName, lastName, email, phone, company, investableCapital, accreditedStatus, source } = req.body;
-      if (!firstName || !lastName || !email) {
-        return res.status(400).json({ error: "Name and email are required" });
+      const input = parseInvestorSignupInput(req.body);
+      const retryAfter = limitInvestorSignup(req.ip || req.socket.remoteAddress || "unknown", input?.email);
+      if (retryAfter > 0) {
+        res.set("Retry-After", String(retryAfter)).status(429).json({ error: "Too many signup attempts. Try again later." });
+        return;
+      }
+      if (!input) {
+        return res.status(400).json({ error: "Please provide a valid name and email." });
       }
       const lead = await crmStorage.createLead({
-        firstName,
-        lastName,
-        email,
-        phone: phone || null,
-        company: company || null,
-        accreditedStatus: accreditedStatus || "unknown",
-        investableCapital: investableCapital || null,
-        source: source || "website",
+        ...input,
         stage: "new",
         interestLevel: "warm",
         notes: "Website investor intake form",

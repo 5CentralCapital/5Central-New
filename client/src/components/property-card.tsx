@@ -1,3 +1,4 @@
+import MarketingImage from "@/components/marketing-image";
 import { type Property } from "@shared/schema";
 import { MapPin, Calendar } from "lucide-react";
 import { getPublicPropertyMeta } from "@/lib/public-portfolio-data";
@@ -82,7 +83,7 @@ export default function PropertyCard({ property, imageUrl, onClick }: PropertyCa
     >
       {/* Image Container */}
       <div className="property-image-wrapper aspect-[4/3] bg-muted">
-        <img
+        <MarketingImage
           src={imageUrl}
           alt={`${property.name} Property`}
           className="w-full h-full object-cover"

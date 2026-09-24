@@ -63,19 +63,20 @@ other state: stop.
 
 ### 2. Freeze, back up and prove the backup
 
-1. Freeze: pause Codex/Claude/MCP writes; announce the window.
+1. Freeze all writes, including manager/applicant/tenant uploads, MCP and background jobs. Stop the Replit web/worker before changing runtime grants; retain its deployment and prior configuration for rollback.
 2. Neon ▸ Branches ▸ New branch from `rent-ops-replacement-20260907`, current point in time,
    name `rops-pre-v49-20260923`.
 3. `export RENT_OPS_BACKUP_DATABASE_URL='<owner URL: rops-pre-v49-20260923 / rent_ops_production>'`
    then `npm run company:production-schema -- compare-backup --backup-url-env RENT_OPS_BACKUP_DATABASE_URL`.
    Expect `matches: true`; keep `ledgerSha256`.
+4. Take an off-platform custom-format `pg_dump` of both runtime and host databases from the frozen point. Use owner connections supplied through protected environment variables, keep files outside Git in restricted storage, record SHA-256, and verify each with `pg_restore --list` plus a restore rehearsal. A Neon branch alone is not the off-platform backup gate.
 
 ### 3. Rehearse
 
 Branch `rops-v49-rehearsal-20260923` from the backup, point `RENT_OPS_MIGRATION_DATABASE_URL` at
 it, and run step 4 in full including `grants-verify` and the relocation plan/apply against it
 (the S3 objects are shared and content-addressed, so this is safe). Optionally point the staging
-web at it for a smoke test. For every grants command in this rehearsal, add
+web at it for a smoke test. Rehearse the retained Replit build against the revised grants and original document bindings as well; record success or prepare a reviewed grant rollback before continuing. For every grants command in this rehearsal, add
 `--environment staging` and use the staging database/role names; the operator defaults to
 production for compatibility when the flag is omitted. Delete it afterwards.
 
@@ -104,7 +105,7 @@ freeze), `plan` (expect `missingCount: 0`), then `apply --rehash` with the revie
 
 1. Create `production` at the reviewed tip of this branch and protect it (PRs + the
    `Verify and build` check). Render follows `production` only.
-2. Apply the Blueprint `render.yaml` (Hobby workspace). The external groups must already hold:
+2. Apply the Blueprint `render.yaml` (Hobby workspace): approved Standard web ($25/month) and Starter worker ($7/month). Pause both staging services after production verification, leaving $32/month base compute; brief overlap is prorated at $46/month. The external groups must already hold:
    - `5central-ops-production`: `RENT_OPS_RUNTIME_DATABASE_URL`, `QBO_ENVIRONMENT=production`,
      production `QBO_CLIENT_ID`/`QBO_CLIENT_SECRET`,
      `QBO_REDIRECT_URI=https://5central.capital/api/accounting/qbo/callback`,
@@ -114,10 +115,10 @@ freeze), `plan` (expect `missingCount: 0`), then `apply --rehash` with the revie
      `RENT_OPS_SESSION_SECRET` copied from Replit.
 3. In a Render web shell: `npm run company:qbo-preflight -- --network --database` (no failures),
    then the document readback (`document-relocation.md` step 8).
-4. On the `onrender.com` URL: `/readyz` 200; the worker log shows jobs being claimed and completed.
+4. Production worker starts with `WORKER_START_GATE=hold` and does no database or provider work. Verify web `/readyz` 200, runtime grants and historical document readback first. Then set the worker service gate to `open`, redeploy only the worker, and verify a recent `company_worker_heartbeats` row and completed jobs. QBO write switches remain off.
 5. DNS: add `5central.capital` and `www.5central.capital` as custom domains, point the records as
    Render instructs (leave MX and other mail records alone), wait for the certificate. Stop — do
-   not delete — the Replit deployment; keep it, its bucket and secrets 30 days.
+   not delete — the Replit deployment; keep it, its bucket and secrets 30 days. Configure and verify `www` redirects to the apex HTTPS domain.
 
 ### 7. Verify on `https://5central.capital`
 
@@ -150,9 +151,7 @@ confirm it opens the same manager.
 ## Rollback
 
 - Before step 4: nothing changed; unfreeze.
-- After step 4, before DNS: nothing user-facing changed. The Replit build runs on the additive
-  schema and still reads documents through the original binding columns.
-- After DNS: point DNS back to Replit (its deployment was stopped, not deleted). Relocation rows
-  stay; they do not affect the Replit build.
+- After step 4, before DNS: keep writes frozen. Suspend both Render services before restoring Replit. Use only the old-build/grant compatibility outcome proven during rehearsal; do not assume additive schema implies privilege compatibility.
+- After DNS: freeze writes, suspend both Render web and worker, restore the rehearsed Replit build/permissions, then point DNS back. Verify only one host can write before reopening access. Relocation rows remain; do not delete them.
 - Data restore only for proven corruption, from `rops-pre-v49-20260923`, accepting loss of later
   writes. Never drop the new tables or delete relocation rows as a shortcut.

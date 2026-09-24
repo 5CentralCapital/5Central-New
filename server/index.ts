@@ -18,7 +18,7 @@ import { publicRequestError, startupFailureSummary, type StartupStage } from "./
 import { sanitizeApiPathForLogging } from "./request-logging";
 import { applicantPageSecurityHeaders } from "./applicant-page-security";
 import { securityHeaders } from "./security-headers";
-import { attachedImages } from "./static-assets";
+import { attachedImages, publicAssets } from "./static-assets";
 import { installGracefulShutdown, shutdownGraceMs } from "./graceful-shutdown";
 import {
   assertRentOpsProductionConfiguration,
@@ -45,6 +45,10 @@ app.get("/readyz", (_req, res) => {
 // Exactly one trusted reverse-proxy hop (Render's router; Replit's before it).
 app.set("trust proxy", 1);
 app.use(securityHeaders({ production: isProduction }));
+// Public build assets need no session lookup. The build copies and optimizes
+// the same public marketing images; private document routes stay authenticated.
+if (isProduction) app.use(publicAssets(path.resolve(import.meta.dirname, 'public')));
+else app.use('/attached_assets', attachedImages(path.resolve(import.meta.dirname, '..', 'attached_assets')));
 
 let tenantPaymentService: TenantPaymentService | undefined;
 // Signature verification must receive the original bytes before any JSON parser.
@@ -83,8 +87,6 @@ app.use(
 // Load user from session
 app.use(loadUser);
 
-// Serve attached_assets statically
-app.use('/attached_assets', attachedImages(path.resolve(import.meta.dirname, '..', 'attached_assets')));
 app.use(/^\/(?:apply|tenant)(?:\/|$)/, applicantPageSecurityHeaders);
 
 app.use((req, res, next) => {
@@ -105,6 +107,7 @@ app.use((req, res, next) => {
 
 (async () => {
   let startupStage: StartupStage = "configuration";
+  let closeRuntime: (() => Promise<void>) | undefined;
   try {
     // Keep production configuration failures inside the same redacted startup
     // boundary as runtime dependency failures. The labels and summaries are
@@ -124,6 +127,7 @@ app.use((req, res, next) => {
 
     startupStage = "route_registration";
     const server = await registerRoutes(app, {
+      onRuntimeClose: close => { closeRuntime = close; },
       onStartupStage: (stage) => { startupStage = stage; },
       onTenantPaymentService: (service) => { tenantPaymentService = service; },
       onRuntimeExecutor: (executor) => { quickBooksWebhookExecutor = executor; }, // lane-b-accounting
@@ -172,12 +176,13 @@ app.use((req, res, next) => {
     installGracefulShutdown({
       server,
       markNotReady: readiness.markFailed,
-      cleanup: () => pool.end(),
+      cleanup: async () => { await Promise.all([pool.end(), closeRuntime?.()]); },
       graceMs: shutdownGraceMs(process.env.WEB_SHUTDOWN_GRACE_MS),
       log,
     });
   } catch (error) {
     readiness.markFailed();
+    await closeRuntime?.().catch(() => undefined);
     log(`startup failed: ${startupFailureSummary(error, startupStage)}`);
     process.exitCode = 1;
   }

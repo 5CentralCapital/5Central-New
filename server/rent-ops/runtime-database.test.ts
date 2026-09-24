@@ -178,3 +178,25 @@ test("pool initialization errors are redacted", async () => {
     },
   );
 });
+
+test('decoded read cache generations invalidate around direct writes and write transactions', async () => {
+  const pool=new FakePool();
+  const database=createRentOpsPoolExecutor(pool);
+  const initial=database.readCacheVersion!();
+  await database.query('SELECT 1');
+  assert.equal(database.readCacheVersion!(),initial);
+  await database.query('UPDATE rent_ops_people SET first_name=$1', ['Synthetic']);
+  const updated=database.readCacheVersion!();
+  assert.notEqual(updated,initial);
+  await database.transaction!(async tx=>{
+    assert.equal(database.readCacheVersion!(),undefined);
+    assert.equal(tx.readCacheVersion,undefined);
+    await tx.query('SELECT 1');
+  });
+  assert.notEqual(database.readCacheVersion!(),updated);
+  const committed=database.readCacheVersion!();
+  await database.transaction!(async()=>{
+    assert.equal(database.readCacheVersion!(),committed);
+  },{readOnly:true});
+  assert.equal(database.readCacheVersion!(),committed);
+});

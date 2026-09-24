@@ -47,3 +47,20 @@ test("a property-scoped administrator can open, download, edit and archive a pro
     assert.deepEqual((await companyDocumentsApi.list(organizationId, { legalEntityId: fixture.entityId, propertyId: fixture.propertyId })).items, []);
   } finally { restore?.(); await app.close(); }
 });
+
+test("browser upload preserves a Unicode filename through the raw file header", async () => {
+  const app = await createLaneTestApp();
+  let restore: (() => void) | undefined;
+  try {
+    restore = routeClientTo(app.origin, fixture.actorId);
+    const fileName = "résumé 日本語.pdf";
+    const document = await companyDocumentsApi.upload(organizationId, {
+      context: { organizationId, legalEntityId: fixture.entityId, propertyId: fixture.propertyId },
+      kind: "contract", title: "Unicode source", tags: [], links: [],
+      file: new File([Buffer.from("%PDF-1.7\nsynthetic unicode source\n%%EOF")], fileName, { type: "application/pdf" }),
+    });
+    assert.equal(document.source.fileName, fileName);
+    const opened = await companyDocumentsApi.get(organizationId, String(document.id), undefined, { legalEntityId: fixture.entityId, propertyId: fixture.propertyId });
+    assert.equal(opened.source.fileName, fileName);
+  } finally { restore?.(); await app.close(); }
+});

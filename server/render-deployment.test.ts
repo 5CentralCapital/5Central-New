@@ -67,7 +67,7 @@ test("Render production and staging Blueprints use paid services and CI-gated de
     const web = serviceBlock(blueprint, `5central-ops${suffix}-web`);
     const worker = serviceBlock(blueprint, `5central-ops${suffix}-worker`);
     for (const service of [web, worker]) {
-      assert.match(service, /plan:\s*starter/);
+      assert.match(service, blueprint === productionBlueprint && service === web ? /plan:\s*standard/ : /plan:\s*starter/);
       assert.match(service, /region:\s*virginia/);
       assert.match(service, new RegExp(`branch:\\s*${branch}\\b`));
       assert.match(service, /numInstances:\s*1/);

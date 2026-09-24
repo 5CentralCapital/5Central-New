@@ -119,6 +119,21 @@ test("sync strategy: full replay without a checkpoint, CDC within 30 days, full 
   }
 });
 
+test("coverage becomes partial when no successful provider read is observed beyond the CDC lookback", async () => {
+  const store: Store = { Bill: [bill("50", "0", "2026-09-10T10:00:00Z")], Account: [{ Id: "7", SyncToken: "0", AccountType: "Expense", MetaData: { LastUpdatedTime: "2026-09-01T00:00:00Z" } }] };
+  const h = await harness(store, "2026-09-20T00:00:00Z");
+  try {
+    const first = await h.sync.syncChanges();
+    assert.equal(first.status, "complete");
+    h.set("2026-10-21T00:00:01Z");
+    const coverage = await h.mirror.readCoverage(sourceScope);
+    assert.equal(coverage.status, "partial");
+    assert.match(coverage.reason ?? "", /coverage is stale/i);
+  } finally {
+    await h.close();
+  }
+});
+
 test("a CDC deletion tombstones the object, retires its lines and blocks the allocations that consumed them", async () => {
   const store: Store = { Bill: [bill("20", "0", "2026-09-10T10:00:00Z", 250)] };
   const h = await harness(store, "2026-09-20T00:00:00Z");
@@ -173,9 +188,9 @@ test("a full replay tombstones objects QBO stopped returning and restores one th
     assert.equal(replay.mode, "full_replay");
     assert.equal(replay.reason, "requested");
     assert.equal(replay.deletedCount, 1);
-    assert.equal(replay.status, "partial", "an inferred deletion stays an open exception");
+    assert.equal(replay.status, "complete", "a full replay confirms the absent object as a deletion");
     assert.equal(await h.mirror.resolveLine({ scope: sourceScope, objectType: "Bill", objectId: "31", lineId: "1" }), null);
-    assert.deepEqual((await h.mirror.listOpenSyncExceptions(scope)).map(item => [item.objectId, item.kind]), [["31", "missing_from_full_replay"]]);
+    assert.deepEqual(await h.mirror.listOpenSyncExceptions(scope), []);
     assert.equal((await h.executor.query<{ detected_via: string }>("SELECT detected_via FROM accounting_qbo_deletion_tombstones")).rows[0]?.detected_via, "full_replay");
 
     store.Bill = [store.Bill[0]!, kept];

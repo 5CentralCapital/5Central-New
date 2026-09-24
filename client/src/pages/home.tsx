@@ -108,7 +108,7 @@ export default function Home() {
   const totalRealizedProfits = soldProperties.reduce((sum, p) => {
     const acquisitionPrice = parseFloat(p.acquisitionPrice);
     const salePrice = parseFloat(p.salePrice || "0");
-    return sum + Math.max(0, salePrice - acquisitionPrice);
+    return sum + salePrice - acquisitionPrice;
   }, 0);
 
   const ctUnits = allProperties.filter(p => p.state === 'CT').reduce((sum, p) => sum + p.units, 0);
@@ -332,8 +332,8 @@ export default function Home() {
                   </div>
                   <div className="h-8 w-px bg-white/10" />
                   <div>
-                    <div className="text-emerald-400 font-medium">+200%</div>
-                    <div className="text-[9px] uppercase tracking-wider text-white/40">Equity</div>
+                    <div className="text-white font-medium">Target</div>
+                    <div className="text-[9px] uppercase tracking-wider text-white/40">Subject to execution</div>
                   </div>
                 </div>
               </div>

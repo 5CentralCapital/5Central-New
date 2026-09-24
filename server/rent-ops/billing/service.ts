@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { DESCRIPTION_MISSING_LABEL, NAME_MISSING_LABEL, PROPERTY_MISSING_LABEL, UNIT_MISSING_LABEL } from "../../../shared/review-cases/display-labels";
 import type { IsoMonth, RentOpsLedgerTransaction, RentOpsSnapshot } from "../../../shared/rent-ops-contracts";
 import { financialMonthInterval, projectFinancialOccupancy, projectFinancialSchedules, resolveEffectiveScheduleVersions } from "../domain/financial-projection";
+import { postedReversalTargets } from "../domain/invariants";
 
 export interface BillingReceipt {
   lineageRootId: string;
@@ -100,6 +101,7 @@ function planBilling(data: BillingData, month: IsoMonth, scope?: BillingScope): 
   const interval = financialMonthInterval(month);
   const receipts = data.receipts.filter((receipt) => receipt.billingOn === interval.start && inScope(snapshot.tenancies.find(row => row.id === receipt.tenancyId)?.propertyId, receipt.tenancyId));
   const projection = projectFinancialSchedules(snapshot, month);
+  const reversedTargets = postedReversalTargets(snapshot.ledgerTransactions);
   const schedules = new Map(snapshot.recurringSchedules.map((schedule) => [schedule.id, schedule]));
   const prior = new Map(receipts.map((receipt) => [receipt.lineageRootId, receipt]));
   const charges: PlannedCharge[] = [];
@@ -171,6 +173,7 @@ function planBilling(data: BillingData, month: IsoMonth, scope?: BillingScope): 
     // that an existing charge represents this schedule, or charge twice.
     const otherCharge = snapshot.ledgerTransactions.some((entry) => entry.kind === "charge"
       && entry.tenancyId === projected.tenancyId && entry.status !== "voided"
+      && !reversedTargets.has(entry.id)
       && (!entry.postedOn || entry.postedOn.slice(0, 7) === month || entry.dueOn?.slice(0, 7) === month)
       && (entry.chargeDefinitionId === schedule.chargeDefinitionId || !entry.category || entry.category === schedule.category)
       && !receipts.some((receipt) => receipt.ledgerTransactionId === entry.id));

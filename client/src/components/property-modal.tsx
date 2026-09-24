@@ -1,3 +1,4 @@
+import MarketingImage from "@/components/marketing-image";
 import { useState } from "react";
 import { Link } from "wouter";
 import { type Property } from "@shared/schema";
@@ -53,7 +54,7 @@ function SingleGallery({ photos, title }: { photos: string[]; title: string }) {
   return (
     <div className="relative">
       <div className="aspect-[4/3] bg-muted rounded-lg overflow-hidden">
-        <img
+        <MarketingImage
           src={photos[currentIndex]}
           alt={`${title} - Photo ${currentIndex + 1}`}
           className="w-full h-full object-cover"
@@ -389,7 +390,7 @@ function FlipProjectView({ property }: { property: Property }) {
   return (
     <div className="space-y-6">
       <div className="mb-6 aspect-[21/9] bg-muted rounded-lg overflow-hidden">
-        <img
+        <MarketingImage
           src={getPublicPropertyImage(property)}
           alt={property.name}
           className="w-full h-full object-cover"
@@ -517,7 +518,7 @@ export default function PropertyModal({ property, isOpen, onClose }: PropertyMod
           {/* Property image for sold properties */}
           {property.status === "sold" && (
             <div className="mb-6 aspect-[21/9] bg-muted rounded-lg overflow-hidden">
-              <img
+              <MarketingImage
                 src={getPublicPropertyImage(property)}
                 alt={property.name}
                 className="w-full h-full object-cover"

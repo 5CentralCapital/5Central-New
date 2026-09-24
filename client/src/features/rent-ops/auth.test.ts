@@ -95,15 +95,15 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-test('denied company scope preserves a valid session while CSRF rejection still expires it', async () => {
+for (const code of ['company_forbidden', 'report_forbidden']) test(`denied ${code} scope preserves a valid session while CSRF rejection still expires it`, async () => {
   const client = new RentOpsAuthClient({ fetchImpl: async input => {
     if (String(input) === RENT_OPS_AUTH_ROUTES.session) return response({ user, csrfToken });
-    return response({ code: String(input).endsWith('/denied') ? 'company_forbidden' : 'csrf_required' }, 403);
+    return response({ code: String(input).endsWith('/denied') ? code : 'csrf_required' }, 403);
   } });
   await client.restore();
   const denied = await client.request('/api/company/denied');
   assert.equal(denied.status, 403);
-  assert.equal((await denied.json()).code, 'company_forbidden');
+  assert.equal((await denied.json()).code, code);
   assert.equal(client.getSnapshot().status, 'authenticated');
   await assert.rejects(client.request('/api/company/csrf'), /session has ended/);
   assert.equal(client.getSnapshot().status, 'unauthenticated');

@@ -130,8 +130,12 @@ export interface RentOpsDocumentServiceOptions {
 
 const MAX_DOCUMENT_NAME = 240;
 const MAX_DOCUMENT_MIME = 120;
-// Source filenames may contain ordinary punctuation; paths/control characters remain forbidden.
-const SAFE_DOCUMENT_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._()',&\-]{0,239}$/;
+// Source filenames may contain non-ASCII characters as well as the existing
+// punctuation. Paths, control characters, and hidden/path-like names remain
+// forbidden before a filename reaches object storage. Keep this ES5-compatible
+// because the main TypeScript project leaves its target at the compiler default.
+const SAFE_DOCUMENT_NAME = /^[A-Za-z0-9\u00a0-\uFFFF][A-Za-z0-9\u00a0-\uFFFF ._()',&\-]{0,239}$/;
+const UNSAFE_DOCUMENT_NAME = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const SAFE_DOCUMENT_MIMES = new Set([
   "application/pdf",
   "image/jpeg",
@@ -454,7 +458,7 @@ function patchRow(snapshot: RentOpsSnapshot, entityType: RentOpsPatchEntityType,
 }
 
 function assertDocumentName(fileName: string): string {
-  if (typeof fileName !== "string" || fileName.length < 1 || fileName.length > MAX_DOCUMENT_NAME || !SAFE_DOCUMENT_NAME.test(fileName) || fileName.includes("..")) throw new RentOpsInvariantError("Document filename is invalid");
+  if (typeof fileName !== "string" || fileName.length < 1 || fileName.length > MAX_DOCUMENT_NAME || !SAFE_DOCUMENT_NAME.test(fileName) || UNSAFE_DOCUMENT_NAME.test(fileName) || fileName.includes("..")) throw new RentOpsInvariantError("Document filename is invalid");
   return fileName;
 }
 
@@ -804,8 +808,31 @@ export class RentOpsService {
         }
       }
     }
-    const updated: RentOpsApplicationRecord = { ...application, ...input, updatedAt: this.now().toISOString() };
-    await this.repository.saveApplication(updated);
+    // Re-read under the same application lock used by manager status writes.
+    // A bearer token may have resolved before a manager approved or declined
+    // the application; saving that stale object would otherwise restore the
+    // old status and overwrite the manager's decision.
+    const editable = {
+      ...(input.phone !== undefined ? { phone: input.phone } : {}),
+      ...(input.propertyId !== undefined ? { propertyId: input.propertyId } : {}),
+      ...(input.unitId !== undefined ? { unitId: input.unitId } : {}),
+      ...(input.rentalHistory !== undefined ? { rentalHistory: input.rentalHistory } : {}),
+      ...(input.employment !== undefined ? { employment: input.employment } : {}),
+      ...(input.householdSummary !== undefined ? { householdSummary: input.householdSummary } : {}),
+      ...(input.preferences !== undefined ? { preferences: input.preferences } : {}),
+      ...(input.voucher !== undefined ? { voucher: input.voucher } : {}),
+      ...(input.pets !== undefined ? { pets: input.pets } : {}),
+      ...(input.vehicles !== undefined ? { vehicles: input.vehicles } : {}),
+      ...(input.emergencyContact !== undefined ? { emergencyContact: input.emergencyContact } : {}),
+    };
+    const updated = await this.repository.transaction(async (repository) => {
+      const current = await repository.getApplicationById(application.id);
+      if (!current || current.resumeTokenHash !== application.resumeTokenHash) throw new RentOpsInvariantError("Application resume token invalid or expired");
+      this.assertPublicEditable(current);
+      const next: RentOpsApplicationRecord = { ...current, ...editable, updatedAt: this.now().toISOString() };
+      await repository.saveApplication(next);
+      return next;
+    }, { lockApplicationId: application.id });
     return toApplicantPublicView(await this.snapshot(), updated);
   }
 

@@ -13,6 +13,16 @@ export interface TenantPayment {
   currentLedgerId?: string; currentLedgerCents: number; ledgerRevision: number;
 }
 export interface PaymentAdjustment { paymentId: string; providerObjectId: string; kind: "refund" | "dispute"; amountCents: number; active: boolean; providerCreatedAt: number; terminal: boolean }
+/** Staff-facing exception record. Provider payloads and checkout URLs remain
+ * out of this queue; opaque IDs and adjustments are enough to investigate a
+ * held or disputed payment without exposing a tenant's payment link. */
+export interface TenantPaymentReviewView {
+  id: string; accountId: string; personId: string; tenancyId: string; propertyId: string; unitId: string;
+  requestId: string; amountCents: number; currency: "usd"; status: TenantPayment["status"];
+  expiresAt: string; createdAt: string; updatedAt: string; postedOn?: string;
+  checkoutSessionId?: string; paymentIntentId?: string;
+  currentLedgerCents: number; ledgerRevision: number; adjustments: PaymentAdjustment[];
+}
 export interface ProcessorEvent {
   id: string; type: string; created: number; live: boolean;
   paymentId?: string; paymentIntentId?: string; checkoutSessionId?: string;
@@ -35,7 +45,13 @@ export function exactPaymentTenancy(snapshot: RentOpsSnapshot, identity: Pick<Te
   return { tenancy, unit };
 }
 export function paymentIsReserved(payment: TenantPayment, now: Date): boolean {
-  return payment.status === "processing" || payment.status === "review_required" || ((payment.status === "creating" || payment.status === "pending") && payment.expiresAt > now.toISOString());
+  // A local 35-minute expiry is also the provider Checkout Session expiry,
+  // but the session is not safely reusable until Stripe confirms a terminal
+  // outcome. Keep creating/pending attempts reserved after that time; a late
+  // success is then held for review without allowing a replacement checkout
+  // to capture the same balance first.
+  void now;
+  return ["creating", "pending", "processing", "review_required"].includes(payment.status);
 }
 export function payableAccount(snapshot: RentOpsSnapshot, identity: Pick<TenantIdentity, "personId" | "tenancyId">, payments: TenantPayment[], now: Date): TenantPayableAccount {
   exactPaymentTenancy(snapshot, identity);

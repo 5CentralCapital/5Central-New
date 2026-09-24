@@ -67,7 +67,7 @@ export async function endWebsiteSession(request: SessionRequest = fetch, forget:
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+export function AuthProvider({ children, restoreSession = true }: { children: ReactNode; restoreSession?: boolean }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -95,8 +95,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    fetchUser();
-  }, [fetchUser]);
+    if (restoreSession) { setIsLoading(true); void fetchUser(); }
+    else setIsLoading(false);
+  }, [fetchUser, restoreSession]);
 
   const login = async (email: string, password: string): Promise<LoginResult> => {
     const result = await signInWebsite(email, password);

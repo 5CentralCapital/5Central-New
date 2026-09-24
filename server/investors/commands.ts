@@ -79,9 +79,11 @@ const INVESTOR_WRITE_ROLES = ["owner", "admin", "finance"] as const;
 const INVESTOR_ARCHIVE_ROLES = ["owner", "admin"] as const;
 
 export const INVESTOR_COMMAND_POLICIES: Readonly<Record<InvestorCommandKind, CommandAuthorizationPolicy>> = Object.freeze({
-  "investor.account.create": { commandKind: "investor.account.create", allowedRoles: INVESTOR_WRITE_ROLES },
-  "investor.account.update": { commandKind: "investor.account.update", allowedRoles: INVESTOR_WRITE_ROLES },
-  "investor.account.archive": { commandKind: "investor.account.archive", allowedRoles: INVESTOR_ARCHIVE_ROLES },
+  // Investor accounts are organization-wide records and carry no legal entity
+  // of their own. Entity-scoped principals must not mutate them indirectly.
+  "investor.account.create": { commandKind: "investor.account.create", allowedRoles: INVESTOR_WRITE_ROLES, requiredScope: "organization" },
+  "investor.account.update": { commandKind: "investor.account.update", allowedRoles: INVESTOR_WRITE_ROLES, requiredScope: "organization" },
+  "investor.account.archive": { commandKind: "investor.account.archive", allowedRoles: INVESTOR_ARCHIVE_ROLES, requiredScope: "organization" },
   "investor.instrument.create": { commandKind: "investor.instrument.create", allowedRoles: INVESTOR_WRITE_ROLES, requiredScope: "legal_entity" },
   "investor.instrument.update": { commandKind: "investor.instrument.update", allowedRoles: INVESTOR_WRITE_ROLES, requiredScope: "legal_entity" },
   "investor.instrument.archive": { commandKind: "investor.instrument.archive", allowedRoles: INVESTOR_ARCHIVE_ROLES, requiredScope: "legal_entity" },
@@ -557,7 +559,23 @@ async function handleCreateContractVersion(context: CommandHandlerContext<Create
   const next = await context.executor.query<{ version_no: string | number }>(`SELECT COALESCE(MAX(version_no),0)::text AS version_no FROM company_investor_contract_versions WHERE organization_id=$1 AND contract_id=$2`, [context.envelope.scope.organizationId, payload.contractId]);
   const versionNo = Number(next.rows[0]?.version_no ?? 0) + 1;
   if (!Number.isSafeInteger(versionNo) || versionNo <= 0) throw new ValidationCommandError("Investor contract version number exceeded supported range", { reason: "investor_contract_version_overflow" });
-  if (payload.status === "active") await context.executor.query(`UPDATE company_investor_contract_versions SET status='superseded' WHERE organization_id=$1 AND contract_id=$2 AND status='active'`, [context.envelope.scope.organizationId, payload.contractId]);
+  if (payload.status === "active") {
+    const active = await context.executor.query<{ id: string; effective_from: string | Date }>(
+      `SELECT id,effective_from FROM company_investor_contract_versions
+        WHERE organization_id=$1 AND contract_id=$2 AND status='active' FOR UPDATE`,
+      [context.envelope.scope.organizationId, payload.contractId],
+    );
+    const current = active.rows[0];
+    if (current) {
+      const currentEffectiveFrom = current.effective_from instanceof Date ? current.effective_from.toISOString().slice(0, 10) : String(current.effective_from).slice(0, 10);
+      if (payload.effectiveFrom <= currentEffectiveFrom) throw new ValidationCommandError("An investor contract amendment must start after the active version", { reason: "investor_contract_version_effective_date" });
+      await context.executor.query(
+        `UPDATE company_investor_contract_versions SET status='superseded',effective_to=$3
+          WHERE organization_id=$1 AND id=$2`,
+        [context.envelope.scope.organizationId, current.id, payload.effectiveFrom],
+      );
+    }
+  }
   const contractInstrument = await loadInstrument(context as unknown as CommandHandlerContext<unknown>, contract.instrumentId, false);
   const versionId = await insertContractVersion(context as unknown as CommandHandlerContext<unknown>, payload.contractId, payload, versionNo, contractInstrument.legalEntityId);
   const update = await context.executor.query<{ record_revision: number }>(`UPDATE company_investor_contracts SET status=$3,current_version_id=$4,record_revision=record_revision+1,updated_at=now() WHERE organization_id=$1 AND id=$2 AND record_revision=$5 RETURNING record_revision`, [context.envelope.scope.organizationId, payload.contractId, payload.status, payload.status === "active" ? versionId : contract.currentVersionId, contract.revision]);

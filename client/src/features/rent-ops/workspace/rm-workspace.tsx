@@ -204,7 +204,7 @@ function AuthenticatedWorkspace(){
  const heading=route.section==='tenants'?'Tenants':route.section==='properties'?(route.kind==='unit'?'Units':'Properties'):route.section==='reports'?(route.report==='occupancy'?'Availability':route.report==='rent-roll'?'Rent roll':REPORT_LABELS[route.report]):workspacePageTitle(route);
  const canRecordMoves=source==='live'&&!!businessDate;
  const reportsView=()=>reportDirectoryQuery.isLoading?<Busy label="Loading report directory…"/>:reportDirectoryQuery.error?<ErrorNotice error={reportDirectoryQuery.error} retry={()=>void reportDirectoryQuery.refetch()}/>:reportDirectory&&snapshot?<ReportsWorkspace snapshot={snapshot} filters={filters} selected={selectedReport} directory={reportDirectory} allowAllScope onSelect={report=>openReport(report)} onOpenTenant={openTenant} onOpenUnit={openUnit} onOpenProperty={openProperty}/>:<Busy label="Loading report directory…"/>;
- const needsCollections=(render:()=>ReactNode)=>()=>data.collectionsReady?render():<Busy/>;
+ const needsCollections=(render:()=>ReactNode)=>()=>data.collectionsReady?render():data.collectionError?null:<Busy/>;
  /** One renderer per canonical view; a missing section is a compile-time error. */
  const views:Record<WorkspaceSection,()=>ReactNode>={
   dashboard:()=><>{data.summary.error&&<ErrorNotice error={data.summary.error} retry={()=>void data.summary.refetch()}/>}{!data.summary.data?!data.summary.error&&<Busy label="Loading portfolio summary…"/>:<DashboardWorkspace onManageMoves={canRecordMoves?()=>setManageMoves({}):undefined} snapshot={snapshot!} filters={filters} previews={data.summary.data.reports} refreshing={data.summary.isFetching} onReport={openReport} onOpenTenant={openTenant} onOpenUnit={openUnit} onOpenProperty={openProperty}

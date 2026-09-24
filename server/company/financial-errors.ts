@@ -23,6 +23,7 @@ export function publicFinancialError(error: unknown): PublicFinancialError | und
   // A concurrent refresh or a transient token-store failure is retryable and
   // must not tell the user to reconnect a healthy connection.
   if (code === 'quickbooks_token_store' && error instanceof QuickBooksIntegrationError && error.retryable) return { status: 503, code, message: 'QuickBooks access is being renewed. Try again shortly.', retryable: true, recovery: 'retry_same_operation' };
+  if (code === 'quickbooks_oauth' && error instanceof QuickBooksIntegrationError && error.retryable) return { status: error.status === 429 ? 429 : 503, code, message: 'QuickBooks authorization is temporarily unavailable. Try again shortly.', retryable: true, recovery: 'retry_same_operation' };
   if (code === 'quickbooks_oauth' || code === 'quickbooks_unauthorized' || code === 'quickbooks_token_store') return { status: 503, code, message: 'Reconnect QuickBooks to continue.', retryable: false, recovery: 'reconnect' };
   if (code === 'accounting_capability_disabled' || code === 'quickbooks_unsupported_capability') return { status: 403, code, message: 'This QuickBooks feature is not enabled for the selected company.', retryable: false, recovery: 'review_capability' };
   if (code.endsWith('_validation')) return { status: 400, code, message: 'Check the accounting fields and selected company.', retryable: false, recovery: 'correct_input' };

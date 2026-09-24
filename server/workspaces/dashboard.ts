@@ -20,14 +20,27 @@ export async function readDashboardCompany(context: WorkspaceReadContext, asOf: 
     id: string; account_id: string; account_name: string; instrument_name: string; due_on: string; currency: string;
     total_expected_cents: unknown; known_minimum_cents: unknown; amount_complete: boolean; paid_cents: unknown;
   }>(
-    `SELECT o.id, o.account_id, a.display_name AS account_name, i.name AS instrument_name, o.due_on::text AS due_on, o.currency,
+    `WITH eligible_obligations AS (
+       SELECT o.*, ROW_NUMBER() OVER (PARTITION BY o.contract_id,o.period_month ORDER BY v.effective_from DESC,o.id DESC) AS version_rank
+         FROM company_investor_obligations o
+         JOIN company_investor_contract_versions v ON v.organization_id=o.organization_id AND v.contract_id=o.contract_id AND v.id=o.contract_version_id
+        WHERE o.organization_id=$1 AND o.legal_entity_id = ANY($2::uuid[]) AND o.due_on BETWEEN $3::date AND $4::date
+          AND v.status IN ('active','superseded','expired')
+          AND o.due_on >= v.effective_from AND (v.effective_to IS NULL OR o.due_on < v.effective_to)
+     )
+     SELECT o.id, o.account_id, a.display_name AS account_name, i.name AS instrument_name, o.due_on::text AS due_on, o.currency,
             o.total_expected_cents, o.known_minimum_cents, o.amount_complete,
-            coalesce((SELECT sum(a.allocated_cents) FROM company_investor_payment_allocations a
-                       WHERE a.organization_id = o.organization_id AND a.obligation_id = o.id), 0)::text AS paid_cents
-       FROM company_investor_obligations o
+            coalesce((SELECT sum(pa.allocated_cents) FROM company_investor_payment_allocations pa
+                       JOIN company_investor_payments pp ON pp.organization_id=pa.organization_id AND pp.id=pa.payment_id
+                       JOIN company_investor_obligations po ON po.organization_id=pa.organization_id AND po.id=pa.obligation_id
+                       JOIN company_investor_contract_versions pv ON pv.organization_id=po.organization_id AND pv.contract_id=po.contract_id AND pv.id=po.contract_version_id
+                       WHERE pa.organization_id = o.organization_id AND po.contract_id = o.contract_id AND po.period_month = o.period_month
+                         AND pv.status IN ('active','superseded','expired')
+                         AND pp.payment_on <= $3::date), 0)::text AS paid_cents
+       FROM eligible_obligations o
        JOIN company_investor_accounts a ON a.organization_id = o.organization_id AND a.id = o.account_id
        JOIN company_investor_instruments i ON i.organization_id = o.organization_id AND i.id = o.instrument_id
-      WHERE o.organization_id = $1 AND o.legal_entity_id = ANY($2::uuid[]) AND o.due_on BETWEEN $3::date AND $4::date
+      WHERE o.version_rank=1
       ORDER BY o.due_on, a.display_name, o.id LIMIT ${OBLIGATION_LIMIT + 1}`,
     [organizationId, entities, asOf, through],
   ) : { rows: [] };
@@ -111,4 +124,3 @@ export async function readDashboardCompany(context: WorkspaceReadContext, asOf: 
     },
   };
 }
-

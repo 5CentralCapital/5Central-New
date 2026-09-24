@@ -26,12 +26,13 @@ test("documents: upload (prepare + commit) -> list -> authorized download; links
     };
     const prepared = await fetch(`${app.base}/documents/uploads`, {
       method: "POST",
-      headers: { "content-type": "application/octet-stream", "x-declared-content-type": "application/pdf", "x-file-name": encodeURIComponent("certificate 2026.pdf"), "x-document-metadata": metadataHeader(input) },
+      headers: { "content-type": "application/octet-stream", "x-declared-content-type": "application/pdf", "x-file-name": encodeURIComponent("cértificate 日本語 2026.pdf"), "x-document-metadata": metadataHeader(input) },
       body: bytes,
     });
     assert.equal(prepared.status, 201, await prepared.clone().text());
     const stage = await prepared.json();
     assert.match(stage.stageId, /^company-document-stage:/);
+    assert.equal(stage.document.source.fileName, "cértificate 日本語 2026.pdf");
     const create = envelope({ action: "create", stageId: stage.stageId, input }, undefined, { organizationId, legalEntityId: fixture.entityId });
     const committed = await fetch(`${app.base}/document-commands/company_document.create`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(create) });
     assert.equal(committed.status, 200, await committed.clone().text());

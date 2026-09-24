@@ -98,10 +98,18 @@ async function safeQuery<T>(
 
 /** Adapt a pool to the narrow executor consumed by the 5Central Ops repository. */
 export function createRentOpsPoolExecutor(pool: RentOpsRuntimePool): RentOpsRuntimeDatabase {
+  let readGeneration = 0;
+  let activeWrites = 0;
   const executor: RentOpsRuntimeDatabase = {
+    readCacheVersion: () => activeWrites ? undefined : readGeneration,
     async query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<{ rows: T[] }> {
-      const result = await safeQuery<Record<string, unknown>>(pool.query.bind(pool), text, values);
-      return { rows: result.rows as T[] };
+      // Conservatively treat CTEs and unknown statements as writes too.
+      const writes = !/^\s*(SELECT|SHOW|EXPLAIN)\b/i.test(text);
+      if (writes) { activeWrites++; readGeneration++; }
+      try {
+        const result = await safeQuery<Record<string, unknown>>(pool.query.bind(pool), text, values);
+        return { rows: result.rows as T[] };
+      } finally { if (writes) { activeWrites--; readGeneration++; } }
     },
 
     async readTableBatch(tables) {
@@ -133,6 +141,7 @@ export function createRentOpsPoolExecutor(pool: RentOpsRuntimePool): RentOpsRunt
         },
       };
       let began = false;
+      if (!options.readOnly) { activeWrites++; readGeneration++; }
       // A connection whose transaction state is unknown must never be reused:
       // the next borrower could run inside a stale, never-committed transaction.
       let discard = false;
@@ -155,6 +164,7 @@ export function createRentOpsPoolExecutor(pool: RentOpsRuntimePool): RentOpsRunt
         throw error;
       } finally {
         client.release(discard);
+        if (!options.readOnly) { activeWrites--; readGeneration++; }
       }
     },
 

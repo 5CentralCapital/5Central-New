@@ -190,3 +190,36 @@ test('large row sets are paged with a stable cursor', async () => {
   const last = pageRows(rows, 200, '400');
   assert.equal(last.rows.length, 50); assert.equal(last.page.nextCursor, null);
 });
+
+test('compact catalog discovers exact schemas and preserves write scope and validation', async () => {
+  const ctx = await connect([READ_SCOPE], {catalogMode:'compact'});
+  try {
+    const listed = await ctx.client.listTools();
+    assert.deepEqual(listed.tools.map(tool => tool.name), ['search','fetch','find_ops_tools','call_ops_read','call_ops_write']);
+    assert.ok(JSON.stringify(listed).length < 14000);
+    const found = await ctx.client.callTool({name:'find_ops_tools',arguments:{query:'update_tenant_contact'}});
+    assert.equal((found.structuredContent as any).data.tools[0].name,'update_tenant_contact');
+    const person = (await ctx.service.snapshot()).people[0];
+    const args = {id:person.id,revision:person.recordRevision ?? 1,patch:{phone:'555-0111'}};
+    const denied = await ctx.client.callTool({name:'call_ops_write',arguments:{tool:'update_tenant_contact',arguments:args}});
+    assert.equal(denied.isError,true);
+    assert.match(String(denied._meta?.['mcp/www_authenticate']),/insufficient_scope/);
+    assert.equal((await ctx.client.callTool({name:'call_ops_read',arguments:{tool:'update_tenant_contact',arguments:args}})).isError,true);
+    const report = await ctx.client.callTool({name:'call_ops_read',arguments:{tool:'get_report',arguments:{report:'deposits',filters:{}}}});
+    assert.notEqual(report.isError,true);
+    assert.equal((await ctx.client.callTool({name:'call_ops_read',arguments:{tool:'get_report',arguments:{report:'deposits',unexpected:'no'}}})).isError,true);
+    assert.equal((await ctx.client.callTool({name:'call_ops_read',arguments:{tool:'call_ops_read',arguments:{}}})).isError,true);
+    assert.notEqual((await ctx.service.snapshot()).people[0].phone,'555-0111');
+  } finally { await ctx.close(); }
+});
+
+test('transport scope requirements use the actual registered tool, including compact writes', async () => {
+  const {requiredMcpToolScopes} = await import('./tools');
+  const server = createRentOpsMcpServer(new RentOpsService(createSyntheticRentOpsRepository()),{subject:'admin',scopes:[READ_SCOPE]},config.resource,{catalogMode:'compact'});
+  try {
+    assert.deepEqual(requiredMcpToolScopes(server,{method:'tools/call',params:{name:'update_tenant_contact'}}),[READ_SCOPE,WRITE_SCOPE]);
+    assert.deepEqual(requiredMcpToolScopes(server,{method:'tools/call',params:{name:'call_ops_write'}}),[READ_SCOPE,WRITE_SCOPE]);
+    assert.deepEqual(requiredMcpToolScopes(server,{method:'tools/call',params:{name:'get_report'}}),[READ_SCOPE]);
+    assert.deepEqual(requiredMcpToolScopes(server,{method:'tools/list'}),[]);
+  } finally { await server.close(); }
+});

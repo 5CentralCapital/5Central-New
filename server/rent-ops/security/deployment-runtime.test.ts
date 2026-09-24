@@ -55,9 +55,9 @@ const databaseEnv = {
   RENT_OPS_SESSION_SECRET: "synthetic-test-secret-at-least-32-characters",
 };
 
-async function invoke(middleware: RequestHandler, method = "POST", path = "/applications/start", ip = "192.0.2.1") {
+async function invoke(middleware: RequestHandler, method = "POST", path = "/applications/start", ip = "192.0.2.1", body?: unknown) {
   const state = { status: 200, body: undefined as unknown, headers: {} as Record<string, string>, nextCalls: 0 };
-  const req = { method, path, ip, originalUrl: `/api/rent-ops/public${path}`, get() { return "untrusted-forwarded-value"; } } as unknown as Request;
+  const req = { method, path, ip, body, originalUrl: `/api/rent-ops/public${path}`, get() { return "untrusted-forwarded-value"; } } as unknown as Request;
   const res = {
     set(name: string, value: string) { state.headers[name] = value; return this; },
     status(code: number) { state.status = code; return this; },
@@ -96,7 +96,32 @@ test("database mode only stores canonical address hashes and constant route buck
   assert.equal(settings.length, 4);
   assert.match(settings[2].bucket_key, /^client:[a-f0-9]{64}:all$/);
   assert.equal(settings[3].request_limit, 5);
-  assert.equal(settings[3].window_seconds, 600);
+  assert.equal(settings[1].request_limit, 100);
+  assert.equal(settings[1].window_seconds, 86400);
+  assert.equal(settings[3].window_seconds, 86400);
+});
+
+test("application starts use a hashed recipient cooldown in addition to the daily cap", async () => {
+  const values: string[] = [];
+  const executor = {
+    async query(_sql: string, parameters: unknown[]) {
+      values.push(String(parameters[0]));
+      return { rows: [{ allowed: true, retry_after_seconds: "1" }] };
+    },
+  } as RentOpsQueryExecutor;
+  const middleware = createRentOpsPublicRateLimiter({ env: databaseEnv, executor });
+  assert.equal((await invoke(middleware, "POST", "/applications/start", "192.0.2.1", { email: "Applicant@Example.test" })).nextCalls, 1);
+  assert.equal((await invoke(middleware, "POST", "/applications/start", "198.51.100.1", { email: "applicant@example.test" })).nextCalls, 1);
+  const first = JSON.parse(values[0]) as Array<Record<string, unknown>>;
+  const second = JSON.parse(values[1]) as Array<Record<string, unknown>>;
+  assert.equal(first[1].request_limit, 100);
+  assert.equal(first[1].window_seconds, 86400);
+  assert.equal(first[3].request_limit, 1);
+  assert.equal(first[3].window_seconds, 900);
+  assert.match(String(first[3].bucket_key), /^client:[a-f0-9]{64}:start$/);
+  assert.equal(first[3].bucket_key, second[3].bucket_key);
+  assert.notEqual(first[2].bucket_key, second[2].bucket_key);
+  assert.equal(String(first[3].bucket_key).includes("Applicant"), false);
 });
 
 test("database mode enforces route/method allowlist before querying and ignores forged forwarded addresses", async () => {
@@ -121,7 +146,7 @@ test("database mode returns Retry-After on limits and fails closed on query fail
     { async query() { throw new Error("secret-driver-diagnostics"); } },
     { async query() { return { rows: [] }; } },
     { async query() { return { rows: [{ allowed: "true", retry_after_seconds: 1 }] }; } },
-    { async query() { return { rows: [{ allowed: true, retry_after_seconds: 99999 }] }; } },
+    { async query() { return { rows: [{ allowed: true, retry_after_seconds: 999999 }] }; } },
   ]) {
     const result = await invoke(createRentOpsPublicRateLimiter({ env: databaseEnv, executor: executor as RentOpsQueryExecutor }));
     assert.equal(result.status, 503);

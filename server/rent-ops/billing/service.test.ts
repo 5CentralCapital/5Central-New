@@ -146,6 +146,17 @@ test("unknown amounts, partial months, and existing manual charges block posting
   }
 });
 
+test("a posted reversal frees a recurring obligation for replacement billing", () => {
+  const data = fixture();
+  data.snapshot.ledgerTransactions.push(
+    { id: "manual-charge", propertyId: "p1", unitId: "u1", tenancyId: "tenancy-u1", personId: "person-u1", kind: "charge", status: "posted", category: "base_rent", amountCents: 125000, postedOn: "2025-05-01", dueOn: "2025-05-01" } as any,
+    { id: "manual-charge-reversal", propertyId: "p1", unitId: "u1", tenancyId: "tenancy-u1", personId: "person-u1", kind: "reversal", status: "posted", category: "base_rent", amountCents: 125000, postedOn: "2025-05-02", reversalOfId: "manual-charge" } as any,
+  );
+  const preview = previewRecurringBilling(data, "2025-05");
+  assert.equal(preview.readyCount, 1);
+  assert.equal(preview.blockedCount, 0);
+});
+
 test("inactive schedules do not bill; subsidy and deposits use separate workflows", () => {
   const data = fixture(); data.snapshot.recurringSchedules[0].active = false;
   assert.equal(previewRecurringBilling(data, "2025-05").readyCount, 0);

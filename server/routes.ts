@@ -39,6 +39,7 @@ function coerceDates(body: Record<string, any>): Record<string, any> {
 }
 
 export async function registerRoutes(app: Express, options: {
+  onRuntimeClose?: (close: () => Promise<void>) => void;
   onTenantPaymentService?: (service: TenantPaymentService) => void;
   /** lane-b-accounting: raw-body webhooks registered before express.json() reach the runtime database here. */
   onRuntimeExecutor?: (executor: import("./rent-ops/repositories/postgres").RentOpsQueryExecutor) => void;
@@ -59,6 +60,7 @@ export async function registerRoutes(app: Express, options: {
     environment: process.env.NODE_ENV,
     sharedExecutor: process.env.NODE_ENV === "production" ? undefined : createRentOpsPoolExecutor(pool),
   });
+  options.onRuntimeClose?.(() => rentOpsRuntimeDatabase.close());
   const rentOpsRepository = new PostgresRentOpsRepository(rentOpsRuntimeDatabase);
   options.onStartupStage?.("runtime_schema");
   if (process.env.NODE_ENV === "production") await rentOpsRepository.assertReady();
@@ -94,7 +96,7 @@ export async function registerRoutes(app: Express, options: {
   const tenantPaymentService = createTenantPaymentService({ executor: rentOpsRuntimeDatabase, rentOpsRepository, env: process.env });
   options.onTenantPaymentService?.(tenantPaymentService);
   options.onStartupStage?.("tenant_routes");
-  registerTenantPaymentRoutes(app, { service: tenantPaymentService, requireTenant: tenantPortal.requireTenant, getTenantIdentity: tenantPortal.getTenantIdentity });
+  registerTenantPaymentRoutes(app, { service: tenantPaymentService, requireTenant: tenantPortal.requireTenant, getTenantIdentity: tenantPortal.getTenantIdentity, requireAdmin: requireRentOpsAdmin });
   registerRentOpsBillingRoutes(app, { service: recurringBillingService, requireAdmin: requireRentOpsAdmin });
 
   // Admin dashboard API routes

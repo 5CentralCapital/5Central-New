@@ -57,5 +57,29 @@ test("dashboard obligations net reversed payments instead of counting them as pa
     for (const obligation of detail.obligations) {
       if (paid.has(obligation.id)) assert.equal(paid.get(obligation.id), obligation.totalRecordedCents, `obligation ${obligation.periodMonth}`);
     }
+
+    await execute("investor.payment.record", envelope({ accountId, instrumentId, contractId, obligationId: march, kind: "principal", method: "manual", paymentOn: "2026-03-02", periodMonth: "2026-03-01", currency: "USD", amounts: amounts("200") }));
+    const asOfDashboard = dashboardCompanySchema.parse(await port.dashboard(actorId, organizationId, "2026-02-01"));
+    const asOfPaid = new Map(asOfDashboard.obligations.items.map(item => [item.obligationId, item.paidCents]));
+    assert.equal(asOfPaid.get(march), "300", "dashboard paid totals must use the dashboard cutoff date");
+
+    const amendment = await execute("investor.contract.version.create", envelope({
+      contractId,
+      status: "active",
+      effectiveFrom: "2026-03-01",
+      signedOn: "2026-03-01",
+      terms: {
+        schedule: "monthly", paymentDay: 1, monthEndRule: "calendar_day_or_month_end", annualRate: null, preferredReturnRate: null, returnMultiple: null,
+        fixedPaymentCents: "1000", principalPaymentCents: null, interestPaymentCents: null, returnOfCapitalCents: null, distributionCents: null, balloonCents: null,
+        originalPrincipalCents: "100000", maturityTotalCents: null, fixedProfitCents: null, maturityPayoffCents: null, thirdPartyInstallmentCents: null,
+        investorSpreadCents: null, unknownComponentKinds: [], interestOnly: false, dayCount: "actual_365",
+      },
+      sourceDocumentIds: [documentId],
+    }));
+    assert.ok(amendment.affectedRecordIds[1]);
+    await execute("investor.obligation.generate", envelope({ instrumentId, contractId, fromMonth: "2026-03-01", throughMonth: "2026-04-01" }));
+    const amendedDashboard = dashboardCompanySchema.parse(await port.dashboard(actorId, organizationId, "2026-02-01"));
+    assert.equal(amendedDashboard.obligations.items.length, 2, "dashboard must show one obligation per amended period");
+    assert.equal(new Set(amendedDashboard.obligations.items.map((item) => item.dueOn)).size, 2);
   } finally { await fixture.close(); }
 });

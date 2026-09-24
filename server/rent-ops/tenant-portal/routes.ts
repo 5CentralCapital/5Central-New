@@ -14,6 +14,7 @@ import type { TenantIdentity, TenantSessionResponse } from "../../../shared/tena
 import type { RentOpsQueryExecutor } from "../repositories/postgres";
 import { hashTenantPassword, validTenantPassword, verifyTenantPassword } from "./passwords";
 import { presentTenantHome, resolveTenantBinding } from "./presentation";
+import { nowIsoDate } from "../domain/dates";
 import { PostgresTenantAccountStore, type TenantAccountRecord, type TenantAccountStore } from "./store";
 
 declare module "express-session" {
@@ -220,7 +221,7 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
   const getTenantHome = async (identity: TenantIdentity) => {
     const snapshot = await operationalSnapshot();
     const transfers = await options.repository.readPortalTransferHistory?.(identity.id) ?? [];
-    const home = presentTenantHome(snapshot, identity, now().toISOString().slice(0, 10), transfers);
+    const home = presentTenantHome(snapshot, identity, nowIsoDate(now()), transfers);
     if (!home) return home;
     // A positive metadata label alone must not advertise a downloadable file.
     const available = await Promise.all(home.leaseFiles.map(async file => {

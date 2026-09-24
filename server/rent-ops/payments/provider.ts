@@ -21,7 +21,8 @@ export function normalizeStripeEvent(event: Stripe.Event): ProcessorEvent {
     result.state='adjustment'; result.adjustment={providerObjectId:o.id,kind:'refund',amountCents:o.amount,active:true,terminal:true};
   } else if (event.type.startsWith('charge.dispute.')) {
     // A dispute is a hold until Stripe confirms a win. Never credit on an open dispute.
-    result.state='adjustment'; result.adjustment={providerObjectId:o.id,kind:'dispute',amountCents:o.amount,active:o.status!=='won',terminal:['won','lost'].includes(o.status)};
+    const terminal = ['won','lost','warning_closed'].includes(o.status);
+    result.state='adjustment'; result.adjustment={providerObjectId:o.id,kind:'dispute',amountCents:o.amount,active:!terminal,terminal};
   }
   return result;
 }

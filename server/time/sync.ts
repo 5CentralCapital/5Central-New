@@ -1,5 +1,5 @@
-import { isoTimestampSchema } from "../../shared/company";
-import { timeConnectionScopeSchema, timeSyncStreamSchema, type TimeConnectionScope, type TimeCoverage, type TimeSyncPort } from "../../shared/time";
+import { isoDateSchema, isoTimestampSchema } from "../../shared/company";
+import { timeConnectionScopeSchema, timeSyncOptionsSchema, timeSyncStreamSchema, type TimeConnectionScope, type TimeCoverage, type TimeSyncOptions, type TimeSyncPort } from "../../shared/time";
 import { AccountingError } from "../accounting/errors";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { normalizeTimeDeleted, normalizeTimeEntry, normalizeTimeJobcode, normalizeTimeUser, type NormalizedDelete, type NormalizedTimeEntry, type NormalizedTimeJobcode, type NormalizedTimeUser } from "./normalize";
@@ -26,6 +26,12 @@ function maxModified(items: readonly Record<string, unknown>[]): string | null {
 }
 function scopeOf(scope: TimeConnectionScope): TimeConnectionScope { return timeConnectionScopeSchema.parse(scope); }
 
+function operatingDate(now: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
+  const values = Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, part.value]));
+  return isoDateSchema.parse(`${values.year}-${values.month}-${values.day}`);
+}
+
 interface FetchedStream { readonly stream: Stream; readonly items: readonly Record<string, unknown>[]; readonly deleted: readonly Record<string, unknown>[]; readonly watermark: string | null; readonly modifiedSince: string | null; readonly complete: boolean; readonly reason: string | null; }
 
 async function withSavepoint<T>(executor: RentOpsQueryExecutor, name: string, work: () => Promise<T>): Promise<T> {
@@ -41,11 +47,21 @@ async function withSavepoint<T>(executor: RentOpsQueryExecutor, name: string, wo
   }
 }
 
-async function fetchAll(client: QuickBooksTimeClient, stream: Stream, accessToken: string, checkpoint: { modifiedSince: string | null } | null, maxPages: number): Promise<FetchedStream> {
-  const items: Record<string, unknown>[] = []; let page = 1; let more = false; let reason: string | null = null; const since = overlap(checkpoint?.modifiedSince ?? null) ?? null;
+async function fetchAll(client: QuickBooksTimeClient, stream: Stream, accessToken: string, checkpoint: { modifiedSince: string | null } | null, options: TimeSyncOptions, today: string): Promise<FetchedStream> {
+  const items: Record<string, unknown>[] = []; let page = 1; let more = false; let reason: string | null = null; const maxPages = options.maxPages ?? 50; const since = overlap(checkpoint?.modifiedSince ?? null) ?? null;
+  const rangeBased = stream === "timesheets" || stream === "timesheets_deleted";
+  const initialRead = rangeBased && since === null;
+  if (initialRead && options.startDate === undefined) throw new AccountingError("accounting_validation", "QuickBooks Time initial sync requires a start date");
+  const endDate = options.endDate ?? today;
   do {
     if (page > maxPages) { reason = "Provider pagination limit reached; checkpoint was not advanced"; break; }
-    const response: TimeProviderPage = await client.getPage(stream, { accessToken, page, limit: 200, modifiedSince: since ?? undefined });
+    const response: TimeProviderPage = await client.getPage(stream, {
+      accessToken,
+      page,
+      limit: 200,
+      modifiedSince: since ?? undefined,
+      ...(initialRead ? { startDate: options.startDate, endDate } : {}),
+    });
     items.push(...Object.values(response.results)); more = response.more; page += 1;
   } while (more);
   // An empty page keeps the prior checkpoint; a null watermark would restart the stream from the beginning.
@@ -65,13 +81,17 @@ export function createTimeSyncService(options: { readonly executor: RentOpsQuery
       const scope = scopeOf(scopeInput); const response = await client.getPage("users", { accessToken, page: 1, limit: 1 });
       return { providerCompanyId: scope.providerCompanyId, userCount: Object.keys(response.results).length };
     },
-    async sync(scopeInput, input = {}) {
-      const scope = scopeOf(scopeInput); const maxPages = input.maxPages ?? 50; if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 10_000) throw new AccountingError("accounting_validation", "QuickBooks Time maxPages is invalid");
+    async sync(scopeInput, inputInput = {}) {
+      const scope = scopeOf(scopeInput); const input = timeSyncOptionsSchema.parse(inputInput);
+      const checkpoints = await Promise.all(STREAMS.map(async stream => ({ stream, checkpoint: await rootStore.readCheckpoint(scope, stream) })));
+      const needsInitialRange = checkpoints.some(({ stream, checkpoint }) => (stream === "timesheets" || stream === "timesheets_deleted") && (checkpoint?.modifiedSince ?? null) === null);
+      if (needsInitialRange && input.startDate === undefined) throw new AccountingError("accounting_validation", "QuickBooks Time initial sync requires a start date");
       const accessToken = await options.getAccessToken(scope); const runId = await rootStore.beginSyncRun(scope, `sync:${now().toISOString()}`);
         const fetched: FetchedStream[] = []; const conflicts: string[] = [];
         let hadPartialStream = false;
       try {
-        for (const stream of STREAMS) { const checkpoint = await rootStore.readCheckpoint(scope, stream); fetched.push(await fetchAll(client, stream, accessToken, checkpoint, maxPages)); }
+        const today = operatingDate(now());
+        for (const { stream, checkpoint } of checkpoints) fetched.push(await fetchAll(client, stream, accessToken, checkpoint, input, today));
         const transaction = options.executor.transaction;
         if (!transaction) throw new AccountingError("accounting_configuration", "QuickBooks Time sync requires an atomic SQL transaction");
         await transaction(async executor => {

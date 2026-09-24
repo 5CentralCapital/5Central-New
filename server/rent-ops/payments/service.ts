@@ -4,7 +4,7 @@ import { tenantCheckoutSchema, type TenantPaymentsView, type TenantCheckoutResul
 import type { RentOpsRepository, RentOpsLedgerTransaction } from '../../../shared/rent-ops-contracts';
 import type { RentOpsQueryExecutor } from '../repositories/postgres';
 import { PostgresTenantPaymentStore, type TenantPaymentStore } from './store';
-import { businessDate, eligibleCharges, exactPaymentTenancy, payableAccount, TenantPaymentError, type TenantPayment, type ProcessorEvent } from './model';
+import { businessDate, eligibleCharges, exactPaymentTenancy, payableAccount, TenantPaymentError, type TenantPayment, type TenantPaymentReviewView, type ProcessorEvent } from './model';
 import { stripeProvider, type PaymentProvider } from './provider';
 export class TenantPaymentService {
   constructor(readonly store:TenantPaymentStore, readonly provider?:PaymentProvider, readonly now=()=>new Date()) {}
@@ -12,6 +12,20 @@ export class TenantPaymentService {
     const snapshot=await this.store.snapshot(), payments=await this.store.list(identity.personId);
     const account=payableAccount(snapshot,identity,payments,this.now());
     return {available:!!this.provider,...(!this.provider?{reason:'stripe_not_configured' as const}:{}),accounts:[account],payments:payments.map(({id,tenancyId,amountCents,currency,status,createdAt,postedOn})=>({id,tenancyId,amountCents,currency,status,createdAt,postedOn}))};
+  }
+  async reviewQueue(): Promise<TenantPaymentReviewView[]> {
+    const payments = await this.store.reviewQueue();
+    return Promise.all(payments.map(async (payment) => ({
+      id: payment.id, accountId: payment.accountId, personId: payment.personId, tenancyId: payment.tenancyId,
+      propertyId: payment.propertyId, unitId: payment.unitId, requestId: payment.requestId,
+      amountCents: payment.amountCents, currency: payment.currency, status: payment.status,
+      expiresAt: payment.expiresAt, createdAt: payment.createdAt, updatedAt: payment.updatedAt,
+      ...(payment.postedOn ? { postedOn: payment.postedOn } : {}),
+      ...(payment.checkoutSessionId ? { checkoutSessionId: payment.checkoutSessionId } : {}),
+      ...(payment.paymentIntentId ? { paymentIntentId: payment.paymentIntentId } : {}),
+      currentLedgerCents: payment.currentLedgerCents, ledgerRevision: payment.ledgerRevision,
+      adjustments: await this.store.adjustments(payment.id),
+    })));
   }
   async checkout(identity:TenantIdentity, raw:unknown):Promise<TenantCheckoutResult> {
     if(!this.provider) throw new TenantPaymentError('stripe_not_configured',503);
@@ -46,8 +60,16 @@ export class TenantPaymentService {
         if(p.status==='review_required') {await store.receipt({id:event.id,eventType:event.type,paymentId:p.id,providerCreatedAt:event.created,outcome:'review_required',receivedAt:this.now().toISOString()});return;}
 
         const mismatch=(event.paymentId && event.paymentId!==p.id)||(p.paymentIntentId && event.paymentIntentId && p.paymentIntentId!==event.paymentIntentId)||(p.checkoutSessionId && event.checkoutSessionId && p.checkoutSessionId!==event.checkoutSessionId);
+        // A successful event for a failed/cancelled or expired reservation is
+        // evidence that the provider captured money after the local checkout
+        // window. Hold it for staff review instead of posting a second credit
+        // when a tenant has already started a replacement checkout.
+        const lateSuccess = event.state === 'success' && (
+          p.status === 'failed' || p.status === 'cancelled' ||
+          ((p.status === 'creating' || p.status === 'pending') && p.expiresAt <= this.now().toISOString())
+        );
         const invalidAdjustment=event.adjustment && (!Number.isSafeInteger(event.adjustment.amountCents) || event.adjustment.amountCents<=0 || event.adjustment.amountCents>p.amountCents);
-        if(mismatch || invalidAdjustment || (event.state==='success' && (event.amountCents!==p.amountCents || event.currency!=='usd'))) {p.status='review_required';outcome='review_required';}
+        if(mismatch || lateSuccess || invalidAdjustment || (event.state==='success' && (event.amountCents!==p.amountCents || event.currency!=='usd'))) {p.status='review_required';outcome='review_required';}
         else {
           p.paymentIntentId??=event.paymentIntentId;p.checkoutSessionId??=event.checkoutSessionId;outcome='processed';
           if(event.adjustment) { const a=event.adjustment; const old=(await store.adjustments(p.id)).find(x=>x.providerObjectId===a.providerObjectId); if(Number.isSafeInteger(a.amountCents)&&a.amountCents>0&&a.amountCents<=p.amountCents && (!old || (!old.terminal && old.providerCreatedAt<=event.created))) await store.adjustment({...a,paymentId:p.id,providerCreatedAt:event.created}); }

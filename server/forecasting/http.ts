@@ -1,4 +1,4 @@
-import express, { type Express, type RequestHandler } from "express";
+import type { Express, RequestHandler } from "express";
 import { z } from "zod";
 import { commandEnvelopeSchema, organizationIdSchema } from "../../shared/company";
 import {
@@ -12,8 +12,9 @@ import {
 } from "../../shared/forecasting/contracts";
 import { attestTransport, loadAuthenticatedPrincipal } from "../company/authorization";
 import { ForbiddenCommandError, ValidationCommandError } from "../company/commands/errors";
-import { companyReadHandler, companyWebActor } from "../company/http";
+import { companyHttpError, companyReadHandler, companyWebActor } from "../company/http";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
+import { forecastWorkbookBodyParser } from "../request-body-parsers";
 import type { ForecastingPort } from "./port";
 import { parseWorkbookCashflow } from "./workbook-import";
 
@@ -36,8 +37,6 @@ const explainQuery = z.object({
 const compareQuery = z.object({ a: forecastSnapshotIdSchema, b: forecastSnapshotIdSchema, limit: z.coerce.number().int().min(1).max(200).default(50) }).strict();
 const previewBody = z.object({ assumptionVersion: z.number().int().positive().optional(), assumptions: z.record(z.string(), z.unknown()).optional() }).strict();
 const workbookQuery = z.object({ fileName: z.string().trim().min(1).max(200) }).strict();
-/** Workbook bytes are posted raw (the global JSON parser ignores non-JSON bodies). */
-const workbookBytes = express.raw({ type: ["application/octet-stream", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "text/csv"], limit: "10mb" });
 
 /** Browser routes; they call the same port as the MCP tools. */
 export function registerForecastingRoutes(app: Express, options: { executor: RentOpsQueryExecutor; requireAdmin: RequestHandler; forecasting: ForecastingPort }): void {
@@ -46,6 +45,15 @@ export function registerForecastingRoutes(app: Express, options: { executor: Ren
   const principalFor = (actorId: string, organizationId: string, connection: RentOpsQueryExecutor = executor) =>
     loadAuthenticatedPrincipal(connection, { actorId, organizationId, role: "admin" });
   const base = "/api/company/:organizationId";
+  /** Keep the large raw parser behind both session and company-grant checks. */
+  const authorizeWorkbookRead: RequestHandler = (req, res, next) => {
+    void (async () => {
+      const organizationId = organizationIdSchema.parse(req.params.organizationId);
+      const principal = await principalFor(companyWebActor(req), organizationId);
+      await forecasting.list(principal, { scope: { organizationId }, limit: 1 });
+      next();
+    })().catch(error => companyHttpError(error, res));
+  };
 
   app.get(`${base}/forecast-scenarios`, requireAdmin, companyReadHandler(async (req, res) => {
     const organizationId = organizationIdSchema.parse(req.params.organizationId);
@@ -95,13 +103,10 @@ export function registerForecastingRoutes(app: Express, options: { executor: Ren
     res.json(await forecasting.compare(principal, { scope: { organizationId }, snapshotA: query.a, snapshotB: query.b, limit: query.limit }));
   }));
   // Read-only workbook discovery: parse an uploaded Cashflow sheet into an assumption draft. Nothing is saved.
-  app.post(`${base}/forecast-workbook-drafts`, requireAdmin, workbookBytes, companyReadHandler(async (req, res) => {
+  app.post(`${base}/forecast-workbook-drafts`, requireAdmin, authorizeWorkbookRead, forecastWorkbookBodyParser, companyReadHandler(async (req, res) => {
     const organizationId = organizationIdSchema.parse(req.params.organizationId);
     const { fileName } = workbookQuery.parse(req.query);
     if (!Buffer.isBuffer(req.body) || req.body.length === 0) throw new ValidationCommandError("Upload a workbook or CSV file", { reason: "forecast_workbook_missing" });
-    const principal = await principalFor(companyWebActor(req), organizationId);
-    // Same organization-level finance grant as scenario reads.
-    await forecasting.list(principal, { scope: { organizationId }, limit: 1 });
     res.json(await parseWorkbookCashflow(req.body, { fileName }));
   }));
   app.post(`${base}/forecast-commands/:commandKind`, requireAdmin, companyReadHandler(async (req, res) => {

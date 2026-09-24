@@ -2,10 +2,18 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { isIP } from "node:net";
 import type { Request, RequestHandler } from "express";
 import type { RentOpsQueryExecutor } from "../repositories/postgres";
+import { normalizeEmailRecipient } from "../email/recipient-policy";
 
 /** Header written by the reviewed edge/WAF integration, never by the browser. */
 export const RENT_OPS_EDGE_ATTESTATION_HEADER = "x-rent-ops-edge-attestation" as const;
 const DEFAULT_ATTESTATION_MAX_AGE_SECONDS = 90;
+
+/** A public application start sends a magic link, so admission is deliberately
+ * much tighter than read-only listing traffic. These values are shared with
+ * the database limiter and kept named for review and regression tests. */
+export const APPLICATION_START_GLOBAL_DAILY_LIMIT = 100;
+export const APPLICATION_START_RECIPIENT_COOLDOWN_SECONDS = 15 * 60;
+export const APPLICATION_START_RECIPIENT_LIMIT = 1;
 
 export interface RentOpsEdgeAttestationOptions {
   secret?: string;
@@ -22,7 +30,7 @@ export interface RentOpsPublicRateLimiterOptions extends RentOpsEdgeAttestationO
 const PUBLIC_ROUTE_LIMITS = Object.freeze({
   "GET /application-options": { bucket: "listings", seconds: 60, global: 300, client: 30 },
   "GET /listings": { bucket: "listings", seconds: 60, global: 300, client: 30 },
-  "POST /applications/start": { bucket: "start", seconds: 600, global: 100, client: 5 },
+  "POST /applications/start": { bucket: "start", seconds: 86_400, global: APPLICATION_START_GLOBAL_DAILY_LIMIT, client: 5 },
   "GET /applications/resume": { bucket: "resume", seconds: 60, global: 300, client: 30 },
   "PATCH /applications/resume": { bucket: "save", seconds: 60, global: 300, client: 30 },
   "POST /applications/resume/certify": { bucket: "certify", seconds: 60, global: 120, client: 10 },
@@ -105,6 +113,18 @@ function trustedClientAddress(req: Request): string | undefined {
   return address;
 }
 
+function recipientHashForApplicationStart(req: Request, secret: string, routeKey: string): string | undefined {
+  if (routeKey !== "POST /applications/start" || !req.body || typeof req.body !== "object") return undefined;
+  try {
+    const email = normalizeEmailRecipient((req.body as Record<string, unknown>).email);
+    return createHmac("sha256", secret).update(`rent-ops-public-rate-limit:recipient:${email}`).digest("hex");
+  } catch {
+    // Invalid bodies are still covered by the IP and global buckets; the
+    // recipient key is only used after the route's email contract is met.
+    return undefined;
+  }
+}
+
 function createDatabasePublicRateLimiter(executor: RentOpsQueryExecutor, secret: string): RequestHandler {
   return async (req, res, next) => {
     const method = req.method.toUpperCase() === "HEAD" ? "GET" : req.method.toUpperCase();
@@ -115,16 +135,18 @@ function createDatabasePublicRateLimiter(executor: RentOpsQueryExecutor, secret:
       const address = trustedClientAddress(req);
       if (!address) throw new Error("public_client_address_unavailable");
       const hash = createHmac("sha256", secret).update(`rent-ops-public-rate-limit:${address}`).digest("hex");
+      const recipientHash = recipientHashForApplicationStart(req, secret, key);
       const settings = [
         { bucket_key: "global:all", window_seconds: 60, request_limit: 600, is_global: true },
         { bucket_key: `global:${rule.bucket}`, window_seconds: rule.seconds, request_limit: rule.global, is_global: true },
         { bucket_key: `client:${hash}:all`, window_seconds: 60, request_limit: 60, is_global: false },
-        { bucket_key: `client:${hash}:${rule.bucket}`, window_seconds: rule.seconds, request_limit: rule.client, is_global: false },
+        { bucket_key: `client:${recipientHash ?? hash}:${rule.bucket}`, window_seconds: recipientHash ? APPLICATION_START_RECIPIENT_COOLDOWN_SECONDS : rule.seconds, request_limit: recipientHash ? APPLICATION_START_RECIPIENT_LIMIT : rule.client, is_global: false },
       ];
       const result = await executor.query<{ allowed: boolean; retry_after_seconds: number | string }>(CONSUME_PUBLIC_LIMIT_SQL, [JSON.stringify(settings)]);
       const decision = result.rows[0];
       const retryAfter = Number(decision?.retry_after_seconds);
-      if (result.rows.length !== 1 || typeof decision?.allowed !== "boolean" || !Number.isFinite(retryAfter) || retryAfter < 1 || retryAfter > 600) {
+      const maxRetryAfter = Math.max(...Object.values(PUBLIC_ROUTE_LIMITS).map((route) => route.seconds));
+      if (result.rows.length !== 1 || typeof decision?.allowed !== "boolean" || !Number.isFinite(retryAfter) || retryAfter < 1 || retryAfter > maxRetryAfter) {
         throw new Error("public_limiter_result_invalid");
       }
       if (decision.allowed) { next(); return; }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import type { QuickAction } from "../rent-ops/form-payload";
+import { PaymentReviewPanel } from "../rent-ops/payment-review-panel";
 import { ManagerIncomeActions } from "../rent-ops/manager-income-actions";
 import { RecurringBillingPanel } from "../rent-ops/recurring-billing-panel";
 import type { AdminSnapshot, ViewFilters } from "../rent-ops/types";
@@ -60,6 +61,7 @@ export function Collections({ identity, snapshot, filters, businessDate, readOnl
     {panel === "billing" && (selected.length > 1
       ? <p className="ws-note" role="status">Select one property to post its recurring charges.</p>
       : <RecurringBillingPanel businessDate={businessDate} propertyId={filters.propertyId === "all" ? undefined : filters.propertyId} onPosted={onSaved} />)}
+    {!readOnly && <PaymentReviewPanel tenants={snapshot.tenants} />}
     <Section title="Balances due" id="collections-due" count={dueRows ? `${dueRows.length} · ${formatMeasure(dueTotal!.total, dueTotal!.complete)}` : undefined}>
       {delinquency.error ? <ErrorState error={delinquency.error} onRetry={() => void delinquency.refetch()} /> : !dueRows ? <Loading label="Loading balances…" />
         : <DataGrid<RentalRow> rows={dueRows} columns={dueColumns} getRowKey={(row, index) => `${row.personId}:${index}`} emptyMessage="No balances due." storageKey="ws-collections-due" />}

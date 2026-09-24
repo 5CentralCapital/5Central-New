@@ -2,6 +2,7 @@ import express, { type RequestHandler } from 'express';
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { privatePortalHtml } from './applicant-page-security';
+import { applyPublicPageMetadata } from './public-page-metadata';
 
 interface ManifestChunk { file: string; name?: string; isDynamicEntry?: boolean; imports?: string[]; css?: string[]; }
 type BuildManifest = Record<string, ManifestChunk>;
@@ -77,6 +78,6 @@ export function createPageShell(publicDir: string): (url: string) => string {
     const extra = /^\/ops(?:\/|$)/.test(parsed.pathname) ? variants[parsed.searchParams.get('ui')==='classic'?'classic':'ops']
       : /^\/tenant(?:\/|$)/.test(parsed.pathname) ? variants.tenant
       : /^\/apply(?:\/|$)/.test(parsed.pathname) ? variants.apply : '';
-    return privatePortalHtml(html,url).replace('</head>',`${extra}</head>`);
+    return privatePortalHtml(applyPublicPageMetadata(html,url),url).replace('</head>',`${extra}</head>`);
   };
 }

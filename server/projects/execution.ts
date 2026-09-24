@@ -123,6 +123,23 @@ function exactSourceKey(reference: FinancialSourceReference): string {
 
 const PROJECT_COST_CLASSIFICATIONS = new Set(["expense", "cogs", "capitalized_cost"]);
 
+/**
+ * Project cost bindings point at transaction streams, while aggregate QBO
+ * coverage also includes unrelated streams such as Accounts and Deposits.
+ * Keep the project read tied to the stream that can contain its bound line.
+ * Unknown object types deliberately fall back to aggregate coverage so an
+ * unclassified source cannot be treated as complete without evidence.
+ */
+function projectCostStream(objectType: string): string | undefined {
+  switch (objectType) {
+    case "Purchase": return "transactions.purchase";
+    case "Bill": return "transactions.bill";
+    case "BillPayment": return "transactions.billpayment";
+    case "Deposit": return "transactions.deposit";
+    default: return undefined;
+  }
+}
+
 async function isEligibleProjectCostLine(
   costContext: FinancialProviderCostContextPort,
   line: FinancialSourceLineResolution,
@@ -161,10 +178,22 @@ export async function resolveProjectFinanceActuals(
   costContext: FinancialProviderCostContextPort,
   input: { organizationId: string; projectId: string; asOf?: IsoDate },
 ): Promise<ProjectFinanceActualReadResult> {
-  const bindingRows = await bindings.listProjectBindings(input);
-  const scopes = new Map<string, FinancialSourceScope>();
-  for (const binding of bindingRows) scopes.set(financialSourceScopeKey(sourceScope(binding.source)), sourceScope(binding.source));
-  const coverages = await Promise.all(Array.from(scopes.values()).map((scope) => source.readCoverage(scope)));
+  // Released bindings are historical audit records, not unresolved current
+  // cost links. Keeping them in the coverage calculation leaves every later
+  // project read partial after an operator intentionally releases a line.
+  const bindingRows = (await bindings.listProjectBindings(input)).filter((binding) => binding.bindingStatus !== "released");
+  const coverageQueries = new Map<string, { readonly scope: FinancialSourceScope; readonly stream?: string }>();
+  for (const binding of bindingRows) {
+    const scope = sourceScope(binding.source);
+    const stream = projectCostStream(binding.source.objectType);
+    const key = `${financialSourceScopeKey(scope)}\u0000${stream ?? "aggregate"}`;
+    coverageQueries.set(key, stream === undefined ? { scope } : { scope, stream });
+  }
+  // A project should inherit uncertainty from the QBO stream that can contain
+  // its bound line. The aggregate read remains the company-wide release and
+  // validation signal; this narrower read prevents an unrelated open object
+  // in another stream from making every project partial.
+  const coverages = await Promise.all(Array.from(coverageQueries.values()).map(({ scope, stream }) => source.readCoverage(scope, stream)));
   let hasUnresolvedBinding = bindingRows.some((binding) => binding.bindingStatus !== "verified" || !binding.eligible);
   const results = await Promise.all(bindingRows.map(async (binding) => {
     if (binding.bindingStatus !== "verified" || !binding.eligible) return null;

@@ -110,3 +110,41 @@ test("browser HTTP and MCP read and write the same forecast records", async () =
     await demo.close();
   }
 });
+
+test("large workbook drafts are parsed only after the session and company grant", async () => {
+  const demo = await createCompanyDemoApp();
+  const listener = demo.app.listen(0, "127.0.0.1");
+  await new Promise<void>(resolve => listener.once("listening", resolve));
+  const base = `http://127.0.0.1:${(listener.address() as AddressInfo).port}/api/company/${fixture.organizationId}`;
+  const csv = Buffer.from(`Category,2027-01-04,2027-01-11\nWater,-100,-100\n${"x".repeat(130 * 1024)}`, "utf8");
+  try {
+    const accepted = await fetch(`${base}/forecast-workbook-drafts?fileName=large.csv`, {
+      method: "POST",
+      headers: { "content-type": "text/csv", "x-rent-ops-csrf": COMPANY_DEMO_CSRF_TOKEN },
+      body: csv,
+    });
+    assert.equal(accepted.status, 200, await accepted.clone().text());
+    assert.equal((await accepted.json()).fileName, "large.csv");
+
+    await demo.database.db.query("UPDATE company_access_grants SET revoked_at=now() WHERE organization_id=$1 AND actor_id=$2", [fixture.organizationId, fixture.actorId]);
+    // This exceeds the route-specific limit. A revoked session must fail its
+    // grant check first, rather than making the parser buffer and reject it.
+    const overLimit = Buffer.alloc(10 * 1024 * 1024 + 1, 120);
+    const denied = await fetch(`${base}/forecast-workbook-drafts?fileName=large.csv`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream", "x-rent-ops-csrf": COMPANY_DEMO_CSRF_TOKEN },
+      body: overLimit,
+    });
+    assert.equal(denied.status, 403, await denied.clone().text());
+
+    const anonymous = await fetch(`${base}/forecast-workbook-drafts?fileName=large.csv`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: overLimit,
+    });
+    assert.equal(anonymous.status, 403, await anonymous.clone().text());
+  } finally {
+    await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+    await demo.close();
+  }
+});

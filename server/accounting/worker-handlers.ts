@@ -44,7 +44,14 @@ function parse<T extends z.ZodTypeAny>(schema: T, value: unknown): z.output<T> {
 function providerFailure(error: unknown): never {
   if (isQuickBooksIntegrationError(error)) {
     if (error.code === "quickbooks_rate_limited") throw new RetryLaterJobError("quickbooks_rate_limited", "QuickBooks asked this company to slow down", error.retryAfterMs ?? 60_000);
-    if (error.code === "quickbooks_unauthorized" || error.code === "quickbooks_oauth") throw new PermanentJobError("qbo_needs_reconnect", "QuickBooks needs to be reconnected for this company");
+    if (error.code === "quickbooks_oauth") {
+      // A token endpoint 429/5xx is a provider outage or throttle, not proof
+      // that the stored grant is invalid. Only invalid_grant is converted to
+      // the reconnect path by the token manager.
+      if (error.retryable) throw new RetryLaterJobError(error.status === 429 ? "quickbooks_rate_limited" : "quickbooks_oauth_retry", "QuickBooks authorization is temporarily unavailable", error.retryAfterMs ?? 60_000);
+      throw new PermanentJobError("qbo_needs_reconnect", "QuickBooks needs to be reconnected for this company");
+    }
+    if (error.code === "quickbooks_unauthorized") throw new PermanentJobError("qbo_needs_reconnect", "QuickBooks needs to be reconnected for this company");
     if (error.code === "quickbooks_unsupported_capability" || error.code === "quickbooks_validation") throw new PermanentJobError(error.code, error.message);
   }
   if (error instanceof AccountingError && (error.code === "accounting_capability_disabled" || error.code === "accounting_validation" || error.code === "accounting_configuration")) {
@@ -90,7 +97,18 @@ export function createAccountingJobHandlers(options: AccountingJobHandlerOptions
         }
         const sync = qbo.createProviderSync(scope);
         try {
-          await sync.bootstrapRead();
+          // CompanyInfo is the one-time read capability proof. Re-reading it
+          // on every queued job made an otherwise healthy connection fail when
+          // Intuit re-rendered the record or temporarily returned it missing;
+          // the durable capability evidence gates access to syncChanges. This
+          // gate is stable capability evidence, not a claim that mutable
+          // CompanyInfo display metadata is current; an explicit reconnect or
+          // metadata probe must refresh that snapshot without blocking sync.
+          const capabilityGate = qbo.capabilityGate;
+          const readCapabilityEnabled = capabilityGate?.isEnabled
+            ? await capabilityGate.isEnabled(scope, "accounting.read")
+            : false;
+          if (!readCapabilityEnabled) await sync.bootstrapRead();
           const result = await sync.syncChanges({ forceFullReplay: payload.forceFullReplay === true });
           if (result.status === "failed") providerFailure(result.error ?? new AccountingError("accounting_unavailable", "QuickBooks sync did not complete"));
           if (payload.events.length > 0 && (result.status !== "complete" || result.anchored !== true)) {
