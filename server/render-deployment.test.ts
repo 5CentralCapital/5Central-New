@@ -71,7 +71,7 @@ test("Render production and staging Blueprints use paid services and CI-gated de
       assert.match(service, /region:\s*virginia/);
       assert.match(service, new RegExp(`branch:\\s*${branch}\\b`));
       assert.match(service, /numInstances:\s*1/);
-      assert.match(service, /buildCommand:\s*npm ci && npm run build/);
+      assert.match(service, /buildCommand:\s*npm ci --include=dev && npm run build/);
       assert.match(service, /autoDeployTrigger:\s*checksPass/);
       assert.match(service, new RegExp(`fromGroup:\\s*${group}\\b`));
       assert.match(service, /key:\s*NODE_VERSION\s*\n\s*value:\s*["']22["']/);
