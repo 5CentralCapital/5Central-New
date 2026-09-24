@@ -20,11 +20,12 @@ export default function Founder() {
   
   const totalUnits = allProperties.reduce((sum, p) => sum + p.units, 0);
   
-  const averageIRR = allProperties.length > 0 ? 
-    allProperties.reduce((sum, p) => sum + parseFloat(p.irr || "0"), 0) / allProperties.length : 0;
+  const realized = allProperties.filter(p => p.status === "sold");
+  const averageIRR = realized.length > 0 ?
+    realized.reduce((sum, p) => sum + parseFloat(p.irr || "0"), 0) / realized.length : 0;
     
-  const averageEquityMultiple = allProperties.length > 0 ?
-    allProperties.reduce((sum, p) => sum + parseFloat(p.equityMultiple || "0"), 0) / allProperties.length : 0;
+  const averageEquityMultiple = realized.length > 0 ?
+    realized.reduce((sum, p) => sum + parseFloat(p.equityMultiple || "0"), 0) / realized.length : 0;
 
   const formatCurrency = (value: number) => {
     if (value >= 1000000) {
@@ -89,7 +90,7 @@ export default function Founder() {
                 <div className="mt-8">
                   <h3 className="text-xl font-semibold text-primary mb-4">What's Next</h3>
                   <p>
-                    I'm scaling a Tampa-first, operations-led platform focused on C/C+ assets with clear management and OpEx wins. Near-term goal: $7.1M AUM by year-end 2025. Medium term: $50M by 2030 through steady, repeatable 10–20-unit acquisitions and fast turns. Long term: $1B by 2050, built on disciplined cash recycling and 1031s.
+                    I'm scaling a Tampa-first, operations-led platform focused on C/C+ assets with clear management and OpEx wins. The current growth plan focuses on repeatable 10–20-unit acquisitions and fast turns. Long term: $1B by 2050, built on disciplined cash recycling and 1031s.
                   </p>
                 </div>
 
@@ -120,13 +121,13 @@ export default function Founder() {
                   <Card className="bg-secondary rounded-lg p-4 text-center">
                     <CardContent className="p-0">
                       <div className="text-2xl font-bold text-primary" data-testid="founder-stat-units">{totalUnits}</div>
-                      <div className="text-sm text-gray-600">Total Units</div>
+                      <div className="text-sm text-gray-600">Units, Current + Sold</div>
                     </CardContent>
                   </Card>
                   <Card className="bg-secondary rounded-lg p-4 text-center">
                     <CardContent className="p-0">
                       <div className="text-2xl font-bold text-primary" data-testid="founder-stat-assets">{formatCurrency(totalPortfolioValue)}</div>
-                      <div className="text-sm text-gray-600">Portfolio Value</div>
+                      <div className="text-sm text-gray-600">Current Values + Realized Exits</div>
                     </CardContent>
                   </Card>
                 </div>
@@ -136,13 +137,13 @@ export default function Founder() {
                   <Card className="bg-secondary rounded-lg p-4 text-center">
                     <CardContent className="p-0">
                       <div className="text-2xl font-bold text-primary" data-testid="founder-stat-irr">{averageIRR.toFixed(1)}%</div>
-                      <div className="text-sm text-gray-600">Average IRR</div>
+                      <div className="text-sm text-gray-600">Avg Realized IRR</div>
                     </CardContent>
                   </Card>
                   <Card className="bg-secondary rounded-lg p-4 text-center">
                     <CardContent className="p-0">
                       <div className="text-2xl font-bold text-primary" data-testid="founder-stat-multiple">{averageEquityMultiple.toFixed(1)}x</div>
-                      <div className="text-sm text-gray-600">Avg Equity Multiple</div>
+                      <div className="text-sm text-gray-600">Avg Realized Equity Multiple</div>
                     </CardContent>
                   </Card>
                 </div>

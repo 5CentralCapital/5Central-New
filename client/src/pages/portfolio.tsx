@@ -137,7 +137,7 @@ export default function Portfolio() {
   const totalRealizedProfits = soldProperties.reduce((sum, p) => {
     const acquisitionPrice = parseFloat(p.acquisitionPrice);
     const salePrice = parseFloat(p.salePrice || "0");
-    return sum + Math.max(0, salePrice - acquisitionPrice);
+    return sum + salePrice - acquisitionPrice;
   }, 0);
 
   const ctProperties = allProperties.filter(p => p.state === 'CT');
@@ -497,7 +497,7 @@ export default function Portfolio() {
                   <div>
                     <h3 className="text-2xl font-serif font-medium text-foreground">Successful Exits</h3>
                     <p className="text-sm text-muted-foreground mt-1">
-                      {soldProperties.length} realized investments with ${(totalRealizedProfits / 1000).toFixed(0)}K in total profits
+                      {soldProperties.length} realized investments with ${(totalRealizedProfits / 1000).toFixed(0)}K in gross sale-price appreciation
                     </p>
                   </div>
                 </div>
@@ -660,7 +660,7 @@ export default function Portfolio() {
                     <div className="text-2xl md:text-3xl font-serif font-medium text-warm-brass mb-1" data-testid="sold-total-profits">
                       ${(totalRealizedProfits / 1000).toFixed(0)}K
                     </div>
-                    <div className="text-sm text-muted-foreground">Total Realized Profits</div>
+                    <div className="text-sm text-muted-foreground">Gross Sale-Price Appreciation</div>
                     <div className="stat-bar mt-3">
                       <div className="stat-bar-fill" style={{ width: '78%' }} />
                     </div>

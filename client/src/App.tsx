@@ -1,5 +1,6 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Switch, Route, useLocation } from "wouter";
+import { publicPageMetadataForPath } from "@shared/public-page-metadata";
 import { AuthProvider } from "@/contexts/auth-context";
 import { ACCOUNT_ENTRY_ROUTES } from "@/components/account-entry";
 import ProtectedRoute from "@/components/protected-route";
@@ -63,11 +64,14 @@ function Router() {
 }
 
 function AppContent({ surface }: { surface: AppSurface }) {
+  const [path] = useLocation();
+  const showInvestmentNotice = ["/", "/founder", "/vision", "/portfolio", "/investor", "/flips"].includes(path) || path.startsWith("/portfolio/");
   return (
     <>
       {surface === "site" && <Suspense fallback={null}><Navigation /></Suspense>}
       {(surface === "site" || surface === "manager") && <Suspense fallback={null}><Toaster /></Suspense>}
       <Suspense fallback={<div role="status" className="p-6 text-sm">Loading…</div>}><Router /></Suspense>
+      {showInvestmentNotice && <footer className="border-t border-border bg-background px-6 py-8 text-sm text-muted-foreground"><div className="mx-auto max-w-5xl"><p>For information only. This website is not an offer to sell or a solicitation to buy securities. Any investment is subject to its offering documents. Investments can lose value, including the full amount invested. Historical results do not assure future returns. Projections and targets are estimates and may not be achieved.</p><a className="mt-3 inline-block underline" href="/legal/privacy">Privacy policy</a></div></footer>}
     </>
   );
 }
@@ -75,6 +79,10 @@ function AppContent({ surface }: { surface: AppSurface }) {
 function App() {
   const [location] = useLocation();
   const surface = appSurfaceForPath(location);
+  useEffect(() => {
+    const metadata = publicPageMetadataForPath(location);
+    if (metadata) document.title = metadata.title;
+  }, [location]);
   // These self-contained portals use their own account and form state. Avoid
   // downloading staff query, tooltip and toast libraries for their first page.
   if (surface === "tenant" || surface === "applicant") return <AppContent surface={surface} />;
