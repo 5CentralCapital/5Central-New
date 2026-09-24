@@ -10,16 +10,28 @@ export const ADMIN_OAUTH_CALLBACK = `${ADMIN_OAUTH_ORIGIN}/api/rent-ops/auth/oau
 export const ADMIN_OAUTH_EMAIL = "michael@5central.capital";
 /** The Render staging web service's own hostname (no custom domain). */
 export const STAGING_ADMIN_OAUTH_ORIGIN = "https://fivecentral-ops-staging-web.onrender.com";
-export const STAGING_RENDER_SERVICE_NAME = "5central-ops-staging-web";
+/** Render service identity for the reviewed staging service. */
+export const STAGING_RENDER_SERVICE_ID = "srv-daq6i3p42hec738g647g";
 /**
  * The staging origin is accepted only inside that exact Render service, which
  * Render identifies through variables it sets itself, and never with
  * QuickBooks production configured. Production cannot opt into it.
  */
 export function isStagingRenderService(env: NodeJS.ProcessEnv): boolean {
+  const externalHostname = env.RENDER_EXTERNAL_HOSTNAME?.trim() || (() => {
+    const externalUrl = env.RENDER_EXTERNAL_URL?.trim();
+    if (!externalUrl) return undefined;
+    try {
+      const parsed = new URL(externalUrl);
+      if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) return undefined;
+      return parsed.host;
+    } catch {
+      return undefined;
+    }
+  })();
   return env.RENDER === "true"
-    && env.RENDER_SERVICE_NAME === STAGING_RENDER_SERVICE_NAME
-    && env.RENDER_EXTERNAL_HOSTNAME === new URL(STAGING_ADMIN_OAUTH_ORIGIN).host
+    && env.RENDER_SERVICE_ID === STAGING_RENDER_SERVICE_ID
+    && externalHostname === new URL(STAGING_ADMIN_OAUTH_ORIGIN).host
     && env.QBO_ENVIRONMENT !== "production";
 }
 export function managerOAuthOrigin(env: NodeJS.ProcessEnv): string {

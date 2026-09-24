@@ -141,8 +141,9 @@ provider when that domain is attached.
 The staging Blueprint sets
 `RENT_OPS_ADMIN_OAUTH_ORIGIN=https://fivecentral-ops-staging-web.onrender.com`.
 The app accepts that origin only when Render's own variables identify the
-process as the `5central-ops-staging-web` service on that hostname
-(`RENDER=true`, `RENDER_SERVICE_NAME`, `RENDER_EXTERNAL_HOSTNAME`) and
+reviewed staging service on that hostname
+(`RENDER=true`, `RENDER_SERVICE_ID=srv-daq6i3p42hec738g647g`, and
+`RENDER_EXTERNAL_URL` or the provider hostname variable) and
 `QBO_ENVIRONMENT` is not `production` (`server/admin-oauth.ts`). Every other
 `onrender.com` hostname, including production's, is still rejected. Add
 `https://fivecentral-ops-staging-web.onrender.com/api/rent-ops/auth/oauth/callback`
