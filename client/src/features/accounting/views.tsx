@@ -216,15 +216,13 @@ function settlementPageTotals(items: readonly PmSettlementSummary[]) {
     collected: summarizeAmounts(items.map(item => ({ currency: item.currency, amountCents: item.grossCollectionsCents }))),
     costs: summarizeAmounts(items.map(item => ({ currency: item.currency, amountCents: item.pmCostsCents }))),
     remitted: summarizeAmounts(items.map(item => ({ currency: item.currency, amountCents: item.ownerRemittanceCents }))),
-    held: summarizeAmounts(items.map(item => ({ currency: item.currency, amountCents: item.closingHeldCents }))),
   };
-  const lookup = (totals: readonly { readonly currency: string; readonly totalCents: string | null }[], currency: string): string | null => totals.find(item => item.currency === currency)?.totalCents ?? "0";
+  const lookup = (totals: readonly { readonly currency: string; readonly totalCents: string | null }[], currency: string): string | null => totals.find(item => item.currency === currency)?.totalCents ?? null;
   return currencies.map(currency => ({
     currency,
     collectedCents: lookup(fields.collected, currency),
     costsCents: lookup(fields.costs, currency),
     remittedCents: lookup(fields.remitted, currency),
-    heldCents: lookup(fields.held, currency),
   }));
 }
 
@@ -327,7 +325,7 @@ export function PmSettlementsView({ api, organizationId, legalEntityId }: { read
             <span className="accounting-meta">{monthLabel(item.periodStart)} · {item.managerName}</span>
             <span className="accounting-record-figures"><span>{formatCents(item.grossCollectionsCents, item.currency)} collected</span><StatePill tone={SETTLEMENT_TONE[item.state]}>{SETTLEMENT_LABEL[item.state]}</StatePill></span>
           </button></li>)}</ul>
-          <div className="accounting-card-footer" aria-label="Page totals"><div><strong>Page totals</strong>{pageTotals.map(total => <div key={total.currency} className="accounting-meta">{total.currency}: {formatCents(total.collectedCents, total.currency)} collected · {formatCents(total.costsCents, total.currency)} PM costs · {formatCents(total.remittedCents, total.currency)} remitted · {formatCents(total.heldCents, total.currency)} held</div>)}</div></div>
+          <div className="accounting-card-footer" aria-label="Page totals"><div><strong>Page totals</strong>{pageTotals.map(total => <div key={total.currency} className="accounting-meta">{total.currency}: {formatCents(total.collectedCents, total.currency)} collected · {formatCents(total.costsCents, total.currency)} PM costs · {formatCents(total.remittedCents, total.currency)} remitted</div>)}</div></div>
           <nav className="accounting-pagination" aria-label="Pages">
             <button type="button" className="accounting-button" disabled={!cursors.length} onClick={() => setCursors(cursors.slice(0, -1))}>Previous</button>
             <button type="button" className="accounting-button" disabled={!list.data.nextCursor} onClick={() => list.data?.nextCursor && setCursors([...cursors, list.data.nextCursor])}>Next</button>
