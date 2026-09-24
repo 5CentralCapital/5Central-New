@@ -297,6 +297,24 @@ test("finance bindings use reserved allocation and downgrade stale or ineligible
   const held = await resolveProjectFinanceActuals(source, bindings, unknownAccountContext, { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
   assert.equal(held.coverage, "partial");
   assert.equal(held.actuals.length, 0);
+
+  const refundLine = financialSourceLineResolutionSchema.parse({ ...line, direction: "credit", flow: "incoming" });
+  const refundSource = { ...source, async resolveLine() { return refundLine; } };
+  const refund = await resolveProjectFinanceActuals(refundSource, bindings, costContextForLine(refundLine), { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
+  assert.equal(refund.coverage, "complete");
+  assert.equal(refund.actuals[0]?.amountCents, "-2500");
+  const refundHeld = await resolveProjectFinanceActuals(refundSource, bindings, unknownAccountContext, { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
+  assert.equal(refundHeld.coverage, "partial");
+  assert.equal(refundHeld.actuals.length, 0);
+  const withReleased: ProjectFinanceBindingSource = {
+    async listProjectBindings(input) {
+      const active = await bindings.listProjectBindings(input);
+      return [...active, projectFinanceBindingSchema.parse({ ...active[0], id: "52000000-0000-4000-8000-000000000011", bindingStatus: "released", eligible: false })];
+    },
+  };
+  const afterCorrection = await resolveProjectFinanceActuals(source, withReleased, costContextForLine(line), { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
+  assert.equal(afterCorrection.coverage, "complete");
+  assert.equal(afterCorrection.actuals.length, 1);
 });
 
 test("execution create commands persist through one idempotent company command path", async () => {
@@ -442,7 +460,7 @@ test("execution create commands persist through one idempotent company command p
   }
 });
 
-test("finance binding commands require current verified source context and release the central reservation", async () => {
+for (const isRefund of [false, true]) test(`finance binding commands reserve and release ${isRefund ? "refund" : "cost"} source amounts`, async () => {
   const fixture = await createSyntheticCompanyDatabase();
   try {
     await fixture.db.query(
@@ -501,6 +519,9 @@ test("finance binding commands require current verified source context and relea
       settlement: { state: "unknown", settledOn: null, settledAmountCents: null },
       watermark: coverage.watermark,
     });
+    if (isRefund) {
+      Object.assign(line, { direction: "credit", flow: "incoming" });
+    }
     const source: FinancialSourceReadPort = {
       async resolveLine() { return line; },
       async readCoverage() { return coverage; },
@@ -529,7 +550,12 @@ test("finance binding commands require current verified source context and relea
     const store = createProjectFinanceBindingStore(fixture.executor);
     const bindings = await store.listProjectBindings({ organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
     assert.equal(bindings[0]?.bindingStatus, "verified");
-    const projectRevision = Number(create.resultingRevisions.find((item) => String(item.recordId) === PROJECT_ID)?.revision);
+    let projectRevision = Number(create.resultingRevisions.find((item) => String(item.recordId) === PROJECT_ID)?.revision);
+    if (isRefund) {
+      const draw = await executeProjectExecutionCommand(fixture.executor, "project.draw_request.create", envelope({ projectId: PROJECT_ID, periodFrom: "2026-09-01", periodTo: "2026-09-21", retainagePercent: "0", currency: "USD" }, projectRevision), options);
+      projectRevision = Number(draw.resultingRevisions.find((item) => String(item.recordId) === PROJECT_ID)?.revision);
+      await assert.rejects(() => executeProjectExecutionCommand(fixture.executor, "project.draw_request.item.create", envelope({ drawRequestId: String(draw.affectedRecordIds[0]), sourceType: "actual", sourceId: bindingId, requestedCents: "2500", eligibleCents: "2500", retainageEligible: false, retainageCents: "0" }, projectRevision), { ...options, financeFactory: () => ({ source, allocations, costContext }) }), /refund cannot fund a draw/);
+    }
     await executeProjectExecutionCommand(fixture.executor, "project.finance_binding.release", envelope({ bindingId }, projectRevision), { ...options, financeFactory: () => ({ source, allocations, costContext }) });
     assert.equal(reserved, BigInt(0));
     const released = await store.listProjectBindings({ organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });

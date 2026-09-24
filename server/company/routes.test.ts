@@ -58,13 +58,14 @@ test('web and Codex share saved projects, exact costs, replay protection and cur
     await fixture.database.db.query("INSERT INTO company_access_grants(id,organization_id,actor_id,role) VALUES ($1,$2,'oauth:synthetic-admin','admin')", [randomUUID(), company.organizationId]);
     const projects = createCompanyProjectPort(fixture.database.executor);
     mcp = createRentOpsMcpServer(new RentOpsService(createSyntheticRentOpsRepository()), { subject: 'synthetic-admin', scopes: [READ_SCOPE, WRITE_SCOPE] }, 'https://app.example.test/mcp', {
-      company: { executor: fixture.database.executor, projects },
+      company: { executor: fixture.database.executor, projects, properties: fixture.services.properties },
     });
     client = new Client({ name: 'company-test', version: '1' });
     const [a,b] = InMemoryTransport.createLinkedPair();
     await mcp.connect(a); await client.connect(b);
     const tools = await client.listTools();
     assert.ok(tools.tools.some(tool => tool.name === 'project_draft_cost_create'));
+    assert.ok(tools.tools.some(tool => tool.name === 'property_setup'));
     const replay = await client.callTool({ name: 'project_create', arguments: { command: create } });
     assert.notEqual(replay.isError, true, JSON.stringify(replay));
     assert.deepEqual(replay.structuredContent?.data, receipt);
@@ -90,6 +91,60 @@ test('web and Codex share saved projects, exact costs, replay protection and cur
     assert.equal((await fixture.database.db.query<{ count: number }>('SELECT count(*)::int AS count FROM company_projects')).rows[0].count, 1);
   } finally {
     await client?.close(); await mcp?.close();
+    await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+    await fixture.close();
+  }
+});
+
+test('property setup atomically creates a mapped property without units and fences duplicate slugs', async () => {
+  const fixture = await createCompanyDemoApp();
+  const listener = fixture.app.listen(0, '127.0.0.1');
+  await new Promise<void>(resolve => listener.once('listening', resolve));
+  const origin = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
+  const base = `${origin}/api/company/${company.organizationId}`;
+  const post = (body: unknown) => fetch(`${base}/property-commands/property.setup`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-rent-ops-csrf': 'rent-ops-demo-csrf-token-local-only-20260817' },
+    body: JSON.stringify(body),
+  });
+  const setup = {
+    operationId: randomUUID(),
+    idempotencyKey: randomUUID(),
+    scope: { organizationId: company.organizationId, legalEntityId: company.entityId },
+    payload: {
+      name: 'Synthetic flip setup', slug: 'synthetic-flip-setup',
+      address: { line1: '123 Synthetic Way', city: 'Tampa', state: 'fl', postalCode: '33602' },
+      propertyType: 'single_family', state: 'active', operatingContact: null, effectiveFrom: '2024-01-01',
+    },
+  };
+  try {
+    const response = await post(setup);
+    assert.equal(response.status, 200, await response.clone().text());
+    const receipt = await response.json();
+    assert.equal(receipt.affectedRecordIds.length, 2);
+    const propertyId = receipt.affectedRecordIds[0];
+    const mappingId = receipt.affectedRecordIds[1];
+    const property = await fixture.database.db.query<{ slug: string; state_status: string; property_type: string }>('SELECT slug, state_status, property_type FROM rent_ops_properties WHERE id=$1', [propertyId]);
+    assert.deepEqual(property.rows, [{ slug: 'synthetic-flip-setup', state_status: 'active', property_type: 'single_family' }]);
+    const mapping = await fixture.database.db.query<{ id: string; effective_from: string }>('SELECT id, effective_from::text FROM company_property_entity_periods WHERE id=$1 AND organization_id=$2 AND legal_entity_id=$3 AND property_id=$4', [mappingId, company.organizationId, company.entityId, propertyId]);
+    assert.deepEqual(mapping.rows, [{ id: mappingId, effective_from: '2024-01-01' }]);
+    assert.equal((await fixture.database.db.query<{ count: string }>('SELECT count(*)::text AS count FROM rent_ops_units WHERE property_id=$1', [propertyId])).rows[0]?.count, '0');
+    assert.deepEqual(await (await post(setup)).json(), receipt);
+    const duplicate = await post({ ...setup, operationId: randomUUID(), idempotencyKey: randomUUID() });
+    assert.equal(duplicate.status, 409);
+
+    const racePayload = { ...setup.payload, name: 'Synthetic race property', slug: 'synthetic-race-property' };
+    const [raceA, raceB] = await Promise.all([
+      post({ ...setup, operationId: randomUUID(), idempotencyKey: randomUUID(), payload: racePayload }),
+      post({ ...setup, operationId: randomUUID(), idempotencyKey: randomUUID(), payload: racePayload }),
+    ]);
+    assert.deepEqual([raceA.status, raceB.status].sort((a, b) => a - b), [200, 409]);
+
+    const propertyScoped = await post({ ...setup, operationId: randomUUID(), idempotencyKey: randomUUID(), scope: { ...setup.scope, propertyId: company.propertyId }, payload: { ...setup.payload, slug: 'property-scope-rejected' } });
+    assert.equal(propertyScoped.status, 403);
+    const missingEntity = await post({ ...setup, operationId: randomUUID(), idempotencyKey: randomUUID(), scope: { organizationId: company.organizationId }, payload: { ...setup.payload, slug: 'missing-entity-rejected' } });
+    assert.equal(missingEntity.status, 403);
+  } finally {
     await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
     await fixture.close();
   }

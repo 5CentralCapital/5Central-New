@@ -1,19 +1,22 @@
 import type { Express, Request, RequestHandler, Response } from "express";
 import { z } from "zod";
-import { legalEntityIdSchema, organizationIdSchema } from "../../shared/company";
+import { ACCOUNTING_PURPOSE_COMMAND_KINDS, accountingPurposeCommandPayloadSchemas, accountingPurposeScopeQuerySchema } from "../../shared/accounting";
+import { commandEnvelopeSchema, legalEntityIdSchema, organizationIdSchema } from "../../shared/company";
 import type { FinancialSourceReadPort } from "../../shared/accounting";
 import type { AccountingServices } from "./index";
-import { loadAuthenticatedPrincipal, authorizeCompanyRead } from "../company/authorization";
+import { attestTransport, loadAuthenticatedPrincipal, authorizeCompanyRead } from "../company/authorization";
 import { companyReadHandler, companyWebActor } from "../company/http";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { AccountingError } from "./errors";
 import { QuickBooksIntegrationError } from "../integrations/quickbooks/errors";
 import type { QboProviderMirrorKind } from "./mirror-store";
 import { hashQuickBooksSessionBinding } from "./oauth-state";
+import { ForbiddenCommandError } from "../company/commands/errors";
 
 const environmentSchema = z.enum(["sandbox", "production"]);
 const realmSchema = z.string().regex(/^\d{1,32}$/);
 const mirrorKindSchema = z.enum(["accounts", "vendors", "customers", "employees"]);
+const purposeMappingQuerySchema = accountingPurposeScopeQuerySchema.omit({ organizationId: true });
 const callbackQuerySchema = z.object({ state: z.string(), code: z.string().optional(), realmId: realmSchema.optional(), error: z.string().optional(), error_description: z.string().max(2_000).optional() }).strict();
 
 function browserSessionBinding(request: unknown): string {
@@ -190,6 +193,12 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
     const items = await authorizedRead(executor, request, organizationId, query.legalEntityId, transaction => services.mirror.forExecutor(transaction).listProviderMirrors({ organizationId, legalEntityId: query.legalEntityId, environment: query.environment, realmId: query.realmId }, query.kind as QboProviderMirrorKind));
     response.json({ items });
   }));
+  app.get("/api/company/:organizationId/accounting/qbo/purpose-mappings", requireAdmin, companyReadHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const query = purposeMappingQuerySchema.parse(request.query);
+    const items = await authorizedRead(executor, request, organizationId, query.legalEntityId, transaction => services.purposeMappings.forExecutor(transaction).listPurposeMappings({ provider: "qbo", organizationId, legalEntityId: query.legalEntityId, environment: query.environment, realmId: query.realmId }, query.providerAccountId));
+    response.json({ items });
+  }));
   app.get("/api/company/:organizationId/accounting/qbo/transactions", requireAdmin, companyReadHandler(async (request, response) => {
     const organizationId = organizationIdSchema.parse(request.params.organizationId);
     const query = z.object({ legalEntityId: legalEntityIdSchema, environment: environmentSchema, realmId: realmSchema, from: z.string().date().optional(), through: z.string().date().optional(), limit: z.coerce.number().int().min(1).max(100).default(50), cursor: z.string().min(1).max(512).optional() }).strict().parse(request.query);
@@ -206,6 +215,16 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
     const sync = services.qbo.createProviderSync({ organizationId, legalEntityId: body.legalEntityId, environment: body.environment, realmId: body.realmId });
     await sync.bootstrapRead();
     response.json(await sync.catchUp({ maxPages: body.maxPages }));
+  }));
+  app.post("/api/company/:organizationId/accounting/qbo/purpose-commands/:commandKind", requireAdmin, companyReadHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const kind = z.enum(ACCOUNTING_PURPOSE_COMMAND_KINDS).parse(request.params.commandKind);
+    const envelope = commandEnvelopeSchema(accountingPurposeCommandPayloadSchemas[kind]).parse(request.body);
+    if (envelope.scope.organizationId !== organizationId) throw new ForbiddenCommandError("Accounting purpose mapping company does not match this request.");
+    const actorId = companyWebActor(request);
+    const resolvePrincipal = (transaction: RentOpsQueryExecutor) => loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: "admin" });
+    const principal = await resolvePrincipal(executor);
+    response.json(await services.purposeCommands.execute(kind, envelope, { principal, resolvePrincipal, transport: attestTransport("web") }));
   }));
   app.get("/api/company/:organizationId/accounting/qbo/coverage", requireAdmin, companyReadHandler(async (request, response) => {
     const organizationId = organizationIdSchema.parse(request.params.organizationId);

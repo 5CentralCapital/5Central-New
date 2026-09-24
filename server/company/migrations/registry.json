@@ -397,6 +397,24 @@
       "minimumServerContract": 1,
       "minimumClientContract": 1,
       "recovery": "Stop QuickBooks mirror catch-up; keep recorded sync exceptions and coverage as partial, then apply a reviewed forward repair."
+    },
+    {
+      "version": 43,
+      "fileName": "043_qbo_account_purpose.sql",
+      "sha256": "39470cac7e424941907aa9d0883260ff2b2860136bda8ede62a5e9b711c7f512",
+      "predecessor": 42,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Additive purpose mapping records can remain on rollback; disable mapping writes and restore the reviewed backup if schema recovery is required."
+    },
+    {
+      "version": 44,
+      "fileName": "044_project_property_plans.sql",
+      "sha256": "32d1c0975dc2eb0382b107c86a915774b1c1d6db402327f978856f411c7b70e4",
+      "predecessor": 43,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Additive planning associations must never be converted to legal ownership on rollback; retain the table and restore the reviewed backup if needed."
     }
   ]
 }

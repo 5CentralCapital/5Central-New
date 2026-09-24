@@ -157,21 +157,53 @@ export async function assertProjectScope(
   scope: { organizationId: string; legalEntityId?: string; propertyId?: string },
   projectId: string,
   asOf: IsoDate,
-): Promise<{ legalEntityId: string; propertyId: string; unitId: string | null; currency: string; recordRevision: Revision; status: string; startOn: string | null; targetOn: string | null }> {
+): Promise<{ legalEntityId: string; propertyId: string; unitId: string | null; currency: string; recordRevision: Revision; status: string; startOn: string | null; targetOn: string | null; plannedScope: boolean }> {
   const result = await executor.query<Record<string, unknown>>(
-    `SELECT p.legal_entity_id, p.property_id, p.unit_id, p.currency, p.record_revision, p.status, p.start_on, p.target_on
+    `SELECT p.legal_entity_id, p.property_id, p.unit_id, p.currency, p.record_revision, p.status, p.start_on, p.target_on,
+            (
+              p.status = 'planning' AND p.unit_id IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM company_property_entity_periods legal_period
+                 WHERE legal_period.organization_id = p.organization_id
+                   AND legal_period.legal_entity_id = p.legal_entity_id
+                   AND legal_period.property_id = p.property_id
+                   AND legal_period.effective_from <= $5::date
+                   AND (legal_period.effective_until IS NULL OR legal_period.effective_until > $5::date)
+              )
+              AND EXISTS (
+                SELECT 1 FROM company_project_property_plans plan
+                 WHERE plan.organization_id = p.organization_id
+                   AND plan.legal_entity_id = p.legal_entity_id
+                   AND plan.property_id = p.property_id
+                   AND plan.status = 'planned'
+                   AND plan.assignment_start_on <= $5::date
+              )
+            ) AS planned_scope
        FROM company_projects p
       WHERE p.id = $1
         AND p.organization_id = $2
         AND ($3::uuid IS NULL OR p.legal_entity_id = $3)
         AND ($4::varchar IS NULL OR p.property_id = $4)
-        AND EXISTS (
-          SELECT 1 FROM company_property_entity_periods pep
-           WHERE pep.organization_id = p.organization_id
-             AND pep.legal_entity_id = p.legal_entity_id
-             AND pep.property_id = p.property_id
-             AND pep.effective_from <= $5::date
-             AND (pep.effective_until IS NULL OR pep.effective_until > $5::date)
+        AND (
+          EXISTS (
+            SELECT 1 FROM company_property_entity_periods pep
+             WHERE pep.organization_id = p.organization_id
+               AND pep.legal_entity_id = p.legal_entity_id
+               AND pep.property_id = p.property_id
+               AND pep.effective_from <= $5::date
+               AND (pep.effective_until IS NULL OR pep.effective_until > $5::date)
+          )
+          OR (
+            p.status = 'planning' AND p.unit_id IS NULL
+            AND EXISTS (
+              SELECT 1 FROM company_project_property_plans plan
+               WHERE plan.organization_id = p.organization_id
+                 AND plan.legal_entity_id = p.legal_entity_id
+                 AND plan.property_id = p.property_id
+                 AND plan.status = 'planned'
+                 AND plan.assignment_start_on <= $5::date
+            )
+          )
         )`,
     [projectId, scope.organizationId, scope.legalEntityId ?? null, scope.propertyId ?? null, asOf],
   );
@@ -186,7 +218,53 @@ export async function assertProjectScope(
     status: dbString(row.status, "status"),
     startOn: dbNullableDate(row.start_on, "start_on"),
     targetOn: dbNullableDate(row.target_on, "target_on"),
+    plannedScope: row.planned_scope === true || row.planned_scope === "t",
   };
+}
+
+/** Resolve a whole-property planning association without opening legal or rental scope. */
+export async function assertPlannedProjectProperty(
+  executor: RentOpsQueryExecutor,
+  input: { organizationId: string; legalEntityId: string; propertyId: string; effectiveDate: IsoDate },
+): Promise<{ currency: string }> {
+  const result = await executor.query<Record<string, unknown>>(
+    `SELECT le.currency
+       FROM company_project_property_plans plan
+       JOIN company_legal_entities le
+         ON le.organization_id = plan.organization_id AND le.id = plan.legal_entity_id
+       JOIN company_organizations o ON o.id = plan.organization_id
+       JOIN rent_ops_properties p ON p.id = plan.property_id
+      WHERE plan.organization_id = $1
+        AND plan.legal_entity_id = $2
+        AND plan.property_id = $3
+        AND plan.status = 'planned'
+        AND plan.assignment_start_on <= $4::date
+        AND le.archived_at IS NULL AND o.archived_at IS NULL
+        AND p.state_status <> 'archived'
+      LIMIT 1`,
+    [input.organizationId, input.legalEntityId, input.propertyId, input.effectiveDate],
+  );
+  const row = result.rows[0];
+  if (!row) throw new ValidationCommandError("Property does not have a planned project association on the effective date", { reason: "planned_property_mapping" });
+  return { currency: dbString(row.currency, "planned_property_currency") };
+}
+
+/** Planning project writes may use a planned association only for a whole-property planning record. */
+export async function assertProjectPropertyAccess(
+  executor: RentOpsQueryExecutor,
+  input: { organizationId: string; legalEntityId: string; propertyId: string; unitId?: string | null; status: string; effectiveDate: IsoDate },
+): Promise<{ currency: string; plannedScope: boolean }> {
+  if (input.status === "planning" && (input.unitId === undefined || input.unitId === null)) {
+    try {
+      const legal = await assertEntityPropertyUnit(executor, input);
+      return { ...legal, plannedScope: false };
+    } catch (error) {
+      if (!(error instanceof ValidationCommandError) || error.details.reason !== "property_entity_mapping") throw error;
+      const planned = await assertPlannedProjectProperty(executor, input);
+      return { ...planned, plannedScope: true };
+    }
+  }
+  return { ...(await assertEntityPropertyUnit(executor, input)), plannedScope: false };
 }
 
 export async function assertEntityPropertyUnit(

@@ -11,7 +11,7 @@ import {
 import type { QuickBooksConnectionScope, QuickBooksJsonObject } from "../../../shared/accounting/quickbooks";
 import type { FinancialProviderPaymentSubtype, FinancialSourceFlow, FinancialSourceLineRole } from "../../../shared/accounting/source";
 
-const SUPPORTED_TRANSACTION_TYPES = ["Purchase", "Bill", "BillPayment", "Deposit"] as const;
+const SUPPORTED_TRANSACTION_TYPES = ["Purchase", "Bill", "BillPayment", "Deposit", "JournalEntry"] as const;
 export type SupportedQboTransactionType = (typeof SUPPORTED_TRANSACTION_TYPES)[number];
 
 export interface NormalizedQboLine {
@@ -124,7 +124,12 @@ export function qboAmountToCents(value: unknown, field: string): MoneyCents {
 
 function referenceId(value: unknown): string | null {
   const ref = record(value);
-  return ref ? optionalText(ref.value ?? ref.Id, "provider reference", 200) : null;
+  if (!ref) return null;
+  const direct = optionalText(ref.value ?? ref.Id, "provider reference", 200);
+  if (direct) return direct;
+  // JournalEntryLineDetail.Entity is commonly shaped as
+  // { Type, EntityRef: { value, name } } rather than a direct reference.
+  return referenceId(ref.EntityRef ?? ref.Ref);
 }
 
 function currencyCode(value: unknown, field: string): CurrencyCode {
@@ -180,6 +185,7 @@ function paymentCashAccount(type: SupportedQboTransactionType, body: QuickBooksJ
       ?? referenceId(body.CCAccountRef);
   }
   if (type === "Deposit") return referenceId(body.DepositToAccountRef);
+  if (type === "JournalEntry") return null;
   return referenceId(body.AccountRef);
 }
 
@@ -206,6 +212,13 @@ function lineDirection(type: SupportedQboTransactionType): "debit" | "credit" {
   // credit only when its actual payment account is present; its generic Line
   // amount must never be treated as an AP debit by inference.
   return type === "BillPayment" ? "credit" : "debit";
+}
+
+function journalPostingType(line: QuickBooksJsonObject, detail: QuickBooksJsonObject): "debit" | "credit" {
+  const postingType = line.PostingType ?? detail.PostingType;
+  if (postingType === "Debit") return "debit";
+  if (postingType === "Credit") return "credit";
+  reject("QBO JournalEntry line has an unsupported PostingType");
 }
 
 interface LinkedTransaction {
@@ -281,6 +294,11 @@ function objectLevelReasons(type: SupportedQboTransactionType, body: QuickBooksJ
     const lineTotal = sumCents(lines.map(line => line.amountCents));
     if (lineTotal !== BigInt(total)) reasons.push(`${label} line amounts do not reconcile to TotalAmt`);
   }
+  if (type === "JournalEntry" && lines.length === rawLineCount && rawLineCount > 0 && reasons.length === 0) {
+    const debitTotal = sumCents(lines.filter(line => line.direction === "debit").map(line => line.amountCents));
+    const creditTotal = sumCents(lines.filter(line => line.direction === "credit").map(line => line.amountCents));
+    if (debitTotal !== creditTotal) reasons.push(`${label} debit and credit lines do not balance`);
+  }
   return reasons;
 }
 
@@ -290,6 +308,38 @@ function normalizeLine(type: SupportedQboTransactionType, body: QuickBooksJsonOb
   const lineId = lineIdentity(type, line, index, links);
   const amount = qboAmountToCents(line.Amount, `${lineLabel} Amount`);
   if (BigInt(amount) < BigInt(0)) reject(`QBO ${lineLabel} amount is negative`);
+  if (type === "JournalEntry") {
+    const detail = record(line.JournalEntryLineDetail);
+    if (!detail) reject(`QBO ${lineLabel} has unsupported DetailType`);
+    const direction = journalPostingType(line, detail);
+    const accountObjectId = referenceId(detail.AccountRef);
+    if (accountObjectId === null) reject(`QBO ${lineLabel} has no AccountRef`);
+    const counterpartyObjectId = referenceId(detail.Entity) ?? referenceId(detail.EntityRef) ?? referenceId(line.Entity) ?? referenceId(line.EntityRef);
+    return {
+      lineId,
+      lineNumber: index + 1,
+      transactionType: type,
+      direction,
+      // Journal lines do not prove cash movement. Keep both sides in the
+      // cost role so a verified Expense/COGS/Fixed Asset Account can classify
+      // either a debit cost or a credit refund; consumers use direction for
+      // the signed amount and must apply their own incoming-credit policy.
+      flow: direction === "debit" ? "outgoing" : "incoming",
+      lineRole: "expense",
+      amountCents: amount,
+      currency: currencyCode,
+      postingState: state,
+      postedOn: date,
+      ...(state === "voided"
+        ? { settlementState: "voided" as const, settledOn: null, settledAmountCents: null }
+        : { settlementState: "unknown" as const, settledOn: null, settledAmountCents: null }),
+      accountObjectId,
+      counterpartyObjectId,
+      cashAccountObjectId: null,
+      paymentSubtype: null,
+      description: lineDescription(body, line),
+    };
+  }
   const cashAccount = paymentCashAccount(type, body);
   let accountObjectId: string | null;
   let counterpartyObjectId: string | null;

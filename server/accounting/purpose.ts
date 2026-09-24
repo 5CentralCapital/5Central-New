@@ -9,9 +9,34 @@ import {
   type FinancialProviderAccountingPurpose,
   type FinancialSourceScope,
 } from "../../shared/accounting";
-import { isoDateSchema, isoTimestampSchema } from "../../shared/company";
+import {
+  ACCOUNTING_PURPOSE_COMMAND_KINDS,
+  accountingPurposeCommandPayloadSchemas,
+  type AccountingPurposeCommandKind,
+  type MapCapitalizedCostPayload,
+} from "../../shared/accounting/purpose-contracts";
+import {
+  commandEnvelopeSchema,
+  isoDateSchema,
+  isoTimestampSchema,
+  recordReferenceIdSchema,
+  revisionSchema,
+  type CommandEnvelope,
+  type OperationReceipt,
+} from "../../shared/company";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { AccountingError } from "./errors";
+import {
+  type AuthenticatedPrincipal,
+  type CommandAuthorizationPolicy,
+  type TransportAttestation,
+} from "../company/authorization";
+import {
+  runCompanyCommand,
+  type CommandHandlerContext,
+  type CommandHandlerResult,
+} from "../company/commands/runner";
+import { ValidationCommandError } from "../company/commands/errors";
 
 const mappedPurposeSchema = financialProviderAccountingPurposeSchema.exclude(["unknown"]);
 const providerAccountIdSchema = z.string().trim().min(1).max(200).regex(/^[^\u0000-\u001f\u007f]+$/);
@@ -22,6 +47,8 @@ export interface AccountingPurposeMappingInput {
   readonly scope: FinancialSourceScope;
   readonly providerAccountId: string;
   readonly purpose: Exclude<FinancialProviderAccountingPurpose, "unknown">;
+  /** If supplied, the reviewed provider Account revision must still be current. */
+  readonly expectedAccountSourceVersion?: string;
   readonly effectiveFrom: string;
   readonly effectiveTo?: string | null;
   /** Human review evidence; this must name the supporting source, not an account name heuristic. */
@@ -31,8 +58,16 @@ export interface AccountingPurposeMappingInput {
 
 export interface AccountingPurposeMappingPort extends FinancialAccountingPurposeMappingReadPort {
   forExecutor(executor: RentOpsQueryExecutor): AccountingPurposeMappingPort;
+  readCurrentAccount(scope: FinancialSourceScope, providerAccountId: string): Promise<AccountingProviderAccountProof | null>;
   mapPurpose(input: AccountingPurposeMappingInput): Promise<FinancialAccountingPurposeMapping>;
   listPurposeMappings(scope: FinancialSourceScope, providerAccountId?: string): Promise<readonly FinancialAccountingPurposeMapping[]>;
+}
+
+export interface AccountingProviderAccountProof {
+  readonly providerAccountId: string;
+  readonly accountSourceVersion: string;
+  readonly accountType: string;
+  readonly accountSubType: string | null;
 }
 
 interface MappingRow {
@@ -148,6 +183,21 @@ class PostgresAccountingPurposeMappingStore implements AccountingPurposeMappingP
     return result.rows[0] ?? null;
   }
 
+  async readCurrentAccount(scopeInput: FinancialSourceScope, providerAccountIdInput: string): Promise<AccountingProviderAccountProof | null> {
+    const scope = financialSourceScopeSchema.parse(scopeInput);
+    const providerAccountId = providerAccountIdSchema.parse(providerAccountIdInput);
+    const row = await this.currentAccount(scope, providerAccountId);
+    if (!row) return null;
+    const account = accountClassification(row.provider_body);
+    if (!account) return null;
+    return {
+      providerAccountId,
+      accountSourceVersion: textValue(row.object_version, "provider account revision", 120),
+      accountType: account.accountType,
+      accountSubType: account.accountSubType,
+    };
+  }
+
   private async readInside(scope: FinancialSourceScope, providerAccountId: string, postedOn: string): Promise<FinancialAccountingPurposeMapping | null> {
     if (!(await this.hasTable())) return null;
     const result = await this.executor.query<MappingRow & { current_provider_body: unknown; current_object_version: unknown }>(
@@ -205,11 +255,47 @@ class PostgresAccountingPurposeMappingStore implements AccountingPurposeMappingP
     if (effectiveTo !== null && effectiveTo <= effectiveFrom) throw new AccountingError("accounting_validation", "Accounting purpose mapping end date must be after its start date");
     const reviewEvidence = reviewEvidenceSchema.parse(input.reviewEvidence);
     const actorId = actorIdSchema.parse(input.actorId);
+    const expectedAccountSourceVersion = input.expectedAccountSourceVersion === undefined
+      ? null
+      : textValue(input.expectedAccountSourceVersion, "expected provider account revision", 120);
     const accountRow = await this.currentAccount(scope, providerAccountId);
     if (!accountRow) throw new AccountingError("accounting_not_found", "The provider Account is not mirrored for this connection");
     const account = accountClassification(accountRow.provider_body);
     if (!account) throw new AccountingError("accounting_unavailable", "The mirrored provider Account has no usable classification");
     const accountSourceVersion = textValue(accountRow.object_version, "provider account revision", 120);
+    if (expectedAccountSourceVersion !== null && expectedAccountSourceVersion !== accountSourceVersion) {
+      throw new AccountingError("accounting_conflict", "The mirrored provider Account changed; refresh it before mapping");
+    }
+
+    // Serialize period checks with the migration trigger. This gives callers
+    // a stable accounting conflict instead of exposing a provider or SQL
+    // trigger error when an overlapping period is already mapped.
+    await this.executor.query(
+      `SELECT pg_advisory_xact_lock(hashtext($1))`,
+      [`qbo-purpose:${scope.organizationId}:${scope.legalEntityId}:${scope.environment}:${scope.realmId}:${providerAccountId}`],
+    );
+    const overlap = await this.executor.query<{ id: unknown }>(
+      `SELECT id
+         FROM accounting_qbo_purpose_mappings
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
+          AND provider_account_id=$5
+          AND effective_from < COALESCE($7::date, DATE '9999-12-31')
+          AND COALESCE(effective_to, DATE '9999-12-31') > $6::date
+        ORDER BY effective_from
+        LIMIT 1
+        FOR UPDATE`,
+      [...scopeParts(scope), providerAccountId, effectiveFrom, effectiveTo],
+    );
+    const overlapId = overlap.rows[0]?.id;
+    if (overlapId !== undefined) {
+      const exact = await this.readMappingById(String(overlapId));
+      if (!exact) throw new AccountingError("accounting_conflict", "An existing accounting purpose mapping could not be read");
+      if (!this.sameMappingRequest(exact, { scope, providerAccountId, purpose, effectiveFrom, effectiveTo, accountSourceVersion, account, reviewEvidence, actorId })) {
+        throw new AccountingError("accounting_conflict", "An accounting purpose mapping already covers this provider Account period");
+      }
+      return exact;
+    }
+
     const reviewedAt = this.now().toISOString();
     const id = randomUUID();
     const inserted = await this.executor.query<{ id: unknown }>(
@@ -222,22 +308,57 @@ class PostgresAccountingPurposeMappingStore implements AccountingPurposeMappingP
        DO NOTHING RETURNING id`,
       [id, ...scopeParts(scope), providerAccountId, purpose, effectiveFrom, effectiveTo, accountSourceVersion, account.accountType, account.accountSubType, reviewEvidence, actorId, reviewedAt],
     );
-    const persistedId = inserted.rows[0]?.id ?? id;
+    const persistedId = inserted.rows[0]?.id;
+    const mapping = persistedId === undefined ? await this.readMappingByKey(scope, providerAccountId, effectiveFrom) : await this.readMappingById(String(persistedId));
+    if (!mapping) throw new AccountingError("accounting_conflict", "Accounting purpose mapping could not be read after save");
+    if (!this.sameMappingRequest(mapping, { scope, providerAccountId, purpose, effectiveFrom, effectiveTo, accountSourceVersion, account, reviewEvidence, actorId })) {
+      throw new AccountingError("accounting_conflict", "An accounting purpose mapping already exists for this provider Account period");
+    }
+    return mapping;
+  }
+
+  private async readMappingById(id: string): Promise<FinancialAccountingPurposeMapping | null> {
     const persisted = await this.executor.query<MappingRow>(
       `SELECT id, organization_id, legal_entity_id, environment, realm_id, provider_account_id,
               purpose, effective_from, effective_to, account_source_version, account_type,
               account_subtype, review_evidence, reviewed_by, reviewed_at, created_at
          FROM accounting_qbo_purpose_mappings
         WHERE id=$1`,
-      [persistedId],
+      [id],
     );
-    const row = persisted.rows[0];
-    if (!row) throw new AccountingError("accounting_conflict", "Accounting purpose mapping could not be read after save");
-    const mapping = mapRow(row);
-    if (mapping.scope.organizationId !== scope.organizationId || mapping.scope.legalEntityId !== scope.legalEntityId || mapping.scope.environment !== scope.environment || mapping.scope.realmId !== scope.realmId || mapping.providerAccountId !== providerAccountId || mapping.purpose !== purpose || mapping.effectiveFrom !== effectiveFrom || mapping.effectiveTo !== effectiveTo) {
-      throw new AccountingError("accounting_conflict", "An accounting purpose mapping already exists for this provider Account period");
-    }
-    return mapping;
+    return persisted.rows[0] ? mapRow(persisted.rows[0]) : null;
+  }
+
+  private async readMappingByKey(scope: FinancialSourceScope, providerAccountId: string, effectiveFrom: string): Promise<FinancialAccountingPurposeMapping | null> {
+    const persisted = await this.executor.query<MappingRow>(
+      `SELECT id, organization_id, legal_entity_id, environment, realm_id, provider_account_id,
+              purpose, effective_from, effective_to, account_source_version, account_type,
+              account_subtype, review_evidence, reviewed_by, reviewed_at, created_at
+         FROM accounting_qbo_purpose_mappings
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
+          AND provider_account_id=$5 AND effective_from=$6::date`,
+      [...scopeParts(scope), providerAccountId, effectiveFrom],
+    );
+    return persisted.rows[0] ? mapRow(persisted.rows[0]) : null;
+  }
+
+  private sameMappingRequest(
+    mapping: FinancialAccountingPurposeMapping,
+    input: { readonly scope: FinancialSourceScope; readonly providerAccountId: string; readonly purpose: FinancialProviderAccountingPurpose; readonly effectiveFrom: string; readonly effectiveTo: string | null; readonly accountSourceVersion: string; readonly account: { readonly accountType: string; readonly accountSubType: string | null }; readonly reviewEvidence: string; readonly actorId: string },
+  ): boolean {
+    return mapping.scope.organizationId === input.scope.organizationId
+      && mapping.scope.legalEntityId === input.scope.legalEntityId
+      && mapping.scope.environment === input.scope.environment
+      && mapping.scope.realmId === input.scope.realmId
+      && mapping.providerAccountId === input.providerAccountId
+      && mapping.purpose === input.purpose
+      && mapping.effectiveFrom === input.effectiveFrom
+      && mapping.effectiveTo === input.effectiveTo
+      && mapping.accountSourceVersion === input.accountSourceVersion
+      && mapping.accountType === input.account.accountType
+      && mapping.accountSubType === input.account.accountSubType
+      && mapping.reviewEvidence === input.reviewEvidence
+      && mapping.reviewedBy === input.actorId;
   }
 
   async mapPurpose(input: AccountingPurposeMappingInput): Promise<FinancialAccountingPurposeMapping> {
@@ -265,4 +386,116 @@ class PostgresAccountingPurposeMappingStore implements AccountingPurposeMappingP
 
 export function createAccountingPurposeMappingStore(executor: RentOpsQueryExecutor, now?: () => Date): AccountingPurposeMappingPort {
   return new PostgresAccountingPurposeMappingStore(executor, false, now);
+}
+
+const ACCOUNTING_PURPOSE_WRITE_ROLES = ["owner", "admin", "finance"] as const;
+
+export const ACCOUNTING_PURPOSE_COMMAND_POLICIES: Readonly<Record<AccountingPurposeCommandKind, CommandAuthorizationPolicy>> = Object.freeze({
+  "accounting.qbo_purpose.map_capitalized_cost": {
+    commandKind: "accounting.qbo_purpose.map_capitalized_cost",
+    allowedRoles: ACCOUNTING_PURPOSE_WRITE_ROLES,
+    requiredScope: "legal_entity",
+  },
+});
+
+export interface AccountingPurposeCommandExecutionOptions {
+  readonly principal: AuthenticatedPrincipal;
+  readonly resolvePrincipal: (executor: RentOpsQueryExecutor) => Promise<AuthenticatedPrincipal>;
+  readonly transport: TransportAttestation;
+}
+
+export interface AccountingPurposeCommandPort {
+  execute(kind: AccountingPurposeCommandKind, envelope: unknown, options: AccountingPurposeCommandExecutionOptions): Promise<OperationReceipt>;
+}
+
+type AnyAccountingPurposeCommandEnvelope = CommandEnvelope<Record<string, unknown>>;
+
+function savedPurposeMappingResult(mapping: FinancialAccountingPurposeMapping): CommandHandlerResult {
+  return {
+    state: "saved_in_rops",
+    affectedRecordIds: [mapping.id],
+    resultingRevisions: [{ recordId: recordReferenceIdSchema.parse(mapping.id), revision: revisionSchema.parse(1) }],
+    validationOutcomes: [{
+      code: "accounting.qbo_purpose.saved",
+      severity: "info",
+      message: "QuickBooks Account purpose mapping saved in R-ops",
+    }],
+  };
+}
+
+function qboMappingScope(context: CommandHandlerContext<unknown>, payload: MapCapitalizedCostPayload): FinancialSourceScope {
+  const legalEntityId = context.envelope.scope.legalEntityId;
+  if (legalEntityId === undefined) throw new ValidationCommandError("Accounting purpose mapping requires a legal entity scope", { reason: "accounting_entity_scope_required" });
+  return financialSourceScopeSchema.parse({
+    provider: "qbo",
+    organizationId: context.envelope.scope.organizationId,
+    legalEntityId,
+    environment: payload.environment,
+    realmId: payload.realmId,
+  });
+}
+
+async function handleMapCapitalizedCost(
+  context: CommandHandlerContext<MapCapitalizedCostPayload>,
+  purposeMappings: AccountingPurposeMappingPort,
+): Promise<CommandHandlerResult> {
+  const payload = accountingPurposeCommandPayloadSchemas["accounting.qbo_purpose.map_capitalized_cost"].parse(context.envelope.payload);
+  const scope = qboMappingScope(context as unknown as CommandHandlerContext<unknown>, payload);
+  const proof = await purposeMappings.readCurrentAccount(scope, payload.providerAccountId);
+  if (!proof) throw new AccountingError("accounting_not_found", "The selected QuickBooks Account is not mirrored for this company and realm");
+  if (proof.accountType !== "Other Current Asset") {
+    throw new AccountingError("accounting_validation", "Capitalized-cost mapping is limited to mirrored Other Current Asset accounts");
+  }
+  if (proof.accountSourceVersion !== payload.accountSourceVersion) {
+    throw new AccountingError("accounting_conflict", "The selected QuickBooks Account changed; refresh it before mapping");
+  }
+  const mapping = await purposeMappings.mapPurpose({
+    scope,
+    providerAccountId: payload.providerAccountId,
+    purpose: "capitalized_cost",
+    expectedAccountSourceVersion: payload.accountSourceVersion,
+    effectiveFrom: payload.effectiveFrom,
+    effectiveTo: payload.effectiveTo ?? null,
+    reviewEvidence: payload.reviewEvidence,
+    actorId: context.principal.actorId,
+  });
+  return savedPurposeMappingResult(mapping);
+}
+
+export async function executeAccountingPurposeCommand(
+  executor: RentOpsQueryExecutor,
+  kindInput: AccountingPurposeCommandKind,
+  rawEnvelope: unknown,
+  options: AccountingPurposeCommandExecutionOptions,
+  purposeMappings = createAccountingPurposeMappingStore(executor),
+): Promise<OperationReceipt> {
+  if (!ACCOUNTING_PURPOSE_COMMAND_KINDS.includes(kindInput)) {
+    throw new ValidationCommandError("Accounting purpose command kind is unsupported", { reason: "unsupported_accounting_purpose_command" });
+  }
+  const payloadSchema = accountingPurposeCommandPayloadSchemas[kindInput];
+  let envelope: AnyAccountingPurposeCommandEnvelope;
+  try {
+    envelope = commandEnvelopeSchema(payloadSchema).parse(rawEnvelope) as unknown as AnyAccountingPurposeCommandEnvelope;
+  } catch (error) {
+    if (error instanceof Error && error.name === "ZodError") throw new ValidationCommandError("Accounting purpose command payload failed validation", { reason: "invalid_accounting_purpose_command_payload" });
+    throw error;
+  }
+  const handler = async (context: CommandHandlerContext<unknown>): Promise<CommandHandlerResult> => {
+    if (kindInput !== "accounting.qbo_purpose.map_capitalized_cost") throw new ValidationCommandError("Accounting purpose command kind is unsupported", { reason: "unsupported_accounting_purpose_command" });
+    return handleMapCapitalizedCost(context as unknown as CommandHandlerContext<MapCapitalizedCostPayload>, purposeMappings.forExecutor(context.executor));
+  };
+  return runCompanyCommand(executor, {
+    envelope,
+    principal: options.principal,
+    resolvePrincipal: options.resolvePrincipal,
+    transport: options.transport,
+    policy: ACCOUNTING_PURPOSE_COMMAND_POLICIES[kindInput],
+    handler,
+  });
+}
+
+export function createAccountingPurposeCommandPort(executor: RentOpsQueryExecutor, purposeMappings = createAccountingPurposeMappingStore(executor)): AccountingPurposeCommandPort {
+  return {
+    execute: (kind, envelope, options) => executeAccountingPurposeCommand(executor, kind, envelope, options, purposeMappings),
+  };
 }

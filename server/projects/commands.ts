@@ -21,6 +21,7 @@ import {
   createProjectPayloadSchema,
   createScopeItemPayloadSchema,
   createTaskPayloadSchema,
+  linkProjectQboIdentityPayloadSchema,
   parseProjectCommandPayload,
   projectCommandPayloadSchemas,
   projectIdSchema,
@@ -39,6 +40,7 @@ import {
   type CreateProjectPayload,
   type CreateScopeItemPayload,
   type CreateTaskPayload,
+  type LinkProjectQboIdentityPayload,
   type ProjectCommandKind,
   type SetTaskDependenciesPayload,
   type UpdateDraftCostPayload,
@@ -66,6 +68,7 @@ import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import {
   assertEntityPropertyUnit,
   assertEstimatedCents,
+  assertProjectPropertyAccess,
   assertProjectScope,
   assertScopeItemForProject,
   calculateEstimatedCents,
@@ -91,6 +94,7 @@ export const PROJECT_COMMAND_POLICIES: Readonly<Record<ProjectCommandKind, Comma
   "project.create": { commandKind: "project.create", allowedRoles: PROJECT_WRITE_ROLES },
   "project.update": { commandKind: "project.update", allowedRoles: PROJECT_WRITE_ROLES },
   "project.archive": { commandKind: "project.archive", allowedRoles: ["owner", "admin", "operations_pm", "project_manager"] },
+  "project.qbo_identity.link": { commandKind: "project.qbo_identity.link", allowedRoles: ["owner", "admin", "operations_pm", "finance"] },
   "project.scope_item.create": { commandKind: "project.scope_item.create", allowedRoles: PROJECT_WRITE_ROLES },
   "project.scope_item.update": { commandKind: "project.scope_item.update", allowedRoles: PROJECT_WRITE_ROLES },
   "project.scope_item.archive": { commandKind: "project.scope_item.archive", allowedRoles: PROJECT_WRITE_ROLES },
@@ -152,9 +156,9 @@ async function assertProjectWriteContext(
   );
   const project = await assertProjectScope(context.executor, context.envelope.scope, projectId, effectiveDate);
   if (project.status === "archived") throw new ConflictCommandError("Archived projects cannot be edited", { reason: "project_archived" });
-  await assertEntityPropertyUnit(context.executor, {
+  await assertProjectPropertyAccess(context.executor, {
     organizationId: context.envelope.scope.organizationId, legalEntityId: project.legalEntityId,
-    propertyId: project.propertyId, unitId: project.unitId, effectiveDate,
+    propertyId: project.propertyId, unitId: project.unitId, status: project.status, effectiveDate,
   });
   return project;
 }
@@ -176,11 +180,12 @@ async function handleCreateProject(context: CommandHandlerContext<CreateProjectP
   const legalEntityId = ensureLegalEntityScope(context as unknown as CommandHandlerContext<unknown>);
   assertSamePropertyScope(context as unknown as CommandHandlerContext<unknown>, payload.propertyId);
   const effectiveDate = resolveEffectiveDate(context.envelope.effectiveDate ?? payload.startOn);
-  const mapping = await assertEntityPropertyUnit(context.executor, {
+  const mapping = await assertProjectPropertyAccess(context.executor, {
     organizationId: context.envelope.scope.organizationId,
     legalEntityId,
     propertyId: payload.propertyId,
     unitId: payload.unitId,
+    status: payload.status,
     effectiveDate,
   });
   if (payload.currency !== undefined && payload.currency !== mapping.currency) {
@@ -208,11 +213,13 @@ async function handleUpdateProject(context: CommandHandlerContext<UpdateProjectP
   const nextTarget = Object.prototype.hasOwnProperty.call(payload, "targetOn") ? payload.targetOn ?? null : project.targetOn;
   // When only one date is edited, validate against the other value already stored.
   ensureDateOrder(nextStart, nextTarget);
-  await assertEntityPropertyUnit(context.executor, {
+  const nextUnit = Object.prototype.hasOwnProperty.call(payload, "unitId") ? payload.unitId : project.unitId;
+  const nextStatus = payload.status ?? project.status;
+  if (nextStatus === "archived") throw new ValidationCommandError("Use the archive project command", { reason: "project_archive_command_required" });
+  await assertProjectPropertyAccess(context.executor, {
     organizationId: context.envelope.scope.organizationId,
     legalEntityId: project.legalEntityId,
-    propertyId: project.propertyId,
-    unitId: Object.prototype.hasOwnProperty.call(payload, "unitId") ? payload.unitId : project.unitId,
+    propertyId: project.propertyId, unitId: nextUnit, status: nextStatus,
     effectiveDate,
   });
   const updates: string[] = [];
@@ -222,7 +229,6 @@ async function handleUpdateProject(context: CommandHandlerContext<UpdateProjectP
   if (payload.projectType !== undefined) set("project_type", payload.projectType);
   if (Object.prototype.hasOwnProperty.call(payload, "description")) set("description", payload.description ?? null);
   if (payload.status !== undefined) {
-    if (payload.status === "archived") throw new ValidationCommandError("Use the archive project command", { reason: "project_archive_command_required" });
     set("status", payload.status);
   }
   if (Object.prototype.hasOwnProperty.call(payload, "unitId")) set("unit_id", payload.unitId ?? null);
@@ -256,6 +262,86 @@ async function handleArchiveProject(context: CommandHandlerContext<ArchiveProjec
   );
   if (result.rows.length !== 1) throw new ConflictCommandError("Project changed while it was being archived", { reason: "revision_conflict" });
   return savedResult(payload.projectId, dbRevision(result.rows[0]!.record_revision));
+}
+
+/**
+ * Link caller supplied provider IDs after verifying the selected realm is
+ * bound to this legal entity. This command only writes the immutable local
+ * identity fence; it never calls QuickBooks and never invents a provider ID.
+ */
+async function handleLinkProjectQboIdentity(context: CommandHandlerContext<LinkProjectQboIdentityPayload>): Promise<CommandHandlerResult> {
+  const payload = linkProjectQboIdentityPayloadSchema.parse(context.envelope.payload);
+  const project = await assertProjectWriteContext(
+    context as unknown as CommandHandlerContext<unknown>,
+    payload.projectId,
+    resolveEffectiveDate(context.envelope.effectiveDate),
+  );
+  assertExpectedRevision(project.recordRevision, context.envelope.expectedRevision);
+  assertSamePropertyScope(context as unknown as CommandHandlerContext<unknown>, project.propertyId);
+
+  const binding = await context.executor.query(
+    `SELECT 1
+       FROM accounting_qbo_realm_bindings
+      WHERE organization_id = $1 AND legal_entity_id = $2
+        AND environment = $3 AND realm_id = $4`,
+    [context.envelope.scope.organizationId, project.legalEntityId, payload.environment, payload.realmId],
+  );
+  if (binding.rows.length !== 1) {
+    throw new ValidationCommandError("QuickBooks realm is not verified for this legal entity", { reason: "qbo_realm_binding_required" });
+  }
+
+  const sourceScope = `qbo:${payload.environment}:${payload.realmId}`;
+  const identities = payload.identities;
+  let changed = false;
+  for (const identity of identities) {
+    const external = await context.executor.query<{ local_kind: unknown; local_id: unknown }>(
+      `SELECT local_kind, local_id
+         FROM company_external_identities
+        WHERE organization_id = $1 AND provider = 'qbo'
+          AND source_scope = $2 AND record_kind = $3 AND external_id = $4`,
+      [context.envelope.scope.organizationId, sourceScope, identity.recordKind, identity.externalId],
+    );
+    const externalRow = external.rows[0];
+    if (externalRow && (String(externalRow.local_kind) !== "project" || String(externalRow.local_id) !== payload.projectId)) {
+      throw new ConflictCommandError("QuickBooks project identity is already linked to another R-ops project", { reason: "qbo_project_identity_conflict" });
+    }
+
+    const local = await context.executor.query<{ external_id: unknown }>(
+      `SELECT external_id
+         FROM company_external_identities
+        WHERE organization_id = $1 AND provider = 'qbo'
+          AND source_scope = $2 AND record_kind = $3
+          AND local_kind = 'project' AND local_id = $4`,
+      [context.envelope.scope.organizationId, sourceScope, identity.recordKind, payload.projectId],
+    );
+    const localRow = local.rows[0];
+    if (localRow && String(localRow.external_id) !== identity.externalId) {
+      throw new ConflictCommandError("This R-ops project already has a different QuickBooks identity of that kind", { reason: "qbo_project_identity_kind_conflict" });
+    }
+    if (externalRow || localRow) continue;
+
+    await context.executor.query(
+      `INSERT INTO company_external_identities
+         (id, organization_id, legal_entity_id, provider, source_scope, record_kind, external_id, local_kind, local_id)
+       VALUES ($1,$2,$3,'qbo',$4,$5,$6,'project',$7)
+       ON CONFLICT (organization_id, provider, source_scope, record_kind, external_id) DO NOTHING`,
+      [newRecordId(), context.envelope.scope.organizationId, project.legalEntityId, sourceScope, identity.recordKind, identity.externalId, payload.projectId],
+    );
+    const persisted = await context.executor.query<{ local_kind: unknown; local_id: unknown }>(
+      `SELECT local_kind, local_id
+         FROM company_external_identities
+        WHERE organization_id = $1 AND provider = 'qbo'
+          AND source_scope = $2 AND record_kind = $3 AND external_id = $4`,
+      [context.envelope.scope.organizationId, sourceScope, identity.recordKind, identity.externalId],
+    );
+    const row = persisted.rows[0];
+    if (!row || String(row.local_kind) !== "project" || String(row.local_id) !== payload.projectId) {
+      throw new ConflictCommandError("QuickBooks project identity changed while it was being linked", { reason: "qbo_project_identity_conflict" });
+    }
+    changed = true;
+  }
+  const revision = changed ? await touchProject(context as unknown as CommandHandlerContext<unknown>, payload.projectId) : project.recordRevision;
+  return savedResult(payload.projectId, revision);
 }
 
 async function touchProject(context: CommandHandlerContext<unknown>, projectId: string): Promise<Revision> {
@@ -681,6 +767,7 @@ const handlers = {
   "project.create": handleCreateProject,
   "project.update": handleUpdateProject,
   "project.archive": handleArchiveProject,
+  "project.qbo_identity.link": handleLinkProjectQboIdentity,
   "project.scope_item.create": handleCreateScopeItem,
   "project.scope_item.update": handleUpdateScopeItem,
   "project.scope_item.archive": handleArchiveScopeItem,

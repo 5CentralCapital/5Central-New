@@ -1,6 +1,8 @@
 import { z } from "zod";
+import { ACCOUNTING_PURPOSE_COMMAND_KINDS, accountingPurposeCommandPayloadSchemas } from "../../shared/accounting";
 import { legalEntityIdSchema, organizationIdSchema } from "../../shared/company";
 import type { CommandRole } from "../../shared/company";
+import { commandEnvelopeSchema } from "../../shared/company";
 import type { AccountingServices } from "./index";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { attestTransport, loadAuthenticatedPrincipal, authorizeCompanyRead } from "../company/authorization";
@@ -51,6 +53,10 @@ export function registerAccountingMcpTools(register: AccountingToolRegistrar, op
     const scope = scopeInput.parse(args.scope);
     return readAuthorized(scope, executor => options.services.mirror.forExecutor(executor).listProviderMirrors(scope, args.kind));
   });
+  register("list_accounting_purpose_mappings", "List dated, reviewed QBO Account purpose mappings for an authorized legal entity and realm. A mapping is effective only while its exact mirrored Account revision remains current.", { scope: scopeInput, providerAccountId: z.string().trim().min(1).max(200).optional() }, false, async (args) => {
+    const scope = scopeInput.parse(args.scope);
+    return readAuthorized(scope, executor => options.services.purposeMappings.forExecutor(executor).listPurposeMappings(scope, args.providerAccountId));
+  });
   register("list_accounting_transactions", "List exact mirrored QBO source lines with coverage evidence and pagination.", { scope: scopeInput, from: z.string().date().optional(), through: z.string().date().optional(), limit: z.number().int().min(1).max(100).optional(), cursor: z.string().min(1).max(512).optional() }, false, async (args) => {
     const scope = scopeInput.parse(args.scope);
     return readAuthorized(scope, executor => options.services.mirror.forExecutor(executor).listTransactions({ scope, from: args.from, through: args.through, limit: args.limit, cursor: args.cursor }));
@@ -65,6 +71,13 @@ export function registerAccountingMcpTools(register: AccountingToolRegistrar, op
     await sync.bootstrapRead();
     return sync.catchUp({ maxPages: args.maxPages });
   });
+  for (const kind of ACCOUNTING_PURPOSE_COMMAND_KINDS) {
+    register(kind.replaceAll(".", "_"), "Map one exact mirrored Other Current Asset Account to capitalized cost for a dated period. Supply its current Account revision, review evidence, legal-entity command scope, and a stable operationId/idempotencyKey; this changes only R-ops mapping metadata and never QuickBooks.", { command: commandEnvelopeSchema(accountingPurposeCommandPayloadSchemas[kind]) }, true, async ({ command }) => {
+      const organizationId = organizationIdSchema.parse(command.scope.organizationId);
+      const principal = await principalFor(organizationId);
+      return options.services.purposeCommands.execute(kind, command, { principal, resolvePrincipal: transaction => principalFor(organizationId, transaction), transport });
+    });
+  }
   register("disconnect_quickbooks", "Revoke an authorized QBO connection at Intuit, then clear its local credentials and disable its capabilities. A failed or uncertain revoke keeps the connection for retry. Reconnect requires the browser flow.", { scope: scopeInput }, true, async (args) => {
     const scope = scopeInput.parse(args.scope);
     const principal = await principalFor(scope.organizationId);

@@ -10,8 +10,8 @@ import type { QboAccountingMirrorStore } from "./mirror-store";
 import { PostgresQboCheckpointStore, runQboCatchUp, type QboCatchUpResult, type QboSyncCheckpoint } from "./sync";
 
 const PAGE_SIZE = 500;
-const TRANSACTION_ENTITY_TYPES = ["Purchase", "Bill", "BillPayment", "Deposit"] as const;
-const REQUIRED_STREAMS = ["accounts", "transactions.purchase", "transactions.bill", "transactions.billpayment", "transactions.deposit"] as const;
+const TRANSACTION_ENTITY_TYPES = ["Purchase", "Bill", "BillPayment", "Deposit", "JournalEntry"] as const;
+const REQUIRED_STREAMS = ["accounts", "transactions.purchase", "transactions.bill", "transactions.billpayment", "transactions.deposit", "transactions.journalentry"] as const;
 
 export interface QboBootstrapProbeResult {
   readonly scope: QuickBooksConnectionScope;

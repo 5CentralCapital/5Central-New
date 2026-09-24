@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { RefreshCw, Unplug } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import type { AccountingApi, AccountingConnection, AccountingEnvironment, AccountingMirrorKind, AccountingPendingBinding, AccountingScope, AccountingWorkspaceEntity, AccountingWorkspaceProps } from "./types";
+import type { AccountingApi, AccountingConnection, AccountingEnvironment, AccountingMirror, AccountingMirrorKind, AccountingPendingBinding, AccountingPurposeMapping, AccountingScope, AccountingWorkspaceEntity, AccountingWorkspaceProps } from "./types";
 import { accountingApi } from "./api";
 import "./accounting.css";
 
@@ -113,9 +113,47 @@ function ConnectionList({ connections, selected, onSelect }: { readonly connecti
   return <div className="accounting-card"><div className="accounting-card-header"><h2>Connections</h2></div>{connections.map(connection => <button type="button" className="accounting-connection" key={`${connection.scope.environment}:${connection.scope.realmId}`} aria-pressed={selected?.scope.realmId === connection.scope.realmId} onClick={() => onSelect(connection)}><strong>{connection.name}</strong><EnvironmentBadge environment={connection.scope.environment} /><span className={`accounting-status ${connection.status === "ready" ? "" : "is-muted"}`}>{connection.status === "ready" ? "Ready" : connection.status === "needs_reconnect" ? "Needs reconnect" : "Connected"}</span></button>)}</div>;
 }
 
-function MirrorTable({ items, kind }: { readonly items: readonly { displayName: string; active: boolean; providerUpdatedAt: string | null }[]; readonly kind: AccountingMirrorKind }) {
+function MirrorTable({ items, kind }: { readonly items: readonly AccountingMirror[]; readonly kind: AccountingMirrorKind }) {
   if (!items.length) return <div className="accounting-empty"><strong>No {kind} mirrored yet</strong><span>Run a source sync after the connection is ready.</span></div>;
-  return <div className="accounting-table-wrap"><table className="accounting-table"><thead><tr><th>Name</th><th>Status</th><th>Updated</th></tr></thead><tbody>{items.map(item => <tr key={`${item.displayName}:${item.providerUpdatedAt}`}><td>{item.displayName}</td><td>{item.active ? "Active" : "Inactive"}</td><td>{dateLabel(item.providerUpdatedAt)}</td></tr>)}</tbody></table></div>;
+  return <div className="accounting-table-wrap"><table className="accounting-table"><thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Updated</th></tr></thead><tbody>{items.map(item => <tr key={`${item.providerObjectId}:${item.version}`}><td>{item.displayName}<small className="accounting-meta">{item.providerObjectId} · revision {item.version}</small></td><td>{item.accountType ? `${item.accountType}${item.accountSubType ? ` · ${item.accountSubType}` : ""}` : "—"}</td><td>{item.active ? "Active" : "Inactive"}</td><td>{dateLabel(item.providerUpdatedAt)}</td></tr>)}</tbody></table></div>;
+}
+
+function PurposeMappingCard({ api, organizationId, scope, accounts, mappings, onSaved }: { readonly api: AccountingApi; readonly organizationId: string; readonly scope: AccountingScope; readonly accounts: readonly AccountingMirror[]; readonly mappings: readonly AccountingPurposeMapping[]; readonly onSaved: () => Promise<void> }) {
+  const eligibleAccounts = accounts.filter(account => account.objectType === "Account" && account.accountType === "Other Current Asset" && account.active);
+  const [accountId, setAccountId] = useState(eligibleAccounts[0]?.providerObjectId ?? "");
+  const [effectiveFrom, setEffectiveFrom] = useState(() => new Date().toISOString().slice(0, 10));
+  const [effectiveTo, setEffectiveTo] = useState("");
+  const [reviewEvidence, setReviewEvidence] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  useEffect(() => {
+    if (!eligibleAccounts.some(account => account.providerObjectId === accountId)) setAccountId(eligibleAccounts[0]?.providerObjectId ?? "");
+  }, [accountId, eligibleAccounts]);
+  const selected = eligibleAccounts.find(account => account.providerObjectId === accountId) ?? null;
+  async function save() {
+    if (!selected) return;
+    setSaving(true); setError(null);
+    try {
+      await api.mapCapitalizedCost(organizationId, { legalEntityId: scope.legalEntityId, scope, providerAccountId: selected.providerObjectId, accountSourceVersion: selected.version, effectiveFrom, ...(effectiveTo ? { effectiveTo } : {}), reviewEvidence });
+      setReviewEvidence("");
+      await onSaved();
+    } catch (caught) { setError(caught); }
+    finally { setSaving(false); }
+  }
+  return <section className="accounting-card accounting-purpose-card">
+    <div className="accounting-card-header"><h2>Capitalized cost accounts</h2></div>
+    <div className="accounting-card-body accounting-form">
+      <p className="accounting-meta">Map a reviewed Other Current Asset account for a dated period. The exact mirrored account revision is recorded with the review; names and subtypes alone do not establish cost eligibility.</p>
+      {eligibleAccounts.length === 0 ? <div className="accounting-empty"><strong>No eligible account mirror</strong><span>Refresh QuickBooks records, then review an Other Current Asset account.</span></div> : <>
+        <label>QuickBooks account<select value={accountId} onChange={event => setAccountId(event.currentTarget.value)}>{eligibleAccounts.map(account => <option key={account.providerObjectId} value={account.providerObjectId}>{account.displayName} · {account.providerObjectId} · revision {account.version}</option>)}</select></label>
+        <div className="accounting-form-row"><label>Effective from<input type="date" value={effectiveFrom} onChange={event => setEffectiveFrom(event.currentTarget.value)} /></label><label>Effective through<input type="date" value={effectiveTo} onChange={event => setEffectiveTo(event.currentTarget.value)} /></label></div>
+        <label>Review evidence<textarea value={reviewEvidence} onChange={event => setReviewEvidence(event.currentTarget.value)} maxLength={1000} placeholder="Name the reviewed source or approval." /></label>
+        <button type="button" className="accounting-button accounting-button-primary" disabled={saving || !selected || !effectiveFrom || !reviewEvidence.trim()} onClick={() => void save()}>{saving ? "Saving mapping…" : "Save capitalized cost mapping"}</button>
+      </>}
+      {error !== null && <div className="accounting-message is-error" role="alert">{error instanceof Error ? error.message : "The account mapping could not be saved."}</div>}
+      <div className="accounting-purpose-list"><strong>Reviewed mappings</strong>{mappings.length === 0 ? <span className="accounting-meta">No reviewed mappings for this QuickBooks company.</span> : <ul>{mappings.map(mapping => <li key={mapping.id}><span>{mapping.providerAccountId} · revision {mapping.accountSourceVersion}</span><span>{mapping.effectiveFrom}{mapping.effectiveTo ? ` through ${mapping.effectiveTo}` : " onward"}</span><small>{mapping.reviewEvidence}</small></li>)}</ul>}</div>
+    </div>
+  </section>;
 }
 
 function TransactionTable({ api, organizationId, scope }: { readonly api: AccountingApi; readonly organizationId: string; readonly scope: AccountingScope }) {
@@ -164,6 +202,7 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
   const selectedConnection = connections.data?.find(connection => connection.scope.realmId === selectedRealmId) ?? connections.data?.[0] ?? null;
   const scope = useMemo<AccountingScope | null>(() => selectedConnection?.status === "needs_reconnect" ? null : selectedConnection?.scope ?? null, [selectedConnection]);
   const mirrors = useQuery({ queryKey: ["accounting", "mirrors", scope, tab], queryFn: ({ signal }) => api.listMirrors(organizationId, scope!, tab as AccountingMirrorKind, signal), enabled: Boolean(scope && tab !== "transactions"), staleTime: 20_000 });
+  const purposeMappings = useQuery({ queryKey: ["accounting", "purpose-mappings", scope], queryFn: ({ signal }) => api.listPurposeMappings(organizationId, scope!, undefined, signal), enabled: Boolean(scope), staleTime: 20_000 });
   const selectedEntity = entityOptions.find(entity => entity.id === legalEntityId);
   const clearPending = async () => {
     setPendingId(null);
@@ -195,7 +234,7 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
     {message && <div className="accounting-message" role="status">{message}</div>}
     {callbackError && <div className="accounting-message" role="alert">{callbackErrorMessage(callbackError)} <button type="button" className="accounting-button" onClick={() => setCallbackError(null)}>Dismiss</button></div>}
     {connections.error && <ErrorBox error={connections.error} retry={() => void connections.refetch()} />}
-    <div className="accounting-grid"><aside className="accounting-sidebar">{pending.data && selectedEntity && <PendingBindingCard api={api} organizationId={organizationId} legalEntityId={legalEntityId} entityName={selectedEntity.name} pending={pending.data} onConfirmed={clearPending} />}{pending.error && <ErrorBox error={pending.error} retry={() => void pending.refetch()} />}{!connections.isLoading && <ConnectionList connections={connections.data ?? []} selected={selectedConnection} onSelect={connection => setSelectedRealmId(connection.scope.realmId)} />}{!pending.data && configuration.data?.configured && legalEntityId && (!selectedConnection || selectedConnection.status === "needs_reconnect") && <ConnectCard api={api} organizationId={organizationId} legalEntityId={legalEntityId} environment={environment} reconnect={selectedConnection?.status === "needs_reconnect" || disconnectedEntities.has(legalEntityId)} />}{configuration.data && !configuration.data.configured && <div className="accounting-card"><div className="accounting-card-header"><h2>QuickBooks is not configured</h2></div><div className="accounting-card-body">QuickBooks connection isn't available.</div></div>}</aside><main className="accounting-main">{scope ? <><nav className="accounting-tabs" aria-label="Accounting records">{[...mirrorTabs, ["transactions", "Transactions"] as const].map(([value, label]) => <button type="button" className={`accounting-tab ${tab === value ? "is-selected" : ""}`} key={value} onClick={() => setTab(value)}>{label}</button>)}</nav>{tab === "transactions" ? <TransactionTable api={api} organizationId={organizationId} scope={scope} /> : mirrors.isLoading ? <div className="accounting-empty">Loading {tab}…</div> : mirrors.error ? <ErrorBox error={mirrors.error} retry={() => void mirrors.refetch()} /> : <MirrorTable items={mirrors.data ?? []} kind={tab} />}</> : <div className="accounting-empty"><strong>{selectedConnection?.status === "needs_reconnect" ? "QuickBooks needs to be reconnected." : configuration.data?.configured && !connections.isLoading && !connections.data?.length ? "QuickBooks is not connected for this legal entity." : "Choose a QuickBooks connection."}</strong>{selectedConnection?.status === "needs_reconnect" ? <span>Use the reconnect action to restore accounting access.</span> : configuration.data?.configured && !connections.isLoading && !connections.data?.length && <span>Use {disconnectedEntities.has(legalEntityId) ? "Reconnect" : "Connect"} QuickBooks to link a company.</span>}</div>}</main></div>
+    <div className="accounting-grid"><aside className="accounting-sidebar">{pending.data && selectedEntity && <PendingBindingCard api={api} organizationId={organizationId} legalEntityId={legalEntityId} entityName={selectedEntity.name} pending={pending.data} onConfirmed={clearPending} />}{pending.error && <ErrorBox error={pending.error} retry={() => void pending.refetch()} />}{!connections.isLoading && <ConnectionList connections={connections.data ?? []} selected={selectedConnection} onSelect={connection => setSelectedRealmId(connection.scope.realmId)} />}{!pending.data && configuration.data?.configured && legalEntityId && (!selectedConnection || selectedConnection.status === "needs_reconnect") && <ConnectCard api={api} organizationId={organizationId} legalEntityId={legalEntityId} environment={environment} reconnect={selectedConnection?.status === "needs_reconnect" || disconnectedEntities.has(legalEntityId)} />}{configuration.data && !configuration.data.configured && <div className="accounting-card"><div className="accounting-card-header"><h2>QuickBooks is not configured</h2></div><div className="accounting-card-body">QuickBooks connection isn't available.</div></div>}</aside><main className="accounting-main">{scope ? <><nav className="accounting-tabs" aria-label="Accounting records">{[...mirrorTabs, ["transactions", "Transactions"] as const].map(([value, label]) => <button type="button" className={`accounting-tab ${tab === value ? "is-selected" : ""}`} key={value} onClick={() => setTab(value)}>{label}</button>)}</nav>{tab === "transactions" ? <TransactionTable api={api} organizationId={organizationId} scope={scope} /> : mirrors.isLoading ? <div className="accounting-empty">Loading {tab}…</div> : mirrors.error ? <ErrorBox error={mirrors.error} retry={() => void mirrors.refetch()} /> : <>{tab === "accounts" && <PurposeMappingCard api={api} organizationId={organizationId} scope={scope} accounts={mirrors.data ?? []} mappings={purposeMappings.data ?? []} onSaved={async () => { await purposeMappings.refetch(); }} />}<MirrorTable items={mirrors.data ?? []} kind={tab} /></>}</> : <div className="accounting-empty"><strong>{selectedConnection?.status === "needs_reconnect" ? "QuickBooks needs to be reconnected." : configuration.data?.configured && !connections.isLoading && !connections.data?.length ? "QuickBooks is not connected for this legal entity." : "Choose a QuickBooks connection."}</strong>{selectedConnection?.status === "needs_reconnect" ? <span>Use the reconnect action to restore accounting access.</span> : configuration.data?.configured && !connections.isLoading && !connections.data?.length && <span>Use {disconnectedEntities.has(legalEntityId) ? "Reconnect" : "Connect"} QuickBooks to link a company.</span>}</div>}</main></div>
     {disconnectOpen && selectedConnection && <DisconnectDialog connection={selectedConnection} entityName={selectedEntity?.name ?? "this legal entity"} saving={disconnecting} error={disconnectError} onCancel={() => setDisconnectOpen(false)} onConfirm={() => void disconnect()} />}
     <p className="accounting-meta accounting-support">QuickBooks connection help: <a href="mailto:michael@5central.capital?subject=Rent%20Ops%20QuickBooks%20support">Contact support</a> · <a href="/legal/eula" target="_blank" rel="noopener noreferrer">EULA</a> · <a href="/legal/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a></p>
   </div>;

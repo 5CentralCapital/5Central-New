@@ -134,6 +134,8 @@ export interface QboProviderMirror {
   readonly objectType: "Account" | "Vendor" | "Customer" | "Employee";
   readonly providerObjectId: string;
   readonly displayName: string;
+  readonly accountType: string | null;
+  readonly accountSubType: string | null;
   readonly active: boolean;
   readonly version: string;
   readonly providerUpdatedAt: string | null;
@@ -814,14 +816,30 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
     const accountType = (body as Record<string, unknown>).AccountType;
     const accountSubType = (body as Record<string, unknown>).AccountSubType ?? (body as Record<string, unknown>).DetailType;
     if (typeof accountType !== "string" || accountType.length === 0 || (accountSubType !== null && accountSubType !== undefined && typeof accountSubType !== "string")) return null;
-    const classification = accountType === "Expense" ? "expense"
+    // Capitalized cost is a reviewed, effective-dated purpose mapping. The
+    // provider account type and subtype are evidence for the mapping, but an
+    // account name or subtype alone must never opt an account into cost use.
+    const purposeMapping = resolution.postedOn
+      ? await this.purposeMappings.readPurposeMapping({
+          scope: {
+            provider: resolution.source.provider,
+            organizationId: resolution.source.organizationId,
+            legalEntityId: resolution.source.legalEntityId,
+            environment: resolution.source.environment,
+            realmId: resolution.source.realmId,
+          },
+          providerAccountId: resolution.accountObjectId,
+          postedOn: resolution.postedOn,
+        })
+      : null;
+    const classification = purposeMapping?.purpose === "capitalized_cost" ? "capitalized_cost"
+      : accountType === "Expense" ? "expense"
       : accountType === "Cost of Goods Sold" ? "cogs"
-        : accountType === "Fixed Asset" ? "capitalized_cost"
-          : accountType === "Bank" || accountType === "Credit Card" ? "bank"
-            : accountType === "Equity" ? "equity"
-              : /Liability|Payable|Receivable/.test(accountType) ? "liability"
-                : /Income/.test(accountType) ? "income"
-                  : /Asset/.test(accountType) ? "other_asset" : "unknown";
+      : accountType === "Bank" || accountType === "Credit Card" ? "bank"
+        : accountType === "Equity" ? "equity"
+          : /Liability|Payable|Receivable/.test(accountType) ? "liability"
+            : /Income/.test(accountType) ? "income"
+              : /Asset/.test(accountType) ? "other_asset" : "unknown";
     const providerUpdatedAt = account.rows[0]?.provider_updated_at;
     const updated = providerUpdatedAt instanceof Date ? providerUpdatedAt.toISOString() : typeof providerUpdatedAt === "string" ? providerUpdatedAt : resolution.watermark.observedAt;
     const parsedUpdated = isoTimestampSchema.safeParse(updated);
@@ -856,9 +874,9 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       const latest = row?.latest_watermark instanceof Date ? row.latest_watermark.toISOString() : typeof row?.latest_watermark === "string" ? row.latest_watermark : null;
       return { objectCount: Number(row?.object_count ?? 0), transactionCount: 0, lineCount: 0, coveredFrom: null, coveredThrough: null, latestWatermark: latest };
     }
-    const match = /^transactions\.(purchase|bill|billpayment|deposit)$/.exec(stream);
+    const match = /^transactions\.(purchase|bill|billpayment|deposit|journalentry)$/.exec(stream);
     if (!match) throw new AccountingError("accounting_validation", "QBO coverage stream is unsupported");
-    const entity = match[1] === "billpayment" ? "BillPayment" : match[1][0].toUpperCase() + match[1].slice(1);
+    const entity = match[1] === "billpayment" ? "BillPayment" : match[1] === "journalentry" ? "JournalEntry" : match[1][0].toUpperCase() + match[1].slice(1);
     const result = await this.executor.query<{ object_count: unknown; transaction_count: unknown; line_count: unknown; covered_from: unknown; covered_through: unknown; latest_watermark: unknown }>(
       `SELECT COUNT(DISTINCT o.object_id) AS object_count, COUNT(DISTINCT t.object_id) AS transaction_count,
               COUNT(DISTINCT (b.object_id || ':' || b.line_id)) AS line_count,
@@ -907,6 +925,13 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
         objectType,
         providerObjectId,
         displayName: displayName ?? `${objectType} ${providerObjectId}`,
+        accountType: objectType === "Account" && typeof body.AccountType === "string" ? body.AccountType : null,
+        accountSubType: objectType === "Account"
+          ? (() => {
+              const value = body.AccountSubType ?? body.DetailType;
+              return typeof value === "string" ? value : null;
+            })()
+          : null,
         active: body.Active !== false,
         version,
         providerUpdatedAt,
@@ -1039,7 +1064,7 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       return openCount > 0 && coverage.status === "complete" ? financialSourceCoverageSchema.parse({ ...coverage, status: "partial", reason: `${openCount} QBO object(s) have unresolved mirror exceptions` }) : coverage;
     }
     const rows = await this.executor.query<CoverageRow>(`SELECT stream,status,evidence,basis,watermark,covered_from,covered_through,observed_at,object_count,transaction_count,line_count,reason FROM accounting_qbo_coverage WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 ORDER BY stream`, scopeParts(scope));
-    const required = ["accounts", "transactions.purchase", "transactions.bill", "transactions.billpayment", "transactions.deposit"];
+    const required = ["accounts", "transactions.purchase", "transactions.bill", "transactions.billpayment", "transactions.deposit", "transactions.journalentry"];
     if (rows.rows.length === 0) return mapCoverage(scope, null, [], "aggregate");
     const byStream = new Map(rows.rows.map(row => [String(row.stream), row]));
     const missing = required.filter(name => !byStream.has(name));

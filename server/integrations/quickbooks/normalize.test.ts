@@ -38,6 +38,41 @@ test("normalizes provider Purchase, Bill, and BillPayment lines with exact cent 
   assert.equal(payment.value.lines[0]?.flow, "outgoing");
 });
 
+test("normalizes JournalEntry debit cost and credit refund lines with exact source identities", () => {
+  const result = normalizeQboTransaction("JournalEntry", {
+    Id: "2949", SyncToken: "0", TxnDate: "2026-09-08", CurrencyRef: { value: "USD" },
+    MetaData: { LastUpdatedTime: updated },
+    Line: [
+      { Id: "0", Amount: "1286.44", Description: "Inventory cost", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "inventory-1" } } },
+      { Id: "1", Amount: "1286.44", Description: "Refund", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "refund-1" } } },
+    ],
+  });
+  assert.deepEqual(result.unsupportedReasons, []);
+  assert.deepEqual(result.value?.lines.map(line => ({
+    lineId: line.lineId,
+    accountObjectId: line.accountObjectId,
+    amountCents: line.amountCents,
+    direction: line.direction,
+    flow: line.flow,
+    lineRole: line.lineRole,
+  })), [
+    { lineId: "0", accountObjectId: "inventory-1", amountCents: "128644", direction: "debit", flow: "outgoing", lineRole: "expense" },
+    { lineId: "1", accountObjectId: "refund-1", amountCents: "128644", direction: "credit", flow: "incoming", lineRole: "expense" },
+  ]);
+});
+
+test("rejects an unbalanced JournalEntry instead of mirroring partial cost lines", () => {
+  const result = normalizeQboTransaction("JournalEntry", {
+    Id: "2950", SyncToken: "0", TxnDate: "2026-09-08", CurrencyRef: { value: "USD" }, MetaData: { LastUpdatedTime: updated },
+    Line: [
+      { Id: "0", Amount: "100.00", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "inventory-1" } } },
+      { Id: "1", Amount: "99.99", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "refund-1" } } },
+    ],
+  });
+  assert.ok(result.unsupportedReasons.some(reason => /do not balance/.test(reason)));
+  assert.equal(result.value?.lines.length, 2);
+});
+
 test("rejects sub-cent or unsafe provider amounts instead of rounding", () => {
   assert.throws(() => qboAmountToCents("1.001", "TotalAmt"), /sub-cent/);
   assert.throws(() => qboAmountToCents(Number.MAX_SAFE_INTEGER + 1, "TotalAmt"), /safe numeric/);

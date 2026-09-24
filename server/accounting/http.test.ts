@@ -5,6 +5,7 @@ import express from "express";
 import { createCompanyDemoApp, COMPANY_DEMO_CSRF_TOKEN } from "../company/demo";
 import { createQboTokenCipher } from "./token-crypto";
 import { SYNTHETIC_COMPANY } from "../company/testing/synthetic-database";
+import { newOperationId } from "../../shared/company";
 
 const scope = {
   organizationId: SYNTHETIC_COMPANY.organizationId,
@@ -41,6 +42,37 @@ test("Accounting HTTP requires environment and reads named mirrors through the r
     const connections = await fetch(`${base}/connections?legalEntityId=${scope.legalEntityId}&environment=sandbox`);
     assert.equal(connections.status, 200, await connections.clone().text());
     assert.deepEqual((await connections.json()).items, []);
+  } finally {
+    await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+    await fixture.close();
+  }
+});
+
+test("Accounting HTTP maps a reviewed capitalized-cost Account through the shared idempotent command", async () => {
+  const fixture = await createCompanyDemoApp();
+  const listener = fixture.app.listen(0, "127.0.0.1");
+  await new Promise<void>(resolve => listener.once("listening", resolve));
+  const origin = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
+  const base = `${origin}/api/company/${scope.organizationId}/accounting/qbo`;
+  try {
+    await fixture.services.accounting.mirror.ingestSourceObject({
+      scope,
+      objectType: "Account",
+      objectId: "132",
+      version: "4",
+      providerUpdatedAt: "2026-09-23T19:30:49.000Z",
+      providerBody: { Id: "132", SyncToken: "4", Name: "Capital account", AccountType: "Other Current Asset", AccountSubType: "OtherCurrentAssets" },
+      receivedAt: "2026-09-24T00:00:00.000Z",
+    });
+    const operationId = newOperationId();
+    const save = await fetch(`${base}/purpose-commands/accounting.qbo_purpose.map_capitalized_cost`, { method: "POST", headers: { "content-type": "application/json", "x-rent-ops-csrf": COMPANY_DEMO_CSRF_TOKEN }, body: JSON.stringify({ operationId, idempotencyKey: `http-purpose:${operationId}`, scope: { organizationId: scope.organizationId, legalEntityId: scope.legalEntityId }, payload: { providerAccountId: "132", accountSourceVersion: "4", environment: "sandbox", realmId: scope.realmId, effectiveFrom: "2026-01-01", reviewEvidence: "Synthetic HTTP review" } }) });
+    assert.equal(save.status, 200, await save.clone().text());
+    const receipt = await save.json() as { state: string; affectedRecordIds: string[] };
+    assert.equal(receipt.state, "saved_in_rops");
+    assert.equal(receipt.affectedRecordIds.length, 1);
+    const mappings = await fetch(`${base}/purpose-mappings?legalEntityId=${scope.legalEntityId}&environment=sandbox&realmId=${scope.realmId}`);
+    assert.equal(mappings.status, 200, await mappings.clone().text());
+    assert.equal((await mappings.json() as { items: Array<{ providerAccountId: string; purpose: string; accountSourceVersion: string }> }).items[0]?.providerAccountId, "132");
   } finally {
     await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
     await fixture.close();

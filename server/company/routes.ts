@@ -17,6 +17,8 @@ import type { TimeServices } from '../time/service';
 import { registerReportingHttpRoutes, type ReportingPort } from '../reporting';
 import { registerWorkOrderRoutes } from '../work-orders/http';
 import type { WorkOrderPort } from '../work-orders/port';
+import { PROPERTY_COMMAND_KINDS, propertyCommandPayloadSchemas } from '../../shared/company/property-contracts';
+import type { CompanyPropertyPort } from './property-port';
 
 export interface CompanyProjectPort {
   list(principal: AuthenticatedPrincipal, query: ProjectListQuery): Promise<unknown>;
@@ -46,6 +48,7 @@ const readQuery = z.object({
 
 export function registerCompanyRoutes(app: Express, options: {
   executor: RentOpsQueryExecutor; requireAdmin: RequestHandler; projects: CompanyProjectPort;
+  properties?: CompanyPropertyPort;
   accounting?: AccountingServices;
   investors?: InvestorPort;
   time?: TimeServices;
@@ -68,6 +71,22 @@ export function registerCompanyRoutes(app: Express, options: {
   const web = attestTransport('web');
   app.get('/api/company/context', requireAdmin, companyReadHandler(async (req, res) => {
     res.json(await readCompanyContext(executor, companyWebActor(req), 'admin'));
+  }));
+  if (options.properties) app.get('/api/company/:organizationId/property-plans', requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const query = z.object({ legalEntityId: legalEntityIdSchema.optional() }).strict().parse(req.query);
+    const principal = await loadAuthenticatedPrincipal(executor, { actorId: companyWebActor(req), organizationId, role: 'admin' });
+    res.json(await options.properties!.listPlanned(principal, { organizationId, ...(query.legalEntityId === undefined ? {} : { legalEntityId: query.legalEntityId }) }));
+  }));
+  if (options.properties) app.post('/api/company/:organizationId/property-commands/:commandKind', requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const kind = z.enum(PROPERTY_COMMAND_KINDS).parse(req.params.commandKind);
+    const envelope = commandEnvelopeSchema(propertyCommandPayloadSchemas[kind]).parse(req.body);
+    if (envelope.scope.organizationId !== organizationId) throw new ForbiddenCommandError('Property company does not match this request.');
+    const actorId = companyWebActor(req);
+    const resolvePrincipal = (transaction: RentOpsQueryExecutor) => loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: 'admin' });
+    const principal = await resolvePrincipal(executor);
+    res.json(await options.properties!.execute(kind, envelope, { principal, resolvePrincipal, transport: web }));
   }));
   app.get('/api/company/:organizationId/projects', requireAdmin, companyReadHandler(async (req, res) => {
     const organizationId = organizationIdSchema.parse(req.params.organizationId);

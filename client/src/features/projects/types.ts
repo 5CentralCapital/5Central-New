@@ -14,6 +14,7 @@ import type {
   ProjectTaskStatus,
   ProjectType,
 } from "@shared/projects";
+import type { QboProjectRecordKind } from "@shared/projects";
 
 export type ProjectWorkspaceProperty = CompanyContextProperty;
 export type ProjectWorkspaceEntity = CompanyContextEntity;
@@ -24,6 +25,20 @@ export type ProjectTask = SharedProjectTask;
 export type ProjectCostControl = ProjectDraftCost;
 export type ProjectExecutionDetail = SharedProjectExecutionDetail;
 export type { ProjectCommandKind, ProjectExecutionCommandKind, ProjectExecutionCommandPayload, ProjectStatus, ProjectTaskStatus, ProjectType };
+
+export interface QboIdentityFormValues {
+  readonly nativeProjectId: string;
+  readonly customerId: string;
+  readonly environment: "sandbox" | "production";
+  readonly realmId: string;
+}
+
+export function qboIdentityFormEntries(values: QboIdentityFormValues): readonly { recordKind: QboProjectRecordKind; externalId: string }[] {
+  return [
+    { recordKind: "Project", externalId: values.nativeProjectId.trim() },
+    ...(values.customerId.trim() ? [{ recordKind: "Customer" as const, externalId: values.customerId.trim() }] : []),
+  ];
+}
 
 export interface ProjectListFilters {
   readonly status?: ProjectStatus | "all";
@@ -67,6 +82,8 @@ export interface ProjectWorkspaceProps {
   readonly organizationId: string;
   readonly organizationName?: string;
   readonly entities?: readonly ProjectWorkspaceEntity[];
+  /** Planned properties come from the project-scoped property-plan read, not company context. */
+  readonly plannedPropertyIds?: readonly string[];
   readonly api?: ProjectsApi;
   readonly initialProjectId?: string;
   readonly activeTab?: ProjectTab;

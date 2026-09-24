@@ -1,5 +1,5 @@
 import { rentOpsAuthClient } from "../rent-ops/auth";
-import type { AccountingApi, AccountingConnection, AccountingEnvironment, AccountingMirror, AccountingMirrorKind, AccountingPendingBinding, AccountingScope, AccountingTransaction, AccountingTransactionPage } from "./types";
+import type { AccountingApi, AccountingConnection, AccountingEnvironment, AccountingMirror, AccountingMirrorKind, AccountingPendingBinding, AccountingPurposeMapping, AccountingScope, AccountingTransaction, AccountingTransactionPage } from "./types";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -74,7 +74,27 @@ function parsePending(value: unknown): AccountingPendingBinding | null {
 function parseMirror(value: unknown, kind: AccountingMirrorKind): AccountingMirror {
   const root = record(value);
   const objectType = ["Account", "Vendor", "Customer", "Employee"].includes(String(root.objectType)) ? String(root.objectType) as AccountingMirror["objectType"] : "Account";
-  return { kind, objectType, providerObjectId: String(root.providerObjectId ?? ""), displayName: String(root.displayName ?? ""), active: root.active !== false, version: String(root.version ?? ""), providerUpdatedAt: root.providerUpdatedAt === null || root.providerUpdatedAt === undefined ? null : String(root.providerUpdatedAt) };
+  return { kind, objectType, providerObjectId: String(root.providerObjectId ?? ""), displayName: String(root.displayName ?? ""), accountType: typeof root.accountType === "string" ? root.accountType : null, accountSubType: typeof root.accountSubType === "string" ? root.accountSubType : null, active: root.active !== false, version: String(root.version ?? ""), providerUpdatedAt: root.providerUpdatedAt === null || root.providerUpdatedAt === undefined ? null : String(root.providerUpdatedAt) };
+}
+
+function parsePurposeMapping(value: unknown): AccountingPurposeMapping {
+  const root = record(value); const scope = record(root.scope);
+  const purpose = ["capital_contribution", "distribution", "principal", "interest", "expense", "capitalized_cost", "rent_receipt"].includes(String(root.purpose)) ? String(root.purpose) as AccountingPurposeMapping["purpose"] : "expense";
+  return {
+    id: String(root.id ?? ""),
+    scope: { organizationId: String(scope.organizationId ?? ""), legalEntityId: String(scope.legalEntityId ?? ""), environment: scope.environment === "production" ? "production" : "sandbox", realmId: String(scope.realmId ?? "") },
+    providerAccountId: String(root.providerAccountId ?? ""),
+    purpose,
+    effectiveFrom: String(root.effectiveFrom ?? ""),
+    effectiveTo: root.effectiveTo === null || root.effectiveTo === undefined ? null : String(root.effectiveTo),
+    accountSourceVersion: String(root.accountSourceVersion ?? ""),
+    accountType: String(root.accountType ?? ""),
+    accountSubType: root.accountSubType === null || root.accountSubType === undefined ? null : String(root.accountSubType),
+    reviewEvidence: String(root.reviewEvidence ?? ""),
+    reviewedBy: String(root.reviewedBy ?? ""),
+    reviewedAt: String(root.reviewedAt ?? ""),
+    createdAt: String(root.createdAt ?? ""),
+  };
 }
 
 function parseTransaction(value: unknown): AccountingTransaction {
@@ -94,6 +114,12 @@ const api: AccountingApi = {
   async listMirrors(organizationId, scope, kind, signal) {
     const value = record(await requestJson(`${basePath(organizationId)}/mirrors?${scopeParams(scope)}&kind=${kind}`, { signal }));
     return Array.isArray(value.items) ? value.items.map(item => parseMirror(item, kind)) : [];
+  },
+  async listPurposeMappings(organizationId, scope, providerAccountId, signal) {
+    const params = scopeParams(scope);
+    if (providerAccountId !== undefined) params.set("providerAccountId", providerAccountId);
+    const value = record(await requestJson(`${basePath(organizationId)}/purpose-mappings?${params}`, { signal }));
+    return Array.isArray(value.items) ? value.items.map(parsePurposeMapping) : [];
   },
   async listTransactions(organizationId, scope, signal) {
     const value = record(await requestJson(`${basePath(organizationId)}/transactions?${scopeParams(scope)}&limit=100`, { signal }));
@@ -118,6 +144,30 @@ const api: AccountingApi = {
   async sync(organizationId, scope, signal) {
     const value = record(await requestJson(`${basePath(organizationId)}/sync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legalEntityId: scope.legalEntityId, environment: scope.environment, realmId: scope.realmId }), signal }));
     return { status: value.status === "partial" ? "partial" : "complete", streams: Array.isArray(value.streams) ? value.streams : [] };
+  },
+  async mapCapitalizedCost(organizationId, input, signal) {
+    const operationId = crypto.randomUUID();
+    const idempotencyKey = `accounting-purpose:${operationId}`;
+    const value = record(await requestJson(`${basePath(organizationId)}/purpose-commands/accounting.qbo_purpose.map_capitalized_cost`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operationId,
+        idempotencyKey,
+        scope: { organizationId, legalEntityId: input.legalEntityId },
+        payload: {
+          providerAccountId: input.providerAccountId,
+          accountSourceVersion: input.accountSourceVersion,
+          environment: input.scope.environment,
+          realmId: input.scope.realmId,
+          effectiveFrom: input.effectiveFrom,
+          effectiveTo: input.effectiveTo ?? null,
+          reviewEvidence: input.reviewEvidence,
+        },
+      }),
+      signal,
+    }));
+    return { operationId: String(value.operationId ?? operationId), idempotencyKey: String(value.idempotencyKey ?? idempotencyKey), state: String(value.state ?? "saved_in_rops"), affectedRecordIds: Array.isArray(value.affectedRecordIds) ? value.affectedRecordIds.map(String) : [] };
   },
   async disconnect(organizationId, scope, signal) {
     const value = record(await requestJson(`${basePath(organizationId)}/disconnect`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legalEntityId: scope.legalEntityId, realmId: scope.realmId }), signal }));

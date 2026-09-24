@@ -34,6 +34,7 @@ import {
   projectIdSchema,
 } from "../../shared/projects";
 import type { AuthenticatedPrincipal } from "../company/authorization";
+import { hasProjectCostDirection } from "./cost-direction";
 import type { ProjectExecutionCommandOptions } from "./execution-commands";
 import {
   financialSourceScopeKey,
@@ -131,7 +132,7 @@ async function isEligibleProjectCostLine(
   // transfers, principal, and bill-payment clearing lines can all look like
   // costs at the transaction level. The finance mirror must also verify the
   // current source identity and the provider Account classification.
-  if (line.flow !== "outgoing" || (line.lineRole !== "expense" && line.lineRole !== "payable")) return false;
+  if (!hasProjectCostDirection(line)) return false;
   const context = await costContext.readCostContext({
     scope: sourceScope(line.source),
     objectType: line.source.objectType,
@@ -161,7 +162,7 @@ export async function resolveProjectFinanceActuals(
   costContext: FinancialProviderCostContextPort,
   input: { organizationId: string; projectId: string; asOf?: IsoDate },
 ): Promise<ProjectFinanceActualReadResult> {
-  const bindingRows = await bindings.listProjectBindings(input);
+  const bindingRows = (await bindings.listProjectBindings(input)).filter((binding) => binding.bindingStatus !== "released");
   const scopes = new Map<string, FinancialSourceScope>();
   for (const binding of bindingRows) scopes.set(financialSourceScopeKey(sourceScope(binding.source)), sourceScope(binding.source));
   const coverages = await Promise.all(Array.from(scopes.values()).map((scope) => source.readCoverage(scope)));

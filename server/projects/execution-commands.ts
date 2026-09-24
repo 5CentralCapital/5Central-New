@@ -39,6 +39,7 @@ import {
 } from "../company/commands/runner";
 import { ConflictCommandError, ValidationCommandError } from "../company/commands/errors";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
+import { hasProjectCostDirection } from "./cost-direction";
 import {
   assertEntityPropertyUnit,
   assertProjectScope,
@@ -147,7 +148,7 @@ async function verifyBindingSource(context: CommandHandlerContext<unknown>, sour
   const resolved = financialSourceLineResolutionSchema.parse(line);
   if (sourceKey(resolved.source) !== sourceKey(source)) throw new ValidationCommandError("The QBO source line revision is stale", { reason: "project_finance_revision_mismatch" });
   if (resolved.postingState !== "posted" || resolved.postedOn === null || resolved.postedOn > effectiveDate) throw new ValidationCommandError("The QBO source line is not posted for this effective date", { reason: "project_finance_line_not_posted" });
-  if (resolved.flow !== "outgoing" || (resolved.lineRole !== "expense" && resolved.lineRole !== "payable")) throw new ValidationCommandError("The QBO source line is not an eligible project cost", { reason: "project_finance_line_ineligible" });
+  if (!hasProjectCostDirection(resolved)) throw new ValidationCommandError("The QBO source line is not an eligible project cost", { reason: "project_finance_line_ineligible" });
   if (resolved.currency !== expectedCurrency) throw new ValidationCommandError("The QBO source line currency does not match the project", { reason: "project_finance_currency_mismatch" });
   const costContext = await finance.costContext.readCostContext({
     scope: { provider: source.provider, organizationId: source.organizationId, legalEntityId: source.legalEntityId, environment: source.environment, realmId: source.realmId },
@@ -306,7 +307,8 @@ async function resolveDrawSourceEligibility(
     version: row.source_version,
   });
   const allocated = rowCents(row.allocated_cents, "draw_actual_eligible");
-  await verifyBindingSource(context, source, allocated, resolveEffectiveDate(context.envelope.effectiveDate), project.currency);
+  const line = await verifyBindingSource(context, source, allocated, resolveEffectiveDate(context.envelope.effectiveDate), project.currency);
+  if (line.direction !== "debit") throw new ValidationCommandError("A project cost refund cannot fund a draw request", { reason: "project_draw_refund_ineligible" });
   return allocated;
 }
 
