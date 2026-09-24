@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { openPrintView } from "./workspace-model";
+import { openPrintView, packageRunRowCount } from "./workspace-model";
 
 test("print opens one tab without noopener and clears its opener", () => {
   const calls: unknown[][] = [];
@@ -13,4 +13,8 @@ test("print opens one tab without noopener and clears its opener", () => {
 
 test("print falls back to a download only when the tab is blocked", () => {
   assert.equal(openPrintView(() => null, "blob:report"), false);
+});
+
+test("package row totals keep missing legacy counts visible", () => {
+  assert.deepEqual(packageRunRowCount([{ rowCount: 12 }, {}, { rowCount: 3 }]), { knownRows: 15, unknownCount: 1 });
 });

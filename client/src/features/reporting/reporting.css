@@ -128,6 +128,12 @@
 .reporting-table-wrap th { position: sticky; top: 0; z-index: 1; background: var(--rp-surface-2); color: var(--rp-muted); font-weight: 600; }
 .reporting-table-wrap tbody tr:hover { background: var(--ds-row-hover, rgb(58 50 38 / 3.5%)); }
 .reporting-table-wrap tfoot th, .reporting-table-wrap tfoot td, .reporting-package-run tfoot th, .reporting-package-run tfoot td { border-top: 1px solid var(--rp-line-strong); border-bottom: 0; color: var(--rp-muted); font-size: 11px; font-weight: 600; }
+.reporting-table-footer { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 24px; }
+.reporting-table-footer-totals { display: grid; gap: 4px; }
+.reporting-table-footer-totals > span { color: var(--rp-muted); font-size: 11px; }
+.reporting-table-footer .reporting-totals { gap: 6px 22px; margin: 0; padding: 0; border: 0; background: transparent; }
+.reporting-table-footer .reporting-totals dd { font-size: 14px; }
+.reporting-table-footer-missing { color: var(--rp-warning); }
 .reporting-workspace .is-numeric { text-align: right; }
 .reporting-more { justify-self: start; }
 

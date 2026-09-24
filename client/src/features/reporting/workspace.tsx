@@ -8,7 +8,7 @@ import { reportingApi, ReportingApiError } from "./api";
 import { ReportSetup } from "./setup";
 import { describeAppliedFilters } from "./setup-model";
 import type { ReportPackageSaveRequest, ReportPresetSaveRequest } from "./types";
-import { openPrintView, packageItemFromRequest, packageRunSummary, runtimeStatusLabel, type PackageDraft } from "./workspace-model";
+import { openPrintView, packageItemFromRequest, packageRunRowCount, packageRunSummary, runtimeStatusLabel, type PackageDraft } from "./workspace-model";
 import { requestFromFinancialLink } from "../accounting/report-links";
 import "./reporting.css";
 
@@ -49,6 +49,11 @@ function Result({ organizationId, page, applied, title, onPage }: { organization
   const run = (work: () => Promise<void>) => { setError(undefined); void work().catch(workError => setError(errorMessage(workError, "The export could not be created."))); };
   const incomplete = page.coverage.filter(item => item.state !== "complete");
   const numeric = (type: string) => type === "money" || type === "integer" || type === "decimal" || type === "percent";
+  const paginated = Boolean(page.nextCursor) || page.rows.length < page.totalRows;
+  const shownLabel = paginated
+    ? `Shown: ${page.rows.length.toLocaleString("en-US")} of ${page.totalRows.toLocaleString("en-US")} rows`
+    : `Shown: ${page.rows.length.toLocaleString("en-US")} rows`;
+  const totalsLabel = paginated ? "Page totals" : "Filtered totals";
   return <section className="reporting-result" aria-label={`${title} results`}>
     <div className="reporting-result-bar">
       <div><strong>{page.nextCursor || page.rows.length < page.totalRows ? `Shown: ${page.rows.length.toLocaleString("en-US")} of ${page.totalRows.toLocaleString("en-US")} rows` : `Filtered total: ${page.totalRows.toLocaleString("en-US")} row${page.totalRows === 1 ? "" : "s"}`}</strong>{applied.length > 0 && <span className="reporting-applied">{applied.join(" · ")}</span>}</div>
@@ -60,20 +65,20 @@ function Result({ organizationId, page, applied, title, onPage }: { organization
       </div>
     </div>
     {error && <div className="reporting-error" role="alert">{error}</div>}
-    {page.totals.length > 0 && <dl className="reporting-totals" aria-label="Report totals">{page.totals.map(total => <div key={total.key} className={total.state === "complete" ? "" : "is-incomplete"}><dt>{reportTotalLabel(total.key)}</dt><dd>{formatReportTotal(total)}{total.state !== "complete" && <small>{reportStatusLabel(total.state)}</small>}</dd></div>)}</dl>}
     {(incomplete.length > 0 || page.missingData.length > 0) && <details className="reporting-notice">
       <summary>{incomplete.length ? "Source coverage is incomplete" : "Some data is missing"}</summary>
       <ul>{incomplete.map(item => <li key={`coverage:${item.source}`}>{reportStatusLabel(item.source)}: {item.reason ?? reportStatusLabel(item.state)}</li>)}{page.missingData.map((item, index) => <li key={`${item.code}:${index}`}>{item.message}</li>)}</ul>
     </details>}
     {page.rows.length === 0
       ? <div className="reporting-empty-state"><h3>No rows</h3><p>No records matched this setup.</p></div>
-      : <div className="reporting-table-wrap" tabIndex={0} aria-label={`${title} table`}><table><thead><tr>{page.columns.map(column => <th key={column.id} scope="col" className={numeric(column.type) ? "is-numeric" : ""}>{column.label}</th>)}</tr></thead><tbody>{page.rows.map(row => <tr key={row.rowId}>{page.columns.map(column => <td key={column.id} className={numeric(column.type) ? "is-numeric" : ""}>{formatReportValue(row.values[column.id], column, row.values)}</td>)}</tr>)}</tbody></table></div>}
+      : <div className="reporting-table-wrap" tabIndex={0} aria-label={`${title} table`}><table><thead><tr>{page.columns.map(column => <th key={column.id} scope="col" className={numeric(column.type) ? "is-numeric" : ""}>{column.label}</th>)}</tr></thead><tbody>{page.rows.map(row => <tr key={row.rowId}>{page.columns.map(column => <td key={column.id} className={numeric(column.type) ? "is-numeric" : ""}>{formatReportValue(row.values[column.id], column, row.values)}</td>)}</tr>)}</tbody><tfoot><tr><td colSpan={Math.max(1, page.columns.length)}><div className="reporting-table-footer"><strong>{shownLabel}</strong>{page.totals.length > 0 ? <div className="reporting-table-footer-totals"><span>{totalsLabel}</span><dl className="reporting-totals" aria-label={`${totalsLabel} for ${title}`}>{page.totals.map(total => <div key={total.key} className={total.state === "complete" ? "" : "is-incomplete"}><dt>{reportTotalLabel(total.key)}</dt><dd>{formatReportTotal(total)}{total.state !== "complete" && <small>{reportStatusLabel(total.state)}</small>}</dd></div>)}</dl></div> : <span className="reporting-table-footer-missing">{totalsLabel} unavailable</span>}</div></td></tr></tfoot></table></div>}
     {page.nextCursor && <button type="button" className="reporting-quiet-button reporting-more" onClick={() => void next()} disabled={loading}>{loading ? "Loading…" : "Show more rows"}</button>}
   </section>;
 }
 
 function PackageRunView({ run, entries, onOpen }: { run: ReportPackageRun; entries: readonly ReportEntry[]; onOpen: (runId: string, title: string) => void }) {
   const summary = packageRunSummary(run);
+  const rowSummary = packageRunRowCount(run.itemRuns);
   return <section className="reporting-package-run" aria-label="Package run">
     <header><h3>{summary.label}</h3><span className={`reporting-badge ${summary.complete ? "is-complete" : "is-incomplete"}`}>{summary.complete ? "Complete" : "Incomplete"}</span></header>
     <table><thead><tr><th scope="col">Report</th><th scope="col">Status</th><th scope="col" className="is-numeric">Rows</th><th scope="col">Detail</th><th scope="col"><span className="reporting-sr-only">Open</span></th></tr></thead>
@@ -81,7 +86,7 @@ function PackageRunView({ run, entries, onOpen }: { run: ReportPackageRun; entri
         const title = item.title ?? entries.find(entry => entry.id === item.reportId)?.title ?? item.itemId;
         const status = item.state === "failed" ? "Failed" : item.completeness === "complete" ? "Complete" : "Incomplete";
         return <tr key={item.itemId}><td>{title}</td><td><span className={`reporting-badge ${status === "Complete" ? "is-complete" : status === "Failed" ? "is-failed" : "is-incomplete"}`}>{status}</span></td><td className="is-numeric">{item.rowCount ?? "—"}</td><td>{item.reason ?? ""}</td><td>{item.runId && <button type="button" className="reporting-quiet-button" onClick={() => onOpen(item.runId!, title)}>View</button>}</td></tr>;
-      })}</tbody><tfoot><tr><th scope="row">Shown: {run.itemRuns.length} reports</th><td>{run.itemRuns.filter(item => item.completeness === "complete" && item.state !== "failed").length} complete · {run.itemRuns.filter(item => item.completeness !== "complete" || item.state === "failed").length} incomplete</td><td className="is-numeric">{run.itemRuns.reduce((total, item) => total + (item.rowCount ?? 0), 0).toLocaleString("en-US")}</td><td colSpan={2}>Filtered package totals</td></tr></tfoot>
+      })}</tbody><tfoot><tr><th scope="row">Shown: {run.itemRuns.length} reports</th><td>{run.itemRuns.filter(item => item.completeness === "complete" && item.state !== "failed").length} complete · {run.itemRuns.filter(item => item.completeness !== "complete" || item.state === "failed").length} incomplete</td><td className="is-numeric">{rowSummary.unknownCount ? `${rowSummary.knownRows.toLocaleString("en-US")} known · ${rowSummary.unknownCount} unknown` : rowSummary.knownRows.toLocaleString("en-US")}</td><td colSpan={2}>Filtered package totals</td></tr></tfoot>
     </table>
   </section>;
 }

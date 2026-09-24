@@ -5,11 +5,15 @@ import type { ProjectCostLine, ProjectCostReport } from "@shared/projects/cost-r
 import type { CostSourceLine, CostSourceLinePage } from "@shared/projects/source-lines";
 import type { ProjectLaborResponse } from "@shared/time/labor";
 import type { ProjectDetail, ProjectExecutionDetail } from "./types";
-import { formatInputValue, formatMoney, formatQualifiedMoney, incurredLabel, paidLabel, parseMoneyInput, sumCents } from "./money";
+import { formatInputValue, formatMoney, formatQualifiedMoney, incurredLabel, paidLabel, parseMoneyInput, sumCents, sumCentsByCurrency } from "./money";
 
 function label(value: string): string { return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
 function dateLabel(value: string | null | undefined): string { if (!value) return "—"; const date = new Date(`${value.slice(0, 10)}T00:00:00`); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date); }
 function money(value: string | null | undefined, currency: string): string { return value === null || value === undefined ? "Unknown" : formatMoney(value, currency); }
+function moneyTotalsByCurrency(values: readonly { readonly cents: string | null | undefined; readonly currency: string }[]): string {
+  const totals = sumCentsByCurrency(values);
+  return totals.length ? totals.map(total => total.cents === null ? `${total.currency} Unknown${total.unknownCount > 1 ? ` (${total.unknownCount})` : ""}` : `${total.currency} ${formatMoney(total.cents, total.currency)}${total.unknownCount ? ` + ${total.unknownCount} unknown` : ""}`).join(" · ") : "—";
+}
 function hours(seconds: number): string { return (seconds / 3_600).toLocaleString("en-US", { maximumFractionDigits: 2 }); }
 function tone(status: string): string { return status === "complete" || status === "on_track" || status === "settled" ? "is-positive" : status === "open" || status === "at_risk" || status === "late" || status === "partial" ? "is-warning" : status === "unknown" || status === "not_applicable" || status === "unavailable" ? "is-muted" : ""; }
 function Status({ value, text }: { value: string; text?: string }) { return <span className={`projects-status ${tone(value)}`}>{text ?? label(value)}</span>; }
@@ -186,7 +190,7 @@ function FinanceBindingForm({ project, execution, disabled, search, onCreate, on
           <td><strong>{item.description ?? item.transactionType}</strong><small className="projects-table-subline">{item.transactionType}</small></td>
           <td>{dateLabel(item.postedOn)}</td>
           <td className="projects-number">{formatMoney(item.availableCents, item.currency)}</td>
-        </tr>)}</tbody><tfoot><tr><th scope="row">Shown: {page.items.length} QBO lines</th><td colSpan={2}>{page.nextCursor ? "Page totals" : "Filtered totals"}</td><td className="projects-number">{formatMoney(sumCents(page.items.map(item => item.availableCents)) ?? undefined, project.currency)}</td></tr></tfoot>
+        </tr>)}</tbody><tfoot><tr><th scope="row">Shown: {page.items.length} QBO lines</th><td colSpan={2}>{page.nextCursor ? "Page totals by currency" : "Filtered totals by currency"}</td><td className="projects-number">{moneyTotalsByCurrency(page.items.map(item => ({ cents: item.availableCents, currency: item.currency })))}</td></tr></tfoot>
       </table>
       {page.nextCursor && <button type="button" className="projects-load-more" onClick={() => void run(page.nextCursor!)} disabled={loading}>{loading ? "Loading…" : "Load more lines"}</button>}
     </div>}
@@ -216,7 +220,7 @@ export function ProjectFinanceBindingsPanel({ project, execution, readOnly, savi
         <td>{actual.settlement ? <Status value={actual.settlement.state} /> : <Status value="unknown" />}</td>
         <td className="projects-number">{formatMoney(actual.amountCents, actual.currency)}</td>
         {!readOnly && <td className="projects-row-actions"><button type="button" className="projects-link-button projects-link-danger" onClick={() => onRelease(actual.id)} disabled={saving}>Release</button></td>}
-      </tr>)}</tbody><tfoot><tr><th scope="row">Shown: {actuals.length} QBO actuals</th><td colSpan={3}>Filtered totals</td><td className="projects-number">{formatMoney(sumCents(actuals.map(actual => actual.amountCents)) ?? undefined, project.currency)}</td>{!readOnly && <td />}</tr></tfoot>
+      </tr>)}</tbody><tfoot><tr><th scope="row">Shown: {actuals.length} QBO actuals</th><td colSpan={3}>Filtered totals by currency</td><td className="projects-number">{moneyTotalsByCurrency(actuals.map(actual => ({ cents: actual.amountCents, currency: actual.currency })))}</td>{!readOnly && <td />}</tr></tfoot>
     </table></div>}
   </section>;
 }
