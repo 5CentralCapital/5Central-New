@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import express from "express";
 import { publicRequestError, startupFailureSummary } from "./request-errors";
+import { RentOpsRuntimePrivilegeError, RentOpsTablesMissingError } from "./rent-ops/repositories/postgres";
 
 test("malformed tenant and auth JSON never echoes submitted credentials", async () => {
   const app = express();
@@ -30,4 +31,11 @@ test("startup failures log their class and stable code, never free-text messages
   assert.equal(startupFailureSummary(new Error("public_database_limiter_configuration_required")), "Error:public_database_limiter_configuration_required");
   assert.equal(startupFailureSummary(new Error("connect failed for postgres://owner:Secret@db.example/app")), "Error");
   assert.equal(startupFailureSummary("postgres://owner:Secret@db.example/app"), "unclassified");
+});
+
+test("startup failures identify missing runtime schema and privilege probes without table names", () => {
+  const missing = startupFailureSummary(new RentOpsTablesMissingError(["rent_ops_properties", "rent_ops_units"]));
+  assert.equal(missing, "RentOpsTablesMissingError:rent_ops_runtime_tables_missing");
+  assert.doesNotMatch(missing, /rent_ops_properties|rent_ops_units/);
+  assert.equal(startupFailureSummary(new RentOpsRuntimePrivilegeError()), "RentOpsRuntimePrivilegeError:rent_ops_runtime_privilege_invalid");
 });
