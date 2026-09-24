@@ -9,6 +9,7 @@ import { ReportSetup } from "./setup";
 import { describeAppliedFilters } from "./setup-model";
 import type { ReportPackageSaveRequest, ReportPresetSaveRequest } from "./types";
 import { openPrintView, packageItemFromRequest, packageRunSummary, runtimeStatusLabel, type PackageDraft } from "./workspace-model";
+import { requestFromFinancialLink } from "../accounting/report-links";
 import "./reporting.css";
 
 const CATEGORY_LABELS: Readonly<Record<string, string>> = { financial: "Financial", rental: "Rental", tasks: "Tasks and work", projects: "Projects", investors: "Investors and owners", forecast: "Forecast" };
@@ -50,7 +51,7 @@ function Result({ organizationId, page, applied, title, onPage }: { organization
   const numeric = (type: string) => type === "money" || type === "integer" || type === "decimal" || type === "percent";
   return <section className="reporting-result" aria-label={`${title} results`}>
     <div className="reporting-result-bar">
-      <div><strong>{page.totalRows.toLocaleString("en-US")} row{page.totalRows === 1 ? "" : "s"}</strong>{applied.length > 0 && <span className="reporting-applied">{applied.join(" · ")}</span>}</div>
+      <div><strong>{page.nextCursor || page.rows.length < page.totalRows ? `Shown: ${page.rows.length.toLocaleString("en-US")} of ${page.totalRows.toLocaleString("en-US")} rows` : `Filtered total: ${page.totalRows.toLocaleString("en-US")} row${page.totalRows === 1 ? "" : "s"}`}</strong>{applied.length > 0 && <span className="reporting-applied">{applied.join(" · ")}</span>}</div>
       <div className="reporting-result-actions">
         <button type="button" className="reporting-quiet-button" onClick={() => run(() => printRun(organizationId, page.runId))}><Printer size={15} aria-hidden="true" />Print</button>
         <button type="button" className="reporting-quiet-button" onClick={() => run(() => downloadExport(organizationId, page.runId, "csv"))}><FileDown size={15} aria-hidden="true" />CSV</button>
@@ -80,7 +81,7 @@ function PackageRunView({ run, entries, onOpen }: { run: ReportPackageRun; entri
         const title = item.title ?? entries.find(entry => entry.id === item.reportId)?.title ?? item.itemId;
         const status = item.state === "failed" ? "Failed" : item.completeness === "complete" ? "Complete" : "Incomplete";
         return <tr key={item.itemId}><td>{title}</td><td><span className={`reporting-badge ${status === "Complete" ? "is-complete" : status === "Failed" ? "is-failed" : "is-incomplete"}`}>{status}</span></td><td className="is-numeric">{item.rowCount ?? "—"}</td><td>{item.reason ?? ""}</td><td>{item.runId && <button type="button" className="reporting-quiet-button" onClick={() => onOpen(item.runId!, title)}>View</button>}</td></tr>;
-      })}</tbody>
+      })}</tbody><tfoot><tr><th scope="row">Shown: {run.itemRuns.length} reports</th><td>{run.itemRuns.filter(item => item.completeness === "complete" && item.state !== "failed").length} complete · {run.itemRuns.filter(item => item.completeness !== "complete" || item.state === "failed").length} incomplete</td><td className="is-numeric">{run.itemRuns.reduce((total, item) => total + (item.rowCount ?? 0), 0).toLocaleString("en-US")}</td><td colSpan={2}>Filtered package totals</td></tr></tfoot>
     </table>
   </section>;
 }
@@ -177,7 +178,7 @@ export function ReportingWorkspace({ identity, organization, initialReportId, in
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<unknown>();
   const [savedOpen, setSavedOpen] = useState(false);
-  const [lastRequest, setLastRequest] = useState<ReportRunRequest>();
+  const [lastRequest, setLastRequest] = useState<ReportRunRequest | undefined>(() => initialPresetId || typeof window === "undefined" ? undefined : requestFromFinancialLink(window.location.search, organization, initialReportId));
   const [setupRevision, setSetupRevision] = useState(0);
   const selected = entries.find(entry => entry.id === selectedId) ?? entries.find(entry => entry.id === initialReportId) ?? entries.find(entry => entry.executable) ?? entries[0];
   const grouped = useMemo(() => {

@@ -27,6 +27,26 @@ import { WORK_ORDER_VIEWS, type WorkOrderView } from "./types";
 export type { WorkOrderView };
 const VIEW_LABELS: Record<WorkOrderView, string> = { open: "Open", schedule: "Schedule", all: "All", ...STATUS_LABELS };
 
+function workOrderMoneyTotals(items: readonly WorkOrderSummary[], pick: (item: WorkOrderSummary) => string | null): string {
+  const totals = new Map<string, bigint>();
+  const unknown = new Map<string, number>();
+  for (const item of items) {
+    const currency = item.currency || "Unknown currency";
+    const cents = pick(item);
+    if (cents === null || cents === undefined || cents === "" || !/^-?\d+$/.test(cents)) { unknown.set(currency, (unknown.get(currency) ?? 0) + 1); continue; }
+    totals.set(currency, (totals.get(currency) ?? BigInt(0)) + BigInt(cents));
+  }
+  const currencies = new Set<string>([...Array.from(totals.keys()), ...Array.from(unknown.keys())]);
+  if (!currencies.size) return "—";
+  return Array.from(currencies).sort().map(currency => totals.has(currency) ? `${formatMoney(totals.get(currency)!.toString(), currency)}${unknown.get(currency) ? ` + ${unknown.get(currency)} unknown` : ""}` : `Unknown${unknown.get(currency)! > 1 ? ` (${unknown.get(currency)})` : ""}`).join(" · ");
+}
+
+function actualSummaryCents(item: WorkOrderSummary): string | null {
+  if (item.actualCost.state === "verified") return item.actualCost.linkedCents;
+  if (item.actualCost.state === "manual") return item.actualCost.manualCents;
+  return null;
+}
+
 export interface WorkOrdersWorkspaceProps {
   organizationId: string;
   entities: readonly CompanyContextEntity[];
@@ -685,6 +705,7 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
               <span className="wo-list-item-foot"><StatusCapsule status={item.status} /><small>{item.reference} · {item.status === "scheduled" && item.scheduledOn ? `Scheduled ${dateLabel(item.scheduledOn)}` : item.status === "completed" && item.completedOn ? `Done ${dateLabel(item.completedOn)}` : `Reported ${dateLabel(item.reportedOn)}`}{item.vendor ? ` · ${item.vendor.name}` : ""}</small></span>
             </button></Fragment>)}
             {list.hasNextPage && <button type="button" className="rm-button wo-load-more" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>{list.isFetchingNextPage ? "Loading…" : "Show more"}</button>}
+            <div className="wo-list-summary" aria-label="Work order totals"><span>{list.hasNextPage ? "Shown" : "Filtered"}: {items.length} work orders</span><span>{list.hasNextPage ? "Page totals" : "Filtered totals"}: Estimated {workOrderMoneyTotals(items, item => item.estimatedCostCents)} · Actual {workOrderMoneyTotals(items, actualSummaryCents)}</span><span>{Object.entries(items.reduce<Record<string, number>>((counts, item) => { counts[item.status] = (counts[item.status] ?? 0) + 1; return counts; }, {})).sort(([left], [right]) => left.localeCompare(right)).map(([status, count]) => `${STATUS_LABELS[status as WorkOrderStatus] ?? status} ${count}`).join(" · ")}</span></div>
           </div>}
       </section>
       <div className="rm-record-detail wo-detail-pane">

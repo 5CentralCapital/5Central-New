@@ -4,6 +4,7 @@ import { CASH_CATEGORY_LABELS, FORECAST_ACCOUNTS, FORECAST_LADDER_OVERDUE, type 
 import { BarLineChart, CompositionChart, LadderChart, LineChart, WaterfallChart } from "./charts";
 import { bpsToPercentText, dateLabel, dscr, money, moneyWhole, monthLabel } from "./format";
 import { DrillCell, EmptyState, type Drill } from "./ui";
+import { sumCents } from "../projects/money";
 
 const big = (value: string | null | undefined) => BigInt(value ?? "0");
 const categoryLabel = (key: string) => CASH_CATEGORY_LABELS[key as keyof typeof CASH_CATEGORY_LABELS] ?? key;
@@ -38,6 +39,10 @@ export function CashView({ result, onDrill }: { result: ForecastResultView; onDr
   const modeled = weeks.some(week => week.modeledInflowsCents !== "0");
   const cashUnknown = openingCashUnknown(result);
   const netChange = weeks.reduce((total, week) => total + big(week.netCents), BigInt(0)).toString();
+  const periodInflows = sumCents(weeks.map(week => week.inflowsCents));
+  const periodOutflows = sumCents(weeks.map(week => week.outflowsCents));
+  const periodNet = sumCents(weeks.map(week => week.netCents));
+  const periodModeledInflows = sumCents(weeks.map(week => week.modeledInflowsCents));
   const relative = (label: string) => cashUnknown ? `${label} (relative)` : label;
   return <div className="fc-view">
     <dl className="fc-stats">
@@ -73,7 +78,7 @@ export function CashView({ result, onDrill }: { result: ForecastResultView; onDr
           <DrillCell cents={week.restrictedClosingCents} line="cash.restricted" period={week.key} label={`Restricted cash, week of ${week.start}`} onDrill={onDrill} currency={currency} />
           <DrillCell cents={week.availableClosingCents} line="cash.available" period={week.key} label={`Available cash, week of ${week.start}`} onDrill={onDrill} currency={currency} emphasis />
           {modeled && <td className="fc-num">{week.modeledInflowsCents === "0" ? "—" : moneyWhole(week.modeledInflowsCents, currency)}</td>}
-        </tr>)}</tbody>
+        </tr>)}</tbody><tfoot><tr className="fc-row--total"><th scope="row">Period totals</th><td className="fc-num">—</td><td className="fc-num">{money(periodInflows, currency)}</td><td className="fc-num">{money(periodOutflows, currency)}</td><td className="fc-num">{money(periodNet, currency)}</td><td className="fc-num">—</td><td className="fc-num">—</td><td className="fc-num">—</td>{modeled && <td className="fc-num">{money(periodModeledInflows, currency)}</td>}</tr></tfoot>
       </table>
     </Scroll>
     {cashUnknown && <p className="fc-footnote">Balances are relative to unknown opening cash; set opening balances to see cash on hand.</p>}
@@ -253,6 +258,8 @@ export function DebtView({ result, onDrill }: { result: ForecastResultView; onDr
   if (!debt.loans.length && !capital.refinances.length && !capital.sales.length) return <EmptyState title="No debt in this scenario" message="Add loans in Assumptions to see maturities and coverage." />;
   const overdue = year === FORECAST_LADDER_OVERDUE;
   const payments = year ? debt.loans.flatMap(loan => loan.payments.filter(row => (overdue ? loan.pastMaturity === true : !loan.pastMaturity && row.date.startsWith(year))).map(row => ({ ...row, loan: loan.label }))).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)) : [];
+  const paymentInterest = sumCents(payments.map(row => row.interestCents));
+  const paymentPrincipal = sumCents(payments.map(row => row.principalCents.replace(/^-/, "")));
   const yearLabel = (value: string) => value === FORECAST_LADDER_OVERDUE ? "Overdue" : value;
   const kindLabel = { scheduled: "Payment", balloon: "Balloon", payoff: "Payoff", draw: "Funding" } as const;
   return <div className="fc-view">
@@ -262,7 +269,7 @@ export function DebtView({ result, onDrill }: { result: ForecastResultView; onDr
         <caption className="fc-table-caption">{overdue ? "Overdue loan balances" : `Loan payments in ${year}`} <button type="button" className="rm-button rm-button--small rm-button--ghost" onClick={() => setYear(null)}>Close</button></caption>
         <thead><tr><th scope="col">Date</th><th scope="col">Loan</th><th scope="col">Type</th><th scope="col" className="fc-num">Interest</th><th scope="col" className="fc-num">Principal</th><th scope="col" className="fc-num">Balance after</th></tr></thead>
         <tbody>{payments.map(row => <tr key={`${row.loan}-${row.date}-${row.kind}`}><td>{dateLabel(row.date, "long")}</td><td>{row.loan}</td><td>{kindLabel[row.kind]}</td>
-          <td className="fc-num">{money(row.interestCents, currency)}</td><td className="fc-num">{money(row.principalCents.replace(/^-/, ""), currency)}</td><td className="fc-num">{money(row.balanceCents, currency)}</td></tr>)}</tbody>
+          <td className="fc-num">{money(row.interestCents, currency)}</td><td className="fc-num">{money(row.principalCents.replace(/^-/, ""), currency)}</td><td className="fc-num">{money(row.balanceCents, currency)}</td></tr>)}</tbody><tfoot><tr className="fc-row--total"><th scope="row">Period totals · {payments.length} payment{payments.length === 1 ? "" : "s"}</th><td colSpan={2} /><td className="fc-num">{money(paymentInterest, currency)}</td><td className="fc-num">{money(paymentPrincipal, currency)}</td><td className="fc-num">—</td></tr></tfoot>
       </table>
     </div>}
     <Scroll label="Loans">
@@ -296,7 +303,7 @@ export function DebtView({ result, onDrill }: { result: ForecastResultView; onDr
         <thead><tr><th scope="col">Refinance</th><th scope="col">Closing</th><th scope="col" className="fc-num">Gross proceeds</th><th scope="col" className="fc-num">Payoff</th><th scope="col" className="fc-num">Costs</th><th scope="col" className="fc-num">Reserves</th><th scope="col" className="fc-num">Net usable</th></tr></thead>
         <tbody>{capital.refinances.map(item => <tr key={item.id}><th scope="row">{item.label}{item.excluded && <span className="rm-status rm-status--unknown fc-tag">Excluded</span>}</th><td>{dateLabel(item.closeOn, "long")}</td>
           <td className="fc-num">{moneyWhole(item.grossProceedsCents, currency)}</td><td className="fc-num">{moneyWhole(item.payoffCents, currency)}</td><td className="fc-num">{moneyWhole(item.costsCents, currency)}</td>
-          <td className="fc-num">{moneyWhole(item.reservesCents, currency)}</td><td className="fc-num fc-num--strong">{moneyWhole(item.netUsableCents, currency)}</td></tr>)}</tbody>
+          <td className="fc-num">{moneyWhole(item.reservesCents, currency)}</td><td className="fc-num fc-num--strong">{moneyWhole(item.netUsableCents, currency)}</td></tr>)}</tbody><tfoot><tr className="fc-row--total"><th scope="row">Shown: {capital.refinances.length} refinances</th><td>Filtered totals</td><td className="fc-num">{money(sumCents(capital.refinances.map(item => item.grossProceedsCents)), currency)}</td><td className="fc-num">{money(sumCents(capital.refinances.map(item => item.payoffCents)), currency)}</td><td className="fc-num">{money(sumCents(capital.refinances.map(item => item.costsCents)), currency)}</td><td className="fc-num">{money(sumCents(capital.refinances.map(item => item.reservesCents)), currency)}</td><td className="fc-num">{money(sumCents(capital.refinances.map(item => item.netUsableCents)), currency)}</td></tr></tfoot>
       </table></Scroll>}
       {capital.sales.length > 0 && <Scroll label="Sales"><table className="rm-table fc-table">
         <caption className="fc-table-caption">Sales <span className="rm-status rm-status--warning fc-tag">Modeled</span></caption>
@@ -304,7 +311,7 @@ export function DebtView({ result, onDrill }: { result: ForecastResultView; onDr
         <tbody>{capital.sales.map(item => <tr key={item.id}><th scope="row">{item.label}{item.excluded && <span className="rm-status rm-status--unknown fc-tag">Excluded</span>}</th><td>{dateLabel(item.closeOn, "long")}</td>
           <td className="fc-num">{moneyWhole(item.priceCents, currency)}</td><td className="fc-num">{moneyWhole(item.sellingCostsCents, currency)}</td><td className="fc-num">{moneyWhole(item.netBookValueCents, currency)}</td>
           <td className="fc-num">{moneyWhole(item.gainCents, currency)}</td><td className="fc-num">{moneyWhole(item.payoffCents, currency)}</td><td className="fc-num">{moneyWhole(item.depositsTransferredCents, currency)}</td>
-          <td className="fc-num fc-num--strong">{moneyWhole(item.netProceedsCents, currency)}</td></tr>)}</tbody>
+          <td className="fc-num fc-num--strong">{moneyWhole(item.netProceedsCents, currency)}</td></tr>)}</tbody><tfoot><tr className="fc-row--total"><th scope="row">Shown: {capital.sales.length} sales</th><td>Filtered totals</td><td className="fc-num">{money(sumCents(capital.sales.map(item => item.priceCents)), currency)}</td><td className="fc-num">{money(sumCents(capital.sales.map(item => item.sellingCostsCents)), currency)}</td><td className="fc-num">{money(sumCents(capital.sales.map(item => item.netBookValueCents)), currency)}</td><td className="fc-num">{money(sumCents(capital.sales.map(item => item.gainCents)), currency)}</td><td className="fc-num">{money(sumCents(capital.sales.map(item => item.payoffCents)), currency)}</td><td className="fc-num">{money(sumCents(capital.sales.map(item => item.depositsTransferredCents)), currency)}</td><td className="fc-num">{money(sumCents(capital.sales.map(item => item.netProceedsCents)), currency)}</td></tr></tfoot>
       </table></Scroll>}
     </section>}
   </div>;

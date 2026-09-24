@@ -42,6 +42,19 @@ function moneyCents(value: string | null, currency: string | null): string {
   return `${negative ? "-" : ""}${currency ?? "—"} ${absolute.slice(0, -2)}.${absolute.slice(-2)}`;
 }
 
+function moneyTotals(values: readonly { readonly cents: string | null | undefined; readonly currency: string | null | undefined }[]): string {
+  const totals = new Map<string, { total: bigint; known: number; unknown: number }>();
+  for (const value of values) {
+    const currency = value.currency?.trim() || "Unknown currency";
+    const current = totals.get(currency) ?? { total: BigInt(0), known: 0, unknown: 0 };
+    if (value.cents === null || value.cents === undefined || value.cents === "" || !/^-?\d+$/.test(value.cents)) current.unknown += 1;
+    else { current.total += BigInt(value.cents); current.known += 1; }
+    totals.set(currency, current);
+  }
+  if (!totals.size) return "—";
+  return Array.from(totals.entries()).sort(([left], [right]) => left.localeCompare(right)).map(([currency, total]) => total.known === 0 ? `Unknown${total.unknown > 1 ? ` (${total.unknown})` : ""}` : `${moneyCents(total.total.toString(), currency)}${total.unknown ? ` + ${total.unknown} unknown` : ""}`).join(" · ");
+}
+
 function localInput(value: string | null): string {
   if (!value) return "";
   const date = new Date(value);
@@ -177,6 +190,10 @@ export function TimeWorkspace({ organizationId, organizationName, entities = [],
 
   const entries = data?.items ?? [];
   const selected = entries.find(entry => entry.id === selectedId) ?? entries[0] ?? null;
+  const entryDurationTotal = entries.reduce((total, entry) => total + entry.durationSeconds, 0);
+  const estimatedTotal = moneyTotals(entries.map(entry => ({ cents: entry.estimatedLaborCostCents, currency: entry.estimatedLaborCurrency })));
+  const postedTotal = moneyTotals(entries.map(entry => ({ cents: entry.postedPayrollCents, currency: entry.postedPayrollCurrency })));
+  const reviewCounts = Object.entries(entries.reduce<Record<string, number>>((counts, entry) => { counts[entry.reviewState] = (counts[entry.reviewState] ?? 0) + 1; return counts; }, {})).sort(([left], [right]) => left.localeCompare(right)).map(([state, count]) => `${reviewStateLabel(state as TimeEntry["reviewState"])} ${count}`).join(" · ");
   useEffect(() => { if (selected && selected.id !== selectedId) setSelectedId(selected.id); }, [selected, selectedId]);
 
   async function execute(kind: string, payload: Record<string, unknown>): Promise<void> {
@@ -240,6 +257,7 @@ export function TimeWorkspace({ organizationId, organizationName, entities = [],
       <aside className="time-list-pane" aria-label="Time records">
         <div className="time-filter-bar"><label>Review<select aria-label="Review state" value={reviewState} onChange={event => setReviewState(event.currentTarget.value as typeof reviewState)}><option value="all">All review states</option><option value="needs_review">{REVIEW_STATE_LABELS.needs_review}</option><option value="corrected">Corrected</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></label><label>Mapping<select aria-label="Mapping status" value={mappingStatus} onChange={event => setMappingStatus(event.currentTarget.value as typeof mappingStatus)}><option value="all">All mappings</option><option value="unmapped_employee">Unmapped employee</option><option value="unmapped_jobcode">Unmapped jobcode</option><option value="mapped">Mapped</option></select></label></div>
         {entries.length === 0 ? <div className="time-empty time-empty-small">No time records match these filters.</div> : <div className="time-list">{entries.map(entry => <button type="button" key={entry.id} className={`time-list-row ${selected?.id === entry.id ? "is-selected" : ""}`} onClick={() => setSelectedId(entry.id)}><span className="time-list-row-top"><strong>{dateLabel(entry.date)}</strong><span className={badgeClass(entry.reviewState)}>{reviewStateLabel(entry.reviewState)}</span></span><span>{entry.type === "manual" ? "Manual time" : entry.onTheClock ? "Clocked in" : `${dateTimeLabel(entry.start)} – ${dateTimeLabel(entry.end)}`}</span><small>{durationLabel(entry.durationSeconds)} · {label(entry.mappingStatus)}</small></button>)}</div>}
+        <div className="time-list-summary" aria-label="Time entry totals"><span>{data?.nextCursor ? "Shown" : "Filtered"}: {entries.length} time entr{entries.length === 1 ? "y" : "ies"}</span><span>{data?.nextCursor ? "Page totals" : "Filtered totals"}: {durationLabel(entryDurationTotal)} · Estimated labor {estimatedTotal} · Posted payroll {postedTotal}</span>{reviewCounts && <span>{reviewCounts}</span>}</div>
         {data?.coverage.length ? <div className="time-coverage"><span className="time-eyebrow">Coverage</span>{data.coverage.map(item => <div key={item.stream}><span>{label(item.stream)}</span><span className={badgeClass(item.status)}>{label(item.status)}</span></div>)}</div> : null}
       </aside>
       <main className="time-main">{selected ? <TimeDetail entry={selected} scope={scope} entities={entities} contacts={data?.contacts ?? []} projects={data?.projects ?? []} users={data?.users ?? []} jobcodes={data?.jobcodes ?? []} employeeMappings={data?.employeeMappings ?? []} jobcodeMappings={data?.jobcodeMappings ?? []} execute={execute} saving={saving} loadScopeItems={api.listProjectScopeItems ? (projectId, signal) => api.listProjectScopeItems!(organizationId, projectId, signal) : undefined} /> : <div className="time-empty">Choose a time record to review.</div>}</main>

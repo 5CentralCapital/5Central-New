@@ -5,7 +5,7 @@ import type { ProjectCostLine, ProjectCostReport } from "@shared/projects/cost-r
 import type { CostSourceLine, CostSourceLinePage } from "@shared/projects/source-lines";
 import type { ProjectLaborResponse } from "@shared/time/labor";
 import type { ProjectDetail, ProjectExecutionDetail } from "./types";
-import { formatInputValue, formatMoney, formatQualifiedMoney, incurredLabel, paidLabel, parseMoneyInput } from "./money";
+import { formatInputValue, formatMoney, formatQualifiedMoney, incurredLabel, paidLabel, parseMoneyInput, sumCents } from "./money";
 
 function label(value: string): string { return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
 function dateLabel(value: string | null | undefined): string { if (!value) return "—"; const date = new Date(`${value.slice(0, 10)}T00:00:00`); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date); }
@@ -106,6 +106,8 @@ export function ProjectCostLinesPanel({ report, readOnly, saving, onSetEtc, onCl
   const [editing, setEditing] = useState<string>();
   const currency = report.summary.currency;
   const line = report.lines.find((item) => item.scopeItemId === editing);
+  const total = (pick: (item: ProjectCostLine) => string | null | undefined) => sumCents(report.lines.map(pick));
+  const incurredUnknown = report.lines.filter((item) => item.incurredCents === null || item.incurredCents === undefined).length;
   return <section className="projects-panel" aria-label="Budget by line">
     <div className="projects-panel-heading"><h3>Budget by line</h3></div>
     {line && <EtcForm line={line} currency={currency} disabled={saving} onCancel={() => setEditing(undefined)} onSave={(amount, reason) => { onSetEtc(line.scopeItemId!, amount, reason); setEditing(undefined); }} />}
@@ -120,7 +122,7 @@ export function ProjectCostLinesPanel({ report, readOnly, saving, onSetEtc, onCl
         <td className="projects-number">{money(item.forecastFinalCostCents, currency)}</td>
         <td className="projects-number">{money(item.varianceCents, currency)}</td>
         {!readOnly && <td className="projects-row-actions">{item.scopeItemId && <button type="button" className="projects-link-button" onClick={() => setEditing(item.scopeItemId!)} disabled={saving}>{item.etcOverride ? "Edit override" : "Override"}</button>}{item.etcOverride && <button type="button" className="projects-link-button projects-link-danger" onClick={() => onClearEtc(item.scopeItemId!)} disabled={saving}>Clear</button>}</td>}
-      </tr>)}</tbody>
+      </tr>)}</tbody><tfoot><tr><th scope="row">Shown: {report.lines.length} budget lines</th><td className="projects-number">{formatMoney(total(item => item.revisedBudgetCents) ?? undefined, currency)}</td><td className="projects-number">{formatMoney(total(item => item.committedCents) ?? undefined, currency)}</td><td className="projects-number">{formatQualifiedMoney(total(item => item.incurredCents), report.summary.actualCoverage, currency)}{incurredUnknown ? ` + ${incurredUnknown} unknown` : ""}</td><td className="projects-number">{formatMoney(total(item => item.costToCompleteCents) ?? undefined, currency)}</td><td className="projects-number">{formatMoney(total(item => item.forecastFinalCostCents) ?? undefined, currency)}</td><td className="projects-number">{formatMoney(total(item => item.varianceCents) ?? undefined, currency)}</td>{!readOnly && <td />}</tr></tfoot>
     </table></div>}
   </section>;
 }
@@ -184,7 +186,7 @@ function FinanceBindingForm({ project, execution, disabled, search, onCreate, on
           <td><strong>{item.description ?? item.transactionType}</strong><small className="projects-table-subline">{item.transactionType}</small></td>
           <td>{dateLabel(item.postedOn)}</td>
           <td className="projects-number">{formatMoney(item.availableCents, item.currency)}</td>
-        </tr>)}</tbody>
+        </tr>)}</tbody><tfoot><tr><th scope="row">Shown: {page.items.length} QBO lines</th><td colSpan={2}>{page.nextCursor ? "Page totals" : "Filtered totals"}</td><td className="projects-number">{formatMoney(sumCents(page.items.map(item => item.availableCents)) ?? undefined, project.currency)}</td></tr></tfoot>
       </table>
       {page.nextCursor && <button type="button" className="projects-load-more" onClick={() => void run(page.nextCursor!)} disabled={loading}>{loading ? "Loading…" : "Load more lines"}</button>}
     </div>}
@@ -214,7 +216,7 @@ export function ProjectFinanceBindingsPanel({ project, execution, readOnly, savi
         <td>{actual.settlement ? <Status value={actual.settlement.state} /> : <Status value="unknown" />}</td>
         <td className="projects-number">{formatMoney(actual.amountCents, actual.currency)}</td>
         {!readOnly && <td className="projects-row-actions"><button type="button" className="projects-link-button projects-link-danger" onClick={() => onRelease(actual.id)} disabled={saving}>Release</button></td>}
-      </tr>)}</tbody>
+      </tr>)}</tbody><tfoot><tr><th scope="row">Shown: {actuals.length} QBO actuals</th><td colSpan={3}>Filtered totals</td><td className="projects-number">{formatMoney(sumCents(actuals.map(actual => actual.amountCents)) ?? undefined, project.currency)}</td>{!readOnly && <td />}</tr></tfoot>
     </table></div>}
   </section>;
 }
@@ -238,7 +240,7 @@ export function ProjectCommitmentLedgerPanel({ report }: { report: ProjectCostRe
         <td className="projects-number">{money(row.invoicedCents, currency)}</td>
         <td className="projects-number">{money(row.paidCents, currency)}</td>
         <td className="projects-number">{money(row.remainingCents, currency)}</td>
-      </tr>)}</tbody>
+      </tr>)}</tbody><tfoot><tr><th scope="row">Shown: {report.commitments.length} commitments</th><td>Filtered totals</td><td className="projects-number">{formatMoney(sumCents(report.commitments.map(row => row.committedCents)) ?? undefined, currency)}</td><td className="projects-number">{formatMoney(sumCents(report.commitments.map(row => row.receivedCents)) ?? undefined, currency)}</td><td className="projects-number">{formatMoney(sumCents(report.commitments.map(row => row.invoicedCents)) ?? undefined, currency)}</td><td className="projects-number">{formatMoney(sumCents(report.commitments.map(row => row.paidCents)) ?? undefined, currency)}</td><td className="projects-number">{formatMoney(sumCents(report.commitments.map(row => row.remainingCents)) ?? undefined, currency)}</td></tr></tfoot>
     </table></div>}
   </section>;
 }
@@ -256,7 +258,7 @@ export function ProjectRetainagePanel({ report }: { report: ProjectCostReport })
     </div>
     {retainage.rows.length > 0 && <div className="projects-table-wrap"><table className="projects-table">
       <thead><tr><th>Draw</th><th>Through</th><th className="projects-number">Opening</th><th className="projects-number">Withheld</th><th className="projects-number">Released</th><th className="projects-number">Closing</th></tr></thead>
-      <tbody>{retainage.rows.map((row) => <tr key={row.drawRequestId}><td>Draw {row.requestNo} <Status value={row.status} /></td><td>{dateLabel(row.periodTo)}</td><td className="projects-number">{formatMoney(row.openingCents, currency)}</td><td className="projects-number">{formatMoney(row.withheldCents, currency)}</td><td className="projects-number">{formatMoney(row.releasedCents, currency)}</td><td className="projects-number">{formatMoney(row.closingCents, currency)}</td></tr>)}</tbody>
+      <tbody>{retainage.rows.map((row) => <tr key={row.drawRequestId}><td>Draw {row.requestNo} <Status value={row.status} /></td><td>{dateLabel(row.periodTo)}</td><td className="projects-number">{formatMoney(row.openingCents, currency)}</td><td className="projects-number">{formatMoney(row.withheldCents, currency)}</td><td className="projects-number">{formatMoney(row.releasedCents, currency)}</td><td className="projects-number">{formatMoney(row.closingCents, currency)}</td></tr>)}</tbody><tfoot><tr><th scope="row">Shown: {retainage.rows.length} draws</th><td>Period totals</td><td className="projects-number">—</td><td className="projects-number">{formatMoney(sumCents(retainage.rows.map(row => row.withheldCents)) ?? undefined, currency)}</td><td className="projects-number">{formatMoney(sumCents(retainage.rows.map(row => row.releasedCents)) ?? undefined, currency)}</td><td className="projects-number">—</td></tr></tfoot>
     </table></div>}
   </section>;
 }

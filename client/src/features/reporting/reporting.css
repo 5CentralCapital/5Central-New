@@ -127,6 +127,7 @@
 .reporting-table-wrap :is(th, td), .reporting-package-run :is(th, td) { padding: 8px 12px; border-bottom: 1px solid var(--rp-table-line); text-align: left; white-space: nowrap; }
 .reporting-table-wrap th { position: sticky; top: 0; z-index: 1; background: var(--rp-surface-2); color: var(--rp-muted); font-weight: 600; }
 .reporting-table-wrap tbody tr:hover { background: var(--ds-row-hover, rgb(58 50 38 / 3.5%)); }
+.reporting-table-wrap tfoot th, .reporting-table-wrap tfoot td, .reporting-package-run tfoot th, .reporting-package-run tfoot td { border-top: 1px solid var(--rp-line-strong); border-bottom: 0; color: var(--rp-muted); font-size: 11px; font-weight: 600; }
 .reporting-workspace .is-numeric { text-align: right; }
 .reporting-more { justify-self: start; }
 

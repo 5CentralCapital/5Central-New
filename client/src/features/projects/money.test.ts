@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatInputValue, formatMoneyExact, parseMoneyInput } from "./money";
+import { formatInputValue, formatMoneyExact, parseMoneyInput, sumCents } from "./money";
 
 test("project money input preserves large exact cents", () => {
   const parsed = parseMoneyInput("92233720368547758.07", "Budget");
@@ -19,6 +19,11 @@ test("project money input rejects fractions beyond cents and overflow", () => {
   assert.throws(() => parseMoneyInput("1.005"), /no more than two decimal places/);
   assert.throws(() => parseMoneyInput("92233720368547758.08"), /signed 64-bit range/);
   assert.throws(() => parseMoneyInput("1e3"), /no more than two decimal places/);
+});
+
+test("project list totals add exact cents and keep an all-unknown total unknown", () => {
+  assert.equal(sumCents(["9223372036854775800", "7", null]), "9223372036854775807");
+  assert.equal(sumCents([null, undefined]), null);
 });
 
 test("cost summary incurred and paid carry their QuickBooks qualifiers", async () => {

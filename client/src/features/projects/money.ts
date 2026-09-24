@@ -49,6 +49,18 @@ export function formatMoney(value: MoneyCents | string | undefined, currency = "
   return formatMoneyExact(value, currency);
 }
 
+/** Add known signed cents without converting through a JavaScript number. */
+export function sumCents(values: readonly (MoneyCents | string | null | undefined)[]): string | null {
+  let total = BigInt(0);
+  let known = false;
+  for (const value of values) {
+    if (value === null || value === undefined || value === "") continue;
+    total += BigInt(value);
+    known = true;
+  }
+  return known ? total.toString() : null;
+}
+
 /**
  * Currency display is intentionally assembled from bigint components. Using
  * Intl on the complete amount would require converting cents to a Number and

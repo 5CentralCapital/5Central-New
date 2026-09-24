@@ -45,6 +45,7 @@
 .rm-workspace.rops-modern .rc-row-foot small { overflow: hidden; color: var(--ds-faint); font: var(--ds-caption); text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .rm-workspace.rops-modern .rc-unknown { color: var(--ds-muted); font-style: italic; }
 .rm-workspace.rops-modern .rc-more { padding: 10px 14px; font: var(--ds-caption); }
+.rm-workspace.rops-modern .rc-list-summary { display: grid; gap: 4px; margin-top: 8px; padding: 10px 14px; border-top: 1px solid var(--ds-hairline); color: var(--ds-muted); font: var(--ds-caption); font-variant-numeric: tabular-nums; }
 
 .rm-workspace.rops-modern .rc-materiality { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 999px; background: var(--ds-fill); color: var(--ds-muted); font: 600 11px/14px var(--ds-font); }
 .rm-workspace.rops-modern .rc-materiality--high { background: var(--ds-critical-wash); color: var(--ds-critical); }

@@ -34,6 +34,7 @@
 .rm-workspace.rops-modern .wo-list { top: 88px; max-height: calc(100vh - 110px); }
 .rm-workspace.rops-modern .wo-list-items { display: block; padding: 4px 0; overflow-y: auto; }
 .rm-workspace.rops-modern .wo-load-more { display: block; margin: 12px auto; min-height: 44px; }
+.rm-workspace.rops-modern .wo-list-summary { display: grid; gap: 4px; margin: 4px 12px 0; padding: 10px 4px 12px; border-top: 1px solid var(--ds-hairline); color: var(--ds-muted); font: var(--ds-caption); font-variant-numeric: tabular-nums; }
 .rm-workspace.rops-modern .wo-list-item { display: grid; gap: 4px; width: calc(100% - 12px); border-bottom: 0; background: transparent; color: var(--ds-ink); text-align: left; cursor: pointer; }
 .rm-workspace.rops-modern .wo-list-item + .wo-list-item { box-shadow: 0 -1px 0 var(--ds-hairline); }
 .rm-workspace.rops-modern .wo-list-item.active + .wo-list-item, .rm-workspace.rops-modern .wo-list-item.active { box-shadow: none; }
