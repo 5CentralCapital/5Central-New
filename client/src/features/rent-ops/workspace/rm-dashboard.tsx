@@ -12,6 +12,9 @@ import { useReportSearch } from "./use-report-search";
 import { recentOnlineApplications, dashboardMovements } from "./dashboard-tiles";
 import { ApplicationCaseDetail } from "../application-case-detail";
 import { dashboardKpis, splitDueRows } from "./dashboard-kpis";
+import { rentalAttentionItems } from "./dashboard-attention";
+import { Skeleton } from "./ops-ui";
+import { displayPersonName, formatMonthLabel, formatTableDate, formatTimestamp } from "../../../lib/rent-ops-formatters";
 import "./rm-dashboard.css";
 import { UNKNOWN_AMOUNT_LABEL } from "@shared/review-cases/display-labels";
 
@@ -21,10 +24,10 @@ const numeric = (value: unknown): value is number => typeof value === "number" &
 const money = (value: unknown) => numeric(value) ? formatReportValue(value, "currency") : "—";
 const text = (value: unknown) => value === null || value === undefined || value === "" ? "—" : String(value);
 
-function Panel({ title, className = "", children, onOpen }: { title: string; className?: string; children: ReactNode; onOpen?: () => void }) {
-  return <section className={`rmd-panel ${className}`} aria-label={title}><header className="rmd-panel-header"><h2>{title}</h2>{onOpen && <button type="button" onClick={onOpen} title={`Open ${title}`} aria-label={`Open ${title}`}><ArrowUpRight size={13} /></button>}</header>{children}</section>;
+function Panel({ title, className = "", children, onOpen, action }: { title: string; className?: string; children: ReactNode; onOpen?: () => void; action?: ReactNode }) {
+  return <section className={`rmd-panel ${className}`} aria-label={title}><header className="rmd-panel-header"><h2>{title}</h2>{action && <span className="rops-panel-action">{action}</span>}{onOpen && <button type="button" onClick={onOpen} title={`Open ${title}`} aria-label={`Open ${title}`}><ArrowUpRight size={13} /></button>}</header>{children}</section>;
 }
-function Table({ rows, columns, empty = "No records.", footer }: { rows?: Row[]; columns: Column[]; empty?: string; footer?: ReactNode }) {
+function Table({ rows, columns, empty = "No records.", footer, limit, onMore, moreLabel }: { rows?: Row[]; columns: Column[]; empty?: string; footer?: ReactNode; limit?: number; onMore?: () => void; moreLabel?: (count: number) => string }) {
   const [sort, setSort] = useState<{ key: string; direction: number }>();
   const ordered = useMemo(() => !sort ? rows : [...(rows ?? [])].sort((a, b) => {
     const left = a[sort.key], right = b[sort.key];
@@ -32,9 +35,11 @@ function Table({ rows, columns, empty = "No records.", footer }: { rows?: Row[];
     if (right == null) return -1;
     return (numeric(left) && numeric(right) ? left - right : String(left).localeCompare(String(right), undefined, { numeric: true })) * sort.direction;
   }), [rows, sort]);
+  const shown = limit && ordered ? ordered.slice(0, limit) : ordered;
+  const hidden = limit && ordered ? ordered.length - (shown?.length ?? 0) : 0;
   return <><div className="rmd-table-scroll"><table><thead><tr>{columns.map(column => <th key={column.key} className={column.number ? "number" : ""} aria-sort={sort?.key === column.key ? sort.direction === 1 ? "ascending" : "descending" : "none"}><button type="button" onClick={() => setSort(current => ({ key: column.key, direction: current?.key === column.key ? -current.direction : 1 }))}>{column.label}{sort?.key === column.key ? sort.direction === 1 ? " ↑" : " ↓" : ""}</button></th>)}</tr></thead><tbody>
-    {!rows ? <tr><td colSpan={columns.length} className="rmd-empty">Loading…</td></tr> : !ordered?.length ? <tr><td colSpan={columns.length} className="rmd-empty">{empty}</td></tr> : ordered.map((row, index) => <tr key={String(row.id ?? row.unitId ?? row.propertyId ?? "row") + index}>{columns.map(column => <td key={column.key} className={column.number ? "number" : ""} title={column.number ? undefined : text(row[column.key])}>{column.render ? column.render(row) : text(row[column.key])}</td>)}</tr>)}
-  </tbody></table></div>{footer && <div className="rmd-table-total">{footer}</div>}</>;
+    {!rows ? <tr><td colSpan={columns.length} className="rmd-empty">Loading…</td></tr> : !ordered?.length ? <tr><td colSpan={columns.length} className="rmd-empty">{empty}</td></tr> : shown!.map((row, index) => <tr key={String(row.id ?? row.unitId ?? row.propertyId ?? "row") + index}>{columns.map(column => <td key={column.key} className={column.number ? "number" : ""}>{column.render ? column.render(row) : text(row[column.key])}</td>)}</tr>)}
+  </tbody></table></div>{hidden > 0 && onMore && <div className="rops-table-more"><button type="button" className="rops-link" onClick={onMore}>{moreLabel ? moreLabel(ordered!.length) : `View all ${ordered!.length}`}</button></div>}{footer && <div className="rmd-table-total">{footer}</div>}</>;
 }
 function Notes({ identity }: { identity: string }) {
   const key = `rent-ops-dashboard-note:${identity}`;
@@ -42,7 +47,7 @@ function Notes({ identity }: { identity: string }) {
   const [saved, setSaved] = useState("");
   const [message, setMessage] = useState("");
   useEffect(() => { try { const note = localStorage.getItem(key) ?? ""; setValue(note); setSaved(note); } catch { setValue(""); setSaved(""); } setMessage(""); }, [key]);
-  return <Panel title="Notes" className="rmd-notes"><textarea aria-label="Dashboard notes" placeholder="Add a dashboard note…" value={value} onChange={event => { setValue(event.target.value); setMessage(""); }} maxLength={10000} /><div className="rmd-note-actions"><span role="status">{message || "This browser"}</span><button type="button" disabled={value === saved} onClick={() => { try { localStorage.setItem(key, value); setSaved(value); setMessage("Saved in this browser"); } catch { setMessage("Could not save. Try again."); } }}>Save</button><button type="button" disabled={value === saved} onClick={() => { setValue(saved); setMessage(""); }}>Cancel</button></div></Panel>;
+  return <Panel title="Notes" className="rmd-notes rops-dash-notes"><textarea aria-label="Dashboard notes" placeholder="Add a dashboard note…" value={value} onChange={event => { setValue(event.target.value); setMessage(""); }} maxLength={10000} /><div className="rmd-note-actions"><span role="status">{message || "Saved in this browser only"}</span><button type="button" disabled={value === saved} onClick={() => { try { localStorage.setItem(key, value); setSaved(value); setMessage("Saved in this browser"); } catch { setMessage("Could not save. Try again."); } }}>Save</button><button type="button" disabled={value === saved} onClick={() => { setValue(saved); setMessage(""); }}>Cancel</button></div></Panel>;
 }
 
 export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenUnit, onOpenProperty, previews, refreshing = false, onManageMoves, companyPanels }: DashboardWorkspaceProps) {
@@ -111,25 +116,74 @@ export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenU
   const movements = dashboardMovements(snapshot, filters);
   const errors = requests.flatMap((request, index) => request.error && !(bundled && index < 2) ? [reports[index]] : []);
   const cashReady = cash.data?.state === "ready" ? cash.data : undefined;
-  return <section className="rm-dashboard-workspace rmd-dashboard" aria-label="Dashboard">
+  const year = Number(filters.asOfDate.slice(0, 4));
+  const shortDate = (value: unknown) => formatTableDate(value, year) ?? text(value);
+  const attention = rentalAttentionItems({ dueRows, vacancy, movements, asOfDate: filters.asOfDate });
+  const knownDue = dueRows?.filter(row => numeric(row.operationalBalanceCents));
+  const unverifiedDue = dueRows ? dueRows.length - (knownDue?.length ?? 0) : 0;
+  const vacancySorted = vacancy ? [...vacancy].sort((a, b) => (numeric(b.daysVacant) ? b.daysVacant : -1) - (numeric(a.daysVacant) ? a.daysVacant : -1)) : undefined;
+  const longestVacancy = (propertyId: unknown) => {
+    const days = ((vacancy ?? []) as Row[]).filter(row => row.propertyId === propertyId && numeric(row.daysVacant)).map(row => row.daysVacant as number);
+    return days.length ? Math.max(...days) : undefined;
+  };
+  const kpis = dashboardKpis({ propertyRows, dueRows, receipts, period: filters.asOfDate.slice(0, 7) });
+  const monthLabel = formatMonthLabel(filters.asOfDate.slice(0, 7)) ?? filters.asOfDate.slice(0, 7);
+  const [metric, setMetric] = useState<"vacancy" | "occupancy" | "rent">("vacancy");
+  return <section className="rm-dashboard-workspace rmd-dashboard rops-dash" aria-label="Dashboard">
     {errors.length > 0 && <div className="rmd-load-error" role="alert">Some tables could not be loaded. <button onClick={() => { requests.forEach(request => { if (request.error) void request.refetch(); }); }}>Retry</button></div>}
-    <ul className="rops-kpis" aria-label="Portfolio summary">{dashboardKpis({ propertyRows, dueRows, receipts, period: filters.asOfDate.slice(0, 7) }).map(kpi => <li key={kpi.key} className="rops-kpi" data-tone={kpi.tone}><span className="rops-kpi-label">{kpi.label}</span><strong className="rops-kpi-value">{kpi.value}</strong>{kpi.share !== undefined && <span className="rops-kpi-meter" aria-hidden="true"><i style={{ width: `${Math.round(kpi.share * 100)}%` }} /></span>}<span className="rops-kpi-detail">{kpi.detail}</span></li>)}</ul>
-    <div className="rmd-top-grid">
-      {cashReady ? <Panel title="Cash Account" className="rmd-cash"><Table rows={[cashReady]} columns={[{ key: "name", label: "Account", render: row => <>{text(row.name)} · {text(row.mask)}</> }, amountColumn("currentCents", "Balance")]} /><div className="rmd-cash-available"><span>Available</span><strong>{money(cashReady.availableCents)}</strong></div><div className="rmd-cash-date">Company cash · {new Date(cashReady.checkedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}<button type="button" title="Refresh cash balance" aria-label="Refresh cash balance" disabled={cash.isFetching} onClick={() => void cash.refetch()}><RefreshCw size={12} /></button></div></Panel>
-      : <Panel title="Rent Roll by Property" className="rmd-cash" onOpen={() => onReport("rent-roll")}><Table rows={propertyRows} columns={[propertyColumn, { key: "rent", label: "Base rent", number: true, render: row => row.rentUnknown || row.unknown ? UNKNOWN_AMOUNT_LABEL : money(row.rent) }]} footer={<><span>Occupied base rent</span><strong>{propertyRows?.some(row => row.rentUnknown || row.unknown) ? UNKNOWN_AMOUNT_LABEL : money(total(propertyRows, "rent"))}</strong></>} /></Panel>}
-      <Panel title="Vacancy by Property" className="rmd-vacancy-property" onOpen={() => onReport("occupancy")}><Table rows={propertyRows} columns={[propertyColumn, { key: "vacant", label: "Vacant", number: true }, { key: "unitCount", label: "Units", number: true }, { key: "vacancyRate", label: "% Vacant", number: true, render: row => row.unknown ? "—" : `${(100 * Number(row.vacant) / Number(row.unitCount)).toFixed(0)}%` }]} footer={<><span>Total vacant</span><strong>{total(propertyRows, "vacant") ?? "—"} / {total(propertyRows, "unitCount") ?? "—"}</strong></>} /></Panel>
-      <Panel title="Delinquency List" className="rmd-delinquency" onOpen={() => onReport("delinquency")}><Table rows={dueRows} empty="No balances due." columns={[{ key: "tenantName", label: "Name", render: personLink }, propertyColumn, unitColumn, { key: "oldestUnpaidRentOn", label: "Date", render: row => row.oldestUnpaidRentOn ? text(row.oldestUnpaidRentOn) : overdueDateAbsentLabel((row.__source ?? row) as Row) }, { ...amountColumn("operationalBalanceCents", "Amount"), render: row => numeric(row.operationalBalanceCents) ? <EntityLink personId={String(row.personId ?? "")} tab="ledger" onOpen={onOpenTenant}>{money(row.operationalBalanceCents)}</EntityLink> : UNKNOWN_AMOUNT_LABEL }]} footer={dueSplit ? <><span>{dueSplit.knownCount} {dueSplit.knownCount === 1 ? "account" : "accounts"} due{dueSplit.unverifiedCount ? ` · ${dueSplit.unverifiedCount} unverified` : ""}</span><strong>{money(dueSplit.knownCents)}</strong></> : <><span>—</span><strong>{UNKNOWN_AMOUNT_LABEL}</strong></>} /></Panel>
-      <Notes identity={identity} />
-      <Panel title="Posted Rent Receipts" className="rmd-receipts" onOpen={() => onReport("collected-income")}><Table rows={receipts} empty="No posted rent receipts this month." columns={[{ key: "tenantName", label: "Tenant", render: personLink }, { key: "paymentOn", label: "Date" }, amountColumn("amountCents", "Amount")]} footer={<><span>{filters.asOfDate.slice(0, 7)}</span><strong>{money(total(receipts, "amountCents"))}</strong></>} /></Panel>
-      <Panel title="Occupancy by Property" className="rmd-occupancy-property" onOpen={() => onReport("occupancy")}><Table rows={propertyRows} columns={[propertyColumn, { key: "occupied", label: "Occupied", number: true }, { key: "preleased", label: "Preleased", number: true }, { key: "unknown", label: "Unknown", number: true }]} footer={<><span>Occupied units</span><strong>{total(propertyRows, "occupied") ?? "—"} / {total(propertyRows, "unitCount") ?? "—"}</strong></>} /></Panel>
+    <ul className="rops-kpis" aria-label="Portfolio summary">{kpis.map(kpi => <li key={kpi.key} className="rops-kpi" data-tone={kpi.tone}><span className="rops-kpi-label">{kpi.label}</span><strong className="rops-kpi-value">{kpi.tone === "loading" ? <Skeleton width="4.5em" label={`Loading ${kpi.label.toLowerCase()}`} /> : kpi.value}</strong>{kpi.share !== undefined && <span className="rops-kpi-meter" aria-hidden="true"><i style={{ width: `${Math.round(kpi.share * 100)}%` }} /></span>}<span className="rops-kpi-detail">{kpi.detail}</span></li>)}</ul>
+    <div className="rops-dash-row rops-dash-row--attention">
+      <Panel title="Needs attention" className="rops-dash-attention">
+        <ul className="rops-attention" aria-label="Needs attention">
+          {!dueRows && !vacancy ? <li className="rops-attention-row"><span className="rops-attention-stripe" /><span><Skeleton width="14em" /></span></li> : null}
+          {attention.map(item => <li key={item.key} className="rops-attention-row" data-tone={item.tone}><span className="rops-attention-stripe" aria-hidden="true" /><span className="rops-attention-text"><strong>{item.title}</strong>{item.detail && <small>{item.detail}</small>}</span>
+            {item.key === "balances" && <button type="button" className="rm-button rm-button--small" onClick={() => onReport("delinquency")}>Open balances</button>}
+            {item.key === "vacancy" && <button type="button" className="rm-button rm-button--small" onClick={() => onReport("occupancy")}>Open vacancies</button>}
+            {item.key === "moves" && <button type="button" className="rm-button rm-button--small" onClick={() => onReport("lease-expiration")}>Plan turns</button>}
+          </li>)}
+          {companyPanels}
+          {dueRows && vacancy && !attention.length && <li className="rops-attention-row" data-tone="positive"><span className="rops-attention-stripe" aria-hidden="true" /><span className="rops-attention-text"><small>No balances due, vacancies or upcoming moves.</small></span></li>}
+        </ul>
+      </Panel>
+      <Panel title="Balances due" className="rops-dash-balances" onOpen={() => onReport("delinquency")}>
+        <Table rows={knownDue} limit={6} empty="No balances due." onMore={() => onReport("delinquency")} moreLabel={count => `View all ${count + unverifiedDue}${unverifiedDue ? `, including ${unverifiedDue} not verified` : ""}`} columns={[
+          { key: "tenantName", label: "Tenant", render: row => <span className="rops-cell-stack">{personLink(row)}<small>{text(row.propertyName)}{row.unitNumber ? ` · ${text(row.unitNumber)}` : ""}</small></span> },
+          { key: "oldestUnpaidRentOn", label: "Oldest", render: row => row.oldestUnpaidRentOn ? shortDate(row.oldestUnpaidRentOn) : overdueDateAbsentLabel((row.__source ?? row) as Row) },
+          { ...amountColumn("operationalBalanceCents", "Amount"), render: row => <EntityLink personId={String(row.personId ?? "")} tab="ledger" onOpen={onOpenTenant}>{money(row.operationalBalanceCents)}</EntityLink> },
+        ]} footer={dueSplit ? <><span>{dueSplit.knownCount} {dueSplit.knownCount === 1 ? "account" : "accounts"}{dueSplit.unverifiedCount ? ` · ${dueSplit.unverifiedCount} not verified` : ""}</span><strong>{money(dueSplit.knownCents)}</strong></> : undefined} />
+      </Panel>
     </div>
-    {companyPanels}
-    <div className="rmd-trend-grid">{(["vacancy", "occupancy", "rent"] as const).map(metric => <DashboardChart key={metric} metric={metric} data={trends.data} loading={trends.isFetching} error={trends.error?.message} onRetry={() => void trends.refetch()} />)}</div>
-    <div className="rmd-bottom-grid">
-      <Panel title="Vacancy List" onOpen={() => onReport("occupancy")}><Table rows={vacancy} empty="No vacant units." columns={[propertyColumn, unitColumn, { key: "type", label: "Type" }, amountColumn("marketRentCents", "Rent"), { key: "daysVacant", label: "Days vacant", number: true }]} footer={<span>{vacancy?.length ?? "—"} vacant units · {total(propertyRows, "preleased") ?? "—"} preleased</span>} /></Panel>
-      <Panel title="Move In / Move Out List" onOpen={() => onReport("lease-expiration")}>{onManageMoves && <div className="rm-toolbar"><button className="rm-button" onClick={onManageMoves}>Record move</button></div>}<Table rows={movements} empty="No moves recorded for this period." columns={[propertyColumn, unitColumn, { key: "tenantName", label: "Tenant", render: personLink }, { key: "date", label: "Date" }, { key: "movement", label: "Move" }, { key: "state", label: "Status" }]} footer={<span>{filters.asOfDate.slice(0, 7)} · Completed and upcoming moves</span>} /></Panel>
-      <Panel title="Recent online applications" onOpen={() => onReport("applicant-pipeline")}><Table rows={applicationQuery.error ? [] : applications} empty={applicationQuery.error ? "Online applications could not be loaded." : "No online applications received in the last 30 days."} columns={[{ key: "submittedOn", label: "Date" }, { key: "displayName", label: "Applicant", render: row => <a className="rm-entity-link" href={entityHref({ section: "applicants", recordId: String(row.id), tab: "summary", report: "applicant-pipeline" })} onClick={event => { if (shouldHandleEntityClick(event)) { event.preventDefault(); setApplicationId(String(row.id)); } }}>{text(row.displayName)}</a> }, propertyColumn, { key: "status", label: "Status", render: row => text(row.status).replaceAll("_", " ") }]} /></Panel>
+    <div className="rops-dash-row">
+      <Panel title="Units by property" className="rops-dash-units" onOpen={() => onReport("occupancy")}>
+        {!propertyRows ? <p className="rmd-empty"><Skeleton width="12em" /></p> : !propertyRows.length ? <p className="rmd-empty">No units in the selected properties.</p> : <ul className="rops-unit-bars">
+          {propertyRows.map(row => { const units = Number(row.unitCount) || 0; const occupied = Number(row.occupied) || 0; const longest = longestVacancy(row.propertyId); return <li key={String(row.propertyId)}>
+            <span className="rops-cell-stack">{propertyLink(row)}<small>{Number(row.vacant) || 0} vacant{row.preleased ? ` · ${row.preleased} preleased` : ""}{longest !== undefined ? ` · longest ${longest} days` : ""}{row.unknown ? ` · ${row.unknown} unknown` : ""}</small></span>
+            <span className="rops-unit-track" aria-hidden="true"><i style={{ width: `${units ? occupied / units * 100 : 0}%` }} /></span>
+            <span className="number">{occupied} / {units}</span>
+          </li>; })}
+        </ul>}
+        <div className="rmd-table-total"><button type="button" className="rops-link" onClick={() => onReport("occupancy")}>Vacancy list</button><strong>{total(propertyRows, "occupied") ?? "—"} / {total(propertyRows, "unitCount") ?? "—"} occupied</strong></div>
+      </Panel>
+      {cashReady ? <Panel title="Cash" className="rops-dash-cash">
+        <table className="rops-cash-table"><tbody>
+          <tr><td>{text(cashReady.name)} · {text(cashReady.mask)}<small>Current balance</small></td><td className="number">{money(cashReady.currentCents)}</td></tr>
+          <tr><td>Available</td><td className="number"><strong>{money(cashReady.availableCents)}</strong></td></tr>
+          <tr><td>Posted rent receipts · {monthLabel}</td><td className="number">{money(total(receipts, "amountCents"))}</td></tr>
+        </tbody></table>
+        <div className="rmd-table-total"><span>Checked {formatTimestamp(new Date(cashReady.checkedAt)) ?? ""}</span><button type="button" className="rops-link" title="Refresh cash balance" disabled={cash.isFetching} onClick={() => void cash.refetch()}><RefreshCw size={12} aria-hidden="true" /> Refresh</button></div>
+      </Panel>
+      : <Panel title="Rent roll by property" className="rops-dash-cash" onOpen={() => onReport("rent-roll")}><Table rows={propertyRows} columns={[propertyColumn, { key: "rent", label: "Base rent", number: true, render: row => row.rentUnknown || row.unknown ? UNKNOWN_AMOUNT_LABEL : money(row.rent) }]} footer={<><span>Occupied base rent</span><strong>{propertyRows?.some(row => row.rentUnknown || row.unknown) ? UNKNOWN_AMOUNT_LABEL : money(total(propertyRows, "rent"))}</strong></>} /></Panel>}
     </div>
+    <div className="rops-dash-row rops-dash-row--wide">
+      <DashboardChart metric={metric} onMetric={setMetric} data={trends.data} loading={trends.isFetching} error={trends.error?.message} onRetry={() => void trends.refetch()} />
+    </div>
+    <div className="rops-dash-row rops-dash-row--thirds">
+      <Panel title="Vacancy list" onOpen={() => onReport("occupancy")}><Table rows={vacancySorted} limit={6} onMore={() => onReport("occupancy")} moreLabel={count => `View all ${count}`} empty="No vacant units." columns={[{ key: "unitNumber", label: "Unit", render: row => <span className="rops-cell-stack">{unitLink(row)}<small>{text(row.propertyName)}{row.type ? ` · ${text(row.type)}` : ""}</small></span> }, amountColumn("marketRentCents", "Rent"), { key: "daysVacant", label: "Days", number: true, render: row => numeric(row.daysVacant) ? String(row.daysVacant) : "—" }]} footer={<span>{vacancy?.length ?? "—"} vacant · {total(propertyRows, "preleased") ?? "—"} preleased</span>} /></Panel>
+      <Panel title="Moves this month" onOpen={() => onReport("lease-expiration")} action={onManageMoves && <button type="button" className="rm-button rm-button--small" onClick={onManageMoves}>Record move</button>}><Table rows={movements} limit={6} onMore={() => onReport("lease-expiration")} moreLabel={count => `View all ${count}`} empty="No moves recorded for this month." columns={[{ key: "tenantName", label: "Tenant", render: row => <span className="rops-cell-stack">{personLink(row)}<small>{text(row.propertyName)}{row.unitNumber ? ` · ${text(row.unitNumber)}` : ""}</small></span> }, { key: "date", label: "Date", render: row => shortDate(row.date) }, { key: "movement", label: "Move", render: row => <span className="rops-cell-stack"><span>{text(row.movement)}</span><small>{text(row.state)}</small></span> }]} footer={<span>{monthLabel} · completed and upcoming</span>} /></Panel>
+      {applications && applications.length > 0 || applicationQuery.error ? <Panel title="Recent online applications" onOpen={() => onReport("applicant-pipeline")}><Table rows={applicationQuery.error ? [] : applications} limit={6} onMore={() => onReport("applicant-pipeline")} moreLabel={count => `View all ${count}`} empty={applicationQuery.error ? "Online applications could not be loaded." : "No online applications received in the last 30 days."} columns={[{ key: "displayName", label: "Applicant", render: row => <span className="rops-cell-stack"><a className="rm-entity-link" href={entityHref({ section: "applicants", recordId: String(row.id), tab: "summary", report: "applicant-pipeline" })} onClick={event => { if (shouldHandleEntityClick(event)) { event.preventDefault(); setApplicationId(String(row.id)); } }}>{displayPersonName(text(row.displayName))}</a><small>{text(row.propertyName)}</small></span> }, { key: "submittedOn", label: "Date", render: row => shortDate(row.submittedOn) }, { key: "status", label: "Status", render: row => text(row.status).replaceAll("_", " ") }]} /></Panel>
+      : <Notes identity={identity} />}
+    </div>
+    {applications && applications.length > 0 && <div className="rops-dash-row rops-dash-row--thirds"><Notes identity={identity} /></div>}
     {applicationId && selectedApplication && <ApplicationCaseDetail key={applicationId} applicationId={applicationId} summary={selectedApplication} onClose={() => setApplicationId(undefined)} />}
     {refreshing && <div className="rmd-refreshing" role="status">Refreshing dashboard…</div>}
   </section>;

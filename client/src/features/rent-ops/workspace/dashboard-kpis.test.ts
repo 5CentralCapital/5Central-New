@@ -17,9 +17,9 @@ test("summarizes known occupancy, rent, receipts and balances", () => {
   assert.equal(occupancy.share, 3 / 7);
   assert.equal(rent.value, "$3,850");
   assert.equal(receipts.value, "$2,465");
-  assert.equal(receipts.detail, "2 posted receipts · Aug 2026");
+  assert.equal(receipts.detail, "2 receipts · Aug 2026 · 64% of base rent");
   assert.ok(receipts.share! > .64 && receipts.share! < .65);
-  assert.equal(due.value, "$525");
+  assert.equal(due.value, "$525.00");
   assert.equal(due.tone, "attention");
 });
 
@@ -35,14 +35,15 @@ test("unknown inputs are never shown as zero", () => {
   assert.equal(rent.detail, "Rent amount unknown");
   assert.equal(receipts.value, "Unknown");
   assert.equal(due.value, "Unknown");
-  assert.equal(due.detail, "Unverified balances: 1");
+  assert.equal(due.detail, "1 not verified");
 });
 
-test("missing collections read as review, empty delinquency as clear", () => {
+test("collections still loading show a loading state, never Unknown; empty delinquency is clear", () => {
   const kpis = dashboardKpis({ period: "2026-08", dueRows: [] });
-  assert.equal(kpis[0].value, "Unknown");
-  assert.equal(kpis[2].value, "Unknown");
-  assert.equal(kpis[3].value, "$0");
+  assert.equal(kpis[0].tone, "loading");
+  assert.equal(kpis[0].value, "");
+  assert.equal(kpis[2].tone, "loading");
+  assert.equal(kpis[3].value, "$0.00");
   assert.equal(kpis[3].detail, "No open balances");
   assert.equal(kpis[3].tone, "normal");
 });
@@ -54,8 +55,8 @@ test("unknown balances name the specific review reason", () => {
     { operationalBalanceCents: 1000 },
   ] })[3];
   // Known amounts due are totalled; unresolved balances are counted apart, not mixed in.
-  assert.equal(due.value, "$10");
-  assert.equal(due.detail, "across 1 account · Unverified balances: 2 (History incomplete)");
+  assert.equal(due.value, "$10.00");
+  assert.equal(due.detail, "1 account · 2 not verified (History incomplete)");
 });
 
 test("whole-dollar formatting rounds and signs", () => {

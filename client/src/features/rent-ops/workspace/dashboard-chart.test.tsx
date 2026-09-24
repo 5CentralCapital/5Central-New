@@ -43,7 +43,7 @@ test("initial rendered chart visibly labels confirmed counts and accessible mont
   const html = renderToStaticMarkup(<DashboardChart metric="occupancy" data={fixture()} loading={false} onRetry={() => {}} />);
   assert.match(html, /Confirmed occupied units/);
   assert.match(html, /value="units" selected=""/);
-  assert.match(html, /2026-08-31: Portfolio 4, 3 units unknown/);
+  assert.match(html, /Aug 31, 2026: Portfolio 4, 3 units unknown/);
   assert.match(html, /Some months have unknown units/);
   assert.match(html, />Percent<\/option>/);
   const vacancy = renderToStaticMarkup(<DashboardChart metric="vacancy" data={fixture()} loading={false} onRetry={() => {}} />);
@@ -53,7 +53,7 @@ test("initial rendered chart visibly labels confirmed counts and accessible mont
 test("rent chart leaves historical values absent with a concise explanation", () => {
   const html = renderToStaticMarkup(<DashboardChart metric="rent" data={fixture()} loading={false} onRetry={() => {}} />);
   assert.match(html, /Historical charge dates or frequency missing/);
-  assert.match(html, /2026-08-31: Portfolio —/);
+  assert.match(html, /Aug 31, 2026: Portfolio —/);
   assert.doesNotMatch(html, /Confirmed vacant units/);
 });
 
@@ -69,6 +69,6 @@ test("recorded mode preserves exact dates, labels the source, and keeps current 
   assert.deepEqual(dashboardChartSeries(data, "portfolio", "occupancy", "units", "recorded")[0].values, [4, 7]);
   const html = renderToStaticMarkup(<DashboardChart metric="occupancy" data={data} loading={false} onRetry={() => {}} />);
   assert.match(html, /Recorded dates/);
-  assert.match(html, /2026-08-03 · Evernest/);
+  assert.match(html, /Aug 3, 2026 · Evernest/);
   assert.match(html, /2 recorded dates/);
 });
