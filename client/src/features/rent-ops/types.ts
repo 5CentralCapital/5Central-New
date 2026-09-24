@@ -1025,7 +1025,7 @@ export const REPORT_LABELS: Record<ReportKey, string> = {
   "scheduled-income": "Scheduled Income",
   "collected-income": "Collected Income",
   "scheduled-vs-collected": "Scheduled vs. Collected",
-  delinquency: "Delinquency",
+  delinquency: "Balances due",
   "tenant-ledger": "Tenant Ledger / Account Statement",
   "lease-expiration": "Lease Expiration / Month-to-Month",
   "security-deposit": "Security-Deposit Liability",
