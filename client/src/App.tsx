@@ -81,7 +81,7 @@ function App() {
   return (
     <Suspense fallback={<div role="status" className="p-6 text-sm">Loading…</div>}>
       <AppProviders>
-        {surface === "manager" ? <AppContent surface={surface} /> : <AuthProvider><AppContent surface={surface} /></AuthProvider>}
+        {surface === "manager" ? <AppContent surface={surface} /> : <AuthProvider restoreSession={["/admin", "/data-room", "/investor-dashboard"].includes(location)}><AppContent surface={surface} /></AuthProvider>}
       </AppProviders>
     </Suspense>
   );
