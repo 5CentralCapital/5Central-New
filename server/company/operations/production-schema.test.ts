@@ -15,7 +15,7 @@ import {
   verifyRuntimeGrants,
   type SchemaSession,
 } from "./production-schema";
-import { parseArgs, runCommand, type SessionHandle } from "../../../scripts/company/production-schema";
+import { exitCodeForOutput, parseArgs, runCommand, type SessionHandle } from "../../../scripts/company/production-schema";
 
 const definitions = rentOpsMigrationDefinitions();
 const latest = definitions.length;
@@ -165,6 +165,18 @@ test("a runtime-only plan manages the web role and PUBLIC without touching other
   await db.close();
 });
 
+test("grant plans classify staging without production authorization and bind the digest to the environment", () => {
+  const attestation = { backup: "neon:rops-staging-backup", review: "staging-review", authorization: "staging-approval" };
+  const production = planRuntimeGrants({ runtimeRole: "ops_web" }, attestation, "rent_ops_production");
+  const staging = planRuntimeGrants({ runtimeRole: "ops_web" }, attestation, "rent_ops_staging", "staging");
+  assert.equal(production.manifest.target.environment, "production");
+  assert.equal(production.manifest.authorization.productionExplicitlyAuthorized, true);
+  assert.equal(staging.manifest.target.environment, "staging");
+  assert.equal(staging.manifest.authorization.productionExplicitlyAuthorized, false);
+  assert.match(staging.sql, /-- Target: staging\/rent_ops_staging/);
+  assert.notEqual(production.grantSha256, staging.grantSha256);
+});
+
 test("backup comparison proves the copy has the same ledger and row counts", async () => {
   const source = await migratedTo(42);
   const backup = await migratedTo(42);
@@ -179,6 +191,30 @@ test("backup comparison proves the copy has the same ledger and row counts", asy
   const step = await inspectSchema(session(source), 43);
   await applySchemaMigration(session(source), { throughVersion: 43, confirmPlanSha256: step.planSha256 });
   assert.equal((await compareBackup(session(source), session(backup))).ledgerMatches, false);
+  await source.close();
+  await backup.close();
+});
+
+test("backup mismatch is a failing CLI result", async () => {
+  const source = await migratedTo(42);
+  const backup = await migratedTo(42);
+  await source.exec("INSERT INTO rent_ops_schema_meta (version) VALUES (9999)");
+  let opened = 0;
+  const open = async (): Promise<SessionHandle> => {
+    const db = opened++ === 0 ? source : backup;
+    return { session: session(db), close: async () => undefined };
+  };
+  const output = await runCommand(
+    parseArgs(["compare-backup", "--backup-url-env", "RENT_OPS_BACKUP_DATABASE_URL"]),
+    {
+      RENT_OPS_MIGRATION_DATABASE_URL: "postgresql://owner@source.invalid/rent_ops_production",
+      RENT_OPS_BACKUP_DATABASE_URL: "postgresql://owner@backup.invalid/rent_ops_production",
+    },
+    open,
+  );
+  assert.equal(output.matches, false);
+  assert.equal(exitCodeForOutput(output), 1);
+  assert.equal(exitCodeForOutput({ command: "compare-backup", matches: true }), 0);
   await source.close();
   await backup.close();
 });
@@ -202,6 +238,17 @@ test("CLI requires the reviewed digest, the explicit flag and a named connection
   const inspected = await runCommand(parseArgs(["inspect", "--through", "48"]), env, open);
   assert.equal(inspected.installedThrough, 42);
   assert.equal(JSON.stringify(inspected).includes("db.invalid"), false);
+  const stagingPlan = await runCommand(parseArgs([
+    "grants-plan",
+    "--environment", "staging",
+    "--runtime-role", "ops_web",
+    "--backup", "backup-ref",
+    "--review", "review-ref",
+    "--authorization", "staging-review",
+  ]), env, open);
+  assert.equal(stagingPlan.environment, "staging");
+  assert.match(String(stagingPlan.sql), /-- Target: staging\//);
+  assert.throws(() => parseArgs(["grants-plan", "--environment", "qa"]), rejects("cli_usage"));
   await assert.rejects(runCommand(parseArgs(["apply", "--through", "48", "--confirm", String(inspected.planSha256)]), env, open), rejects("cli_usage"));
   await assert.rejects(runCommand(parseArgs(["inspect"]), {}, open), rejects("connection_missing"));
   await assert.rejects(runCommand(parseArgs(["inspect", "--url-env", "lower"]), env, open), rejects("cli_usage"));
