@@ -16,7 +16,8 @@
 .time-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 20px 28px; border-bottom: 1px solid var(--time-line); background: var(--time-surface); }
 .time-toolbar h1 { margin: 0; font-size: 23px; font-weight: 650; letter-spacing: -.02em; }
 .time-toolbar p { margin: 5px 0 0; color: var(--time-muted); font-size: 12px; }
-.time-eyebrow { display: block; margin-bottom: 7px; color: var(--time-muted); font-size: 10px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
+/* Sentence-case muted label; the design system does not use uppercase eyebrows. */
+.time-eyebrow { display: block; margin-bottom: 6px; color: var(--time-muted); font-size: 12px; font-weight: 500; }
 .time-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .time-button { display: inline-flex; min-height: 35px; align-items: center; justify-content: center; gap: 7px; padding: 0 13px; border: 1px solid transparent; border-radius: 8px; font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
 .time-button:disabled { cursor: wait; opacity: .55; }

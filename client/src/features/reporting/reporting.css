@@ -30,9 +30,9 @@
   transition: background-color 120ms var(--rp-ease);
 }
 .reporting-list button:hover { background: var(--rp-fill); }
-.reporting-list button.is-selected { background: var(--rp-gold-wash); color: var(--rp-ink); font-weight: 600; }
+.reporting-list button.is-selected { background: var(--rp-fill-hover); color: var(--rp-ink); font-weight: 600; }
 .reporting-status { flex: 0 0 auto; color: var(--rp-muted); font-size: 11px; font-weight: 500; white-space: nowrap; }
-.reporting-status.is-missing_data { color: var(--rp-warning); }
+.reporting-status.is-missing_data { padding: 2px 8px; border-radius: 999px; background: var(--rp-warning-wash); color: var(--rp-warning); }
 .reporting-status.is-not_implemented { color: var(--rp-faint); }
 
 /* Main */

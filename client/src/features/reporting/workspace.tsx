@@ -3,12 +3,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, FileDown, Printer, Search, Trash2 } from "lucide-react";
 import type { CompanyContextOrganization } from "@shared/company/context";
 import type { ReportEntry, ReportPackage, ReportPackageItem, ReportPackageRun, ReportPage, ReportPreset, ReportRunRequest } from "@shared/reporting";
-import { describeReportPeriod, formatReportTotal, formatReportValue, reportStatusLabel, reportTotalLabel } from "@shared/reporting/format";
+import { formatReportTotal, reportStatusLabel, reportTotalLabel } from "@shared/reporting/format";
 import { reportingApi, ReportingApiError } from "./api";
 import { ReportSetup } from "./setup";
 import { describeAppliedFilters } from "./setup-model";
 import type { ReportPackageSaveRequest, ReportPresetSaveRequest } from "./types";
-import { openPrintView, packageItemFromRequest, packageRunRowCount, packageRunSummary, runtimeStatusLabel, type PackageDraft } from "./workspace-model";
+import { displayReportCell, displayReportPeriod, openPrintView, packageItemFromRequest, packageRunRowCount, packageRunSummary, runtimeStatusLabel, type PackageDraft } from "./workspace-model";
 import { requestFromFinancialLink } from "../accounting/report-links";
 import "./reporting.css";
 
@@ -69,7 +69,7 @@ function Result({ organizationId, page, applied, title, onPage }: { organization
       <summary>{incomplete.length ? "Source coverage is incomplete" : "Some data is missing"}</summary>
       <ul>{incomplete.map(item => <li key={`coverage:${item.source}`}>{reportStatusLabel(item.source)}: {item.reason ?? reportStatusLabel(item.state)}</li>)}{page.missingData.map((item, index) => <li key={`${item.code}:${index}`}>{item.message}</li>)}</ul>
     </details>}
-    <div className="reporting-table-wrap" tabIndex={0} aria-label={`${title} table`}><table><thead><tr>{page.columns.map(column => <th key={column.id} scope="col" className={numeric(column.type) ? "is-numeric" : ""}>{column.label}</th>)}</tr></thead><tbody>{page.rows.length === 0 ? <tr><td colSpan={Math.max(1, page.columns.length)}><span className="reporting-table-empty">No rows matched this setup.</span></td></tr> : page.rows.map(row => <tr key={row.rowId}>{page.columns.map(column => <td key={column.id} className={numeric(column.type) ? "is-numeric" : ""}>{formatReportValue(row.values[column.id], column, row.values)}</td>)}</tr>)}</tbody><tfoot><tr><td colSpan={Math.max(1, page.columns.length)}><div className="reporting-table-footer"><strong>{shownLabel}</strong>{page.totals.length > 0 ? <div className="reporting-table-footer-totals"><span>{totalsLabel}</span><dl className="reporting-totals" aria-label={`${totalsLabel} for ${title}`}>{page.totals.map(total => <div key={total.key} className={total.state === "complete" ? "" : "is-incomplete"}><dt>{reportTotalLabel(total.key)}</dt><dd>{formatReportTotal(total)}{total.state !== "complete" && <small>{reportStatusLabel(total.state)}</small>}</dd></div>)}</dl></div> : <span className="reporting-table-footer-missing">Count only</span>}</div></td></tr></tfoot></table></div>
+    <div className="reporting-table-wrap" tabIndex={0} aria-label={`${title} table`}><table><thead><tr>{page.columns.map(column => <th key={column.id} scope="col" className={numeric(column.type) ? "is-numeric" : ""}>{column.label}</th>)}</tr></thead><tbody>{page.rows.length === 0 ? <tr><td colSpan={Math.max(1, page.columns.length)}><span className="reporting-table-empty">No rows matched this setup.</span></td></tr> : page.rows.map(row => <tr key={row.rowId}>{page.columns.map(column => <td key={column.id} className={numeric(column.type) ? "is-numeric" : ""}>{displayReportCell(row.values[column.id], column, row.values)}</td>)}</tr>)}</tbody><tfoot><tr><td colSpan={Math.max(1, page.columns.length)}><div className="reporting-table-footer"><strong>{shownLabel}</strong>{page.totals.length > 0 ? <div className="reporting-table-footer-totals"><span>{totalsLabel}</span><dl className="reporting-totals" aria-label={`${totalsLabel} for ${title}`}>{page.totals.map(total => <div key={total.key} className={total.state === "complete" ? "" : "is-incomplete"}><dt>{reportTotalLabel(total.key)}</dt><dd>{formatReportTotal(total)}{total.state !== "complete" && <small>{reportStatusLabel(total.state)}</small>}</dd></div>)}</dl></div> : <span className="reporting-table-footer-missing">Count only</span>}</div></td></tr></tfoot></table></div>
     {page.nextCursor && <button type="button" className="reporting-quiet-button reporting-more" onClick={() => void next()} disabled={loading}>{loading ? "Loading…" : "Show more rows"}</button>}
   </section>;
 }
@@ -110,7 +110,7 @@ function PackageEditor({ organizationId, draft, entries, latestRequest, onChange
       <label className="reporting-check"><input type="checkbox" checked={draft.visibility === "shared"} onChange={event => onChange({ ...draft, visibility: event.currentTarget.checked ? "shared" : "private" })} />Share with the company</label>
     </div>
     {draft.items.length === 0 ? <p className="reporting-inline-note">Run a report, then add it here.</p> : <ol className="reporting-package-items">{draft.items.map((item, index) => <li key={item.id ?? `${item.reportId}-${index}`}>
-      <div><strong>{item.title ?? titleFor(item.reportId)}</strong><small>{describeReportPeriod(item.period)}</small></div>
+      <div><strong>{item.title ?? titleFor(item.reportId)}</strong><small>{displayReportPeriod(item.period)}</small></div>
       <div className="reporting-row-actions">
         <button type="button" className="reporting-icon-button" aria-label={`Move ${item.title ?? titleFor(item.reportId)} up`} disabled={index === 0} onClick={() => move(index, -1)}><ArrowUp size={15} /></button>
         <button type="button" className="reporting-icon-button" aria-label={`Move ${item.title ?? titleFor(item.reportId)} down`} disabled={index === draft.items.length - 1} onClick={() => move(index, 1)}><ArrowDown size={15} /></button>
@@ -155,7 +155,7 @@ function SavedReports({ organizationId, entries, latestRequest, onApply, onOpenR
     {message && <p className="reporting-inline-note" role="status">{message}</p>}
     {tab === "setups" ? <div role="tabpanel">
       <div className="reporting-saved-row"><input aria-label="Setup name" placeholder="Setup name" value={name} onChange={event => setName(event.currentTarget.value)} /><button type="button" className="reporting-quiet-button" onClick={() => void savePreset()} disabled={!latestRequest}>Save Setup</button></div>
-      {presets.isLoading ? <p className="reporting-inline-note">Loading…</p> : presets.error ? <p className="reporting-inline-note">Saved setups could not be loaded.</p> : presets.data?.length ? <ul className="reporting-saved-list">{presets.data.map(preset => <li key={preset.id}><button type="button" className="reporting-link" onClick={() => onApply(requestFromPreset(preset))}>{preset.name}</button><small>{entries.find(entry => entry.id === preset.reportId)?.title ?? preset.reportId} · {describeReportPeriod(preset.current.period)}</small></li>)}</ul> : <p className="reporting-inline-note">No saved setups.</p>}
+      {presets.isLoading ? <p className="reporting-inline-note">Loading…</p> : presets.error ? <p className="reporting-inline-note">Saved setups could not be loaded.</p> : presets.data?.length ? <ul className="reporting-saved-list">{presets.data.map(preset => <li key={preset.id}><button type="button" className="reporting-link" onClick={() => onApply(requestFromPreset(preset))}>{preset.name}</button><small>{entries.find(entry => entry.id === preset.reportId)?.title ?? preset.reportId} · {displayReportPeriod(preset.current.period)}</small></li>)}</ul> : <p className="reporting-inline-note">No saved setups.</p>}
     </div> : <div role="tabpanel">
       {draft ? <PackageEditor organizationId={organizationId} draft={draft} entries={entries} latestRequest={latestRequest} onChange={setDraft} onCancel={() => setDraft(undefined)} onSaved={() => { setDraft(undefined); setMessage("Package saved."); refresh(); }} />
         : <div className="reporting-saved-row"><button type="button" className="reporting-quiet-button" onClick={() => setDraft({ name: "", visibility: "private", items: latestRequest ? [packageItemFromRequest(latestRequest, entries.find(entry => entry.id === latestRequest.reportId)?.title ?? latestRequest.reportId, [])] : [] })}>New Package</button></div>}
@@ -195,7 +195,7 @@ export function ReportingWorkspace({ identity, organization, initialReportId, in
     try {
       const result = await reportingApi.run(organization.id, request);
       const entry = entries.find(item => item.id === request.reportId);
-      setPage({ page: result.page, applied: entry ? [describeReportPeriod(request.period), ...describeAppliedFilters(entry, request, organization, labels)] : [describeReportPeriod(request.period)], title: entry?.title ?? request.reportId });
+      setPage({ page: result.page, applied: entry ? [displayReportPeriod(request.period), ...describeAppliedFilters(entry, request, organization, labels)] : [displayReportPeriod(request.period)], title: entry?.title ?? request.reportId });
     } catch (nextError) { setError(nextError); } finally { setRunning(false); }
   };
   const applySavedRequest = (request: ReportRunRequest) => { setSelectedId(request.reportId); setLastRequest(request); setSetupRevision(value => value + 1); setPage(undefined); setError(undefined); onNavigate?.(organization.id, request.reportId); };

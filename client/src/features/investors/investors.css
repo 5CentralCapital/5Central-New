@@ -39,7 +39,9 @@
 .investors-main { min-width: 0; padding: 25px 30px 44px; background: var(--investors-surface); }
 .investors-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 20px; border-bottom: 1px solid var(--investors-line); }
 .investors-detail-head h2 { margin: 0; font-size: 26px; font-weight: 650; letter-spacing: -.025em; }
-.investors-eyebrow { display: block; margin-bottom: 7px; color: var(--investors-muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+/* Sentence-case muted label; the design system does not use uppercase eyebrows. */
+.investors-eyebrow { display: block; margin-bottom: 6px; color: var(--investors-muted); font-size: 12px; font-weight: 500; }
+.investors-empty-page { padding: 24px 28px; border-bottom: 1px solid var(--investors-line); background: var(--investors-surface); }
 .investors-detail-head p { margin: 6px 0 0; color: var(--investors-muted); font-size: 13px; }
 .investors-status { display: inline-flex; min-height: 24px; align-items: center; padding: 0 8px; border-radius: 999px; background: #eeeae4; color: var(--investors-muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
 .investors-status.is-positive { background: #e6f1e9; color: var(--investors-positive); }

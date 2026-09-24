@@ -51,6 +51,7 @@
 
 .projects-page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 24px 14px; }
 .projects-eyebrow { display: block; margin-bottom: 6px; color: var(--projects-muted); font-size: 12px; letter-spacing: .02em; }
+.projects-empty-page { display: grid; gap: 12px; padding: 24px; border-top: 1px solid var(--projects-line); }
 .projects-layout { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); min-height: 640px; border-top: 1px solid var(--projects-line); }
 .projects-list-pane { min-width: 0; border-right: 1px solid var(--projects-line); background: var(--projects-soft); }
 .projects-list-toolbar { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 16px; border-bottom: 1px solid var(--projects-line); }

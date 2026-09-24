@@ -31,6 +31,8 @@
 
 /* List + detail */
 .rm-workspace.rops-modern .wo-layout { grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 20px; }
+.rm-workspace.rops-modern .wo-layout.is-list-only { grid-template-columns: minmax(0, 1fr); }
+.rm-workspace.rops-modern .wo-empty-page { border-radius: var(--ds-r-l); background: var(--ds-surface); box-shadow: var(--ds-shadow-panel), 0 0 0 1px var(--ds-hairline); }
 .rm-workspace.rops-modern .wo-list { top: 88px; max-height: calc(100vh - 110px); }
 .rm-workspace.rops-modern .wo-list-items { display: block; padding: 4px 0; overflow-y: auto; }
 .rm-workspace.rops-modern .wo-load-more { display: block; margin: 12px auto; min-height: 44px; }

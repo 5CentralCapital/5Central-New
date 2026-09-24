@@ -14,6 +14,7 @@ import {
   filterReportLocalRows,
   isOccupancyReport,
   isTenantStatusReport,
+  REPORT_PERIODS,
   reportQueryFilters,
   validateReportPeriod,
   type ReportBalanceFilter,
@@ -367,6 +368,112 @@ export function applyReportSetupLocalFilters(rows: readonly import("../types").R
 
 export function isReportSetupDateField(field: ReportSetupField): boolean {
   return usesDateField(field);
+}
+
+/** Reports that run as soon as they open and re-run whenever their setup changes. */
+const AUTO_RUN_REPORTS: ReadonlySet<ReportKey> = new Set<ReportKey>(["rent-roll", "occupancy", "delinquency"]);
+
+export function reportRunsAutomatically(key: ReportKey): boolean {
+  return AUTO_RUN_REPORTS.has(key);
+}
+
+/**
+ * How long to wait before an automatic re-run. Typing in a text field waits
+ * for a pause; every other change (selects, dates, chips) applies at once.
+ */
+export function reportSetupApplyDelay(key: ReportKey, applied: ReportSetupState | undefined, next: ReportSetupState): number {
+  if (!applied) return 0;
+  const textFields = reportFilterDefinitions(key).filter(field => field.kind === "text").map(field => field.name);
+  if (!textFields.length) return 0;
+  const withoutText = (state: ReportSetupState) => {
+    const values = cloneValues(state.values);
+    for (const name of textFields) delete values[name];
+    return reportSetupToUrlValue({ ...state, values });
+  };
+  const textChanged = textFields.some(name => (applied.values[name] ?? "") !== (next.values[name] ?? ""));
+  return textChanged && withoutText(applied) === withoutText(next) ? 300 : 0;
+}
+
+/** One active-setup chip above the report results. */
+export interface ReportSetupChip {
+  id: string;
+  label: string;
+  /** The setup with this filter removed; absent for chips that cannot be removed (portfolio, period). */
+  clear?: (state: ReportSetupState) => ReportSetupState;
+}
+
+export interface ReportSetupChipFormatters {
+  longDate: (value: string) => string | undefined;
+  monthLabel: (value: string) => string | undefined;
+}
+
+function isEmptyChipValue(value: ReportSetupValue | undefined): boolean {
+  if (Array.isArray(value)) return value.filter(item => item && item !== "all").length === 0;
+  return !value || value === "all";
+}
+
+function clearedFieldValue(field: ReportSetupField): ReportSetupValue {
+  if (field.multiple || field.kind === "multi_select") return [];
+  return field.kind === "select" ? "all" : "";
+}
+
+function referenceLabel(field: ReportSetupField, id: string, directory?: ReportSetupDirectory): string | undefined {
+  if (!directory) return undefined;
+  if (field.reference === "unit") {
+    const unit = directory.units.find(candidate => candidate.id === id);
+    return unit?.unitNumber ? `Unit ${unit.unitNumber}` : undefined;
+  }
+  if (field.reference === "person") {
+    const person = directory.people.find(candidate => candidate.id === id);
+    const name = person ? [person.firstName, person.lastName].filter(Boolean).join(" ").trim() : "";
+    return name || undefined;
+  }
+  return undefined;
+}
+
+/** Fields whose selected values read well on their own ("Current", "Vacant"). */
+const BARE_CHIP_FIELDS = new Set(["occupancy", "tenantStatus", "tenancyStatus"]);
+
+/**
+ * Summarize a setup as chips: portfolio, period and every narrowing filter.
+ * Chips only describe the setup; they never change what the report requests.
+ */
+export function reportSetupChips(key: ReportKey, state: ReportSetupState, format: ReportSetupChipFormatters, directory?: ReportSetupDirectory): ReportSetupChip[] {
+  const chips: ReportSetupChip[] = [];
+  const definitions = reportFilterDefinitions(key);
+  chips.push({ id: "propertyScope", label: state.propertyScope === "all" ? "All properties" : "Active portfolio" });
+  if (state.propertyIds.length) {
+    const name = state.propertyIds.length === 1 ? directory?.properties.find(property => property.id === state.propertyIds[0])?.name : undefined;
+    chips.push({ id: "propertyIds", label: name ?? `${state.propertyIds.length} ${state.propertyIds.length === 1 ? "property" : "properties"}`, clear: current => ({ ...current, propertyIds: [] }) });
+  }
+  const mode = REPORT_PERIODS[key];
+  const longDate = (value: string) => format.longDate(value) ?? value;
+  if (mode === "month") chips.push({ id: "month", label: format.monthLabel(state.month) ?? state.month });
+  else if (mode === "range") chips.push({ id: "range", label: `${longDate(state.fromDate)} – ${longDate(state.toDate)}` });
+  else chips.push({ id: "asOfDate", label: `As of ${longDate(state.asOfDate)}` });
+  for (const field of definitions) {
+    if (usesPropertyField(field) || usesDateField(field)) continue;
+    const value = fieldValue(state, field);
+    if (isEmptyChipValue(value)) continue;
+    const values = (Array.isArray(value) ? value : [value]).filter(item => item && item !== "all");
+    let text: string;
+    if (field.kind === "text") text = `${field.label}: “${values[0]}”`;
+    else if (field.reference) {
+      const labels = values.map(id => referenceLabel(field, id, directory));
+      text = labels.length === 1 && labels[0] ? labels[0] : `${field.label}: ${values.length} selected`;
+    } else {
+      const labels = values.map(item => field.options?.find(option => option.value === item)?.label ?? item.replaceAll("_", " "));
+      const joined = labels.length > 2 ? `${labels.slice(0, 2).join(", ")} +${labels.length - 2}` : labels.join(", ");
+      text = BARE_CHIP_FIELDS.has(field.name) ? joined : `${field.label}: ${joined}`;
+    }
+    const required = (field as ReportSetupField & { required?: boolean }).required;
+    chips.push({
+      id: field.name,
+      label: text,
+      clear: required ? undefined : current => ({ ...current, values: { ...cloneValues(current.values), [field.name]: clearedFieldValue(field) } }),
+    });
+  }
+  return chips;
 }
 
 export function isReportSetupPropertyField(field: ReportSetupField): boolean {

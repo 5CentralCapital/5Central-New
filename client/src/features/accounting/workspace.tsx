@@ -1,10 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { RefreshCw, Unplug } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ACCOUNTING_VIEWS, isAccountingView, type AccountingApi, type AccountingConnection, type AccountingEnvironment, type AccountingMirrorKind, type AccountingPendingBinding, type AccountingScope, type AccountingView, type AccountingWorkspaceEntity, type AccountingWorkspaceProps } from "./types";
 import { accountingApi } from "./api";
 import { dateLabel, dateTimeLabel, formatCents } from "./format";
-import { BankingView, EmptyState, OverviewPanel, PayablesView, PeriodCloseView, PmSettlementsView } from "./views";
+import { BankingView, EmptyState, OverviewPanel, PayablesView, PeriodCloseView, PmSettlementsView, QuickBooksStatusLine, pickHealth, quickBooksStatus } from "./views";
+import { RowMenu } from "../rent-ops/workspace/ops-ui";
 import { FullGeneralLedger } from "./full-ledger";
 import { FinancialDashboard } from "./dashboard";
 import { shouldInvalidateAccountingQuery, waitForAccountingRefresh } from "./refresh";
@@ -24,15 +25,15 @@ function environmentLabel(environment: AccountingEnvironment | null | undefined)
   return environment === "production" ? "Production" : environment === "sandbox" ? "Sandbox" : "Not configured";
 }
 
-function EnvironmentBadge({ environment }: { readonly environment: AccountingEnvironment | null | undefined }) {
-  if (!environment) return null;
-  return <span className={`accounting-environment is-${environment}`} title={`QuickBooks ${environmentLabel(environment)} environment`}>{environmentLabel(environment)}</span>;
-}
 
+/** In-page confirmation (window.confirm is disabled in some viewers). Typing the company name enables Disconnect. */
 function DisconnectDialog({ connection, entityName, saving, error, onCancel, onConfirm }: { readonly connection: AccountingConnection; readonly entityName: string; readonly saving: boolean; readonly error: unknown; readonly onCancel: () => void; readonly onConfirm: () => void }) {
   const titleId = useId();
-  const cancelRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => { cancelRef.current?.focus(); }, []);
+  const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [typed, setTyped] = useState("");
+  const matches = typed.trim() === connection.name.trim();
+  useEffect(() => { inputRef.current?.focus(); }, []);
   useEffect(() => {
     const listener = (event: KeyboardEvent) => { if (event.key === "Escape" && !saving) onCancel(); };
     window.addEventListener("keydown", listener);
@@ -41,20 +42,24 @@ function DisconnectDialog({ connection, entityName, saving, error, onCancel, onC
   return <div className="rm-dialog-backdrop accounting-dialog-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !saving) onCancel(); }}>
     <section className="rm-dialog accounting-dialog" role="alertdialog" aria-modal="true" aria-labelledby={titleId} aria-busy={saving}>
       <div className="rm-dialog-header accounting-dialog-header"><h2 id={titleId}>Disconnect QuickBooks?</h2></div>
-      <div className="accounting-dialog-body">
-        <p>This disconnects <strong>{connection.name}</strong> ({environmentLabel(connection.scope.environment)}) from {entityName}.</p>
-        <ul>
-          <li>5Central Ops asks Intuit to revoke its access. Nothing inside QuickBooks is changed or deleted.</li>
-          <li>Record refreshes stop until you reconnect. Records already copied into 5Central Ops stay stored here.</li>
-          <li>If Intuit can't confirm the disconnect, the connection is kept so you can try again.</li>
-          <li>You can reconnect the same QuickBooks company at any time.</li>
-        </ul>
-        {error !== null && <div className="accounting-message is-error" role="alert">{error instanceof Error ? error.message : "QuickBooks could not be disconnected."}</div>}
-      </div>
-      <div className="rm-dialog-footer accounting-dialog-footer">
-        <button ref={cancelRef} type="button" className="accounting-button" disabled={saving} onClick={onCancel}>Cancel</button>
-        <button type="button" className="accounting-button accounting-button-danger rm-button-danger" disabled={saving} onClick={onConfirm}>{saving ? "Disconnecting…" : "Disconnect QuickBooks"}</button>
-      </div>
+      <form className="accounting-dialog-form" onSubmit={event => { event.preventDefault(); if (matches && !saving) onConfirm(); }}>
+        <div className="accounting-dialog-body">
+          <p>This disconnects the QuickBooks company <strong>{connection.name}</strong> ({environmentLabel(connection.scope.environment)}) from the legal entity <strong>{entityName}</strong>.</p>
+          <ul>
+            <li>5Central Ops asks Intuit to revoke its access. Nothing inside QuickBooks is changed or deleted.</li>
+            <li>Record refreshes stop until you reconnect. Records already copied into 5Central Ops stay stored here.</li>
+            <li>If Intuit can't confirm the disconnect, the connection is kept so you can try again.</li>
+            <li>You can reconnect the same QuickBooks company at any time.</li>
+          </ul>
+          <label className="accounting-confirm-field" htmlFor={inputId}>Type <strong>{connection.name}</strong> to confirm</label>
+          <input ref={inputRef} id={inputId} className="accounting-confirm-input" value={typed} autoComplete="off" spellCheck={false} disabled={saving} onChange={event => setTyped(event.currentTarget.value)} />
+          {error !== null && <div className="accounting-message is-error" role="alert">{error instanceof Error ? error.message : "QuickBooks could not be disconnected."}</div>}
+        </div>
+        <div className="rm-dialog-footer accounting-dialog-footer">
+          <button type="button" className="accounting-button" disabled={saving} onClick={onCancel}>Cancel</button>
+          <button type="submit" className="accounting-button accounting-button-danger rm-button-danger" disabled={saving || !matches}>{saving ? "Disconnecting…" : "Disconnect QuickBooks"}</button>
+        </div>
+      </form>
     </section>
   </div>;
 }
@@ -68,7 +73,7 @@ function ConnectCard({ api, organizationId, legalEntityId, environment, reconnec
     catch (caught) { setError(caught); setStarting(false); }
   }
   return <div className="accounting-card">
-    <div className="accounting-card-header"><h2>{reconnect ? "Reconnect QuickBooks" : "Connect QuickBooks"}</h2><EnvironmentBadge environment={environment} /></div>
+    <div className="accounting-card-header"><h2>{reconnect ? "Reconnect QuickBooks" : "Connect QuickBooks"}</h2>{environment && <span className="accounting-meta">{environmentLabel(environment)} environment</span>}</div>
     <div className="accounting-card-body accounting-form">
       {reconnect && <p className="accounting-meta">QuickBooks needs to be reconnected for this legal entity. Accounting access is paused until you reconnect.</p>}
       <button className="accounting-button accounting-button-primary" disabled={starting} onClick={() => void connect()}>{starting ? "Opening QuickBooks…" : reconnect ? "Reconnect QuickBooks" : "Connect QuickBooks"}</button>
@@ -100,11 +105,6 @@ function PendingBindingCard({ api, organizationId, legalEntityId, entityName, pe
       {error !== null && <div className="accounting-message is-error" role="alert">{error instanceof Error ? error.message : "The connection could not be confirmed."}</div>}
     </div>
   </div>;
-}
-
-function ConnectionList({ connections, selected, onSelect }: { readonly connections: readonly AccountingConnection[]; readonly selected: AccountingConnection | null; readonly onSelect: (connection: AccountingConnection) => void }) {
-  if (!connections.length) return null;
-  return <div className="accounting-card"><div className="accounting-card-header"><h2>Connections</h2></div>{connections.map(connection => <button type="button" className="accounting-connection" key={`${connection.scope.environment}:${connection.scope.realmId}`} aria-pressed={selected?.scope.realmId === connection.scope.realmId} onClick={() => onSelect(connection)}><strong>{connection.name}</strong><EnvironmentBadge environment={connection.scope.environment} /><span className={`accounting-status ${connection.status === "ready" ? "" : "is-muted"}`}>{connection.status === "ready" ? "Ready" : connection.status === "needs_reconnect" ? "Needs reconnect" : "Connected"}</span></button>)}</div>;
 }
 
 function MirrorTable({ items, kind }: { readonly items: readonly { displayName: string; active: boolean; providerUpdatedAt: string | null }[]; readonly kind: AccountingMirrorKind }) {
@@ -178,6 +178,7 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
   const scope = useMemo<AccountingScope | null>(() => selectedConnection?.status === "needs_reconnect" ? null : selectedConnection?.scope ?? null, [selectedConnection]);
   const reportsReady = selectedConnection?.status === "ready";
   const mirrors = useQuery({ queryKey: ["accounting", "mirrors", scope, tab], queryFn: ({ signal }) => api.listMirrors(organizationId, scope!, tab as AccountingMirrorKind, signal), enabled: Boolean(scope && tab !== "transactions" && tab !== "general-ledger" && view === "transactions"), staleTime: 20_000 });
+  const health = useQuery({ queryKey: ["accounting", "health", organizationId, legalEntityId], queryFn: ({ signal }) => api.health(organizationId, legalEntityId, signal), enabled: Boolean(legalEntityId && selectedConnection && selectedConnection.status !== "needs_reconnect"), staleTime: 15_000, refetchInterval: 60_000 });
   const selectedEntity = entityOptions.find(entity => entity.id === legalEntityId);
   const currency = selectedEntity?.currency ?? "USD";
   const clearPending = async () => {
@@ -239,20 +240,30 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
     finally { setDisconnecting(false); }
   }
   useEffect(() => { if (pendingId) setView("connections"); }, [pendingId]);
-  const sidebar = <aside className="accounting-sidebar">{pending.data && selectedEntity && <PendingBindingCard api={api} organizationId={organizationId} legalEntityId={legalEntityId} entityName={selectedEntity.name} pending={pending.data} onConfirmed={clearPending} />}{pending.error && <ErrorBox error={pending.error} retry={() => void pending.refetch()} />}{!connections.isLoading && <ConnectionList connections={connections.data ?? []} selected={selectedConnection} onSelect={connection => setSelectedRealmId(connection.scope.realmId)} />}{!pending.data && configuration.data?.configured && legalEntityId && (!selectedConnection || selectedConnection.status === "needs_reconnect") && <ConnectCard api={api} organizationId={organizationId} legalEntityId={legalEntityId} environment={environment} reconnect={selectedConnection?.status === "needs_reconnect" || disconnectedEntities.has(legalEntityId)} />}{configuration.data && !configuration.data.configured && <div className="accounting-card"><div className="accounting-card-header"><h2>QuickBooks is not configured</h2></div><div className="accounting-card-body">QuickBooks connection isn't available.</div></div>}</aside>;
+  const showConnect = Boolean(!pending.data && configuration.data?.configured && legalEntityId && (!selectedConnection || selectedConnection.status === "needs_reconnect"));
+  const setup = <>{pending.data && selectedEntity && <PendingBindingCard api={api} organizationId={organizationId} legalEntityId={legalEntityId} entityName={selectedEntity.name} pending={pending.data} onConfirmed={clearPending} />}{pending.error && <ErrorBox error={pending.error} retry={() => void pending.refetch()} />}{showConnect && <ConnectCard api={api} organizationId={organizationId} legalEntityId={legalEntityId} environment={environment} reconnect={selectedConnection?.status === "needs_reconnect" || disconnectedEntities.has(legalEntityId)} />}{configuration.data && !configuration.data.configured && <div className="accounting-card"><div className="accounting-card-header"><h2>QuickBooks is not configured</h2></div><div className="accounting-card-body">QuickBooks connection isn't available.</div></div>}</>;
+  const setupVisible = Boolean(pending.data || pending.error || showConnect || (configuration.data && !configuration.data.configured));
+  const canDisconnect = Boolean(selectedConnection && selectedConnection.status !== "needs_reconnect");
+  const canRefresh = Boolean(scope && view !== "overview" && view !== "banking");
+  const status = quickBooksStatus({ environment, connection: selectedConnection, health: pickHealth(health.data?.items, selectedConnection?.scope.realmId), healthLoading: health.isLoading });
+  const statusActions = (canRefresh || canDisconnect) ? <>
+    {canRefresh && <button type="button" className="accounting-button" disabled={syncing || disconnecting} onClick={() => void sync()}><RefreshCw size={14} aria-hidden="true" />{syncing ? "Refreshing…" : "Refresh records"}</button>}
+    {canDisconnect && <RowMenu label="QuickBooks connection actions" items={[{ label: "Disconnect QuickBooks…", danger: true, disabled: syncing || disconnecting, onSelect: () => { setDisconnectError(null); setDisconnectOpen(true); } }]} />}
+  </> : undefined;
   const notConnected = <EmptyState title={selectedConnection?.status === "needs_reconnect" ? "QuickBooks needs to be reconnected" : "QuickBooks isn't connected"} detail={selectedConnection?.status === "needs_reconnect" ? "Reconnect to restore accounting access for this legal entity." : "Connect this legal entity's QuickBooks company to see its records."} action={{ label: "Open connections", onClick: () => setView("connections") }} />;
   const mirrorContent = scope ? <><nav className="accounting-tabs" aria-label="QuickBooks records">{[["general-ledger", "General ledger"] as const, ["transactions", "Synced transactions"] as const, ...mirrorTabs].map(([value, label]) => <button type="button" className={`accounting-tab ${tab === value ? "is-selected" : ""}`} aria-pressed={tab === value} key={value} onClick={() => setTab(value)}>{label}</button>)}</nav>{tab === "general-ledger" ? <FullGeneralLedger api={reportsApi} ready={reportsReady} key={`${organizationId}:${legalEntityId}:${selectedRealmId}`} organizationId={organizationId} legalEntityId={legalEntityId} currency={currency} /> : tab === "transactions" ? <TransactionTable onFullLedger={() => setTab("general-ledger")} key={`${organizationId}:${scope.legalEntityId}:${scope.environment}:${scope.realmId}`} api={api} organizationId={organizationId} scope={scope} /> : mirrors.isLoading ? <div className="accounting-empty">Loading {tab}…</div> : mirrors.error ? <ErrorBox error={mirrors.error} retry={() => void mirrors.refetch()} /> : <MirrorTable items={mirrors.data ?? []} kind={tab} />}</> : notConnected;
   return <div className="accounting-workspace">
-    <header className="accounting-toolbar"><div><h1>Accounting</h1><p>{organizationName ?? "Company"}</p></div><div className="accounting-actions"><EnvironmentBadge environment={environment} />{scope && view !== "overview" && <button className="accounting-button accounting-button-primary" disabled={syncing || disconnecting} onClick={() => void sync()}><RefreshCw size={14} aria-hidden="true" />{syncing ? "Refreshing…" : "Refresh records"}</button>}{selectedConnection && selectedConnection.status !== "needs_reconnect" && view === "connections" && <button className="accounting-button accounting-button-danger rm-button-danger" disabled={syncing || disconnecting} onClick={() => { setDisconnectError(null); setDisconnectOpen(true); }}><Unplug size={14} aria-hidden="true" />Disconnect QuickBooks</button>}</div></header>
-    <div className="accounting-selectors"><label>Company<select value={legalEntityId} onChange={event => { setLegalEntityId(event.currentTarget.value); setTab("general-ledger"); }}>{entityOptions.map(entity => <option key={entity.id} value={entity.id}>{entity.name}</option>)}</select></label><span className="accounting-meta">{selectedEntity?.currency ?? "—"}</span></div>
+    <header className="accounting-toolbar"><div><h1>Accounting</h1><p>{organizationName ?? "Company"}</p></div></header>
+    <div className="accounting-selectors"><label>Company<select value={legalEntityId} onChange={event => { setLegalEntityId(event.currentTarget.value); setTab("general-ledger"); }}>{entityOptions.map(entity => <option key={entity.id} value={entity.id}>{entity.name}</option>)}</select></label>{(connections.data?.length ?? 0) > 1 && <label>QuickBooks company<select value={selectedConnection?.scope.realmId ?? ""} onChange={event => setSelectedRealmId(event.currentTarget.value)}>{connections.data!.map(connection => <option key={`${connection.scope.environment}:${connection.scope.realmId}`} value={connection.scope.realmId}>{connection.name}</option>)}</select></label>}<span className="accounting-meta">{selectedEntity?.currency ?? "—"}</span></div>
     <nav className="accounting-tabs accounting-view-tabs" aria-label="Accounting sections">{ACCOUNTING_VIEWS.map(item => <button type="button" key={item.value} className={`accounting-tab ${view === item.value ? "is-selected" : ""}`} aria-current={view === item.value ? "page" : undefined} onClick={() => setView(item.value)}>{item.label}</button>)}</nav>
+    {legalEntityId && configuration.data?.configured && !connections.isLoading && <div className="accounting-status-row"><QuickBooksStatusLine status={status} actions={statusActions} /></div>}
     {message && <div className="accounting-message" role="status">{message}</div>}
     {callbackError && <div className="accounting-message" role="alert">{callbackErrorMessage(callbackError)} <button type="button" className="accounting-button" onClick={() => setCallbackError(null)}>Dismiss</button></div>}
     {configuration.error && <ErrorBox error={configuration.error} retry={() => void configuration.refetch()} />}
     {connections.error && <ErrorBox error={connections.error} retry={() => void connections.refetch()} />}
     {!legalEntityId ? <main className="accounting-main"><EmptyState title="No legal entity" detail="Add a legal entity to this company to use accounting." /></main>
       : view === "overview" ? <main className="accounting-main is-wide">{configuration.isLoading || connections.isLoading ? <div className="accounting-empty" role="status">Loading QuickBooks…</div> : <FinancialDashboard api={reportsApi} key={`${organizationId}:${legalEntityId}:${selectedRealmId}`} organizationId={organizationId} legalEntityId={legalEntityId} currency={currency} connected={Boolean(scope)} ready={reportsReady} onConnections={() => setView("connections")} />}</main>
-      : view === "connections" ? <div className="accounting-connections-layout">{sidebar}<main className="accounting-main"><OverviewPanel api={api} organizationId={organizationId} legalEntityId={legalEntityId} currency={currency} onOpen={setView} /></main></div>
+      : view === "connections" ? <main className="accounting-main is-wide">{setupVisible && <div className="accounting-setup">{setup}</div>}<OverviewPanel api={api} organizationId={organizationId} legalEntityId={legalEntityId} currency={currency} realmId={selectedConnection?.scope.realmId ?? null} primaryAction={!setupVisible} onOpen={setView} /></main>
       : view === "transactions" ? <main className="accounting-main is-wide">{mirrorContent}</main>
       : <main className="accounting-main is-wide">
         {view === "bills" && (scope ? <PayablesView api={api} organizationId={organizationId} scope={scope} currency={currency} /> : notConnected)}

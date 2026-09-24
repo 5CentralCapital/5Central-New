@@ -1,3 +1,4 @@
+import { formatLongDate, formatMonthLabel } from "../../lib/rent-ops-formatters";
 import type { CompanyContextOrganization } from "@shared/company/context";
 import {
   periodFilterNamesFor,
@@ -238,7 +239,8 @@ export function describeAppliedFilters(entry: ReportEntry, request: ReportRunReq
     if (isEmpty(value) || (filter.default !== undefined && JSON.stringify(value) === JSON.stringify(filter.default))) continue;
     const values = Array.isArray(value) ? value.map(String) : [String(value)];
     const localOptions = filter.reference === "unit" ? availableUnits(organization, [], []) : filter.reference === "property" ? availableProperties(organization, []) : [];
-    const display = values.map(item => labels[`${filter.name}:${item}`] ?? filter.options?.find(option => option.value === item)?.label ?? localOptions.find(option => option.value === item)?.label ?? (filter.kind === "reference" ? null : item));
+    const dateLabel = (item: string) => filter.kind === "date" ? formatLongDate(item) : filter.kind === "month" ? formatMonthLabel(item) : undefined;
+    const display = values.map(item => labels[`${filter.name}:${item}`] ?? filter.options?.find(option => option.value === item)?.label ?? localOptions.find(option => option.value === item)?.label ?? dateLabel(item) ?? (filter.kind === "reference" ? null : item));
     // Record IDs are never shown; an unnamed reference is summarized by count.
     items.push(`${filter.label}: ${display.length > 2 || display.some(item => item === null) ? `${display.length} selected` : display.join(", ")}`);
   }

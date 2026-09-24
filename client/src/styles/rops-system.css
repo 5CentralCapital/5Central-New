@@ -974,3 +974,35 @@
   .rm-workspace.rops-modern .accounting-toolbar h1 { font-size: 24px; }
   .rm-workspace.rops-modern .accounting-toolbar .accounting-actions { justify-content: flex-end; }
 }
+
+/* ── Shared primitives (design audit): empty state, skeleton, row menu, status line, chips ── */
+.rm-workspace.rops-modern .ops-empty { display: grid; justify-items: center; gap: 8px; padding: 48px 24px; text-align: center; color: var(--ds-muted); }
+.rm-workspace.rops-modern .ops-empty.is-compact { padding: 24px 16px; }
+.rm-workspace.rops-modern .ops-empty-icon { color: var(--ds-faint); }
+.rm-workspace.rops-modern .ops-empty-title { color: var(--ds-ink); font: var(--ds-headline); }
+.rm-workspace.rops-modern .ops-empty-body { max-width: 46ch; margin: 0; font: var(--ds-body); color: var(--ds-muted); }
+.rm-workspace.rops-modern .ops-empty-action { margin-top: 6px; }
+.rm-workspace.rops-modern .ops-skeleton { display: inline-block; height: .9em; min-width: 3em; border-radius: 5px; background: var(--ds-fill-hover); vertical-align: middle; animation: ops-pulse 1.4s ease-in-out infinite; }
+@keyframes ops-pulse { 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .rm-workspace.rops-modern .ops-skeleton { animation: none; } }
+.rm-workspace.rops-modern .ops-row-menu-trigger { display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--ds-r-s); background: transparent; color: var(--ds-muted); cursor: pointer; }
+.rm-workspace.rops-modern .ops-row-menu-trigger:hover, .rm-workspace.rops-modern .ops-row-menu-trigger[data-state="open"] { background: var(--ds-fill-hover); color: var(--ds-ink); }
+.ops-row-menu { min-width: 180px; z-index: 60; background: var(--ds-surface, #fff); }
+.ops-row-menu .rops-menu-item { display: flex; align-items: center; cursor: default; outline: none; }
+.ops-row-menu .rops-menu-item.is-danger { color: var(--ds-critical, #c0352b); }
+.ops-row-menu .rops-menu-item[data-disabled] { opacity: .45; }
+.rm-workspace.rops-modern .ops-status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-height: 40px; padding: 8px 14px; border-radius: var(--ds-r-l); background: var(--ds-surface); box-shadow: var(--ds-shadow-panel), 0 0 0 1px var(--ds-hairline); font: var(--ds-callout); color: var(--ds-ink); }
+.rm-workspace.rops-modern .ops-status-line .ops-status-text { flex: 1 1 auto; min-width: 0; }
+.rm-workspace.rops-modern .ops-status-line .ops-status-text small, .rm-workspace.rops-modern .ops-status-line .ops-status-text span { color: var(--ds-muted); font-weight: 400; }
+.rm-workspace.rops-modern .ops-status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ds-faint); flex: none; }
+.rm-workspace.rops-modern .ops-status-line.is-positive .ops-status-dot { background: var(--ds-positive); }
+.rm-workspace.rops-modern .ops-status-line.is-warning .ops-status-dot { background: var(--ds-warning); }
+.rm-workspace.rops-modern .ops-status-line.is-critical .ops-status-dot { background: var(--ds-critical); }
+.rm-workspace.rops-modern .ops-status-actions { display: inline-flex; gap: 6px; align-items: center; }
+.rm-workspace.rops-modern .ops-chip { display: inline-flex; align-items: center; min-height: 28px; border-radius: 999px; background: var(--ds-fill); color: var(--ds-ink); font: 500 12px/1 var(--ds-font); white-space: nowrap; }
+.rm-workspace.rops-modern .ops-chip-label { padding: 0 10px; border: 0; background: transparent; color: inherit; font: inherit; min-height: 28px; display: inline-flex; align-items: center; }
+.rm-workspace.rops-modern button.ops-chip-label { cursor: pointer; }
+.rm-workspace.rops-modern .ops-chip-remove { width: 24px; min-height: 28px; margin-left: -6px; border: 0; border-radius: 0 999px 999px 0; background: transparent; color: var(--ds-muted); font-size: 14px; cursor: pointer; }
+.rm-workspace.rops-modern .ops-chip-remove:hover { color: var(--ds-ink); }
+.rm-workspace.rops-modern .ops-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.rm-workspace.rops-modern .ops-not-verified { white-space: nowrap; }

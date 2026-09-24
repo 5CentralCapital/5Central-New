@@ -21,6 +21,7 @@ import { PRIORITY_LABELS, STATUS_LABELS, categoryLabel, dateLabel, eventSummary,
 import { PendingEnvelopes } from "./pending";
 import { sumWorkOrderMoneyByCurrency } from "./totals";
 import { invalidateWorkOrderReads } from "../workspaces/work-data";
+import { EmptyState } from "../rent-ops/workspace/ops-ui";
 import "./work-orders.css";
 
 import { WORK_ORDER_VIEWS, type WorkOrderView } from "./types";
@@ -608,6 +609,16 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
   useEffect(() => {
     if (!selectedId && !list.isPlaceholderData && items[0] && window.matchMedia?.("(min-width: 901px)").matches) onSelect(items[0].id, true);
   }, [selectedId, items, onSelect, list.isPlaceholderData]);
+  // Whether the company has any work order at all: asked only when this view is empty and unfiltered.
+  const filtersActive = Boolean(search.trim() || debouncedSearch.trim() || priority || propertyKey);
+  const viewEmpty = !list.isLoading && !list.error && !list.isPlaceholderData && items.length === 0;
+  const anyWorkOrders = useQuery({
+    queryKey: ["work-orders", "list", organizationId, "any"],
+    queryFn: ({ signal }) => workOrdersApi.list(organizationId, { openOnly: false }, signal),
+    enabled: viewEmpty && !filtersActive && view !== "all", staleTime: 10_000, retry: false,
+  });
+  const noWorkOrdersYet = viewEmpty && !filtersActive && (view === "all" || anyWorkOrders.data?.items.length === 0);
+  const checkingEmpty = viewEmpty && !filtersActive && view !== "all" && anyWorkOrders.isLoading;
   const detail = useQuery({
     queryKey: ["work-orders", "detail", organizationId, selectedId],
     queryFn: ({ signal }) => workOrdersApi.get(organizationId, selectedId!, signal),
@@ -658,14 +669,21 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
   const emergencyCount = items.filter(item => item.priority === "emergency" && (item.status !== "completed" && item.status !== "canceled")).length;
   const current = detail.data && detail.data.id === selectedId ? detail.data : undefined;
 
+  const newWorkOrderButton = <button type="button" className="rm-button rm-button-primary" onClick={() => setDialog({ kind: "create" })} disabled={!choices.length}><Plus size={15} />New work order</button>;
+  const emptyViewMessage = filtersActive ? "No work orders match these filters." : view === "open" ? "Nothing open right now." : "Nothing in this view.";
+  const listEmpty = !list.error && !list.isLoading && !items.length;
+
   return <div className="wo-workspace">
     <header className="wo-page-header">
       <div>
         <h1>Work orders</h1>
-        <p className="wo-subtitle" aria-live="polite">{list.isLoading ? "Loading…" : openCount !== undefined ? `${openCount}${list.hasNextPage ? "+" : ""} open${emergencyCount ? ` · ${emergencyCount} emergency` : ""}` : `${items.length}${list.hasNextPage ? "+" : ""} ${VIEW_LABELS[view].toLowerCase()}`}</p>
+        {!noWorkOrdersYet && !checkingEmpty && <p className="wo-subtitle" aria-live="polite">{list.isLoading ? "Loading…" : openCount !== undefined ? `${openCount}${list.hasNextPage ? "+" : ""} open${emergencyCount ? ` · ${emergencyCount} emergency` : ""}` : `${items.length}${list.hasNextPage ? "+" : ""} ${VIEW_LABELS[view].toLowerCase()}`}</p>}
       </div>
-      <button type="button" className="rm-button rm-button-primary" onClick={() => setDialog({ kind: "create" })} disabled={!choices.length}><Plus size={15} />New work order</button>
+      {!noWorkOrdersYet && !checkingEmpty && newWorkOrderButton}
     </header>
+    {noWorkOrdersYet ? <div className="wo-empty-page"><EmptyState icon={<Wrench size={28} />} title="No work orders yet" action={newWorkOrderButton}>Log repairs and turns by property and unit, assign a vendor, and track them to completion.{!choices.length && " Add a property in Company before creating one."}</EmptyState></div>
+      : checkingEmpty ? <div className="wo-state" role="status"><LoaderCircle size={16} className="wo-spin" />Loading work orders…</div>
+      : <>
     <div className="wo-filters">
       <div className="wo-chips" role="group" aria-label="Status">
         {WORK_ORDER_VIEWS.map(item => <button key={item} type="button" aria-pressed={view === item} className={`wo-chip${view === item ? " is-selected" : ""}`} onClick={() => { onViewChange(item); }}>{VIEW_LABELS[item]}</button>)}
@@ -686,11 +704,11 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
         </label>
       </div>
     </div>
-    <div className={`rm-record-layout wo-layout${selectedId ? " is-detail" : ""}`}>
+    <div className={`rm-record-layout wo-layout${selectedId ? " is-detail" : ""}${listEmpty && !selectedId ? " is-list-only" : ""}`}>
       <section className="rm-record-list wo-list" aria-label="Work orders">
         {list.error ? <Notice error={list.error} onRetry={() => void list.refetch()} />
           : list.isLoading ? <div className="wo-state" role="status"><LoaderCircle size={16} className="wo-spin" />Loading work orders…</div>
-          : !items.length ? <div className="wo-state"><Wrench size={20} aria-hidden="true" /><strong>No work orders</strong><span>{search || priority || propertyKey ? "Nothing matches these filters." : view === "open" ? "Nothing open right now." : "Nothing in this view."}</span></div>
+          : !items.length ? <EmptyState compact title={emptyViewMessage} />
           : <div className="rm-record-list-items wo-list-items">
             {(view === "schedule" ? scheduleOrder(items) : items.map(item => ({ item, heading: undefined as string | undefined }))).map(({ item, heading }) => <Fragment key={item.id}>{heading && <h3 className="wo-day-heading">{heading}</h3>}<button key={item.id} type="button" className={`rm-record-list-item wo-list-item${item.id === selectedId ? " active" : ""}`} aria-current={item.id === selectedId ? "true" : undefined} onClick={() => onSelect(item.id)}>
               <span className="wo-list-item-top"><strong className="rm-record-list-item-title">{item.title}</strong><PriorityCapsule priority={item.priority} /></span>
@@ -701,14 +719,15 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
             <div className="wo-list-summary" aria-label="Work order totals"><span>{list.hasNextPage ? "Shown" : "Filtered"}: {items.length} work orders</span><span>{list.hasNextPage ? "Page totals" : "Filtered totals"}: Estimated {workOrderMoneyTotals(items, item => item.estimatedCostCents)} · Actual {workOrderMoneyTotals(items, actualSummaryCents)}</span><span>{Object.entries(items.reduce<Record<string, number>>((counts, item) => { counts[item.status] = (counts[item.status] ?? 0) + 1; return counts; }, {})).sort(([left], [right]) => left.localeCompare(right)).map(([status, count]) => `${STATUS_LABELS[status as WorkOrderStatus] ?? status} ${count}`).join(" · ")}</span></div>
           </div>}
       </section>
-      <div className="rm-record-detail wo-detail-pane">
+      {!(listEmpty && !selectedId) && <div className="rm-record-detail wo-detail-pane">
         <Notice error={actionError} />
         {!selectedId ? <div className="wo-state wo-detail-empty"><Wrench size={22} aria-hidden="true" /><span>Select a work order to see its details and history.</span></div>
           : detail.error ? <Notice error={detail.error} onRetry={() => void detail.refetch()} />
           : !current ? <div className="wo-state" role="status"><LoaderCircle size={16} className="wo-spin" />Loading work order…</div>
           : <Detail detail={current} onDialog={setDialog} onClearChargeback={() => void clearChargeback()} clearing={clearing} onBack={() => onSelect(undefined)} onOpenProperty={props.onOpenProperty} onOpenUnit={props.onOpenUnit} onOpenTenant={props.onOpenTenant} onQuickAction={(kind, payload) => void quickAction(kind, payload)} />}
-      </div>
+      </div>}
     </div>
+    </>}
     {dialog?.kind === "create" && <EditDialog organizationId={organizationId} choices={choices} onClose={closeDialog} onSaved={() => setDialog(null)} save={save} />}
     {dialog?.kind === "edit" && current && <EditDialog organizationId={organizationId} detail={current} choices={choices} onClose={closeDialog} onSaved={afterSave} save={save} />}
     {dialog?.kind === "status" && current && <StatusDialog detail={current} initial={dialog.to} onClose={closeDialog} onSaved={afterSave} save={save} />}

@@ -24,7 +24,7 @@ await new Promise<void>((done) => listener.once('listening', done));
 const origin = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
 
 type ReportMode = 'as-of' | 'month' | 'range';
-type ReportCase = { key: string; label: string; mode: ReportMode };
+type ReportCase = { key: string; label: string; mode: ReportMode; autoRun?: boolean };
 type ReportRequest = {
   method: string;
   url: string;
@@ -43,12 +43,12 @@ type PageDiagnostics = {
 const pageDiagnostics = new WeakMap<Page, PageDiagnostics>();
 
 const reports: ReportCase[] = [
-  { key: 'rent-roll', label: 'Rent roll', mode: 'as-of' },
-  { key: 'occupancy', label: 'Vacancies', mode: 'as-of' },
+  { key: 'rent-roll', label: 'Rent roll', mode: 'as-of', autoRun: true },
+  { key: 'occupancy', label: 'Vacancies', mode: 'as-of', autoRun: true },
   { key: 'scheduled-income', label: 'Scheduled income', mode: 'month' },
   { key: 'collected-income', label: 'Collected income', mode: 'range' },
   { key: 'scheduled-vs-collected', label: 'Scheduled vs collected', mode: 'month' },
-  { key: 'delinquency', label: 'Balances due', mode: 'as-of' },
+  { key: 'delinquency', label: 'Balances due', mode: 'as-of', autoRun: true },
   { key: 'tenant-ledger', label: 'Tenant statement', mode: 'range' },
   { key: 'lease-expiration', label: 'Lease expirations', mode: 'as-of' },
   { key: 'security-deposit', label: 'Security deposit and liabilities', mode: 'as-of' },
@@ -210,9 +210,21 @@ async function assertPeriodControls(page: Page, report: ReportCase): Promise<voi
   await expect(await firstVisible(periodControl(setup, 'toDate', ['Through', 'Through date', 'End date', 'Activity through'], 'date'))).toBeVisible();
 }
 
+/**
+ * The rental reports (rent roll, vacancies, balances due) open on their
+ * results with the setup summarized as chips; the full form is behind the
+ * "Filter" toggle. Other reports open with the form expanded.
+ */
+async function ensureSetupOpen(page: Page): Promise<void> {
+  const toggle = page.locator('.rm-report-filter-toggle').first();
+  await expect(toggle).toBeVisible();
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+  await expect(setupRoot(page)).toHaveCount(1);
+}
+
 async function openReport(page: Page, report: ReportCase): Promise<void> {
   await page.goto(`${origin}/ops?section=reports&report=${encodeURIComponent(report.key)}&scope=all&asOf=${expected.asOfDate}&status=all&search=`);
-  await expect(setupRoot(page)).toHaveCount(1);
+  await ensureSetupOpen(page);
   const heading = page.getByRole('heading', { name: new RegExp(report.label, 'i') }).first();
   if (await heading.count()) await expect(heading).toBeVisible();
   await assertPeriodControls(page, report);
@@ -334,9 +346,11 @@ async function runDesktop(page: Page, browserName: string): Promise<Record<strin
   directPage.on('pageerror', (error) => directPageErrors.push(error.message));
   try {
     await openReport(directPage, direct);
-    await directPage.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
-    expect(directRequests.length, 'direct report route does not auto-run').toBe(0);
-    expect(await runReportButton(directPage).isEnabled()).toBe(true);
+    // Rent roll runs on open with its default setup and shows results at once.
+    await expect.poll(() => directRequests.length, { message: 'direct rent roll route runs on open' }).toBeGreaterThan(0);
+    await waitForReportResults(directPage);
+    await expect(directPage.locator('.rm-report-active-setup .ops-chip').first()).toBeVisible();
+    await expect(runReportButton(directPage)).toHaveCount(0);
     pageErrors.push(...directPageErrors);
   } finally {
     await directContext.close();
@@ -353,18 +367,25 @@ async function runDesktop(page: Page, browserName: string): Promise<Record<strin
   await expect(library.locator('[data-report-id="rent-roll"]')).toHaveCount(1);
   expect(await library.locator('[data-report-id]').count(), 'available reports include at least the 11 rental reports').toBeGreaterThanOrEqual(11);
   await library.locator('[data-report-id="rent-roll"] .rops-report-open').click();
-  await expect(setupRoot(page)).toHaveCount(1);
-  expect(reportRequests.length, 'library report open does not auto-run').toBe(baselineAfterDashboard);
+  await expect.poll(() => reportRequests.length, { message: 'library rent roll open runs the report' }).toBeGreaterThan(baselineAfterDashboard);
+  await waitForReportResults(page);
 
-  // Every available report has its own setup mode and starts with no report
-  // request, even when it has a previously cached query in React Query.
+  // Every available report has its own setup mode. The rental reports run
+  // on open; every other report starts with no report request, even when it
+  // has a previously cached query in React Query.
   const reportSetupEvidence: Array<Record<string, unknown>> = [];
   for (const report of reports) {
-    await openReport(page, report);
     const before = reportRequests.length;
+    await openReport(page, report);
     await assertPeriodControls(page, report);
-    expect(reportRequests.length, `${report.key} opens without a report request`).toBe(before);
-    reportSetupEvidence.push({ key: report.key, label: report.label, mode: report.mode, requestCountBeforeRun: before });
+    if (report.autoRun) {
+      await expect.poll(() => reportRequests.length, { message: `${report.key} runs on open` }).toBeGreaterThan(before);
+      await waitForReportResults(page);
+    } else {
+      await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
+      expect(reportRequests.length, `${report.key} opens without a report request`).toBe(before);
+    }
+    reportSetupEvidence.push({ key: report.key, label: report.label, mode: report.mode, autoRun: Boolean(report.autoRun), requestCountBeforeRun: before });
   }
 
   // Pick a report with every scope/status field. The exact query is the
@@ -585,14 +606,15 @@ async function runMobile(page: Page, browserName: string): Promise<Record<string
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.goto(`${origin}/ops?section=reports&report=rent-roll&scope=all&asOf=${expected.asOfDate}`);
+  // Rent roll runs on open; the filter toggle then opens the full setup.
+  await expect.poll(() => reportRequests.length).toBeGreaterThan(0);
+  await waitForReportResults(page);
+  const toggle = page.locator('.rm-report-filter-toggle').first();
+  await toggle.focus();
+  await page.keyboard.press('Enter');
   await expect(setupRoot(page)).toHaveCount(1);
   expect(await noHorizontalOverflow(page), 'report setup has no mobile horizontal overflow').toBe(false);
   const setup = setupRoot(page);
-  const run = runReportButton(page);
-  await run.focus();
-  await page.keyboard.press('Enter');
-  await expect.poll(() => reportRequests.length).toBeGreaterThan(0);
-  await waitForReportResults(page);
   await expect(setup).toBeVisible();
   expect(pageErrors).toEqual([]);
   await assertReportLayoutContained(page, `${browserName}-mobile`);

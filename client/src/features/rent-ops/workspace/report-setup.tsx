@@ -22,6 +22,10 @@ export interface ReportSetupProps {
   directory?: ReportSetupDirectory;
   allowAllScope?: boolean;
   hasAppliedRun?: boolean;
+  /** Results follow every valid change, so the form has no Run button. */
+  autoApply?: boolean;
+  /** DOM id so a toggle can point at this panel with aria-controls. */
+  id?: string;
   onChange: (next: ReportSetupState) => void;
   onRun: (next: ReportSetupState) => void;
 }
@@ -100,7 +104,7 @@ function standardOptions(field: ReportSetupField): Array<{ value: string; label:
   return options;
 }
 
-export function ReportSetup({ report, value, directory, allowAllScope = true, hasAppliedRun = false, onChange, onRun }: ReportSetupProps) {
+export function ReportSetup({ report, value, directory, allowAllScope = true, hasAppliedRun = false, autoApply = false, id, onChange, onRun }: ReportSetupProps) {
   const [openPicker, setOpenPicker] = useState<string | null>(null);
   const pickerRefs = useRef(new Map<string, HTMLDetailsElement>());
   const summaryRefs = useRef(new Map<string, HTMLElement>());
@@ -201,7 +205,7 @@ export function ReportSetup({ report, value, directory, allowAllScope = true, ha
     return <label className="rm-report-setup-field" data-report-filter={field.name} key={field.name}><span className="rm-report-setup-label">{field.label}</span><select name={field.name} value={typeof current === "string" ? current : current[0] ?? "all"} onChange={event => updateValue(field, event.target.value)}>{options.map(option => <option value={option.value} key={option.value}>{option.label}</option>)}</select></label>;
   };
 
-  return <section className="rm-report-setup" data-report-setup="true" aria-label={`${report} report settings`}>
+  return <section id={id} className="rm-report-setup" data-report-setup="true" data-report-auto-apply={autoApply ? "true" : undefined} aria-label="Report filters">
     <div className="rm-report-setup-heading"><h2>Filters</h2></div>
     <div className="rm-report-setup-grid">
       <fieldset className="rm-report-setup-group rm-report-setup-group--scope"><legend>Scope</legend>
@@ -217,7 +221,7 @@ export function ReportSetup({ report, value, directory, allowAllScope = true, ha
       {definitions.filter(field => !isReportSetupDateField(field) && !isReportSetupPropertyField(field)).length > 0 && <fieldset className="rm-report-setup-group rm-report-setup-group--filters"><legend>Filters</legend><div className="rm-report-setup-filter-grid">{definitions.map(renderField)}</div></fieldset>}
     </div>
     {error && <p className="rm-report-setup-error" role="alert">{error}</p>}
-    <div className="rm-report-setup-actions"><button type="button" className="rm-button rm-button-primary rm-report-setup-run" disabled={!!error} onClick={run}><Play size={14} aria-hidden="true" />{hasAppliedRun ? "Update report" : "Run report"}</button></div>
+    {!autoApply && <div className="rm-report-setup-actions"><button type="button" className="rm-button rm-button-primary rm-report-setup-run" disabled={!!error} onClick={run}><Play size={14} aria-hidden="true" />{hasAppliedRun ? "Update report" : "Run report"}</button></div>}
   </section>;
 }
 
