@@ -9,6 +9,7 @@ import type {
   PmSettlementListResponse,
   RentalBridgePreview,
   RentalPostingPolicy,
+  JobState,
 } from "@shared/accounting/operations";
 import type { QboCustomerLedger } from "@shared/accounting/receivables";
 
@@ -93,7 +94,9 @@ export interface AccountingApi {
   getPendingBinding(organizationId: string, legalEntityId: string, pendingId: string, signal?: AbortSignal): Promise<AccountingPendingBinding | null>;
   confirmConnection(organizationId: string, legalEntityId: string, pendingId: string, signal?: AbortSignal): Promise<void>;
   /** Queues a background refresh; the worker performs it. */
-  sync(organizationId: string, scope: AccountingScope, signal?: AbortSignal): Promise<{ readonly status: "queued"; readonly message: string }>;
+  sync(organizationId: string, scope: AccountingScope, signal?: AbortSignal): Promise<{ readonly status: "queued"; readonly jobId: string | null; readonly message: string }>;
+  /** Reads the durable refresh job so the UI can wait for completion. */
+  getJob?(organizationId: string, jobId: string, signal?: AbortSignal): Promise<{ readonly state: JobState }>;
   disconnect(organizationId: string, scope: AccountingScope, signal?: AbortSignal): Promise<{ readonly providerOutcome: "revoked" | "already_revoked" }>;
   health(organizationId: string, legalEntityId: string | undefined, signal?: AbortSignal): Promise<ConnectorHealthResponse>;
   closeChecklist(organizationId: string, legalEntityId: string, period: AccountingPeriod, signal?: AbortSignal): Promise<PeriodCloseChecklist>;

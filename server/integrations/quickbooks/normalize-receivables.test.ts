@@ -73,6 +73,15 @@ test("a missing currency is never assumed", () => {
   assert.equal(supported(normalizeQboReceivable("Invoice", body, { currency: usd })).currency, "USD");
 });
 
+test("foreign currency and explicit nonzero voids are excluded from the receivables mirror", () => {
+  const foreign = normalizeQboReceivable("Invoice", invoice({ CurrencyRef: { value: "CAD" } }), { currency: usd });
+  assert.match(reasons(foreign), /differs from verified home currency/);
+  const nonEntity = normalizeQboReceivable("Invoice", invoice(), { currency: usd, entityCurrency: "CAD" });
+  assert.match(reasons(nonEntity), /differs from legal entity currency/);
+  const voided = supported(normalizeQboReceivable("Invoice", invoice({ TxnStatus: "Voided" }), { currency: usd }));
+  assert.equal(voided.postingState, "voided");
+});
+
 test("a credit memo reduces the balance and keeps its remaining credit", () => {
   const document = supported(normalizeQboReceivable("CreditMemo", {
     Id: "77", SyncToken: "0", MetaData: meta, TxnDate: "2026-09-10", CustomerRef: { value: "58" }, CurrencyRef: { value: "USD" },

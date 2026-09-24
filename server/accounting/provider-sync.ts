@@ -171,12 +171,13 @@ export async function applyQboReceivableObject(input: {
   readonly item: QuickBooksJsonObject;
   readonly observedAt: string;
   readonly currency: QboCurrencyContext | null;
+  readonly entityCurrency?: string | null;
 }): Promise<ApplyOutcome> {
-  const { mirror, receivables, entity, item, observedAt, currency } = input;
+  const { mirror, receivables, entity, item, observedAt, currency, entityCurrency } = input;
   const scope = scopeOf(input.scope);
   const stream = receivableStreamFor(entity);
   const accountTypes = entity === "JournalEntry" ? await receivables.accountTypes(scope, journalEntryAccountIds(item)) : undefined;
-  const result = normalizeQboReceivable(entity, item, { currency, accountTypes });
+  const result = normalizeQboReceivable(entity, item, { currency, entityCurrency, accountTypes });
   const identity = result.status === "supported"
     ? { objectType: entity, objectId: result.document.objectId, version: result.document.version, providerUpdatedAt: result.document.providerUpdatedAt }
     : result.identity;
@@ -444,6 +445,7 @@ export function createQboProviderSync(options: {
   const receivables = options.receivables ?? new PostgresQboReceivablesStore(options.executor);
   // undefined = not read yet; null = read, but no usable home currency.
   let verifiedCurrency: QboCurrencyContext | null | undefined;
+  let verifiedEntityCurrency: string | null | undefined;
 
   /**
    * CompanyInfo does not carry the home currency. Preferences.CurrencyPrefs is
@@ -460,6 +462,23 @@ export function createQboProviderSync(options: {
       verifiedCurrency = null;
     }
     return verifiedCurrency;
+  }
+
+  /** Currency on the bound legal entity is the reporting currency for reads. */
+  async function loadEntityCurrency(): Promise<string | null> {
+    if (verifiedEntityCurrency !== undefined) return verifiedEntityCurrency;
+    try {
+      const result = await options.executor.query<{ currency: unknown }>(
+        "SELECT currency FROM company_legal_entities WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL",
+        [scope.organizationId, scope.legalEntityId],
+      );
+      const raw = result.rows[0]?.currency;
+      const parsed = typeof raw === "string" && /^[A-Za-z]{3}$/.test(raw) ? currencyCodeSchema.safeParse(raw.toUpperCase()) : null;
+      verifiedEntityCurrency = parsed?.success ? parsed.data : null;
+    } catch {
+      verifiedEntityCurrency = null;
+    }
+    return verifiedEntityCurrency;
   }
 
   const sync: QboProviderSync = {
@@ -492,6 +511,7 @@ export function createQboProviderSync(options: {
     async catchUp(input = {}) {
       await requireReadCapability();
       const currency = await loadCurrencyContext();
+      const entityCurrency = await loadEntityCurrency();
       const fullReplay = input.fullReplay === true;
       const streams: QboProviderStreamResult[] = [];
       const syncStream = async (entity: string, stream: string, apply: (mirror: QboAccountingMirrorStore, item: QuickBooksJsonObject, observedAt: string, executor: RentOpsQueryExecutor) => Promise<ApplyOutcome>) => {
@@ -571,7 +591,7 @@ export function createQboProviderSync(options: {
         const customers = await syncStream("Customer", receivableStreamFor("Customer"), (mirror, item, observedAt) => applyQboNamedObject(mirror, scope, "Customer", item, observedAt));
         if (customers.status !== "failed") {
           for (const entity of QBO_RECEIVABLE_DOCUMENT_TYPES) {
-            const result = await syncStream(entity, receivableStreamFor(entity), (mirror, item, observedAt, executor) => applyQboReceivableObject({ mirror, receivables: receivables.forExecutor(executor), scope, entity, item, observedAt, currency }));
+            const result = await syncStream(entity, receivableStreamFor(entity), (mirror, item, observedAt, executor) => applyQboReceivableObject({ mirror, receivables: receivables.forExecutor(executor), scope, entity, item, observedAt, currency, entityCurrency }));
             if (result.status === "failed") break;
           }
         }
@@ -590,6 +610,7 @@ export function createQboProviderSync(options: {
       if (reason !== null) return fullReplay(reason, checkpoint, input.maxPages);
 
       const currency = await loadCurrencyContext();
+      const entityCurrency = await loadEntityCurrency();
       const since = new Date(Math.max(Date.parse(watermark!) - CDC_OVERLAP_MS, startedAt.getTime() - CDC_SAFE_LOOKBACK_MS)).toISOString();
       let response;
       try {
@@ -643,7 +664,7 @@ export function createQboProviderSync(options: {
               }
               const outcome = entity === "Customer"
                 ? await applyQboNamedObject(mirror, scope, "Customer", item, observedAt)
-                : await applyQboReceivableObject({ mirror, receivables: receivableStore, scope, entity, item, observedAt, currency });
+                : await applyQboReceivableObject({ mirror, receivables: receivableStore, scope, entity, item, observedAt, currency, entityCurrency });
               if (outcome.unsupported) tally.unsupported.set(stream, (tally.unsupported.get(stream) ?? 0) + outcome.unsupported);
               else if (!outcome.skipped) tally.applied += 1;
             }
@@ -688,7 +709,8 @@ export function createQboProviderSync(options: {
       }
       const currency = (QBO_NAMED_ENTITIES as readonly string[]).includes(objectType) || objectType === "Account" ? null : await loadCurrencyContext();
       if (isQboReceivableType(objectType)) {
-        const outcome = await options.executor.transaction(executor => applyQboReceivableObject({ mirror: options.mirror.forExecutor(executor), receivables: receivables.forExecutor(executor), scope, entity: objectType, item: entity, observedAt: now().toISOString(), currency }));
+        const entityCurrency = await loadEntityCurrency();
+        const outcome = await options.executor.transaction(executor => applyQboReceivableObject({ mirror: options.mirror.forExecutor(executor), receivables: receivables.forExecutor(executor), scope, entity: objectType, item: entity, observedAt: now().toISOString(), currency, entityCurrency }));
         const version = typeof entity.SyncToken === "string" || typeof entity.SyncToken === "number" ? String(entity.SyncToken) : null;
         return { status: outcome.skipped ? "stale" : outcome.unsupported ? "unsupported" : "applied", objectType, objectId, version };
       }

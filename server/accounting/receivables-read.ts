@@ -127,7 +127,8 @@ export async function readCustomerLedger(executor: RentOpsQueryExecutor, query: 
        SELECT d.object_type, d.object_id, d.object_version, d.txn_date, d.due_date, d.doc_number, d.open_balance_cents, d.posting_state, d.mirrored_at, ${rankCase} AS type_rank
          FROM accounting_qbo_receivable_documents d
          JOIN accounting_qbo_source_objects s ON s.id = d.source_object_id AND s.deleted_at IS NULL
-        WHERE d.organization_id=$1 AND d.legal_entity_id=$2 AND d.environment=$3 AND d.realm_id=$4 AND d.mirror_state='current'
+         JOIN company_legal_entities le ON le.organization_id=d.organization_id AND le.id=d.legal_entity_id AND le.currency=d.currency
+        WHERE d.organization_id=$1 AND d.legal_entity_id=$2 AND d.environment=$3 AND d.realm_id=$4 AND d.mirror_state='current' AND d.posting_state='posted'
           AND ($6::date IS NULL OR d.txn_date <= $6::date)
      ), per_doc AS (
        SELECT l.object_type, l.object_id, l.object_version, l.txn_date, l.due_date, l.doc_number, l.open_balance_cents, l.posting_state, l.type_rank, l.mirrored_at,
@@ -177,7 +178,8 @@ export async function readCustomerLedger(executor: RentOpsQueryExecutor, query: 
     `SELECT e.effect_kind, SUM(e.amount_cents)::text AS amount_cents
        FROM accounting_qbo_receivable_effects e
        JOIN accounting_qbo_receivable_documents d ON d.organization_id=e.organization_id AND d.legal_entity_id=e.legal_entity_id AND d.environment=e.environment AND d.realm_id=e.realm_id
-        AND d.object_type=e.object_type AND d.object_id=e.object_id AND d.object_version=e.object_version AND d.mirror_state='current'
+        AND d.object_type=e.object_type AND d.object_id=e.object_id AND d.object_version=e.object_version AND d.mirror_state='current' AND d.posting_state='posted'
+       JOIN company_legal_entities le ON le.organization_id=d.organization_id AND le.id=d.legal_entity_id AND le.currency=d.currency
        JOIN accounting_qbo_source_objects s ON s.id = d.source_object_id AND s.deleted_at IS NULL
       WHERE e.organization_id=$1 AND e.legal_entity_id=$2 AND e.environment=$3 AND e.realm_id=$4 AND e.customer_object_id=$5
         AND ($6::date IS NULL OR d.txn_date <= $6::date)
@@ -193,8 +195,9 @@ export async function readCustomerLedger(executor: RentOpsQueryExecutor, query: 
     `SELECT d.object_type, d.object_id, d.doc_number, d.txn_date, d.due_date, d.open_balance_cents::text AS open_balance_cents
        FROM accounting_qbo_receivable_documents d
        JOIN accounting_qbo_source_objects s ON s.id = d.source_object_id AND s.deleted_at IS NULL
+       JOIN company_legal_entities le ON le.organization_id=d.organization_id AND le.id=d.legal_entity_id AND le.currency=d.currency
       WHERE d.organization_id=$1 AND d.legal_entity_id=$2 AND d.environment=$3 AND d.realm_id=$4 AND d.customer_object_id=$5
-        AND d.mirror_state='current' AND d.object_type IN ('Invoice','CreditMemo','Payment') AND d.open_balance_cents IS NOT NULL AND d.open_balance_cents <> 0
+        AND d.mirror_state='current' AND d.posting_state='posted' AND d.object_type IN ('Invoice','CreditMemo','Payment') AND d.open_balance_cents IS NOT NULL AND d.open_balance_cents <> 0
       ORDER BY COALESCE(d.due_date, d.txn_date), d.txn_date, d.object_id`,
     [...parts, customerObjectId],
   )).rows;
@@ -250,6 +253,17 @@ export async function readCustomerLedger(executor: RentOpsQueryExecutor, query: 
   }
   const openExceptions = exceptions.reduce((sum, row) => sum + Number(row.open_count ?? 0), 0);
   if (openExceptions > 0) reasons.push(`${openExceptions} QuickBooks receivable record(s) could not be mirrored and are excluded until resolved`);
+  const currencyGaps = (await executor.query<{ count: unknown; currencies: string | null }>(
+    `SELECT COUNT(*) AS count, string_agg(DISTINCT d.currency, ',') AS currencies
+       FROM accounting_qbo_receivable_documents d
+       JOIN accounting_qbo_source_objects s ON s.id=d.source_object_id AND s.deleted_at IS NULL
+       JOIN company_legal_entities le ON le.organization_id=d.organization_id AND le.id=d.legal_entity_id
+      WHERE d.organization_id=$1 AND d.legal_entity_id=$2 AND d.environment=$3 AND d.realm_id=$4 AND d.mirror_state='current'
+        AND d.currency IS DISTINCT FROM le.currency`,
+    parts,
+  )).rows[0];
+  const foreignCurrencyCount = Number(currencyGaps?.count ?? 0);
+  if (foreignCurrencyCount > 0) reasons.push(`${foreignCurrencyCount} QuickBooks receivable document(s) use a currency different from the legal entity and are excluded${currencyGaps?.currencies ? ` (${currencyGaps.currencies})` : ""}`);
   const unsupportedForCustomer = Number((await executor.query<{ n: unknown }>(
     `SELECT COUNT(*) AS n FROM accounting_qbo_receivable_documents
       WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND customer_object_id=$5 AND mirror_state='unsupported'`,
@@ -302,9 +316,21 @@ export async function readCustomerLedger(executor: RentOpsQueryExecutor, query: 
  */
 export async function resolveTenancyCustomer(executor: RentOpsQueryExecutor, input: { readonly organizationId: string; readonly tenancyId: string; readonly environment: "sandbox" | "production" }): Promise<{ readonly scope: FinancialSourceScope; readonly customerObjectId: string } | null> {
   const rows = (await executor.query<{ legal_entity_id: string; source_scope: string; external_id: string }>(
-    `SELECT legal_entity_id, source_scope, external_id FROM company_external_identities
-      WHERE organization_id=$1 AND provider='qbo' AND record_kind='Customer' AND local_kind='tenancy' AND local_id=$2 AND source_scope LIKE $3
-      ORDER BY created_at`,
+    `SELECT i.legal_entity_id, i.source_scope, i.external_id
+       FROM company_external_identities i
+       JOIN rent_ops_tenancies t ON t.id=i.local_id
+      WHERE i.organization_id=$1 AND i.provider='qbo' AND i.record_kind='Customer' AND i.local_kind='tenancy' AND i.local_id=$2 AND i.source_scope LIKE $3
+        AND EXISTS (
+          SELECT 1
+            FROM company_property_entity_periods m
+           WHERE m.organization_id=i.organization_id AND m.legal_entity_id=i.legal_entity_id AND m.property_id=t.property_id
+             AND m.effective_from <= GREATEST(
+               COALESCE(t.actual_move_in_on, t.planned_move_in_on, (t.created_at AT TIME ZONE 'America/New_York')::date),
+               COALESCE(t.actual_move_out_on, (t.ended_at AT TIME ZONE 'America/New_York')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'America/New_York')::date)
+             )
+             AND (m.effective_until IS NULL OR m.effective_until > COALESCE(t.actual_move_in_on, t.planned_move_in_on, (t.created_at AT TIME ZONE 'America/New_York')::date))
+        )
+      ORDER BY i.created_at`,
     [input.organizationId, input.tenancyId, `qbo:${input.environment}:%`],
   )).rows;
   if (rows.length === 0) return null;

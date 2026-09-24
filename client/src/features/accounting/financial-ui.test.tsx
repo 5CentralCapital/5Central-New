@@ -36,3 +36,20 @@ test("dashboard is entity-scoped and shows unavailable rather than zero without 
  assert.match(html, /reportId=general-ledger/);
  client.clear();
 });
+test("dashboard waits for verified QuickBooks read access before loading native reports", async () => {
+ const { FinancialDashboard } = await import("./dashboard");
+ const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+ const html = renderToString(React.createElement(QueryClientProvider, { client }, React.createElement(FinancialDashboard, { organizationId: org, legalEntityId: entity, currency: "USD", connected: true, ready: false, onConnections: () => undefined, api })));
+ assert.match(html, /QuickBooks read access is being verified/);
+ assert.match(html, /read-only QuickBooks check completes/);
+ assert.doesNotMatch(html, /Profit &amp; loss/);
+ client.clear();
+});
+test("general ledger waits for verified QuickBooks read access before running a report", async () => {
+ const { FullGeneralLedger } = await import("./full-ledger");
+ const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+ const html = renderToString(React.createElement(QueryClientProvider, { client }, React.createElement(FullGeneralLedger, { organizationId: org, legalEntityId: entity, currency: "USD", ready: false, api })));
+ assert.match(html, /QuickBooks read access is being verified/);
+ assert.doesNotMatch(html, /Run ledger/);
+ client.clear();
+});

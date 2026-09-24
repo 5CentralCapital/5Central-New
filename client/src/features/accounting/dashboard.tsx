@@ -25,15 +25,16 @@ function Statement({ title, report, loading, error, retry, lines, finalGroup, cu
   </section>;
 }
 
-export function FinancialDashboard({ organizationId, legalEntityId, currency, connected, onConnections, api = reportingApi }: { organizationId: string; legalEntityId: string; currency: string; connected: boolean; onConnections: () => void; api?: ReportingApi }) {
+export function FinancialDashboard({ organizationId, legalEntityId, currency, connected, ready = true, onConnections, api = reportingApi }: { organizationId: string; legalEntityId: string; currency: string; connected: boolean; ready?: boolean; onConnections: () => void; api?: ReportingApi }) {
   const [draft, setDraft] = useState<DashboardSetup>(() => { const today = workspaceToday(); return { from: `${today.slice(0, 4)}-01-01`, through: today, basis: "cash" }; });
   const [setup, setSetup] = useState(draft);
-  const pnl = useQuery({ queryKey: ["accounting", "financial-dashboard", organizationId, legalEntityId, currency, "income-statement", setup], queryFn: ({ signal }) => loadDashboardReport(api, financialRequest(organizationId, legalEntityId, currency, "income-statement", setup), signal), enabled: connected, staleTime: 300_000, retry: false, refetchOnWindowFocus: false });
-  const balance = useQuery({ queryKey: ["accounting", "financial-dashboard", organizationId, legalEntityId, currency, "balance-sheet", setup], queryFn: ({ signal }) => loadDashboardReport(api, financialRequest(organizationId, legalEntityId, currency, "balance-sheet", setup), signal), enabled: connected, staleTime: 300_000, retry: false, refetchOnWindowFocus: false });
+  const pnl = useQuery({ queryKey: ["accounting", "financial-dashboard", organizationId, legalEntityId, currency, "income-statement", setup], queryFn: ({ signal }) => loadDashboardReport(api, financialRequest(organizationId, legalEntityId, currency, "income-statement", setup), signal), enabled: connected && ready, staleTime: 300_000, retry: false, refetchOnWindowFocus: false });
+  const balance = useQuery({ queryKey: ["accounting", "financial-dashboard", organizationId, legalEntityId, currency, "balance-sheet", setup], queryFn: ({ signal }) => loadDashboardReport(api, financialRequest(organizationId, legalEntityId, currency, "balance-sheet", setup), signal), enabled: connected && ready, staleTime: 300_000, retry: false, refetchOnWindowFocus: false });
   const valid = Boolean(draft.from && draft.through && draft.from <= draft.through);
   const changed = JSON.stringify(draft) !== JSON.stringify(setup);
   const reportLink = (reportId: string) => financialReportHref(organizationId, legalEntityId, reportId, setup);
   if (!connected) return <EmptyState title="Connect QuickBooks to see your financial dashboard" detail="Select the matching QuickBooks company for this legal entity." action={{ label: "Open connections", onClick: onConnections }} />;
+  if (!ready) return <EmptyState title="QuickBooks read access is being verified" detail="Financial reports will be available after the read-only QuickBooks check completes." action={{ label: "Open connections", onClick: onConnections }} />;
   return <div className="accounting-financial-dashboard">
     <form className="accounting-dashboard-filters" onSubmit={event => { event.preventDefault(); if (!valid) return; if (changed) setSetup(draft); else { void pnl.refetch(); void balance.refetch(); } }}>
       <label>From<input type="date" value={draft.from} max={draft.through} required onChange={event => setDraft({ ...draft, from: event.currentTarget.value })} /></label>

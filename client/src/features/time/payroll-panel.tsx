@@ -3,6 +3,7 @@ import { Link2, LoaderCircle } from "lucide-react";
 import type { TimeConnectionScope, TimeEntry } from "@shared/time";
 import type { CostSourceLine } from "@shared/projects/source-lines";
 import type { TimeApi, TimePayrollLink } from "./types";
+import { sumTimeMoneyByCurrency, type TimeMoneyValue } from "./totals";
 
 function money(value: string | null | undefined, currency: string | null | undefined): string {
   if (value === null || value === undefined) return "—";
@@ -11,17 +12,10 @@ function money(value: string | null | undefined, currency: string | null | undef
   const absolute = (negative ? -cents : cents).toString().padStart(3, "0");
   return `${negative ? "-" : ""}${currency ?? ""} ${absolute.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${absolute.slice(-2)}`.trim();
 }
-function moneyTotals(values: readonly { readonly cents: string | null | undefined; readonly currency: string | null | undefined }[]): string {
-  const totals = new Map<string, bigint>();
-  const unknown = new Map<string, number>();
-  for (const value of values) {
-    const currency = value.currency?.trim() || "Unknown currency";
-    if (value.cents === null || value.cents === undefined || value.cents === "" || !/^-?\d+$/.test(value.cents)) { unknown.set(currency, (unknown.get(currency) ?? 0) + 1); continue; }
-    totals.set(currency, (totals.get(currency) ?? BigInt(0)) + BigInt(value.cents));
-  }
-  const currencies = new Set<string>([...Array.from(totals.keys()), ...Array.from(unknown.keys())]);
-  if (!currencies.size) return "—";
-  return Array.from(currencies).sort().map(currency => totals.has(currency) ? `${money(totals.get(currency)!.toString(), currency)}${unknown.get(currency) ? ` + ${unknown.get(currency)} unknown` : ""}` : `Unknown${unknown.get(currency)! > 1 ? ` (${unknown.get(currency)})` : ""}`).join(" · ");
+function moneyTotals(values: readonly TimeMoneyValue[]): string {
+  const totals = sumTimeMoneyByCurrency(values);
+  if (!totals.length) return "—";
+  return totals.map(total => total.knownCount === 0 ? `${total.currency === "Unknown currency" ? "Unknown currency" : "Unknown"}${total.unknownCount > 1 ? ` (${total.unknownCount})` : ""}` : `${money(total.cents!, total.currency)}${total.unknownCount ? ` + ${total.unknownCount} unknown` : ""}`).join(" · ");
 }
 function dateLabel(value: string | null | undefined): string { if (!value) return "—"; const date = new Date(`${value.slice(0, 10)}T00:00:00`); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date); }
 function lineKey(line: CostSourceLine): string { return `${line.source.realmId}|${line.source.objectType}|${line.source.objectId}|${line.source.lineId ?? ""}|${line.source.version}`; }

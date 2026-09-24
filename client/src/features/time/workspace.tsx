@@ -4,6 +4,7 @@ import { timeEntryTypeSchema, type TimeConnectionScope, type TimeEntry, type Tim
 import { commandEnvelope, scopeFromFilters, timeApi } from "./api";
 import type { TimeApi, TimeConnectionSummary, TimeContactOption, TimeProjectOption, TimeWorkspaceEntity, TimeWorkspaceProps } from "./types";
 import { PayrollPanel } from "./payroll-panel";
+import { sumTimeMoneyByCurrency, type TimeMoneyValue } from "./totals";
 import "./time.css";
 
 const REVIEW_STATE_LABELS: Readonly<Record<TimeEntry["reviewState"], string>> = { needs_review: "Awaiting approval", corrected: "Corrected", approved: "Approved", rejected: "Rejected" };
@@ -42,17 +43,10 @@ function moneyCents(value: string | null, currency: string | null): string {
   return `${negative ? "-" : ""}${currency ?? "—"} ${absolute.slice(0, -2)}.${absolute.slice(-2)}`;
 }
 
-function moneyTotals(values: readonly { readonly cents: string | null | undefined; readonly currency: string | null | undefined }[]): string {
-  const totals = new Map<string, { total: bigint; known: number; unknown: number }>();
-  for (const value of values) {
-    const currency = value.currency?.trim() || "Unknown currency";
-    const current = totals.get(currency) ?? { total: BigInt(0), known: 0, unknown: 0 };
-    if (value.cents === null || value.cents === undefined || value.cents === "" || !/^-?\d+$/.test(value.cents)) current.unknown += 1;
-    else { current.total += BigInt(value.cents); current.known += 1; }
-    totals.set(currency, current);
-  }
-  if (!totals.size) return "—";
-  return Array.from(totals.entries()).sort(([left], [right]) => left.localeCompare(right)).map(([currency, total]) => total.known === 0 ? `Unknown${total.unknown > 1 ? ` (${total.unknown})` : ""}` : `${moneyCents(total.total.toString(), currency)}${total.unknown ? ` + ${total.unknown} unknown` : ""}`).join(" · ");
+function moneyTotals(values: readonly TimeMoneyValue[]): string {
+  const totals = sumTimeMoneyByCurrency(values);
+  if (!totals.length) return "—";
+  return totals.map(total => total.knownCount === 0 ? `${total.currency === "Unknown currency" ? "Unknown currency" : "Unknown"}${total.unknownCount > 1 ? ` (${total.unknownCount})` : ""}` : `${moneyCents(total.cents!, total.currency)}${total.unknownCount ? ` + ${total.unknownCount} unknown` : ""}`).join(" · ");
 }
 
 function localInput(value: string | null): string {

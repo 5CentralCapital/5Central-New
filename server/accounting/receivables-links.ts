@@ -39,7 +39,30 @@ export async function linkTenancyToQboCustomer(executor: RentOpsQueryExecutor, i
   );
   if (binding.rows.length === 0) throw new AccountingError("accounting_conflict", "This QuickBooks company is not bound to the legal entity");
 
-  const tenancy = await executor.query("SELECT id FROM rent_ops_tenancies WHERE id=$1", [tenancyId]);
+  // Tenancy ids are globally unique in Rent Ops, so existence alone is not an
+  // authorization boundary. A tenancy may be linked only when its property's
+  // legal-entity assignment overlaps the tenancy interval. This mirrors the
+  // customer-plan historical ownership policy: [effective_from,effective_until)
+  // overlaps [start_on,max(end_on,start_on)].
+  const tenancy = await executor.query(
+    `WITH tenancy AS (
+       SELECT id, property_id,
+              COALESCE(actual_move_in_on, planned_move_in_on, (created_at AT TIME ZONE 'America/New_York')::date) AS start_on,
+              COALESCE(actual_move_out_on, (ended_at AT TIME ZONE 'America/New_York')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'America/New_York')::date) AS end_on
+         FROM rent_ops_tenancies
+        WHERE id=$3
+     )
+     SELECT t.id
+       FROM tenancy t
+      WHERE EXISTS (
+        SELECT 1
+          FROM company_property_entity_periods m
+         WHERE m.organization_id=$1 AND m.legal_entity_id=$2 AND m.property_id=t.property_id
+           AND m.effective_from <= GREATEST(t.start_on, t.end_on)
+           AND (m.effective_until IS NULL OR m.effective_until > t.start_on)
+      )`,
+    [scope.organizationId, scope.legalEntityId, tenancyId],
+  );
   if (tenancy.rows.length === 0) throw new AccountingError("accounting_not_found", "Tenancy was not found");
 
   const customer = await executor.query<{ active: string | null }>(

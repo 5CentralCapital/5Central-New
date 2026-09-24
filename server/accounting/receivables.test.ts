@@ -144,6 +144,37 @@ test("a full replay mirrors customers and receivables and the ledger ties to Qui
   }
 });
 
+test("voided receivable revisions remain stored for audit but never affect the ledger", async () => {
+  const store = baseStore();
+  store.JournalEntry.push({
+    Id: "92", SyncToken: "0", TxnStatus: "Voided", TxnDate: "2026-09-05", CurrencyRef: { value: "USD" }, MetaData: { LastUpdatedTime: T("11") },
+    Line: [
+      { Id: "0", Amount: 5, DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "84" }, Entity: { Type: "Customer", EntityRef: { value: "58" } } } },
+      { Id: "1", Amount: 5, DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "79" } } },
+    ],
+  } as QuickBooksJsonObject);
+  const h = await harness(store);
+  try {
+    await h.sync.syncChanges();
+    const ledger = await h.ledger();
+    assert.equal(ledger.entries.some(entry => entry.objectId === "92"), false);
+    assert.equal(ledger.totals.endingBalanceCents, "122500");
+    assert.equal(ledger.verification.state, "verified");
+    const stored = await h.synthetic.db.query<{ mirror_state: string; posting_state: string }>("SELECT mirror_state, posting_state FROM accounting_qbo_receivable_documents WHERE object_type='JournalEntry' AND object_id='92'");
+    assert.deepEqual(stored.rows.map(row => [row.mirror_state, row.posting_state]), [["current", "voided"]]);
+
+    // A legacy/imported row in another currency is excluded at read time and
+    // leaves visible partial coverage rather than being relabeled as USD.
+    await h.synthetic.db.query("UPDATE accounting_qbo_receivable_documents SET currency='CAD' WHERE object_type='JournalEntry' AND object_id='90'");
+    const foreign = await h.ledger();
+    assert.equal(foreign.entries.some(entry => entry.objectId === "90"), false);
+    assert.equal(foreign.coverage.status, "partial");
+    assert.ok(foreign.coverage.reasons.some(reason => /different from the legal entity/.test(reason)));
+  } finally {
+    await h.close();
+  }
+});
+
 test("pages keep the complete-history running balance and refuse a ledger that changed between pages", async () => {
   const store = baseStore();
   const h = await harness(store);
@@ -201,6 +232,58 @@ test("edits replace effects by revision, older deliveries are ignored, deletes a
     assert.equal(deleted.status, "deleted");
     ledger = await h.ledger();
     assert.equal(ledger.entries.some(entry => entry.objectId === "77"), false);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a same-token receivable recovers after its prerequisite account becomes available", async () => {
+  const store = baseStore();
+  const h = await harness(store);
+  try {
+    await h.sync.syncChanges();
+    const firstRevision = {
+      Id: "92", SyncToken: "0", TxnDate: "2026-09-05", CurrencyRef: { value: "USD" }, MetaData: { LastUpdatedTime: T("11") },
+      Line: [
+        { Id: "0", Amount: 5, DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "84" }, Entity: { Type: "Customer", EntityRef: { value: "58" } } } },
+        { Id: "1", Amount: 5, DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "79" } } },
+      ],
+    } as QuickBooksJsonObject;
+    store.JournalEntry.push(firstRevision);
+    store.Customer[0] = customer("58", "1230.00", { SyncToken: "1", MetaData: { LastUpdatedTime: T("21") } });
+    await h.sync.applyObject({ objectType: "JournalEntry", objectId: "92", operation: "created" });
+    await h.sync.applyObject({ objectType: "Customer", objectId: "58", operation: "updated" });
+    assert.equal((await h.ledger()).totals.endingBalanceCents, "123000");
+
+    // The same provider revision is first unreadable because Account 85 has
+    // not been mirrored. It retires the prior effects and records an exception.
+    store.JournalEntry[2] = {
+      ...firstRevision,
+      SyncToken: "1",
+      MetaData: { LastUpdatedTime: T("13") },
+      Line: [
+        { Id: "0", Amount: 5, DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "85" }, Entity: { Type: "Customer", EntityRef: { value: "58" } } } },
+        { Id: "1", Amount: 5, DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "79" } } },
+      ],
+    } as QuickBooksJsonObject;
+    const unsupported = await h.sync.applyObject({ objectType: "JournalEntry", objectId: "92", operation: "updated" });
+    assert.equal(unsupported.status, "unsupported");
+    assert.equal((await h.ledger()).entries.some(entry => entry.objectId === "92"), false);
+
+    // Once the missing account is mirrored, the exact same SyncToken can be
+    // normalized. Its append-only effects are inserted once and the current
+    // document is promoted from unsupported to current.
+    store.Account.push({ Id: "85", SyncToken: "0", Name: "Accounts Receivable (A/R) - Reclassified", AccountType: "Accounts Receivable", Active: true, MetaData: { LastUpdatedTime: T("13") } } as QuickBooksJsonObject);
+    await h.sync.applyObject({ objectType: "Account", objectId: "85", operation: "created" });
+    const recovered = await h.sync.applyObject({ objectType: "JournalEntry", objectId: "92", operation: "updated" });
+    assert.equal(recovered.status, "applied");
+    const ledger = await h.ledger();
+    assert.deepEqual(ledger.entries.filter(entry => entry.objectId === "92").map(entry => [entry.amountCents, entry.postingState]), [["500", "posted"]]);
+    assert.equal(ledger.totals.endingBalanceCents, "123000");
+    assert.equal(ledger.verification.state, "verified");
+    assert.equal(ledger.coverage.status, "complete", ledger.coverage.reasons.join("; "));
+    const effects = await h.synthetic.db.query<{ object_version: string; effect_id: string }>("SELECT object_version, effect_id FROM accounting_qbo_receivable_effects WHERE object_type='JournalEntry' AND object_id='92' ORDER BY object_version, effect_id");
+    assert.deepEqual(effects.rows.map(row => [row.object_version, row.effect_id]), [["0", "0"], ["1", "0"]]);
   } finally {
     await h.close();
   }
@@ -268,16 +351,41 @@ test("tenancies link to one QuickBooks customer through the immutable identity m
     );
     await assert.rejects(h.executor.transaction!(tx => linkTenancyToQboCustomer(tx, input)), (error: unknown) => error instanceof AccountingError && error.code === "accounting_not_found");
     await h.synthetic.db.exec(`
-      INSERT INTO rent_ops_people(id,first_name,last_name) VALUES('person-1','QA','Resident'),('person-2','QA','Next');
+      INSERT INTO company_legal_entities(id,organization_id,name,entity_type,currency) VALUES('20000000-0000-4000-8000-000000000002','${scope.organizationId}','Other Property LLC','llc','USD');
+      INSERT INTO rent_ops_properties(id,name,slug) VALUES('demo-property-b','Demo property B','demo-property-b');
+      INSERT INTO rent_ops_units(id,property_id,unit_number) VALUES('demo-unit-b-1','demo-property-b','1B');
+      INSERT INTO company_property_entity_periods(id,organization_id,legal_entity_id,property_id,effective_from) VALUES('30000000-0000-4000-8000-000000000002','${scope.organizationId}','20000000-0000-4000-8000-000000000002','demo-property-b','2020-01-01');
+      INSERT INTO company_organizations(id,name) VALUES('10000000-0000-4000-8000-000000000002','Other Company');
+      INSERT INTO company_legal_entities(id,organization_id,name,entity_type,currency) VALUES('20000000-0000-4000-8000-000000000003','10000000-0000-4000-8000-000000000002','Other Company LLC','llc','USD');
+      INSERT INTO rent_ops_properties(id,name,slug) VALUES('foreign-property','Foreign property','foreign-property');
+      INSERT INTO rent_ops_units(id,property_id,unit_number) VALUES('foreign-unit-1','foreign-property','1F');
+      INSERT INTO company_property_entity_periods(id,organization_id,legal_entity_id,property_id,effective_from) VALUES('30000000-0000-4000-8000-000000000003','10000000-0000-4000-8000-000000000002','20000000-0000-4000-8000-000000000003','foreign-property','2020-01-01');
+      INSERT INTO rent_ops_people(id,first_name,last_name) VALUES('person-1','QA','Resident'),('person-2','QA','Next'),('person-3','QA','Historical'),('person-4','QA','Other entity'),('person-5','QA','Other company');
       INSERT INTO rent_ops_tenancies(id,property_id,unit_id,primary_person_id,status,created_at,property_link_knowledge,unit_link_knowledge,primary_person_link_knowledge,status_knowledge)
         VALUES('t-1','${SYNTHETIC_COMPANY.propertyId}','${SYNTHETIC_COMPANY.unitId}','person-1','past',NOW(),'manual','manual','manual','manual'),
-              ('t-2','${SYNTHETIC_COMPANY.propertyId}','${SYNTHETIC_COMPANY.unitId}','person-2','current',NOW(),'manual','manual','manual','manual');`);
+              ('t-2','${SYNTHETIC_COMPANY.propertyId}','${SYNTHETIC_COMPANY.unitId}','person-2','current',NOW(),'manual','manual','manual','manual'),
+              ('t-3','${SYNTHETIC_COMPANY.propertyId}','${SYNTHETIC_COMPANY.unitId}','person-3','past',NOW(),'manual','manual','manual','manual'),
+              ('t-4','demo-property-b','demo-unit-b-1','person-4','past',NOW(),'manual','manual','manual','manual'),
+              ('t-5','foreign-property','foreign-unit-1','person-5','past',NOW(),'manual','manual','manual','manual');
+      UPDATE rent_ops_tenancies SET actual_move_in_on='2019-01-01', actual_move_out_on='2019-12-31' WHERE id='t-3';`);
     assert.equal((await h.executor.transaction!(tx => linkTenancyToQboCustomer(tx, input))).status, "linked");
     assert.equal((await h.executor.transaction!(tx => linkTenancyToQboCustomer(tx, input))).status, "already_linked");
     // The next occupant of the same unit never inherits the former tenant's history.
     await assert.rejects(h.executor.transaction!(tx => linkTenancyToQboCustomer(tx, { ...input, tenancyId: "t-2" })), (error: unknown) => error instanceof AccountingError && /another tenancy/.test(error.message));
     await assert.rejects(h.executor.transaction!(tx => linkTenancyToQboCustomer(tx, { ...input, customerObjectId: "59" })), (error: unknown) => error instanceof AccountingError && /different QuickBooks customer/.test(error.message));
     await assert.rejects(h.executor.transaction!(tx => linkTenancyToQboCustomer(tx, { ...input, tenancyId: "t-2", customerObjectId: "999" })), (error: unknown) => error instanceof AccountingError && error.code === "accounting_not_found");
+    // A globally existing tenancy outside the legal entity's historical
+    // property assignment cannot be linked or used to resolve a stale map.
+    await assert.rejects(h.executor.transaction!(tx => linkTenancyToQboCustomer(tx, { ...input, tenancyId: "t-3", customerObjectId: "59" })), (error: unknown) => error instanceof AccountingError && error.code === "accounting_not_found");
+    // A property assigned to another legal entity in this organization, or to
+    // an entirely different organization, is outside the requested scope.
+    await assert.rejects(h.executor.transaction!(tx => linkTenancyToQboCustomer(tx, { ...input, tenancyId: "t-4", customerObjectId: "59" })), (error: unknown) => error instanceof AccountingError && error.code === "accounting_not_found");
+    await assert.rejects(h.executor.transaction!(tx => linkTenancyToQboCustomer(tx, { ...input, tenancyId: "t-5", customerObjectId: "59" })), (error: unknown) => error instanceof AccountingError && error.code === "accounting_not_found");
+    await h.synthetic.db.query(
+      "INSERT INTO company_external_identities (id, organization_id, legal_entity_id, provider, source_scope, record_kind, external_id, local_kind, local_id) VALUES ('50000000-0000-4000-8000-000000000002',$1,$2::uuid,'qbo','qbo:sandbox:123456','Customer','59','tenancy','t-3')",
+      [scope.organizationId, scope.legalEntityId],
+    );
+    assert.equal(await resolveTenancyCustomer(h.executor, { organizationId: scope.organizationId, tenancyId: "t-3", environment: "sandbox" }), null);
     const link = await resolveTenancyCustomer(h.executor, { organizationId: scope.organizationId, tenancyId: "t-1", environment: "sandbox" });
     assert.deepEqual(link, { scope: sourceScope, customerObjectId: "58" });
     assert.equal(await resolveTenancyCustomer(h.executor, { organizationId: scope.organizationId, tenancyId: "t-1", environment: "production" }), null);

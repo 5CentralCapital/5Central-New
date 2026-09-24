@@ -19,6 +19,7 @@ export type ReceivableApplyOutcome = "applied" | "unchanged" | "stale";
 
 interface CurrentRow {
   readonly object_version: string;
+  readonly mirror_state: "current" | "unsupported";
 }
 
 function scopeOf(scope: QuickBooksConnectionScope): FinancialSourceScope {
@@ -38,7 +39,7 @@ export class PostgresQboReceivablesStore {
 
   private async current(scope: FinancialSourceScope, objectType: string, objectId: string): Promise<CurrentRow | null> {
     const result = await this.executor.query<CurrentRow>(
-      `SELECT object_version FROM accounting_qbo_receivable_documents
+      `SELECT object_version, mirror_state FROM accounting_qbo_receivable_documents
         WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6
         FOR UPDATE`,
       [...scopeParts(scope), objectType, objectId],
@@ -93,6 +94,23 @@ export class PostgresQboReceivablesStore {
       return "applied";
     }
     if (existing.object_version === document.version) {
+      // A supported replay is a no-op. An earlier attempt may have retired
+      // this exact provider revision as unsupported (for example, before the
+      // prerequisite Account revision arrived); the same revision can then be
+      // recovered without appending duplicate effects. Source-object ingest
+      // has already enforced same-token body immutability.
+      if (existing.mirror_state === "unsupported") {
+        await this.executor.query(
+          `UPDATE accounting_qbo_receivable_documents SET
+             source_object_id=$8, mirror_state='current', customer_object_id=$9, doc_number=$10, txn_date=$11, due_date=$12,
+             currency=$13, total_cents=$14::bigint, open_balance_cents=$15::bigint, posting_state=$16, email_status=$17, allow_online_card=$18,
+             allow_online_ach=$19, allow_ipn=$20, bill_email_present=$21, unsupported_reason=NULL, provider_updated_at=$22, mirrored_at=now()
+           WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6
+             AND object_version=$7 AND mirror_state='unsupported'`,
+          values,
+        );
+        return "applied";
+      }
       // Same revision seen again (overlap, replay, webhook after CDC): refresh nothing.
       return "unchanged";
     }

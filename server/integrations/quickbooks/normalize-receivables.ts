@@ -31,6 +31,8 @@ import { QboNormalizationError, qboAmountToCents, resolveQboCurrency, type QboCu
 
 export interface ReceivableNormalizationOptions {
   readonly currency?: QboCurrencyContext | null;
+  /** Currency recorded on the bound legal entity; foreign documents are not summed into it. */
+  readonly entityCurrency?: string | null;
   /** AccountType by Account Id, from the mirrored Account revisions. Needed for JournalEntry. */
   readonly accountTypes?: ReadonlyMap<string, string>;
 }
@@ -211,8 +213,23 @@ function reconcile(type: QboReceivableDocumentType, effects: readonly QboReceiva
 }
 
 function looksVoided(body: QuickBooksJsonObject, total: MoneyCents): boolean {
-  // QuickBooks voids by zeroing amounts and noting "Voided"; the amounts are the truth either way.
-  return BigInt(total) === BigInt(0) && typeof body.PrivateNote === "string" && /^voided\b/i.test(body.PrivateNote.trim());
+  // QuickBooks usually zeroes a void and adds a note, but the explicit status
+  // is authoritative when present. A nonzero void must never contribute to a
+  // customer's balance merely because the provider retained its old amount.
+  const status = body.TxnStatus ?? body.Status;
+  return (typeof status === "string" && /^(?:void|voided)$/i.test(status.trim()))
+    || (BigInt(total) === BigInt(0) && typeof body.PrivateNote === "string" && /^voided\b/i.test(body.PrivateNote.trim()));
+}
+
+function resolveReceivableCurrency(body: QuickBooksJsonObject, context: QboCurrencyContext | null | undefined, entityCurrency: string | null | undefined): CurrencyCode {
+  const currency = resolveQboCurrency(body, context);
+  if (!context) reject(`QBO receivable currency ${currency} cannot be checked without verified Preferences home currency`);
+  if (currency !== context.homeCurrency.toUpperCase()) reject(`QBO receivable currency ${currency} differs from verified home currency ${context.homeCurrency.toUpperCase()}; foreign-currency receivables are excluded`);
+  if (entityCurrency !== undefined) {
+    if (entityCurrency === null) reject("QBO receivable currency cannot be checked because the bound legal entity currency is unavailable");
+    if (currency !== entityCurrency.toUpperCase()) reject(`QBO receivable currency ${currency} differs from legal entity currency ${entityCurrency.toUpperCase()}; foreign-currency receivables are excluded`);
+  }
+  return currency;
 }
 
 function documentBase(type: QboReceivableDocumentType, body: QuickBooksJsonObject, identity: ReceivableIdentity, currency: CurrencyCode, total: MoneyCents) {
@@ -393,7 +410,7 @@ function normalizeJournalEntry(body: QuickBooksJsonObject, identity: ReceivableI
   if (effects.length === 0) return { notReceivable: "QBO JournalEntry has no Accounts Receivable line" };
   const total = centsFromBigInt(sum(effects.map(effect => effect.amountCents)));
   const base = documentBase("JournalEntry", body, identity, currency, total);
-  return { ...base, postingState: "posted", customerObjectId: null, dueDate: null, openBalanceCents: null, effects, applications: [] };
+  return { ...base, customerObjectId: null, dueDate: null, openBalanceCents: null, effects, applications: [] };
 }
 
 export function isQboReceivableType(type: string): type is QboReceivableDocumentType {
@@ -423,7 +440,7 @@ export function normalizeQboReceivable(type: string, input: unknown, options: Re
     return { status: "unsupported", identity: null, reasons: [error instanceof QboNormalizationError ? error.message : "QBO object identity is invalid"] };
   }
   try {
-    const currency = resolveQboCurrency(body, options.currency);
+    const currency = resolveReceivableCurrency(body, options.currency, options.entityCurrency);
     const result = type === "Payment"
       ? normalizePayment(body, identity, currency)
       : type === "JournalEntry"

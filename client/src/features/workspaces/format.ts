@@ -35,11 +35,16 @@ export function compareCentsText(left: string | null, right: string | null): num
   return difference === BigInt(0) ? 0 : difference < BigInt(0) ? -1 : 1;
 }
 
-/** Sort key for grids that sort numbers: exact for |cents| below 2^53, which covers display ordering. */
-export function centsSortValue(value: string | null): number | null {
-  if (value === null) return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+/** Keep cent sort keys as integer strings so the grid model can compare them as BigInts. */
+export function centsSortValue(value: string | null): string | null {
+  const normalized = value?.trim() ?? "";
+  if (!/^-?\d+$/.test(normalized)) return null;
+  try {
+    BigInt(normalized);
+    return normalized;
+  } catch {
+    return null;
+  }
 }
 
 export function formatIsoDate(value: string | null | undefined): string {

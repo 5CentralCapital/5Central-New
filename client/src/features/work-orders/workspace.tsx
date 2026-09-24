@@ -19,6 +19,7 @@ import { formatInputValue, formatMoney, parseMoneyInput } from "../projects/mone
 import { WorkOrderApiError, revisionFrom, workOrderEnvelope, workOrderViewFilters, workOrdersApi, type WorkOrderCommandEnvelope } from "./api";
 import { PRIORITY_LABELS, STATUS_LABELS, categoryLabel, dateLabel, eventSummary, operatingToday, priorityClass, scheduleOrder, statusClass, timestampLabel } from "./format";
 import { PendingEnvelopes } from "./pending";
+import { sumWorkOrderMoneyByCurrency } from "./totals";
 import { invalidateWorkOrderReads } from "../workspaces/work-data";
 import "./work-orders.css";
 
@@ -28,17 +29,9 @@ export type { WorkOrderView };
 const VIEW_LABELS: Record<WorkOrderView, string> = { open: "Open", schedule: "Schedule", all: "All", ...STATUS_LABELS };
 
 function workOrderMoneyTotals(items: readonly WorkOrderSummary[], pick: (item: WorkOrderSummary) => string | null): string {
-  const totals = new Map<string, bigint>();
-  const unknown = new Map<string, number>();
-  for (const item of items) {
-    const currency = item.currency || "Unknown currency";
-    const cents = pick(item);
-    if (cents === null || cents === undefined || cents === "" || !/^-?\d+$/.test(cents)) { unknown.set(currency, (unknown.get(currency) ?? 0) + 1); continue; }
-    totals.set(currency, (totals.get(currency) ?? BigInt(0)) + BigInt(cents));
-  }
-  const currencies = new Set<string>([...Array.from(totals.keys()), ...Array.from(unknown.keys())]);
-  if (!currencies.size) return "—";
-  return Array.from(currencies).sort().map(currency => totals.has(currency) ? `${formatMoney(totals.get(currency)!.toString(), currency)}${unknown.get(currency) ? ` + ${unknown.get(currency)} unknown` : ""}` : `Unknown${unknown.get(currency)! > 1 ? ` (${unknown.get(currency)})` : ""}`).join(" · ");
+  const totals = sumWorkOrderMoneyByCurrency(items.map(item => ({ cents: pick(item), currency: item.currency })));
+  if (!totals.length) return "—";
+  return totals.map(total => total.knownCount === 0 ? `${total.currency === "Unknown currency" ? "Unknown currency" : "Unknown"}${total.unknownCount > 1 ? ` (${total.unknownCount})` : ""}` : `${formatMoney(total.cents!, total.currency)}${total.unknownCount ? ` + ${total.unknownCount} unknown` : ""}`).join(" · ");
 }
 
 function actualSummaryCents(item: WorkOrderSummary): string | null {

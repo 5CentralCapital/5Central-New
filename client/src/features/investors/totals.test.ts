@@ -13,3 +13,16 @@ test("investor totals preserve bigint cents, currencies, and unknown values", ()
     { currency: "USD", cents: "9223372036854775807", knownCount: 2, unknownCount: 1 },
   ]);
 });
+
+test("investor totals never add amounts whose currency is unknown", () => {
+  assert.deepEqual(sumMoneyByCurrency([
+    { cents: "100", currency: null },
+    { cents: "200", currency: "EUR" },
+    { cents: "300", currency: "USD" },
+    { cents: "400", currency: "not-a-currency" },
+  ]), [
+    { currency: "EUR", cents: "200", knownCount: 1, unknownCount: 0 },
+    { currency: "Unknown currency", cents: null, knownCount: 0, unknownCount: 2 },
+    { currency: "USD", cents: "300", knownCount: 1, unknownCount: 0 },
+  ]);
+});
