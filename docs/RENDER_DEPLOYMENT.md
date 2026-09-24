@@ -139,13 +139,13 @@ accepted origin is the existing Replit origin. Register the branded callback
 provider when that domain is attached.
 
 The staging Blueprint sets
-`RENT_OPS_ADMIN_OAUTH_ORIGIN=https://5central-ops-staging-web.onrender.com`.
+`RENT_OPS_ADMIN_OAUTH_ORIGIN=https://fivecentral-ops-staging-web.onrender.com`.
 The app accepts that origin only when Render's own variables identify the
 process as the `5central-ops-staging-web` service on that hostname
 (`RENDER=true`, `RENDER_SERVICE_NAME`, `RENDER_EXTERNAL_HOSTNAME`) and
 `QBO_ENVIRONMENT` is not `production` (`server/admin-oauth.ts`). Every other
 `onrender.com` hostname, including production's, is still rejected. Add
-`https://5central-ops-staging-web.onrender.com/api/rent-ops/auth/oauth/callback`
+`https://fivecentral-ops-staging-web.onrender.com/api/rent-ops/auth/oauth/callback`
 to the Auth0 application's allowed callbacks before testing staging sign-in.
 
 The staging web-only group has the staging host database URL, admin email,

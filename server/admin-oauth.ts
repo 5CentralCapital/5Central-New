@@ -9,7 +9,7 @@ export const ADMIN_OAUTH_SUBJECT = "google-oauth2|118183229923455274061";
 export const ADMIN_OAUTH_CALLBACK = `${ADMIN_OAUTH_ORIGIN}/api/rent-ops/auth/oauth/callback`;
 export const ADMIN_OAUTH_EMAIL = "michael@5central.capital";
 /** The Render staging web service's own hostname (no custom domain). */
-export const STAGING_ADMIN_OAUTH_ORIGIN = "https://5central-ops-staging-web.onrender.com";
+export const STAGING_ADMIN_OAUTH_ORIGIN = "https://fivecentral-ops-staging-web.onrender.com";
 export const STAGING_RENDER_SERVICE_NAME = "5central-ops-staging-web";
 /**
  * The staging origin is accepted only inside that exact Render service, which

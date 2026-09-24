@@ -1,70 +1,74 @@
-services:
-  - type: web
-    name: 5central-ops-web
-    runtime: node
-    plan: starter
-    region: virginia
-    branch: production
-    numInstances: 1
-    buildCommand: npm ci && npm run build
-    startCommand: npm start
-    autoDeployTrigger: checksPass
-    healthCheckPath: /readyz
-    envVars:
-      - fromGroup: 5central-ops-production
-      - fromGroup: 5central-ops-production-web
-      - key: NODE_ENV
-        value: production
-      - key: NODE_VERSION
-        value: "22"
-      - key: RENT_OPS_ADMIN_OAUTH_ORIGIN
-        value: https://5central.capital
-      - key: QBO_WRITES_ENABLED
-        value: "off"
-      - key: QBO_PRODUCTION_WRITES
-        value: "off"
-      - key: RENT_OPS_OBJECT_STORE_BACKEND
-        value: private-versioned
-      - key: RENT_OPS_OBJECT_STORE_ENDPOINT
-        value: https://s3.us-west-2.amazonaws.com
-      - key: RENT_OPS_OBJECT_STORE_REGION
-        value: us-west-2
-      - key: RENT_OPS_OBJECT_STORE_BUCKET
-        value: fivecentral-ops-production-651532007693
-      - key: RENT_OPS_OBJECT_STORE_PREFIX
-        value: rent-ops/private
-      - key: RENT_OPS_OBJECT_STORE_ENCRYPTION
-        value: required
-      - key: RENT_OPS_OBJECT_STORE_VERSIONING
-        value: required
-      - key: RENT_OPS_PUBLIC_LIMITER_MODE
-        value: database
-      - key: RENT_OPS_INSTANCE_MODE
-        value: single
-      - key: RENT_OPS_TENANT_EMAIL_PROVIDER
-        value: gmail
-      - key: RENT_OPS_TENANT_EMAIL_ENABLED
-        value: "true"
+projects:
+  - name: 5Central Ops
+    environments:
+      - name: Production
+        services:
+          - type: web
+            name: 5central-ops-web
+            runtime: node
+            plan: starter
+            region: virginia
+            branch: production
+            numInstances: 1
+            buildCommand: npm ci && npm run build
+            startCommand: npm start
+            autoDeployTrigger: checksPass
+            healthCheckPath: /readyz
+            envVars:
+              - fromGroup: 5central-ops-production
+              - fromGroup: 5central-ops-production-web
+              - key: NODE_ENV
+                value: production
+              - key: NODE_VERSION
+                value: "22"
+              - key: RENT_OPS_ADMIN_OAUTH_ORIGIN
+                value: https://5central.capital
+              - key: QBO_WRITES_ENABLED
+                value: "off"
+              - key: QBO_PRODUCTION_WRITES
+                value: "off"
+              - key: RENT_OPS_OBJECT_STORE_BACKEND
+                value: private-versioned
+              - key: RENT_OPS_OBJECT_STORE_ENDPOINT
+                value: https://s3.us-west-2.amazonaws.com
+              - key: RENT_OPS_OBJECT_STORE_REGION
+                value: us-west-2
+              - key: RENT_OPS_OBJECT_STORE_BUCKET
+                value: fivecentral-ops-production-651532007693
+              - key: RENT_OPS_OBJECT_STORE_PREFIX
+                value: rent-ops/private
+              - key: RENT_OPS_OBJECT_STORE_ENCRYPTION
+                value: required
+              - key: RENT_OPS_OBJECT_STORE_VERSIONING
+                value: required
+              - key: RENT_OPS_PUBLIC_LIMITER_MODE
+                value: database
+              - key: RENT_OPS_INSTANCE_MODE
+                value: single
+              - key: RENT_OPS_TENANT_EMAIL_PROVIDER
+                value: gmail
+              - key: RENT_OPS_TENANT_EMAIL_ENABLED
+                value: "true"
 
-  - type: worker
-    name: 5central-ops-worker
-    runtime: node
-    plan: starter
-    region: virginia
-    branch: production
-    numInstances: 1
-    buildCommand: npm ci && npm run build
-    startCommand: npm run worker
-    autoDeployTrigger: checksPass
-    envVars:
-      - fromGroup: 5central-ops-production
-      - key: NODE_ENV
-        value: production
-      - key: NODE_VERSION
-        value: "22"
-      - key: QBO_WRITES_ENABLED
-        value: "off"
-      - key: QBO_PRODUCTION_WRITES
-        value: "off"
-      - key: WORKER_SHUTDOWN_GRACE_MS
-        value: "25000"
+          - type: worker
+            name: 5central-ops-worker
+            runtime: node
+            plan: starter
+            region: virginia
+            branch: production
+            numInstances: 1
+            buildCommand: npm ci && npm run build
+            startCommand: npm run worker
+            autoDeployTrigger: checksPass
+            envVars:
+              - fromGroup: 5central-ops-production
+              - key: NODE_ENV
+                value: production
+              - key: NODE_VERSION
+                value: "22"
+              - key: QBO_WRITES_ENABLED
+                value: "off"
+              - key: QBO_PRODUCTION_WRITES
+                value: "off"
+              - key: WORKER_SHUTDOWN_GRACE_MS
+                value: "25000"

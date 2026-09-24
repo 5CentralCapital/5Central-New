@@ -1,77 +1,81 @@
-services:
-  - type: web
-    name: 5central-ops-staging-web
-    runtime: node
-    plan: starter
-    region: virginia
-    branch: hosting/render
-    numInstances: 1
-    buildCommand: npm ci && npm run build
-    startCommand: npm start
-    autoDeployTrigger: checksPass
-    healthCheckPath: /readyz
-    envVars:
-      - fromGroup: 5central-ops-staging
-      - fromGroup: 5central-ops-staging-web
-      - key: NODE_ENV
-        value: production
-      - key: NODE_VERSION
-        value: "22"
-      - key: SESSION_SECRET
-        generateValue: true
-      - key: RENT_OPS_SESSION_SECRET
-        generateValue: true
-      # Accepted by the app only inside this exact Render service with QBO sandbox.
-      - key: RENT_OPS_ADMIN_OAUTH_ORIGIN
-        value: https://5central-ops-staging-web.onrender.com
-      - key: QBO_WRITES_ENABLED
-        value: "off"
-      - key: QBO_PRODUCTION_WRITES
-        value: "off"
-      - key: RENT_OPS_OBJECT_STORE_BACKEND
-        value: private-versioned
-      - key: RENT_OPS_OBJECT_STORE_ENDPOINT
-        value: https://s3.us-west-2.amazonaws.com
-      - key: RENT_OPS_OBJECT_STORE_REGION
-        value: us-west-2
-      - key: RENT_OPS_OBJECT_STORE_BUCKET
-        value: fivecentral-ops-staging-651532007693
-      - key: RENT_OPS_OBJECT_STORE_PREFIX
-        value: rent-ops/private
-      - key: RENT_OPS_OBJECT_STORE_ENCRYPTION
-        value: required
-      - key: RENT_OPS_OBJECT_STORE_VERSIONING
-        value: required
-      - key: RENT_OPS_PUBLIC_LIMITER_MODE
-        value: database
-      - key: RENT_OPS_INSTANCE_MODE
-        value: single
-      - key: RENT_OPS_TENANT_EMAIL_ENABLED
-        value: "false"
-      - key: RENT_OPS_MAGIC_LINK_WEBHOOK_URL
-        value: https://mail-disabled.invalid
-      - key: RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET
-        generateValue: true
+projects:
+  - name: 5Central Ops
+    environments:
+      - name: Staging
+        services:
+          - type: web
+            name: 5central-ops-staging-web
+            runtime: node
+            plan: starter
+            region: virginia
+            branch: hosting/render
+            numInstances: 1
+            buildCommand: npm ci && npm run build
+            startCommand: npm start
+            autoDeployTrigger: checksPass
+            healthCheckPath: /readyz
+            envVars:
+              - fromGroup: 5central-ops-staging
+              - fromGroup: 5central-ops-staging-web
+              - key: NODE_ENV
+                value: production
+              - key: NODE_VERSION
+                value: "22"
+              - key: SESSION_SECRET
+                generateValue: true
+              - key: RENT_OPS_SESSION_SECRET
+                generateValue: true
+              # Accepted by the app only inside this exact Render service with QBO sandbox.
+              - key: RENT_OPS_ADMIN_OAUTH_ORIGIN
+                value: https://fivecentral-ops-staging-web.onrender.com
+              - key: QBO_WRITES_ENABLED
+                value: "off"
+              - key: QBO_PRODUCTION_WRITES
+                value: "off"
+              - key: RENT_OPS_OBJECT_STORE_BACKEND
+                value: private-versioned
+              - key: RENT_OPS_OBJECT_STORE_ENDPOINT
+                value: https://s3.us-west-2.amazonaws.com
+              - key: RENT_OPS_OBJECT_STORE_REGION
+                value: us-west-2
+              - key: RENT_OPS_OBJECT_STORE_BUCKET
+                value: fivecentral-ops-staging-651532007693
+              - key: RENT_OPS_OBJECT_STORE_PREFIX
+                value: rent-ops/private
+              - key: RENT_OPS_OBJECT_STORE_ENCRYPTION
+                value: required
+              - key: RENT_OPS_OBJECT_STORE_VERSIONING
+                value: required
+              - key: RENT_OPS_PUBLIC_LIMITER_MODE
+                value: database
+              - key: RENT_OPS_INSTANCE_MODE
+                value: single
+              - key: RENT_OPS_TENANT_EMAIL_ENABLED
+                value: "false"
+              - key: RENT_OPS_MAGIC_LINK_WEBHOOK_URL
+                value: https://mail-disabled.invalid
+              - key: RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET
+                generateValue: true
 
-  - type: worker
-    name: 5central-ops-staging-worker
-    runtime: node
-    plan: starter
-    region: virginia
-    branch: hosting/render
-    numInstances: 1
-    buildCommand: npm ci && npm run build
-    startCommand: npm run worker
-    autoDeployTrigger: checksPass
-    envVars:
-      - fromGroup: 5central-ops-staging
-      - key: NODE_ENV
-        value: production
-      - key: NODE_VERSION
-        value: "22"
-      - key: QBO_WRITES_ENABLED
-        value: "off"
-      - key: QBO_PRODUCTION_WRITES
-        value: "off"
-      - key: WORKER_SHUTDOWN_GRACE_MS
-        value: "25000"
+          - type: worker
+            name: 5central-ops-staging-worker
+            runtime: node
+            plan: starter
+            region: virginia
+            branch: hosting/render
+            numInstances: 1
+            buildCommand: npm ci && npm run build
+            startCommand: npm run worker
+            autoDeployTrigger: checksPass
+            envVars:
+              - fromGroup: 5central-ops-staging
+              - key: NODE_ENV
+                value: production
+              - key: NODE_VERSION
+                value: "22"
+              - key: QBO_WRITES_ENABLED
+                value: "off"
+              - key: QBO_PRODUCTION_WRITES
+                value: "off"
+              - key: WORKER_SHUTDOWN_GRACE_MS
+                value: "25000"
