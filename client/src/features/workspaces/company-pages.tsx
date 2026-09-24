@@ -42,6 +42,7 @@ function EntitiesContent({ identity, organizationId, asOfDate, selector, onOpenA
             <td>{property.effectiveUntil ? formatIsoDate(property.effectiveUntil) : "Open"}</td>
             <td>{property.current ? "Current" : property.effectiveFrom > asOfDate ? "Scheduled" : "Ended"}</td>
           </tr>)}</tbody>
+          <tfoot><tr><th scope="row" colSpan={3}>Shown properties</th><td className="number">{properties.length}</td></tr></tfoot>
         </table> : <p className="ws-note">No properties assigned{showPast ? "" : " on this date"}.</p>}
         {production?.companyName && <details className="ws-details"><summary>QuickBooks company</summary><p>{production.companyName}{production.realmId ? ` · Realm ${production.realmId}` : ""}{production.confirmedAt ? ` · Confirmed ${formatIsoDate(production.confirmedAt)}` : ""}</p></details>}
       </Section>;
@@ -88,6 +89,7 @@ function PeopleContent({ identity, organizationId, asOfDate, selector }: { ident
             <td>{contact.roles.length ? contact.roles.map(item => `${humanize(item.role)}${item.legalEntityName ? ` · ${item.legalEntityName}` : ""}${item.effectiveUntil && item.effectiveUntil <= asOfDate ? " (ended)" : ""}`).join("; ") : "—"}</td>
             <td>{contact.rentOpsPersonId ? <EntityLink personId={contact.rentOpsPersonId}>Open tenant record</EntityLink> : "—"}</td>
           </tr>)}</tbody>
+          <tfoot><tr><th scope="row" colSpan={2}>{people.hasNextPage ? "Loaded contacts" : "Contact count"}</th><td className="number">{contacts.length}</td></tr></tfoot>
         </table>
         {people.hasNextPage && <button type="button" className="rm-button" disabled={people.isFetchingNextPage} onClick={() => void people.fetchNextPage()}>{people.isFetchingNextPage ? "Loading…" : "Show more"}</button>}
       </> : <StatePanel title="No contacts" message={search || role ? "No contacts match these filters." : "Company contacts appear here once they are recorded."} />)
@@ -95,6 +97,7 @@ function PeopleContent({ identity, organizationId, asOfDate, selector }: { ident
         <table className="ws-table">
           <thead><tr><th scope="col">Vendor</th><th scope="col">Entity</th><th scope="col">Status</th></tr></thead>
           <tbody>{vendors.map(vendor => <tr key={`${vendor.legalEntityName}:${vendor.providerObjectId}`}><td>{vendor.displayName}</td><td>{vendor.legalEntityName}</td><td>{vendor.active ? "Active" : "Inactive"}</td></tr>)}</tbody>
+          <tfoot><tr><th scope="row" colSpan={2}>Shown vendors</th><td className="number">{vendors.length}</td></tr></tfoot>
         </table>
         {people.data.pages[0]?.vendorsTruncated && <p className="ws-note">Showing the first 100 vendors. Search to narrow the list.</p>}
       </> : <StatePanel title="No QuickBooks vendors" message="Vendors appear after a QuickBooks company is connected and synced." />}

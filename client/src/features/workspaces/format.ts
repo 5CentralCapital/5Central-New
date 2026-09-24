@@ -21,6 +21,12 @@ export function formatMeasure(value: string | null, complete: boolean, currency 
   return complete ? formatCentsText(value, currency) : `At least ${formatCentsText(value, currency)}`;
 }
 
+/** Display a subtotal when unknown rows may be signed and therefore are not a lower bound. */
+export function formatKnownSubtotal(value: string | null, complete: boolean, currency = "USD"): string {
+  if (value === null) return "Unknown";
+  return complete ? formatCentsText(value, currency) : `Known subtotal ${formatCentsText(value, currency)} + unknown`;
+}
+
 export function compareCentsText(left: string | null, right: string | null): number {
   if (left === right) return 0;
   if (left === null) return -1;

@@ -36,11 +36,13 @@ export function PropertyDocumentsPage({ identity, snapshot, filters, organizatio
             <td className="number">{row.documentCount}</td>
             <td>{row.insuranceDated ? <>{formatIsoDate(row.insuranceDated)} {row.insuranceAgeDays !== null && row.insuranceAgeDays > 365 && <Badge tone="warning">Over a year old</Badge>}</> : <Badge tone="warning">None on file</Badge>}</td>
           </tr>)}</tbody>
+          <tfoot><tr><th scope="row">Shown properties</th><td className="number">{rows.length}</td><td>Counts only</td></tr></tfoot>
         </table>}
       {documents.data && documents.data.documents.length > 0 && <details className="ws-details"><summary>All company documents</summary>
         <table className="ws-table">
           <thead><tr><th scope="col">Title</th><th scope="col">Property</th><th scope="col">Kind</th><th scope="col">Dated</th></tr></thead>
           <tbody>{documents.data.documents.map(document => <tr key={document.id}><td>{document.title}</td><td>{document.propertyName ?? "—"}</td><td>{humanize(document.kind)}</td><td>{formatIsoDate(document.documentDate)}</td></tr>)}</tbody>
+          <tfoot><tr><th scope="row" colSpan={3}>{documents.data.truncated ? "Loaded documents" : "Document count"}</th><td className="number">{documents.data.documents.length}</td></tr></tfoot>
         </table>
         {documents.data.truncated && <p className="ws-note">Showing the first 500 documents. Select properties to narrow the list.</p>}
       </details>}

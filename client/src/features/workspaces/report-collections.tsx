@@ -26,12 +26,13 @@ function Presets({ identity, organizationId, selector, onOpenReport, onOpenLibra
     {!presets.data.length ? <StatePanel title="No saved reports" message="Run a report and save its setup to find it here." action={{ label: "Open report library", onClick: onOpenLibrary }} />
       : <table className="ws-table">
         <thead><tr><th scope="col">Name</th><th scope="col">Report</th><th scope="col">Shared</th><th scope="col">Updated</th></tr></thead>
-        <tbody>{presets.data.map(preset => <tr key={preset.id}>
-          <td><button type="button" className="ws-link" onClick={() => onOpenReport(organizationId, preset.reportId, preset.id)}>{preset.name}</button>{preset.description && <div className="ws-note">{preset.description}</div>}</td>
-          <td>{titles.get(preset.reportId) ?? humanize(preset.reportId)}</td>
-          <td>{preset.visibility === "private" ? "Only me" : humanize(preset.visibility)}</td>
-          <td>{formatIsoDate(preset.updatedAt)}</td>
+          <tbody>{presets.data.map(preset => <tr key={preset.id}>
+            <td><button type="button" className="ws-link" onClick={() => onOpenReport(organizationId, preset.reportId, preset.id)}>{preset.name}</button>{preset.description && <div className="ws-note">{preset.description}</div>}</td>
+            <td>{titles.get(preset.reportId) ?? humanize(preset.reportId)}</td>
+            <td>{preset.visibility === "private" ? "Only me" : humanize(preset.visibility)}</td>
+            <td>{formatIsoDate(preset.updatedAt)}</td>
         </tr>)}</tbody>
+        <tfoot><tr><th scope="row" colSpan={3}>Saved report count</th><td className="number">{presets.data.length}</td></tr></tfoot>
       </table>}
   </div>;
 }
@@ -64,6 +65,7 @@ function Packages({ identity, organizationId, selector, onOpenLibrary }: Props &
           <td role="status">{runs[pkg.id] ? packageRunSummary(runs[pkg.id]) : "—"}</td>
           <td><button type="button" className="rm-button rm-button--small" disabled={run.isPending && run.variables === pkg.id} onClick={() => run.mutate(pkg.id)}>{run.isPending && run.variables === pkg.id ? "Running…" : "Run"}</button></td>
         </tr>)}</tbody>
+        <tfoot><tr><th scope="row" colSpan={3}>Report package count</th><td className="number">{packages.data.length}</td></tr></tfoot>
       </table>}
   </div>;
 }

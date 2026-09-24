@@ -8,7 +8,7 @@ import type { AdminSnapshot, ViewFilters } from "../rent-ops/types";
 import { EntityLink, RecordLink } from "../rent-ops/workspace/entity-link";
 import { DataGrid, type GridColumn } from "../rent-ops/workspace/grid";
 import { selectedWorkspaceProperties } from "../rent-ops/workspace/workspace-state";
-import { centsSortValue, formatCentsText, formatIsoDate, formatMeasure, formatMonth, humanize, sumCentsTexts } from "./format";
+import { centsSortValue, formatCentsText, formatIsoDate, formatKnownSubtotal, formatMeasure, formatMonth, humanize, sumCentsTexts } from "./format";
 import { ErrorState, Loading, Section } from "./page";
 import { matchesSearch, rentalRows, useRentalReport } from "./rental-reports";
 import { balancesDue, legacyCents, receiptsByPayment, type RentalRow } from "./models";
@@ -64,11 +64,13 @@ export function Collections({ identity, snapshot, filters, businessDate, readOnl
     {!readOnly && <PaymentReviewPanel tenants={snapshot.tenants} />}
     <Section title="Balances due" id="collections-due" count={dueRows ? `${dueRows.length} · ${formatMeasure(dueTotal!.total, dueTotal!.complete)}` : undefined}>
       {delinquency.error ? <ErrorState error={delinquency.error} onRetry={() => void delinquency.refetch()} /> : !dueRows ? <Loading label="Loading balances…" />
-        : <DataGrid<RentalRow> rows={dueRows} columns={dueColumns} getRowKey={(row, index) => `${row.personId}:${index}`} emptyMessage="No balances due." storageKey="ws-collections-due" />}
+        : <DataGrid<RentalRow> rows={dueRows} columns={dueColumns} getRowKey={(row, index) => `${row.personId}:${index}`} emptyMessage="No balances due." storageKey="ws-collections-due" summaryLabel="balance due"
+          getFooterMetrics={rows => { const total = sumCentsTexts(rows.map(row => legacyCents(row.operationalBalanceCents))); return [{ label: "Filtered total", value: formatKnownSubtotal(total.total, total.complete) }]; }} />}
     </Section>
     <Section title={`Receipts · ${formatMonth(month)} to date`} id="collections-receipts" count={receipts ? `${receipts.length} · ${formatMeasure(receiptTotal!.total, receiptTotal!.complete)}` : undefined}>
       {collected.error ? <ErrorState error={collected.error} onRetry={() => void collected.refetch()} /> : !receipts ? <Loading label="Loading receipts…" />
-        : <DataGrid<RentalRow> rows={receipts} columns={receiptColumns} getRowKey={(row, index) => `${row.paymentTransactionId}:${index}`} emptyMessage="No receipts applied this month." storageKey="ws-collections-receipts" />}
+        : <DataGrid<RentalRow> rows={receipts} columns={receiptColumns} getRowKey={(row, index) => `${row.paymentTransactionId}:${index}`} emptyMessage="No receipts applied this month." storageKey="ws-collections-receipts" summaryLabel="receipt"
+          getFooterMetrics={rows => { const total = sumCentsTexts(rows.map(row => row.receiptCents as string | null)); return [{ label: "Filtered total", value: formatKnownSubtotal(total.total, total.complete) }]; }} />}
     </Section>
   </div>;
 }

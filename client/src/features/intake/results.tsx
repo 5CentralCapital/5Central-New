@@ -4,6 +4,7 @@ import type { MraPacketReadModel } from "@shared/intake";
 import { EntityLink, RecordLink } from "../rent-ops/workspace/entity-link";
 import { intakeApi } from "./api";
 import type { IntakeResultsProps } from "./types";
+import { formatKnownSubtotal, sumCentsTexts } from "../workspaces/format";
 import "./intake.css";
 
 function amount(value: string, currency: string): string {
@@ -21,6 +22,27 @@ function dateLabel(value: string): string {
 }
 
 function label(value: string | null | undefined): string { return value ? value.replace(/_/g, " ").replace(/\b\w/g, letter => letter.toUpperCase()) : "—"; }
+
+interface CategoryTotal {
+  readonly category: string;
+  readonly currency: string;
+  readonly count: number;
+  readonly summary: ReturnType<typeof sumCentsTexts>;
+}
+
+function categoryTotals(lines: MraPacketReadModel["lines"]): readonly CategoryTotal[] {
+  const groups = new Map<string, { category: string; currency: string; amounts: Array<string | null>; count: number }>();
+  for (const line of lines) {
+    const key = `${line.category}\u0000${line.currency}`;
+    const group = groups.get(key) ?? { category: line.category, currency: line.currency, amounts: [], count: 0 };
+    group.amounts.push(line.amountCents);
+    group.count += 1;
+    groups.set(key, group);
+  }
+  return Array.from(groups.values())
+    .map(group => ({ category: group.category, currency: group.currency, count: group.count, summary: sumCentsTexts(group.amounts) }))
+    .sort((left, right) => `${left.category}\u0000${left.currency}`.localeCompare(`${right.category}\u0000${right.currency}`));
+}
 
 function packetPeriod(packet: MraPacketReadModel): { readonly from: string; readonly through: string } {
   const dates = packet.lines.map(line => line.postedOn).sort();
@@ -84,6 +106,7 @@ export function MraResults({ organizationId, organizationName, legalEntityId, pr
   useEffect(() => { void loadDetail(selectedId); }, [loadDetail, selectedId]);
   const warnings = useMemo(() => selected?.candidateWarnings ?? [], [selected]);
   const selectedPeriod = selected ? packetPeriod(selected) : undefined;
+  const selectedCategoryTotals = useMemo(() => selected ? categoryTotals(selected.lines) : [], [selected]);
 
   return <div className="intake-workspace" data-testid="intake-results">
     <header className="intake-toolbar"><div><h1>MRA Results</h1>{organizationName && <p>{organizationName}</p>}</div><button type="button" className="intake-button" data-testid="intake-refresh" onClick={() => void reload()} disabled={loading}><RefreshCw size={14} />{loading ? "Refreshing…" : "Refresh"}</button></header>
@@ -94,7 +117,7 @@ export function MraResults({ organizationId, organizationName, legalEntityId, pr
         {warnings.length > 0 && <div className="intake-warning" role="status">{warnings.length} parser note{warnings.length === 1 ? "" : "s"}: {warnings[0]}</div>}
         {selected.reconciliation && <div className="intake-metrics"><div><span>Source lines</span><strong>{selected.reconciliation.sourceLineCount}</strong></div><div><span>Matched</span><strong>{selected.reconciliation.matchedLineCount}</strong></div><div><span>Held</span><strong>{selected.reconciliation.heldLineCount}</strong></div><div><span>Applied</span><strong>{selected.reconciliation.appliedLineCount}</strong></div></div>}
         {selected.reconciliation && selected.reconciliation.totals.length > 0 && <div className="intake-card"><div className="intake-card-heading"><h3>Control totals</h3><span>{selected.reconciliation.accounts.length} account{selected.reconciliation.accounts.length === 1 ? "" : "s"}</span></div><div className="intake-table-wrap"><table className="intake-table"><thead><tr><th>Currency</th><th>Input</th><th>Matched</th><th>Held</th><th>Duplicate</th><th>Overlap</th><th>Applied</th></tr></thead><tbody>{selected.reconciliation.totals.map(total => <tr key={total.currency}><td>{total.currency}</td><td className="amount">{amount(total.inputCents, total.currency)}</td><td className="amount">{amount(total.matchedCents, total.currency)}</td><td className="amount">{amount(total.heldCents, total.currency)}</td><td className="amount">{amount(total.duplicateCents, total.currency)}</td><td className="amount">{amount(total.overlapCents, total.currency)}</td><td className="amount">{amount(total.appliedCents, total.currency)}</td></tr>)}</tbody></table></div></div>}
-        <div className="intake-card"><div className="intake-card-heading"><h3>Normalized activity</h3><span>{selected.lines.length} line{selected.lines.length === 1 ? "" : "s"}</span></div><div className="intake-table-wrap"><table className="intake-table"><thead><tr><th>Account</th><th>Posted</th><th>Amount</th><th>Category</th><th>Payer</th><th>Outcome</th><th>Evidence</th></tr></thead><tbody>{selected.lines.map(line => <tr data-testid="intake-line-row" key={line.sourceLineKey}><td><strong>{line.sourceAccountName ?? line.sourceAccountId}</strong><small>{line.tenantDisplayName ?? line.description ?? "—"}</small><LineTarget line={line} /></td><td>{dateLabel(line.postedOn)}</td><td className="amount">{amount(line.amountCents, line.currency)}</td><td>{label(line.category)}</td><td>{label(line.payer)}</td><td><span className={`intake-state is-${line.outcome ?? "pending"}`}>{label(line.outcome ?? "pending")}</span>{line.outcomeReason && <small>{line.outcomeReason}</small>}</td><td>{line.evidence.map(evidence => <small key={`${evidence.page ?? ""}:${evidence.row ?? ""}:${evidence.sourcePath ?? ""}`}>{evidence.page ? `Page ${evidence.page}` : evidence.row ? `Row ${evidence.row}` : evidence.sourcePath ?? "Source"}</small>)}</td></tr>)}</tbody></table></div></div>
+        <div className="intake-card"><div className="intake-card-heading"><h3>Normalized activity</h3><span>{selected.lines.length} line{selected.lines.length === 1 ? "" : "s"}</span></div><div className="intake-table-wrap"><table className="intake-table"><thead><tr><th>Account</th><th>Posted</th><th>Amount</th><th>Category</th><th>Payer</th><th>Outcome</th><th>Evidence</th></tr></thead><tbody>{selected.lines.map(line => <tr data-testid="intake-line-row" key={line.sourceLineKey}><td><strong>{line.sourceAccountName ?? line.sourceAccountId}</strong><small>{line.tenantDisplayName ?? line.description ?? "—"}</small><LineTarget line={line} /></td><td>{dateLabel(line.postedOn)}</td><td className="amount">{amount(line.amountCents, line.currency)}</td><td>{label(line.category)}</td><td>{label(line.payer)}</td><td><span className={`intake-state is-${line.outcome ?? "pending"}`}>{label(line.outcome ?? "pending")}</span>{line.outcomeReason && <small>{line.outcomeReason}</small>}</td><td>{line.evidence.map(evidence => <small key={`${evidence.page ?? ""}:${evidence.row ?? ""}:${evidence.sourcePath ?? ""}`}>{evidence.page ? `Page ${evidence.page}` : evidence.row ? `Row ${evidence.row}` : evidence.sourcePath ?? "Source"}</small>)}</td></tr>)}</tbody><tfoot aria-label="Normalized activity totals by category">{selectedCategoryTotals.map(total => <tr key={`${total.category}:${total.currency}`}><th scope="row" colSpan={2}>{label(total.category)} total · {total.currency}</th><td className="amount">{formatKnownSubtotal(total.summary.total, total.summary.complete, total.currency)}</td><td colSpan={4}>{total.count} line{total.count === 1 ? "" : "s"}</td></tr>)}</tfoot></table></div></div>
       </>}</main>
     </div>
   </div>;
