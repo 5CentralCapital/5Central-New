@@ -5,6 +5,9 @@ import { ACCOUNTING_VIEWS, isAccountingView, type AccountingApi, type Accounting
 import { accountingApi } from "./api";
 import { dateLabel, dateTimeLabel, formatCents } from "./format";
 import { BankingView, EmptyState, OverviewPanel, PayablesView, PeriodCloseView, PmSettlementsView } from "./views";
+import { FullGeneralLedger } from "./full-ledger";
+import { FinancialDashboard } from "./dashboard";
+import { transactionTotals } from "./transaction-totals";
 import "./accounting.css";
 
 const mirrorTabs: readonly [AccountingMirrorKind, string][] = [["accounts", "Accounts"], ["vendors", "Vendors"], ["customers", "Customers"], ["employees", "Employees"]];
@@ -105,16 +108,28 @@ function ConnectionList({ connections, selected, onSelect }: { readonly connecti
 
 function MirrorTable({ items, kind }: { readonly items: readonly { displayName: string; active: boolean; providerUpdatedAt: string | null }[]; readonly kind: AccountingMirrorKind }) {
   if (!items.length) return <div className="accounting-empty"><strong>No {kind} mirrored yet</strong><span>Run a source sync after the connection is ready.</span></div>;
-  return <div className="accounting-table-wrap"><table className="accounting-table"><thead><tr><th>Name</th><th>Status</th><th>Updated</th></tr></thead><tbody>{items.map(item => <tr key={`${item.displayName}:${item.providerUpdatedAt}`}><td>{item.displayName}</td><td>{item.active ? "Active" : "Inactive"}</td><td>{dateTimeLabel(item.providerUpdatedAt)}</td></tr>)}</tbody></table></div>;
+  return <div className="accounting-table-wrap"><table className="accounting-table"><thead><tr><th>Name</th><th>Status</th><th>Updated</th></tr></thead><tbody>{items.map(item => <tr key={`${item.displayName}:${item.providerUpdatedAt}`}><td>{item.displayName}</td><td>{item.active ? "Active" : "Inactive"}</td><td>{dateTimeLabel(item.providerUpdatedAt)}</td></tr>)}</tbody><tfoot><tr><th scope="row">{items.length} {kind}</th><td>{items.filter(item => item.active).length} active</td><td>{items.filter(item => !item.active).length} inactive</td></tr></tfoot></table></div>;
 }
 
-function TransactionTable({ api, organizationId, scope }: { readonly api: AccountingApi; readonly organizationId: string; readonly scope: AccountingScope }) {
-  const query = useQuery({ queryKey: ["accounting", "transactions", scope], queryFn: ({ signal }) => api.listTransactions(organizationId, scope, signal), staleTime: 20_000 });
+function TransactionTable({ api, organizationId, scope, onFullLedger }: { readonly api: AccountingApi; readonly organizationId: string; readonly scope: AccountingScope; readonly onFullLedger: () => void }) {
+  const [cursors, setCursors] = useState<readonly string[]>([]);
+  const cursor = cursors.at(-1);
+  const query = useQuery({ queryKey: ["accounting", "transactions", organizationId, scope, cursor], queryFn: ({ signal }) => api.listTransactions(organizationId, scope, signal, cursor), staleTime: 20_000 });
   if (query.isLoading) return <div className="accounting-empty">Loading transactions…</div>;
   if (query.error) return <ErrorBox error={query.error} retry={() => void query.refetch()} />;
   const page = query.data;
-  if (!page?.items.length) return <div className="accounting-empty"><strong>{page?.coverage.status === "complete" ? "No supported transactions in this view" : "No supported transactions mirrored yet"}</strong><span>This view shows purchases, bills, bill payments, and deposits; journal entries are not included. {page?.coverage.status === "complete" ? "For complete QuickBooks financial statements, open Reports." : "Refresh records to load supported source transactions, or open Reports for complete QuickBooks financial statements."}</span></div>;
-  return <><div className="accounting-meta" role="status">Coverage: {page.coverage.status} · {page.coverage.evidence}{page.coverage.status !== "complete" ? <> — incomplete mirror; QuickBooks remains the accounting record.{page.coverage.reason ? ` ${page.coverage.reason}` : ""}</> : null}</div><div className="accounting-table-wrap"><table className="accounting-table"><thead><tr><th>Date</th><th>Type</th><th className="is-number">Amount</th><th>Status</th><th>Settlement</th></tr></thead><tbody>{page.items.map(item => <tr key={`${item.source.objectType}:${item.source.objectId}:${item.source.lineId ?? ""}:${item.source.version}`}><td>{dateLabel(item.postedOn)}</td><td>{item.transactionType}</td><td className="is-number">{formatCents(item.amountCents, item.currency)}</td><td>{item.postingState}</td><td>{item.settlement.state}</td></tr>)}</tbody></table></div></>;
+  const totals = transactionTotals(page?.items ?? []);
+  return <>
+    <div className="accounting-list-heading"><span className="accounting-meta">{page?.items.length ?? 0} transaction lines shown</span><button className="accounting-button" onClick={onFullLedger}>Full general ledger</button></div>
+    <p className="accounting-meta">Synced purchases, bills, bill payments and deposits. Open the general ledger for all QuickBooks activity.</p>
+    {page?.coverage.status !== "complete" && <p className="accounting-message is-warning" role="status">The synced records are incomplete.{page?.coverage.reason ? ` ${page.coverage.reason}` : " Refresh records to load the latest activity."}</p>}
+    {!page?.items.length ? <div className="accounting-empty"><strong>No supported transactions in this view</strong><span>Open the general ledger for complete QuickBooks activity, including journal entries.</span></div> : <div className="accounting-table-wrap"><table className="accounting-table" aria-label="Synced QuickBooks transactions">
+      <thead><tr><th>Date</th><th>Type</th><th>Description</th><th className="is-number">Amount</th><th>Status</th><th>Settlement</th></tr></thead>
+      <tbody>{page.items.map(item => <tr key={`${item.source.objectType}:${item.source.objectId}:${item.source.lineId ?? ""}:${item.source.version}`}><td>{dateLabel(item.postedOn)}</td><td>{item.transactionType}</td><td className="accounting-description">{item.description || "—"}</td><td className="is-number">{formatCents(item.amountCents, item.currency)}</td><td>{item.postingState}</td><td>{item.settlement.state === "unknown" ? "Unverified" : item.settlement.state}</td></tr>)}</tbody>
+      <tfoot>{totals.map(total => <tr key={`${total.type}:${total.currency}:${total.state}`}><th scope="row" colSpan={3}>{cursors.length || page.nextCursor ? "Page" : "Shown"} total · {total.type} · {total.count} line{total.count === 1 ? "" : "s"}</th><td className="is-number">{formatCents(total.amountCents, total.currency)}</td><td>{total.state}</td><td>{total.currency}</td></tr>)}</tfoot>
+    </table></div>}
+    {(cursors.length > 0 || page?.nextCursor) && <nav className="accounting-pagination" aria-label="Transaction pages"><button className="accounting-button" disabled={!cursors.length} onClick={() => setCursors(cursors.slice(0, -1))}>Previous</button><span className="accounting-meta">Page {cursors.length + 1}</span><button className="accounting-button" disabled={!page?.nextCursor} onClick={() => page?.nextCursor && setCursors([...cursors, page.nextCursor])}>Next</button></nav>}
+  </>;
 }
 
 function callbackErrorMessage(code: string): string {
@@ -126,7 +141,7 @@ function callbackErrorMessage(code: string): string {
   }
 }
 
-export function AccountingWorkspace({ organizationId, organizationName, entities, api = accountingApi, view: controlledView, onViewChange }: AccountingWorkspaceProps) {
+export function AccountingWorkspace({ organizationId, organizationName, entities, api = accountingApi, reportsApi, view: controlledView, onViewChange }: AccountingWorkspaceProps) {
   const entityOptions = legalEntityOptions(entities);
   const [legalEntityId, setLegalEntityId] = useState(() => {
     const pendingEntityId = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("qboEntity");
@@ -139,7 +154,7 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
   const view = controlledView ?? internalView;
   const setView = (next: AccountingView) => { if (onViewChange) onViewChange(next); else setInternalView(next); };
   const [selectedRealmId, setSelectedRealmId] = useState<string | null>(null);
-  const [tab, setTab] = useState<AccountingMirrorKind | "transactions">("transactions");
+  const [tab, setTab] = useState<AccountingMirrorKind | "transactions" | "general-ledger">("general-ledger");
   const [message, setMessage] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [disconnectOpen, setDisconnectOpen] = useState(false);
@@ -160,11 +175,12 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
   useEffect(() => { if (!connections.data?.length) { setSelectedRealmId(null); return; } if (!connections.data.some(connection => connection.scope.realmId === selectedRealmId)) setSelectedRealmId(connections.data[0]!.scope.realmId); }, [connections.data, selectedRealmId]);
   const selectedConnection = connections.data?.find(connection => connection.scope.realmId === selectedRealmId) ?? connections.data?.[0] ?? null;
   const scope = useMemo<AccountingScope | null>(() => selectedConnection?.status === "needs_reconnect" ? null : selectedConnection?.scope ?? null, [selectedConnection]);
-  const mirrors = useQuery({ queryKey: ["accounting", "mirrors", scope, tab], queryFn: ({ signal }) => api.listMirrors(organizationId, scope!, tab as AccountingMirrorKind, signal), enabled: Boolean(scope && tab !== "transactions" && view === "transactions"), staleTime: 20_000 });
+  const mirrors = useQuery({ queryKey: ["accounting", "mirrors", scope, tab], queryFn: ({ signal }) => api.listMirrors(organizationId, scope!, tab as AccountingMirrorKind, signal), enabled: Boolean(scope && tab !== "transactions" && tab !== "general-ledger" && view === "transactions"), staleTime: 20_000 });
   const selectedEntity = entityOptions.find(entity => entity.id === legalEntityId);
   const currency = selectedEntity?.currency ?? "USD";
   const clearPending = async () => {
     setPendingId(null);
+    setView("overview");
     const url = new URL(window.location.href); url.searchParams.delete("qboPending"); url.searchParams.delete("qboEntity"); url.searchParams.delete("qboConnected"); window.history.replaceState(window.history.state, "", url.toString());
     await connections.refetch();
   };
@@ -188,19 +204,22 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
     } catch (error) { setDisconnectError(error); }
     finally { setDisconnecting(false); }
   }
+  useEffect(() => { if (pendingId) setView("connections"); }, [pendingId]);
   const sidebar = <aside className="accounting-sidebar">{pending.data && selectedEntity && <PendingBindingCard api={api} organizationId={organizationId} legalEntityId={legalEntityId} entityName={selectedEntity.name} pending={pending.data} onConfirmed={clearPending} />}{pending.error && <ErrorBox error={pending.error} retry={() => void pending.refetch()} />}{!connections.isLoading && <ConnectionList connections={connections.data ?? []} selected={selectedConnection} onSelect={connection => setSelectedRealmId(connection.scope.realmId)} />}{!pending.data && configuration.data?.configured && legalEntityId && (!selectedConnection || selectedConnection.status === "needs_reconnect") && <ConnectCard api={api} organizationId={organizationId} legalEntityId={legalEntityId} environment={environment} reconnect={selectedConnection?.status === "needs_reconnect" || disconnectedEntities.has(legalEntityId)} />}{configuration.data && !configuration.data.configured && <div className="accounting-card"><div className="accounting-card-header"><h2>QuickBooks is not configured</h2></div><div className="accounting-card-body">QuickBooks connection isn't available.</div></div>}</aside>;
-  const notConnected = <EmptyState title={selectedConnection?.status === "needs_reconnect" ? "QuickBooks needs to be reconnected" : "QuickBooks isn't connected"} detail={selectedConnection?.status === "needs_reconnect" ? "Reconnect to restore accounting access for this legal entity." : "Connect this legal entity's QuickBooks company to see its records."} action={{ label: "Open overview", onClick: () => setView("overview") }} />;
-  const mirrorContent = scope ? <><nav className="accounting-tabs" aria-label="QuickBooks records">{[["transactions", "Transactions"] as const, ...mirrorTabs].map(([value, label]) => <button type="button" className={`accounting-tab ${tab === value ? "is-selected" : ""}`} aria-pressed={tab === value} key={value} onClick={() => setTab(value)}>{label}</button>)}</nav>{tab === "transactions" ? <TransactionTable api={api} organizationId={organizationId} scope={scope} /> : mirrors.isLoading ? <div className="accounting-empty">Loading {tab}…</div> : mirrors.error ? <ErrorBox error={mirrors.error} retry={() => void mirrors.refetch()} /> : <MirrorTable items={mirrors.data ?? []} kind={tab} />}</> : notConnected;
+  const notConnected = <EmptyState title={selectedConnection?.status === "needs_reconnect" ? "QuickBooks needs to be reconnected" : "QuickBooks isn't connected"} detail={selectedConnection?.status === "needs_reconnect" ? "Reconnect to restore accounting access for this legal entity." : "Connect this legal entity's QuickBooks company to see its records."} action={{ label: "Open connections", onClick: () => setView("connections") }} />;
+  const mirrorContent = scope ? <><nav className="accounting-tabs" aria-label="QuickBooks records">{[["general-ledger", "General ledger"] as const, ["transactions", "Synced transactions"] as const, ...mirrorTabs].map(([value, label]) => <button type="button" className={`accounting-tab ${tab === value ? "is-selected" : ""}`} aria-pressed={tab === value} key={value} onClick={() => setTab(value)}>{label}</button>)}</nav>{tab === "general-ledger" ? <FullGeneralLedger api={reportsApi} key={`${organizationId}:${legalEntityId}:${selectedRealmId}`} organizationId={organizationId} legalEntityId={legalEntityId} currency={currency} /> : tab === "transactions" ? <TransactionTable onFullLedger={() => setTab("general-ledger")} key={`${organizationId}:${scope.legalEntityId}:${scope.environment}:${scope.realmId}`} api={api} organizationId={organizationId} scope={scope} /> : mirrors.isLoading ? <div className="accounting-empty">Loading {tab}…</div> : mirrors.error ? <ErrorBox error={mirrors.error} retry={() => void mirrors.refetch()} /> : <MirrorTable items={mirrors.data ?? []} kind={tab} />}</> : notConnected;
   return <div className="accounting-workspace">
-    <header className="accounting-toolbar"><div><h1>Accounting</h1><p>{organizationName ?? "Company"}</p></div><div className="accounting-actions"><EnvironmentBadge environment={environment} />{scope && <button className="accounting-button accounting-button-primary" disabled={syncing || disconnecting} onClick={() => void sync()}><RefreshCw size={14} aria-hidden="true" />{syncing ? "Queuing…" : "Refresh records"}</button>}{selectedConnection && selectedConnection.status !== "needs_reconnect" && view === "overview" && <button className="accounting-button accounting-button-danger rm-button-danger" disabled={syncing || disconnecting} onClick={() => { setDisconnectError(null); setDisconnectOpen(true); }}><Unplug size={14} aria-hidden="true" />Disconnect QuickBooks</button>}</div></header>
-    <div className="accounting-selectors"><label>Legal entity<select value={legalEntityId} onChange={event => { setLegalEntityId(event.currentTarget.value); setTab("transactions"); }}>{entityOptions.map(entity => <option key={entity.id} value={entity.id}>{entity.name}</option>)}</select></label><label>QuickBooks environment<span className="accounting-meta">{environmentLabel(environment)}</span></label><label>Currency<span className="accounting-meta">{selectedEntity?.currency ?? "—"}</span></label></div>
+    <header className="accounting-toolbar"><div><h1>Accounting</h1><p>{organizationName ?? "Company"}</p></div><div className="accounting-actions"><EnvironmentBadge environment={environment} />{scope && view !== "overview" && <button className="accounting-button accounting-button-primary" disabled={syncing || disconnecting} onClick={() => void sync()}><RefreshCw size={14} aria-hidden="true" />{syncing ? "Queuing…" : "Refresh records"}</button>}{selectedConnection && selectedConnection.status !== "needs_reconnect" && view === "connections" && <button className="accounting-button accounting-button-danger rm-button-danger" disabled={syncing || disconnecting} onClick={() => { setDisconnectError(null); setDisconnectOpen(true); }}><Unplug size={14} aria-hidden="true" />Disconnect QuickBooks</button>}</div></header>
+    <div className="accounting-selectors"><label>Company<select value={legalEntityId} onChange={event => { setLegalEntityId(event.currentTarget.value); setTab("general-ledger"); }}>{entityOptions.map(entity => <option key={entity.id} value={entity.id}>{entity.name}</option>)}</select></label><span className="accounting-meta">{selectedEntity?.currency ?? "—"}</span></div>
     <nav className="accounting-tabs accounting-view-tabs" aria-label="Accounting sections">{ACCOUNTING_VIEWS.map(item => <button type="button" key={item.value} className={`accounting-tab ${view === item.value ? "is-selected" : ""}`} aria-current={view === item.value ? "page" : undefined} onClick={() => setView(item.value)}>{item.label}</button>)}</nav>
     {message && <div className="accounting-message" role="status">{message}</div>}
     {callbackError && <div className="accounting-message" role="alert">{callbackErrorMessage(callbackError)} <button type="button" className="accounting-button" onClick={() => setCallbackError(null)}>Dismiss</button></div>}
+    {configuration.error && <ErrorBox error={configuration.error} retry={() => void configuration.refetch()} />}
     {connections.error && <ErrorBox error={connections.error} retry={() => void connections.refetch()} />}
     {!legalEntityId ? <main className="accounting-main"><EmptyState title="No legal entity" detail="Add a legal entity to this company to use accounting." /></main>
-      : view === "overview" ? <div className="accounting-grid">{sidebar}<main className="accounting-main"><OverviewPanel api={api} organizationId={organizationId} legalEntityId={legalEntityId} currency={currency} onOpen={setView} /></main></div>
-      : view === "transactions" ? <div className="accounting-grid">{sidebar}<main className="accounting-main">{mirrorContent}</main></div>
+      : view === "overview" ? <main className="accounting-main is-wide">{configuration.isLoading || connections.isLoading ? <div className="accounting-empty" role="status">Loading QuickBooks…</div> : <FinancialDashboard api={reportsApi} key={`${organizationId}:${legalEntityId}:${selectedRealmId}`} organizationId={organizationId} legalEntityId={legalEntityId} currency={currency} connected={Boolean(scope)} onConnections={() => setView("connections")} />}</main>
+      : view === "connections" ? <div className="accounting-connections-layout">{sidebar}<main className="accounting-main"><OverviewPanel api={api} organizationId={organizationId} legalEntityId={legalEntityId} currency={currency} onOpen={setView} /></main></div>
+      : view === "transactions" ? <main className="accounting-main is-wide">{mirrorContent}</main>
       : <main className="accounting-main is-wide">
         {view === "bills" && (scope ? <PayablesView api={api} organizationId={organizationId} scope={scope} currency={currency} /> : notConnected)}
         {view === "banking" && <BankingView api={api} organizationId={organizationId} legalEntityId={legalEntityId} currency={currency} onOpen={setView} />}

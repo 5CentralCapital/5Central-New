@@ -118,8 +118,8 @@ const api: AccountingApi = {
     const value = record(await requestJson(`${basePath(organizationId)}/mirrors?${scopeParams(scope)}&kind=${kind}`, { signal }));
     return Array.isArray(value.items) ? value.items.map(item => parseMirror(item, kind)) : [];
   },
-  async listTransactions(organizationId, scope, signal) {
-    const value = record(await requestJson(`${basePath(organizationId)}/transactions?${scopeParams(scope)}&limit=100`, { signal }));
+  async listTransactions(organizationId, scope, signal, cursor) {
+    const value = record(await requestJson(`${basePath(organizationId)}/transactions?${scopeParams(scope)}&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { signal }));
     return { items: Array.isArray(value.items) ? value.items.map(parseTransaction) : [], nextCursor: value.nextCursor === null || value.nextCursor === undefined ? null : String(value.nextCursor), coverage: (() => { const coverage = record(value.coverage); return { status: String(coverage.status ?? "unavailable"), evidence: String(coverage.evidence ?? "unverified"), reason: coverage.reason === null || coverage.reason === undefined ? null : String(coverage.reason) }; })() } satisfies AccountingTransactionPage;
   },
   async beginConnection(organizationId, legalEntityId, signal) {
