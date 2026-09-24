@@ -63,12 +63,12 @@ test("leasing agent attributes applications to the earliest non-system actor and
 });
 
 // ── Book statements via a fake QBO mirror ───────────────────────────────
-function line(input: { entity: string; realm: string; type: "Purchase" | "Bill" | "BillPayment" | "Deposit"; id: string; account: string | null; amount: string; on: string; vendor?: string; lineId?: string }): FinancialSourceLineResolution {
+function line(input: { entity: string; realm: string; type: "Purchase" | "Bill" | "BillPayment" | "Deposit"; id: string; account: string | null; amount: string; on: string; vendor?: string; lineId?: string; direction?: "debit" | "credit"; flow?: "incoming" | "outgoing" | "unknown"; lineRole?: "receipt" | "expense" | "payable" | "payment_source" | "unknown" }): FinancialSourceLineResolution {
   const incoming = input.type === "Deposit";
   return {
     source: { provider: "qbo", organizationId, legalEntityId: input.entity, environment: "sandbox", realmId: input.realm, objectType: input.type, objectId: input.id, lineId: input.lineId ?? "1", version: "0" },
-    direction: input.type === "BillPayment" ? "credit" : "debit", flow: incoming ? "incoming" : "outgoing",
-    lineRole: input.type === "Deposit" ? "receipt" : input.type === "Bill" ? "payable" : input.type === "BillPayment" ? "payment_source" : "expense",
+    direction: input.direction ?? (input.type === "BillPayment" ? "credit" : "debit"), flow: input.flow ?? (incoming ? "incoming" : "outgoing"),
+    lineRole: input.lineRole ?? (input.type === "Deposit" ? "receipt" : input.type === "Bill" ? "payable" : input.type === "BillPayment" ? "payment_source" : "expense"),
     amountCents: input.amount, currency: "USD", transactionType: input.type, accountObjectId: input.account, counterpartyObjectId: input.vendor ?? null, description: null,
     postingState: "posted", postedOn: input.on, settlement: { state: "unknown", settledOn: null, settledAmountCents: null }, watermark: { value: "w1", observedAt: "2026-09-20T00:00:00.000Z" },
   } as unknown as FinancialSourceLineResolution;
@@ -125,6 +125,27 @@ test("property T12 from the mirror signs income and expense, attributes a sole m
   const cash = await engine.run(context("property-t12", { mode: "range", fromDate: "2026-08-01", toDate: "2026-08-31" }, { basis: "cash", scope: { legalEntityIds: [entityA] } }));
   // The bill itself is not cash; its payment is, attributed to the bill's expense account.
   assert.equal(total(cash, "expenses"), "10000");
+});
+
+test("property T12 applies Purchase refund sign and keeps Deposit cash back out of income", async () => {
+  const { executor, mirror } = fakeFinancialDatabase({
+    connections: { [entityA]: "9001" }, properties: { [entityA]: ["property-a"] }, accounts: {
+      ...accountBodies,
+      "36": { Name: "Cash on hand", Classification: "Asset", AccountType: "CashOnHand" },
+    },
+    lines: { [entityA]: [
+      line({ entity: entityA, realm: "9001", type: "Deposit", id: "d1", account: "10", amount: "100000", on: "2026-08-03" }),
+      line({ entity: entityA, realm: "9001", type: "Deposit", id: "d1", account: "36", amount: "2000", on: "2026-08-03", lineId: "synthetic:cashback", flow: "outgoing", lineRole: "unknown" }),
+      line({ entity: entityA, realm: "9001", type: "Purchase", id: "p1", account: "20", amount: "6000", on: "2026-08-10" }),
+      line({ entity: entityA, realm: "9001", type: "Purchase", id: "r1", account: "20", amount: "1000", on: "2026-08-11", direction: "credit", flow: "incoming" }),
+    ] },
+  });
+  const engine = createCombinedFinancialReportingEngine(createMirrorCombinedFinancialReadPort({ executor, principal, environment: "sandbox", mirror }));
+  const result = await engine.run(context("property-t12", { mode: "range", fromDate: "2026-08-01", toDate: "2026-08-31" }, { basis: "accrual", scope: { legalEntityIds: [entityA] } }));
+  assert.equal(total(result, "income"), "100000");
+  assert.equal(total(result, "expenses"), "5000");
+  assert.equal(total(result, "net_operating_income"), "95000");
+  assert.ok(!result.rows.some(row => row.values.accountName === "Cash on hand"), "asset cash-back account is not an income-statement row");
 });
 
 test("cash-basis statements attribute bill payments pro rata to the paid bill's lines and name payments they cannot attribute", async () => {

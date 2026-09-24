@@ -135,6 +135,52 @@ test("an item-based expense without an account cannot claim complete coverage", 
   }
 });
 
+test("provider sync mirrors refund and cash-back lines with signed flow and no duplicate replay", async () => {
+  const store: Store = {
+    Purchase: [{
+      Id: "26", SyncToken: "0", TxnDate: "2026-09-10", TotalAmt: 12, CurrencyRef: { value: "USD" },
+      PaymentType: "CreditCard", Credit: true, AccountRef: { value: "41" }, MetaData: { LastUpdatedTime: "2026-09-10T10:00:00Z" },
+      Line: [{ Id: "1", Amount: 12, AccountBasedExpenseLineDetail: { AccountRef: { value: "7" } } }],
+    } as QuickBooksJsonObject],
+    Deposit: [{
+      Id: "121", SyncToken: "0", TxnDate: "2026-09-10", TotalAmt: 80, CurrencyRef: { value: "USD" }, DepositToAccountRef: { value: "35" },
+      CashBack: { AccountRef: { value: "36" }, Amount: 20 }, MetaData: { LastUpdatedTime: "2026-09-10T11:00:00Z" },
+      Line: [{ Id: "1", Amount: 100, DepositLineDetail: { AccountRef: { value: "79" } } }],
+    } as QuickBooksJsonObject],
+    Account: [account("35", "Bank"), account("36", "CashOnHand"), account("41", "Credit Card"), account("7", "Expense"), account("79", "Income")],
+  };
+  const { synthetic, mirror, sync } = await harness(store);
+  try {
+    const first = await sync.catchUp();
+    assert.equal(first.status, "complete");
+    assert.deepEqual(await mirror.listOpenSyncExceptions(scope), []);
+    const refund = await mirror.resolveLine({ scope: sourceScope, objectType: "Purchase", objectId: "26", lineId: "1" });
+    assert.equal(refund?.amountCents, "1200");
+    assert.equal(refund?.direction, "credit");
+    assert.equal(refund?.flow, "incoming");
+    assert.equal(refund?.lineRole, "expense");
+    assert.equal(await mirror.readPaymentContext({ scope: sourceScope, objectType: "Purchase", objectId: "26", lineId: "1" }), null, "a Purchase refund is not an outgoing payment");
+    const deposit = await mirror.resolveLine({ scope: sourceScope, objectType: "Deposit", objectId: "121", lineId: "1" });
+    assert.equal(deposit?.amountCents, "10000");
+    const cashBack = await mirror.resolveLine({ scope: sourceScope, objectType: "Deposit", objectId: "121", lineId: "synthetic:cashback" });
+    assert.equal(cashBack?.amountCents, "2000");
+    assert.equal(cashBack?.direction, "debit");
+    assert.equal(cashBack?.flow, "outgoing");
+    assert.equal(cashBack?.lineRole, "unknown");
+    assert.equal(await mirror.readPaymentContext({ scope: sourceScope, objectType: "Deposit", objectId: "121", lineId: "synthetic:cashback" }), null, "cash back is not an incoming receipt");
+    assert.equal((await mirror.readCostContext({ scope: sourceScope, objectType: "Deposit", objectId: "121", lineId: "synthetic:cashback" }))?.eligible, false, "cash back account classification remains fail-closed");
+
+    const replay = await sync.catchUp({ fullReplay: true });
+    assert.equal(replay.status, "complete");
+    assert.deepEqual(await mirror.listOpenSyncExceptions(scope), []);
+    const lines = await mirror.listTransactions({ scope: sourceScope, from: "2026-09-10", through: "2026-09-10", limit: 20 });
+    assert.equal(lines.items.filter(item => item.source.objectType === "Purchase" && item.source.objectId === "26").length, 1);
+    assert.equal(lines.items.filter(item => item.source.objectType === "Deposit" && item.source.objectId === "121").length, 2);
+  } finally {
+    await synthetic.close();
+  }
+});
+
 test("a full replay flags mirrored objects that QBO no longer returns", async () => {
   const store: Store = {
     BillPayment: [billPayment("30", "0", "2026-09-10T10:00:00Z", [{ amount: 5, txnType: "Bill", txnId: "7" }], 5), billPayment("31", "0", "2026-09-10T10:00:01Z", [{ amount: 6, txnType: "Bill", txnId: "8" }], 6)],

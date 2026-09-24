@@ -235,7 +235,18 @@ export function createMirrorCombinedFinancialReadPort(options: MirrorFinancialPo
     if (reportId === "general-ledger-consolidated") {
       if (basis === "cash" && type === "Bill") return null;
       if (basis === "accrual" && type === "BillPayment") return null;
-      const debit = type === "Purchase" || type === "Bill";
+      // Purchase/Bill lines debit their offset account, while a Purchase
+      // credit is a refund and credits that expense account. Deposit detail
+      // lines credit their offset account; a synthetic cash-back line debits
+      // its explicit CashBack.AccountRef. Flow carries those two exceptional
+      // reversals without allowing a negative source amount.
+      const debit = type === "Purchase"
+        ? line.flow !== "incoming"
+        : type === "Bill"
+          ? true
+          : type === "Deposit"
+            ? line.flow === "outgoing"
+            : false;
       return { ...base, id: base.sourceId, accountId: line.accountObjectId, accountName: account?.name ?? null, amountCents: (debit ? amount : -amount).toString(), category: account?.classification?.toLowerCase() ?? null, statement: "general_ledger" };
     }
     // Income-statement semantics: a Deposit credits its offset account; a
