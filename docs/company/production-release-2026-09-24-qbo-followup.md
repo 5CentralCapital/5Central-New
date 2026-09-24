@@ -11,14 +11,18 @@ apply this addendum by starting the application or by using `db:push` or `db:mig
 
 Before opening the followup window:
 
-1. Merge the protected branch only after the required `Verify and build` check and review pass.
+1. Before merging, set both production Render services to manual deployment and verify that no
+   deploy is queued or running. Production currently auto-deploys after CI passes; merging first
+   could start the schema-050 build against the schema-049 database. Keep the existing release
+   serving while the protected review and backup preparation finish.
+2. Merge the protected branch only after the required `Verify and build` check and review pass.
    The release branch freezes migration 050 with `RELEASED_THROUGH = 50`.
-2. Confirm the frozen registry and rendered migration. The source checksum is
+3. Confirm the frozen registry and rendered migration. The source checksum is
    `8eb43fdc0b7a8c901b739af2d2d241768f471f4614b4050a73f5f4eb594c2736`; the rendered checksum is
    `05edcddfdc927eca7809a2a474e226bdfed5940b1afdd8f5dd29670e5c841aa3`.
-3. Keep QBO writes disabled (`QBO_WRITES_ENABLED=off` and `QBO_PRODUCTION_WRITES=off`). Freeze
+4. Keep QBO writes disabled (`QBO_WRITES_ENABLED=off` and `QBO_PRODUCTION_WRITES=off`). Freeze
    application writes and hold the worker while the schema and grants change.
-4. Create and verify the reviewed Neon backup and off-platform dump/restore rehearsal. The old
+5. Create and verify the reviewed Neon backup and off-platform dump/restore rehearsal. The old
    v049 grant manifest is not a v050 attestation: it covers 164 managed tables, while this branch
    manages 167.
 
@@ -60,7 +64,8 @@ After `grants-verify` succeeds, deploy the followup build with the worker still 
 `/readyz`, the runtime grant check, and the existing document readback. Then open the worker and
 confirm a fresh `company_worker_heartbeats` row and successful bounded read-only QBO mirror work.
 The mirror migration does not perform an initial provider replay by itself; provider acceptance
-and reconciliation remain a separate read-only gate.
+and reconciliation remain a separate read-only gate. Restore the prior Render auto-deploy policy
+only after the web and worker acceptance checks succeed.
 
 ## Compatibility and rollback
 
