@@ -53,7 +53,7 @@
 .rm-ribbon-label {
   display: block;
   margin-bottom: 5px;
-  color: var(--rm-gold);
+  color: var(--rm-muted);
   font-size: .68rem;
   font-weight: 750;
   letter-spacing: .12em;
@@ -95,6 +95,97 @@
   color: #9c5c00;
 }
 
+/* Header: record actions over one "Balance due" block. Money stays in ink. */
+.rm-record-summary-main p .rm-status {
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+
+.rm-record-summary-side {
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rm-record-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rm-tenant-record .rm-record-summary-side .rm-record-balance {
+  justify-items: end;
+  padding-left: 0;
+  border-left: 0;
+  text-align: right;
+}
+
+.rm-tenant-record .rm-record-balance .rm-record-balance-amount {
+  color: var(--rm-ink);
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.rm-tenant-record .rm-record-balance .rm-record-balance-detail,
+.rm-tenant-record .rm-record-balance .rm-warning-copy {
+  font-size: .75rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.rm-tenant-record .rm-record-balance .rm-warning-copy {
+  color: var(--ds-warning, #9a6a0f);
+}
+
+.rm-record-balance-diff {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.rm-record-balance-diff .rm-status {
+  cursor: help;
+}
+
+/* Keep the pill's own warning style (the shared header rule restyles a first-child span as a label). */
+.rm-workspace.rops-modern .rm-tenant-record .rm-record-balance-diff .rm-status {
+  color: var(--ds-warning);
+  font: 500 12px/16px var(--ds-font);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.rm-tenant-record .rm-balance-note {
+  display: block;
+  font-size: .75rem;
+}
+
+/* "Edit phone numbers" reads as a quiet link inside the Contact card. */
+.rm-contact-phone-edit .ro-phone-editor > button.secondary {
+  min-height: 0;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--rm-charcoal);
+  font-size: .8125rem;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.rm-contact-phone-edit .ro-phone-editor > button.secondary:hover {
+  color: var(--rm-ink);
+}
+
 .rm-tabs.rm-tenant-tabs {
   display: flex;
   gap: 2px;
@@ -124,7 +215,7 @@
 }
 
 .rm-tabs.rm-tenant-tabs button.active {
-  border-bottom-color: var(--rm-gold);
+  border-bottom-color: var(--rm-charcoal);
 }
 
 .rm-tenant-toolbar,
@@ -482,7 +573,7 @@
 .rm-warning {
   margin: 0 0 11px;
   padding: 8px 10px;
-  border-left: 3px solid var(--rm-gold);
+  border-left: 3px solid var(--ds-warning, #9a6a0f);
   background: #fff7e3;
   color: #795113;
   font-size: .7rem;
@@ -590,6 +681,17 @@
   .rm-record-summary-meta {
     justify-content: flex-start;
     gap: var(--rm-space-3, .75rem);
+  }
+
+  .rm-record-summary-side,
+  .rm-tenant-record .rm-record-summary-side .rm-record-balance {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .rm-record-actions,
+  .rm-record-balance-diff {
+    justify-content: flex-start;
   }
 
   .rm-summary-grid,

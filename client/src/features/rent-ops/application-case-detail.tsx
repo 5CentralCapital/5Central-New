@@ -1,4 +1,4 @@
-import { usdCurrencyFormatter } from '../../lib/rent-ops-formatters';
+import { formatLongDate, formatTimestamp, usdCurrencyFormatter } from '../../lib/rent-ops-formatters';
 import {EntityLink} from "./workspace/entity-link";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { AlertCircle, Download, FileCheck2, FileText, Loader2, Users, X } from "lucide-react";
@@ -44,7 +44,12 @@ function moneyFact(value: unknown, knowledge?: string): string {
 }
 
 function dateFact(value: unknown, knowledge?: string): string {
-  return applicationCaseFact(value, knowledge);
+  const fact = applicationCaseFact(value, knowledge);
+  return applicationCaseFactResolved(value, knowledge) ? formatLongDate(value) ?? fact : fact;
+}
+
+function timestampText(value: unknown): string {
+  return formatTimestamp(value) ?? String(value);
 }
 
 function Fact({ label, value, knowledge, className = "" }: { label: string; value: unknown; knowledge?: string; className?: string }) {
@@ -194,7 +199,7 @@ function DocumentsSection({ application }: { application: AdminApplicationDetail
         const unavailableMessage = document.availability === "metadata" ? "Metadata only — file unavailable." : "Secure file unavailable.";
         return <article className="ro-case-document" key={document.id ?? `${documentName}-${index}`}>
           <FileCheck2 aria-hidden="true" />
-          <div className="ro-case-document-body"><strong>{documentName}</strong><span>{title(applicationCaseFact(document.type))} · {title(applicationCaseFact(document.state))}</span><small>{canDownload ? "Verified secure document" : unavailableMessage}</small><small>{document.uploadedAt ? `Uploaded ${document.uploadedAt}` : "Upload date unknown"}{document.verifiedAt ? ` · Verified ${document.verifiedAt}` : ""}</small></div>
+          <div className="ro-case-document-body"><strong>{documentName}</strong><span>{title(applicationCaseFact(document.type))} · {title(applicationCaseFact(document.state))}</span><small>{canDownload ? "Verified secure document" : unavailableMessage}</small><small>{document.uploadedAt ? `Uploaded ${timestampText(document.uploadedAt)}` : "Upload date unknown"}{document.verifiedAt ? ` · Verified ${timestampText(document.verifiedAt)}` : ""}</small></div>
           {canDownload ? <button type="button" className="secondary ro-case-download" disabled={downloadingDocumentId === document.id} onClick={() => { void handleDownload(document); }} aria-label={`Download ${documentName}`}><Download aria-hidden="true" />{downloadingDocumentId === document.id ? "Preparing" : "Download"}</button> : <span className="ro-case-not-downloadable">Not downloadable</span>}
         </article>;
       })}
@@ -313,7 +318,7 @@ function HistoryActivitySection({ history }: { history: AdminApplicationHistoryC
     {state !== "full" ? <EmptySection message={state === "unknown" ? "Some historical activity could not be linked to this case." : "No historical activity was recorded."} /> : <div className="ro-case-history-activity-list">
       {history.activities.map((activity, index) => <article className="ro-case-member" key={`historical-activity-${index}`}>
         <FileText aria-hidden="true" />
-        <div><strong>{title(applicationCaseFact(activity.type))}</strong><span>{activity.occurredAt ? new Date(activity.occurredAt).toLocaleString() : applicationCaseFact(undefined, activity.occurredAtKnowledge)}</span><small>{applicationCaseFact(activity.summary, activity.summaryKnowledge)}</small></div>
+        <div><strong>{title(applicationCaseFact(activity.type))}</strong><span>{activity.occurredAt ? timestampText(activity.occurredAt) : applicationCaseFact(undefined, activity.occurredAtKnowledge)}</span><small>{applicationCaseFact(activity.summary, activity.summaryKnowledge)}</small></div>
       </article>)}
     </div>}
   </section>;

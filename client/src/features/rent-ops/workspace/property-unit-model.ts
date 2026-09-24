@@ -199,6 +199,17 @@ function propertyInFilters(property: AdminPropertyView, filters: Pick<ViewFilter
 }
 
 /**
+ * "10 units · 4 vacant" when as-of occupancy is known for every unit, else
+ * "10 units". The address stays searchable but is not repeated in the list.
+ */
+export function propertyListSubtitle(units: readonly AdminUnitView[], occupancy?: Map<string, string>): string {
+  const count = `${units.length} ${units.length === 1 ? "unit" : "units"}`;
+  const known = occupancy && units.length > 0 && units.every((unit) => !!unit.id && occupancy.has(unit.id));
+  if (!known) return count;
+  return `${count} · ${units.filter((unit) => occupancy.get(unit.id!) === "vacant").length} vacant`;
+}
+
+/**
  * Build the compact left-hand property/unit list. A property remains visible
  * when one of its units matches the query, and a property match expands to
  * its units so the operator can open the related record immediately.
@@ -233,7 +244,7 @@ export function propertyUnitListItems(
       kind: "property",
       id: propertyId,
       title: text(property.name) || PROPERTY_MISSING_LABEL,
-      subtitle: [`${propertyUnits.length} ${propertyUnits.length === 1 ? "unit" : "units"}`, addressLines(property.address).join(", ")].filter(Boolean).join(" · "),
+      subtitle: propertyListSubtitle(propertyUnits, occupancy),
       searchText: [property.name, property.slug, formatAddress(property.address)].filter(Boolean).join(" "),
     });
 

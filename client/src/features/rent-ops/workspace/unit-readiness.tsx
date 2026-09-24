@@ -7,6 +7,7 @@ import { handleRentOpsMutationError, RENT_OPS_CONFLICT_NOTICE } from '../ui';
 import type { AdminUnitView, RentRollRow, ViewFilters } from '../types';
 import { reportQueryKey } from './report-model';
 import { READINESS_OPTIONS, unitOccupancyMap, unitReadinessDisplay, unitReadinessPayload, unitReadinessQuery } from './unit-readiness-model';
+import { formatLongDate } from '../../../lib/rent-ops-formatters';
 import './editor.css';
 
 const ReadinessContext = createContext<{ occupancy: Map<string, string>; occupancyRows: RentRollRow[]; occupancyReady: boolean; occupancyError: boolean; open: (unit: AdminUnitView) => void }>({ occupancy: new Map(), occupancyRows: [], occupancyReady: false, occupancyError: false, open: () => {} });
@@ -40,6 +41,7 @@ function ReadinessDialog({ unit, occupancy, readOnly, asOfDate, onClose, onSaved
   const dialog = useRef<HTMLElement>(null);
   const submitting = useRef(false);
   const dirty = readiness !== (unit.readiness ?? '');
+  const asOfLabel = formatLongDate(asOfDate) ?? asOfDate;
   const close = () => { if (submitting.current) return; if (dirty) setDiscard(true); else onClose(); };
   useEffect(() => { const previous = document.activeElement as HTMLElement | null; dialog.current?.querySelector<HTMLElement>('button')?.focus(); return () => previous?.focus(); }, []);
   useEffect(() => { if (!dirty && !saving) return; const protect = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; }; window.addEventListener('beforeunload', protect); return () => window.removeEventListener('beforeunload', protect); }, [dirty, saving]);
@@ -52,7 +54,7 @@ function ReadinessDialog({ unit, occupancy, readOnly, asOfDate, onClose, onSaved
     try { const result = await postRentOpsMutation({ action: 'save-unit', payload: unitReadinessPayload(unit, readiness) }); if (!result.ok) throw new Error(result.message ?? 'Readiness was not saved.'); onSaved(); }
     catch (cause) { handleRentOpsMutationError(cause, onConflict, setError); }
     finally { submitting.current = false; setSaving(false); }
-  }}><p id="rm-readiness-description">{occupancy === 'current' ? `Occupied as of ${asOfDate}. Readiness describes the unit’s preparation status; changing it does not end the tenancy or make this unit vacant.` : occupancy ? `Occupancy as of ${asOfDate}: ${occupancy.replaceAll('_', ' ')}. Readiness changes do not change occupancy.` : 'Occupancy is not available. Readiness changes do not change occupancy.'}</p>
+  }}><p id="rm-readiness-description">{occupancy === 'current' ? `Occupied as of ${asOfLabel}. Readiness describes the unit’s preparation status; changing it does not end the tenancy or make this unit vacant.` : occupancy ? `Occupancy as of ${asOfLabel}: ${occupancy.replaceAll('_', ' ')}. Readiness changes do not change occupancy.` : 'Occupancy is not available. Readiness changes do not change occupancy.'}</p>
     <label className="rm-readiness-field">{occupancy === 'current' ? 'Underlying readiness' : 'Readiness'}<select aria-label={occupancy === 'current' ? 'Underlying readiness' : 'Readiness'} value={readiness} disabled={readOnly || saving} required onChange={event => setReadiness(event.target.value)}><option value="" disabled>Choose readiness</option>{!READINESS_OPTIONS.some(([key]) => key === readiness) && readiness && <option value={readiness} disabled>Not recorded</option>}{READINESS_OPTIONS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
     {readOnly && <p>Read-only preview.</p>}{error && <p role="alert" className="rm-dialog-error">{error}</p>}
     {discard && <div className="rm-dialog-discard" role="alert">Discard readiness changes? <button type="button" onClick={onClose}>Discard</button><button type="button" onClick={() => setDiscard(false)}>Keep editing</button></div>}

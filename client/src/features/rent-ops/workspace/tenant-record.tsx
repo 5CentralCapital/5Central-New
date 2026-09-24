@@ -8,9 +8,10 @@ import { TenantQuickBooksPanel } from "./tenant-quickbooks";
 import { ManagerTenancyActions } from './manager-tenancy-actions';
 import { useRecurringChargeTerms } from './use-recurring-charge-terms';
 import { currentPhoneMethods, phoneTypeLabel } from "../phone-methods-display";
-import { usdAccountingFormatter, utcCalendarDateFormatter } from '../../../lib/rent-ops-formatters';
-import { balanceReviewDisplay } from "./balance-review-display";
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { displayPersonName, formatLongDate, formatTableDate, formatTimestamp, usdAccountingFormatter } from '../../../lib/rent-ops-formatters';
+import { balanceReviewDisplay, tenantHeaderBalance } from "./balance-review-display";
+import { NotVerified, RowMenu, type RowMenuItem } from "./ops-ui";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, Plus } from "lucide-react";
 import { ManagerLeaseUpload } from "../manager-lease-upload";
 import { PhoneMethodsEditor } from "../phone-methods-editor";
@@ -37,6 +38,9 @@ import {
   recurringChargeIssueLabels,
   isCurrentTenancy,
   resolveTenantContext,
+  TENANT_RECORD_TABS,
+  TENANT_TAB_SECTIONS,
+  tenantRecordTabFor,
   type RecurringChargeFilter,
   type RecurringChargeRow,
   type TenantEditAction,
@@ -65,31 +69,21 @@ export interface TenantRecordProps {
   readOnly?: boolean;
 }
 
-export const TENANT_RECORD_TABS: TenantTab[] = [
-  "summary",
-  "household",
-  "tenancy",
-  "charges",
-  "ledger",
-  "quickbooks",
-  "deposits",
-  "housing-assistance",
-  "documents",
-  "activity",
-];
+export { TENANT_RECORD_TABS, TENANT_TAB_SECTIONS, tenantRecordTabFor };
 
-const TAB_LABELS: Record<TenantTab, string> = {
+const TAB_LABELS: Partial<Record<TenantTab, string>> = {
   summary: "Summary",
-  household: "Contacts & household",
-  tenancy: "Tenancy & leases",
-  charges: "Recurring charges",
-  ledger: "Transactions",
-  quickbooks: "QuickBooks",
-  deposits: "Deposits",
-  "housing-assistance": "HAP",
+  ledger: "Ledger",
+  tenancy: "Lease & charges",
+  household: "Household",
   documents: "Documents",
   activity: "Activity",
+  quickbooks: "QuickBooks",
 };
+
+function sectionId(section: TenantTab): string {
+  return `tenant-section-${section}`;
+}
 
 function text(value: unknown, fallback = UNVERIFIED_LABEL): string {
   if (typeof value !== "string") return fallback;
@@ -104,11 +98,23 @@ function label(value: unknown): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+/** Field dates: "Sep 24, 2026". */
 function formatDate(value: string | null | undefined): string {
   if (!value) return UNVERIFIED_LABEL;
-  const parsed = new Date(value);
-  if (!Number.isFinite(parsed.getTime())) return UNVERIFIED_LABEL;
-  return utcCalendarDateFormatter.format(parsed);
+  return formatLongDate(value) ?? UNVERIFIED_LABEL;
+}
+
+/** Table dates: "Sep 24" this year, "Sep 24, 2025" otherwise. */
+function tableDate(value: string | null | undefined): string {
+  if (!value) return UNVERIFIED_LABEL;
+  return formatTableDate(value) ?? UNVERIFIED_LABEL;
+}
+
+/** Timestamps keep their time (no seconds); date-only values stay calendar dates. */
+function whenLabel(value: string | null | undefined): string {
+  if (!value) return UNVERIFIED_LABEL;
+  if (/T\d{2}:\d{2}/.test(value)) return formatTimestamp(value) ?? UNVERIFIED_LABEL;
+  return tableDate(value);
 }
 
 function formatMoney(cents: number | null | undefined): string {
@@ -132,8 +138,8 @@ function Field({ label: fieldLabel, children, warning = false }: { label: string
   return <div className={`rm-field${warning ? " rm-field-warning" : ""}`}><dt>{fieldLabel}</dt><dd>{children}</dd></div>;
 }
 
-function Panel({ title: panelTitle, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
-  return <section className="rm-panel rm-tenant-panel"><div className="rm-panel-title"><h3>{panelTitle}</h3>{action}</div>{children}</section>;
+function Panel({ title: panelTitle, children, action, id }: { title: string; children: ReactNode; action?: ReactNode; id?: string }) {
+  return <section className="rm-panel rm-tenant-panel" id={id}><div className="rm-panel-title"><h3>{panelTitle}</h3>{action}</div>{children}</section>;
 }
 
 function Empty({ message }: { message: string }) {
@@ -168,12 +174,12 @@ function SummaryTab({ tenant, snapshot, onChanged }: { tenant: TenantView; snaps
     <div className="rm-summary-grid">
       <Panel title="General">
         <dl className="rm-form-grid rm-detail-grid">
-          <Field label="Resident">{summary.displayName}</Field>
+          <Field label="Resident">{displayPersonName(summary.displayName) || summary.displayName}</Field>
           <Field label="Property">{summary.propertyName}</Field>
           <Field label="Unit">{summary.unitLabel}</Field>
           <Field label="Status">{statusValue(summary.statusVerified ? summary.status : undefined, !summary.statusVerified)}</Field>
-          {review && <Field label={review.label} warning={Boolean(review.warning)}><strong className="rm-amount">{review.amount}</strong><small>{review.date}</small>{review.warning && <small className="rm-warning-copy" role="status">{review.warning}</small>}{review.qualification && <small>{review.qualification}</small>}<small>{review.payerSplit}</small></Field>}
-          <Field label="Posted ledger balance" warning={balanceWarning}><span className={balanceWarning ? "rm-muted" : summary.balance.amountCents ? "rm-amount rm-amount-warning" : "rm-amount"}>{summary.balance.complete ? formatMoney(summary.balance.amountCents) : reviewLabelForCodes(summary.balance.uncertaintyCodes)}</span>{balanceWarning && summary.balance.uncertaintyCodes.length > 1 && <small className="rm-warning-copy">{reviewLabelsForCodes(summary.balance.uncertaintyCodes).join(" · ")}</small>}</Field>
+          {review && <Field label={review.label} warning={Boolean(review.warning)}><strong className="rm-amount">{review.amount}</strong><small className="rm-muted">{review.date}</small>{review.warning && <small className="rm-warning-copy" role="status">{review.warning}</small>}{review.qualification && <small className="rm-muted rm-balance-note">{review.qualification}</small>}<small className="rm-muted rm-balance-note">{review.payerSplit}</small></Field>}
+          <Field label="Posted ledger balance" warning={balanceWarning}><span className={balanceWarning ? "rm-muted" : "rm-amount"}>{summary.balance.complete ? formatMoney(summary.balance.amountCents) : reviewLabelForCodes(summary.balance.uncertaintyCodes)}</span>{balanceWarning && summary.balance.uncertaintyCodes.length > 1 && <small className="rm-warning-copy">{reviewLabelsForCodes(summary.balance.uncertaintyCodes).join(" · ")}</small>}</Field>
           <Field label="As of date">{formatDate(summary.asOfDate)}</Field>
           {(tenant.meteredUtilities ?? []).map(utility => <Field key={`${utility.utility}:${utility.effectiveFrom}`} label="Water — metered"><span>Starts {formatDate(utility.effectiveFrom)}</span><small>Amount unknown · billed from meter readings</small></Field>)}
           {tenancy?.plannedMoveInOn && <Field label="Planned move-in">{formatDate(tenancy.plannedMoveInOn)}</Field>}
@@ -188,10 +194,10 @@ function SummaryTab({ tenant, snapshot, onChanged }: { tenant: TenantView; snaps
           <Field label="Insurance expires">{tenant.person.renterInsuranceExpiresOn ? formatDate(tenant.person.renterInsuranceExpiresOn) : "Not on file"}</Field>
           {typeof tenant.person.archived === "boolean" && <Field label="Archived">{tenant.person.archived ? "Yes" : "No"}</Field>}
         </dl>
-        {tenant.person.id && <PhoneMethodsEditor key={`phones:${tenant.person.id}:${tenant.person.recordRevision ?? 1}`} person={tenant.person} onSaved={onChanged} />}
+        {tenant.person.id && <div className="rm-contact-phone-edit"><PhoneMethodsEditor key={`phones:${tenant.person.id}:${tenant.person.recordRevision ?? 1}`} person={tenant.person} onSaved={onChanged} /></div>}
       </Panel>
     </div>
-    {tenant.person.id && <TenantPortalAccountsPanel key={`portal:${tenant.person.id}`} personId={tenant.person.id} personName={summary.displayName} email={tenant.person.email} />}
+    {tenant.person.id && <TenantPortalAccountsPanel key={`portal:${tenant.person.id}`} personId={tenant.person.id} personName={displayPersonName(summary.displayName) || summary.displayName} email={tenant.person.email} />}
     <Panel title="Property and unit context">
       <dl className="rm-form-grid rm-detail-grid">
         <Field label="Unit type">{valueOrDash(context.unit?.unitType)}</Field>
@@ -213,12 +219,12 @@ function HouseholdTab({ tenant, snapshot, onEdit, editActions }: { tenant: Tenan
       {rows.length === 0 ? <Empty message="No household or contact records are linked to this tenant." /> : <><div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Contacts and household members</caption><thead><tr><th>Name</th><th>Role</th><th>Relationship</th><th>Financially responsible</th><th>Tenancy</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{rows.map((row, index) => {
         const action = findAction(editActions, "save-household-membership", (candidate) => candidate.values.id === row.membership.id) ?? editActions.filter((candidate) => candidate.action === "save-household-membership")[index];
         const tenancy = row.membership.tenancyId ? snapshot.snapshot.tenancies.find((candidate) => candidate.id === row.membership.tenancyId) : undefined;
-        return <tr key={row.membership.id ?? `household-${index}`}><td><strong><EntityLink personId={row.person?.id ?? row.membership.personId}>{row.name}</EntityLink></strong>{row.person?.email && <small>{row.person.email}</small>}{row.person?.phone && <small>{row.person.phone}</small>}</td><td>{label(row.role)}</td><td>{row.relationship}</td><td>{row.responsibility}</td><td>{tenancy ? tenancyLocation(tenancy, snapshot) : UNVERIFIED_LABEL}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
+        return <tr key={row.membership.id ?? `household-${index}`}><td><strong><EntityLink personId={row.person?.id ?? row.membership.personId}>{displayPersonName(row.name) || row.name}</EntityLink></strong>{row.person?.email && <small>{row.person.email}</small>}{row.person?.phone && <small>{row.person.phone}</small>}</td><td>{label(row.role)}</td><td>{row.relationship}</td><td>{row.responsibility}</td><td>{tenancy ? tenancyLocation(tenancy, snapshot) : UNVERIFIED_LABEL}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
       })}</tbody></table></div><ListTotals totalCount={rows.length} itemLabel="household record" /></>}
     </Panel>
     <Panel title="Primary contact">
       <dl className="rm-form-grid rm-detail-grid">
-        <Field label="Name">{text(tenant.person.firstName, UNVERIFIED_LABEL)} {text(tenant.person.lastName, "")}</Field>
+        <Field label="Name">{displayPersonName(`${text(tenant.person.firstName, UNVERIFIED_LABEL)} ${text(tenant.person.lastName, "")}`)}</Field>
         <Field label="Email">{valueOrDash(tenant.person.email)}</Field>
         <Field label="Phone">{valueOrDash(tenant.person.phone)}</Field>
         <Field label="Insurance expires">{formatDate(tenant.person.renterInsuranceExpiresOn)}</Field>
@@ -249,7 +255,7 @@ function LeaseTermsTable({ terms, snapshot, editActions, onEdit }: { terms: Admi
   return <><div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Lease terms</caption><thead><tr><th>Tenancy</th><th>Status</th><th>Contract start</th><th>Contract end</th><th>Signed</th><th>Month to month</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{terms.map((term, index) => {
     const action = findAction(editActions, "save-lease-term", (candidate) => candidate.values.id === term.id) ?? editActions.filter((candidate) => candidate.action === "save-lease-term")[index];
     const tenancy = snapshot.snapshot.tenancies.find((candidate) => candidate.id === term.tenancyId);
-    return <tr key={term.id ?? `lease-${index}`}><td>{tenancy ? tenancyLocation(tenancy, snapshot) : UNVERIFIED_LABEL}</td><td>{!term.status || ["unknown", "ambiguous", "inferred"].includes(term.statusKnowledge ?? "") ? <span className="rm-muted">Execution not recorded</span> : statusValue(term.status)}</td><td>{formatDate(term.contractStartOn)}</td><td>{formatDate(term.contractEndOn)}</td><td>{term.signedOn ? formatDate(term.signedOn) : <span className="rm-muted">Not recorded</span>}</td><td>{term.monthToMonth == null ? "Not recorded" : term.monthToMonth ? "Yes" : "No"}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
+    return <tr key={term.id ?? `lease-${index}`}><td>{tenancy ? tenancyLocation(tenancy, snapshot) : UNVERIFIED_LABEL}</td><td>{!term.status || ["unknown", "ambiguous", "inferred"].includes(term.statusKnowledge ?? "") ? <span className="rm-muted">Execution not recorded</span> : statusValue(term.status)}</td><td>{tableDate(term.contractStartOn)}</td><td>{tableDate(term.contractEndOn)}</td><td>{term.signedOn ? tableDate(term.signedOn) : <span className="rm-muted">Not recorded</span>}</td><td>{term.monthToMonth == null ? "Not recorded" : term.monthToMonth ? "Yes" : "No"}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
   })}</tbody></table></div><ListTotals totalCount={terms.length} itemLabel="lease term" /> </>;
 }
 
@@ -261,13 +267,13 @@ function TenancyTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantV
   const showNotice = history.some(tenancy => tenancy.noticeOn);
   const showExpectedMoveOut = history.some(tenancy => tenancy.expectedMoveOutOn);
   return <div className="rm-tenant-tab-content">
-    <Panel title="Current tenancy">
+    <Panel title="Current tenancy" id={sectionId("tenancy")}>
       {current.length === 0 ? <Empty message="No current or future tenancy is linked." /> : current.map((tenancy, index) => <article className="rm-tenancy-card" key={tenancy.id ?? `current-${index}`}><div className="rm-card-heading"><div><strong>{tenancyLocation(tenancy, snapshot)}</strong></div>{statusValue(tenancy.status, !tenancy.status)}</div><TenancyDates tenancy={tenancy} /><div className="rm-panel-actions">{findAction(editActions, "save-tenancy", (candidate) => candidate.values.id === tenancy.id) && <ActionButton action={findAction(editActions, "save-tenancy", (candidate) => candidate.values.id === tenancy.id)!} onEdit={onEdit} />}</div></article>)}
     </Panel>
     <Panel title="Tenancy history">
       {history.length === 0 ? <Empty message="No prior tenancy records are linked." /> : <><div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Tenancy history</caption><thead><tr><th>Property / unit</th><th>Status</th>{showPlannedMoveIn && <th>Planned move-in</th>}<th>Actual move-in</th>{showNotice && <th>Notice</th>}{showExpectedMoveOut && <th>Expected move-out</th>}<th>Actual move-out</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{history.map((tenancy, index) => {
         const action = findAction(editActions, "save-tenancy", (candidate) => candidate.values.id === tenancy.id) ?? editActions.filter((candidate) => candidate.action === "save-tenancy")[index];
-        return <tr key={tenancy.id ?? `history-${index}`}><td>{tenancyLocation(tenancy, snapshot)}</td><td>{statusValue(tenancy.status, !tenancy.status)}</td>{showPlannedMoveIn && <td>{tenancy.plannedMoveInOn ? formatDate(tenancy.plannedMoveInOn) : "—"}</td>}<td>{tenancy.actualMoveInOn || !["future", "cancelled"].includes(tenancy.status ?? "") ? formatDate(tenancy.actualMoveInOn) : "—"}</td>{showNotice && <td>{tenancy.noticeOn ? formatDate(tenancy.noticeOn) : "—"}</td>}{showExpectedMoveOut && <td>{tenancy.expectedMoveOutOn ? formatDate(tenancy.expectedMoveOutOn) : "—"}</td>}<td>{tenancy.actualMoveOutOn || tenancy.status === "past" ? formatDate(tenancy.actualMoveOutOn) : "—"}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
+        return <tr key={tenancy.id ?? `history-${index}`}><td>{tenancyLocation(tenancy, snapshot)}</td><td>{statusValue(tenancy.status, !tenancy.status)}</td>{showPlannedMoveIn && <td>{tenancy.plannedMoveInOn ? tableDate(tenancy.plannedMoveInOn) : "—"}</td>}<td>{tenancy.actualMoveInOn || !["future", "cancelled"].includes(tenancy.status ?? "") ? tableDate(tenancy.actualMoveInOn) : "—"}</td>{showNotice && <td>{tenancy.noticeOn ? tableDate(tenancy.noticeOn) : "—"}</td>}{showExpectedMoveOut && <td>{tenancy.expectedMoveOutOn ? tableDate(tenancy.expectedMoveOutOn) : "—"}</td>}<td>{tenancy.actualMoveOutOn || tenancy.status === "past" ? tableDate(tenancy.actualMoveOutOn) : "—"}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
       })}</tbody></table></div><ListTotals totalCount={history.length} itemLabel="historical tenancy" /></>}
     </Panel>
     <Panel title="Lease terms"><LeaseTermsTable terms={context.leaseTerms} snapshot={snapshot} editActions={editActions} onEdit={onEdit} /></Panel>
@@ -285,7 +291,7 @@ function ChargeTable({ rows, totalCount = rows.length, monthlyTotal, editActions
     const replace = chargeAction(editActions, "replace-recurring-schedule", row);
     const end = chargeAction(editActions, "end-recurring-schedule", row);
     const warning = row.uncertaintyCodes.length > 0 || row.state === "unknown";
-    return <tr key={row.id ?? `charge-${index}`}><td><strong>{row.description}</strong>{warning && <small className="rm-warning-copy">{recurringChargeIssueLabels(row.uncertaintyCodes).join(" · ") || reviewReason("schedule_unconfirmed").shortLabel}</small>}</td><td><span>{row.applicabilityLabel}</span>{(row.scope.type === "unit" || row.scope.type === "property") && <small className="rm-warning-copy">Shared schedule: replacing or ending changes charges for all applicable residents in this {row.scope.type}.</small>}</td><td>{row.billingFrequency ? label(row.billingFrequency) : UNVERIFIED_LABEL}</td><td>{chargeTerms.label(row.id, "start", row.scope.type)}</td><td>{chargeTerms.label(row.id, "through", row.scope.type)}</td><td>{row.effectiveTo ? formatDate(row.effectiveTo) : "—"}</td><td className="rm-align-right rm-amount">{formatMoney(row.amountCents)}</td><td>{statusValue(row.state === "unknown" ? reviewLabelForCodes(row.uncertaintyCodes) : row.state, warning || row.active == null)}{row.stateReason && <small>{row.stateReason}</small>}</td><td><div className="rm-row-actions">{replace && <ActionButton action={{...replace,label:"Schedule change"}} onEdit={onEdit} />}{end && <ActionButton action={{...end,label:"End"}} onEdit={onEdit} danger />}</div></td></tr>;
+    return <tr key={row.id ?? `charge-${index}`}><td><strong>{row.description}</strong>{warning && <small className="rm-warning-copy">{recurringChargeIssueLabels(row.uncertaintyCodes).join(" · ") || reviewReason("schedule_unconfirmed").shortLabel}</small>}</td><td><span>{row.applicabilityLabel}</span>{(row.scope.type === "unit" || row.scope.type === "property") && <small className="rm-warning-copy">Shared schedule: replacing or ending changes charges for all applicable residents in this {row.scope.type}.</small>}</td><td>{row.billingFrequency ? label(row.billingFrequency) : UNVERIFIED_LABEL}</td><td>{chargeTerms.label(row.id, "start", row.scope.type)}</td><td>{chargeTerms.label(row.id, "through", row.scope.type)}</td><td>{row.effectiveTo ? tableDate(row.effectiveTo) : "—"}</td><td className="rm-align-right rm-amount">{formatMoney(row.amountCents)}</td><td>{statusValue(row.state === "unknown" ? reviewLabelForCodes(row.uncertaintyCodes) : row.state, warning || row.active == null)}{row.stateReason && <small>{row.stateReason}</small>}</td><td><div className="rm-row-actions">{replace && <ActionButton action={{...replace,label:"Schedule change"}} onEdit={onEdit} />}{end && <ActionButton action={{...end,label:"End"}} onEdit={onEdit} danger />}</div></td></tr>;
   })}</tbody></table></div><ListTotals totalCount={totalCount} visibleCount={rows.length} itemLabel="recurring charge" metrics={monthlyTotal === undefined ? [] : [exactCentsMetric("Current monthly total", summarizeExactCents([monthlyTotal]))]} /> </>;
 }
 
@@ -294,7 +300,7 @@ function ChargesTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantV
   const rows = useMemo(() => buildRecurringChargeRows(tenant, snapshot), [tenant, snapshot]);
   const filtered = useMemo(() => filterRecurringCharges(rows, filter), [rows, filter]);
   const monthlyTotal = currentMonthlyTotal(rows, tenant.operationalSchedulesComplete === true && Array.isArray(tenant.operationalScheduleIds));
-  return <div className="rm-tenant-tab-content"><Panel title="Recurring charges">
+  return <div className="rm-tenant-tab-content"><Panel title="Recurring charges" id={sectionId("charges")}>
     <div className="rm-charge-toolbar"><div className="rm-segmented" role="group" aria-label="Recurring charge status">{(["current", "all", "history", "future", "review"] as RecurringChargeFilter[]).map((option) => <button type="button" key={option} className={filter === option ? "active" : ""} onClick={() => setFilter(option)}>{option === "review" ? "Unconfirmed" : label(option)} <span>{option === "all" ? rows.length : filterRecurringCharges(rows, option).length}</span></button>)}</div><div className="rm-charge-total"><span>Current monthly total</span><strong>{formatMoney(monthlyTotal)}</strong></div></div>
     <ChargeTable asOfDate={snapshot.summary.asOfDate} rows={filtered} totalCount={rows.length} monthlyTotal={monthlyTotal} editActions={editActions} onEdit={onEdit} />
     {(tenant.meteredUtilities ?? []).map(utility => <p key={`${utility.utility}:${utility.effectiveFrom}`} className="rm-warning" role="status">Water — metered · starts {formatDate(utility.effectiveFrom)} · amount unknown. Metered usage is excluded from the fixed monthly total.</p>)}
@@ -322,7 +328,7 @@ function LedgerTable({ rows, allRows, summaryRows = rows, summaryFiltered = fals
     const reverse = eligible.reverse ? { label: "Reverse", action: "reverse-ledger-transaction" as QuickAction, values: { originalId: row.transaction.id, postedOn: "", status: "posted", description: "" } satisfies FormValues } : undefined;
 
     return <Fragment key={`${row.key}-${index}`}>
-      <tr className={isOpen ? "rm-row-open" : canEditPayment ? "rm-editable-payment" : ""} onClick={event=>{if(canEditPayment && !(event.target as HTMLElement).closest("button,a,input"))editTransaction?.(row.transaction.id!);}}><td>{formatDate(row.date)}</td><td>{row.propertyName}</td><td>{row.unitLabel}</td>{showReference && <td className="rm-reference">{row.reference || "—"}</td>}<td>{canEditPayment && editTransaction ? <button type="button" className="rm-payment-link" onClick={()=>editTransaction(row.transaction.id!)}>{row.description}</button> : <strong>{row.description}</strong>}</td><td className="rm-align-right rm-amount">{amountCell(row.chargeCents, row.chargeCents !== null || ["charge", "debit"].includes(row.kind?.toLowerCase() ?? ""))}</td><td className={`rm-align-right rm-amount${row.paymentLabel === "Credit" ? " rm-credit" : ""}`}>{row.paymentLabel ? <>{amountCell(row.paymentCents)}<small>{row.paymentLabel}</small></> : "—"}</td><td className="rm-align-right rm-amount">{formatMoney(row.runningBalanceCents)}</td><td>{statusValue(row.status, !row.statusKnown)}</td><td><div className="rm-row-actions"><button type="button" className="rm-button rm-button-icon" aria-expanded={isOpen} aria-label={canEditPayment ? `Edit ${row.transaction.kind}: ${row.description}` : `${isOpen ? "Hide" : "Show"} details for ${row.description}`} onClick={() => canEditPayment && editTransaction ? editTransaction(row.transaction.id!) : onToggle(row.key)}>{isOpen ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}</button>{eligible.allocate && onAutoAllocate && <button type="button" className="rm-button" disabled={!!allocatingId} onClick={()=>onAutoAllocate(row.transaction.id!)}>{allocatingId===row.transaction.id ? "Allocating…" : "Auto-allocate"}</button>}{reverse && <ActionButton action={reverse} onEdit={onEdit} danger />}</div></td></tr>
+      <tr className={isOpen ? "rm-row-open" : canEditPayment ? "rm-editable-payment" : ""} onClick={event=>{if(canEditPayment && !(event.target as HTMLElement).closest("button,a,input"))editTransaction?.(row.transaction.id!);}}><td>{tableDate(row.date)}</td><td>{row.propertyName}</td><td>{row.unitLabel}</td>{showReference && <td className="rm-reference">{row.reference || "—"}</td>}<td>{canEditPayment && editTransaction ? <button type="button" className="rm-payment-link" onClick={()=>editTransaction(row.transaction.id!)}>{row.description}</button> : <strong>{row.description}</strong>}</td><td className="rm-align-right rm-amount">{amountCell(row.chargeCents, row.chargeCents !== null || ["charge", "debit"].includes(row.kind?.toLowerCase() ?? ""))}</td><td className={`rm-align-right rm-amount${row.paymentLabel === "Credit" ? " rm-credit" : ""}`}>{row.paymentLabel ? <>{amountCell(row.paymentCents)}<small>{row.paymentLabel}</small></> : "—"}</td><td className="rm-align-right rm-amount">{formatMoney(row.runningBalanceCents)}</td><td>{statusValue(row.status, !row.statusKnown)}</td><td><div className="rm-row-actions"><button type="button" className="rm-button rm-button-icon" aria-expanded={isOpen} aria-label={canEditPayment ? `Edit ${row.transaction.kind}: ${row.description}` : `${isOpen ? "Hide" : "Show"} details for ${row.description}`} onClick={() => canEditPayment && editTransaction ? editTransaction(row.transaction.id!) : onToggle(row.key)}>{isOpen ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}</button>{eligible.allocate && onAutoAllocate && <button type="button" className="rm-button" disabled={!!allocatingId} onClick={()=>onAutoAllocate(row.transaction.id!)}>{allocatingId===row.transaction.id ? "Allocating…" : "Auto-allocate"}</button>}{reverse && <ActionButton action={reverse} onEdit={onEdit} danger />}</div></td></tr>
       {isOpen && <tr key={`${row.key}-${index}-detail`} className="rm-detail-row"><td colSpan={showReference ? 10 : 9}><LedgerDetail row={row} snapshot={snapshot} /></td></tr>}
     </Fragment>;
   })}</tbody></table></div><ListTotals totalCount={allRows.length} visibleCount={summaryRows.length} filtered={summaryFiltered || summaryRows.length !== allRows.length} itemLabel="transaction" metrics={[exactCentsMetric("Charges", ledgerTotals.charge), exactCentsMetric("Payments / credits", ledgerTotals.payment), exactCentsMetric(summaryFiltered || summaryRows.length !== allRows.length ? "Balance at last match" : "Ending balance", ledgerTotals.endingBalance)]} /> </>;
@@ -361,7 +367,7 @@ function LedgerTab({ tenant, snapshot, onEdit, editActions, onChanged, onMoveRef
   const pages = Math.max(1, Math.ceil(filtered.length / 25));
   const currentPage = Math.min(page, pages - 1);
   const visible = filtered.slice(currentPage * 25, (currentPage + 1) * 25);
-  return <div className="rm-tenant-tab-content">{chargeId && <ChargeEditDialog key={chargeId} id={chargeId} tenantName={buildTenantSummary(tenant,snapshot).displayName} onClose={()=>setChargeId(undefined)} onSaved={onMoveRefresh ?? (async()=>{await onChanged();})}/>} {paymentId && <PaymentEditDialog key={paymentId} id={paymentId} tenantName={buildTenantSummary(tenant,snapshot).displayName} onClose={()=>setPaymentId(undefined)} onSaved={onMoveRefresh ?? (async()=>{await onChanged();})}/>} {exportOpen && <TenantLedgerExportDialog rows={rows} tenant={tenant} snapshot={snapshot} initialFrom={from} initialThrough={to} search={search} onClose={() => setExportOpen(false)} />}<Panel title="Transactions" action={<button type="button" className="rm-button" onClick={() => setExportOpen(true)}>Export CSV</button>}>
+  return <div className="rm-tenant-tab-content">{chargeId && <ChargeEditDialog key={chargeId} id={chargeId} tenantName={displayPersonName(buildTenantSummary(tenant,snapshot).displayName) || buildTenantSummary(tenant,snapshot).displayName} onClose={()=>setChargeId(undefined)} onSaved={onMoveRefresh ?? (async()=>{await onChanged();})}/>} {paymentId && <PaymentEditDialog key={paymentId} id={paymentId} tenantName={displayPersonName(buildTenantSummary(tenant,snapshot).displayName) || buildTenantSummary(tenant,snapshot).displayName} onClose={()=>setPaymentId(undefined)} onSaved={onMoveRefresh ?? (async()=>{await onChanged();})}/>} {exportOpen && <TenantLedgerExportDialog rows={rows} tenant={tenant} snapshot={snapshot} initialFrom={from} initialThrough={to} search={search} onClose={() => setExportOpen(false)} />}<Panel title="Transactions" id={sectionId("ledger")} action={<button type="button" className="rm-button" onClick={() => setExportOpen(true)}>Export CSV</button>}>
     <div className="rm-ledger-filters">
       <label>Search transactions<input type="search" value={search} placeholder="Description, payment method, status" onChange={event => { setSearch(event.target.value); setPage(0); }} /></label>
       <label>From<input type="date" value={from} onChange={event => { setFrom(event.target.value); setPage(0); }} /></label>
@@ -374,13 +380,14 @@ function LedgerTab({ tenant, snapshot, onEdit, editActions, onChanged, onMoveRef
   </Panel></div>;
 }
 
-function DepositsTab({ tenant, snapshot, onEdit, editActions }: { tenant: TenantView; snapshot: AdminSnapshot; onEdit: EditAction; editActions: TenantEditAction[] }) {
+function DepositsTab({ tenant, onEdit, editActions, readOnly }: { tenant: TenantView; snapshot: AdminSnapshot; onEdit: EditAction; editActions: TenantEditAction[]; readOnly?: boolean }) {
   const rows = tenant.deposits ?? [];
-  return <div className="rm-tenant-tab-content"><Panel title="Security deposits">
+  const addDeposit = readOnly ? undefined : findAction(editActions, "save-security-deposit", candidate => candidate.label === "Add deposit");
+  return <div className="rm-tenant-tab-content"><Panel title="Security deposits" id={sectionId("deposits")} action={addDeposit && <button type="button" className="rm-button" onClick={() => onEdit(addDeposit.action, addDeposit.values)}><Plus aria-hidden="true" /> Add deposit</button>}>
     {rows.length === 0 ? <Empty message="No security-deposit records are linked to this tenant." /> : <><div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Security deposits</caption><thead><tr><th>Type</th><th className="rm-align-right">Amount held</th><th className="rm-align-right">Source balance</th><th>Received</th><th>Disposition</th><th>Disposed</th><th>Notes</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{rows.map((deposit, index) => {
-      const action = findAction(editActions, "save-security-deposit", (candidate) => candidate.values.id === deposit.id);
+      const action = findAction(editActions, "save-security-deposit", (candidate) => candidate.label !== "Add deposit" && candidate.values.id === deposit.id);
       const warning = deposit.amountHeldCents == null || !deposit.receivedOn;
-      return <tr key={deposit.id ?? `deposit-${index}`}><td>{deposit.type ? label(deposit.type) : UNVERIFIED_LABEL}</td><td className="rm-align-right rm-amount">{formatMoney(deposit.amountHeldCents)}</td><td className="rm-align-right rm-amount">{formatMoney(deposit.sourceBalanceCents)}</td><td>{formatDate(deposit.receivedOn)}</td><td>{statusValue(deposit.dispositionStatus, warning || !deposit.dispositionStatus)}</td><td>{formatDate(deposit.disposedOn)}</td><td className="rm-note-cell">{valueOrDash(deposit.dispositionNotes)}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
+      return <tr key={deposit.id ?? `deposit-${index}`}><td>{deposit.type ? label(deposit.type) : UNVERIFIED_LABEL}</td><td className="rm-align-right rm-amount">{formatMoney(deposit.amountHeldCents)}</td><td className="rm-align-right rm-amount">{formatMoney(deposit.sourceBalanceCents)}</td><td>{tableDate(deposit.receivedOn)}</td><td>{statusValue(deposit.dispositionStatus, warning || !deposit.dispositionStatus)}</td><td>{tableDate(deposit.disposedOn)}</td><td className="rm-note-cell">{valueOrDash(deposit.dispositionNotes)}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
     })}</tbody></table></div><ListTotals totalCount={rows.length} itemLabel="deposit" metrics={[exactCentsMetric("Held", summarizeExactCents(rows.map((row) => row.amountHeldCents)))]} /></>}
     {rows.some((deposit) => deposit.amountHeldCents == null || deposit.sourceBalanceCents == null) && <p className="rm-warning" role="status">Held amount and source balance are separate liabilities. Unknown amounts stay marked for review.</p>}
   </Panel></div>;
@@ -388,12 +395,12 @@ function DepositsTab({ tenant, snapshot, onEdit, editActions }: { tenant: Tenant
 
 function HapTab({ tenant, onEdit, editActions }: { tenant: TenantView; onEdit: EditAction; editActions: TenantEditAction[] }) {
   const rows = tenant.subsidyContracts ?? [];
-  return <div className="rm-tenant-tab-content"><Panel title="Housing assistance (HAP)">
+  return <div className="rm-tenant-tab-content"><Panel title="Housing assistance (HAP)" id={sectionId("housing-assistance")}>
     {tenant.payerResponsibilityUnverified && <p role="status" className="rm-section-note">{reviewReason("subsidy_split_unknown").shortLabel}: agency and tenant responsibility are not yet verified. Gross rent remains separate from the payer split.</p>}
     {rows.length === 0 ? <Empty message="No housing-assistance contract is linked to this tenant." /> : <><div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Housing assistance contracts</caption><thead><tr><th>Agency</th><th>Contract</th><th>Effective from</th><th>Effective to</th><th className="rm-align-right">Agency portion</th><th className="rm-align-right">Tenant portion</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{rows.map((contract, index) => {
       const action = findAction(editActions, "save-subsidy-contract", (candidate) => candidate.values.id === contract.id);
       const warning = !contract.agencyName || contract.agencyObligationCents == null || contract.tenantObligationCents == null;
-      return <tr key={contract.id ?? `hap-${index}`}><td>{text(contract.agencyName)}</td><td>{valueOrDash(contract.contractNumber)}</td><td>{formatDate(contract.effectiveFrom)}</td><td>{formatDate(contract.effectiveTo)}</td><td className="rm-align-right rm-amount">{formatMoney(contract.agencyObligationCents)}</td><td className="rm-align-right rm-amount">{formatMoney(contract.tenantObligationCents)}</td><td>{statusValue(contract.status, warning || !contract.status)}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
+      return <tr key={contract.id ?? `hap-${index}`}><td>{text(contract.agencyName)}</td><td>{valueOrDash(contract.contractNumber)}</td><td>{tableDate(contract.effectiveFrom)}</td><td>{tableDate(contract.effectiveTo)}</td><td className="rm-align-right rm-amount">{formatMoney(contract.agencyObligationCents)}</td><td className="rm-align-right rm-amount">{formatMoney(contract.tenantObligationCents)}</td><td>{statusValue(contract.status, warning || !contract.status)}</td><td>{action && <ActionButton action={action} onEdit={onEdit} />}</td></tr>;
     })}</tbody></table></div><ListTotals totalCount={rows.length} itemLabel="housing assistance contract" /></>}
   </Panel></div>;
 }
@@ -407,18 +414,21 @@ function DocumentsTab({ tenant, snapshot, onChanged }: { tenant: TenantView; sna
   const context = resolveTenantContext(tenant, snapshot);
   const currentTenancyId = context.currentTenancy?.id;
   const documents = tenant.documents ?? [];
-  return <div className="rm-tenant-tab-content"><Panel title="Documents"><div className="rm-document-upload">{currentTenancyId && <ManagerLeaseUpload key={`lease-upload:${currentTenancyId}`} tenancyId={currentTenancyId} files={documents} onSaved={onChanged} />}</div>{documents.length === 0 ? <Empty message="No tenant documents are linked." /> : <><div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Tenant documents</caption><thead><tr><th>Type</th><th>File</th><th>State</th><th>Uploaded</th><th>Verified</th><th>Availability</th><th>Open</th></tr></thead><tbody>{documents.map((document, index) => <tr key={document.id ?? `document-${index}`}><td>{document.type ? label(document.type) : UNVERIFIED_LABEL}</td><td><strong>{text(document.fileName)}</strong><small>{document.mimeType ?? UNVERIFIED_LABEL}</small></td><td>{statusValue(document.state, !document.state)}</td><td>{formatDate(document.uploadedAt)}</td><td>{formatDate(document.verifiedAt)}</td><td>{document.availability ? label(document.availability) : UNVERIFIED_LABEL}</td><td>{documentLink(document)}</td></tr>)}</tbody></table></div><ListTotals totalCount={documents.length} itemLabel="document" /></>}</Panel></div>;
+  return <div className="rm-tenant-tab-content"><Panel title="Documents"><div className="rm-document-upload">{currentTenancyId && <ManagerLeaseUpload key={`lease-upload:${currentTenancyId}`} tenancyId={currentTenancyId} files={documents} onSaved={onChanged} />}</div>{documents.length === 0 ? <Empty message="No tenant documents are linked." /> : <><div className="rm-table-wrap"><table className="rm-table"><caption className="sr-only">Tenant documents</caption><thead><tr><th>Type</th><th>File</th><th>State</th><th>Uploaded</th><th>Verified</th><th>Availability</th><th>Open</th></tr></thead><tbody>{documents.map((document, index) => <tr key={document.id ?? `document-${index}`}><td>{document.type ? label(document.type) : UNVERIFIED_LABEL}</td><td><strong>{text(document.fileName)}</strong><small>{document.mimeType ?? UNVERIFIED_LABEL}</small></td><td>{statusValue(document.state, !document.state)}</td><td>{whenLabel(document.uploadedAt)}</td><td>{whenLabel(document.verifiedAt)}</td><td>{document.availability ? label(document.availability) : UNVERIFIED_LABEL}</td><td>{documentLink(document)}</td></tr>)}</tbody></table></div><ListTotals totalCount={documents.length} itemLabel="document" /></>}</Panel></div>;
 }
 
-function ActivityTab({ tenant, onEdit, editActions }: { tenant: TenantView; onEdit: EditAction; editActions: TenantEditAction[] }) {
+function ActivityTab({ tenant, onEdit, editActions, readOnly }: { tenant: TenantView; onEdit: EditAction; editActions: TenantEditAction[]; readOnly?: boolean }) {
   const rows = [...(tenant.activity ?? [])].sort((left, right) => String(right.occurredAt ?? "").localeCompare(String(left.occurredAt ?? "")));
-  return <div className="rm-tenant-tab-content"><Panel title="Activity">
-    {rows.length === 0 ? <Empty message="No activity is linked to this tenant." /> : <><div className="rm-activity-list">{rows.map((event, index) => { const shown = activityDisplay(event); return <article className="rm-activity-item" key={event.id ?? `activity-${index}`}><div className="rm-activity-meta"><span>{formatDate(event.occurredAt)}</span>{shown.typeKnown ? statusValue(event.type ?? undefined) : <span className="rm-muted">{shown.type}</span>}</div><div><strong>{shown.title}</strong>{shown.body && <p>{shown.body}</p>}<small>{shown.actor}</small></div></article>; })}</div><ListTotals totalCount={rows.length} itemLabel="activity record" /></>}
+  const addActivity = readOnly ? undefined : findAction(editActions, "save-activity");
+  return <div className="rm-tenant-tab-content"><Panel title="Activity" action={addActivity && <button type="button" className="rm-button" onClick={() => onEdit(addActivity.action, addActivity.values)}><Plus aria-hidden="true" /> Add activity</button>}>
+    {rows.length === 0 ? <Empty message="No activity is linked to this tenant." /> : <><div className="rm-activity-list">{rows.map((event, index) => { const shown = activityDisplay(event); return <article className="rm-activity-item" key={event.id ?? `activity-${index}`}><div className="rm-activity-meta"><span>{whenLabel(event.occurredAt)}</span>{shown.typeKnown ? statusValue(event.type ?? undefined) : <span className="rm-muted">{shown.type}</span>}</div><div><strong>{shown.title}</strong>{shown.body && <p>{shown.body}</p>}<small>{shown.actor}</small></div></article>; })}</div><ListTotals totalCount={rows.length} itemLabel="activity record" /></>}
   </Panel></div>;
 }
 
-function tabContent(tab: TenantTab, props: Omit<TenantRecordProps, "tab" | "onTab"> & { editActions: TenantEditAction[] }): ReactNode {
-  switch (tab) {
+type TabContentProps = Omit<TenantRecordProps, "tab" | "onTab"> & { editActions: TenantEditAction[] };
+
+function sectionContent(section: TenantTab, props: TabContentProps): ReactNode {
+  switch (section) {
     case "summary": return <SummaryTab {...props} />;
     case "household": return <HouseholdTab {...props} />;
     case "tenancy": return <TenancyTab {...props} />;
@@ -428,32 +438,73 @@ function tabContent(tab: TenantTab, props: Omit<TenantRecordProps, "tab" | "onTa
     case "deposits": return <DepositsTab {...props} />;
     case "housing-assistance": return <HapTab {...props} />;
     case "documents": return <DocumentsTab tenant={props.tenant} snapshot={props.snapshot} onChanged={props.onChanged} />;
-    case "activity": return <ActivityTab tenant={props.tenant} onEdit={props.onEdit} editActions={props.editActions} />;
+    case "activity": return <ActivityTab tenant={props.tenant} onEdit={props.onEdit} editActions={props.editActions} readOnly={props.readOnly} />;
   }
+}
+
+/** A visible tab renders its sections stacked, each with its own heading. */
+function tabContent(tab: TenantTab, props: TabContentProps): ReactNode {
+  const sections = TENANT_TAB_SECTIONS[tab] ?? [tab];
+  if (sections.length === 1) return sectionContent(sections[0], props);
+  return <div className="rm-tenant-tab-content rm-tenant-combined">{sections.map(section => <Fragment key={section}>{sectionContent(section, props)}</Fragment>)}</div>;
+}
+
+function HeaderBalance({ tenant, summary, onReconcile }: { tenant: TenantView; summary: ReturnType<typeof buildTenantSummary>; onReconcile: () => void }) {
+  const balance = tenantHeaderBalance(tenant.balanceReview, {
+    complete: summary.balance.complete,
+    amountCents: summary.balance.amountCents,
+    unknownLabel: summary.balance.complete ? undefined : reviewLabelForCodes(summary.balance.uncertaintyCodes),
+    unknownReason: summary.balance.complete ? undefined : reviewLabelsForCodes(summary.balance.uncertaintyCodes).join(" · "),
+    asOfDate: summary.asOfDate,
+    format: cents => formatMoney(cents),
+  });
+  return <div className="rm-record-balance">
+    <span className="rm-record-balance-label">{balance.label}</span>
+    {balance.amount ? <strong className="rm-record-balance-amount">{balance.amount}</strong> : <NotVerified reason={balance.unknownReason}>{balance.unknownLabel}</NotVerified>}
+    <small className="rm-record-balance-detail">{balance.detail}</small>
+    {balance.warning && <small className="rm-warning-copy" role="status">{balance.warning}</small>}
+    {balance.ledgerDifference && <div className="rm-record-balance-diff">
+      <span className="rm-status rm-status--warning" title={balance.ledgerDifference.explanation} aria-label={`${balance.ledgerDifference.label}. ${balance.ledgerDifference.explanation}`}>{balance.ledgerDifference.label}</span>
+      <button type="button" className="rm-button rm-button--small" onClick={onReconcile} title={balance.ledgerDifference.explanation}>Reconcile</button>
+    </div>}
+  </div>;
 }
 
 export function TenantRecord({ tenant, snapshot, tab, onTab, onEdit, onChanged, onMoveRefresh, businessDate, readOnly = false, onManageMoves }: TenantRecordProps) {
   const [movesOpen, setMovesOpen] = useState(false);
   const [addPaymentOpen,setAddPaymentOpen]=useState(false);
   const paymentTenancy=resolveTenantContext(tenant,snapshot).currentTenancy;
-  const review = balanceReviewDisplay(tenant.balanceReview);
   const summary = buildTenantSummary(tenant, snapshot);
-  const editActions = useMemo(() => buildTenantEditActions(tenant, snapshot, tab), [tenant, snapshot, tab]);
-  const headerActions = useMemo(() => {
-    const oneTime = buildTenantEditActions(tenant, snapshot, "ledger").filter(action => action.action === "post-ledger-transaction");
-    const contextual = editActions.filter(action => (tab === "summary" && action.action === "save-person") || (tab === "activity" && action.action === "save-activity") || (tab === "deposits" && action.label.startsWith("Add ")));
-    return [...oneTime, ...contextual];
-  }, [tenant, snapshot, editActions, tab]);
-  return <section className="rm-tenant-record" aria-label={`Tenant record for ${summary.displayName}`}>
-    {addPaymentOpen && paymentTenancy?.id && <PaymentEditDialog id="new" tenancyId={paymentTenancy.id} businessDate={businessDate??summary.asOfDate} tenantName={summary.displayName} onClose={()=>setAddPaymentOpen(false)} onSaved={onMoveRefresh??(async()=>{await onChanged();})}/>}
+  const displayName = displayPersonName(summary.displayName) || summary.displayName;
+  const activeTab = tenantRecordTabFor(tab);
+  const editActions = useMemo(() => (TENANT_TAB_SECTIONS[activeTab] ?? [activeTab]).flatMap(section => buildTenantEditActions(tenant, snapshot, section)), [tenant, snapshot, activeTab]);
+  const addCharge = useMemo(() => buildTenantEditActions(tenant, snapshot, "ledger").find(action => action.action === "post-ledger-transaction"), [tenant, snapshot]);
+  const editResident = useMemo(() => buildTenantEditActions(tenant, snapshot, "summary").find(action => action.action === "save-person"), [tenant, snapshot]);
+  const menuItems: RowMenuItem[] = readOnly ? [] : [
+    ...(businessDate ? [{ label: "Move in / move out…", onSelect: () => onManageMoves ? onManageMoves() : setMovesOpen(true) }] : []),
+    ...(editResident ? [{ label: "Edit resident", onSelect: () => onEdit(editResident.action, editResident.values) }] : []),
+  ];
+  // A legacy key (deposits, charges, HAP) opens its combined tab at that section.
+  useEffect(() => {
+    if (tab === activeTab || typeof document === "undefined") return;
+    const frame = requestAnimationFrame(() => document.getElementById(sectionId(tab))?.scrollIntoView({ block: "start", behavior: "smooth" }));
+    return () => cancelAnimationFrame(frame);
+  }, [tab, activeTab]);
+  return <section className="rm-tenant-record" aria-label={`Tenant record for ${displayName}`}>
+    {addPaymentOpen && paymentTenancy?.id && <PaymentEditDialog id="new" tenancyId={paymentTenancy.id} businessDate={businessDate??summary.asOfDate} tenantName={displayName} onClose={()=>setAddPaymentOpen(false)} onSaved={onMoveRefresh??(async()=>{await onChanged();})}/>}
     <header className="rm-record-summary">
-      <div className="rm-record-summary-main"><h2>{summary.displayName}</h2><p>{summary.propertyName} · Unit {summary.unitLabel}</p></div>
-      <div className="rm-record-summary-meta"><span className={statusClass(summary.statusVerified ? summary.status : undefined, !summary.statusVerified)}>{summary.statusVerified ? label(summary.status) : summary.status}</span><span className={`rm-record-balance${review ? tenant.balanceReview?.stale || tenant.balanceReview?.reviewedBalanceCents ? " rm-record-balance-warning" : "" : summary.balance.complete && summary.balance.amountCents ? " rm-record-balance-warning" : ""}`}><small>{review ? review.label : "Posted ledger balance"}</small><strong>{review ? review.amount : summary.balance.complete ? formatMoney(summary.balance.amountCents) : reviewLabelForCodes(summary.balance.uncertaintyCodes)}</strong></span><span className="rm-record-as-of"><small>As of</small><strong>{formatDate(review ? tenant.balanceReview?.asOfDate : summary.asOfDate)}</strong></span></div>
+      <div className="rm-record-summary-main"><h2>{displayName}</h2><p>{summary.propertyName} · Unit {summary.unitLabel} <span className={statusClass(summary.statusVerified ? summary.status : undefined, !summary.statusVerified)}>{summary.statusVerified ? label(summary.status) : summary.status}</span></p></div>
+      <div className="rm-record-summary-side">
+        {!readOnly && <div className="rm-record-actions">
+          <button type="button" className="rm-button rm-button-primary" disabled={!paymentTenancy?.id} title={paymentTenancy?.id ? undefined : "No current tenancy to record a payment against."} onClick={()=>setAddPaymentOpen(true)}>Record payment</button>
+          {addCharge && <button type="button" className="rm-button" onClick={() => onEdit(addCharge.action, addCharge.values)}>{addCharge.label}</button>}
+          <RowMenu items={menuItems} label="More tenant actions" />
+        </div>}
+        <HeaderBalance tenant={tenant} summary={summary} onReconcile={() => onTab("ledger")} />
+      </div>
     </header>
-    {!readOnly && businessDate && <div className="rm-toolbar"><button className="rm-button" onClick={() => onManageMoves ? onManageMoves() : setMovesOpen(true)}>Move-in / move-out</button></div>}
     {movesOpen && !readOnly && businessDate && <ManagerTenancyActions key={tenant.person.id} snapshot={snapshot} personId={tenant.person.id} businessDate={businessDate} onSaved={onMoveRefresh ?? (async () => { await onChanged(); })} onClose={() => setMovesOpen(false)} />}
-    <nav className="rm-tabs rm-tenant-tabs" role="tablist" aria-label="Tenant record sections">{TENANT_RECORD_TABS.map((item) => <button type="button" role="tab" aria-selected={tab === item} aria-controls={`tenant-panel-${item}`} className={tab === item ? "active" : ""} key={item} onClick={() => onTab(item)}>{TAB_LABELS[item]}</button>)}</nav>
-    {headerActions.length > 0 && <div className="rm-toolbar rm-tenant-toolbar">{tab==="ledger"&&!readOnly&&<button className="rm-button rm-button-primary" disabled={!paymentTenancy?.id} onClick={()=>setAddPaymentOpen(true)}>Add payment</button>}{headerActions.map((action) => <ActionButton key={`${action.action}-${action.label}`} action={action} onEdit={onEdit} primary />)}</div>}
-    <div id={`tenant-panel-${tab}`} role="tabpanel" className="rm-tenant-panel-body">{tabContent(tab, { tenant, snapshot, onEdit, onChanged, onMoveRefresh, businessDate, readOnly, editActions })}</div>
+    <nav className="rm-tabs rm-tenant-tabs" role="tablist" aria-label="Tenant record sections">{TENANT_RECORD_TABS.map((item) => <button type="button" role="tab" aria-selected={activeTab === item} aria-controls={`tenant-panel-${item}`} className={activeTab === item ? "active" : ""} key={item} onClick={() => onTab(item)}>{TAB_LABELS[item]}</button>)}</nav>
+    <div id={`tenant-panel-${activeTab}`} role="tabpanel" className="rm-tenant-panel-body">{tabContent(activeTab, { tenant, snapshot, onEdit, onChanged, onMoveRefresh, businessDate, readOnly, editActions })}</div>
   </section>;
 }

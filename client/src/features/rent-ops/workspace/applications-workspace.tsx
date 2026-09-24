@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, MapPin, Search, UserRound } from "lucide-react";
+import { AlertCircle, AlertTriangle } from "lucide-react";
 
 import { APPLICATION_STATUS_TRANSITIONS } from "../../../../../shared/application-status-transitions";
 import {
@@ -27,17 +27,27 @@ import {
   sortApplicationsByDate,
   type LeasingRegisterFilters,
 } from "./leasing-model";
+import {
+  APPLICATION_STATUS_GROUPS,
+  applicationGroupCounts,
+  applicationsInPropertySelection,
+  applicationStatusTone,
+  filterApplicationsByGroup,
+  type ApplicationStatusGroup,
+} from "./applications-view-model";
 import { formatDate, formatLabel } from "./display";
+import { RowMenu, type RowMenuItem } from "./ops-ui";
+import { Segmented } from "../../workspaces/page";
+import { displayPersonName, formatTableDate } from "../../../lib/rent-ops-formatters";
 import { PROPERTY_MISSING_LABEL, UNIT_MISSING_LABEL } from "@shared/review-cases/display-labels";
 import "./leasing.css";
+import "./applications-workspace.css";
 
 export type EditAction = (action: QuickAction, values?: FormValues) => void;
 
+/** Register-only filters. Property, status and search come from the global filter bar. */
 interface ApplicationFilterState {
-  propertyId: string;
   unitId: string;
-  status: string;
-  search: string;
   fromDate: string;
   toDate: string;
 }
@@ -52,36 +62,18 @@ interface ApplicationGridRow extends Record<string, unknown> {
   unit: string;
 }
 
-function initialFilterState(filters: ViewFilters): ApplicationFilterState {
-  return {
-    propertyId: filters.propertyId || "all",
-    unitId: "all",
-    status: filters.status || "all",
-    search: filters.search || "",
-    fromDate: "",
-    toDate: "",
-  };
-}
-
 function normalized(value: unknown): string {
   return String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
 }
 
 function knownDate(value: string | undefined, knowledge?: string): string {
   const fact = leasingFact(value, knowledge);
-  return leasingFactResolved(value, knowledge) ? formatDate(value) : fact;
+  return leasingFactResolved(value, knowledge) ? formatTableDate(value) ?? formatDate(value) : fact;
 }
 
-function statusClass(status?: string): string {
-  const value = normalized(status);
-  return value ? `rm-status rm-status-${value}` : "rm-status rm-status-unknown";
-}
-
-function propertyOptions(snapshot: AdminSnapshot, scope: ViewFilters["propertyScope"]): Array<[string, string]> {
-  return snapshot.snapshot.properties
-    .filter((property) => scope !== "active" || property.state === "active")
-    .map((property) => [property.id ?? "", property.name ?? PROPERTY_MISSING_LABEL] as [string, string])
-    .filter(([id]) => Boolean(id));
+function statusClass(status?: string, knowledge?: string): string {
+  const tone = applicationStatusTone(status, knowledge);
+  return tone ? `rm-status rm-status--${tone}` : "rm-status";
 }
 
 function statusOptions(applications: readonly AdminApplicationView[]): string[] {
@@ -101,19 +93,24 @@ function applicationStatusFilter(value: string | undefined, applications: readon
   return statusOptions(applications).includes(requested) ? requested : "all";
 }
 
-function unitOptions(snapshot: AdminSnapshot, propertyId: string): Array<[string, string]> {
+function unitOptions(snapshot: AdminSnapshot, propertyIds: readonly string[]): Array<[string, string]> {
   return snapshot.snapshot.units
-    .filter((unit) => propertyId === "all" || unit.propertyId === propertyId)
+    .filter((unit) => !propertyIds.length || (!!unit.propertyId && propertyIds.includes(unit.propertyId)))
     .map((unit) => [unit.id ?? "", unit.unitNumber ?? UNIT_MISSING_LABEL] as [string, string])
     .filter(([id]) => Boolean(id));
+}
+
+function selectedPropertyIds(filters: ViewFilters): string[] {
+  if (filters.propertyIds?.length) return [...filters.propertyIds];
+  return filters.propertyId && filters.propertyId !== "all" ? [filters.propertyId] : [];
 }
 
 function displayStatus(application: AdminApplicationView): string {
   return applicationStatusLabel(application.status, application.statusKnowledge);
 }
 
-function applicationDate(application: AdminApplicationView): string {
-  return knownDate(applicationDateValue(application), application.submittedOnKnowledge);
+function applicantName(application: AdminApplicationView): string {
+  return displayPersonName(applicationDisplayName(application)) || applicationDisplayName(application);
 }
 
 function mutationError(cause: unknown, onConflict: () => void, setError: (message: string) => void): void {
@@ -126,12 +123,15 @@ interface ApplicationActionsProps {
   onChanged: () => void;
   onEdit: EditAction;
   onError: (message: string) => void;
+  onReview: (applicationId: string) => void;
   busy: string | undefined;
   setBusy: (value: string | undefined) => void;
 }
 
-function ApplicationActions({ application, snapshot, onChanged, onEdit, onError, busy, setBusy }: ApplicationActionsProps) {
+function ApplicationActions({ application, snapshot, onChanged, onEdit, onError, onReview, busy, setBusy }: ApplicationActionsProps) {
   const [assignmentOpen, setAssignmentOpen] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
+  const applicantLabel = applicantName(application);
   const [assignmentProperty, setAssignmentProperty] = useState(application.propertyId ?? "");
   const [assignmentUnit, setAssignmentUnit] = useState(application.unitId ?? "");
 
@@ -219,71 +219,83 @@ function ApplicationActions({ application, snapshot, onChanged, onEdit, onError,
     }
   }
 
-  return <div className="rm-leasing-row-actions" onClick={(event) => event.stopPropagation()}>
-    <div className="rm-leasing-action-line">
-      {statusChoices.length > 0 ? <label className="rm-field rm-leasing-status-field"><span className="sr-only">Application status</span><select aria-label={`Application status for ${applicationDisplayName(application)}`} className={statusClass(application.status)} value={currentStatus} disabled={rowBusy} onChange={(event) => { void changeStatus(event.target.value); }}><option value={currentStatus}>{displayStatus(application)}</option>{statusChoices.filter((status) => status !== currentStatus).map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}</select></label> : <span className={statusClass(application.status)}>{displayStatus(application)}</span>}
-      {currentStatus === "approved" && !application.convertedTenancyId && <button type="button" className="rm-button rm-button-primary" disabled={rowBusy} onClick={convert}>Convert</button>}
-      {application.convertedTenancyId && <span className="rm-muted">Converted</span>}
+  const menuItems: RowMenuItem[] = [];
+  if (currentStatus === "approved" && !application.convertedTenancyId) menuItems.push({ label: "Convert to tenancy…", disabled: rowBusy, onSelect: convert });
+  if (!application.convertedTenancyId) menuItems.push({ label: application.unitId ? "Change unit" : "Assign unit", disabled: rowBusy || !id, onSelect: () => { setStatusOpen(false); setAssignmentOpen((open) => !open); } });
+  menuItems.push({ label: "Request information", disabled: rowBusy || !id, onSelect: () => { void requestInformation(); } });
+  if (statusChoices.length > 1) menuItems.push({ label: "Change status…", disabled: rowBusy || !id, onSelect: () => { setAssignmentOpen(false); setStatusOpen((open) => !open); } });
+
+  return <div className="rm-apps-row-actions" onClick={(event) => event.stopPropagation()}>
+    <div className="rm-apps-action-line">
+      <button type="button" className="rm-button rm-apps-review" disabled={!id} onClick={() => { if (id) onReview(id); }}>Review</button>
+      <RowMenu label={`Actions for ${applicantLabel}`} items={menuItems} />
     </div>
-    <div className="rm-leasing-action-line">
-      {!application.convertedTenancyId && <button type="button" className="rm-button" disabled={rowBusy || !id} onClick={() => setAssignmentOpen((open) => !open)}>{application.unitId ? "Change unit" : "Assign unit"}</button>}
-      <button type="button" className="rm-button" disabled={rowBusy || !id} onClick={() => { void requestInformation(); }}>Request information</button>
-    </div>
-    {assignmentOpen && <div className="rm-leasing-assignment rm-form-grid">
-      <label className="rm-field">Property<select aria-label="Application property" value={assignmentProperty} disabled={rowBusy} onChange={(event) => { setAssignmentProperty(event.target.value); setAssignmentUnit(""); }}><option value="">Choose property</option>{snapshot.snapshot.properties.map((property) => <option key={property.id} value={property.id}>{property.name ?? PROPERTY_MISSING_LABEL}</option>)}</select></label>
-      <label className="rm-field">Unit<select aria-label="Application unit" value={assignmentUnit} disabled={rowBusy || !assignmentProperty} onChange={(event) => setAssignmentUnit(event.target.value)}><option value="">Choose unit</option>{assignedUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.unitNumber ?? UNIT_MISSING_LABEL}</option>)}</select></label>
-      <div className="rm-leasing-assignment-buttons"><button type="button" className="rm-button rm-button-primary" disabled={rowBusy || !assignmentProperty || !assignmentUnit} onClick={() => { void assignUnit(); }}>Save assignment</button><button type="button" className="rm-button" disabled={rowBusy} onClick={() => setAssignmentOpen(false)}>Cancel</button></div>
+    {statusOpen && <div className="rm-apps-inline-form">
+      <label className="rm-apps-field"><span>Status</span><select aria-label={`Application status for ${applicantLabel}`} value={currentStatus} disabled={rowBusy} onChange={(event) => { setStatusOpen(false); void changeStatus(event.target.value); }}><option value={currentStatus}>{displayStatus(application)}</option>{statusChoices.filter((status) => status !== currentStatus).map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}</select></label>
+      <button type="button" className="rm-button" disabled={rowBusy} onClick={() => setStatusOpen(false)}>Cancel</button>
+    </div>}
+    {assignmentOpen && <div className="rm-apps-inline-form">
+      <label className="rm-apps-field"><span>Property</span><select aria-label="Application property" value={assignmentProperty} disabled={rowBusy} onChange={(event) => { setAssignmentProperty(event.target.value); setAssignmentUnit(""); }}><option value="">Choose property</option>{snapshot.snapshot.properties.map((property) => <option key={property.id} value={property.id}>{property.name ?? PROPERTY_MISSING_LABEL}</option>)}</select></label>
+      <label className="rm-apps-field"><span>Unit</span><select aria-label="Application unit" value={assignmentUnit} disabled={rowBusy || !assignmentProperty} onChange={(event) => setAssignmentUnit(event.target.value)}><option value="">Choose unit</option>{assignedUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.unitNumber ?? UNIT_MISSING_LABEL}</option>)}</select></label>
+      <button type="button" className="rm-button" disabled={rowBusy || !assignmentProperty || !assignmentUnit} onClick={() => { void assignUnit(); }}>Save assignment</button>
+      <button type="button" className="rm-button" disabled={rowBusy} onClick={() => setAssignmentOpen(false)}>Cancel</button>
     </div>}
   </div>;
 }
 
-function ApplicationFilterBar({ snapshot, filters, applications, onChange }: { snapshot: AdminSnapshot; filters: ApplicationFilterState; applications: readonly AdminApplicationView[]; onChange: (next: ApplicationFilterState) => void }) {
-  const properties = propertyOptions(snapshot, "all");
-  const units = unitOptions(snapshot, filters.propertyId);
-  const statuses = statusOptions(applications);
-  return <div className="rm-toolbar rm-leasing-toolbar" aria-label="Application filters">
-    <label className="rm-field"><span>Property</span><select value={filters.propertyId} onChange={(event) => onChange({ ...filters, propertyId: event.target.value, unitId: "all" })}><option value="all">All properties</option>{properties.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
-    <label className="rm-field"><span>Unit</span><select value={filters.unitId} onChange={(event) => onChange({ ...filters, unitId: event.target.value })}><option value="all">All units</option>{units.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
-    <label className="rm-field"><span>Status</span><select value={filters.status} onChange={(event) => onChange({ ...filters, status: event.target.value })}><option value="all">All statuses</option>{statuses.map((status) => <option key={status} value={status}>{formatLabel(status)}</option>)}</select></label>
-    <label className="rm-field"><span>Date from</span><input type="date" value={filters.fromDate} onChange={(event) => onChange({ ...filters, fromDate: event.target.value })} /></label>
-    <label className="rm-field"><span>Date through</span><input type="date" value={filters.toDate} onChange={(event) => onChange({ ...filters, toDate: event.target.value })} /></label>
-    <label className="rm-field rm-leasing-search"><span>Search name, contact, property, unit</span><Search aria-hidden="true" /><input type="search" value={filters.search} placeholder="Search applications" onChange={(event) => onChange({ ...filters, search: event.target.value })} /></label>
+function ApplicationFilterRow({ snapshot, filters, propertyIds, group, counts, onChange, onGroup }: { snapshot: AdminSnapshot; filters: ApplicationFilterState; propertyIds: readonly string[]; group: ApplicationStatusGroup; counts: Record<ApplicationStatusGroup, number>; onChange: (next: ApplicationFilterState) => void; onGroup: (group: ApplicationStatusGroup) => void }) {
+  const units = unitOptions(snapshot, propertyIds);
+  return <div className="rm-apps-filters" aria-label="Application filters">
+    <Segmented label="Application status" value={group} onChange={onGroup} options={APPLICATION_STATUS_GROUPS.map(([key, text]) => [key, `${text} · ${counts[key]}`] as const)} />
+    <label className="rm-apps-field"><span>Unit</span><select value={filters.unitId} onChange={(event) => onChange({ ...filters, unitId: event.target.value })}><option value="all">All units</option>{units.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+    <label className="rm-apps-field"><span>From</span><input type="date" value={filters.fromDate} max={filters.toDate || undefined} onChange={(event) => onChange({ ...filters, fromDate: event.target.value })} /></label>
+    <label className="rm-apps-field"><span>Through</span><input type="date" value={filters.toDate} min={filters.fromDate || undefined} onChange={(event) => onChange({ ...filters, toDate: event.target.value })} /></label>
+    {(filters.unitId !== "all" || filters.fromDate || filters.toDate) && <button type="button" className="rm-button rm-apps-clear" onClick={() => onChange({ ...filters, unitId: "all", fromDate: "", toDate: "" })}>Clear</button>}
   </div>;
 }
 
+function ContactCell({ application }: { application: AdminApplicationView }) {
+  const facts = ([["Email", application.email, application.emailKnowledge], ["Phone", application.phone, application.phoneKnowledge]] as const)
+    .filter(([, value]) => typeof value === "string" && value.trim());
+  if (!facts.length) return <span className="rm-muted" title="No contact recorded">—</span>;
+  return <span className="rm-apps-contact">{facts.map(([kind, value, knowledge]) => {
+    const unverified = !leasingFactResolved(value, knowledge);
+    return <span key={kind} className="rm-apps-contact-line">{value}{unverified && <span className="rm-apps-unverified" role="img" aria-label={`${kind} not verified`} title={`${kind} not verified`}><AlertTriangle aria-hidden="true" /></span>}</span>;
+  })}</span>;
+}
+
 export function ApplicationsWorkspace({ snapshot, filters, onChanged, onEdit }: { snapshot: AdminSnapshot; filters: ViewFilters; onChanged: () => void; onEdit: EditAction }) {
-  const [filterState, setFilterState] = useState<ApplicationFilterState>(() => ({ ...initialFilterState(filters), status: applicationStatusFilter(filters.status, snapshot.applicants) }));
+  const [filterState, setFilterState] = useState<ApplicationFilterState>({ unitId: "all", fromDate: "", toDate: "" });
+  const [group, setGroup] = useState<ApplicationStatusGroup>("all");
   const [selectedApplicationId, setSelectedApplicationId] = useState<string | undefined>(() => typeof window === "undefined" ? undefined : new URLSearchParams(window.location.search).get("record") ?? undefined);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState<string>();
+  const propertyIds = useMemo(() => selectedPropertyIds(filters), [filters.propertyId, filters.propertyIds]);
+  const propertyKey = propertyIds.join("\u001f");
 
-  useEffect(() => {
-    setFilterState((current) => ({
-      ...current,
-      propertyId: filters.propertyId || current.propertyId || "all",
-      status: applicationStatusFilter(filters.status, snapshot.applicants) || current.status || "all",
-      search: filters.search,
-    }));
-  }, [filters.propertyId, filters.search, filters.status, snapshot.applicants]);
+  // A unit chosen for another property selection no longer applies.
+  useEffect(() => { setFilterState((current) => current.unitId === "all" ? current : { ...current, unitId: "all" }); }, [propertyKey]);
 
   const registerFilters: LeasingRegisterFilters = useMemo(() => ({
     propertyScope: filters.propertyScope,
-    propertyId: filters.propertyId !== "all" ? filters.propertyId : filterState.propertyId,
+    propertyId: propertyIds.length === 1 ? propertyIds[0] : "all",
     unitId: filterState.unitId,
-    status: filterState.status,
-    search: filterState.search,
+    status: applicationStatusFilter(filters.status, snapshot.applicants),
+    search: filters.search,
     fromDate: filterState.fromDate,
     toDate: filterState.toDate,
-  }), [filterState, filters.propertyScope, filters.propertyId]);
-  const visibleApplications = useMemo(() => sortApplicationsByDate(filterApplications(snapshot.applicants, snapshot, registerFilters)), [registerFilters, snapshot]);
+  }), [filterState, filters.propertyScope, filters.status, filters.search, propertyKey, snapshot.applicants]);
+  const scopedApplications = useMemo(() => applicationsInPropertySelection(sortApplicationsByDate(filterApplications(snapshot.applicants, snapshot, registerFilters)), propertyIds.length > 1 ? propertyIds : undefined), [registerFilters, snapshot, propertyKey]);
+  const groupCounts = useMemo(() => applicationGroupCounts(scopedApplications), [scopedApplications]);
+  const visibleApplications = useMemo(() => filterApplicationsByGroup(scopedApplications, group), [scopedApplications, group]);
   const rows = useMemo<ApplicationGridRow[]>(() => visibleApplications.map((application, index) => ({
     application,
     recordKey: applicationRecordKey(application, index),
-    name: applicationDisplayName(application),
+    name: applicantName(application),
     submittedOn: applicationDateValue(application),
     status: application.status,
     property: propertyDisplayName(snapshot, application.propertyId),
-    unit: applicationUnitDisplayName(snapshot, application),
+    unit: application.unitId ? applicationUnitDisplayName(snapshot, application) : "",
   })), [snapshot, visibleApplications]);
   const selectedSummary = selectedApplicationId ? visibleApplications.find((application) => application.id === selectedApplicationId) : undefined;
   useEffect(() => {
@@ -291,20 +303,23 @@ export function ApplicationsWorkspace({ snapshot, filters, onChanged, onEdit }: 
   }, [selectedApplicationId, selectedSummary]);
 
   const columns = useMemo<GridColumn<ApplicationGridRow>[]>(() => [
-    { key: "name", label: "Applicant", width: "18rem", render: (row) => <div className="rm-leasing-record-link"><UserRound aria-hidden="true" />{applicationTenantPersonId(snapshot,row.application)?<><EntityLink personId={applicationTenantPersonId(snapshot,row.application)}>{row.name}</EntityLink><button type="button" className="rm-button" onClick={()=>row.application.id&&setSelectedApplicationId(row.application.id)}>Application</button></>:<button type="button" disabled={!row.application.id} onClick={()=>row.application.id&&setSelectedApplicationId(row.application.id)}>{row.name}</button>}</div>, sortValue: (row) => row.name },
-    { key: "submittedOn", label: "Submitted / created", render: (row) => knownDate(row.submittedOn, row.application.submittedOn ? row.application.submittedOnKnowledge : "unknown"), sortValue: (row) => row.submittedOn ?? "" },
-    { key: "status", label: "Status", render: (row) => <span className={statusClass(row.status)}>{displayStatus(row.application)}</span>, sortValue: (row) => row.status ?? "" },
-    { key: "property", label: "Property", render: (row) => <span className="rm-leasing-linked"><MapPin aria-hidden="true" />{row.property}</span>, sortValue: (row) => row.property },
-    { key: "unit", label: "Unit", render: (row) => row.unit, sortValue: (row) => row.unit },
-    { key: "contact", label: "Contact", render: (row) => <span className="rm-leasing-contact">{leasingFact(row.application.email, row.application.emailKnowledge)}<br />{leasingFact(row.application.phone, row.application.phoneKnowledge)}</span>, sortValue: (row) => `${row.application.email ?? ""} ${row.application.phone ?? ""}` },
-    { key: "actions", label: "Actions", render: (row) => <ApplicationActions application={row.application} snapshot={snapshot} onChanged={onChanged} onEdit={onEdit} onError={(message) => { setError(message); }} busy={busy} setBusy={setBusy} /> },
+    { key: "name", label: "Applicant", width: "16rem", render: (row) => {
+      const personId = applicationTenantPersonId(snapshot, row.application);
+      return personId ? <EntityLink personId={personId}>{row.name}</EntityLink> : <button type="button" className="rm-apps-name" disabled={!row.application.id} onClick={() => row.application.id && setSelectedApplicationId(row.application.id)}>{row.name}</button>;
+    }, sortValue: (row) => row.name },
+    { key: "submittedOn", label: "Submitted", render: (row) => knownDate(row.submittedOn, row.application.submittedOn ? row.application.submittedOnKnowledge : "unknown"), sortValue: (row) => row.submittedOn ?? "" },
+    { key: "status", label: "Status", render: (row) => <span className="rm-apps-status"><span className={statusClass(row.status, row.application.statusKnowledge)}>{displayStatus(row.application)}</span>{row.application.convertedTenancyId && <span className="rm-muted">Converted</span>}</span>, sortValue: (row) => row.status ?? "" },
+    { key: "property", label: "Property", render: (row) => row.property, sortValue: (row) => row.property },
+    { key: "unit", label: "Unit", render: (row) => row.unit || <span className="rm-muted">Unassigned</span>, sortValue: (row) => row.unit },
+    { key: "contact", label: "Contact", render: (row) => <ContactCell application={row.application} />, sortValue: (row) => `${row.application.email ?? ""} ${row.application.phone ?? ""}` },
+    { key: "actions", label: "", width: "9rem", render: (row) => <ApplicationActions application={row.application} snapshot={snapshot} onChanged={onChanged} onEdit={onEdit} onError={(message) => { setError(message); }} onReview={setSelectedApplicationId} busy={busy} setBusy={setBusy} /> },
   ], [busy, onChanged, onEdit, snapshot]);
 
-  return <section className="rm-panel rm-leasing-workspace" aria-labelledby="rm-applications-title">
-    <header className="rm-panel-title rm-leasing-heading"><div><h2 id="rm-applications-title" className="sr-only">Applications</h2></div><div className="rm-leasing-count"><strong>{visibleApplications.length}</strong><span>matching cases</span></div></header>
+  return <section className="rm-panel rm-leasing-workspace rm-apps-workspace" aria-labelledby="rm-applications-title">
+    <header className="rm-apps-heading"><h2 id="rm-applications-title">Applications</h2><span className="rm-muted">{visibleApplications.length} {visibleApplications.length === 1 ? "application" : "applications"}</span></header>
     {error && <div className="rm-error" role="alert"><AlertCircle aria-hidden="true" />{error}<button type="button" className="rm-button" onClick={() => setError(undefined)}>Dismiss</button></div>}
-    <ApplicationFilterBar snapshot={snapshot} filters={filterState} applications={snapshot.applicants} onChange={setFilterState} />
-    <DataGrid<ApplicationGridRow> rows={rows} columns={columns} getRowKey={(row, index) => row.recordKey || applicationRecordKey(row.application, index)} pageSize={25} emptyMessage="No applications match these filters." caption="Application register" summaryLabel="application" initialSort={{ key: "submittedOn", direction: "desc" }} storageKey="rm-applications" />
+    <ApplicationFilterRow snapshot={snapshot} filters={filterState} propertyIds={propertyIds} group={group} counts={groupCounts} onChange={setFilterState} onGroup={setGroup} />
+    <DataGrid<ApplicationGridRow> rows={rows} columns={columns} getRowKey={(row, index) => row.recordKey || applicationRecordKey(row.application, index)} onRow={(row) => { if (row.application.id) setSelectedApplicationId(row.application.id); }} pageSize={25} emptyMessage="No applications match these filters." caption="Application register" summaryLabel="application" initialSort={{ key: "submittedOn", direction: "desc" }} storageKey="rm-applications" />
     {selectedApplicationId && selectedSummary && <ApplicationCaseDetail key={selectedApplicationId} applicationId={selectedApplicationId} tenantPersonId={applicationTenantPersonId(snapshot,selectedSummary)} summary={selectedSummary} onClose={() => { setSelectedApplicationId(undefined); onChanged(); }} />}
   </section>;
 }

@@ -7,9 +7,15 @@ import { rentOpsAuthClient } from "../rent-ops/auth";
 import type { AdminSnapshot } from "../rent-ops/types";
 import { EntityLink, RecordLink } from "../rent-ops/workspace/entity-link";
 import { workspacesApi } from "./api";
+import { formatTableDate } from "../../lib/rent-ops-formatters";
 import { formatCentsText, formatIsoDate, formatKnownSubtotal, formatMeasure, humanize, opensInline, sumCentsTexts } from "./format";
 import { Badge, ErrorState, Loading, Section, StatePanel, propertyEntity, selectOrganization, useCompanyContext } from "./page";
 import { useOpenWorkOrders } from "./work-data";
+
+/** Table dates follow the shared rule: "Jun 1" this year, "Jun 1, 2025" otherwise. */
+function tableDate(value: string | null | undefined): string {
+  return formatTableDate(value) ?? formatIsoDate(value);
+}
 
 /** The property's company and entity; property tabs show a clear state when either is missing. */
 function usePropertyCompany(identity: string, propertyId: string, organizationId?: string): { organization?: CompanyContextOrganization; legalEntityId?: string; loading: boolean; error: unknown } {
@@ -57,7 +63,7 @@ export function PropertyProjectsTab({ identity, propertyId, organizationId, onOp
       <tbody>{projects.data.items.map(project => <tr key={project.id}>
         <td><button type="button" className="ws-link" onClick={() => onOpenProject(organization.id, project.id)}>{project.name}</button></td>
         <td>{humanize(project.status)}</td>
-        <td>{formatIsoDate(project.targetOn)}</td>
+        <td>{tableDate(project.targetOn)}</td>
         <td className="number">{project.approvedBudgetCents === null ? "Not approved" : formatCentsText(project.approvedBudgetCents, project.currency)}</td>
         <td className="number">{formatCentsText(project.postedActualCents, project.currency)}</td>
       </tr>)}</tbody>
@@ -87,7 +93,7 @@ export function PropertyWorkOrdersTab({ identity, propertyId, organizationId, on
       <td>{item.unitId ? <RecordLink kind="unit" recordId={item.unitId}>{item.unitNumber ?? "Unit"}</RecordLink> : "Common area"}</td>
       <td>{item.priority === "emergency" || item.priority === "high" ? <Badge tone={item.priority === "emergency" ? "critical" : "warning"}>{humanize(item.priority)}</Badge> : humanize(item.priority)}</td>
       <td>{humanize(item.status)}</td>
-      <td>{item.completedOn ? `Done ${formatIsoDate(item.completedOn)}` : formatIsoDate(item.scheduledOn)}</td>
+      <td>{item.completedOn ? `Done ${tableDate(item.completedOn)}` : tableDate(item.scheduledOn)}</td>
     </tr>)}</tbody>
     <tfoot><tr><th scope="row" colSpan={4}>Shown work orders</th><td className="number">{items.length}</td></tr></tfoot>
   </table>;
@@ -138,7 +144,7 @@ export function PropertyDocumentsTab({ identity, propertyId, organizationId, sna
             <td>{document.id && document.downloadAvailable ? <button type="button" className="ws-link" onClick={() => void openDocument(document.id!, document.fileName ?? "document")}>{document.fileName ?? "Document"}</button> : document.fileName ?? "Document"}</td>
             <td>{humanize(document.type)}</td>
             <td>{person ? <EntityLink personId={person.id} tab="documents">{[person.firstName, person.lastName].filter(Boolean).join(" ") || "Tenant"}</EntityLink> : "—"}</td>
-            <td>{formatIsoDate(document.uploadedAt)}</td>
+            <td>{tableDate(document.uploadedAt)}</td>
           </tr>; })}</tbody>
           <tfoot><tr><th scope="row" colSpan={3}>Shown tenant documents</th><td className="number">{rentalRows.length}</td></tr></tfoot>
         </table>}
@@ -150,7 +156,7 @@ export function PropertyDocumentsTab({ identity, propertyId, organizationId, sna
         : !companyDocuments.data.documents.length ? <StatePanel title="No company documents" message="Insurance, loan and contract documents linked to this property appear here." />
         : <table className="ws-table">
           <thead><tr><th scope="col">Title</th><th scope="col">Kind</th><th scope="col">Dated</th><th scope="col">File</th></tr></thead>
-          <tbody>{companyDocuments.data.documents.map(document => <tr key={document.id}><td>{document.title}</td><td>{humanize(document.kind)}</td><td>{formatIsoDate(document.documentDate)}</td><td>{document.fileName}</td></tr>)}</tbody>
+          <tbody>{companyDocuments.data.documents.map(document => <tr key={document.id}><td>{document.title}</td><td>{humanize(document.kind)}</td><td>{tableDate(document.documentDate)}</td><td>{document.fileName}</td></tr>)}</tbody>
           <tfoot><tr><th scope="row" colSpan={3}>{companyDocuments.data.truncated ? "Loaded company documents" : "Company document count"}</th><td className="number">{companyDocuments.data.documents.length}</td></tr></tfoot>
         </table>}
     </Section>
