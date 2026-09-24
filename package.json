@@ -5,7 +5,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "NODE_ENV=development tsx server/index.ts",
-    "build": "vite build && esbuild server/index.ts server/worker.ts --platform=node --packages=external --bundle --format=esm --outdir=dist && npm run rent-ops:migration:render:all",
+    "build": "vite build && node scripts/optimize-public-images.mjs && esbuild server/index.ts server/worker.ts --platform=node --packages=external --bundle --format=esm --outdir=dist && npm run rent-ops:migration:render:all",
     "start": "NODE_ENV=production node scripts/deploy/start.mjs",
     "check": "tsc --incremental false && tsc -p scripts/performance/tsconfig.json --incremental false",
     "db:push": "node scripts/company/block-direct-migration.mjs",
@@ -141,6 +141,7 @@
     "drizzle-kit": "^0.31.11",
     "esbuild": "^0.25.0",
     "postcss": "^8.4.47",
+    "sharp": "0.35.4",
     "tailwindcss": "^3.4.17",
     "tsx": "^4.19.1",
     "typescript": "5.6.3",

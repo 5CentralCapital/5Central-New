@@ -1,3 +1,4 @@
+import MarketingImage from "@/components/marketing-image";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Building2 } from "lucide-react";
@@ -37,12 +38,12 @@ export default function Founder() {
   return (
     <div className="min-h-screen pt-16" data-testid="founder-page">
       {/* Hero Section */}
-      <section className="py-16 bg-gradient-to-br from-primary to-gray-800 text-white relative overflow-hidden">
+      <section className="py-16 bg-gradient-to-br from-deep-charcoal to-gray-800 text-white relative overflow-hidden">
         <div className="geometric-pattern absolute inset-0 opacity-10"></div>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
           <div className="text-center">
             <h1 className="text-5xl md:text-6xl font-serif font-bold mb-6" data-testid="founder-title">
-              Meet <span className="text-accent-gold">Michael McElwee</span>
+              Meet <span className="text-warm-brass">Michael McElwee</span>
             </h1>
             <p className="text-xl text-gray-300 max-w-3xl mx-auto">
               Founder and Principal of 5Central Capital
@@ -56,7 +57,8 @@ export default function Founder() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid lg:grid-cols-2 gap-16 items-center">
             <div>
-              <img 
+              <MarketingImage 
+                loading="eager" fetchPriority="high"
                 src="/founder-logo.jpg" 
                 alt="5Central Capital Logo" 
                 className="w-full h-[500px] object-contain"
@@ -67,7 +69,7 @@ export default function Founder() {
               <h2 className="text-4xl md:text-5xl font-serif font-bold text-primary mb-6" data-testid="founder-name">
                 Michael McElwee
               </h2>
-              <p className="text-xl text-accent-gold mb-8 leading-relaxed font-medium">
+              <p className="text-xl text-warm-brass mb-8 leading-relaxed font-medium">
                 Founder and Principal of 5Central Capital
               </p>
               
@@ -164,7 +166,7 @@ export default function Founder() {
           <div className="grid md:grid-cols-3 gap-8">
             <Card className="bg-white rounded-2xl card-shadow premium-border p-8 text-center hover:shadow-xl transition-all duration-300">
               <CardContent className="p-0">
-                <div className="w-16 h-16 bg-gradient-to-br from-accent-gold to-bronze rounded-full flex items-center justify-center mx-auto mb-6">
+                <div className="w-16 h-16 bg-gradient-to-br from-warm-brass to-warm-stone rounded-full flex items-center justify-center mx-auto mb-6">
                   <Building2 className="w-8 h-8 text-white" />
                 </div>
                 <h3 className="text-xl font-serif font-semibold text-primary mb-4">Strategic Acquisition</h3>
@@ -176,7 +178,7 @@ export default function Founder() {
 
             <Card className="bg-white rounded-2xl card-shadow premium-border p-8 text-center hover:shadow-xl transition-all duration-300">
               <CardContent className="p-0">
-                <div className="w-16 h-16 bg-gradient-to-br from-accent-gold to-bronze rounded-full flex items-center justify-center mx-auto mb-6">
+                <div className="w-16 h-16 bg-gradient-to-br from-warm-brass to-warm-stone rounded-full flex items-center justify-center mx-auto mb-6">
                   <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
                   </svg>
@@ -190,7 +192,7 @@ export default function Founder() {
 
             <Card className="bg-white rounded-2xl card-shadow premium-border p-8 text-center hover:shadow-xl transition-all duration-300">
               <CardContent className="p-0">
-                <div className="w-16 h-16 bg-gradient-to-br from-accent-gold to-bronze rounded-full flex items-center justify-center mx-auto mb-6">
+                <div className="w-16 h-16 bg-gradient-to-br from-warm-brass to-warm-stone rounded-full flex items-center justify-center mx-auto mb-6">
                   <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 011 1v2a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1v-6zM14 9a1 1 0 00-1 1v6a1 1 0 001 1h2a1 1 0 001-1v-6a1 1 0 00-1-1h-2z" clipRule="evenodd" />
                   </svg>
@@ -256,7 +258,7 @@ export default function Founder() {
       </section>
 
       {/* Call to Action */}
-      <section className="py-20 bg-gradient-to-br from-primary to-gray-800 text-white">
+      <section className="py-20 bg-gradient-to-br from-deep-charcoal to-gray-800 text-white">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <h2 className="text-4xl md:text-5xl font-serif font-bold mb-6">Ready to Partner with Michael?</h2>
           <p className="text-xl text-gray-300 mb-12 max-w-2xl mx-auto">
@@ -265,7 +267,7 @@ export default function Founder() {
           
           <div className="flex flex-col sm:flex-row gap-6 justify-center">
             <Button 
-              className="bg-gradient-to-r from-accent-gold to-bronze text-white px-10 py-4 rounded-lg font-semibold text-lg hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1"
+              className="bg-gradient-to-r from-warm-brass to-warm-stone text-deep-charcoal px-10 py-4 rounded-lg font-semibold text-lg hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1"
               data-testid="button-schedule-meeting"
               asChild
             >
@@ -273,7 +275,7 @@ export default function Founder() {
             </Button>
             <Button asChild
                 variant="outline"
-                className="border-2 border-accent-gold text-accent-gold px-10 py-4 rounded-lg font-semibold text-lg hover:bg-accent-gold hover:text-primary transition-all duration-300"
+                className="bg-transparent border-2 border-warm-brass text-warm-white px-10 py-4 rounded-lg font-semibold text-lg hover:bg-warm-brass hover:text-deep-charcoal transition-all duration-300"
                 data-testid="button-view-portfolio"
               >
               <Link href="/portfolio">

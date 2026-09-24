@@ -1,3 +1,4 @@
+import MarketingImage from "@/components/marketing-image";
 import { useState } from "react";
 import { type Property } from "@shared/schema";
 import PropertyModal from "@/components/property-modal";
@@ -451,7 +452,7 @@ export default function Portfolio() {
                           onClick={() => openPropertyModal(property)}
                         >
                           <div className="collage-image">
-                            <img
+                            <MarketingImage
                               src={getPublicPropertyImage(property)}
                               alt={property.name}
                               className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
@@ -519,7 +520,7 @@ export default function Portfolio() {
                         onClick={() => openPropertyModal(property)}
                       >
                         <div className="sold-collage-image">
-                          <img
+                          <MarketingImage
                             src={getPublicPropertyImage(property)}
                             alt={property.name}
                             className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
@@ -612,7 +613,7 @@ export default function Portfolio() {
                       onClick={() => openPropertyModal(property)}
                     >
                       <div className="collage-image">
-                        <img
+                        <MarketingImage
                           src={getPublicPropertyImage(property)}
                           alt={property.name}
                           className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
@@ -701,7 +702,7 @@ export default function Portfolio() {
                       onClick={() => openPropertyModal(property)}
                     >
                       <div className="sold-collage-image">
-                        <img
+                        <MarketingImage
                           src={getPublicPropertyImage(property)}
                           alt={property.name}
                           className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"

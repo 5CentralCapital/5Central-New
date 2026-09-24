@@ -18,7 +18,7 @@ import { publicRequestError, startupFailureSummary, type StartupStage } from "./
 import { sanitizeApiPathForLogging } from "./request-logging";
 import { applicantPageSecurityHeaders } from "./applicant-page-security";
 import { securityHeaders } from "./security-headers";
-import { attachedImages } from "./static-assets";
+import { attachedImages, publicAssets } from "./static-assets";
 import { installGracefulShutdown, shutdownGraceMs } from "./graceful-shutdown";
 import {
   assertRentOpsProductionConfiguration,
@@ -45,6 +45,10 @@ app.get("/readyz", (_req, res) => {
 // Exactly one trusted reverse-proxy hop (Render's router; Replit's before it).
 app.set("trust proxy", 1);
 app.use(securityHeaders({ production: isProduction }));
+// Public build assets need no session lookup. The build copies and optimizes
+// the same public marketing images; private document routes stay authenticated.
+if (isProduction) app.use(publicAssets(path.resolve(import.meta.dirname, 'public')));
+else app.use('/attached_assets', attachedImages(path.resolve(import.meta.dirname, '..', 'attached_assets')));
 
 let tenantPaymentService: TenantPaymentService | undefined;
 // Signature verification must receive the original bytes before any JSON parser.
@@ -83,8 +87,6 @@ app.use(
 // Load user from session
 app.use(loadUser);
 
-// Serve attached_assets statically
-app.use('/attached_assets', attachedImages(path.resolve(import.meta.dirname, '..', 'attached_assets')));
 app.use(/^\/(?:apply|tenant)(?:\/|$)/, applicantPageSecurityHeaders);
 
 app.use((req, res, next) => {
