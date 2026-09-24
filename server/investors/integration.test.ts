@@ -71,6 +71,14 @@ test("investor payment allocation and reversal preserve append-only history", as
     const bankSource = { provider: "bank", sourceScope: "synthetic-bank", externalTransactionId: "txn-1", externalLineId: "1", sourceRevision: "r1", currency: "USD", amountCents: "500" };
     await assert.rejects(() => execute("investor.payment.settle", envelope({ paymentId, source: bankSource })), /already has a reversal/);
 
+    // Keep an allocation on the old August obligation before the amendment
+    // closes that version. Reads must carry it onto the successor row for the
+    // same contract period without mutating append-only payment history.
+    const augustObligationId = obligationRows.rows.find(row => dateText(row.period_month) === "2026-08-01")?.id;
+    assert.ok(augustObligationId);
+    const preAmendmentPayment = await execute("investor.payment.record", envelope({ accountId, instrumentId, contractId, obligationId: augustObligationId, kind: "principal", method: "manual", paymentOn: "2026-07-31", periodMonth: "2026-08-01", currency: "USD", amounts: { principalCents: "200", interestCents: "0", returnOfCapitalCents: "0", distributionCents: "0", feeCents: "0", balloonCents: "0" } }));
+    const preAmendmentPaymentId = String(preAmendmentPayment.affectedRecordIds[0]);
+
     const editable = await execute("investor.payment.record", envelope({ accountId, instrumentId, contractId, obligationId, kind: "principal", method: "manual", paymentOn: "2026-02-04", periodMonth: "2026-02-01", currency: "USD", amounts: { principalCents: "300", interestCents: "0", returnOfCapitalCents: "0", distributionCents: "0", feeCents: "0", balloonCents: "0" } }));
     const editableId = String(editable.affectedRecordIds[0]);
     const edited = await execute("investor.payment.edit_manual", envelope({ paymentId: editableId, obligationId, contractId, kind: "principal", method: "manual", paymentOn: "2026-02-05", periodMonth: "2026-02-01", amounts: { principalCents: "700", interestCents: "0", returnOfCapitalCents: "0", distributionCents: "0", feeCents: "0", balloonCents: "0" }, reason: "Synthetic manual edit" }));
@@ -111,6 +119,10 @@ test("investor payment allocation and reversal preserve append-only history", as
     const amendedPeriods = amendedDetail.obligations.map((item) => String(item.periodMonth));
     assert.equal(amendedPeriods.length, 12, "an amendment should replace the overlapping schedule, not add a second obligation");
     assert.equal(new Set(amendedPeriods).size, amendedPeriods.length);
+    const amendedAugust = amendedDetail.obligations.find(item => String(item.periodMonth) === "2026-08-01");
+    assert.equal(amendedAugust?.totalRecordedCents, "200", "payments allocated to an old overlapping obligation must remain visible on the successor period");
+    const monthly = await services.investors.monthlyPayments(access.principal, { scope, accountId, instrumentId, fromMonth: "2026-08-01", throughMonth: "2026-08-01", limit: 25 });
+    assert.ok(monthly.items[0]?.payments.some(item => String(item.id) === preAmendmentPaymentId), "the monthly payment view must retain the old obligation allocation");
   } finally {
     await database.close();
   }
@@ -136,6 +148,18 @@ test("investor party mapping edits stay inside the principal's legal entity gran
     };
     const account = await services.investors.execute("investor.account.create", envelope({ displayName: "Scoped investor", newContact: { kind: "person", displayName: "Scoped contact" } }), admin);
     const accountId = String(account.affectedRecordIds[0]);
+    await assert.rejects(
+      () => services.investors.execute("investor.account.update", envelope({ accountId, displayName: "Unauthorized rename" }, entityId, 1), restricted),
+      /scope level/,
+      "an entity-scoped administrator cannot edit the organization-wide investor account",
+    );
+    await assert.rejects(
+      () => services.investors.execute("investor.account.archive", envelope({ accountId }, entityId, 1), restricted),
+      /scope level/,
+      "an entity-scoped administrator cannot archive the organization-wide investor account",
+    );
+    const storedAccount = await database.db.query<{ display_name: string; status: string }>("SELECT display_name,status FROM company_investor_accounts WHERE organization_id=$1 AND id=$2", [organizationId, accountId]);
+    assert.deepEqual(storedAccount.rows[0], { display_name: "Scoped investor", status: "active" });
     const mapping = await services.investors.execute("investor.party_mapping.create", envelope({
       accountId, partyKind: "investor", displayName: "Other entity payee", effectiveFrom: "2026-01-01",
       providerParty: { provider: "qbo", organizationId, legalEntityId: otherEntityId, environment: "sandbox", realmId: "123", objectType: "Vendor", objectId: "vendor-9" },

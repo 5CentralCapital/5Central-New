@@ -402,12 +402,23 @@ export class InvestorReadService {
     assertReadScope(principal, query.scope);
     const cursor = decodeMonthlyPaymentCursor(query.cursor);
     const obligations = await this.loadObligations(query.scope, query.accountId, query.instrumentId ? [query.instrumentId] : undefined, query.fromMonth, query.throughMonth, query.limit + 1, cursor);
-    const payments = await this.loadPayments(query.scope, { accountId: query.accountId, instrumentId: query.instrumentId, fromMonth: query.fromMonth, throughMonth: query.throughMonth });
+    const payments = (await this.loadPayments(query.scope, { accountId: query.accountId, instrumentId: query.instrumentId })).filter(payment => {
+      // Obligation payments are displayed by contractual period, even when
+      // the operator recorded an advance before the period's due date.
+      const month = payment.periodMonth ?? `${payment.paymentOn.slice(0, 7)}-01`;
+      return (query.fromMonth === undefined || month >= query.fromMonth)
+        && (query.throughMonth === undefined || month <= query.throughMonth);
+    });
+    const pageObligations = obligations.slice(0, query.limit);
+    const obligationAliases = await this.loadObligationAliases(query.scope, pageObligations);
     const grouped = new Map<string, InvestorPayment[]>();
     for (const payment of payments) if (payment.obligationId) grouped.set(String(payment.obligationId), [...(grouped.get(String(payment.obligationId)) ?? []), payment]);
     const hasMore = obligations.length > query.limit;
-    const pageObligations = obligations.slice(0, query.limit);
-    const rows = pageObligations.map(obligation => investorMonthlyPaymentRowSchema.parse({ obligation, payments: grouped.get(String(obligation.id)) ?? [] }));
+    const rows = pageObligations.map(obligation => {
+      const aliases = obligationAliases.get(`${String(obligation.contractId)}\u0000${obligation.periodMonth}`) ?? [String(obligation.id)];
+      const rowPayments = Array.from(new Map(aliases.flatMap(id => grouped.get(id) ?? []).map(payment => [String(payment.id), payment])).values());
+      return investorMonthlyPaymentRowSchema.parse({ obligation, payments: rowPayments });
+    });
     const filtered = query.status ? rows.filter(row => row.obligation.status === query.status) : rows;
     const last = pageObligations.at(-1);
     // A payment linked to an obligation belongs to that obligation's paged row,
@@ -519,6 +530,30 @@ export class InvestorReadService {
     return new Map(result.rows.map(row => [dbString(row, "id"), { instrumentName: dbString(row, "name"), accountName: dbString(row, "display_name") }] as const));
   }
 
+  /** Include payments attached to a superseded obligation for the same contract period. */
+  private async loadObligationAliases(scope: CompanyScope, obligations: readonly InvestorObligation[]): Promise<Map<string, string[]>> {
+    if (obligations.length === 0) return new Map();
+    const contractIds = Array.from(new Set(obligations.map(obligation => String(obligation.contractId))));
+    const periodMonths = Array.from(new Set(obligations.map(obligation => obligation.periodMonth)));
+    const result = await this.executor.query<Record<string, unknown>>(
+      `SELECT o.id, o.contract_id, o.period_month
+         FROM company_investor_obligations o
+         JOIN company_investor_contract_versions v ON v.organization_id=o.organization_id AND v.contract_id=o.contract_id AND v.id=o.contract_version_id
+        WHERE o.organization_id=$1 AND o.contract_id=ANY($2::uuid[]) AND o.period_month=ANY($3::date[])
+          AND ($4::uuid IS NULL OR o.legal_entity_id=$4)
+          AND ($5::varchar IS NULL OR EXISTS (SELECT 1 FROM company_investor_instrument_properties ip WHERE ip.organization_id=o.organization_id AND ip.instrument_id=o.instrument_id AND ip.property_id=$5))
+          AND v.status IN ('active','superseded','expired')
+        ORDER BY o.contract_id, o.period_month, o.id`,
+      [scope.organizationId, contractIds, periodMonths, scope.legalEntityId ?? null, scope.propertyId ?? null],
+    );
+    const aliases = new Map<string, string[]>();
+    for (const row of result.rows) {
+      const key = `${dbString(row, "contract_id")}\u0000${dbDate(row, "period_month")}`;
+      aliases.set(key, [...(aliases.get(key) ?? []), dbString(row, "id")]);
+    }
+    return aliases;
+  }
+
   /** Fixed contractual profit from the active version of an active contract, when documented. */
   private async guaranteedReturn(organizationId: string, instrumentIds: readonly string[]): Promise<Map<string, string>> {
     if (!instrumentIds.length) return new Map();
@@ -546,21 +581,28 @@ export class InvestorReadService {
     const obligationRows = await this.executor.query<Record<string, unknown>>(
       `WITH eligible_obligations AS (
          SELECT o.*, ROW_NUMBER() OVER (PARTITION BY o.contract_id,o.period_month ORDER BY v.effective_from DESC,o.id DESC) AS version_rank
-           FROM company_investor_obligations o
+          FROM company_investor_obligations o
            JOIN company_investor_contract_versions v ON v.organization_id=o.organization_id AND v.contract_id=o.contract_id AND v.id=o.contract_version_id
           WHERE o.organization_id=$1 AND o.account_id=ANY($2::uuid[]) AND ($3::uuid IS NULL OR o.legal_entity_id=$3)
             AND ($4::varchar IS NULL OR EXISTS (SELECT 1 FROM company_investor_instrument_properties ip WHERE ip.organization_id=o.organization_id AND ip.instrument_id=o.instrument_id AND ip.property_id=$4))
+            AND v.status IN ('active','superseded','expired')
             AND o.due_on >= v.effective_from AND (v.effective_to IS NULL OR o.due_on < v.effective_to)
        )
        SELECT o.id, o.account_id, o.instrument_id, o.contract_id, o.contract_version_id, o.organization_id, o.legal_entity_id, o.period_month, o.due_on, o.currency, o.principal_cents, o.interest_cents, o.return_of_capital_cents, o.distribution_cents, o.fee_cents, o.balloon_cents, o.unknown_expected_cents, o.unknown_component_kinds, o.total_expected_cents, o.known_minimum_cents, o.amount_complete, o.record_revision, o.updated_at
          FROM eligible_obligations o
         WHERE o.version_rank=1
         ORDER BY o.account_id, o.currency, o.due_on, o.id`, [scope.organizationId, accountIds, scope.legalEntityId ?? null, scope.propertyId ?? null]);
+    const baseObligations = obligationRows.rows.map(row => mappedObligation(row, []));
+    const obligationAliases = await this.loadObligationAliases(scope, baseObligations);
     const obligationsByAccountCurrency = new Map<string, InvestorObligation[]>();
-    for (const row of obligationRows.rows) {
+    for (let index = 0; index < obligationRows.rows.length; index += 1) {
+      const row = obligationRows.rows[index]!;
       const accountId = dbString(row, "account_id");
       const payments = paymentsByAccount.get(accountId) ?? [];
-      const obligation = mappedObligation(row, payments.filter(payment => String(payment.obligationId) === dbString(row, "id")));
+      const base = baseObligations[index]!;
+      const obligationIds = obligationAliases.get(`${String(base.contractId)}\u0000${base.periodMonth}`) ?? [dbString(row, "id")];
+      const obligationIdSet = new Set(obligationIds);
+      const obligation = mappedObligation(row, payments.filter(payment => payment.obligationId !== null && obligationIdSet.has(String(payment.obligationId))));
       const key = `${accountId}:${obligation.currency}`;
       obligationsByAccountCurrency.set(key, [...(obligationsByAccountCurrency.get(key) ?? []), obligation]);
     }
@@ -653,6 +695,7 @@ export class InvestorReadService {
             AND ($4::date IS NULL OR o.period_month >= $4) AND ($5::date IS NULL OR o.period_month <= $5)
             AND ($6::uuid IS NULL OR o.legal_entity_id=$6)
             AND ($7::varchar IS NULL OR EXISTS (SELECT 1 FROM company_investor_instrument_properties ip WHERE ip.organization_id=o.organization_id AND ip.instrument_id=o.instrument_id AND ip.property_id=$7))
+            AND v.status IN ('active','superseded','expired')
             AND o.due_on >= v.effective_from AND (v.effective_to IS NULL OR o.due_on < v.effective_to)
        )
        SELECT o.id, o.account_id, o.instrument_id, o.contract_id, o.contract_version_id, o.organization_id, o.legal_entity_id, o.period_month, o.due_on, o.currency, o.principal_cents, o.interest_cents, o.return_of_capital_cents, o.distribution_cents, o.fee_cents, o.balloon_cents, o.unknown_expected_cents, o.unknown_component_kinds, o.total_expected_cents, o.known_minimum_cents, o.amount_complete, o.record_revision, o.updated_at
@@ -661,9 +704,19 @@ export class InvestorReadService {
         ORDER BY o.period_month, o.due_on, o.id LIMIT $11`,
       [scope.organizationId, accountId ?? null, instrumentIds ?? null, fromMonth ?? null, throughMonth ?? null, scope.legalEntityId ?? null, scope.propertyId ?? null, cursor?.periodMonth ?? null, cursor?.dueOn ?? null, cursor?.id ?? null, limit],
     );
-    const payments = await this.loadPayments(scope, { accountId, instrumentIds, obligationIds: result.rows.map(row => dbString(row, "id")) });
-    const grouped = new Map<string, InvestorPayment[]>(); for (const payment of payments) if (payment.obligationId) grouped.set(String(payment.obligationId), [...(grouped.get(String(payment.obligationId)) ?? []), payment]);
-    return result.rows.map(row => mappedObligation(row, grouped.get(dbString(row, "id")) ?? []));
+    const baseObligations = result.rows.map(row => mappedObligation(row, []));
+    const obligationAliases = await this.loadObligationAliases(scope, baseObligations);
+    const obligationIds = Array.from(new Set(baseObligations.flatMap(obligation => obligationAliases.get(`${String(obligation.contractId)}\u0000${obligation.periodMonth}`) ?? [String(obligation.id)])));
+    const payments = await this.loadPayments(scope, { accountId, instrumentIds, obligationIds });
+    const grouped = new Map<string, InvestorPayment[]>();
+    for (const payment of payments) if (payment.obligationId) grouped.set(String(payment.obligationId), [...(grouped.get(String(payment.obligationId)) ?? []), payment]);
+    return result.rows.map((row, index) => {
+      const base = baseObligations[index]!;
+      const ids = obligationAliases.get(`${String(base.contractId)}\u0000${base.periodMonth}`) ?? [dbString(row, "id")];
+      const obligationPayments = ids.flatMap(id => grouped.get(id) ?? []);
+      const uniquePayments = Array.from(new Map(obligationPayments.map(payment => [String(payment.id), payment])).values());
+      return mappedObligation(row, uniquePayments);
+    });
   }
 
   private async refreshQboSource(source: InvestorPayment["postedSource"]): Promise<{ source: InvestorPayment["postedSource"]; validity: InvestorPostedSourceValidity | null }> {

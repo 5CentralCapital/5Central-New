@@ -329,6 +329,80 @@ test("finance bindings use reserved allocation and downgrade stale or ineligible
   assert.deepEqual(afterRelease.actuals.map((actual) => actual.amountCents), ["2500"], "released history must not keep current project coverage partial or duplicate an actual");
 });
 
+test("project cost coverage follows the bound QBO stream without hiding aggregate uncertainty", async () => {
+  const line = financialSourceLineResolutionSchema.parse({
+    source: SOURCE,
+    direction: "debit",
+    flow: "outgoing",
+    lineRole: "expense",
+    amountCents: "10000",
+    currency: "USD",
+    transactionType: "Bill",
+    accountObjectId: "expense-account",
+    counterpartyObjectId: "vendor-42",
+    description: "Synthetic posted bill",
+    postingState: "posted",
+    postedOn: "2026-09-20",
+    settlement: { state: "unknown", settledOn: null, settledAmountCents: null },
+    watermark: { value: "stream-watermark", observedAt: "2026-09-21T00:00:00.000Z" },
+  });
+  const aggregateCoverage = financialSourceCoverageSchema.parse({
+    scope: SCOPE,
+    stream: "aggregate",
+    status: "partial",
+    evidence: "live_provider_readback",
+    basis: "source_transactions",
+    watermark: { value: "aggregate-watermark", observedAt: "2026-09-21T00:00:00.000Z" },
+    coveredFrom: "2026-01-01",
+    coveredThrough: "2026-12-31",
+    observedAt: "2026-09-21T00:00:00.000Z",
+    objectCount: 2,
+    transactionCount: 2,
+    lineCount: 1,
+    missingIntervals: [],
+    reason: "One unrelated QBO account object remains unresolved",
+  });
+  const billCoverage = financialSourceCoverageSchema.parse({
+    ...aggregateCoverage,
+    stream: "transactions.bill",
+    status: "complete",
+    reason: null,
+  });
+  const bindingSource: ProjectFinanceBindingSource = {
+    async listProjectBindings() {
+      return [projectFinanceBindingSchema.parse({
+        id: SOURCE_ID,
+        projectId: PROJECT_ID,
+        commitmentId: COMMITMENT_ID,
+        scopeItemId: null,
+        source: SOURCE,
+        allocatedCents: "2500",
+        eligible: true,
+        bindingStatus: "verified",
+      })];
+    },
+  };
+  const requestedStreams: (string | undefined)[] = [];
+  let relevantCoverage = billCoverage;
+  const source: FinancialSourceReadPort = {
+    async resolveLine() { return line; },
+    async readCoverage(_scope, stream) {
+      requestedStreams.push(stream);
+      return stream === "transactions.bill" ? relevantCoverage : aggregateCoverage;
+    },
+    async listTransactions() { return { items: [line], nextCursor: null, coverage: relevantCoverage }; },
+  };
+  const complete = await resolveProjectFinanceActuals(source, bindingSource, costContextForLine(line), { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
+  assert.equal(complete.coverage, "complete", "an unrelated aggregate exception must not downgrade a fully covered bound Bill stream");
+  assert.deepEqual(requestedStreams, ["transactions.bill"]);
+  assert.equal(complete.actuals[0]?.amountCents, "2500");
+
+  relevantCoverage = financialSourceCoverageSchema.parse({ ...billCoverage, status: "partial", reason: "The bound Bill stream has an unresolved object" });
+  const partial = await resolveProjectFinanceActuals(source, bindingSource, costContextForLine(line), { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
+  assert.equal(partial.coverage, "partial", "relevant stream uncertainty must remain visible even when the exact line resolves");
+  assert.equal(partial.actuals[0]?.amountCents, "2500");
+});
+
 test("execution create commands persist through one idempotent company command path", async () => {
   const fixture = await createSyntheticCompanyDatabase();
   try {
@@ -367,12 +441,20 @@ test("execution create commands persist through one idempotent company command p
       legalEntityId: SYNTHETIC_COMPANY.entityId,
       propertyId: SYNTHETIC_COMPANY.propertyId,
     };
+    const organizationScope = { organizationId: SYNTHETIC_COMPANY.organizationId };
     const envelope = (payload: Record<string, unknown>, expectedRevision?: number) => ({
       operationId: newOperationId(),
       idempotencyKey: `execution-test-${newOperationId()}`,
       scope,
       effectiveDate: "2026-09-21",
       ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      payload,
+    });
+    const organizationEnvelope = (payload: Record<string, unknown>) => ({
+      operationId: newOperationId(),
+      idempotencyKey: `execution-test-org-${newOperationId()}`,
+      scope: organizationScope,
+      effectiveDate: "2026-09-21",
       payload,
     });
     const templateReceipt = await executeProjectExecutionCommand(fixture.executor, "project.template.create", envelope({ name: "Turn template", projectType: "unit_turn", description: null, currency: "USD" }), options);
@@ -389,8 +471,31 @@ test("execution create commands persist through one idempotent company command p
     );
     const instantiate = await executeProjectExecutionCommand(fixture.executor, "project.template.instantiate", envelope({ projectId: PROJECT_ID, templateId, startOn: "2026-09-21" }, 1), options);
     let projectRevision = Number(instantiate.resultingRevisions.find((item) => String(item.recordId) === PROJECT_ID)?.revision);
-    const vendor = await executeProjectExecutionCommand(fixture.executor, "project.vendor.create", envelope({ name: "Synthetic vendor", notes: null }), options);
+    const vendor = await executeProjectExecutionCommand(fixture.executor, "project.vendor.create", organizationEnvelope({ name: "Synthetic vendor", notes: null }), options);
     const vendorId = String(vendor.affectedRecordIds[0]);
+    const restrictedActor = "project-entity-admin";
+    await fixture.db.query(
+      `INSERT INTO company_access_grants(id,organization_id,actor_id,role,legal_entity_id)
+       VALUES ('57000000-0000-4000-8000-000000000010',$1,$2,'admin',$3)`,
+      [SYNTHETIC_COMPANY.organizationId, restrictedActor, SYNTHETIC_COMPANY.entityId],
+    );
+    const restrictedResolve = (executor: typeof fixture.executor) => loadAuthenticatedPrincipal(executor, {
+      actorId: restrictedActor,
+      organizationId: SYNTHETIC_COMPANY.organizationId,
+      role: "admin",
+    });
+    const restrictedOptions = {
+      principal: await restrictedResolve(fixture.executor),
+      transport: attestTransport("web"),
+      resolvePrincipal: restrictedResolve,
+    };
+    await assert.rejects(
+      () => executeProjectExecutionCommand(fixture.executor, "project.vendor.update", envelope({ vendorId, name: "Unauthorized vendor rename" }), restrictedOptions),
+      /scope level/,
+      "an entity-scoped administrator cannot edit the organization-wide vendor registry",
+    );
+    const vendorRow = await fixture.db.query<{ name: string }>("SELECT name FROM company_project_vendors WHERE organization_id=$1 AND id=$2", [SYNTHETIC_COMPANY.organizationId, vendorId]);
+    assert.equal(vendorRow.rows[0]?.name, "Synthetic vendor");
     const assignment = await executeProjectExecutionCommand(fixture.executor, "project.assignment.create", envelope({ projectId: PROJECT_ID, assigneeType: "vendor", assigneeRef: vendorId, role: "General contractor" }, projectRevision), options);
     projectRevision = Number(assignment.resultingRevisions.find((item) => String(item.recordId) === PROJECT_ID)?.revision);
     const milestone = await executeProjectExecutionCommand(fixture.executor, "project.milestone.create", envelope({ projectId: PROJECT_ID, name: "Rough inspection" }, projectRevision), options);

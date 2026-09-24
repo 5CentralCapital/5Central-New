@@ -117,22 +117,29 @@ async function investorObligations(executor: RentOpsQueryExecutor, organizationI
        SELECT o.*, ROW_NUMBER() OVER (PARTITION BY o.contract_id,o.period_month ORDER BY v.effective_from DESC,o.id DESC) AS version_rank
          FROM company_investor_obligations o
          JOIN company_investor_contract_versions v ON v.organization_id=o.organization_id AND v.contract_id=o.contract_id AND v.id=o.contract_version_id
-        WHERE o.organization_id = $1 AND o.due_on >= v.effective_from AND (v.effective_to IS NULL OR o.due_on < v.effective_to)
+        WHERE o.organization_id = $1 AND v.status IN ('active','superseded','expired')
+          AND o.due_on >= v.effective_from AND (v.effective_to IS NULL OR o.due_on < v.effective_to)
      ), paid AS (
-       SELECT a.obligation_id, sum(a.allocated_cents) AS allocated
+       SELECT o.contract_id, o.period_month, sum(a.allocated_cents) AS allocated
          FROM company_investor_payment_allocations a
          JOIN company_investor_payments p ON p.organization_id = a.organization_id AND p.id = a.payment_id
-        WHERE a.organization_id = $1 AND p.status <> 'reversed' AND p.payment_on <= $2::date
+         JOIN company_investor_obligations o ON o.organization_id = a.organization_id AND o.id = a.obligation_id
+         JOIN company_investor_contract_versions pv ON pv.organization_id=o.organization_id AND pv.contract_id=o.contract_id AND pv.id=o.contract_version_id
+        WHERE a.organization_id = $1 AND pv.status IN ('active','superseded','expired')
+          -- The selected obligation enforces the effective interval. Payment
+          -- history also needs superseded rows whose allocations were made
+          -- before an amendment replaced that period.
+          AND p.status <> 'reversed' AND p.payment_on <= $2::date
           AND NOT EXISTS (
             SELECT 1 FROM company_investor_payments reversal
              WHERE reversal.organization_id=p.organization_id AND reversal.reverses_payment_id=p.id AND reversal.payment_on <= $2::date
           )
-        GROUP BY a.obligation_id)
+        GROUP BY o.contract_id, o.period_month)
        SELECT sum(GREATEST(o.total_expected_cents - COALESCE(paid.allocated, 0), 0)) FILTER (WHERE o.amount_complete)::text AS unpaid,
             count(*) FILTER (WHERE NOT o.amount_complete)::text AS incomplete,
             count(*)::text AS count
        FROM eligible_obligations o
-       LEFT JOIN paid ON paid.obligation_id = o.id
+       LEFT JOIN paid ON paid.contract_id = o.contract_id AND paid.period_month = o.period_month
       WHERE o.version_rank=1 AND o.due_on <= $2::date`,
     [organizationId, asOf],
   );

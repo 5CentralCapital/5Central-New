@@ -79,9 +79,11 @@ const INVESTOR_WRITE_ROLES = ["owner", "admin", "finance"] as const;
 const INVESTOR_ARCHIVE_ROLES = ["owner", "admin"] as const;
 
 export const INVESTOR_COMMAND_POLICIES: Readonly<Record<InvestorCommandKind, CommandAuthorizationPolicy>> = Object.freeze({
-  "investor.account.create": { commandKind: "investor.account.create", allowedRoles: INVESTOR_WRITE_ROLES },
-  "investor.account.update": { commandKind: "investor.account.update", allowedRoles: INVESTOR_WRITE_ROLES },
-  "investor.account.archive": { commandKind: "investor.account.archive", allowedRoles: INVESTOR_ARCHIVE_ROLES },
+  // Investor accounts are organization-wide records and carry no legal entity
+  // of their own. Entity-scoped principals must not mutate them indirectly.
+  "investor.account.create": { commandKind: "investor.account.create", allowedRoles: INVESTOR_WRITE_ROLES, requiredScope: "organization" },
+  "investor.account.update": { commandKind: "investor.account.update", allowedRoles: INVESTOR_WRITE_ROLES, requiredScope: "organization" },
+  "investor.account.archive": { commandKind: "investor.account.archive", allowedRoles: INVESTOR_ARCHIVE_ROLES, requiredScope: "organization" },
   "investor.instrument.create": { commandKind: "investor.instrument.create", allowedRoles: INVESTOR_WRITE_ROLES, requiredScope: "legal_entity" },
   "investor.instrument.update": { commandKind: "investor.instrument.update", allowedRoles: INVESTOR_WRITE_ROLES, requiredScope: "legal_entity" },
   "investor.instrument.archive": { commandKind: "investor.instrument.archive", allowedRoles: INVESTOR_ARCHIVE_ROLES, requiredScope: "legal_entity" },

@@ -70,7 +70,13 @@ export interface ProjectExecutionCommandOptions {
 const EXECUTION_WRITE_ROLES = ["owner", "admin", "operations_pm", "project_manager", "finance"] as const;
 
 export const PROJECT_EXECUTION_COMMAND_POLICIES: Readonly<Record<ProjectExecutionCommandKind, CommandAuthorizationPolicy>> = Object.freeze(
-  Object.fromEntries(projectExecutionCommandKinds.map((commandKind) => [commandKind, { commandKind, allowedRoles: EXECUTION_WRITE_ROLES }])) as unknown as Record<ProjectExecutionCommandKind, CommandAuthorizationPolicy>,
+  Object.fromEntries(projectExecutionCommandKinds.map((commandKind) => [commandKind, {
+    commandKind,
+    allowedRoles: EXECUTION_WRITE_ROLES,
+    // Vendors are organization-wide registry records. Require an explicit
+    // organization command scope before creating or editing one.
+    ...(commandKind === "project.vendor.create" || commandKind === "project.vendor.update" ? { requiredScope: "organization" as const } : {}),
+  }])) as unknown as Record<ProjectExecutionCommandKind, CommandAuthorizationPolicy>,
 );
 
 type AnyExecutionEnvelope = CommandEnvelope<Record<string, unknown>>;
