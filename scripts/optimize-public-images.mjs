@@ -4,6 +4,24 @@ import {fileURLToPath} from 'node:url';
 import sharp from 'sharp';
 
 const raster = /\.(?:jpe?g|png|webp)$/i;
+// These are the only legacy images still referenced by absolute
+// `/attached_assets/...` paths in client/src/lib/property-data.ts. The
+// client/public tree is the reviewed source for the rest of the public image
+// library. The root attached_assets directory also contains private working
+// exports and screenshots, so it must never be copied wholesale.
+export const publicAttachedAssetFiles = [
+  '1 Harmony St _1754934705755.jpg',
+  '41 stuart Ave_1754934705755.PNG',
+  '52 Summit ave_1754934705755.PNG',
+  '29 Brainard St_1754934705755.PNG',
+  '25 Huntington Pl_1754934705755.PNG',
+  '175-crystal-ave.jpg',
+  '35 Linden St_1754934705755.PNG',
+  '145 Crystal Ave_1754934705754.JPG',
+  '149 Crystal Ave _1754934705754.JPG',
+  '157 crystal ave_1754938607514.jpeg',
+];
+
 async function images(directory) {
   const result=[];
   for (const entry of await readdir(directory,{withFileTypes:true})) {
@@ -18,8 +36,9 @@ async function images(directory) {
 export async function optimizePublicImages(publicDir, attachedDir) {
   sharp.cache(false);
   sharp.concurrency(1);
-  if(attachedDir) for(const source of await images(attachedDir)) {
-    const target=path.join(publicDir,'attached_assets',path.relative(attachedDir,source));
+  if(attachedDir) for(const relative of publicAttachedAssetFiles) {
+    const source=path.join(attachedDir,relative);
+    const target=path.join(publicDir,'attached_assets',relative);
     await mkdir(path.dirname(target),{recursive:true});
     await writeFile(target,await readFile(source));
   }
