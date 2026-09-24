@@ -403,6 +403,106 @@ test("project cost coverage follows the bound QBO stream without hiding aggregat
   assert.equal(partial.actuals[0]?.amountCents, "2500");
 });
 
+test("a Purchase credit keeps a Purchase-bound project cost report partial", async () => {
+  const purchaseSource = financialSourceReferenceSchema.parse({ ...SOURCE, objectType: "Purchase", objectId: "purchase-42" });
+  const refundSource = financialSourceReferenceSchema.parse({ ...SOURCE, objectType: "Purchase", objectId: "purchase-refund-42" });
+  const coverage = financialSourceCoverageSchema.parse({
+    scope: SCOPE,
+    stream: "transactions.purchase",
+    status: "complete",
+    evidence: "live_provider_readback",
+    basis: "source_transactions",
+    watermark: { value: "purchase-watermark", observedAt: "2026-09-21T00:00:00.000Z" },
+    coveredFrom: "2026-01-01",
+    coveredThrough: "2026-12-31",
+    observedAt: "2026-09-21T00:00:00.000Z",
+    objectCount: 2,
+    transactionCount: 2,
+    lineCount: 2,
+    missingIntervals: [],
+    reason: null,
+  });
+  const purchaseLine = financialSourceLineResolutionSchema.parse({
+    source: purchaseSource,
+    direction: "debit",
+    flow: "outgoing",
+    lineRole: "expense",
+    amountCents: "10000",
+    currency: "USD",
+    transactionType: "Purchase",
+    accountObjectId: "expense-account",
+    counterpartyObjectId: "vendor-42",
+    description: "Synthetic posted purchase",
+    postingState: "posted",
+    postedOn: "2026-09-20",
+    settlement: { state: "unknown", settledOn: null, settledAmountCents: null },
+    watermark: coverage.watermark,
+  });
+  const refundLine = financialSourceLineResolutionSchema.parse({
+    source: refundSource,
+    direction: "credit",
+    flow: "incoming",
+    lineRole: "expense",
+    amountCents: "2500",
+    currency: "USD",
+    transactionType: "Purchase",
+    accountObjectId: "expense-account",
+    counterpartyObjectId: "vendor-42",
+    description: "Synthetic purchase refund",
+    postingState: "posted",
+    postedOn: "2026-09-21",
+    settlement: { state: "unknown", settledOn: null, settledAmountCents: null },
+    watermark: coverage.watermark,
+  });
+  let listTransactionsCalls = 0;
+  let hasPurchaseCreditsCalls = 0;
+  const source: FinancialSourceReadPort = {
+    async resolveLine() { return purchaseLine; },
+    async readCoverage() { return coverage; },
+    async listTransactions() {
+      listTransactionsCalls += 1;
+      return { items: [purchaseLine, refundLine], nextCursor: null, coverage };
+    },
+    async hasPurchaseCredits(_scope, through) {
+      hasPurchaseCreditsCalls += 1;
+      assert.equal(through, "2026-09-21");
+      return true;
+    },
+  };
+  const bindings: ProjectFinanceBindingSource = {
+    async listProjectBindings() {
+      return [projectFinanceBindingSchema.parse({
+        id: SOURCE_ID,
+        projectId: PROJECT_ID,
+        commitmentId: COMMITMENT_ID,
+        scopeItemId: null,
+        source: purchaseSource,
+        allocatedCents: "2500",
+        eligible: true,
+        bindingStatus: "verified",
+      })];
+    },
+  };
+  const result = await resolveProjectFinanceActuals(source, bindings, costContextForLine(purchaseLine), {
+    organizationId: SYNTHETIC_COMPANY.organizationId,
+    projectId: PROJECT_ID,
+    asOf: "2026-09-21",
+  });
+  assert.equal(result.coverage, "partial");
+  assert.deepEqual(result.actuals.map((actual) => actual.amountCents), ["2500"]);
+  assert.equal(hasPurchaseCreditsCalls, 1);
+  assert.equal(listTransactionsCalls, 0, "project coverage uses the narrow provider probe instead of scanning all lines");
+
+  const withoutProbe: FinancialSourceReadPort = { ...source, hasPurchaseCredits: undefined };
+  const unavailable = await resolveProjectFinanceActuals(withoutProbe, bindings, costContextForLine(purchaseLine), {
+    organizationId: SYNTHETIC_COMPANY.organizationId,
+    projectId: PROJECT_ID,
+    asOf: "2026-09-21",
+  });
+  assert.equal(unavailable.coverage, "partial", "missing provider probe must fail closed");
+  assert.equal(listTransactionsCalls, 0);
+});
+
 test("execution create commands persist through one idempotent company command path", async () => {
   const fixture = await createSyntheticCompanyDatabase();
   try {

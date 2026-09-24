@@ -195,6 +195,23 @@ export async function resolveProjectFinanceActuals(
   // in another stream from making every project partial.
   const coverages = await Promise.all(Array.from(coverageQueries.values()).map(({ scope, stream }) => source.readCoverage(scope, stream)));
   let hasUnresolvedBinding = bindingRows.some((binding) => binding.bindingStatus !== "verified" || !binding.eligible);
+  // Purchase credits are normalized as incoming expense reversals and are
+  // intentionally excluded from outgoing project-cost bindings. A bound
+  // Purchase stream with any current, non-voided credit therefore has an
+  // unresolved project allocation and must remain visibly partial. The
+  // optional probe is deliberately narrow; without it, fail closed rather
+  // than scanning or claiming complete coverage.
+  const purchaseScopes = Array.from(coverageQueries.values())
+    .filter(({ stream }) => stream === "transactions.purchase")
+    .map(({ scope }) => scope);
+  const hasPurchaseCredits = source.hasPurchaseCredits?.bind(source);
+  if (purchaseScopes.length > 0) {
+    if (hasPurchaseCredits === undefined) {
+      hasUnresolvedBinding = true;
+    } else if (await Promise.all(purchaseScopes.map((scope) => hasPurchaseCredits(scope, input.asOf))).then((values) => values.some(Boolean))) {
+      hasUnresolvedBinding = true;
+    }
+  }
   const results = await Promise.all(bindingRows.map(async (binding) => {
     if (binding.bindingStatus !== "verified" || !binding.eligible) return null;
     const resolved = await source.resolveLine({

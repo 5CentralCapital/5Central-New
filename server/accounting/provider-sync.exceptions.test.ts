@@ -3,6 +3,7 @@ import test from "node:test";
 import { createSyntheticCompanyDatabase, SYNTHETIC_COMPANY } from "../company/testing/synthetic-database";
 import type { QuickBooksAccountingClient } from "../integrations/quickbooks/accounting";
 import type { QuickBooksJsonObject } from "../../shared/accounting/quickbooks";
+import { financialSourceReferenceSchema } from "../../shared/accounting/source";
 import { createQboAccountingMirrorStore } from "./mirror-store";
 import { PostgresQuickBooksCapabilityStore } from "./capabilities";
 import { createQboProviderSync, decodeQboKeysetCursor, encodeQboKeysetCursor, nextQboKeysetCursor, queryFor } from "./provider-sync";
@@ -130,6 +131,108 @@ test("an item-based expense without an account cannot claim complete coverage", 
     assert.equal(stream.openExceptionCount, 1);
     assert.equal(await mirror.resolveLine({ scope: sourceScope, objectType: "Purchase", objectId: "25", lineId: "1" }), null);
     assert.equal((await mirror.readCoverage(sourceScope, "transactions.purchase")).status, "partial");
+  } finally {
+    await synthetic.close();
+  }
+});
+
+test("provider sync mirrors refund and cash-back lines with signed flow and no duplicate replay", async () => {
+  const store: Store = {
+    Purchase: [{
+      Id: "26", SyncToken: "0", TxnDate: "2026-09-10", TotalAmt: 12, CurrencyRef: { value: "USD" },
+      PaymentType: "CreditCard", Credit: true, AccountRef: { value: "41" }, MetaData: { LastUpdatedTime: "2026-09-10T10:00:00Z" },
+      Line: [{ Id: "1", Amount: 12, AccountBasedExpenseLineDetail: { AccountRef: { value: "7" } } }],
+    } as QuickBooksJsonObject],
+    Deposit: [{
+      Id: "121", SyncToken: "0", TxnDate: "2026-09-10", TotalAmt: 80, CurrencyRef: { value: "USD" }, DepositToAccountRef: { value: "35" },
+      CashBack: { AccountRef: { value: "36" }, Amount: 20 }, MetaData: { LastUpdatedTime: "2026-09-10T11:00:00Z" },
+      Line: [{ Id: "1", Amount: 100, DepositLineDetail: { AccountRef: { value: "79" } } }],
+    } as QuickBooksJsonObject],
+    Account: [account("35", "Bank"), account("36", "CashOnHand"), account("41", "Credit Card"), account("7", "Expense"), account("79", "Income")],
+  };
+  const { synthetic, mirror, sync } = await harness(store);
+  try {
+    const first = await sync.catchUp();
+    assert.equal(first.status, "complete");
+    assert.deepEqual(await mirror.listOpenSyncExceptions(scope), []);
+    const refund = await mirror.resolveLine({ scope: sourceScope, objectType: "Purchase", objectId: "26", lineId: "1" });
+    assert.equal(refund?.amountCents, "1200");
+    assert.equal(refund?.direction, "credit");
+    assert.equal(refund?.flow, "incoming");
+    assert.equal(refund?.lineRole, "expense");
+    assert.equal(await mirror.readPaymentContext({ scope: sourceScope, objectType: "Purchase", objectId: "26", lineId: "1" }), null, "a Purchase refund is not an outgoing payment");
+    const deposit = await mirror.resolveLine({ scope: sourceScope, objectType: "Deposit", objectId: "121", lineId: "1" });
+    assert.equal(deposit?.amountCents, "10000");
+    const cashBack = await mirror.resolveLine({ scope: sourceScope, objectType: "Deposit", objectId: "121", lineId: "synthetic:cashback" });
+    assert.equal(cashBack?.amountCents, "2000");
+    assert.equal(cashBack?.direction, "debit");
+    assert.equal(cashBack?.flow, "outgoing");
+    assert.equal(cashBack?.lineRole, "unknown");
+    assert.equal(await mirror.readPaymentContext({ scope: sourceScope, objectType: "Deposit", objectId: "121", lineId: "synthetic:cashback" }), null, "cash back is not an incoming receipt");
+    assert.equal((await mirror.readCostContext({ scope: sourceScope, objectType: "Deposit", objectId: "121", lineId: "synthetic:cashback" }))?.eligible, false, "cash back account classification remains fail-closed");
+
+    const replay = await sync.catchUp({ fullReplay: true });
+    assert.equal(replay.status, "complete");
+    assert.deepEqual(await mirror.listOpenSyncExceptions(scope), []);
+    const lines = await mirror.listTransactions({ scope: sourceScope, from: "2026-09-10", through: "2026-09-10", limit: 20 });
+    assert.equal(lines.items.filter(item => item.source.objectType === "Purchase" && item.source.objectId === "26").length, 1);
+    assert.equal(lines.items.filter(item => item.source.objectType === "Deposit" && item.source.objectId === "121").length, 2);
+
+    // The narrow probe respects the as-of date, current-row state and source
+    // scope. A retired credit in another realm must not affect this company.
+    assert.equal(await mirror.hasPurchaseCredits(sourceScope, "2026-09-09"), false);
+    assert.equal(await mirror.hasPurchaseCredits(sourceScope, "2026-09-10"), true);
+    const isolatedScope = { ...scope, realmId: "654321" };
+    const isolatedSource = financialSourceReferenceSchema.parse({
+      provider: "qbo", ...isolatedScope, objectType: "Purchase", objectId: "isolated", lineId: "1", version: "0",
+    });
+    const isolatedObject = await mirror.ingestSourceObject({
+      scope: isolatedScope,
+      objectType: "Purchase",
+      objectId: "isolated",
+      version: "0",
+      providerUpdatedAt: "2026-09-10T12:00:00Z",
+      providerBody: { Id: "isolated", SyncToken: "0" },
+    });
+    const isolatedTransaction = await mirror.ingestTransaction({
+      sourceObjectId: isolatedObject.id,
+      scope: isolatedScope,
+      objectType: "Purchase",
+      objectId: "isolated",
+      version: "0",
+      transactionDate: "2026-09-10",
+      postingState: "posted",
+      currency: "USD",
+      watermark: "2026-09-10T12:00:00Z",
+      updatedAt: "2026-09-10T12:00:00Z",
+    });
+    await mirror.ingestTransactionLine({
+      transactionId: isolatedTransaction.id,
+      sourceObjectId: isolatedObject.id,
+      source: isolatedSource,
+      lineNumber: 1,
+      transactionType: "Purchase",
+      direction: "credit",
+      flow: "incoming",
+      lineRole: "expense",
+      amountCents: "100",
+      currency: "USD",
+      postingState: "posted",
+      postedOn: "2026-09-10",
+      settlementState: "unknown",
+      settledOn: null,
+      settledAmountCents: null,
+      accountObjectId: "7",
+      counterpartyObjectId: null,
+      description: "isolated refund",
+      watermark: "2026-09-10T12:00:00Z",
+      updatedAt: "2026-09-10T12:00:00Z",
+    });
+    const isolatedSourceScope = { provider: "qbo" as const, ...isolatedScope };
+    assert.equal(await mirror.hasPurchaseCredits(isolatedSourceScope, "2026-09-10"), true);
+    assert.equal(await mirror.hasPurchaseCredits(sourceScope, "2026-09-10"), true);
+    await mirror.beginTransactionRevision({ scope: isolatedScope, objectType: "Purchase", objectId: "isolated", version: "1", lineIds: [] });
+    assert.equal(await mirror.hasPurchaseCredits(isolatedSourceScope, "2026-09-10"), false);
   } finally {
     await synthetic.close();
   }

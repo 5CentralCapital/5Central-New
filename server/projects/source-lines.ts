@@ -51,7 +51,10 @@ function text(value: unknown): string { return value instanceof Date ? value.toI
 
 const PURPOSE_FILTER: Readonly<Record<CostSourceLinePurpose, string>> = {
   cost: "b.flow = 'outgoing' AND b.line_role IN ('expense','payable')",
-  payroll: "b.direction = 'debit' AND b.flow <> 'incoming' AND b.line_role IN ('expense','payable','unknown')",
+  // Deposit cash-back is an outgoing debit to an explicitly named provider
+  // account, but it is not payroll evidence. Keep it visible in the source
+  // mirror while excluding it from the payroll picker.
+  payroll: "b.direction = 'debit' AND b.flow <> 'incoming' AND b.line_role IN ('expense','payable','unknown') AND b.transaction_type <> 'Deposit'",
 };
 
 /**
@@ -157,7 +160,7 @@ export async function verifyCostSourceLine(finance: ProjectExecutionFinancePorts
   if (resolved.currency !== input.currency) throw new ValidationCommandError("The QBO source line currency does not match", { reason: reason("currency_mismatch") });
   const roleOk = input.purpose === "cost"
     ? resolved.flow === "outgoing" && (resolved.lineRole === "expense" || resolved.lineRole === "payable")
-    : resolved.direction === "debit" && resolved.flow !== "incoming";
+    : resolved.direction === "debit" && resolved.flow !== "incoming" && resolved.transactionType !== "Deposit";
   if (!roleOk) throw new ValidationCommandError("The QBO source line is not an eligible cost", { reason: reason("line_ineligible") });
   const context = await finance.costContext.readCostContext({ scope: scopeOf(source), objectType: resolved.source.objectType, objectId: resolved.source.objectId, lineId: resolved.source.lineId ?? undefined });
   const classifications = input.purpose === "cost" ? COST_CLASSIFICATIONS : PAYROLL_CLASSIFICATIONS;
