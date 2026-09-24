@@ -5,10 +5,14 @@ import type { ProjectCostLine, ProjectCostReport } from "@shared/projects/cost-r
 import type { CostSourceLine, CostSourceLinePage } from "@shared/projects/source-lines";
 import type { ProjectLaborResponse } from "@shared/time/labor";
 import type { ProjectDetail, ProjectExecutionDetail } from "./types";
+import { formatLongDate, formatTableDate } from "../../lib/rent-ops-formatters";
 import { formatInputValue, formatMoney, formatQualifiedMoney, incurredLabel, paidLabel, parseMoneyInput, sumCents, sumCentsByCurrency } from "./money";
 
 function label(value: string): string { return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
-function dateLabel(value: string | null | undefined): string { if (!value) return "—"; const date = new Date(`${value.slice(0, 10)}T00:00:00`); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date); }
+/** Table dates: "Jun 1" this year, "Jun 1, 2025" otherwise. */
+function dateLabel(value: string | null | undefined): string { return formatTableDate(value) ?? "—"; }
+/** Field dates: "Sep 24, 2026". */
+function longDateLabel(value: string | null | undefined): string { return formatLongDate(value) ?? "—"; }
 function money(value: string | null | undefined, currency: string): string { return value === null || value === undefined ? "Unknown" : formatMoney(value, currency); }
 function moneyTotalsByCurrency(values: readonly { readonly cents: string | null | undefined; readonly currency: string }[]): string {
   const totals = sumCentsByCurrency(values);
@@ -64,8 +68,8 @@ export function ProjectScheduleRiskPanel({ report, project }: { report: ProjectC
   return <section className="projects-panel" aria-label="Schedule risk">
     <div className="projects-panel-heading"><h3>Schedule</h3><Status value={risk.status} /></div>
     <dl className="projects-definition-list">
-      <div><dt>Target</dt><dd>{dateLabel(risk.targetOn)}</dd></div>
-      <div><dt>Projected finish</dt><dd>{dateLabel(risk.projectedFinishOn)}</dd></div>
+      <div><dt>Target</dt><dd>{longDateLabel(risk.targetOn)}</dd></div>
+      <div><dt>Projected finish</dt><dd>{longDateLabel(risk.projectedFinishOn)}</dd></div>
       <div><dt>Open tasks</dt><dd>{risk.openTaskCount}</dd></div>
     </dl>
     {risk.lateTaskIds.length > 0 && <p className="projects-muted">Late: {risk.lateTaskIds.map(title).join(", ")}</p>}

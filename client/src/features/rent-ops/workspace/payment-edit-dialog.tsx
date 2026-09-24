@@ -33,7 +33,7 @@ export function PaymentEditDialog({id,tenantName,onClose,onSaved,tenancyId,busin
       setPending(body);await request(tenancyId?"manual-payments":`payments/${encodeURIComponent(id)}/corrections`,tenancyId?{id:operationId,tenancyId,amountCents:body.amountCents,postedOn:body.postedOn,paymentMethod:body.paymentMethod,description:body.description,category:"unapplied_cash",allocations:[]}:body);setSaved(true);}
     await refresh();
   }catch(err){if((err as {definitive?:boolean})?.definitive)setPending(undefined);setError(err instanceof Error?err.message:"Unable to save payment.");}finally{setBusy(false);}}
-  return <Dialog open onOpenChange={open=>{if(!open&&!busy)onClose();}}><DialogContent className="rops-payment-dialog" onEscapeKeyDown={e=>{if(busy)e.preventDefault();}} onPointerDownOutside={e=>e.preventDefault()}><DialogHeader><DialogTitle>{tenancyId?"Add payment":"Edit payment"}</DialogTitle><DialogDescription>{tenantName}</DialogDescription></DialogHeader>
+  return <Dialog open onOpenChange={open=>{if(!open&&!busy)onClose();}}><DialogContent className="rops-payment-dialog" onEscapeKeyDown={e=>{if(busy)e.preventDefault();}} onPointerDownOutside={e=>e.preventDefault()}><DialogHeader><DialogTitle>{tenancyId?"Record payment":"Edit payment"}</DialogTitle><DialogDescription>{tenantName}</DialogDescription></DialogHeader>
     <form onSubmit={save}>
       {!context&&!error&&<p role="status">Loading payment…</p>}
       {context&&<fieldset disabled={busy||saved||!!pending}><div className="rops-payment-fields">

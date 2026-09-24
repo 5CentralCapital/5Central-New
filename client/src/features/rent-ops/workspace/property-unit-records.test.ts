@@ -226,3 +226,15 @@ test("optional property metadata stays neutral while real values and explicit un
   assert.equal(unitLayoutLabel({ bedrooms: 2 }), "2 bd");
   assert.equal(unitLayoutLabel({}), "—");
 });
+
+test("property list rows show unit and vacancy counts instead of the address", () => {
+  const snapshot = makeSnapshot({
+    properties: [{ id: "p", name: "Court", state: "active", address: { line1: "1 Maple Way", city: "Tampa", state: "FL" } }],
+    units: [{ id: "u1", propertyId: "p", unitNumber: "1" }, { id: "u2", propertyId: "p", unitNumber: "2" }],
+  });
+  const filters = { propertyId: "all", propertyScope: "active" as const };
+  assert.equal(propertyUnitListItems(snapshot, filters)[0]?.subtitle, "2 units");
+  assert.equal(propertyUnitListItems(snapshot, filters, "", new Map([["u1", "vacant"]]))[0]?.subtitle, "2 units", "Partial occupancy never undercounts vacancies");
+  assert.equal(propertyUnitListItems(snapshot, filters, "", new Map([["u1", "vacant"], ["u2", "current"]]))[0]?.subtitle, "2 units · 1 vacant");
+  assert.equal(propertyUnitListItems(snapshot, filters, "Maple")[0]?.id, "p", "The address remains searchable");
+});

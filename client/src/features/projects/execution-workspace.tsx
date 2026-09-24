@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { CircleAlert, ClipboardCheck, Hammer, Landmark, Users, WalletCards } from "lucide-react";
 import { formatMoney, formatInputValue, parseMoneyInput } from "./money";
+import { formatTableDate } from "../../lib/rent-ops-formatters";
 import type { DecimalString, IsoDate } from "@shared/company";
 import type {
   ProjectAssignment,
@@ -85,7 +86,7 @@ export interface ProjectExecutionWorkspaceProps extends ProjectExecutionActions 
 function label(value: string): string { return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
 function dateValue(value: string): IsoDate | null { return value ? value as IsoDate : null; }
 function decimalValue(value: string): DecimalString { return value as DecimalString; }
-function dateLabel(value: string | null | undefined): string { if (!value) return "—"; const date = new Date(`${value.slice(0, 10)}T00:00:00`); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date); }
+function dateLabel(value: string | null | undefined): string { return formatTableDate(value) ?? "—"; }
 function statusTone(value: string): string { return value === "complete" || value === "approved" || value === "paid" || value === "accepted" ? "is-positive" : value === "blocked" || value === "failed" || value === "submitted" ? "is-warning" : value === "cancelled" || value === "void" ? "is-muted" : ""; }
 function Status({ value }: { value: string }) { return <span className={`projects-status ${statusTone(value)}`}>{label(value)}</span>; }
 function Field({ label: fieldLabel, children }: { label: string; children: ReactNode }) { return <label className="projects-execution-field"><span>{fieldLabel}</span>{children}</label>; }

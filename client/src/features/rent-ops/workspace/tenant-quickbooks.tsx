@@ -22,6 +22,7 @@ import { rentOpsAuthClient } from "../auth";
 import type { AdminSnapshot, AdminTenancyView, TenantView } from "../types";
 import { isCurrentTenancy, resolveTenantContext } from "./tenant-model";
 import { ListTotals } from "./list-totals";
+import { formatLongDate } from "../../../lib/rent-ops-formatters";
 
 /*
  * The tenancy's QuickBooks customer ledger, read from the verified receivables
@@ -67,7 +68,7 @@ function tenancyLabel(tenancy: AdminTenancyView, snapshot: AdminSnapshot): strin
   const unit = snapshot.snapshot.units.find(candidate => candidate.id === tenancy.unitId)?.unitNumber;
   const moveIn = tenancy.actualMoveInOn ?? tenancy.plannedMoveInOn;
   const status = isCurrentTenancy(tenancy, snapshot.summary.asOfDate) ? "current" : tenancy.status ?? "past";
-  return `${property}${unit ? ` · Unit ${unit}` : ""}${moveIn ? ` · from ${moveIn}` : ""} (${status})`;
+  return `${property}${unit ? ` · Unit ${unit}` : ""}${moveIn ? ` · from ${formatLongDate(moveIn) ?? moveIn}` : ""} (${status})`;
 }
 
 function Notice({ tone, title, children }: { tone: "info" | "warning" | "error" | "notice"; title: string; children?: ReactNode }) {
@@ -95,7 +96,7 @@ export function TenantQuickBooksPanel({ tenant, snapshot, readOnly = false, api 
   // Null while the connection list for a configured environment is still loading.
   const state = !configuration.data || (configuration.data.configured && configuration.data.environment && !connections.data) ? null : qboConnectionState(configuration.data, connections.data ?? []);
 
-  const intro = <p className="rm-muted">QuickBooks data, read-only. This is the tenancy's QuickBooks customer history from the verified QuickBooks mirror; it is shown separately from, and never combined with, the 5Central Ops ledger on the Transactions tab.</p>;
+  const intro = <p className="rm-muted">QuickBooks data, read-only. This is the tenancy's QuickBooks customer history from the verified QuickBooks mirror; it is shown separately from, and never combined with, the 5Central Ops ledger on the Ledger tab.</p>;
   const picker = tenancies.length > 1 && <div className="rm-ledger-filters"><label>Tenancy<select value={tenancyId} onChange={event => setTenancyId(event.target.value)}>{tenancies.map(candidate => <option key={candidate.id} value={candidate.id}>{tenancyLabel(candidate, snapshot)}</option>)}</select></label></div>;
 
   let body: ReactNode;
@@ -142,7 +143,7 @@ function LedgerView({ ledger, entries, hasMore, loadingMore, pageError, onMore, 
   return <>
     <dl className="rm-form-grid rm-detail-grid">
       <Field label="QuickBooks customer"><strong>{ledger.customer.displayName ?? "Name not mirrored"}</strong><small>QuickBooks #{ledger.customer.objectId}{ledger.customer.active === false ? " · inactive" : ""}</small></Field>
-      <Field label="Balance from QuickBooks history" warning={!coverage.amountsKnown || verification.tone !== "good"}><strong className="rm-amount">{ending.amount}</strong>{ledger.asOf && <small>Through {ledger.asOf}</small>}</Field>
+      <Field label="Balance from QuickBooks history" warning={!coverage.amountsKnown || verification.tone !== "good"}><strong className="rm-amount">{ending.amount}</strong>{ledger.asOf && <small>Through {formatLongDate(ledger.asOf) ?? ledger.asOf}</small>}</Field>
       <Field label="QuickBooks customer balance" warning={verification.tone !== "good"}><span className={toneClass(verification.tone)}>{verification.label}</span>{verification.detail && <small>{verification.detail}</small>}</Field>
       <Field label="Coverage" warning={coverage.tone !== "good"}><span className={toneClass(coverage.tone)}>{coverage.tone === "good" ? "Complete" : !coverage.amountsKnown ? "Not read" : ledger.coverage.status === "complete" ? "Out of date" : "Partial"}</span><small>As of {coverage.asOfLabel}</small></Field>
     </dl>

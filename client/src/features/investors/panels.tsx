@@ -5,10 +5,12 @@ import type { InvestorCalendarState } from "@shared/investors/rollforward";
 import type { InvestorDebtMaturity, InvestorInstrumentFinancials, InvestorPaymentCalendarItem } from "@shared/investors/reports";
 import type { InvestorsApi } from "./types";
 import { sumMoneyByCurrency, type MoneyValue } from "./totals";
+import { formatMonthLabel, formatTableDate } from "../../lib/rent-ops-formatters";
 
 function label(value: string | null | undefined): string { return value ? value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) : "—"; }
-function dateLabel(value: string | null | undefined): string { if (!value) return "—"; const date = new Date(`${value.slice(0, 10)}T00:00:00`); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date); }
-function monthLabel(value: string): string { const date = new Date(`${value.slice(0, 10)}T00:00:00`); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric" }).format(date); }
+/** Table dates: "Jun 1" this year, "Jun 1, 2025" otherwise. */
+function dateLabel(value: string | null | undefined): string { return formatTableDate(value) ?? "—"; }
+function monthLabel(value: string): string { return formatMonthLabel(value) ?? value; }
 export function formatInvestorMoney(value: string | null | undefined, currency = "USD"): string {
   if (value === null || value === undefined) return "Unknown";
   const amount = BigInt(value);

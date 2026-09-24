@@ -18,6 +18,39 @@ import type {
 } from "../types";
 import type { FormValues, QuickAction } from "../form-payload";
 
+/*
+ * Visible tabs. Every TenantTab key stays a valid route (bookmarks, and
+ * rm-workspace sends `tab:'ledger'` / `tab:'charges'` after saves): the keys
+ * folded into a combined tab open that tab and scroll to their section.
+ */
+export const TENANT_RECORD_TABS: TenantTab[] = [
+  "summary",
+  "ledger",
+  "tenancy",
+  "household",
+  "documents",
+  "activity",
+  "quickbooks",
+];
+
+/** Sections stacked inside each visible tab, in display order. */
+export const TENANT_TAB_SECTIONS: Partial<Record<TenantTab, readonly TenantTab[]>> = {
+  summary: ["summary"],
+  ledger: ["ledger", "deposits"],
+  tenancy: ["tenancy", "charges", "housing-assistance"],
+  household: ["household"],
+  documents: ["documents"],
+  activity: ["activity"],
+  quickbooks: ["quickbooks"],
+};
+
+/** The visible tab that shows a (possibly legacy) tab key. */
+export function tenantRecordTabFor(tab: TenantTab): TenantTab {
+  if (TENANT_RECORD_TABS.includes(tab)) return tab;
+  for (const visible of TENANT_RECORD_TABS) if (TENANT_TAB_SECTIONS[visible]?.includes(tab)) return visible;
+  return "summary";
+}
+
 export type RecurringChargeFilter = "all" | "current" | "future" | "ended" | "history" | "review";
 export type RecurringChargeState = "current" | "future" | "ended" | "unknown";
 

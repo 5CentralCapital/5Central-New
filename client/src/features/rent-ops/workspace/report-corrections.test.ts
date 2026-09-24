@@ -100,11 +100,11 @@ test("K2: balances due count known amounts separately from unverified balances",
   ];
   assert.deepEqual(splitDueRows(rows), { knownCents: 75000, knownCount: 2, unverifiedCount: 1 });
   const due = dashboardKpis({ dueRows: rows, period: "2026-09" }).find((kpi) => kpi.key === "due")!;
-  assert.equal(due.value, "$750");
-  assert.match(due.detail, /^across 2 accounts · Unverified balances: 1/);
+  assert.equal(due.value, "$750.00");
+  assert.match(due.detail, /^2 accounts · 1 not verified/);
   const clean = dashboardKpis({ dueRows: rows.slice(0, 2), period: "2026-09" }).find((kpi) => kpi.key === "due")!;
-  assert.equal(clean.detail, "across 2 accounts");
-  assert.doesNotMatch(clean.detail, /Unverified/);
+  assert.equal(clean.detail, "2 accounts");
+  assert.doesNotMatch(clean.detail, /not verified/);
   const onlyUnverified = dashboardKpis({ dueRows: rows.slice(2), period: "2026-09" }).find((kpi) => kpi.key === "due")!;
   assert.equal(onlyUnverified.value, "Unknown", "no known amount and an unverified balance is not $0");
   const empty = dashboardKpis({ dueRows: [], period: "2026-09" }).find((kpi) => kpi.key === "due")!;

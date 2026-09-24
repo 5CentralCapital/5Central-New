@@ -185,7 +185,7 @@ test("package helpers freeze the executed request and label incomplete runs", ()
   assert.deepEqual(packageRunSummary({ ...base, completeness: "incomplete", itemRuns: [{ itemId: "rent-roll-1", runId: null, state: "ready", errorCode: null, completeness: "incomplete" }, { itemId: "rent-roll-2", runId: null, state: "failed", errorCode: "report_unavailable" }] }), { complete: false, label: "Package incomplete: 1 failed, 1 incomplete" });
   // A stored run without completeness is never presented as complete.
   assert.equal(packageRunSummary({ ...base, itemRuns: [{ itemId: "rent-roll-1", runId: null, state: "ready", errorCode: null }] }).complete, false);
-  assert.deepEqual(["available", "missing_data", "not_implemented"].map(status => runtimeStatusLabel(status as never)), ["Available", "Missing data", "Not implemented"]);
+  assert.deepEqual(["available", "missing_data", "not_implemented"].map(status => runtimeStatusLabel(status as never)), ["Available", "Needs data", "Not implemented"]);
 });
 
 test("a saved preset keeps its pinned forecast input and forecast reports drop entity and property choices", () => {

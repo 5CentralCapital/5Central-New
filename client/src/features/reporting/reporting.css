@@ -23,16 +23,16 @@
 .reporting-search input, .rm-workspace.rops-modern .reporting-search input { width: 100%; padding-left: 32px; }
 .reporting-list { display: grid; gap: 14px; overflow-y: auto; }
 .reporting-list-group { display: grid; gap: 1px; }
-.reporting-list-group h3 { margin: 4px 8px 4px; color: var(--rp-muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.reporting-list-group h3 { margin: 4px 8px 4px; color: var(--rp-muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: none; }
 .reporting-list button {
   display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; padding: 7px 10px;
   border: 0; border-radius: 8px; background: transparent; color: var(--rp-ink-2); font: inherit; font-size: 14px; text-align: left; cursor: pointer;
   transition: background-color 120ms var(--rp-ease);
 }
 .reporting-list button:hover { background: var(--rp-fill); }
-.reporting-list button.is-selected { background: var(--rp-gold-wash); color: var(--rp-ink); font-weight: 600; }
+.reporting-list button.is-selected { background: var(--rp-fill-hover); color: var(--rp-ink); font-weight: 600; }
 .reporting-status { flex: 0 0 auto; color: var(--rp-muted); font-size: 11px; font-weight: 500; white-space: nowrap; }
-.reporting-status.is-missing_data { color: var(--rp-warning); }
+.reporting-status.is-missing_data { padding: 2px 8px; border-radius: 999px; background: var(--rp-warning-wash); color: var(--rp-warning); }
 .reporting-status.is-not_implemented { color: var(--rp-faint); }
 
 /* Main */

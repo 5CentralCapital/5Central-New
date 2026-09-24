@@ -239,9 +239,9 @@ export function DataGrid<T extends object>({
 
   return (
     <section className="rm-data-grid" aria-label={caption}>
-      <div className="rm-toolbar">
-        <details>
-          <summary className="rm-button">Columns <span className="rm-muted">{visibleCount}/{columns.length}</span></summary>
+      <div className="rm-toolbar rm-grid-toolbar">
+        <details className="rm-grid-columns">
+          <summary className="rm-button rm-button--small" aria-label={`Columns: ${visibleCount} of ${columns.length} shown`}>Columns{visibleCount < columns.length && <span className="rm-muted"> {visibleCount}/{columns.length}</span>}</summary>
           <div role="group" aria-label="Visible columns">
             {columns.map((column) => {
               const checked = !hiddenColumns.has(column.key);

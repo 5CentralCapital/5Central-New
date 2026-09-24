@@ -1,4 +1,6 @@
-import type { ReportPackageItem, ReportPackageRun, ReportRunRequest, ReportingRuntimeStatus } from "@shared/reporting";
+import type { ReportColumn, ReportPackageItem, ReportPackageRun, ReportPeriod, ReportRunRequest, ReportingRuntimeStatus } from "@shared/reporting";
+import { describeReportPeriod, formatReportValue } from "@shared/reporting/format";
+import { formatLongDate, formatMonthLabel, formatTableDate } from "../../lib/rent-ops-formatters";
 
 export type PackageDraftItem = Omit<ReportPackageItem, "id"> & { readonly id?: string; readonly title?: string };
 export interface PackageDraft {
@@ -11,8 +13,31 @@ export interface PackageDraft {
 
 export function runtimeStatusLabel(status: ReportingRuntimeStatus): string {
   if (status === "available") return "Available";
-  if (status === "missing_data") return "Missing data";
+  if (status === "missing_data") return "Needs data";
   return "Not implemented";
+}
+
+/**
+ * The on-screen period label: "As of Sep 24, 2026", "Sep 1, 2026 to Sep 24, 2026", "Sep 2026".
+ * Exports keep describeReportPeriod's machine dates.
+ */
+export function displayReportPeriod(period: ReportPeriod): string {
+  const long = (value: string | undefined) => value ? formatLongDate(value) ?? value : undefined;
+  const month = (value: string | undefined) => value ? formatMonthLabel(value) ?? value : undefined;
+  if (period.mode === "as_of") return `As of ${long(period.asOfDate)}`;
+  if (period.mode === "range") return `${long(period.fromDate)} to ${long(period.toDate)}`;
+  if (period.mode === "month") return month(period.month)!;
+  if (period.fromDate && period.toDate) return `${long(period.fromDate)} to ${long(period.toDate)}`;
+  if (period.asOfDate) return `As of ${long(period.asOfDate)}`;
+  if (period.month) return month(period.month)!;
+  return describeReportPeriod(period);
+}
+
+/** On-screen table cell: short table dates and month labels; everything else as the shared formatter. */
+export function displayReportCell(value: unknown, column: Pick<ReportColumn, "id" | "type">, values: Readonly<Record<string, unknown>> = {}, referenceYear?: number): string {
+  if (column.type === "date") { const date = formatTableDate(value, referenceYear); if (date) return date; }
+  if (column.type === "month") { const month = formatMonthLabel(value); if (month) return month; }
+  return formatReportValue(value, column, values);
 }
 
 /** A package item freezes the exact executed request of the current report. */

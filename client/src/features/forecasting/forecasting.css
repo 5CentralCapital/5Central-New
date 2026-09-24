@@ -102,7 +102,7 @@
 .rm-workspace.rops-modern .fc-num--strong, .rm-workspace.rops-modern .fc-num--strong .fc-cell { font-weight: 600; }
 .rm-workspace.rops-modern .fc-sticky { position: sticky; left: 0; z-index: 1; background: var(--ds-surface); box-shadow: 1px 0 0 var(--ds-table-hairline); }
 .rm-workspace.rops-modern .fc-row--total th, .rm-workspace.rops-modern .fc-row--total td { border-top: 1px solid var(--ds-hairline-strong); font-weight: 600; }
-.rm-workspace.rops-modern .fc-row--group th { padding-top: 14px; color: var(--ds-muted); font: var(--ds-overline); letter-spacing: .03em; text-transform: uppercase; text-align: left; }
+.rm-workspace.rops-modern .fc-row--group th { padding-top: 14px; color: var(--ds-muted); font: var(--ds-overline); letter-spacing: .03em; text-transform: none; text-align: left; }
 .rm-workspace.rops-modern .fc-row--low { background: none; }
 .rm-workspace.rops-modern .fc-row--selected { background: var(--ds-gold-wash); }
 .rm-workspace.rops-modern .fc-row--note td { color: var(--ds-muted); }

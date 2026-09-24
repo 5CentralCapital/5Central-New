@@ -62,8 +62,8 @@
 .applicant-card-fact-label {
   display:block;
   color:var(--ro-muted);
-  font-size:9px;
-  text-transform:uppercase
+  font-size: 11px;
+  text-transform: none
 }
 
 .applicant-card-facts>span>span:last-child {
@@ -76,10 +76,10 @@
   display:block;
   margin-top:13px;
   color:var(--ro-green);
-  font-size:10px;
+  font-size: 11px;
   font-weight:700;
   letter-spacing:.04em;
-  text-transform:uppercase
+  text-transform: none
 }
 
 .ro-case-dialog {
@@ -128,10 +128,10 @@
   border-radius:999px;
   background:#edf2ee;
   color:#3c5148;
-  font-size:10px;
+  font-size: 11px;
   font-weight:700;
   letter-spacing:.035em;
-  text-transform:uppercase;
+  text-transform: none;
   white-space:nowrap
 }
 
@@ -280,11 +280,11 @@
 .ro-case-fact dt {
   overflow:hidden;
   color:var(--ro-muted);
-  font-size:9px;
+  font-size: 11px;
   font-weight:700;
   letter-spacing:.07em;
   text-overflow:ellipsis;
-  text-transform:uppercase;
+  text-transform: none;
   white-space:nowrap
 }
 
@@ -367,7 +367,7 @@
 .ro-case-member span,.ro-case-member small,.ro-case-document span,.ro-case-document small {
   margin-top:3px;
   color:var(--ro-muted);
-  font-size:10px;
+  font-size: 11px;
   line-height:1.4
 }
 
@@ -393,9 +393,9 @@
   border-radius:999px;
   background:#edf2ee;
   color:#3c5148;
-  font-size:9px;
+  font-size: 11px;
   font-weight:700;
-  text-transform:uppercase
+  text-transform: none
 }
 
 .ro-case-requirement .ro-case-facts {
@@ -409,7 +409,7 @@
 }
 
 .ro-case-document-body small:last-child {
-  font-size:9px
+  font-size: 11px
 }
 
 .ro-case-download {
@@ -428,7 +428,7 @@
   flex:0 0 auto;
   align-self:center;
   color:#89958f;
-  font-size:10px;
+  font-size: 11px;
   font-weight:600
 }
 
@@ -477,7 +477,7 @@
 
 .ro-history-answer small {
   color:var(--ro-muted);
-  font-size:10px
+  font-size: 11px
 }
 
 .ro-case-history-activity-list,.ro-case-history-blockers {

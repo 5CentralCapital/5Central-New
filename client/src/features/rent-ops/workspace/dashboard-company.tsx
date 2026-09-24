@@ -1,11 +1,10 @@
 import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUpRight } from "lucide-react";
 import { workspacesApi } from "../../workspaces/api";
 import { formatCentsText, formatIsoDate, humanize } from "../../workspaces/format";
 import { obligationRemaining } from "../../workspaces/models";
 import { selectOrganization, useCompanyContext } from "../../workspaces/page";
-import { RecordLink } from "./entity-link";
+import { Skeleton } from "./ops-ui";
 
 export interface DashboardCompanyTargets {
   onObligations: (organizationId: string) => void;
@@ -15,16 +14,10 @@ export interface DashboardCompanyTargets {
   onForecasting: (organizationId: string) => void;
 }
 
-function CompactPanel({ title, onOpen, children }: { title: string; onOpen?: () => void; children: ReactNode }) {
-  return <section className="rmd-panel rmd-compact" aria-label={title}>
-    <header className="rmd-panel-header"><h2>{title}</h2>{onOpen && <button type="button" onClick={onOpen} title={`Open ${title}`} aria-label={`Open ${title}`}><ArrowUpRight size={13} /></button>}</header>
-    {children}
-  </section>;
-}
-
 /**
- * Company rows on the RM-style dashboard: upcoming obligations, exceptions to
- * resolve, work due and the cash-outlook entry. Hidden without company access.
+ * Company rows inside the dashboard's "Needs attention" list: record issues,
+ * investor payments and work due. Empty lanes fold into one all-clear line
+ * (design audit D3, D6). Hidden without company access.
  */
 export function DashboardCompanyPanels({ identity, organizationId, asOfDate, targets }: { identity: string; organizationId?: string; asOfDate: string; targets: DashboardCompanyTargets }) {
   const context = useCompanyContext(identity);
@@ -36,30 +29,31 @@ export function DashboardCompanyPanels({ identity, organizationId, asOfDate, tar
   });
   if (!organization) return null;
   const org = organization.id;
-  if (data.error) return <div className="rmd-company-grid"><div className="rmd-load-error" role="alert">Company rows could not be loaded. <button onClick={() => void data.refetch()}>Retry</button></div></div>;
+  const row = (key: string, tone: string, title: ReactNode, detail: ReactNode, action?: ReactNode) => <li key={key} className="rops-attention-row" data-tone={tone}><span className="rops-attention-stripe" aria-hidden="true" /><span className="rops-attention-text"><strong>{title}</strong>{detail && <small>{detail}</small>}</span>{action}</li>;
+  if (data.error) return row("company-error", "neutral", "Company items could not be loaded.", null, <button type="button" className="rm-button rm-button--small" onClick={() => void data.refetch()}>Retry</button>);
   const value = data.data;
-  return <div className="rmd-company-grid" aria-label="Company">
-    <CompactPanel title="Upcoming obligations" onOpen={() => targets.onObligations(org)}>
-      {!value ? <p className="rmd-empty">Loading…</p> : !value.obligations.items.length && !value.maturities.length ? <p className="rmd-empty">No investor payments due in the next 30 days.</p> : <ul className="rmd-rows">
-        {value.obligations.items.slice(0, 5).map(item => <li key={item.obligationId}><span><strong>{item.accountName}</strong><small>{item.instrumentName} · due {formatIsoDate(item.dueOn)}</small></span><span className="number">{obligationRemaining(item)}</span></li>)}
-        {value.maturities.slice(0, 3).map(item => <li key={item.instrumentId}><span><button type="button" className="rmd-row-link" onClick={() => targets.onMaturities(org)}>{item.instrumentName}</button><small>{item.accountName} · matures {formatIsoDate(item.maturityOn)}</small></span><span className="number">{item.outstandingPrincipalCents === null ? "Balance unknown" : formatCentsText(item.outstandingPrincipalCents, item.currency)}</span></li>)}
-      </ul>}
-      {value && value.obligations.items.length > 5 && <footer className="rmd-table-total"><span>{value.obligations.items.length}{value.obligations.truncated ? "+" : ""} due in 30 days</span></footer>}
-    </CompactPanel>
-    {value?.reviewCases.available !== false && <CompactPanel title="Needs attention" onOpen={() => targets.onReviewQueue(org)}>
-      {!value ? <p className="rmd-empty">Loading…</p> : !value.reviewCases.openCount ? <p className="rmd-empty">No open review cases.</p> : <ul className="rmd-rows">
-        {value.reviewCases.topReasons.map(reason => <li key={reason.reasonCode}><span><button type="button" className="rmd-row-link" onClick={() => targets.onReviewQueue(org)}>{humanize(reason.reasonCode)}</button>{reason.highMaterialityCount > 0 && <small>{reason.highMaterialityCount} high impact</small>}</span><span className="number">{reason.count}</span></li>)}
-      </ul>}
-      {value && value.reviewCases.openCount > 0 && <footer className="rmd-table-total"><span>Open cases</span><strong>{value.reviewCases.openCount}</strong></footer>}
-    </CompactPanel>}
-    <CompactPanel title="Work due" onOpen={() => targets.onWorkSchedule(org)}>
-      {!value ? <p className="rmd-empty">Loading…</p> : !value.workDue.items.length ? <p className="rmd-empty">No work scheduled in the next 14 days.</p> : <ul className="rmd-rows">
-        {value.workDue.items.slice(0, 6).map(item => <li key={item.id}><span><button type="button" className="rmd-row-link" onClick={() => targets.onWorkSchedule(org, item.id)}>{item.title}</button><small><RecordLink kind="property" recordId={item.propertyId}>{item.propertyName ?? "Property"}</RecordLink>{item.unitNumber ? ` · Unit ${item.unitNumber}` : ""}</small></span><span className={item.overdue ? "rmd-overdue" : undefined}>{item.scheduledOn ? `${item.overdue ? "Overdue · " : ""}${formatIsoDate(item.scheduledOn)}` : humanize(item.priority)}</span></li>)}
-      </ul>}
-      {value && value.workDue.openCount > 6 && <footer className="rmd-table-total"><span>{value.workDue.openCount} due</span></footer>}
-    </CompactPanel>
-    <CompactPanel title="Cash outlook" onOpen={() => targets.onForecasting(org)}>
-      <p className="rmd-empty"><button type="button" className="rmd-row-link" onClick={() => targets.onForecasting(org)}>Open the 13-week cash forecast</button></p>
-    </CompactPanel>
-  </div>;
+  if (!value) return <li className="rops-attention-row"><span className="rops-attention-stripe" aria-hidden="true" /><span className="rops-attention-text"><Skeleton width="16em" label="Loading company items" /></span></li>;
+  const rows: ReactNode[] = [];
+  const clear: string[] = [];
+  const obligations = value.obligations.items;
+  if (obligations.length || value.maturities.length) {
+    const first = obligations[0];
+    rows.push(row("obligations", "warning", obligations.length ? `${obligations.length}${value.obligations.truncated ? "+" : ""} investor ${obligations.length === 1 ? "payment" : "payments"} due in 30 days` : `${value.maturities.length} ${value.maturities.length === 1 ? "loan matures" : "loans mature"} soon`,
+      first ? `${first.accountName} · ${first.instrumentName} · due ${formatIsoDate(first.dueOn)} · ${obligationRemaining(first)}` : value.maturities[0] ? `${value.maturities[0].instrumentName} · matures ${formatIsoDate(value.maturities[0].maturityOn)}${value.maturities[0].outstandingPrincipalCents === null ? "" : ` · ${formatCentsText(value.maturities[0].outstandingPrincipalCents, value.maturities[0].currency)}`}` : null,
+      <button type="button" className="rm-button rm-button--small" onClick={() => obligations.length ? targets.onObligations(org) : targets.onMaturities(org)}>{obligations.length ? "Payment calendar" : "Maturities"}</button>));
+  } else clear.push("no investor payments scheduled in the next 30 days");
+  if (value.workDue.items.length) {
+    const overdue = value.workDue.items.filter(item => item.overdue).length;
+    const first = value.workDue.items[0];
+    rows.push(row("work", overdue ? "critical" : "warning", `${value.workDue.openCount} work ${value.workDue.openCount === 1 ? "order" : "orders"} due in 14 days${overdue ? ` · ${overdue} overdue` : ""}`,
+      `${first.title}${first.propertyName ? ` · ${first.propertyName}` : ""}${first.unitNumber ? ` ${first.unitNumber}` : ""}${first.scheduledOn ? ` · ${formatIsoDate(first.scheduledOn)}` : ""}`,
+      <button type="button" className="rm-button rm-button--small" onClick={() => targets.onWorkSchedule(org)}>Work schedule</button>));
+  } else clear.push("no work due in 14 days");
+  if (value.reviewCases.available !== false && value.reviewCases.openCount > 0) {
+    rows.push(row("review", "neutral", `${value.reviewCases.openCount} record ${value.reviewCases.openCount === 1 ? "issue" : "issues"} to review`,
+      value.reviewCases.topReasons.slice(0, 3).map(reason => `${reason.count} ${humanize(reason.reasonCode).toLowerCase()}`).join(" · "),
+      <button type="button" className="rm-button rm-button--small" onClick={() => targets.onReviewQueue(org)}>Review queue</button>));
+  }
+  rows.push(row("clear", "positive", null, <>{clear.length ? `All clear: ${clear.join(", ")}. ` : ""}<button type="button" className="rops-link" onClick={() => targets.onForecasting(org)}>13-week cash forecast</button></>));
+  return <>{rows}</>;
 }

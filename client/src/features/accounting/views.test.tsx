@@ -75,11 +75,24 @@ test("overview and period close render health, clearing and checklist state", as
     client.setQueryData(["accounting", "close", ORG, ENTITY, period], checklist);
     client.setQueryData(["accounting", "pm-open", ORG, ENTITY], { items: [{ ...detail }], nextCursor: null });
   });
-  assert.match(overview, /Out of date/);
   assert.match(overview, /background worker isn(&#x27;|')t running/);
-  assert.match(overview, /Deletions to review<\/dt><dd>2/);
   assert.match(overview, /\$900\.00/);
-  assert.match(overview, /1 of 2/);
+  assert.match(overview, /1 of 2 steps/);
+  assert.match(overview, /Blocked: Rental accounting method/, "the close figure's caption names the open step, not the method heading");
+  assert.match(overview, /Background work<\/dt><dd>1 in progress · 1 failed/);
+  assert.match(overview, /No webhooks received yet/);
+  assert.equal((overview.match(/accounting-button-primary/g) ?? []).length, 1, "one filled button: Continue close");
+  assert.match(overview, /accounting-button accounting-button-primary"[^>]*>Continue close/);
+  assert.doesNotMatch(overview, /PRODUCTION|SANDBOX/);
+
+  const { quickBooksStatus } = await views;
+  const stale = quickBooksStatus({ environment: "sandbox", connection: { name: "Synthetic QBO", status: "ready" }, health: health.items[0], now: new Date("2026-09-23T03:00:00Z") });
+  assert.equal(stale.tone, "warning");
+  assert.match(stale.text, /^QuickBooks sandbox · Synthetic QBO · out of date · synced 3 h(r)? ago · coverage partial · 1 exception · 2 deletions to review · 1 failed job$/);
+  const ready = quickBooksStatus({ environment: "production", connection: { name: "Synthetic QBO", status: "ready" }, health: { ...health.items[0]!, freshness: "current", lastChangeSyncAt: "2026-09-23T02:30:00.000Z" as never, coverage: { status: "complete", reason: null }, openSyncExceptions: 0, activeTombstones: 0, jobs: { queued: 0, running: 0, retry: 0, dead: 0, lastFailureCode: null } }, now: new Date("2026-09-23T03:00:00Z") });
+  assert.deepEqual(ready, { tone: "positive", text: "QuickBooks production · Synthetic QBO · synced 30 min ago · coverage complete · 0 exceptions · 0 deletions to review" });
+  assert.deepEqual(quickBooksStatus({ environment: "production", connection: { name: "Synthetic QBO", status: "needs_reconnect" }, health: null }), { tone: "critical", text: "QuickBooks production · Synthetic QBO · needs reconnect" });
+  assert.equal(quickBooksStatus({ environment: "production", connection: null, health: null }).text, "QuickBooks production · not connected");
 
   const preview = { organizationId: ORG, legalEntityId: ENTITY, periodStart: period.periodStart, periodEnd: period.periodEnd, currency: "USD", postingMethod: null, status: "no_policy", reason: "No rental accounting method is set for this entity and period.",
     controlTotals: { chargesCents: "150000", chargeCount: 1, creditsCents: "0", receipts: { tenantCents: "100000", subsidyCents: "40000", otherCents: "0", totalCents: "140000", count: 2 }, depositReceiptsCents: "0", depositsReceivedCents: "0", depositsHeldAtEndCents: "0", reversalsCents: "0", adjustments: { debitCents: "0", creditCents: "0" }, netReceivableChangeCents: "10000", excludedVoidedCount: 0, excludedPendingCount: 0, excludedUnknownCount: 1 },
@@ -94,4 +107,20 @@ test("overview and period close render health, clearing and checklist state", as
   assert.match(close, /Receipts \(2\)<\/th><td class="is-number">\$1,400\.00/);
   assert.match(close, /1 with unknown values/);
   assert.match(close, /href="\/export\.csv"/);
+});
+
+test("banking shows its own heading and a one-line status when no remittance awaits a bank match", async () => {
+  const { BankingView } = await views;
+  const html = render(createElement(BankingView, { api, organizationId: ORG, legalEntityId: ENTITY, currency: "USD", onOpen: () => undefined }), client => {
+    client.setQueryData(["accounting", "pm-open", ORG, ENTITY, undefined], { items: [], nextCursor: null });
+  });
+  assert.match(html, /<h2[^>]*>Banking &amp; reconciliation<\/h2>/);
+  assert.match(html, /ops-status-line is-positive[\s\S]*No owner remittance is waiting for bank evidence/);
+  assert.doesNotMatch(html, /Remittances awaiting a bank match<\/h3>/);
+
+  const waiting = render(createElement(BankingView, { api, organizationId: ORG, legalEntityId: ENTITY, currency: "USD", onOpen: () => undefined }), client => {
+    client.setQueryData(["accounting", "pm-open", ORG, ENTITY, undefined], { items: [{ ...detail }], nextCursor: null });
+  });
+  assert.match(waiting, /Remittances awaiting a bank match<\/h3>/);
+  assert.match(waiting, /Remittance total[\s\S]*\$900\.00/);
 });

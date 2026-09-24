@@ -23,7 +23,7 @@
 .rops-modern .rm-button { border-radius: 8px; transition: background-color 120ms ease, border-color 120ms ease; }
 .rops-modern .rm-button:not(:disabled):active { opacity: .78; }
 .rops-modern .rm-workspace-toolbar > label > :is(input, select),
-.rops-modern .rm-property-filter > summary { height: 40px; font-size: 14px; border-color: var(--rm-line-strong); }
+.rops-modern .rm-property-filter > summary { height: 40px; font-size: 14px; border-color: var(--ds-hairline-strong); }
 .rops-modern .rm-toolbar select { padding-right: 28px; }
 .rops-modern .rm-property-filter-options { border-radius: 12px; padding: 8px; }
 .rops-modern .rm-property-filter-options > label { min-height: 40px; }
@@ -38,7 +38,7 @@
 .rops-modern .rm-dialog-footer { padding: 16px 24px; }
 .rops-modern .projects-workspace { background: transparent; }
 .rops-modern .projects-page-header { padding: 0 0 24px; border: 0; background: transparent; }
-.rops-modern .projects-layout { border: 1px solid var(--rm-line); border-radius: 12px; overflow: hidden; background: white; }
+.rops-modern .projects-layout { border: 1px solid var(--ds-hairline); border-radius: 12px; overflow: hidden; background: white; }
 .rops-modern .projects-list-pane { background: #faf9f6; }
 
 .rops-topbar, .rops-nav-menu {

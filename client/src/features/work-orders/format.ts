@@ -1,3 +1,4 @@
+import { formatLongDate, formatTableDate, formatTimestamp } from "../../lib/rent-ops-formatters";
 import { WORK_ORDER_CATEGORY_LABELS, type WorkOrderCategory, type WorkOrderEvent, type WorkOrderPriority, type WorkOrderStatus, type WorkOrderSummary } from "@shared/work-orders";
 
 export const STATUS_LABELS: Readonly<Record<WorkOrderStatus, string>> = {
@@ -23,17 +24,15 @@ export function priorityClass(priority: WorkOrderPriority): string | null {
   return null;
 }
 
+/** "short" for lists and tables ("Jun 1" this year), "long" for fields and headings ("Sep 24, 2026"). */
 export function dateLabel(value: string | null | undefined, style: "short" | "long" = "short"): string {
   if (!value) return "—";
-  const date = new Date(value.length === 10 ? `${value}T00:00:00` : value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-US", style === "long" ? { month: "short", day: "numeric", year: "numeric" } : { month: "short", day: "numeric" }).format(date);
+  return (style === "long" ? formatLongDate(value) : formatTableDate(value)) ?? "—";
 }
 
+/** Activity timestamps without seconds. */
 export function timestampLabel(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).format(date);
+  return formatTimestamp(value) ?? "—";
 }
 
 /** Today in the company's operating time zone, as an ISO date. */

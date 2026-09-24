@@ -3,8 +3,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ConnectorHealth, PmSettlementDetail, PmSettlementSummary, RentalPostingMethod } from "@shared/accounting/operations";
 import { ageLabel, dateLabel, dateTimeLabel, formatCents, isPositiveCents, monthLabel, monthPeriod, newOperationId, previousOperatingMonth } from "./format";
 import { summarizeAmounts } from "./list-totals";
-import type { AccountingApi, AccountingCommandEnvelope, AccountingPeriod, AccountingScope, AccountingView } from "./types";
+import type { AccountingApi, AccountingCommandEnvelope, AccountingConnection, AccountingEnvironment, AccountingPeriod, AccountingScope, AccountingView } from "./types";
 import { AccountingApiError } from "./api";
+import { StatusLine } from "../rent-ops/workspace/ops-ui";
+import { formatRelativeTime } from "../../lib/rent-ops-formatters";
 
 const RmBanking = lazy(() => import("../rent-ops/workspace/rm-banking").then(module => ({ default: module.RmBanking })));
 
@@ -56,51 +58,116 @@ function useCommand(api: AccountingApi, organizationId: string) {
   return { run, busy, error, clearError: () => setError(null) };
 }
 
-const FRESHNESS: Readonly<Record<ConnectorHealth["freshness"], { label: string; tone: Tone }>> = {
-  current: { label: "Current", tone: "positive" },
-  stale: { label: "Out of date", tone: "warning" },
-  never_synced: { label: "Not synced yet", tone: "neutral" },
-  disconnected: { label: "QBO disconnected", tone: "critical" },
-};
+type StatusTone = "positive" | "warning" | "critical" | "neutral";
 
-function HealthCard({ item }: { readonly item: ConnectorHealth }) {
-  const freshness = FRESHNESS[item.freshness];
-  const failing = item.jobs.dead > 0;
-  return <section className="accounting-card accounting-health" aria-label={`${item.companyName ?? "QuickBooks"} health`}>
-    <div className="accounting-card-header"><h3>{item.companyName ?? "QuickBooks Online"}</h3><StatePill tone={freshness.tone}>{freshness.label}</StatePill></div>
-    <dl className="accounting-dl">
-      <div><dt>Last change sync</dt><dd>{ageLabel(item.lagSeconds)}</dd></div>
-      <div><dt>Coverage</dt><dd>{item.coverage.status === "complete" ? "Complete" : item.coverage.status === "partial" ? "Partial" : "Not available"}</dd></div>
-      <div><dt>Open exceptions</dt><dd>{item.openSyncExceptions}</dd></div>
-      <div><dt>Deletions to review</dt><dd>{item.activeTombstones}</dd></div>
-      <div><dt>Background work</dt><dd>{item.jobs.running + item.jobs.queued + item.jobs.retry > 0 ? `${item.jobs.running + item.jobs.queued + item.jobs.retry} in progress` : "Idle"}{failing ? ` · ${item.jobs.dead} failed` : ""}</dd></div>
-      <div><dt>Last webhook</dt><dd>{dateTimeLabel(item.lastWebhookAt)}</dd></div>
-      {item.lastVerifiedFullReplayAt && <div><dt>Last full check</dt><dd>{dateTimeLabel(item.lastVerifiedFullReplayAt)}</dd></div>}
-      {item.rateLimitedUntil && <div><dt>Paused by QuickBooks until</dt><dd>{dateTimeLabel(item.rateLimitedUntil)}</dd></div>}
-    </dl>
-    {item.coverage.status !== "complete" && item.coverage.reason && <p className="accounting-meta">{item.coverage.reason}</p>}
+function plural(count: number, one: string, many = `${one}s`): string { return `${count} ${count === 1 ? one : many}`; }
+
+export function environmentName(environment: AccountingEnvironment | null | undefined): string {
+  return environment === "production" ? "QuickBooks production" : environment === "sandbox" ? "QuickBooks sandbox" : "QuickBooks";
+}
+
+/** The health row for the selected QuickBooks company, or the only one. */
+export function pickHealth(items: readonly ConnectorHealth[] | undefined, realmId?: string | null): ConnectorHealth | null {
+  if (!items?.length) return null;
+  return items.find(item => item.scope.realmId === realmId) ?? items[0]!;
+}
+
+function syncedPhrase(item: ConnectorHealth, now: Date): string {
+  const at = item.lastChangeSyncAt ?? item.lastSuccessfulSyncAt;
+  const relative = at ? formatRelativeTime(at, now) : undefined;
+  return relative ? `synced ${relative}` : item.lagSeconds === null ? "not synced yet" : `synced ${ageLabel(item.lagSeconds).toLowerCase()}`;
+}
+
+/**
+ * One line of QuickBooks status built only from values the page already has:
+ * "QuickBooks production · Company · synced 30 min ago · coverage complete · 0 exceptions · 0 deletions to review".
+ */
+export function quickBooksStatus({ environment, connection, health, healthLoading = false, now = new Date() }: {
+  readonly environment: AccountingEnvironment | null | undefined;
+  readonly connection: Pick<AccountingConnection, "name" | "status"> | null | undefined;
+  readonly health: ConnectorHealth | null | undefined;
+  readonly healthLoading?: boolean;
+  readonly now?: Date;
+}): { readonly tone: StatusTone; readonly text: string } {
+  const parts = [environmentName(environment)];
+  if (!connection) return { tone: "neutral", text: [...parts, "not connected"].join(" · ") };
+  parts.push(connection.name);
+  if (connection.status === "needs_reconnect") return { tone: "critical", text: [...parts, "needs reconnect"].join(" · ") };
+  let tone: StatusTone = connection.status === "ready" ? "positive" : "warning";
+  if (connection.status !== "ready") parts.push("verifying read access");
+  if (!health) {
+    if (healthLoading) parts.push("checking sync…");
+    return { tone: connection.status === "ready" ? "neutral" : tone, text: parts.join(" · ") };
+  }
+  if (health.freshness === "disconnected") { parts.push("disconnected"); tone = "critical"; }
+  else if (health.freshness === "never_synced") { parts.push("not synced yet"); if (tone === "positive") tone = "neutral"; }
+  else if (health.freshness === "stale") { parts.push(`out of date · ${syncedPhrase(health, now)}`); tone = "warning"; }
+  else parts.push(syncedPhrase(health, now));
+  parts.push(`coverage ${health.coverage.status === "complete" ? "complete" : health.coverage.status === "partial" ? "partial" : "not available"}`);
+  parts.push(plural(health.openSyncExceptions, "exception"));
+  parts.push(plural(health.activeTombstones, "deletion", "deletions") + " to review");
+  if (health.jobs.dead > 0) parts.push(plural(health.jobs.dead, "failed job"));
+  if (tone === "positive" && (health.coverage.status !== "complete" || health.openSyncExceptions > 0 || health.jobs.dead > 0)) tone = "warning";
+  return { tone, text: parts.join(" · ") };
+}
+
+export function QuickBooksStatusLine({ status, actions }: { readonly status: { readonly tone: StatusTone; readonly text: string }; readonly actions?: ReactNode }) {
+  return <StatusLine tone={status.tone} actions={actions}>{status.text}</StatusLine>;
+}
+
+function backgroundWork(item: ConnectorHealth): string {
+  const active = item.jobs.running + item.jobs.queued + item.jobs.retry;
+  return `${active > 0 ? `${active} in progress` : "Idle"}${item.jobs.dead > 0 ? ` · ${item.jobs.dead} failed` : ""}`;
+}
+
+function SyncCard({ health, loading, error, retry }: { readonly health: ConnectorHealth | null; readonly loading: boolean; readonly error: unknown; readonly retry: () => void }) {
+  return <section className="accounting-card accounting-summary-card" aria-labelledby="accounting-sync-heading">
+    <div className="accounting-card-header"><h3 id="accounting-sync-heading">Sync</h3></div>
+    {loading ? <div className="accounting-card-body"><span className="accounting-meta">Checking QuickBooks…</span></div>
+      : error ? <ErrorState error={error} retry={retry} />
+      : !health ? <div className="accounting-card-body"><span className="accounting-meta">QuickBooks isn't connected for this legal entity.</span></div>
+      : <>
+        <dl className="accounting-dl">
+          <div><dt>Last full check</dt><dd>{health.lastVerifiedFullReplayAt ? dateTimeLabel(health.lastVerifiedFullReplayAt) : "Not run yet"}</dd></div>
+          <div><dt>Background work</dt><dd>{backgroundWork(health)}</dd></div>
+          <div><dt>Last webhook</dt><dd>{health.lastWebhookAt ? dateTimeLabel(health.lastWebhookAt) : "No webhooks received yet"}</dd></div>
+          {health.rateLimitedUntil && <div><dt>Paused by QuickBooks until</dt><dd>{dateTimeLabel(health.rateLimitedUntil)}</dd></div>}
+        </dl>
+        {health.coverage.status !== "complete" && health.coverage.reason && <p className="accounting-meta accounting-summary-note">{health.coverage.reason}</p>}
+      </>}
   </section>;
 }
 
-export function OverviewPanel({ api, organizationId, legalEntityId, currency, onOpen }: { readonly api: AccountingApi; readonly organizationId: string; readonly legalEntityId: string; readonly currency: string; readonly onOpen: (view: AccountingView) => void }) {
+export function OverviewPanel({ api, organizationId, legalEntityId, currency, onOpen, realmId = null, primaryAction = true }: { readonly api: AccountingApi; readonly organizationId: string; readonly legalEntityId: string; readonly currency: string; readonly onOpen: (view: AccountingView) => void; readonly realmId?: string | null; readonly primaryAction?: boolean }) {
+  void currency;
   const period = useMemo(() => previousOperatingMonth(), []);
   const health = useQuery({ queryKey: ["accounting", "health", organizationId, legalEntityId], queryFn: ({ signal }) => api.health(organizationId, legalEntityId, signal), staleTime: 15_000, refetchInterval: 60_000 });
   const close = useQuery({ queryKey: ["accounting", "close", organizationId, legalEntityId, period], queryFn: ({ signal }) => api.closeChecklist(organizationId, legalEntityId, period, signal), staleTime: 30_000 });
   const open = useQuery({ queryKey: ["accounting", "pm-open", organizationId, legalEntityId], queryFn: ({ signal }) => api.pmSettlements(organizationId, { legalEntityId, states: ["draft", "exception"] }, signal), staleTime: 30_000 });
   const awaiting = open.data?.items.filter(item => isPositiveCents(item.ownerRemittanceCents) && !item.bankSettledOn) ?? [];
   const awaitingTotals = summarizeAmounts(awaiting.map(item => ({ currency: item.currency, amountCents: item.ownerRemittanceCents })));
+  const selectedHealth = pickHealth(health.data?.items, realmId);
+  const closeItems = close.data?.items ?? [];
+  const closePercent = closeItems.length ? Math.round((close.data!.completeCount / closeItems.length) * 100) : 0;
+  const closeNotes = [
+    ...closeItems.filter(item => item.state === "blocked").map(item => `Blocked: ${item.label}`),
+    ...closeItems.filter(item => item.state === "attention").map(item => `Needs attention: ${item.label}`),
+  ];
   return <div className="accounting-overview">
-    <section aria-labelledby="accounting-health-heading">
-      <h2 id="accounting-health-heading" className="accounting-section-title">QuickBooks</h2>
-      {health.isLoading ? <Loading label="Checking QuickBooks…" /> : health.error ? <ErrorState error={health.error} retry={() => void health.refetch()} /> : !health.data?.items.length
-        ? <EmptyState title="QuickBooks isn't connected" detail="Connect this legal entity's QuickBooks company to mirror its records." />
-        : <>
-          {health.data.workers.active === 0 && <div className="accounting-message is-warning" role="status">The background worker isn't running. Refreshes wait until it starts.</div>}
-          <div className="accounting-health-grid">{health.data.items.map(item => <HealthCard key={`${item.scope.environment}:${item.scope.realmId}`} item={item} />)}</div>
-        </>}
-    </section>
-    <div className="accounting-summary-grid">
-      <section className="accounting-card" aria-labelledby="accounting-clearing-heading">
+    {health.data && health.data.items.length > 0 && health.data.workers.active === 0 && <div className="accounting-message is-warning" role="status">The background worker isn't running. Refreshes wait until it starts.</div>}
+    <div className="accounting-summary-grid accounting-overview-cards">
+      <section className="accounting-card accounting-summary-card" aria-labelledby="accounting-close-heading">
+        <div className="accounting-card-header"><h3 id="accounting-close-heading">{monthLabel(period.periodStart)} close</h3></div>
+        <div className="accounting-card-body">
+          {close.isLoading ? <span className="accounting-meta">Loading…</span> : close.error ? <span className="accounting-meta" role="alert">Close status could not be loaded.</span> : close.data && <>
+            <p className="accounting-figure">{close.data.completeCount} of {closeItems.length} steps</p>
+            <div className="accounting-meter" aria-hidden="true"><span style={{ width: `${closePercent}%` }} /></div>
+            <p className="accounting-meta">{closeNotes.join(" · ") || (closeItems.length ? "Ready to close" : "No checklist available")}</p>
+          </>}
+          <div className="accounting-summary-action"><button type="button" className={`accounting-button${primaryAction ? " accounting-button-primary" : ""}`} onClick={() => onOpen("close")}>Continue close</button></div>
+        </div>
+      </section>
+      <section className="accounting-card accounting-summary-card" aria-labelledby="accounting-clearing-heading">
         <div className="accounting-card-header"><h3 id="accounting-clearing-heading">PM clearing</h3></div>
         <div className="accounting-card-body">
           {open.isLoading ? <span className="accounting-meta">Loading…</span> : open.error ? <span className="accounting-meta" role="alert">Statements could not be loaded.</span> : open.data && open.data.items.length === 0
@@ -109,19 +176,10 @@ export function OverviewPanel({ api, organizationId, legalEntityId, currency, on
               {awaitingTotals.map(total => <p key={total.currency} className="accounting-figure">{formatCents(total.totalCents, total.currency)}</p>)}
               <p className="accounting-meta">{open.data?.nextCursor ? "First page: " : ""}{awaiting.length} remittance{awaiting.length === 1 ? "" : "s"} awaiting a bank match · {open.data?.items.length ?? 0} open statement{open.data?.items.length === 1 ? "" : "s"}</p>
             </>}
-          <button type="button" className="accounting-button" onClick={() => onOpen("pm-settlements")}>Open PM settlements</button>
+          <div className="accounting-summary-action"><button type="button" className="accounting-button" onClick={() => onOpen("pm-settlements")}>Open PM settlements</button></div>
         </div>
       </section>
-      <section className="accounting-card" aria-labelledby="accounting-close-heading">
-        <div className="accounting-card-header"><h3 id="accounting-close-heading">{monthLabel(period.periodStart)} close</h3></div>
-        <div className="accounting-card-body">
-          {close.isLoading ? <span className="accounting-meta">Loading…</span> : close.error ? <span className="accounting-meta" role="alert">Close status could not be loaded.</span> : close.data && <>
-            <p className="accounting-figure">{close.data.completeCount} of {close.data.items.length}</p>
-            <p className="accounting-meta">{close.data.items.filter(item => item.state === "blocked" || item.state === "attention").map(item => item.label).join(" · ") || (close.data.items.length ? "Ready to close" : "No checklist available")}</p>
-          </>}
-          <button type="button" className="accounting-button" onClick={() => onOpen("close")}>Open period close</button>
-        </div>
-      </section>
+      <SyncCard health={selectedHealth} loading={health.isLoading} error={health.error} retry={() => void health.refetch()} />
     </div>
   </div>;
 }
@@ -183,22 +241,27 @@ export function BankingView({ api, organizationId, legalEntityId, currency, onOp
   const awaiting = open.data?.items.filter(item => isPositiveCents(item.ownerRemittanceCents) && !item.bankSettledOn) ?? [];
   const remittanceTotals = summarizeAmounts(awaiting.map(item => ({ currency: item.currency, amountCents: item.ownerRemittanceCents })));
   const limited = cursors.length > 0 || Boolean(open.data?.nextCursor);
+  const quiet = !open.isLoading && !open.error && awaiting.length === 0 && !limited;
+  const openSettlements = <button type="button" className="accounting-button" onClick={() => onOpen("pm-settlements")}>Open PM settlements</button>;
   return <div className="accounting-stack">
-    <section className="accounting-card" aria-labelledby="accounting-rec-heading">
-      <div className="accounting-card-header"><h3 id="accounting-rec-heading">Remittances awaiting a bank match</h3></div>
-      {open.isLoading ? <Loading label="Loading…" /> : open.error ? <ErrorState error={open.error} retry={() => void open.refetch()} /> : awaiting.length === 0
-        ? <div className="accounting-card-body"><span className="accounting-meta">No owner remittance is waiting for bank evidence.</span></div>
-        : <div className="accounting-table-wrap is-flush"><table className="accounting-table" aria-label="Remittances awaiting a bank match">
-          <thead><tr><th>Period</th><th>Property</th><th>Manager</th><th className="is-number">Remittance</th><th>Status</th></tr></thead>
-          <tbody>{awaiting.map(item => <tr key={item.id}><td>{dateLabel(item.periodStart)} – {dateLabel(item.periodEnd)}</td><td>{item.propertyName ?? item.propertyId}</td><td>{item.managerName}</td><td className="is-number">{formatCents(item.ownerRemittanceCents, item.currency)}</td><td>{item.state === "exception" ? "Exception" : "Not reconciled"}</td></tr>)}</tbody>
-          <tfoot>{remittanceTotals.map(total => <tr key={total.currency} className="is-total"><th scope="row" colSpan={3}>{limited ? "Shown remittances" : "Remittance total"}<span className="accounting-meta"> · {total.currency}</span></th><td className="is-number">{formatCents(total.totalCents, total.currency)}</td><td className="accounting-meta">{limited ? "Current page" : "Page total"}</td></tr>)}</tfoot>
-        </table></div>}
-      {open.data && <nav className="accounting-pagination" aria-label="Remittance pages">
-        <button type="button" className="accounting-button" disabled={!cursors.length} onClick={() => setCursors(cursors.slice(0, -1))}>Previous</button>
-        <button type="button" className="accounting-button" disabled={!open.data.nextCursor} onClick={() => open.data?.nextCursor && setCursors([...cursors, open.data.nextCursor])}>Next</button>
-      </nav>}
-      <div className="accounting-card-footer"><button type="button" className="accounting-button" onClick={() => onOpen("pm-settlements")}>Reconcile in PM settlements</button><span className="accounting-meta">Amounts shown in each source currency.</span></div>
-    </section>
+    <h2 className="accounting-section-title accounting-view-title">Banking &amp; reconciliation</h2>
+    {open.isLoading ? <StatusLine tone="neutral">Checking remittances awaiting a bank match…</StatusLine>
+      : quiet ? <StatusLine tone="positive" actions={openSettlements}>No owner remittance is waiting for bank evidence.</StatusLine>
+      : <section className="accounting-card" aria-labelledby="accounting-rec-heading">
+        <div className="accounting-card-header"><h3 id="accounting-rec-heading">Remittances awaiting a bank match</h3></div>
+        {open.error ? <ErrorState error={open.error} retry={() => void open.refetch()} /> : awaiting.length === 0
+          ? <div className="accounting-card-body"><span className="accounting-meta">No owner remittance on this page is waiting for bank evidence.</span></div>
+          : <div className="accounting-table-wrap is-flush"><table className="accounting-table" aria-label="Remittances awaiting a bank match">
+            <thead><tr><th>Period</th><th>Property</th><th>Manager</th><th className="is-number">Remittance</th><th>Status</th></tr></thead>
+            <tbody>{awaiting.map(item => <tr key={item.id}><td>{dateLabel(item.periodStart)} – {dateLabel(item.periodEnd)}</td><td>{item.propertyName ?? item.propertyId}</td><td>{item.managerName}</td><td className="is-number">{formatCents(item.ownerRemittanceCents, item.currency)}</td><td>{item.state === "exception" ? "Exception" : "Not reconciled"}</td></tr>)}</tbody>
+            <tfoot>{remittanceTotals.map(total => <tr key={total.currency} className="is-total"><th scope="row" colSpan={3}>{limited ? "Shown remittances" : "Remittance total"}<span className="accounting-meta"> · {total.currency}</span></th><td className="is-number">{formatCents(total.totalCents, total.currency)}</td><td className="accounting-meta">{limited ? "Current page" : "Page total"}</td></tr>)}</tfoot>
+          </table></div>}
+        {open.data && limited && <nav className="accounting-pagination" aria-label="Remittance pages">
+          <button type="button" className="accounting-button" disabled={!cursors.length} onClick={() => setCursors(cursors.slice(0, -1))}>Previous</button>
+          <button type="button" className="accounting-button" disabled={!open.data.nextCursor} onClick={() => open.data?.nextCursor && setCursors([...cursors, open.data.nextCursor])}>Next</button>
+        </nav>}
+        <div className="accounting-card-footer"><button type="button" className="accounting-button" onClick={() => onOpen("pm-settlements")}>Reconcile in PM settlements</button><span className="accounting-meta">Amounts shown in each source currency.</span></div>
+      </section>}
     <Suspense fallback={<Loading label="Loading bank accounts…" />}><RmBanking /></Suspense>
   </div>;
 }

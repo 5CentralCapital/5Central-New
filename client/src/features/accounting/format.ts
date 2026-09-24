@@ -1,5 +1,6 @@
 /** Display helpers for exact cents strings; money never passes through floating point. */
 import { workspaceToday } from "../rent-ops/workspace/workspace-date";
+import { formatLongDate, formatTimestamp } from "../../lib/rent-ops-formatters";
 
 const SYMBOLS: Readonly<Record<string, string>> = { USD: "$", CAD: "CA$", EUR: "€", GBP: "£" };
 
@@ -29,14 +30,15 @@ export function sumCents(values: readonly (string | null | undefined)[]): string
 
 export function dateLabel(value: string | null | undefined): string {
   if (!value) return "—";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return formatLongDate(value) ?? value;
   const date = new Date(/^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T12:00:00Z` : value);
   return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeZone: /^\d{4}-\d{2}-\d{2}$/.test(value) ? "UTC" : undefined }).format(date);
 }
 
-export function dateTimeLabel(value: string | null | undefined): string {
+/** Shared manager timestamp: "11:29 AM" today, otherwise "Sep 23, 2026, 11:29 AM"; never seconds. */
+export function dateTimeLabel(value: string | null | undefined, now = new Date()): string {
   if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(date);
+  return formatTimestamp(value, now) ?? value;
 }
 
 /** "4 min ago", "3 h ago", "2 days ago" from a lag in seconds. */

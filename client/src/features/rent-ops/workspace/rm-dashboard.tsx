@@ -1,50 +1,25 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { ArrowUpRight, RefreshCw } from "lucide-react";
-import { loadDashboardCash, loadDashboardTrends, loadRentOpsReport, loadRentOpsWorkspaceCollection } from "../api";
+import { loadBanking, loadDashboardCash, loadDashboardTrends, loadRentOpsReport, loadRentOpsWorkspaceCollection } from "../api";
 import { useRentOpsAuth } from "../auth-ui";
 import type { DashboardWorkspaceProps } from "./dashboard-workspace";
-import { EntityLink, RecordLink, entityHref, shouldHandleEntityClick } from "./entity-link";
-import { createReportViewModel, formatReportValue, overdueDateAbsentLabel, readReportValue, reportQueryFilters, reportQueryKey } from "./report-model";
+import { createReportViewModel, readReportValue, reportQueryFilters, reportQueryKey } from "./report-model";
 import { workspaceApiFilters } from "./workspace-state";
-import { DashboardChart } from "./dashboard-chart";
 import { useReportSearch } from "./use-report-search";
 import { recentOnlineApplications, dashboardMovements } from "./dashboard-tiles";
 import { ApplicationCaseDetail } from "../application-case-detail";
 import { dashboardKpis, splitDueRows } from "./dashboard-kpis";
+import { rentalAttentionItems } from "./dashboard-attention";
+import { DashboardGrid } from "./dashboard-grid";
+import { numeric, text, type DashboardData, type Row } from "./dashboard-widgets";
+import type { TrendMetric } from "./dashboard-model";
+import { formatMonthLabel } from "../../../lib/rent-ops-formatters";
 import "./rm-dashboard.css";
-import { UNKNOWN_AMOUNT_LABEL } from "@shared/review-cases/display-labels";
 
-type Row = Record<string, unknown>;
-type Column = { key: string; label: string; number?: boolean; render?: (row: Row) => ReactNode };
-const numeric = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
-const money = (value: unknown) => numeric(value) ? formatReportValue(value, "currency") : "—";
-const text = (value: unknown) => value === null || value === undefined || value === "" ? "—" : String(value);
-
-function Panel({ title, className = "", children, onOpen }: { title: string; className?: string; children: ReactNode; onOpen?: () => void }) {
-  return <section className={`rmd-panel ${className}`} aria-label={title}><header className="rmd-panel-header"><h2>{title}</h2>{onOpen && <button type="button" onClick={onOpen} title={`Open ${title}`} aria-label={`Open ${title}`}><ArrowUpRight size={13} /></button>}</header>{children}</section>;
-}
-function Table({ rows, columns, empty = "No records.", footer }: { rows?: Row[]; columns: Column[]; empty?: string; footer?: ReactNode }) {
-  const [sort, setSort] = useState<{ key: string; direction: number }>();
-  const ordered = useMemo(() => !sort ? rows : [...(rows ?? [])].sort((a, b) => {
-    const left = a[sort.key], right = b[sort.key];
-    if (left == null) return right == null ? 0 : 1;
-    if (right == null) return -1;
-    return (numeric(left) && numeric(right) ? left - right : String(left).localeCompare(String(right), undefined, { numeric: true })) * sort.direction;
-  }), [rows, sort]);
-  return <><div className="rmd-table-scroll"><table><thead><tr>{columns.map(column => <th key={column.key} className={column.number ? "number" : ""} aria-sort={sort?.key === column.key ? sort.direction === 1 ? "ascending" : "descending" : "none"}><button type="button" onClick={() => setSort(current => ({ key: column.key, direction: current?.key === column.key ? -current.direction : 1 }))}>{column.label}{sort?.key === column.key ? sort.direction === 1 ? " ↑" : " ↓" : ""}</button></th>)}</tr></thead><tbody>
-    {!rows ? <tr><td colSpan={columns.length} className="rmd-empty">Loading…</td></tr> : !ordered?.length ? <tr><td colSpan={columns.length} className="rmd-empty">{empty}</td></tr> : ordered.map((row, index) => <tr key={String(row.id ?? row.unitId ?? row.propertyId ?? "row") + index}>{columns.map(column => <td key={column.key} className={column.number ? "number" : ""} title={column.number ? undefined : text(row[column.key])}>{column.render ? column.render(row) : text(row[column.key])}</td>)}</tr>)}
-  </tbody></table></div>{footer && <div className="rmd-table-total">{footer}</div>}</>;
-}
-function Notes({ identity }: { identity: string }) {
-  const key = `rent-ops-dashboard-note:${identity}`;
-  const [value, setValue] = useState("");
-  const [saved, setSaved] = useState("");
-  const [message, setMessage] = useState("");
-  useEffect(() => { try { const note = localStorage.getItem(key) ?? ""; setValue(note); setSaved(note); } catch { setValue(""); setSaved(""); } setMessage(""); }, [key]);
-  return <Panel title="Notes" className="rmd-notes"><textarea aria-label="Dashboard notes" placeholder="Add a dashboard note…" value={value} onChange={event => { setValue(event.target.value); setMessage(""); }} maxLength={10000} /><div className="rmd-note-actions"><span role="status">{message || "This browser"}</span><button type="button" disabled={value === saved} onClick={() => { try { localStorage.setItem(key, value); setSaved(value); setMessage("Saved in this browser"); } catch { setMessage("Could not save. Try again."); } }}>Save</button><button type="button" disabled={value === saved} onClick={() => { setValue(saved); setMessage(""); }}>Cancel</button></div></Panel>;
-}
-
+/**
+ * The dashboard: one data layer (the requests below) feeding a grid of
+ * widgets the manager arranges (dashboard-grid.tsx, dashboard-widgets.tsx).
+ */
 export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenUnit, onOpenProperty, previews, refreshing = false, onManageMoves, companyPanels }: DashboardWorkspaceProps) {
   const auth = useRentOpsAuth();
   const enabled = auth.status === "authenticated" && !!auth.user?.id;
@@ -101,35 +76,28 @@ export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenU
   }, [rentRoll]);
   const trends = useQuery({ queryKey: ["rent-ops-workspace", "dashboard-trends", identity, apiFilters], queryFn: ({ signal }) => loadDashboardTrends(apiFilters, signal), enabled, staleTime: 60_000, gcTime: 300_000, retry: false, refetchOnWindowFocus: true });
   const cash = useQuery({ queryKey: ["rent-ops-workspace", "dashboard-cash", identity], queryFn: ({ signal }) => loadDashboardCash(signal), enabled, staleTime: 60_000, gcTime: 60_000, retry: false, refetchOnWindowFocus: true });
-  const propertyLink = (row: Row) => <RecordLink kind="property" recordId={String(row.propertyId ?? "")} onOpen={onOpenProperty}>{text(row.propertyName)}</RecordLink>;
-  const unitLink = (row: Row) => <RecordLink kind="unit" recordId={String(row.unitId ?? "")} onOpen={onOpenUnit}>{text(row.unitNumber)}</RecordLink>;
-  const personLink = (row: Row) => <EntityLink personId={String(row.currentPersonId ?? row.personId ?? row.futurePersonId ?? "")} onOpen={onOpenTenant}>{text(row.tenantName ?? row.currentTenantName ?? row.futureTenantName)}</EntityLink>;
-  const propertyColumn: Column = { key: "propertyName", label: "Property", render: propertyLink };
-  const unitColumn: Column = { key: "unitNumber", label: "Unit", render: unitLink };
-  const amountColumn = (key: string, label: string): Column => ({ key, label, number: true, render: row => money(row[key]) });
-  const total = (rows: Row[] | undefined, key: string) => !rows || rows.some(row => !numeric(row[key])) ? undefined : rows.reduce((sum, row) => sum + Number(row[key]), 0);
+  const banking = useQuery({ queryKey: ["rent-ops-workspace", "dashboard-banking", identity], queryFn: ({ signal }) => loadBanking(signal), enabled, staleTime: 120_000, gcTime: 300_000, retry: false, refetchOnWindowFocus: false });
   const movements = dashboardMovements(snapshot, filters);
   const errors = requests.flatMap((request, index) => request.error && !(bundled && index < 2) ? [reports[index]] : []);
-  const cashReady = cash.data?.state === "ready" ? cash.data : undefined;
-  return <section className="rm-dashboard-workspace rmd-dashboard" aria-label="Dashboard">
+  const attention = rentalAttentionItems({ dueRows, vacancy, movements, asOfDate: filters.asOfDate });
+  const knownDue = dueRows?.filter(row => numeric(row.operationalBalanceCents));
+  const unverifiedDue = dueRows ? dueRows.length - (knownDue?.length ?? 0) : 0;
+  const vacancySorted = vacancy ? [...vacancy].sort((a, b) => (numeric(b.daysVacant) ? b.daysVacant : -1) - (numeric(a.daysVacant) ? a.daysVacant : -1)) : undefined;
+  const kpis = dashboardKpis({ propertyRows, dueRows, receipts, period: filters.asOfDate.slice(0, 7) });
+  const monthLabel = formatMonthLabel(filters.asOfDate.slice(0, 7)) ?? filters.asOfDate.slice(0, 7);
+  const [metric, setMetric] = useState<TrendMetric>("vacancy");
+  const data: DashboardData = {
+    snapshot, filters, identity, year: Number(filters.asOfDate.slice(0, 4)), monthLabel, kpis, attention, companyPanels,
+    rentRoll, dueRows, knownDue, unverifiedDue, dueSplit, receipts, vacancy, vacancySorted, propertyRows, movements,
+    applications, applicationsError: !!applicationQuery.error, onOpenApplication: setApplicationId,
+    trends: { data: trends.data, loading: trends.isFetching, error: trends.error?.message, retry: () => void trends.refetch(), metric, setMetric },
+    cash: { data: cash.data, error: cash.error?.message, fetching: cash.isFetching, refetch: () => void cash.refetch() },
+    banking: { data: banking.data, error: banking.error?.message, loading: banking.isFetching, refetch: () => void banking.refetch() },
+    onReport, onOpenTenant, onOpenUnit, onOpenProperty, onManageMoves,
+  };
+  return <section className="rm-dashboard-workspace rmd-dashboard rops-dash" aria-label="Dashboard">
     {errors.length > 0 && <div className="rmd-load-error" role="alert">Some tables could not be loaded. <button onClick={() => { requests.forEach(request => { if (request.error) void request.refetch(); }); }}>Retry</button></div>}
-    <ul className="rops-kpis" aria-label="Portfolio summary">{dashboardKpis({ propertyRows, dueRows, receipts, period: filters.asOfDate.slice(0, 7) }).map(kpi => <li key={kpi.key} className="rops-kpi" data-tone={kpi.tone}><span className="rops-kpi-label">{kpi.label}</span><strong className="rops-kpi-value">{kpi.value}</strong>{kpi.share !== undefined && <span className="rops-kpi-meter" aria-hidden="true"><i style={{ width: `${Math.round(kpi.share * 100)}%` }} /></span>}<span className="rops-kpi-detail">{kpi.detail}</span></li>)}</ul>
-    <div className="rmd-top-grid">
-      {cashReady ? <Panel title="Cash Account" className="rmd-cash"><Table rows={[cashReady]} columns={[{ key: "name", label: "Account", render: row => <>{text(row.name)} · {text(row.mask)}</> }, amountColumn("currentCents", "Balance")]} /><div className="rmd-cash-available"><span>Available</span><strong>{money(cashReady.availableCents)}</strong></div><div className="rmd-cash-date">Company cash · {new Date(cashReady.checkedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}<button type="button" title="Refresh cash balance" aria-label="Refresh cash balance" disabled={cash.isFetching} onClick={() => void cash.refetch()}><RefreshCw size={12} /></button></div></Panel>
-      : <Panel title="Rent Roll by Property" className="rmd-cash" onOpen={() => onReport("rent-roll")}><Table rows={propertyRows} columns={[propertyColumn, { key: "rent", label: "Base rent", number: true, render: row => row.rentUnknown || row.unknown ? UNKNOWN_AMOUNT_LABEL : money(row.rent) }]} footer={<><span>Occupied base rent</span><strong>{propertyRows?.some(row => row.rentUnknown || row.unknown) ? UNKNOWN_AMOUNT_LABEL : money(total(propertyRows, "rent"))}</strong></>} /></Panel>}
-      <Panel title="Vacancy by Property" className="rmd-vacancy-property" onOpen={() => onReport("occupancy")}><Table rows={propertyRows} columns={[propertyColumn, { key: "vacant", label: "Vacant", number: true }, { key: "unitCount", label: "Units", number: true }, { key: "vacancyRate", label: "% Vacant", number: true, render: row => row.unknown ? "—" : `${(100 * Number(row.vacant) / Number(row.unitCount)).toFixed(0)}%` }]} footer={<><span>Total vacant</span><strong>{total(propertyRows, "vacant") ?? "—"} / {total(propertyRows, "unitCount") ?? "—"}</strong></>} /></Panel>
-      <Panel title="Delinquency List" className="rmd-delinquency" onOpen={() => onReport("delinquency")}><Table rows={dueRows} empty="No balances due." columns={[{ key: "tenantName", label: "Name", render: personLink }, propertyColumn, unitColumn, { key: "oldestUnpaidRentOn", label: "Date", render: row => row.oldestUnpaidRentOn ? text(row.oldestUnpaidRentOn) : overdueDateAbsentLabel((row.__source ?? row) as Row) }, { ...amountColumn("operationalBalanceCents", "Amount"), render: row => numeric(row.operationalBalanceCents) ? <EntityLink personId={String(row.personId ?? "")} tab="ledger" onOpen={onOpenTenant}>{money(row.operationalBalanceCents)}</EntityLink> : UNKNOWN_AMOUNT_LABEL }]} footer={dueSplit ? <><span>{dueSplit.knownCount} {dueSplit.knownCount === 1 ? "account" : "accounts"} due{dueSplit.unverifiedCount ? ` · ${dueSplit.unverifiedCount} unverified` : ""}</span><strong>{money(dueSplit.knownCents)}</strong></> : <><span>—</span><strong>{UNKNOWN_AMOUNT_LABEL}</strong></>} /></Panel>
-      <Notes identity={identity} />
-      <Panel title="Posted Rent Receipts" className="rmd-receipts" onOpen={() => onReport("collected-income")}><Table rows={receipts} empty="No posted rent receipts this month." columns={[{ key: "tenantName", label: "Tenant", render: personLink }, { key: "paymentOn", label: "Date" }, amountColumn("amountCents", "Amount")]} footer={<><span>{filters.asOfDate.slice(0, 7)}</span><strong>{money(total(receipts, "amountCents"))}</strong></>} /></Panel>
-      <Panel title="Occupancy by Property" className="rmd-occupancy-property" onOpen={() => onReport("occupancy")}><Table rows={propertyRows} columns={[propertyColumn, { key: "occupied", label: "Occupied", number: true }, { key: "preleased", label: "Preleased", number: true }, { key: "unknown", label: "Unknown", number: true }]} footer={<><span>Occupied units</span><strong>{total(propertyRows, "occupied") ?? "—"} / {total(propertyRows, "unitCount") ?? "—"}</strong></>} /></Panel>
-    </div>
-    {companyPanels}
-    <div className="rmd-trend-grid">{(["vacancy", "occupancy", "rent"] as const).map(metric => <DashboardChart key={metric} metric={metric} data={trends.data} loading={trends.isFetching} error={trends.error?.message} onRetry={() => void trends.refetch()} />)}</div>
-    <div className="rmd-bottom-grid">
-      <Panel title="Vacancy List" onOpen={() => onReport("occupancy")}><Table rows={vacancy} empty="No vacant units." columns={[propertyColumn, unitColumn, { key: "type", label: "Type" }, amountColumn("marketRentCents", "Rent"), { key: "daysVacant", label: "Days vacant", number: true }]} footer={<span>{vacancy?.length ?? "—"} vacant units · {total(propertyRows, "preleased") ?? "—"} preleased</span>} /></Panel>
-      <Panel title="Move In / Move Out List" onOpen={() => onReport("lease-expiration")}>{onManageMoves && <div className="rm-toolbar"><button className="rm-button" onClick={onManageMoves}>Record move</button></div>}<Table rows={movements} empty="No moves recorded for this period." columns={[propertyColumn, unitColumn, { key: "tenantName", label: "Tenant", render: personLink }, { key: "date", label: "Date" }, { key: "movement", label: "Move" }, { key: "state", label: "Status" }]} footer={<span>{filters.asOfDate.slice(0, 7)} · Completed and upcoming moves</span>} /></Panel>
-      <Panel title="Recent online applications" onOpen={() => onReport("applicant-pipeline")}><Table rows={applicationQuery.error ? [] : applications} empty={applicationQuery.error ? "Online applications could not be loaded." : "No online applications received in the last 30 days."} columns={[{ key: "submittedOn", label: "Date" }, { key: "displayName", label: "Applicant", render: row => <a className="rm-entity-link" href={entityHref({ section: "applicants", recordId: String(row.id), tab: "summary", report: "applicant-pipeline" })} onClick={event => { if (shouldHandleEntityClick(event)) { event.preventDefault(); setApplicationId(String(row.id)); } }}>{text(row.displayName)}</a> }, propertyColumn, { key: "status", label: "Status", render: row => text(row.status).replaceAll("_", " ") }]} /></Panel>
-    </div>
+    <DashboardGrid data={data} />
     {applicationId && selectedApplication && <ApplicationCaseDetail key={applicationId} applicationId={applicationId} summary={selectedApplication} onClose={() => setApplicationId(undefined)} />}
     {refreshing && <div className="rmd-refreshing" role="status">Refreshing dashboard…</div>}
   </section>;

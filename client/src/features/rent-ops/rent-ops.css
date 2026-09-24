@@ -156,10 +156,10 @@
 .eyebrow {
   display:block;
   color:var(--ro-green);
-  font-size:10px;
+  font-size: 11px;
   font-weight:700;
   letter-spacing:.13em;
-  text-transform:uppercase;
+  text-transform: none;
   margin-bottom:5px
 }
 .ro-topbar h1,.ro-panel h2 {
@@ -265,11 +265,11 @@
   box-shadow:0 2px 8px rgba(23,32,29,.03)
 }
 .ro-filters label,.ro-dialog label {
-  font-size:10px;
+  font-size: 11px;
   font-weight:700;
   color:var(--ro-muted);
   letter-spacing:.04em;
-  text-transform:uppercase
+  text-transform: none
 }
 .ro-filters input,.ro-filters select,.ro-dialog input,.ro-dialog select,.ro-dialog textarea,.ro-app-actions select {
   display:block;
@@ -315,8 +315,8 @@
   display:block
 }
 .ro-stat span {
-  font-size:10px;
-  text-transform:uppercase;
+  font-size: 11px;
+  text-transform: none;
   letter-spacing:.07em;
   color:var(--ro-muted);
   margin-bottom:7px
@@ -361,7 +361,7 @@ button.ro-stat:hover {
   font-size:12px
 }
 .ro-report-picker span {
-  font-size:10px;
+  font-size: 11px;
   color:var(--ro-muted);
   margin-top:5px;
   line-height:1.35
@@ -396,8 +396,8 @@ button.ro-stat:hover {
   background:#f3f5f2;
   text-align:left;
   color:#5e6863;
-  font-size:9px;
-  text-transform:uppercase;
+  font-size: 11px;
+  text-transform: none;
   letter-spacing:.055em;
   padding:9px 12px;
   border-block:1px solid var(--ro-line)
@@ -416,7 +416,7 @@ button.ro-stat:hover {
 }
 .source-note {
   color:var(--ro-muted);
-  font-size:10px;
+  font-size: 11px;
   margin:12px 0 0
 }
 .ro-empty {
@@ -497,7 +497,7 @@ button.ro-stat:hover {
   font-size:12px
 }
 .tenant-list span {
-  font-size:10px;
+  font-size: 11px;
   color:var(--ro-muted);
   margin-top:3px
 }
@@ -548,7 +548,7 @@ button.ro-stat:hover {
 }
 .ro-record-grid dt,.applicant-card dt {
   color:var(--ro-muted);
-  font-size:10px
+  font-size: 11px
 }
 .ro-record-grid dd,.applicant-card dd {
   margin:0;
@@ -595,9 +595,9 @@ button.ro-stat:hover {
   border-radius:999px;
   background:#edf1ee;
   color:#56635d;
-  font-size:9px;
+  font-size: 11px;
   font-weight:700;
-  text-transform:uppercase;
+  text-transform: none;
   letter-spacing:.04em
 }
 .status.current,.status.ready,.status.approved,.status.converted {
@@ -650,7 +650,7 @@ button.ro-stat:hover {
   font-size:11px
 }
 .ro-timeline span,.ro-timeline small {
-  font-size:10px;
+  font-size: 11px;
   color:var(--ro-muted);
   margin-top:3px
 }
@@ -665,16 +665,16 @@ button.ro-stat:hover {
   border-radius:9px
 }
 .ro-quick-actions>span {
-  font-size:10px;
+  font-size: 11px;
   font-weight:700;
-  text-transform:uppercase;
+  text-transform: none;
   color:var(--ro-muted);
   margin-right:4px
 }
 .ro-quick-actions button {
   min-height:30px;
   padding:0 9px;
-  font-size:10px
+  font-size: 11px
 }
 
 .ro-dialog-backdrop {
@@ -781,11 +781,34 @@ button.ro-stat:hover {
 .ro-auth-icon svg {
   width:20px
 }
+.ro-auth-card {
+  display:grid;
+  gap:14px
+}
 .ro-auth-card h1 {
   margin:0;
-  font:600 30px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-  letter-spacing:-.8px
+  font:600 24px/1.15 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  letter-spacing:-.5px
 }
+.ro-auth-wordmark {
+  font:700 14px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  letter-spacing:.06em;
+  color:#1d1d1f
+}
+.ro-auth-wordmark > span { color:#d4a843 }
+.ro-auth-heading { display:grid; gap:3px }
+.ro-auth-heading .ro-auth-intro { margin:0 }
+.ro-auth-divider {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  color:#6e6e73;
+  font-size:12px
+}
+.ro-auth-divider::before,.ro-auth-divider::after { content:"";flex:1;height:1px;background:rgb(58 50 38 / 11%) }
+.ro-auth-card form { margin-top:0 }
+.ro-auth-submit.is-secondary { background:transparent;color:#1d1d1f;box-shadow:inset 0 0 0 1px rgb(58 50 38 / 20%) }
+.ro-auth-submit.is-secondary:hover { background:rgb(58 50 38 / 5.5%) }
 .ro-auth-intro,.ro-auth-note {
   color:#66716c;
   font-size:13px;
@@ -801,11 +824,9 @@ button.ro-stat:hover {
 }
 .ro-auth-card label {
   margin-top:7px;
-  font-size:10px;
-  font-weight:700;
-  color:#66716c;
-  letter-spacing:.04em;
-  text-transform:uppercase
+  font-size:12px;
+  font-weight:500;
+  color:#6e6e73
 }
 .ro-auth-card input {
   width:100%;
@@ -823,8 +844,8 @@ button.ro-stat:hover {
 }
 .ro-auth-submit {
   width:100%;
-  margin-top:12px;
-  min-height:var(--ro-control-height);
+  margin-top:4px;
+  min-height:40px;
   display:flex;
   align-items:center;
   justify-content:center;
@@ -840,8 +861,8 @@ button.ro-stat:hover {
 .ro-auth-submit:disabled { opacity:.55;cursor:wait }
 .ro-auth-note {
   display:inline-block;
-  margin:18px 0 0;
-  font-size:11px
+  margin:4px 0 0;
+  font-size:12px
 }
 .ro-logout {
   display:flex;
@@ -954,7 +975,7 @@ button.ro-stat:hover {
   box-shadow:none
 }
 .ro-table {
-  font-size:9px
+  font-size: 11px
 }
 
 }

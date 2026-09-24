@@ -8,9 +8,9 @@
   --rm-ink: #1d1d1f;
   --rm-muted: #6d6a63;
   --rm-border: rgba(58, 58, 60, .16);
-  --rm-panel-bg: var(--rm-surface, #fff);
+  --rm-panel-bg: var(--ds-surface, #fff);
   min-width: 0;
-  color: var(--rm-ink, #1d1d1f);
+  color: var(--ds-ink, #1d1d1f);
 }
 
 .rm-tenant-record button,
@@ -27,9 +27,9 @@
   justify-content: space-between;
   gap: var(--rm-space-4, 1rem);
   padding: var(--rm-panel-inset, 1rem);
-  border: 1px solid var(--rm-border);
-  border-radius: var(--rm-radius, .75rem);
-  background: var(--rm-panel-bg);
+  border: 1px solid var(--ds-hairline-strong);
+  border-radius: var(--ds-r-l, .75rem);
+  background: var(--ds-surface);
 }
 
 .rm-record-summary-main,
@@ -39,25 +39,25 @@
 
 .rm-record-summary-main h2 {
   margin: 0;
-  color: var(--rm-charcoal);
+  color: var(--ds-ink-2);
   font-size: clamp(1.45rem, 2.4vw, 2rem);
   line-height: 1.1;
 }
 
 .rm-record-summary-main p {
   margin: 5px 0 0;
-  color: var(--rm-muted);
+  color: var(--ds-muted);
   font-size: .88rem;
 }
 
 .rm-ribbon-label {
   display: block;
   margin-bottom: 5px;
-  color: var(--rm-gold);
-  font-size: .68rem;
+  color: var(--ds-muted);
+  font-size: .6875rem;
   font-weight: 750;
   letter-spacing: .12em;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 .rm-record-summary-meta {
@@ -73,20 +73,20 @@
   display: grid;
   gap: 2px;
   padding-left: 12px;
-  border-left: 1px solid var(--rm-border);
+  border-left: 1px solid var(--ds-hairline-strong);
 }
 
 .rm-record-balance small,
 .rm-record-as-of small {
-  color: var(--rm-muted);
-  font-size: .65rem;
+  color: var(--ds-muted);
+  font-size: .6875rem;
   letter-spacing: .07em;
-  text-transform: uppercase;
+  text-transform: none;
 }
 
 .rm-record-balance strong,
 .rm-record-as-of strong {
-  color: var(--rm-charcoal);
+  color: var(--ds-ink-2);
   font-size: .84rem;
   white-space: nowrap;
 }
@@ -95,22 +95,113 @@
   color: #9c5c00;
 }
 
+/* Header: record actions over one "Balance due" block. Money stays in ink. */
+.rm-record-summary-main p .rm-status {
+  margin-left: 6px;
+  vertical-align: 1px;
+}
+
+.rm-record-summary-side {
+  display: grid;
+  justify-items: end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rm-record-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.rm-tenant-record .rm-record-summary-side .rm-record-balance {
+  justify-items: end;
+  padding-left: 0;
+  border-left: 0;
+  text-align: right;
+}
+
+.rm-tenant-record .rm-record-balance .rm-record-balance-amount {
+  color: var(--ds-ink);
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.rm-tenant-record .rm-record-balance .rm-record-balance-detail,
+.rm-tenant-record .rm-record-balance .rm-warning-copy {
+  font-size: .75rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.rm-tenant-record .rm-record-balance .rm-warning-copy {
+  color: var(--ds-warning, #9a6a0f);
+}
+
+.rm-record-balance-diff {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.rm-record-balance-diff .rm-status {
+  cursor: help;
+}
+
+/* Keep the pill's own warning style (the shared header rule restyles a first-child span as a label). */
+.rm-workspace.rops-modern .rm-tenant-record .rm-record-balance-diff .rm-status {
+  color: var(--ds-warning);
+  font: 500 12px/16px var(--ds-font);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.rm-tenant-record .rm-balance-note {
+  display: block;
+  font-size: .75rem;
+}
+
+/* "Edit phone numbers" reads as a quiet link inside the Contact card. */
+.rm-contact-phone-edit .ro-phone-editor > button.secondary {
+  min-height: 0;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ds-ink-2);
+  font-size: .8125rem;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.rm-contact-phone-edit .ro-phone-editor > button.secondary:hover {
+  color: var(--ds-ink);
+}
+
 .rm-tabs.rm-tenant-tabs {
   display: flex;
   gap: 2px;
   overflow-x: auto;
   padding: 0 2px;
-  border-bottom: 1px solid var(--rm-border);
+  border-bottom: 1px solid var(--ds-hairline-strong);
   scrollbar-width: thin;
 }
 
 .rm-tabs.rm-tenant-tabs button {
   flex: 0 0 auto;
-  min-height: var(--rm-control-height, 2rem);
+  min-height: var(--ds-control, 2rem);
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
-  color: var(--rm-muted);
+  color: var(--ds-muted);
   cursor: pointer;
   padding: 5px 10px 4px;
   font-size: .74rem;
@@ -120,11 +211,11 @@
 
 .rm-tabs.rm-tenant-tabs button:hover,
 .rm-tabs.rm-tenant-tabs button.active {
-  color: var(--rm-charcoal);
+  color: var(--ds-ink-2);
 }
 
 .rm-tabs.rm-tenant-tabs button.active {
-  border-bottom-color: var(--rm-gold);
+  border-bottom-color: var(--ds-ink-2);
 }
 
 .rm-tenant-toolbar,
@@ -138,7 +229,7 @@
 
 .rm-tenant-record .rm-tenant-toolbar {
   justify-content: flex-end;
-  min-height: var(--rm-control-height, 2.25rem);
+  min-height: var(--ds-control, 2.25rem);
   padding: 0;
   border: 0;
   background: transparent;
@@ -161,9 +252,9 @@
 .rm-tenant-panel {
   min-width: 0;
   padding: var(--rm-panel-inset, 1rem);
-  border: 1px solid var(--rm-border);
-  border-radius: var(--rm-radius, .75rem);
-  background: var(--rm-panel-bg);
+  border: 1px solid var(--ds-hairline-strong);
+  border-radius: var(--ds-r-l, .75rem);
+  background: var(--ds-surface);
 }
 
 .rm-panel-title,
@@ -182,7 +273,7 @@
 
 .rm-panel-title h3 {
   margin: 0;
-  color: var(--rm-charcoal);
+  color: var(--ds-ink-2);
   font-size: .91rem;
   letter-spacing: .01em;
 }
@@ -203,7 +294,7 @@
 
 .rm-field dt {
   margin-bottom: 3px;
-  color: var(--rm-muted);
+  color: var(--ds-muted);
   font-size: .75rem;
   font-weight: 500;
   letter-spacing: 0;
@@ -212,7 +303,7 @@
 
 .rm-field dd {
   margin: 0;
-  color: var(--rm-charcoal);
+  color: var(--ds-ink-2);
   font-size: .82rem;
   overflow-wrap: anywhere;
 }
@@ -223,8 +314,8 @@
 .rm-activity-item small {
   display: block;
   margin-top: 3px;
-  color: var(--rm-muted);
-  font-size: .68rem;
+  color: var(--ds-muted);
+  font-size: .6875rem;
 }
 
 .rm-field-warning dd,
@@ -244,10 +335,10 @@
   justify-content: center;
   gap: 5px;
   padding: 0 9px;
-  border: 1px solid var(--rm-border);
+  border: 1px solid var(--ds-hairline-strong);
   border-radius: 4px;
   background: #fff;
-  color: var(--rm-charcoal);
+  color: var(--ds-ink-2);
   cursor: pointer;
   font-size: .7rem;
   font-weight: 700;
@@ -270,12 +361,12 @@
 
 .rm-button:hover {
   border-color: rgba(58, 58, 60, .33);
-  background: var(--rm-cream);
+  background: var(--ds-bg);
 }
 
 .rm-button-primary {
-  border-color: var(--rm-charcoal);
-  background: var(--rm-charcoal);
+  border-color: var(--ds-ink-2);
+  background: var(--ds-ink-2);
   color: #fff;
 }
 
@@ -305,11 +396,11 @@
   border: 1px solid rgba(58, 58, 60, .18);
   border-radius: 3px;
   background: #f4f3ef;
-  color: var(--rm-charcoal);
-  font-size: .62rem;
+  color: var(--ds-ink-2);
+  font-size: .6875rem;
   font-weight: 750;
   letter-spacing: .04em;
-  text-transform: uppercase;
+  text-transform: none;
   white-space: nowrap;
 }
 
@@ -326,7 +417,7 @@
 }
 
 .rm-status-muted {
-  color: var(--rm-muted);
+  color: var(--ds-muted);
 }
 
 .rm-table-wrap {
@@ -350,11 +441,11 @@
 }
 
 .rm-table th {
-  color: var(--rm-muted);
-  font-size: .62rem;
+  color: var(--ds-muted);
+  font-size: .6875rem;
   font-weight: 750;
   letter-spacing: .07em;
-  text-transform: uppercase;
+  text-transform: none;
   white-space: nowrap;
 }
 
@@ -364,13 +455,13 @@
 }
 
 .rm-table td strong {
-  color: var(--rm-charcoal);
+  color: var(--ds-ink-2);
   font-weight: 700;
 }
 
 .rm-table .rm-reference {
   max-width: 170px;
-  color: var(--rm-muted);
+  color: var(--ds-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .64rem;
   overflow-wrap: anywhere;
@@ -381,7 +472,7 @@
 }
 
 .rm-amount {
-  color: var(--rm-charcoal);
+  color: var(--ds-ink-2);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -401,7 +492,7 @@
 
 .rm-detail-row td {
   padding: 11px 12px 14px;
-  background: var(--rm-cream);
+  background: var(--ds-bg);
 }
 
 .rm-ledger-detail {
@@ -435,9 +526,9 @@
 }
 
 .rm-segmented button {
-  border: 1px solid var(--rm-border);
+  border: 1px solid var(--ds-hairline-strong);
   background: #fff;
-  color: var(--rm-muted);
+  color: var(--ds-muted);
   cursor: pointer;
   padding: 6px 8px;
   font-size: .67rem;
@@ -453,8 +544,8 @@
 }
 
 .rm-segmented button.active {
-  border-color: var(--rm-charcoal);
-  background: var(--rm-charcoal);
+  border-color: var(--ds-ink-2);
+  background: var(--ds-ink-2);
   color: #fff;
 }
 
@@ -470,26 +561,26 @@
 
 .rm-charge-total span,
 .rm-ledger-toolbar {
-  color: var(--rm-muted);
-  font-size: .68rem;
+  color: var(--ds-muted);
+  font-size: .6875rem;
 }
 
 .rm-charge-total strong {
-  color: var(--rm-charcoal);
+  color: var(--ds-ink-2);
   font-size: .86rem;
 }
 
 .rm-warning {
   margin: 0 0 11px;
   padding: 8px 10px;
-  border-left: 3px solid var(--rm-gold);
+  border-left: 3px solid var(--ds-warning, #9a6a0f);
   background: #fff7e3;
   color: #795113;
   font-size: .7rem;
 }
 
 .rm-muted {
-  color: var(--rm-muted);
+  color: var(--ds-muted);
 }
 
 .rm-section-note {
@@ -499,14 +590,14 @@
 
 .rm-note-cell {
   max-width: 210px;
-  color: var(--rm-muted);
+  color: var(--ds-muted);
   overflow-wrap: anywhere;
 }
 
 .rm-tenancy-card {
   padding: var(--rm-space-3, .75rem) 0;
   border: 0;
-  border-top: 1px solid var(--rm-border);
+  border-top: 1px solid var(--ds-hairline-strong);
   background: transparent;
 }
 
@@ -517,7 +608,7 @@
 
 .rm-card-heading strong {
   display: block;
-  color: var(--rm-charcoal);
+  color: var(--ds-ink-2);
   font-size: .83rem;
 }
 
@@ -547,18 +638,18 @@
   display: grid;
   align-content: start;
   gap: 5px;
-  color: var(--rm-muted);
+  color: var(--ds-muted);
   font-size: .7rem;
 }
 
 .rm-activity-item strong {
-  color: var(--rm-charcoal);
+  color: var(--ds-ink-2);
   font-size: .78rem;
 }
 
 .rm-activity-item p {
   margin: 4px 0 0;
-  color: var(--rm-muted);
+  color: var(--ds-muted);
   font-size: .72rem;
   line-height: 1.4;
 }
@@ -570,7 +661,7 @@
 
 .rm-empty {
   padding: 18px 10px;
-  color: var(--rm-muted);
+  color: var(--ds-muted);
   font-size: .75rem;
   text-align: center;
 }
@@ -592,6 +683,17 @@
     gap: var(--rm-space-3, .75rem);
   }
 
+  .rm-record-summary-side,
+  .rm-tenant-record .rm-record-summary-side .rm-record-balance {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .rm-record-actions,
+  .rm-record-balance-diff {
+    justify-content: flex-start;
+  }
+
   .rm-summary-grid,
   .rm-form-grid.rm-detail-grid {
     grid-template-columns: 1fr;
@@ -611,4 +713,4 @@
 .rm-ledger-filters { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
 .rm-ledger-filters label { display: grid; gap: 5px; font-size: 12px; }
 .rm-ledger-filters label:first-child { flex: 1; min-width: 220px; }
-.rm-ledger-filters input { min-height: var(--rm-control-height, 32px); padding: 5px 8px; border: 1px solid #d8d5cf; border-radius: 4px; background: white; }
+.rm-ledger-filters input { min-height: var(--ds-control, 32px); padding: 5px 8px; border: 1px solid #d8d5cf; border-radius: 4px; background: white; }
