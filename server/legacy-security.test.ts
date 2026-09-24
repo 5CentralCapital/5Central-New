@@ -113,6 +113,19 @@ test("public investor intake requires same-origin requests", () => {
   assert.equal(blocked.getStatus(), 403);
   assert.equal(nextCalls, 0);
 
+  assert.equal(auth.requestHasSameOrigin(request({
+    method: "POST",
+    host: "app.example.test",
+    origin: "null",
+    referer: "https://app.example.test/investor",
+  })), false);
+  assert.equal(auth.requestHasSameOrigin(request({
+    method: "POST",
+    host: "app.example.test",
+    origin: "not a URL",
+    referer: "https://app.example.test/investor",
+  })), false);
+
   auth.requireSameOriginForMutation(request({ method: "POST", host: "app.example.test", origin: "https://app.example.test" }), blocked.response, () => { nextCalls++; });
   assert.equal(nextCalls, 1);
 });

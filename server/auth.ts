@@ -189,7 +189,11 @@ function requestOrigin(req: Request): string | undefined {
  * fallback for older browsers. API-key automation is handled separately.
  */
 export function requestHasSameOrigin(req: Request): boolean {
-  const candidate = originOf(req.get?.("origin")) ?? originOf(req.get?.("referer"));
+  const originHeader = req.get?.("origin");
+  // An explicit Origin header is authoritative, even when it is malformed or
+  // the browser supplies the opaque `null` origin. Never downgrade that signal
+  // to a same-origin Referer value.
+  const candidate = originHeader !== undefined ? originOf(originHeader) : originOf(req.get?.("referer"));
   if (!candidate) return false;
 
   const allowed = new Set<string>();
