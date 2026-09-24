@@ -280,6 +280,12 @@ export interface FinancialSourceReadPort {
   resolveLine(query: FinancialSourceLineQuery): Promise<FinancialSourceLineResolution | null>;
   readCoverage(scope: FinancialSourceScope, stream?: string): Promise<FinancialSourceCoverage>;
   listTransactions(query: FinancialSourceTransactionQuery): Promise<FinancialSourceTransactionPage>;
+  /**
+   * Narrow provider-truth probe used by project cost coverage. Implementations
+   * should query current, non-voided Purchase credits without materializing
+   * the full transaction stream. Consumers fail closed when it is absent.
+   */
+  hasPurchaseCredits?(scope: FinancialSourceScope, through?: IsoDate | string): Promise<boolean>;
 }
 
 export interface FinancialSourceTransactionPage {

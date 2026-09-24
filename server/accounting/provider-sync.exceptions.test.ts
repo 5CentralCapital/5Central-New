@@ -3,6 +3,7 @@ import test from "node:test";
 import { createSyntheticCompanyDatabase, SYNTHETIC_COMPANY } from "../company/testing/synthetic-database";
 import type { QuickBooksAccountingClient } from "../integrations/quickbooks/accounting";
 import type { QuickBooksJsonObject } from "../../shared/accounting/quickbooks";
+import { financialSourceReferenceSchema } from "../../shared/accounting/source";
 import { createQboAccountingMirrorStore } from "./mirror-store";
 import { PostgresQuickBooksCapabilityStore } from "./capabilities";
 import { createQboProviderSync, decodeQboKeysetCursor, encodeQboKeysetCursor, nextQboKeysetCursor, queryFor } from "./provider-sync";
@@ -176,6 +177,62 @@ test("provider sync mirrors refund and cash-back lines with signed flow and no d
     const lines = await mirror.listTransactions({ scope: sourceScope, from: "2026-09-10", through: "2026-09-10", limit: 20 });
     assert.equal(lines.items.filter(item => item.source.objectType === "Purchase" && item.source.objectId === "26").length, 1);
     assert.equal(lines.items.filter(item => item.source.objectType === "Deposit" && item.source.objectId === "121").length, 2);
+
+    // The narrow probe respects the as-of date, current-row state and source
+    // scope. A retired credit in another realm must not affect this company.
+    assert.equal(await mirror.hasPurchaseCredits(sourceScope, "2026-09-09"), false);
+    assert.equal(await mirror.hasPurchaseCredits(sourceScope, "2026-09-10"), true);
+    const isolatedScope = { ...scope, realmId: "654321" };
+    const isolatedSource = financialSourceReferenceSchema.parse({
+      provider: "qbo", ...isolatedScope, objectType: "Purchase", objectId: "isolated", lineId: "1", version: "0",
+    });
+    const isolatedObject = await mirror.ingestSourceObject({
+      scope: isolatedScope,
+      objectType: "Purchase",
+      objectId: "isolated",
+      version: "0",
+      providerUpdatedAt: "2026-09-10T12:00:00Z",
+      providerBody: { Id: "isolated", SyncToken: "0" },
+    });
+    const isolatedTransaction = await mirror.ingestTransaction({
+      sourceObjectId: isolatedObject.id,
+      scope: isolatedScope,
+      objectType: "Purchase",
+      objectId: "isolated",
+      version: "0",
+      transactionDate: "2026-09-10",
+      postingState: "posted",
+      currency: "USD",
+      watermark: "2026-09-10T12:00:00Z",
+      updatedAt: "2026-09-10T12:00:00Z",
+    });
+    await mirror.ingestTransactionLine({
+      transactionId: isolatedTransaction.id,
+      sourceObjectId: isolatedObject.id,
+      source: isolatedSource,
+      lineNumber: 1,
+      transactionType: "Purchase",
+      direction: "credit",
+      flow: "incoming",
+      lineRole: "expense",
+      amountCents: "100",
+      currency: "USD",
+      postingState: "posted",
+      postedOn: "2026-09-10",
+      settlementState: "unknown",
+      settledOn: null,
+      settledAmountCents: null,
+      accountObjectId: "7",
+      counterpartyObjectId: null,
+      description: "isolated refund",
+      watermark: "2026-09-10T12:00:00Z",
+      updatedAt: "2026-09-10T12:00:00Z",
+    });
+    const isolatedSourceScope = { provider: "qbo" as const, ...isolatedScope };
+    assert.equal(await mirror.hasPurchaseCredits(isolatedSourceScope, "2026-09-10"), true);
+    assert.equal(await mirror.hasPurchaseCredits(sourceScope, "2026-09-10"), true);
+    await mirror.beginTransactionRevision({ scope: isolatedScope, objectType: "Purchase", objectId: "isolated", version: "1", lineIds: [] });
+    assert.equal(await mirror.hasPurchaseCredits(isolatedSourceScope, "2026-09-10"), false);
   } finally {
     await synthetic.close();
   }

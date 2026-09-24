@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { centsFromBigInt, centsSchema, currencyCodeSchema, isoDateSchema, isoTimestampSchema, type MoneyCents } from "../../shared/company";
+import { centsFromBigInt, centsSchema, currencyCodeSchema, isoDateSchema, isoTimestampSchema, type IsoDate, type MoneyCents } from "../../shared/company";
 import {
   financialBasisSchema,
   financialCoverageStatusSchema,
@@ -1362,6 +1362,26 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
     if (!row) return null;
     const merged = { ...row, transaction_type: row.line_transaction_type, flow: row.line_flow, line_role: row.line_line_role, account_object_id: row.line_account_object_id, counterparty_object_id: row.line_counterparty_object_id };
     return mapResolution(merged);
+  }
+
+  async hasPurchaseCredits(scopeInput: FinancialSourceScope, through?: IsoDate | string): Promise<boolean> {
+    const scope = financialSourceScopeSchema.parse(scopeInput);
+    const values: unknown[] = [...scopeParts(scope)];
+    const clauses = [
+      "b.organization_id=$1", "b.legal_entity_id=$2", "b.environment=$3", "b.realm_id=$4",
+      "b.object_type='Purchase'", "b.transaction_type='Purchase'", "b.is_current=true", "b.posting_state <> 'voided'",
+      "b.direction='credit'", "b.flow='incoming'",
+    ];
+    if (through !== undefined) {
+      const date = isoDateSchema.parse(through);
+      values.push(date);
+      clauses.push("b.posted_on <= $" + String(values.length));
+    }
+    const result = await this.executor.query<{ has_credit: boolean }>(
+      "SELECT EXISTS (SELECT 1 FROM accounting_qbo_source_line_balances b WHERE " + clauses.join(" AND ") + ") AS has_credit",
+      values,
+    );
+    return result.rows[0]?.has_credit === true;
   }
 
   async listTransactions(query: { scope: FinancialSourceScope; from?: string; through?: string; limit?: number; cursor?: string }) {

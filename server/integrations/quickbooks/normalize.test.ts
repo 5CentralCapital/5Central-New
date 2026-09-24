@@ -127,6 +127,15 @@ test("Deposit cash back is a signed source line and reconciles to net TotalAmt",
   ]);
 });
 
+test("cash back synthetic identity collisions remain whole-object exceptions", () => {
+  const result = normalizeQboTransaction("Deposit", {
+    Id: "306", SyncToken: "0", TxnDate: "2026-09-21", CurrencyRef: { value: "USD" }, TotalAmt: 80, DepositToAccountRef: { value: "35" },
+    CashBack: { AccountRef: { value: "36" }, Amount: 20 }, MetaData: { LastUpdatedTime: updated },
+    Line: [{ Id: "synthetic:cashback", Amount: 100, DepositLineDetail: { AccountRef: { value: "79" } } }],
+  });
+  assert.ok(result.unsupportedReasons.some(reason => /duplicate line identities/.test(reason)));
+});
+
 test("cash back without an explicit AccountRef stays unsupported and cannot be netted", () => {
   const result = normalizeQboTransaction("Deposit", {
     Id: "307", SyncToken: "0", TxnDate: "2026-09-21", CurrencyRef: { value: "USD" }, TotalAmt: 80, DepositToAccountRef: { value: "35" },
@@ -191,6 +200,15 @@ test("an item-based line with an explicit ItemAccountRef carries that account wi
   });
   assert.deepEqual(result.unsupportedReasons, []);
   assert.equal(result.value?.lines[0]?.accountObjectId, "expense-11");
+});
+
+test("an item-based line without ItemRef stays unsupported even with an explicit account", () => {
+  const result = normalizeQboTransaction("Purchase", {
+    Id: "407", SyncToken: "0", TxnDate: "2026-09-20", CurrencyRef: { value: "USD" }, PaymentType: "Cash", TotalAmt: 5,
+    AccountRef: { value: "bank-9" }, MetaData: { LastUpdatedTime: updated },
+    Line: [{ Id: "1", Amount: 5, ItemBasedExpenseLineDetail: { ItemAccountRef: { value: "expense-11" } } }],
+  });
+  assert.ok(result.unsupportedReasons.some(reason => /has no ItemRef/.test(reason)));
 });
 
 test("a refund with a non-credit-card payment type stays unsupported", () => {

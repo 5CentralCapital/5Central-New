@@ -385,6 +385,7 @@ function normalizeLine(type: SupportedQboTransactionType, body: QuickBooksJsonOb
       // inventory/COGS path for inventory), and the referenced Account
       // revision is mirrored.
       if (itemDetail) {
+        if (referenceId(itemDetail.ItemRef) === null) reject(`QBO ${lineLabel} ItemBasedExpenseLineDetail has no ItemRef`);
         accountObjectId = referenceId(itemDetail.ItemAccountRef);
         if (accountObjectId === null) reject(`QBO ${lineLabel} uses ItemBasedExpenseLineDetail without a mirrored expense account`);
       } else reject(`QBO ${lineLabel} has unsupported DetailType`);
