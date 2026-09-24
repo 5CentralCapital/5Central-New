@@ -130,8 +130,12 @@ export interface RentOpsDocumentServiceOptions {
 
 const MAX_DOCUMENT_NAME = 240;
 const MAX_DOCUMENT_MIME = 120;
-// Source filenames may contain ordinary punctuation; paths/control characters remain forbidden.
-const SAFE_DOCUMENT_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._()',&\-]{0,239}$/;
+// Source filenames may contain non-ASCII characters as well as the existing
+// punctuation. Paths, control characters, and hidden/path-like names remain
+// forbidden before a filename reaches object storage. Keep this ES5-compatible
+// because the main TypeScript project leaves its target at the compiler default.
+const SAFE_DOCUMENT_NAME = /^[A-Za-z0-9\u00a0-\uFFFF][A-Za-z0-9\u00a0-\uFFFF ._()',&\-]{0,239}$/;
+const UNSAFE_DOCUMENT_NAME = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const SAFE_DOCUMENT_MIMES = new Set([
   "application/pdf",
   "image/jpeg",
@@ -454,7 +458,7 @@ function patchRow(snapshot: RentOpsSnapshot, entityType: RentOpsPatchEntityType,
 }
 
 function assertDocumentName(fileName: string): string {
-  if (typeof fileName !== "string" || fileName.length < 1 || fileName.length > MAX_DOCUMENT_NAME || !SAFE_DOCUMENT_NAME.test(fileName) || fileName.includes("..")) throw new RentOpsInvariantError("Document filename is invalid");
+  if (typeof fileName !== "string" || fileName.length < 1 || fileName.length > MAX_DOCUMENT_NAME || !SAFE_DOCUMENT_NAME.test(fileName) || UNSAFE_DOCUMENT_NAME.test(fileName) || fileName.includes("..")) throw new RentOpsInvariantError("Document filename is invalid");
   return fileName;
 }
 

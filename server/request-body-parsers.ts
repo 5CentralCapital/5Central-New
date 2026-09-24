@@ -8,11 +8,27 @@ import express, { type Express, type RequestHandler } from "express";
 export const MCP_JSON_BODY_LIMIT = "16mb";
 
 /**
+ * Workbook discovery is a read-only browser operation, but a real workbook
+ * can be larger than Express's small global JSON limit.  The route mounts
+ * this parser only after its session and company-grant checks have run.
+ */
+export const FORECAST_WORKBOOK_BODY_LIMIT = "10mb";
+
+/**
  * The /mcp JSON parser. The MCP route mounts it after bearer-token
  * verification so an anonymous client cannot make the server buffer and parse
  * a 16 MB body.
  */
 export const mcpJsonBodyParser: RequestHandler = express.json({ limit: MCP_JSON_BODY_LIMIT });
+
+export const forecastWorkbookBodyParser: RequestHandler = express.raw({
+  type: [
+    "application/octet-stream",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/csv",
+  ],
+  limit: FORECAST_WORKBOOK_BODY_LIMIT,
+});
 
 /**
  * Register the global JSON and form parsers. /mcp is skipped here and parsed

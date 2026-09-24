@@ -5,7 +5,7 @@ import express from "express";
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { mcpJsonBodyParser, registerRequestBodyParsers } from "./request-body-parsers";
+import { forecastWorkbookBodyParser, mcpJsonBodyParser, registerRequestBodyParsers } from "./request-body-parsers";
 
 /*
  * The production /mcp route (server/rent-ops/mcp/routes.ts) hands req.body to
@@ -59,6 +59,38 @@ test("a multi-megabyte base64 MCP upload passes the JSON parser while other rout
 
     const anonymous = await fetch(`${base}/mcp`, { method: "POST", headers: { "content-type": "application/json" }, body: "{not json" });
     assert.equal(anonymous.status, 401, "an unauthenticated MCP body is rejected before it is parsed");
+  } finally {
+    listener.close();
+  }
+});
+
+test("a workbook parser accepts a large authorized raw body without widening anonymous JSON parsing", async () => {
+  const server = express();
+  registerRequestBodyParsers(server);
+  const authenticate: express.RequestHandler = (req, res, next) => {
+    if (req.get("authorization") !== "Bearer synthetic") { res.status(401).json({ error: "invalid_token" }); return; }
+    next();
+  };
+  const authorizeCompany: express.RequestHandler = (req, res, next) => {
+    if (req.get("x-company-grant") !== "synthetic") { res.status(403).json({ error: "company_grant_required" }); return; }
+    next();
+  };
+  server.post("/forecast-workbook", authenticate, authorizeCompany, forecastWorkbookBodyParser, (req, res) => {
+    res.json({ bytes: Buffer.isBuffer(req.body) ? req.body.byteLength : -1 });
+  });
+  const listener = server.listen(0, "127.0.0.1");
+  await new Promise<void>(resolve => listener.once("listening", resolve));
+  const base = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
+  const body = Buffer.from(`Category,2027-01-04,2027-01-11\nWater,-100,-100\n${"x".repeat(130 * 1024)}`, "utf8");
+  try {
+    const anonymous = await fetch(`${base}/forecast-workbook`, { method: "POST", headers: { "content-type": "application/octet-stream" }, body });
+    assert.equal(anonymous.status, 401, "session authentication runs before the large parser");
+    const unauthorised = await fetch(`${base}/forecast-workbook`, { method: "POST", headers: { authorization: "Bearer synthetic", "content-type": "application/octet-stream" }, body });
+    assert.equal(unauthorised.status, 403, "company authorization runs before the large parser");
+    const authorized = await fetch(`${base}/forecast-workbook`, { method: "POST", headers: { authorization: "Bearer synthetic", "x-company-grant": "synthetic", "content-type": "application/octet-stream" }, body });
+    assert.equal(authorized.status, 200, await authorized.clone().text());
+    assert.deepEqual(await authorized.json(), { bytes: body.byteLength });
+
   } finally {
     listener.close();
   }
