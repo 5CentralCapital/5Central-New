@@ -1,3 +1,5 @@
+import type { TenantPaymentStatus } from "@shared/tenant-payment-contracts";
+
 export type RentOpsSource = "live" | "synthetic";
 
 export type SectionKey =
@@ -290,6 +292,39 @@ export interface AdminChargeDefinitionView {
   active?: boolean | null;
   activeKnowledge?: string | null;
   recordRevision?: number;
+}
+
+export interface TenantPaymentReviewAdjustment {
+  paymentId: string;
+  providerObjectId: string;
+  kind: "refund" | "dispute";
+  amountCents: number;
+  active: boolean;
+  providerCreatedAt: number;
+  terminal: boolean;
+}
+
+/** Staff-safe payment exception data returned by the narrow review queue. */
+export interface TenantPaymentReview {
+  id: string;
+  accountId: string;
+  personId: string;
+  tenancyId: string;
+  propertyId: string;
+  unitId: string;
+  requestId: string;
+  amountCents: number;
+  currency: "usd";
+  status: TenantPaymentStatus;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+  postedOn?: string;
+  checkoutSessionId?: string;
+  paymentIntentId?: string;
+  currentLedgerCents: number;
+  ledgerRevision: number;
+  adjustments: TenantPaymentReviewAdjustment[];
 }
 export interface AdminLedgerTransactionView {
   id?: string;

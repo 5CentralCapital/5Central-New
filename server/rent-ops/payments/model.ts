@@ -45,7 +45,13 @@ export function exactPaymentTenancy(snapshot: RentOpsSnapshot, identity: Pick<Te
   return { tenancy, unit };
 }
 export function paymentIsReserved(payment: TenantPayment, now: Date): boolean {
-  return payment.status === "processing" || payment.status === "review_required" || ((payment.status === "creating" || payment.status === "pending") && payment.expiresAt > now.toISOString());
+  // A local 35-minute expiry is also the provider Checkout Session expiry,
+  // but the session is not safely reusable until Stripe confirms a terminal
+  // outcome. Keep creating/pending attempts reserved after that time; a late
+  // success is then held for review without allowing a replacement checkout
+  // to capture the same balance first.
+  void now;
+  return ["creating", "pending", "processing", "review_required"].includes(payment.status);
 }
 export function payableAccount(snapshot: RentOpsSnapshot, identity: Pick<TenantIdentity, "personId" | "tenancyId">, payments: TenantPayment[], now: Date): TenantPayableAccount {
   exactPaymentTenancy(snapshot, identity);

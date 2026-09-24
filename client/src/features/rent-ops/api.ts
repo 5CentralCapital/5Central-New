@@ -55,12 +55,15 @@ import type {
   RentOpsMutation,
   RentOpsMutationResult,
   TenantView,
+  TenantPaymentReview,
+  TenantPaymentReviewAdjustment,
   OperationalScheduleRegister,
 } from "./types";
 import { createDemoAdminSnapshot, DEMO_AS_OF_DATE } from "./demo";
 import { REPORT_KEYS, REPORT_LABELS } from "./types";
 import type { ReportColumn } from "./types";
 import { rentOpsAuthClient } from "./auth";
+import { TENANT_PAYMENT_STATUSES, type TenantPaymentStatus } from "@shared/tenant-payment-contracts";
 
 /**
  * The browser is an adapter, not a second reporting engine. All financial and
@@ -654,6 +657,55 @@ function decodeChargeDefinition(value: unknown): AdminChargeDefinitionView {
     active: nullableBoolean(input, "active"),
     activeKnowledge: nullableAllowed(input, "activeKnowledge", FACT_KNOWLEDGE),
     recordRevision: optionalRevision(input),
+  };
+}
+
+function decodeTenantPaymentReviewAdjustment(value: unknown): TenantPaymentReviewAdjustment {
+  const input = exactRecord(value, "payment review adjustment", ["paymentId", "providerObjectId", "kind", "amountCents", "active", "providerCreatedAt", "terminal"]);
+  const amountCents = requiredMoney(input, "amountCents");
+  if (amountCents <= 0) invalidResponse();
+  const providerCreatedAt = requiredInteger(input, "providerCreatedAt");
+  if (providerCreatedAt < 0) invalidResponse();
+  return {
+    paymentId: requiredId(input, "paymentId"),
+    providerObjectId: requiredId(input, "providerObjectId"),
+    kind: requiredAllowed(input, "kind", ["refund", "dispute"] as const) as "refund" | "dispute",
+    amountCents,
+    active: requiredBoolean(input, "active"),
+    providerCreatedAt,
+    terminal: requiredBoolean(input, "terminal"),
+  };
+}
+
+/** Decode the staff-only disputed/held payment queue without accepting a
+ * provider payload, checkout URL, or unknown field into browser state. */
+export function decodeTenantPaymentReview(value: unknown): TenantPaymentReview {
+  const input = exactRecord(value, "payment review", ["id", "accountId", "personId", "tenancyId", "propertyId", "unitId", "requestId", "amountCents", "currency", "status", "expiresAt", "createdAt", "updatedAt", "postedOn", "checkoutSessionId", "paymentIntentId", "currentLedgerCents", "ledgerRevision", "adjustments"]);
+  const amountCents = requiredMoney(input, "amountCents");
+  if (amountCents <= 0) invalidResponse();
+  const currentLedgerCents = requiredMoney(input, "currentLedgerCents");
+  const ledgerRevision = requiredInteger(input, "ledgerRevision");
+  if (ledgerRevision < 0) invalidResponse();
+  return {
+    id: requiredId(input, "id"),
+    accountId: requiredId(input, "accountId"),
+    personId: requiredId(input, "personId"),
+    tenancyId: requiredId(input, "tenancyId"),
+    propertyId: requiredId(input, "propertyId"),
+    unitId: requiredId(input, "unitId"),
+    requestId: requiredId(input, "requestId"),
+    amountCents,
+    currency: requiredAllowed(input, "currency", ["usd"] as const) as "usd",
+    status: requiredAllowed(input, "status", TENANT_PAYMENT_STATUSES) as TenantPaymentStatus,
+    expiresAt: requiredTimestamp(input, "expiresAt"),
+    createdAt: requiredTimestamp(input, "createdAt"),
+    updatedAt: requiredTimestamp(input, "updatedAt"),
+    postedOn: optionalDate(input, "postedOn"),
+    checkoutSessionId: optionalId(input, "checkoutSessionId"),
+    paymentIntentId: optionalId(input, "paymentIntentId"),
+    currentLedgerCents,
+    ledgerRevision,
+    adjustments: requiredArrayOf(input, "adjustments", decodeTenantPaymentReviewAdjustment),
   };
 }
 
@@ -1613,6 +1665,17 @@ export async function loadRentOpsChargeDefinitions(): Promise<AdminChargeDefinit
   assertNoForbiddenResponseFields(payload);
   if (!Array.isArray(payload)) invalidResponse();
   return payload.map(decodeChargeDefinition);
+}
+
+/** Load the staff-visible payment exceptions separately from the broad
+ * snapshot so a held or disputed provider event is easy to find and cannot
+ * become an accidental tenant-facing field. */
+export async function loadRentOpsPaymentReviewQueue(signal?: AbortSignal): Promise<TenantPaymentReview[]> {
+  if (DEMO_ALLOWED) return [];
+  const payload = await requestJson("/api/rent-ops/tenant-payments/review", { signal });
+  assertNoForbiddenResponseFields(payload);
+  if (!Array.isArray(payload)) invalidResponse();
+  return payload.map(decodeTenantPaymentReview);
 }
 
 export async function loadRentOpsReport(report: ReportKey, filters: ApiFilters = {}, signal?: AbortSignal): Promise<ReportRow[]> {
