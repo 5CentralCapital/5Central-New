@@ -44,7 +44,14 @@ function parse<T extends z.ZodTypeAny>(schema: T, value: unknown): z.output<T> {
 function providerFailure(error: unknown): never {
   if (isQuickBooksIntegrationError(error)) {
     if (error.code === "quickbooks_rate_limited") throw new RetryLaterJobError("quickbooks_rate_limited", "QuickBooks asked this company to slow down", error.retryAfterMs ?? 60_000);
-    if (error.code === "quickbooks_unauthorized" || error.code === "quickbooks_oauth") throw new PermanentJobError("qbo_needs_reconnect", "QuickBooks needs to be reconnected for this company");
+    if (error.code === "quickbooks_oauth") {
+      // A token endpoint 429/5xx is a provider outage or throttle, not proof
+      // that the stored grant is invalid. Only invalid_grant is converted to
+      // the reconnect path by the token manager.
+      if (error.retryable) throw new RetryLaterJobError(error.status === 429 ? "quickbooks_rate_limited" : "quickbooks_oauth_retry", "QuickBooks authorization is temporarily unavailable", error.retryAfterMs ?? 60_000);
+      throw new PermanentJobError("qbo_needs_reconnect", "QuickBooks needs to be reconnected for this company");
+    }
+    if (error.code === "quickbooks_unauthorized") throw new PermanentJobError("qbo_needs_reconnect", "QuickBooks needs to be reconnected for this company");
     if (error.code === "quickbooks_unsupported_capability" || error.code === "quickbooks_validation") throw new PermanentJobError(error.code, error.message);
   }
   if (error instanceof AccountingError && (error.code === "accounting_capability_disabled" || error.code === "accounting_validation" || error.code === "accounting_configuration")) {

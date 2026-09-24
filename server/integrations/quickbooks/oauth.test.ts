@@ -96,6 +96,23 @@ test("OAuth failures are safe and do not blindly retry", async () => {
   assert.equal(calls, 1);
 });
 
+test("OAuth token throttles and provider outages stay retryable", async () => {
+  for (const status of [429, 503]) {
+    const client = createQuickBooksOAuthClient(config(async () => response(status, { error: "temporarily_unavailable", error_description: "private provider detail" })));
+    await assert.rejects(
+      () => client.refreshToken("refresh-token"),
+      (error: unknown) => {
+        assert.ok(error instanceof QuickBooksIntegrationError);
+        assert.equal(error.code, "quickbooks_oauth");
+        assert.equal(error.status, status);
+        assert.equal(error.retryable, true);
+        assert.doesNotMatch(error.message, /private provider detail/);
+        return true;
+      },
+    );
+  }
+});
+
 test("non-accounting provider scopes stay disabled", () => {
   const client = createQuickBooksOAuthClient(config(async () => response(500, {})));
   assert.throws(() => client.getAuthorizationUrl("state", ["com.intuit.quickbooks.payment"]), /OAuth scopes are invalid/);
