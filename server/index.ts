@@ -14,7 +14,7 @@ import { setupVite, serveStatic, log } from "./vite";
 import { loadUser } from "./auth";
 import { pool } from "./db";
 import { ensureSchema } from "./ensureSchema";
-import { publicRequestError, startupFailureSummary } from "./request-errors";
+import { publicRequestError, startupFailureSummary, type StartupStage } from "./request-errors";
 import { sanitizeApiPathForLogging } from "./request-logging";
 import { applicantPageSecurityHeaders } from "./applicant-page-security";
 import { securityHeaders } from "./security-headers";
@@ -41,13 +41,6 @@ app.get("/readyz", (_req, res) => {
     status: state === "ready" ? "ready" : "not_ready",
   });
 });
-
-if (isProduction && !process.env.SESSION_SECRET) {
-  throw new Error("SESSION_SECRET must be configured in production");
-}
-if (isProduction) {
-  assertRentOpsProductionConfiguration(process.env);
-}
 
 // Exactly one trusted reverse-proxy hop (Render's router; Replit's before it).
 app.set("trust proxy", 1);
@@ -111,12 +104,27 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  let startupStage: StartupStage = "configuration";
   try {
+    // Keep production configuration failures inside the same redacted startup
+    // boundary as runtime dependency failures. The labels and summaries are
+    // fixed; arbitrary provider/configuration messages never enter logs.
+    startupStage = "configuration";
+    if (isProduction && !process.env.SESSION_SECRET) {
+      throw new Error("SESSION_SECRET must be configured in production");
+    }
+    if (isProduction) {
+      assertRentOpsProductionConfiguration(process.env);
+    }
+
     // Production migrations are reviewed and run out-of-band by the importer
     // role. Startup may prepare only the development schema.
+    startupStage = isProduction ? "route_registration" : "development_schema";
     if (!isProduction) await ensureSchema();
 
+    startupStage = "route_registration";
     const server = await registerRoutes(app, {
+      onStartupStage: (stage) => { startupStage = stage; },
       onTenantPaymentService: (service) => { tenantPaymentService = service; },
       onRuntimeExecutor: (executor) => { quickBooksWebhookExecutor = executor; }, // lane-b-accounting
     });
@@ -136,6 +144,7 @@ app.use((req, res, next) => {
     // importantly only setup vite in development and after
     // setting up all the other routes so the catch-all route
     // doesn't interfere with the other routes
+    startupStage = "static_assets";
     if (app.get("env") === "development") {
       await setupVite(app, server);
     } else {
@@ -144,10 +153,11 @@ app.use((req, res, next) => {
 
     // Render supplies PORT. Bind the only externally reachable listener to
     // all interfaces, and do not report readiness until listen succeeds.
+    startupStage = "listener";
     const port = parseInt(process.env.PORT || '10000', 10);
     server.once("error", (error) => {
       readiness.markFailed();
-      log(`startup failed: ${startupFailureSummary(error)}`);
+      log(`startup failed: ${startupFailureSummary(error, startupStage)}`);
       process.exitCode = 1;
     });
     server.listen({
@@ -168,7 +178,7 @@ app.use((req, res, next) => {
     });
   } catch (error) {
     readiness.markFailed();
-    log(`startup failed: ${startupFailureSummary(error)}`);
+    log(`startup failed: ${startupFailureSummary(error, startupStage)}`);
     process.exitCode = 1;
   }
 })();
