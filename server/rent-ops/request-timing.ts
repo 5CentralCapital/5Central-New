@@ -47,7 +47,7 @@ function timingHeader(state: TimingState): string {
  * request parameters enter the fixed numeric header; no metric is retained. */
 export const rentOpsRequestTiming: RequestHandler = (req, res, next) => {
   if (req.method !== "GET" || !/^\/(?:workspace(?:\/dashboard)?|dashboard|reports\/[^/]+|tenants\/[^/]+)$/.test(req.path)) { next(); return; }
-  const state: TimingState = {started: performance.now(), durations: {}, counts: {}};
+  const state: TimingState = {started: performance.now(), durations: {db: 0, decode: 0, map: 0}, counts: {db_calls: 0, batch_calls: 0}};
   const original = res.writeHead;
   res.writeHead = function (this: Response, ...args: any[]) {
     if (!this.headersSent) {
