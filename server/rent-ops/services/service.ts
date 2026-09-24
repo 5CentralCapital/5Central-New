@@ -804,8 +804,31 @@ export class RentOpsService {
         }
       }
     }
-    const updated: RentOpsApplicationRecord = { ...application, ...input, updatedAt: this.now().toISOString() };
-    await this.repository.saveApplication(updated);
+    // Re-read under the same application lock used by manager status writes.
+    // A bearer token may have resolved before a manager approved or declined
+    // the application; saving that stale object would otherwise restore the
+    // old status and overwrite the manager's decision.
+    const editable = {
+      ...(input.phone !== undefined ? { phone: input.phone } : {}),
+      ...(input.propertyId !== undefined ? { propertyId: input.propertyId } : {}),
+      ...(input.unitId !== undefined ? { unitId: input.unitId } : {}),
+      ...(input.rentalHistory !== undefined ? { rentalHistory: input.rentalHistory } : {}),
+      ...(input.employment !== undefined ? { employment: input.employment } : {}),
+      ...(input.householdSummary !== undefined ? { householdSummary: input.householdSummary } : {}),
+      ...(input.preferences !== undefined ? { preferences: input.preferences } : {}),
+      ...(input.voucher !== undefined ? { voucher: input.voucher } : {}),
+      ...(input.pets !== undefined ? { pets: input.pets } : {}),
+      ...(input.vehicles !== undefined ? { vehicles: input.vehicles } : {}),
+      ...(input.emergencyContact !== undefined ? { emergencyContact: input.emergencyContact } : {}),
+    };
+    const updated = await this.repository.transaction(async (repository) => {
+      const current = await repository.getApplicationById(application.id);
+      if (!current || current.resumeTokenHash !== application.resumeTokenHash) throw new RentOpsInvariantError("Application resume token invalid or expired");
+      this.assertPublicEditable(current);
+      const next: RentOpsApplicationRecord = { ...current, ...editable, updatedAt: this.now().toISOString() };
+      await repository.saveApplication(next);
+      return next;
+    }, { lockApplicationId: application.id });
     return toApplicantPublicView(await this.snapshot(), updated);
   }
 

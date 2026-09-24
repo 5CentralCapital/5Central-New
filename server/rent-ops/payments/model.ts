@@ -13,6 +13,16 @@ export interface TenantPayment {
   currentLedgerId?: string; currentLedgerCents: number; ledgerRevision: number;
 }
 export interface PaymentAdjustment { paymentId: string; providerObjectId: string; kind: "refund" | "dispute"; amountCents: number; active: boolean; providerCreatedAt: number; terminal: boolean }
+/** Staff-facing exception record. Provider payloads and checkout URLs remain
+ * out of this queue; opaque IDs and adjustments are enough to investigate a
+ * held or disputed payment without exposing a tenant's payment link. */
+export interface TenantPaymentReviewView {
+  id: string; accountId: string; personId: string; tenancyId: string; propertyId: string; unitId: string;
+  requestId: string; amountCents: number; currency: "usd"; status: TenantPayment["status"];
+  expiresAt: string; createdAt: string; updatedAt: string; postedOn?: string;
+  checkoutSessionId?: string; paymentIntentId?: string;
+  currentLedgerCents: number; ledgerRevision: number; adjustments: PaymentAdjustment[];
+}
 export interface ProcessorEvent {
   id: string; type: string; created: number; live: boolean;
   paymentId?: string; paymentIntentId?: string; checkoutSessionId?: string;

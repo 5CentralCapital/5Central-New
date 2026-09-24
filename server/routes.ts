@@ -96,7 +96,7 @@ export async function registerRoutes(app: Express, options: {
   const tenantPaymentService = createTenantPaymentService({ executor: rentOpsRuntimeDatabase, rentOpsRepository, env: process.env });
   options.onTenantPaymentService?.(tenantPaymentService);
   options.onStartupStage?.("tenant_routes");
-  registerTenantPaymentRoutes(app, { service: tenantPaymentService, requireTenant: tenantPortal.requireTenant, getTenantIdentity: tenantPortal.getTenantIdentity });
+  registerTenantPaymentRoutes(app, { service: tenantPaymentService, requireTenant: tenantPortal.requireTenant, getTenantIdentity: tenantPortal.getTenantIdentity, requireAdmin: requireRentOpsAdmin });
   registerRentOpsBillingRoutes(app, { service: recurringBillingService, requireAdmin: requireRentOpsAdmin });
 
   // Admin dashboard API routes
