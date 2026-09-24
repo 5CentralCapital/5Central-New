@@ -16,5 +16,9 @@ export function registerTenantPaymentRoutes(app:Express,options:{service:TenantP
       try { res.set('Cache-Control', 'no-store'); res.json(await options.service.reviewQueue()); }
       catch (error) { failure(res, error); }
     });
+    app.post('/api/rent-ops/tenant-payments/:paymentId/reconcile', options.requireAdmin, async (req, res) => {
+      try { res.set('Cache-Control', 'no-store'); res.json(await options.service.reconcile(req.params.paymentId)); }
+      catch (error) { failure(res, error); }
+    });
   }
 }
