@@ -54,7 +54,7 @@ export function FinancialDashboard({ organizationId, legalEntityId, currency, co
     </dl>
     <div className="accounting-dashboard-statements">
       <Statement title="Profit & loss summary" report={pnl.isError ? undefined : pnl.data} loading={pnl.isLoading} error={pnl.error} retry={() => void pnl.refetch()} lines={PROFIT_LINES} finalGroup="NetIncome" currency={currency} date={`${dateLabel(setup.from)} – ${dateLabel(setup.through)}`} />
-      <Statement title="Balance sheet summary" report={balance.isError ? undefined : balance.data} loading={balance.isLoading} error={balance.error} retry={() => void balance.refetch()} lines={BALANCE_LINES} finalGroup="LiabilitiesAndEquity" currency={currency} date={`As of ${dateLabel(setup.through)}`} />
+      <Statement title="Balance sheet summary" report={balance.isError ? undefined : balance.data} loading={balance.isLoading} error={balance.error} retry={() => void balance.refetch()} lines={BALANCE_LINES} finalGroup="TotalLiabilitiesAndEquity" currency={currency} date={`As of ${dateLabel(setup.through)}`} />
     </div>
     <nav className="accounting-report-links" aria-label="Full QuickBooks reports">{[["income-statement", "Profit & loss"], ["balance-sheet", "Balance sheet"], ["cash-flow-statement", "Cash flow"], ["general-ledger", "General ledger"], ["trial-balance", "Trial balance"]].map(([id, label]) => <a key={id} className="accounting-button" href={reportLink(id)}>{label}</a>)}</nav>
   </div>;

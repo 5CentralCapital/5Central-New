@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { financialFigure, financialRequest, loadDashboardReport, type DashboardReport } from "./dashboard-model";
+import { BALANCE_LINES, financialFigure, financialRequest, loadDashboardReport, type DashboardReport } from "./dashboard-model";
 import { transactionTotals } from "./transaction-totals";
 import type { AccountingTransaction } from "./types";
 import type { ReportingApi } from "../reporting/types";
@@ -26,6 +26,23 @@ test("only provider verified no-data becomes zero; missing or incomplete is unav
  assert.equal(financialFigure(empty, "Income"), null);
  assert.equal(financialFigure({ ...empty, page: { ...empty.page, missingData: [{ code: "qbo_no_report_data", state: "verified_zero", message: "No data" }] } }, "Income"), "0");
  assert.equal(financialFigure(undefined, "Assets"), null);
+});
+test("balance dashboard selects QuickBooks root totals instead of nested or renamed account labels", () => {
+ const data = report([
+  { rowId: "assets-section", values: { rowKind: "section", providerGroup: "TotalAssets", account: "Renamed asset heading", totalCents: null } },
+  { rowId: "cash-detail", values: { rowKind: "detail", account: "Renamed checking account", totalCents: "300" } },
+  { rowId: "property-detail", values: { rowKind: "detail", account: "Renamed property account", totalCents: "400" } },
+  { rowId: "assets-summary", values: { rowKind: "summary", providerGroup: "TotalAssets", providerTotalCents: "900719925474099312", totalCents: "700" } },
+  { rowId: "liabilities-equity-section", values: { rowKind: "section", providerGroup: "TotalLiabilitiesAndEquity", account: "Renamed liabilities and equity heading", totalCents: null } },
+  { rowId: "loan-detail", values: { rowKind: "detail", account: "Renamed loan account", totalCents: "100" } },
+  { rowId: "equity-detail", values: { rowKind: "detail", account: "Renamed owner equity account", totalCents: "200" } },
+  { rowId: "liabilities-equity-summary", values: { rowKind: "summary", providerGroup: "TotalLiabilitiesAndEquity", providerTotalCents: "900719925474099313", totalCents: "300" } },
+ ]);
+ assert.deepEqual(BALANCE_LINES.map(([group]) => group), ["TotalAssets", "Liabilities", "Equity", "TotalLiabilitiesAndEquity"]);
+ assert.equal(financialFigure(data, BALANCE_LINES[0]![0]), "900719925474099312");
+ assert.equal(financialFigure(data, BALANCE_LINES[3]![0]), "900719925474099313");
+ assert.equal(financialFigure(data, "Assets"), null);
+ assert.equal(financialFigure(data, "LiabilitiesAndEquity"), null);
 });
 test("dashboard requests the exact legal entity, basis and periods", () => {
  const setup = { from: "2026-01-01", through: "2026-09-24", basis: "accrual" as const };
