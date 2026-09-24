@@ -26,13 +26,15 @@ test("QuickBooks Time client sends modified-since pagination and maps 401 to a r
     requestUrl = request.url;
     return { status: 200, body: JSON.stringify({ more: false, results: { timesheets: { "timesheet-1": { id: "timesheet-1" } } } }) };
   });
-  const page = await client.getPage("timesheets", { accessToken: "access", page: 2, limit: 200, modifiedSince: "2026-09-20T00:00:00.000Z" });
+  const page = await client.getPage("timesheets", { accessToken: "access", page: 2, limit: 200, modifiedSince: "2026-09-20T00:00:00.000Z", startDate: "2026-09-01", endDate: "2026-09-21" });
   assert.equal(page.more, false);
   assert.equal(page.results["timesheet-1"]?.id, "timesheet-1");
   const url = new URL(requestUrl);
   assert.equal(url.searchParams.get("page"), "2");
   assert.equal(url.searchParams.get("limit"), "200");
   assert.equal(url.searchParams.get("modified_since"), "2026-09-20T00:00:00.000Z");
+  assert.equal(url.searchParams.get("start_date"), "2026-09-01");
+  assert.equal(url.searchParams.get("end_date"), "2026-09-21");
   const unauthorized = createQuickBooksTimeClient(async () => ({ status: 401, body: JSON.stringify({ error: "expired" }) }));
   await assert.rejects(() => unauthorized.getPage("users", { accessToken: "access" }), (error: unknown) => error instanceof AccountingError && error.code === "accounting_conflict");
 });

@@ -192,6 +192,41 @@ test("wildcard catch-up finalization is durable, concurrent, and scoped by envir
   }
 });
 
+test("an already verified QBO connection does not re-read CompanyInfo for every sync job", async () => {
+  const h = await harness();
+  try {
+    const queue = new PostgresJobQueue(h.executor);
+    await queue.enqueue({
+      jobKey: "company-info-not-a-recurring-health-gate",
+      topic: QBO_SYNC_TOPIC,
+      organizationId: ORG_A,
+      payload: { organizationId: ORG_A, legalEntityId: ENTITY_A, environment: "sandbox", realmId: SHARED_REALM, events: [] },
+    });
+    let bootstrapCalls = 0;
+    let syncCalls = 0;
+    const services = {
+      qbo: {
+        status: "configured",
+        environment: "sandbox",
+        capabilityGate: { isEnabled: async () => true },
+        createProviderSync: () => ({
+          bootstrapRead: async () => { bootstrapCalls += 1; throw new Error("CompanyInfo was unavailable"); },
+          syncChanges: async () => { syncCalls += 1; return { mode: "cdc", reason: null, status: "complete", appliedCount: 0, deletedCount: 0, unsupportedCount: 0, anchored: true, watermark: "2026-09-23T10:00:00.000Z" }; },
+        }),
+      },
+    } as unknown as AccountingServices;
+    const handlers = createAccountingJobHandlers({ services });
+    const [job] = await queue.claim({ workerId: "worker-company-info", topics: [QBO_SYNC_TOPIC], limit: 1 });
+    assert.ok(job);
+    const result = await handlers[QBO_SYNC_TOPIC]!.handler({ job, workerId: "worker-company-info", signal: new AbortController().signal, queue, executor: h.executor, now: () => new Date(), checkpoint: async () => {} });
+    assert.equal((result as { status: string }).status, "complete");
+    assert.equal(bootstrapCalls, 0);
+    assert.equal(syncCalls, 1);
+  } finally {
+    await h.close();
+  }
+});
+
 test("the finalizer refuses legacy skipped, partial, or unanchored successful sync results", async () => {
   const h = await harness();
   try {

@@ -147,14 +147,14 @@ test("purchase refunds and taxed transactions are explicit exceptions", () => {
   assert.ok(taxed.unsupportedReasons.some(reason => /tax/.test(reason)));
 });
 
-test("an item-based expense line never borrows the payment account as its expense account", () => {
+test("an item-based expense line without an account is an explicit coverage exception", () => {
   const result = normalizeQboTransaction("Purchase", {
     Id: "403", SyncToken: "0", TxnDate: "2026-09-20", CurrencyRef: { value: "USD" }, PaymentType: "Cash", TotalAmt: 5,
     AccountRef: { value: "bank-9" }, MetaData: { LastUpdatedTime: updated },
     Line: [{ Id: "1", Amount: 5, ItemBasedExpenseLineDetail: { ItemRef: { value: "11" } } }],
   });
-  assert.deepEqual(result.unsupportedReasons, []);
-  assert.equal(result.value?.lines[0]?.accountObjectId, null);
+  assert.ok(result.unsupportedReasons.some(reason => /ItemBasedExpenseLineDetail/.test(reason)));
+  assert.equal(result.value?.lines.length, 0);
 });
 
 test("rejection reasons never echo provider values", () => {

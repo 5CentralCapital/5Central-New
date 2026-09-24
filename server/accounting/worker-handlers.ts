@@ -90,7 +90,15 @@ export function createAccountingJobHandlers(options: AccountingJobHandlerOptions
         }
         const sync = qbo.createProviderSync(scope);
         try {
-          await sync.bootstrapRead();
+          // CompanyInfo is the one-time read capability proof. Re-reading it
+          // on every queued job made an otherwise healthy connection fail when
+          // Intuit re-rendered the record or temporarily returned it missing;
+          // the durable capability evidence already gates syncChanges.
+          const capabilityGate = qbo.capabilityGate;
+          const readCapabilityEnabled = capabilityGate?.isEnabled
+            ? await capabilityGate.isEnabled(scope, "accounting.read")
+            : false;
+          if (!readCapabilityEnabled) await sync.bootstrapRead();
           const result = await sync.syncChanges({ forceFullReplay: payload.forceFullReplay === true });
           if (result.status === "failed") providerFailure(result.error ?? new AccountingError("accounting_unavailable", "QuickBooks sync did not complete"));
           if (payload.events.length > 0 && (result.status !== "complete" || result.anchored !== true)) {

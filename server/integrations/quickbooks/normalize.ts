@@ -321,9 +321,19 @@ function normalizeLine(type: SupportedQboTransactionType, body: QuickBooksJsonOb
       counterpartyObjectId = null;
     }
   } else {
-    const detail = record(line.AccountBasedExpenseLineDetail) ?? record(line.ItemBasedExpenseLineDetail);
-    if (!detail) reject(`QBO ${lineLabel} has unsupported DetailType`);
-    accountObjectId = referenceId(detail.AccountRef);
+    const accountDetail = record(line.AccountBasedExpenseLineDetail);
+    const itemDetail = record(line.ItemBasedExpenseLineDetail);
+    if (!accountDetail) {
+      // ItemBasedExpenseLineDetail.ItemRef identifies a product or service,
+      // not the expense account that receives the posting. Without the
+      // provider's mirrored expense account, retaining the line would make a
+      // complete transaction look classified while cost reads silently omit
+      // it. Keep the whole object unsupported until QBO supplies an account
+      // reference through AccountBasedExpenseLineDetail.
+      if (itemDetail) reject(`QBO ${lineLabel} uses ItemBasedExpenseLineDetail without a mirrored expense account`);
+      reject(`QBO ${lineLabel} has unsupported DetailType`);
+    }
+    accountObjectId = referenceId(accountDetail.AccountRef);
     counterpartyObjectId = transactionCounterparty(type, body);
   }
   return {

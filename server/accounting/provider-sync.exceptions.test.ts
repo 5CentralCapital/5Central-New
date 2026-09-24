@@ -112,6 +112,29 @@ test("a newer unsupported revision retires the stale mirrored lines", async () =
   }
 });
 
+test("an item-based expense without an account cannot claim complete coverage", async () => {
+  const store: Store = {
+    Purchase: [{
+      Id: "25", SyncToken: "0", TxnDate: "2026-09-10", TotalAmt: 12, CurrencyRef: { value: "USD" },
+      PaymentType: "Cash", AccountRef: { value: "35" }, MetaData: { LastUpdatedTime: "2026-09-10T10:00:00Z" },
+      Line: [{ Id: "1", Amount: 12, ItemBasedExpenseLineDetail: { ItemRef: { value: "item-1" } } }],
+    } as QuickBooksJsonObject],
+    Account: [account("35", "Bank")],
+  };
+  const { synthetic, mirror, sync } = await harness(store);
+  try {
+    const result = await sync.catchUp();
+    const stream = result.streams.find(item => item.stream === "transactions.purchase")!;
+    assert.equal(result.status, "partial");
+    assert.equal(stream.unsupportedCount, 1);
+    assert.equal(stream.openExceptionCount, 1);
+    assert.equal(await mirror.resolveLine({ scope: sourceScope, objectType: "Purchase", objectId: "25", lineId: "1" }), null);
+    assert.equal((await mirror.readCoverage(sourceScope, "transactions.purchase")).status, "partial");
+  } finally {
+    await synthetic.close();
+  }
+});
+
 test("a full replay flags mirrored objects that QBO no longer returns", async () => {
   const store: Store = {
     BillPayment: [billPayment("30", "0", "2026-09-10T10:00:00Z", [{ amount: 5, txnType: "Bill", txnId: "7" }], 5), billPayment("31", "0", "2026-09-10T10:00:01Z", [{ amount: 6, txnType: "Bill", txnId: "8" }], 6)],
@@ -124,8 +147,9 @@ test("a full replay flags mirrored objects that QBO no longer returns", async ()
     const replay = await sync.catchUp({ fullReplay: true });
     const stream = replay.streams.find(item => item.stream === "transactions.billpayment")!;
     assert.equal(stream.missingFromReplayCount, 1);
-    assert.equal(replay.status, "partial");
-    assert.deepEqual((await mirror.listOpenSyncExceptions(scope)).map(item => [item.objectId, item.kind]), [["31", "missing_from_full_replay"]]);
+    assert.equal(replay.status, "complete", "a full replay confirms the absent object as a deletion");
+    assert.deepEqual(await mirror.listOpenSyncExceptions(scope), []);
+    assert.equal((await mirror.readCoverage(sourceScope, "transactions.billpayment")).status, "complete");
   } finally {
     await synthetic.close();
   }

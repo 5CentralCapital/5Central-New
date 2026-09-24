@@ -33,6 +33,7 @@ import {
 } from "../../shared/accounting";
 import type { QuickBooksConnectionScope } from "../../shared/accounting/quickbooks";
 import { canonicalJsonSha256 } from "../company/commands/fingerprint";
+import { QUICKBOOKS_CDC_LOOKBACK_DAYS } from "../integrations/quickbooks/accounting";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { AccountingError } from "./errors";
 import { createAccountingPurposeMappingStore, type AccountingPurposeMappingPort } from "./purpose";
@@ -363,6 +364,20 @@ function mapCoverage(scope: FinancialSourceScope, row: CoverageRow | null, gaps:
   });
 }
 
+function coverageIsStale(observedAt: string, now: Date): boolean {
+  const observed = Date.parse(observedAt);
+  return Number.isFinite(observed) && now.getTime() - observed > COVERAGE_STALE_AFTER_MS;
+}
+
+function markStaleCoverage(coverage: FinancialSourceCoverage, now: Date): FinancialSourceCoverage {
+  if (coverage.status !== "complete" || !coverageIsStale(coverage.observedAt, now)) return coverage;
+  return financialSourceCoverageSchema.parse({
+    ...coverage,
+    status: "partial",
+    reason: "QBO provider coverage is stale; a successful sync has not been observed within the CDC lookback window",
+  });
+}
+
 export type QboSyncExceptionKind = "unsupported" | "missing_from_full_replay";
 
 export interface QboSyncExceptionInput {
@@ -398,6 +413,7 @@ export interface QboSyncException {
 
 const STREAM_PATTERN = /^[a-z][a-z0-9_.:-]*$/;
 const MAX_EXCEPTION_REASON_LENGTH = 300;
+const COVERAGE_STALE_AFTER_MS = QUICKBOOKS_CDC_LOOKBACK_DAYS * 86_400_000;
 
 function exceptionReasons(reasons: readonly string[]): string[] {
   const cleaned = Array.from(new Set(reasons.map(reason => String(reason).replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, MAX_EXCEPTION_REASON_LENGTH)).filter(reason => reason.length > 0))).slice(0, 50);
@@ -1087,15 +1103,16 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
         RETURNING b.line_id`,
       [...identity, observedAt],
     );
-    if (input.detectedVia !== "full_replay") {
-      // Explicit provider evidence settles every open exception for the object;
-      // an inferred full-replay deletion keeps its exception open for review.
-      await this.executor.query(
-        `UPDATE accounting_qbo_sync_exceptions SET resolved_at = $7, resolved_version = $8, last_seen_at = GREATEST(last_seen_at, $7)
-          WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6 AND resolved_at IS NULL`,
-        [...identity, observedAt, lastKnownVersion ?? "deleted"],
-      );
-    }
+    // A full replay is the provider's complete live-object read. Once the
+    // absent object has been tombstoned, its missing-from-replay exception is
+    // resolved as a confirmed deletion so the same object cannot keep the
+    // stream partial forever. The row remains append-only audit evidence.
+    // Explicit webhook/CDC evidence follows the same resolution path.
+    await this.executor.query(
+      `UPDATE accounting_qbo_sync_exceptions SET resolved_at = $7, resolved_version = $8, last_seen_at = GREATEST(last_seen_at, $7)
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6 AND resolved_at IS NULL`,
+      [...identity, observedAt, lastKnownVersion ?? "deleted"],
+    );
     return {
       applied: true,
       tombstoneCreated: tombstone.rows.length === 1,
@@ -1295,7 +1312,7 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       const rows = await this.executor.query<CoverageRow>(`SELECT stream,status,evidence,basis,watermark,covered_from,covered_through,observed_at,object_count,transaction_count,line_count,reason FROM accounting_qbo_coverage WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream=$5`, [...scopeParts(scope), stream]);
       const gaps = await this.executor.query<{ gap_from: string; gap_through: string }>(`SELECT gap_from,gap_through FROM accounting_qbo_coverage_gaps WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream=$5 ORDER BY gap_from`, [...scopeParts(scope), stream]);
       const openCount = (await this.openExceptionCounts(scope, stream)).get(stream) ?? 0;
-      const coverage = mapCoverage(scope, rows.rows[0] ?? null, gaps.rows.map((gap) => ({ from: dateValue(gap.gap_from, "gap start"), through: dateValue(gap.gap_through, "gap end") })), stream);
+      const coverage = markStaleCoverage(mapCoverage(scope, rows.rows[0] ?? null, gaps.rows.map((gap) => ({ from: dateValue(gap.gap_from, "gap start"), through: dateValue(gap.gap_through, "gap end") })), stream), this.now());
       return openCount > 0 && coverage.status === "complete" ? financialSourceCoverageSchema.parse({ ...coverage, status: "partial", reason: `${openCount} QBO object(s) have unresolved mirror exceptions` }) : coverage;
     }
     const rows = await this.executor.query<CoverageRow>(`SELECT stream,status,evidence,basis,watermark,covered_from,covered_through,observed_at,object_count,transaction_count,line_count,reason FROM accounting_qbo_coverage WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 ORDER BY stream`, scopeParts(scope));
@@ -1304,13 +1321,14 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
     const byStream = new Map(rows.rows.map(row => [String(row.stream), row]));
     const missing = required.filter(name => !byStream.has(name));
     const openExceptions = Array.from((await this.openExceptionCounts(scope)).values()).reduce((sum, count) => sum + count, 0);
-    const partial = openExceptions > 0 || rows.rows.some(row => row.status !== "complete" || row.evidence !== "live_provider_readback");
+    const partial = openExceptions > 0 || rows.rows.some(row => row.status !== "complete" || row.evidence !== "live_provider_readback" || coverageIsStale(timestampValue(row.observed_at, "coverage timestamp"), this.now()));
     const status = missing.length > 0 || partial ? "partial" : "complete";
     const values = rows.rows.map(row => row.watermark === null || row.watermark === undefined ? null : String(row.watermark)).filter((value): value is string => value !== null);
     const observed = rows.rows.map(row => timestampValue(row.observed_at, "coverage timestamp")).sort();
     const coveredFrom = rows.rows.map(row => row.covered_from).filter((value): value is string => value !== null && value !== undefined).map(value => dateValue(value, "coverage start")).sort()[0] ?? null;
     const coveredThroughValues = rows.rows.map(row => row.covered_through).filter((value): value is string => value !== null && value !== undefined).map(value => dateValue(value, "coverage end")).sort();
-    const reason = [...(missing.length ? [`Missing required QBO streams: ${missing.join(", ")}`] : []), ...(openExceptions > 0 ? [`${openExceptions} QBO object(s) have unresolved mirror exceptions`] : []), ...(partial ? ["One or more QBO streams have partial or non-live evidence"] : [])].join("; ") || null;
+    const stale = rows.rows.some(row => coverageIsStale(timestampValue(row.observed_at, "coverage timestamp"), this.now()));
+    const reason = [...(missing.length ? [`Missing required QBO streams: ${missing.join(", ")}`] : []), ...(openExceptions > 0 ? [`${openExceptions} QBO object(s) have unresolved mirror exceptions`] : []), ...(stale ? ["QBO provider coverage is stale; a successful sync has not been observed within the CDC lookback window"] : []), ...(partial ? ["One or more QBO streams have partial or non-live evidence"] : [])].join("; ") || null;
     return financialSourceCoverageSchema.parse({
       scope, stream: "aggregate", status, evidence: rows.rows.every(row => row.evidence === "live_provider_readback") ? "live_provider_readback" : "unverified", basis: "source_transactions",
       watermark: values.length ? { value: values.sort().at(-1)!, observedAt: observed.at(-1)! } : null,

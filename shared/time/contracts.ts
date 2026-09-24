@@ -290,8 +290,20 @@ export interface TimeCommandPort {
   execute(kind: TimeCommandKind, envelope: unknown, access: unknown): Promise<import("../company").OperationReceipt>;
 }
 
+export const timeSyncOptionsSchema = z.object({
+  maxPages: z.number().int().min(1).max(10_000).optional(),
+  /** Required for the first timesheet read because the provider endpoint is range-based. */
+  startDate: isoDateSchema.optional(),
+  endDate: isoDateSchema.optional(),
+}).strict().superRefine((value, context) => {
+  if (value.startDate !== undefined && value.endDate !== undefined && value.endDate < value.startDate) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["endDate"], message: "endDate must be on or after startDate" });
+  }
+});
+export type TimeSyncOptions = z.infer<typeof timeSyncOptionsSchema>;
+
 export interface TimeSyncPort {
-  sync(scope: TimeConnectionScope, options?: { readonly maxPages?: number }): Promise<{ status: "complete" | "partial"; streams: readonly TimeCoverage[]; conflicts: readonly string[] }>;
+  sync(scope: TimeConnectionScope, options?: TimeSyncOptions): Promise<{ status: "complete" | "partial"; streams: readonly TimeCoverage[]; conflicts: readonly string[] }>;
 }
 
 export type TimeScope = CompanyScope & { readonly legalEntityId: LegalEntityId };
