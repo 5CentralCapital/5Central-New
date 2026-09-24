@@ -105,7 +105,7 @@ freeze), `plan` (expect `missingCount: 0`), then `apply --rehash` with the revie
 
 1. Create `production` at the reviewed tip of this branch and protect it (PRs + the
    `Verify and build` check). Render follows `production` only.
-2. Apply the Blueprint `render.yaml` (Hobby workspace). The external groups must already hold:
+2. Apply the Blueprint `render.yaml` (Hobby workspace): approved Standard web ($25/month) and Starter worker ($7/month). Pause both staging services after production verification, leaving $32/month base compute; brief overlap is prorated at $46/month. The external groups must already hold:
    - `5central-ops-production`: `RENT_OPS_RUNTIME_DATABASE_URL`, `QBO_ENVIRONMENT=production`,
      production `QBO_CLIENT_ID`/`QBO_CLIENT_SECRET`,
      `QBO_REDIRECT_URI=https://5central.capital/api/accounting/qbo/callback`,

@@ -6,7 +6,7 @@ projects:
           - type: web
             name: 5central-ops-web
             runtime: node
-            plan: starter
+            plan: standard
             region: virginia
             branch: production
             numInstances: 1
