@@ -4,7 +4,7 @@ import { parseQuickBooksEventType, parseQuickBooksWebhookPayload, verifyQuickBoo
 import { PostgresJobQueue } from "../jobs/queue";
 import { periodicBucketLabel } from "../jobs/worker-runtime";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
-import { QBO_CDC_ENTITIES, QBO_NAMED_ENTITIES } from "./provider-sync";
+import { QBO_CDC_ENTITIES, QBO_NAMED_ENTITIES, QBO_RECEIVABLE_CDC_ENTITIES } from "./provider-sync";
 
 export const QBO_WEBHOOK_EVENT_TOPIC = "accounting.qbo.webhook_event";
 export const QBO_SYNC_TOPIC = "accounting.qbo.sync";
@@ -59,7 +59,7 @@ export type WebhookIngestResult =
 
 interface BindingRow { organization_id: string; legal_entity_id: string }
 
-const SUPPORTED_OBJECTS = new Set<string>([...QBO_CDC_ENTITIES, ...QBO_NAMED_ENTITIES]);
+const SUPPORTED_OBJECTS = new Set<string>([...QBO_CDC_ENTITIES, ...QBO_NAMED_ENTITIES, ...QBO_RECEIVABLE_CDC_ENTITIES]);
 const MAX_EVENT_REFS = 100;
 
 function eventRef(event: QuickBooksCloudEvent) {

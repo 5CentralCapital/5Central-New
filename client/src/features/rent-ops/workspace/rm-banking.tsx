@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { loadBanking } from "../api";
 import { useRentOpsAuth } from "../auth-ui";
+import { ListTotals } from "./list-totals";
 import "./rm-banking.css";
 const money = (cents: number | null, currency: string | null) => cents === null || !currency ? "Unavailable" : new Intl.NumberFormat("en-US", { style: "currency", currency }).format(cents / 100);
 export function RmBanking() {
@@ -25,6 +26,7 @@ export function RmBanking() {
       <div className="rmb-heading"><h2>Recent transactions</h2><div className="rmb-filters"><label>Account <select value={selected} onChange={event => { setSelected(event.target.value); setPage(0); }}><option value="all">All accounts</option>{accounts.map(account => <option value={account.id} key={account.id}>{account.connection} · {account.name} {account.mask ? `••${account.mask}` : ""}</option>)}</select></label><label>Status <select value={status} onChange={event => { setStatus(event.target.value); setPage(0); }}><option value="all">All</option><option value="posted">Posted</option><option value="pending">Pending</option></select></label></div></div>
       <p>{data?.fromDate} through {data?.throughDate}. Incoming and outgoing follow the bank transaction amount. Pending entries may change.</p>
       <div className="rmb-table"><table><thead><tr><th>Date</th><th>Account</th><th>Description</th><th>Status</th><th className="rmb-number">Incoming</th><th className="rmb-number">Outgoing</th></tr></thead><tbody>{pageTransactions.map(tx => { const account = accounts.find(account => account.id === tx.accountId); return <tr key={tx.id}><td>{tx.date}</td><td>{account?.name ?? "Account"} {account?.mask ? `••${account.mask}` : ""}</td><td>{tx.description}</td><td>{tx.pending ? "Pending" : "Posted"}</td><td className="rmb-number">{tx.amountCents === null ? "Unavailable" : tx.amountCents < 0 ? money(-tx.amountCents, tx.currency) : "—"}</td><td className="rmb-number">{tx.amountCents === null ? "Unavailable" : tx.amountCents >= 0 ? money(tx.amountCents, tx.currency) : "—"}</td></tr>; })}{transactions.length === 0 && <tr><td colSpan={6}>{data?.connections.some(connection => connection.transactionsState !== "ready") ? "No transactions available for these filters; bank coverage is incomplete." : "No transactions for these filters."}</td></tr>}</tbody></table></div>
+      <ListTotals totalCount={transactions.length} visibleCount={pageTransactions.length} itemLabel="bank transaction" />
       {transactions.length > 0 && <nav className="rmb-pagination" aria-label="Transaction pages"><span>{currentPage * 50 + 1}–{Math.min((currentPage + 1) * 50, transactions.length)} of {transactions.length} transactions</span><button type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous</button><button type="button" disabled={currentPage + 1 >= pageCount} onClick={() => setPage(currentPage + 1)}>Next</button></nav>}
     </>}
   </section>;

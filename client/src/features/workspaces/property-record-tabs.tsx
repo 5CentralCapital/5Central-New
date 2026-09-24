@@ -7,7 +7,7 @@ import { rentOpsAuthClient } from "../rent-ops/auth";
 import type { AdminSnapshot } from "../rent-ops/types";
 import { EntityLink, RecordLink } from "../rent-ops/workspace/entity-link";
 import { workspacesApi } from "./api";
-import { formatCentsText, formatIsoDate, humanize, opensInline } from "./format";
+import { formatCentsText, formatIsoDate, formatKnownSubtotal, formatMeasure, humanize, opensInline, sumCentsTexts } from "./format";
 import { Badge, ErrorState, Loading, Section, StatePanel, propertyEntity, selectOrganization, useCompanyContext } from "./page";
 import { useOpenWorkOrders } from "./work-data";
 
@@ -43,6 +43,14 @@ export function PropertyProjectsTab({ identity, propertyId, organizationId, onOp
   if (projects.error) return <ErrorState error={projects.error} onRetry={() => void projects.refetch()} />;
   if (!projects.data) return <Loading label="Loading projects…" />;
   const organization = company.organization;
+  const totalsByCurrency = new Map<string, { approved: Array<string | null>; posted: Array<string | null> }>();
+  for (const project of projects.data.items) {
+    const totals = totalsByCurrency.get(project.currency) ?? { approved: [], posted: [] };
+    totals.approved.push(project.approvedBudgetCents);
+    totals.posted.push(project.postedActualCents);
+    totalsByCurrency.set(project.currency, totals);
+  }
+  const projectTotals = Array.from(totalsByCurrency.entries()).sort(([left], [right]) => left.localeCompare(right)).map(([currency, values]) => ({ currency, approved: sumCentsTexts(values.approved), posted: sumCentsTexts(values.posted) }));
   return <Section title="Projects" id="property-projects" count={projects.data.items.length} actions={<button type="button" className="rm-button" onClick={() => onNewProject(organization.id)}>Open projects</button>}>
     {!projects.data.items.length ? <StatePanel title="No projects" message="Projects for this property appear here." /> : <table className="ws-table">
       <thead><tr><th scope="col">Project</th><th scope="col">Status</th><th scope="col">Target</th><th scope="col" className="number">Approved budget</th><th scope="col" className="number">Posted costs</th></tr></thead>
@@ -53,6 +61,7 @@ export function PropertyProjectsTab({ identity, propertyId, organizationId, onOp
         <td className="number">{project.approvedBudgetCents === null ? "Not approved" : formatCentsText(project.approvedBudgetCents, project.currency)}</td>
         <td className="number">{formatCentsText(project.postedActualCents, project.currency)}</td>
       </tr>)}</tbody>
+      <tfoot>{projectTotals.map(total => <tr key={total.currency}><th scope="row" colSpan={3}>Shown: {projects.data.items.length} projects · Page totals · {total.currency}</th><td className="number">{formatKnownSubtotal(total.approved.total, total.approved.complete, total.currency)}</td><td className="number">{formatKnownSubtotal(total.posted.total, total.posted.complete, total.currency)}</td></tr>)}</tfoot>
     </table>}
   </Section>;
 }
@@ -80,6 +89,7 @@ export function PropertyWorkOrdersTab({ identity, propertyId, organizationId, on
       <td>{humanize(item.status)}</td>
       <td>{item.completedOn ? `Done ${formatIsoDate(item.completedOn)}` : formatIsoDate(item.scheduledOn)}</td>
     </tr>)}</tbody>
+    <tfoot><tr><th scope="row" colSpan={4}>Shown work orders</th><td className="number">{items.length}</td></tr></tfoot>
   </table>;
   return <>
     <Section title="Open work" id="property-work-open" count={open.length} actions={<button type="button" className="rm-button" onClick={() => onOpenWorkOrder(organization.id)}>Open work orders</button>}>
@@ -130,6 +140,7 @@ export function PropertyDocumentsTab({ identity, propertyId, organizationId, sna
             <td>{person ? <EntityLink personId={person.id} tab="documents">{[person.firstName, person.lastName].filter(Boolean).join(" ") || "Tenant"}</EntityLink> : "—"}</td>
             <td>{formatIsoDate(document.uploadedAt)}</td>
           </tr>; })}</tbody>
+          <tfoot><tr><th scope="row" colSpan={3}>Shown tenant documents</th><td className="number">{rentalRows.length}</td></tr></tfoot>
         </table>}
     </Section>
     <Section title="Company documents" id="property-docs-company" count={companyDocuments.data?.documents.length}>
@@ -140,6 +151,7 @@ export function PropertyDocumentsTab({ identity, propertyId, organizationId, sna
         : <table className="ws-table">
           <thead><tr><th scope="col">Title</th><th scope="col">Kind</th><th scope="col">Dated</th><th scope="col">File</th></tr></thead>
           <tbody>{companyDocuments.data.documents.map(document => <tr key={document.id}><td>{document.title}</td><td>{humanize(document.kind)}</td><td>{formatIsoDate(document.documentDate)}</td><td>{document.fileName}</td></tr>)}</tbody>
+          <tfoot><tr><th scope="row" colSpan={3}>{companyDocuments.data.truncated ? "Loaded company documents" : "Company document count"}</th><td className="number">{companyDocuments.data.documents.length}</td></tr></tfoot>
         </table>}
     </Section>
   </>;

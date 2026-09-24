@@ -135,3 +135,27 @@
 @media print {
   .rops-modern .rops-topbar, .rops-modern .rops-skip-link, .rops-nav-menu { display: none !important; }
 }
+
+/* The manager shell is dense on desktop; coarse pointers retain the larger
+   controls defined below for touch accessibility. */
+@media (min-width: 769px) and (pointer: fine) {
+  .rops-modern .rm-main > .rm-page-heading {
+    min-height: 32px;
+    margin-bottom: 10px;
+  }
+
+  .rops-modern .rm-workspace-toolbar {
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .rops-modern .rm-workspace-toolbar > label {
+    gap: 3px;
+  }
+
+  .rops-modern .rm-workspace-toolbar > label > :is(input, select),
+  .rops-modern .rm-property-filter > summary {
+    height: 32px;
+    min-height: 32px;
+  }
+}

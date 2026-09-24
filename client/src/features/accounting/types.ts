@@ -9,16 +9,19 @@ import type {
   PmSettlementListResponse,
   RentalBridgePreview,
   RentalPostingPolicy,
+  JobState,
 } from "@shared/accounting/operations";
+import type { QboCustomerLedger } from "@shared/accounting/receivables";
 
-export type AccountingView = "overview" | "transactions" | "bills" | "banking" | "pm-settlements" | "close";
+export type AccountingView = "overview" | "transactions" | "bills" | "banking" | "pm-settlements" | "close" | "connections";
 export const ACCOUNTING_VIEWS: readonly { readonly value: AccountingView; readonly label: string }[] = [
-  { value: "overview", label: "Overview" },
+  { value: "overview", label: "Dashboard" },
   { value: "transactions", label: "Transactions" },
   { value: "bills", label: "Bills & payments" },
   { value: "banking", label: "Banking & reconciliation" },
   { value: "pm-settlements", label: "PM settlements" },
   { value: "close", label: "Period close" },
+  { value: "connections", label: "Connections" },
 ];
 export function isAccountingView(value: unknown): value is AccountingView {
   return ACCOUNTING_VIEWS.some(view => view.value === value);
@@ -86,12 +89,14 @@ export interface AccountingApi {
   getConfiguration(organizationId: string, legalEntityId: string, signal?: AbortSignal): Promise<{ readonly configured: boolean; readonly environment: AccountingEnvironment | null }>;
   listConnections(organizationId: string, legalEntityId: string, environment: AccountingEnvironment, signal?: AbortSignal): Promise<readonly AccountingConnection[]>;
   listMirrors(organizationId: string, scope: AccountingScope, kind: AccountingMirrorKind, signal?: AbortSignal): Promise<readonly AccountingMirror[]>;
-  listTransactions(organizationId: string, scope: AccountingScope, signal?: AbortSignal): Promise<AccountingTransactionPage>;
+  listTransactions(organizationId: string, scope: AccountingScope, signal?: AbortSignal, cursor?: string): Promise<AccountingTransactionPage>;
   beginConnection(organizationId: string, legalEntityId: string, signal?: AbortSignal): Promise<{ readonly authorizationUrl: string; readonly expiresAt: string }>;
   getPendingBinding(organizationId: string, legalEntityId: string, pendingId: string, signal?: AbortSignal): Promise<AccountingPendingBinding | null>;
   confirmConnection(organizationId: string, legalEntityId: string, pendingId: string, signal?: AbortSignal): Promise<void>;
   /** Queues a background refresh; the worker performs it. */
-  sync(organizationId: string, scope: AccountingScope, signal?: AbortSignal): Promise<{ readonly status: "queued"; readonly message: string }>;
+  sync(organizationId: string, scope: AccountingScope, signal?: AbortSignal): Promise<{ readonly status: "queued"; readonly jobId: string | null; readonly message: string }>;
+  /** Reads the durable refresh job so the UI can wait for completion. */
+  getJob?(organizationId: string, jobId: string, signal?: AbortSignal): Promise<{ readonly state: JobState }>;
   disconnect(organizationId: string, scope: AccountingScope, signal?: AbortSignal): Promise<{ readonly providerOutcome: "revoked" | "already_revoked" }>;
   health(organizationId: string, legalEntityId: string | undefined, signal?: AbortSignal): Promise<ConnectorHealthResponse>;
   closeChecklist(organizationId: string, legalEntityId: string, period: AccountingPeriod, signal?: AbortSignal): Promise<PeriodCloseChecklist>;
@@ -102,6 +107,10 @@ export interface AccountingApi {
   bridgeCsvHref(organizationId: string, legalEntityId: string, period: AccountingPeriod): string;
   payables(organizationId: string, scope: AccountingScope, kind: "bills" | "payments", cursor?: string, signal?: AbortSignal): Promise<AccountingPayablesResponse>;
   command(organizationId: string, kind: AccountingOperationCommandKind, envelope: AccountingCommandEnvelope, signal?: AbortSignal): Promise<OperationReceipt>;
+  /** A tenancy's QuickBooks customer ledger from the receivables mirror; null when the tenancy is not linked to a customer. */
+  tenancyLedger(organizationId: string, query: { readonly tenancyId: string; readonly environment: AccountingEnvironment; readonly cursor?: string; readonly limit?: number }, signal?: AbortSignal): Promise<QboCustomerLedger | null>;
+  /** Records the tenancy ↔ QuickBooks customer link in the local identity map. Nothing is written to QuickBooks. */
+  linkTenancyCustomer(organizationId: string, input: { readonly scope: AccountingScope; readonly tenancyId: string; readonly customerId: string }, signal?: AbortSignal): Promise<{ readonly status: "linked" | "already_linked" }>;
 }
 
 export interface AccountingPeriod {
@@ -124,6 +133,7 @@ export interface AccountingWorkspaceProps {
   readonly organizationName?: string;
   readonly entities?: readonly AccountingWorkspaceEntity[];
   readonly api?: AccountingApi;
+  readonly reportsApi?: import("../reporting/types").ReportingApi;
   /** Controlled sub-view, e.g. from `section=accounting&acctView=…`. */
   readonly view?: AccountingView;
   readonly onViewChange?: (view: AccountingView) => void;

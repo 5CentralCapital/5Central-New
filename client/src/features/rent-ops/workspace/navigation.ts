@@ -56,7 +56,8 @@ export const WORKSPACE_NAVIGATION: readonly WorkspaceNavigationGroup[] = Object.
     destination('units.listings', 'Listings', { section: 'listings' }),
   ] },
   { label: 'Accounting', items: [
-    destination('accounting.overview', 'Overview', { section: 'accounting', accountingView: 'overview' }),
+    destination('accounting.overview', 'Dashboard', { section: 'accounting', accountingView: 'overview' }),
+    destination('accounting.connections', 'Connections', { section: 'accounting', accountingView: 'connections' }),
     destination('accounting.transactions', 'Transactions', { section: 'accounting', accountingView: 'transactions' }),
     destination('accounting.bills', 'Bills & payments', { section: 'accounting', accountingView: 'bills' }),
     destination('accounting.banking', 'Banking & reconciliation', { section: 'accounting', accountingView: 'banking' }),

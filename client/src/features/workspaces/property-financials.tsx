@@ -5,15 +5,16 @@ import { EntityLink } from "../rent-ops/workspace/entity-link";
 import type { ReportKey, TenantTab } from "../rent-ops/types";
 import { REPORT_KEYS } from "../rent-ops/types";
 import { workspacesApi } from "./api";
-import { formatCentsText, formatIsoDate, formatMeasure, formatMonth } from "./format";
+import { formatCentsText, formatIsoDate, formatKnownSubtotal, formatMeasure, formatMonth, sumCentsTexts } from "./format";
 import { ErrorState, Loading, selectOrganization, useCompanyContext } from "./page";
 
 const GROUPS: ReadonlyArray<[FinancialMeasure["group"], string]> = [
   ["rental", "Charges"], ["collections", "Collections"], ["balances", "Balances"], ["manager", "Property manager"], ["projects", "Projects"],
 ];
 
-function MeasureRecords({ measure, onOpenProject, onOpenReport }: { measure: FinancialMeasure; onOpenProject: (projectId: string) => void; onOpenReport: (report: ReportKey) => void }) {
+function MeasureRecords({ measure, currency, onOpenProject, onOpenReport }: { measure: FinancialMeasure; currency: string; onOpenProject: (projectId: string) => void; onOpenReport: (report: ReportKey) => void }) {
   const [detail, setDetail] = useState<number>();
+  const shownTotal = sumCentsTexts(measure.records.map(record => record.amountCents));
   return <div className="ws-drill" id={`measure-${measure.key}`}>
     <header className="ws-drill-heading">
       <h4>{measure.label}</h4>
@@ -31,8 +32,9 @@ function MeasureRecords({ measure, onOpenProject, onOpenReport }: { measure: Fin
           {detail === index && <span className="ws-source">{record.sourceReferences.join(" · ")}</span>}
         </>}</td>
         <td>{formatIsoDate(record.date)}</td>
-        <td className="number">{formatCentsText(record.amountCents)}</td>
+        <td className="number">{formatCentsText(record.amountCents, currency)}</td>
       </tr>)}</tbody>
+      <tfoot><tr><th scope="row" colSpan={3}>Shown total · {measure.records.length} record{measure.records.length === 1 ? "" : "s"}</th><td className="number">{formatKnownSubtotal(shownTotal.total, shownTotal.complete, currency)}</td></tr></tfoot>
     </table>}
     {measure.recordCount > measure.records.length && <p className="ws-note">Showing {measure.records.length} of {measure.recordCount}. Open the report for the full list.</p>}
   </div>;
@@ -78,7 +80,7 @@ export function PropertyFinancials({ identity, propertyId, asOfDate, organizatio
               </button>}</dd>
             <dd className="ws-basis">{item.basis}</dd>
           </div>)}</dl>
-          {measures.some(item => item.key === open) && <MeasureRecords measure={measures.find(item => item.key === open)!} onOpenReport={onOpenReport} onOpenProject={projectId => organization && onOpenProject(organization.id, projectId)} />}
+          {measures.some(item => item.key === open) && <MeasureRecords measure={measures.find(item => item.key === open)!} currency={financials.data.currency} onOpenReport={onOpenReport} onOpenProject={projectId => organization && onOpenProject(organization.id, projectId)} />}
         </div>;
       })}
       <p className="ws-note">{formatMonth(financials.data.period.month)} · balances as of {formatIsoDate(financials.data.period.asOf)}</p></>}

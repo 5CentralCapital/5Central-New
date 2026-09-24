@@ -122,3 +122,50 @@ a.accounting-button { text-decoration: none; }
 @media (pointer: coarse) { .accounting-workspace :is(.accounting-button, .accounting-tab, .accounting-segmented button, .accounting-record-list button, select, input) { min-height: 44px; } }
 @media (prefers-reduced-motion: reduce) { .accounting-workspace * { transition: none !important; animation: none !important; } }
 @media (max-width: 900px) { .accounting-split { grid-template-columns: 1fr; } .accounting-view-tabs { margin: 0 16px; overflow-x: auto; flex-wrap: nowrap; } .accounting-main.is-wide { padding: 18px 16px 34px; } }
+
+/* Financial workspace: the records keep the width; connection administration is separate. */
+.accounting-connections-layout { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); align-items: start; gap: 16px; }
+.accounting-connections-layout .accounting-sidebar { border: 0; background: transparent; }
+.accounting-connections-layout .accounting-main { padding: 16px 0; }
+.accounting-connection { width: calc(100% - 16px); text-align: left; font: inherit; }
+.accounting-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.accounting-table .accounting-description { min-width: 180px; max-width: 440px; white-space: normal; overflow-wrap: anywhere; }
+.accounting-pagination { align-items: center; }
+.accounting-table tfoot :is(th, td) { border-top: 1px solid var(--accounting-line); background: var(--accounting-soft); font-weight: 600; text-transform: none; letter-spacing: 0; }
+.accounting-financial-dashboard { display: grid; gap: 12px; }
+.accounting-dashboard-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin-bottom: 4px; }
+.accounting-dashboard-filters label { display: grid; gap: 4px; color: var(--accounting-muted); font-size: 12px; }
+.accounting-dashboard-filters :is(input, select) { min-height: 34px; padding: 5px 10px; border: 1px solid var(--accounting-line); border-radius: 8px; background: var(--accounting-soft); color: var(--accounting-ink); font: inherit; }
+.accounting-dashboard-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; }
+.accounting-dashboard-heading h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.accounting-dashboard-heading span { font-size: 12px; color: var(--accounting-muted); }
+.accounting-financial-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0 0 4px; }
+.accounting-financial-figure { display: grid; gap: 8px; padding: 16px; border: 1px solid var(--accounting-line); border-radius: 12px; background: var(--accounting-surface); }
+.accounting-financial-figure dt { color: var(--accounting-muted); font-size: 12px; }
+.accounting-financial-figure dd { margin: 0; font-size: clamp(18px, 2vw, 27px); font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.accounting-financial-figure.is-accent { background: #3a3a3c; color: #fff; border-color: #3a3a3c; }
+.accounting-financial-figure.is-accent dt { color: #f5f0e8; }
+.accounting-dashboard-statements { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 4px; align-items: start; }
+.accounting-statement.accounting-card { margin: 0; min-width: 0; }
+.accounting-statement .accounting-card-header { padding: 12px 14px; }
+.accounting-statement .accounting-card-header > div { display: grid; gap: 4px; }
+.accounting-statement tbody th { background: transparent; text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 400; }
+.accounting-statement .accounting-empty { min-height: 140px; padding: 16px; }
+.accounting-report-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+@media (max-width: 900px) { .accounting-connections-layout { grid-template-columns: 1fr; } }
+@media (max-width: 640px) {
+  .accounting-dashboard-statements { grid-template-columns: 1fr; }
+  .accounting-financial-grid { gap: 6px; }
+  .accounting-financial-figure { padding: 10px 8px; gap: 6px; }
+  .accounting-financial-figure dd { font-size: 16px; }
+  .accounting-dashboard-filters { gap: 8px; }
+  .accounting-dashboard-filters label { flex: 1 1 130px; min-width: 0; }
+  .accounting-dashboard-filters input { width: 100%; box-sizing: border-box; min-width: 0; }
+}
+@media (max-width: 640px) {
+  .accounting-financial-grid { grid-template-columns: 1fr; }
+  .accounting-financial-figure { grid-template-columns: minmax(0, 1fr) auto; align-items: center; padding: 11px 12px; }
+  .accounting-financial-figure dd { font-size: 18px; white-space: nowrap; }
+}
+.accounting-provider-total td { font-weight: 600; background: var(--accounting-soft); }
+.accounting-provider-section td { font-weight: 600; }

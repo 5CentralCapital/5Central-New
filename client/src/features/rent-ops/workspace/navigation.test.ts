@@ -130,7 +130,7 @@ test('page titles use the product name and qualify ambiguous labels', () => {
   assert.equal(workspaceDocumentTitle(route({ section: 'dashboard' })), '5Central Ops — Dashboard');
   assert.equal(workspaceDocumentTitle(route({ section: 'projects', projectTab: 'schedule' })), '5Central Ops — Projects schedule');
   assert.equal(workspaceDocumentTitle(route({ section: 'work-orders', workOrderView: 'schedule' })), '5Central Ops — Work Orders schedule');
-  assert.equal(workspaceDocumentTitle(route({ section: 'accounting', accountingView: 'overview' })), '5Central Ops — Accounting overview');
+  assert.equal(workspaceDocumentTitle(route({ section: 'accounting', accountingView: 'overview' })), '5Central Ops — Accounting dashboard');
   assert.equal(workspaceDocumentTitle(route({ section: 'collections' })), '5Central Ops — Collections');
   assert.equal(workspaceDocumentTitle(route({ section: 'recurring' })), '5Central Ops — Recurring charges');
 });

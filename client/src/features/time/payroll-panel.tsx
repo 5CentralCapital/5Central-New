@@ -3,6 +3,7 @@ import { Link2, LoaderCircle } from "lucide-react";
 import type { TimeConnectionScope, TimeEntry } from "@shared/time";
 import type { CostSourceLine } from "@shared/projects/source-lines";
 import type { TimeApi, TimePayrollLink } from "./types";
+import { sumTimeMoneyByCurrency, type TimeMoneyValue } from "./totals";
 
 function money(value: string | null | undefined, currency: string | null | undefined): string {
   if (value === null || value === undefined) return "—";
@@ -10,6 +11,11 @@ function money(value: string | null | undefined, currency: string | null | undef
   const negative = cents < BigInt(0);
   const absolute = (negative ? -cents : cents).toString().padStart(3, "0");
   return `${negative ? "-" : ""}${currency ?? ""} ${absolute.slice(0, -2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${absolute.slice(-2)}`.trim();
+}
+function moneyTotals(values: readonly TimeMoneyValue[]): string {
+  const totals = sumTimeMoneyByCurrency(values);
+  if (!totals.length) return "—";
+  return totals.map(total => total.knownCount === 0 ? `${total.currency === "Unknown currency" ? "Unknown currency" : "Unknown"}${total.unknownCount > 1 ? ` (${total.unknownCount})` : ""}` : `${money(total.cents!, total.currency)}${total.unknownCount ? ` + ${total.unknownCount} unknown` : ""}`).join(" · ");
 }
 function dateLabel(value: string | null | undefined): string { if (!value) return "—"; const date = new Date(`${value.slice(0, 10)}T00:00:00`); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date); }
 function lineKey(line: CostSourceLine): string { return `${line.source.realmId}|${line.source.objectType}|${line.source.objectId}|${line.source.lineId ?? ""}|${line.source.version}`; }
@@ -78,6 +84,6 @@ export function PayrollPanel({ api, organizationId, scope, entries, saving, exec
       <label>Amount<input inputMode="decimal" value={amount} onChange={(event) => setAmount(event.currentTarget.value)} placeholder="0.00" /></label>
       <div className="time-form-actions time-form-wide"><button type="button" className="time-button time-button-secondary" onClick={() => { setAdding(false); setFormError(undefined); }} disabled={saving}>Cancel</button><button type="submit" className="time-button time-button-primary" disabled={saving || !line}>Link payroll</button></div>
     </form>}
-    {linksError ? <div className="time-message is-error" role="alert">{linksError}</div> : !links ? <div className="time-empty time-empty-small" role="status"><LoaderCircle size={16} className="time-spin" />Loading payroll links…</div> : links.length === 0 ? <div className="time-empty time-empty-small">No posted payroll linked yet.</div> : <div className="time-table-wrap"><table className="time-table"><thead><tr><th>Pay period</th><th>Posted</th><th>Entries</th><th className="time-number">Amount</th><th>Status</th><th><span className="time-sr-only">Actions</span></th></tr></thead><tbody>{links.map((link) => <tr key={link.batchId}><td>{dateLabel(link.periodFrom)} – {dateLabel(link.periodThrough)}</td><td>{dateLabel(link.postedOn)}</td><td>{link.timesheetCount}</td><td className="time-number">{money(link.amountCents, link.currency)}</td><td><span className={`time-badge ${link.status === "active" ? "is-positive" : ""}`}>{link.status === "active" ? "Linked" : "Released"}</span></td><td>{link.status === "active" && <button type="button" className="time-button time-button-secondary" onClick={() => void release(link)} disabled={saving}>Release</button>}</td></tr>)}</tbody></table></div>}
+    {linksError ? <div className="time-message is-error" role="alert">{linksError}</div> : !links ? <div className="time-empty time-empty-small" role="status"><LoaderCircle size={16} className="time-spin" />Loading payroll links…</div> : links.length === 0 ? <div className="time-empty time-empty-small">No posted payroll linked yet.</div> : <div className="time-table-wrap"><table className="time-table"><thead><tr><th>Pay period</th><th>Posted</th><th>Entries</th><th className="time-number">Amount</th><th>Status</th><th><span className="time-sr-only">Actions</span></th></tr></thead><tbody>{links.map((link) => <tr key={link.batchId}><td>{dateLabel(link.periodFrom)} – {dateLabel(link.periodThrough)}</td><td>{dateLabel(link.postedOn)}</td><td>{link.timesheetCount}</td><td className="time-number">{money(link.amountCents, link.currency)}</td><td><span className={`time-badge ${link.status === "active" ? "is-positive" : ""}`}>{link.status === "active" ? "Linked" : "Released"}</span></td><td>{link.status === "active" && <button type="button" className="time-button time-button-secondary" onClick={() => void release(link)} disabled={saving}>Release</button>}</td></tr>)}</tbody><tfoot><tr><th scope="row">Shown: {links.length} payroll links</th><td>State totals</td><td>{links.reduce((total, link) => total + link.timesheetCount, 0)}</td><td className="time-number">Linked {moneyTotals(links.filter(link => link.status === "active").map(link => ({ cents: link.amountCents, currency: link.currency })))} · Released {moneyTotals(links.filter(link => link.status !== "active").map(link => ({ cents: link.amountCents, currency: link.currency })))}</td><td colSpan={2}>Statuses kept separate</td></tr></tfoot></table></div>}
   </section>;
 }

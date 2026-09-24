@@ -960,16 +960,38 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
   async summarizeStream(scopeInput: QuickBooksConnectionScope, streamInput: string): Promise<QboCoverageSummary> {
     const scope = scopeOf(scopeInput);
     const stream = z.string().trim().min(1).max(120).regex(/^[a-z][a-z0-9_.:-]*$/).parse(streamInput);
-    if (stream === "accounts") {
+    if (stream === "accounts" || stream === "customers") {
       const result = await this.executor.query<{ object_count: unknown; latest_watermark: unknown }>(
         `SELECT COUNT(DISTINCT object_id) AS object_count, MAX(provider_updated_at) AS latest_watermark
            FROM accounting_qbo_source_objects
-          WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type='Account' AND deleted_at IS NULL`,
-        scopeParts(scope),
+          WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND deleted_at IS NULL`,
+        [...scopeParts(scope), stream === "accounts" ? "Account" : "Customer"],
       );
       const row = result.rows[0];
       const latest = row?.latest_watermark instanceof Date ? row.latest_watermark.toISOString() : typeof row?.latest_watermark === "string" ? row.latest_watermark : null;
       return { objectCount: Number(row?.object_count ?? 0), transactionCount: 0, lineCount: 0, coveredFrom: null, coveredThrough: null, latestWatermark: latest };
+    }
+    const receivable = /^receivables\.(invoice|creditmemo|payment|salesreceipt|refundreceipt|journalentry)$/.exec(stream);
+    if (receivable) {
+      const objectType = ({ invoice: "Invoice", creditmemo: "CreditMemo", payment: "Payment", salesreceipt: "SalesReceipt", refundreceipt: "RefundReceipt", journalentry: "JournalEntry" } as const)[receivable[1] as "invoice"];
+      const result = await this.executor.query<{ object_count: unknown; transaction_count: unknown; line_count: unknown; covered_from: unknown; covered_through: unknown; latest_watermark: unknown }>(
+        `SELECT COUNT(DISTINCT o.object_id) AS object_count,
+                COUNT(DISTINCT d.object_id) FILTER (WHERE d.mirror_state = 'current') AS transaction_count,
+                (SELECT COUNT(*) FROM accounting_qbo_receivable_effects e
+                   JOIN accounting_qbo_receivable_documents cd ON cd.organization_id=e.organization_id AND cd.legal_entity_id=e.legal_entity_id AND cd.environment=e.environment
+                    AND cd.realm_id=e.realm_id AND cd.object_type=e.object_type AND cd.object_id=e.object_id AND cd.object_version=e.object_version AND cd.mirror_state='current'
+                  WHERE e.organization_id=$1 AND e.legal_entity_id=$2 AND e.environment=$3 AND e.realm_id=$4 AND e.object_type=$5) AS line_count,
+                MIN(d.txn_date) AS covered_from, MAX(d.txn_date) AS covered_through, MAX(o.provider_updated_at) AS latest_watermark
+           FROM accounting_qbo_source_objects o
+           LEFT JOIN accounting_qbo_receivable_documents d ON d.organization_id=o.organization_id AND d.legal_entity_id=o.legal_entity_id AND d.environment=o.environment
+            AND d.realm_id=o.realm_id AND d.object_type=o.object_type AND d.object_id=o.object_id
+          WHERE o.organization_id=$1 AND o.legal_entity_id=$2 AND o.environment=$3 AND o.realm_id=$4 AND o.object_type=$5 AND o.deleted_at IS NULL`,
+        [...scopeParts(scope), objectType],
+      );
+      const row = result.rows[0];
+      const toDate = (value: unknown) => value instanceof Date ? value.toISOString().slice(0, 10) : typeof value === "string" ? value.slice(0, 10) : null;
+      const latest = row?.latest_watermark instanceof Date ? row.latest_watermark.toISOString() : typeof row?.latest_watermark === "string" ? row.latest_watermark : null;
+      return { objectCount: Number(row?.object_count ?? 0), transactionCount: Number(row?.transaction_count ?? 0), lineCount: Number(row?.line_count ?? 0), coveredFrom: toDate(row?.covered_from), coveredThrough: toDate(row?.covered_through), latestWatermark: latest };
     }
     const match = /^transactions\.(purchase|bill|billpayment|deposit)$/.exec(stream);
     if (!match) throw new AccountingError("accounting_validation", "QBO coverage stream is unsupported");
@@ -1315,12 +1337,17 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       const coverage = markStaleCoverage(mapCoverage(scope, rows.rows[0] ?? null, gaps.rows.map((gap) => ({ from: dateValue(gap.gap_from, "gap start"), through: dateValue(gap.gap_through, "gap end") })), stream), this.now());
       return openCount > 0 && coverage.status === "complete" ? financialSourceCoverageSchema.parse({ ...coverage, status: "partial", reason: `${openCount} QBO object(s) have unresolved mirror exceptions` }) : coverage;
     }
-    const rows = await this.executor.query<CoverageRow>(`SELECT stream,status,evidence,basis,watermark,covered_from,covered_through,observed_at,object_count,transaction_count,line_count,reason FROM accounting_qbo_coverage WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 ORDER BY stream`, scopeParts(scope));
+    // The aggregate describes the cash/payables mirror that its existing
+    // readers depend on. Receivable and customer streams are read per stream
+    // by the receivables read service, so their gaps do not degrade it.
+    const isAggregateStream = (name: string) => !name.startsWith("receivables.") && name !== "customers";
+    const allRows = await this.executor.query<CoverageRow>(`SELECT stream,status,evidence,basis,watermark,covered_from,covered_through,observed_at,object_count,transaction_count,line_count,reason FROM accounting_qbo_coverage WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 ORDER BY stream`, scopeParts(scope));
+    const rows = { rows: allRows.rows.filter(row => isAggregateStream(String(row.stream))) };
     const required = ["accounts", "transactions.purchase", "transactions.bill", "transactions.billpayment", "transactions.deposit"];
     if (rows.rows.length === 0) return mapCoverage(scope, null, [], "aggregate");
     const byStream = new Map(rows.rows.map(row => [String(row.stream), row]));
     const missing = required.filter(name => !byStream.has(name));
-    const openExceptions = Array.from((await this.openExceptionCounts(scope)).values()).reduce((sum, count) => sum + count, 0);
+    const openExceptions = Array.from((await this.openExceptionCounts(scope)).entries()).filter(([name]) => isAggregateStream(name)).reduce((sum, [, count]) => sum + count, 0);
     const partial = openExceptions > 0 || rows.rows.some(row => row.status !== "complete" || row.evidence !== "live_provider_readback" || coverageIsStale(timestampValue(row.observed_at, "coverage timestamp"), this.now()));
     const status = missing.length > 0 || partial ? "partial" : "complete";
     const values = rows.rows.map(row => row.watermark === null || row.watermark === undefined ? null : String(row.watermark)).filter((value): value is string => value !== null);

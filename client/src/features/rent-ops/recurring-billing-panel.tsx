@@ -4,6 +4,8 @@ import {EntityLink,EntityNavigationContext} from "./workspace/entity-link";
 import React, { useState, useContext } from "react";
 import { z } from "zod";
 import { rentOpsAuthClient } from "./auth";
+import { ListTotals, exactCentsMetric } from "./workspace/list-totals";
+import { summarizeExactCents } from "./workspace/list-totals-model";
 
 const cents = z.number().int().nonnegative().safe();
 const previewSchema = z.object({
@@ -91,6 +93,7 @@ export function RecurringBillingPanel({ onPosted, businessDate, propertyId }: { 
         {preview.rows.map((row, index) => <tr key={`${row.scheduleId}:${index}`}><td>{row.propertyName} / {row.unitNumber}</td><td>{navigation.onTenant?<EntityLink personId={row.personId}>{row.tenantName}</EntityLink>:row.tenantName}</td><td>{navigation.onTenant?<EntityLink personId={row.personId} tab="charges">{row.description}</EntityLink>:row.description}</td><td className="number">{navigation.onTenant?<EntityLink personId={row.personId} tab="charges">{money(row.amountCents)}</EntityLink>:money(row.amountCents)}</td><td>{statusLabels[row.status]}{row.reasons.map((reason) => <div key={reason} style={{ fontSize: 12, marginTop: 4 }}>{reason}</div>)}</td></tr>)}
         {!preview.rows.length && <tr><td colSpan={5}>No applicable recurring charges for this month.</td></tr>}
       </tbody></table></div>
+      <ListTotals totalCount={preview.rows.length} itemLabel="billing preview row" metrics={[exactCentsMetric("Ready charges", summarizeExactCents([preview.readyCents])), exactCentsMetric("Already posted", summarizeExactCents([preview.postedCents]))]} className="ro-list-totals" />
     </>}
   </section>;
 }

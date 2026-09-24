@@ -1,14 +1,18 @@
+import { z } from "zod";
 import { operationReceiptSchema } from "@shared/company";
 import {
   accountingPayablesResponseSchema,
   connectorHealthResponseSchema,
+  jobDetailSchema,
   periodCloseChecklistSchema,
   pmSettlementDetailSchema,
   pmSettlementListResponseSchema,
   rentalBridgePreviewSchema,
   rentalPostingPolicyListSchema,
 } from "@shared/accounting/operations";
+import { financialSourceCoverageSchema, financialSourceLineResolutionSchema } from "@shared/accounting/source";
 import { rentOpsAuthClient } from "../rent-ops/auth";
+import { parseCustomerLedger } from "./customer-ledger";
 import type { AccountingApi, AccountingConnection, AccountingEnvironment, AccountingMirror, AccountingMirrorKind, AccountingPendingBinding, AccountingPeriod, AccountingScope, AccountingTransaction, AccountingTransactionPage } from "./types";
 
 type JsonRecord = Record<string, unknown>;
@@ -99,9 +103,33 @@ function parseMirror(value: unknown, kind: AccountingMirrorKind): AccountingMirr
   return { kind, objectType, providerObjectId: String(root.providerObjectId ?? ""), displayName: String(root.displayName ?? ""), active: root.active !== false, version: String(root.version ?? ""), providerUpdatedAt: root.providerUpdatedAt === null || root.providerUpdatedAt === undefined ? null : String(root.providerUpdatedAt) };
 }
 
-function parseTransaction(value: unknown): AccountingTransaction {
-  const root = record(value); const source = record(root.source); const settlement = record(root.settlement);
-  return { source: { objectType: String(source.objectType ?? ""), objectId: String(source.objectId ?? ""), lineId: source.lineId === null || source.lineId === undefined ? null : String(source.lineId), version: String(source.version ?? "") }, amountCents: String(root.amountCents ?? "0"), currency: String(root.currency ?? ""), transactionType: String(root.transactionType ?? ""), description: root.description === null || root.description === undefined ? null : String(root.description), postingState: String(root.postingState ?? "unknown"), postedOn: root.postedOn === null || root.postedOn === undefined ? null : String(root.postedOn), settlement: { state: String(settlement.state ?? "unknown"), settledOn: settlement.settledOn === null || settlement.settledOn === undefined ? null : String(settlement.settledOn), settledAmountCents: settlement.settledAmountCents === null || settlement.settledAmountCents === undefined ? null : String(settlement.settledAmountCents) } };
+const transactionPageResponseSchema = z.object({
+  items: z.array(financialSourceLineResolutionSchema),
+  nextCursor: z.string().nullable(),
+  coverage: financialSourceCoverageSchema,
+}).strict();
+
+export function parseTransaction(value: unknown): AccountingTransaction {
+  const line = parsed(financialSourceLineResolutionSchema, value);
+  return {
+    source: {
+      objectType: line.source.objectType,
+      objectId: line.source.objectId,
+      lineId: line.source.lineId,
+      version: line.source.version,
+    },
+    amountCents: line.amountCents,
+    currency: line.currency,
+    transactionType: line.transactionType,
+    description: line.description,
+    postingState: line.postingState,
+    postedOn: line.postedOn,
+    settlement: {
+      state: line.settlement.state,
+      settledOn: line.settlement.settledOn,
+      settledAmountCents: line.settlement.settledAmountCents,
+    },
+  };
 }
 
 const api: AccountingApi = {
@@ -117,9 +145,13 @@ const api: AccountingApi = {
     const value = record(await requestJson(`${basePath(organizationId)}/mirrors?${scopeParams(scope)}&kind=${kind}`, { signal }));
     return Array.isArray(value.items) ? value.items.map(item => parseMirror(item, kind)) : [];
   },
-  async listTransactions(organizationId, scope, signal) {
-    const value = record(await requestJson(`${basePath(organizationId)}/transactions?${scopeParams(scope)}&limit=100`, { signal }));
-    return { items: Array.isArray(value.items) ? value.items.map(parseTransaction) : [], nextCursor: value.nextCursor === null || value.nextCursor === undefined ? null : String(value.nextCursor), coverage: (() => { const coverage = record(value.coverage); return { status: String(coverage.status ?? "unavailable"), evidence: String(coverage.evidence ?? "unverified"), reason: coverage.reason === null || coverage.reason === undefined ? null : String(coverage.reason) }; })() } satisfies AccountingTransactionPage;
+  async listTransactions(organizationId, scope, signal, cursor) {
+    const value = parsed(transactionPageResponseSchema, await requestJson(`${basePath(organizationId)}/transactions?${scopeParams(scope)}&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { signal }));
+    return {
+      items: value.items.map(parseTransaction),
+      nextCursor: value.nextCursor,
+      coverage: { status: value.coverage.status, evidence: value.coverage.evidence, reason: value.coverage.reason },
+    } satisfies AccountingTransactionPage;
   },
   async beginConnection(organizationId, legalEntityId, signal) {
     const value = record(await requestJson(`${basePath(organizationId)}/connect`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legalEntityId }), signal }));
@@ -139,7 +171,12 @@ const api: AccountingApi = {
   },
   async sync(organizationId, scope, signal) {
     const value = record(await requestJson(`${basePath(organizationId)}/sync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legalEntityId: scope.legalEntityId, environment: scope.environment, realmId: scope.realmId }), signal }));
-    return { status: "queued", message: typeof value.message === "string" ? value.message : "QuickBooks refresh queued." };
+    return { status: "queued", jobId: typeof value.jobId === "string" ? value.jobId : null, message: typeof value.message === "string" ? value.message : "QuickBooks refresh queued." };
+  },
+  async getJob(organizationId, jobId, signal) {
+    if (!/^[0-9a-f-]{36}$/i.test(jobId)) throw new AccountingApiError("That refresh job is unavailable.", 400, "accounting_validation");
+    const value = parsed(jobDetailSchema, await requestJson(`${companyPath(organizationId)}/jobs/${encodeURIComponent(jobId)}`, { signal }));
+    return { state: value.state };
   },
   async health(organizationId, legalEntityId, signal) {
     const query = legalEntityId ? `?${new URLSearchParams({ legalEntityId })}` : "";
@@ -176,6 +213,22 @@ const api: AccountingApi = {
   async command(organizationId, kind, envelope, signal) {
     if (!/^[a-z][a-z0-9_.-]*$/.test(kind)) throw new AccountingApiError("That action is unavailable.", 400, "accounting_validation");
     return parsed(operationReceiptSchema, await requestJson(`${companyPath(organizationId)}/accounting-commands/${kind}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(envelope), signal }));
+  },
+  async tenancyLedger(organizationId, query, signal) {
+    const params = new URLSearchParams({ tenancyId: query.tenancyId, environment: query.environment, limit: String(query.limit ?? 200) });
+    if (query.cursor) params.set("cursor", query.cursor);
+    try {
+      return parsed({ parse: parseCustomerLedger }, await requestJson(`${basePath(organizationId)}/receivables/tenancy-ledger?${params}`, { signal }));
+    } catch (error) {
+      if (error instanceof AccountingApiError && error.status === 404 && error.code === "accounting_not_linked") return null;
+      throw error;
+    }
+  },
+  async linkTenancyCustomer(organizationId, input, signal) {
+    const value = record(await requestJson(`${basePath(organizationId)}/receivables/tenancy-links`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legalEntityId: input.scope.legalEntityId, environment: input.scope.environment, realmId: input.scope.realmId, tenancyId: input.tenancyId, customerId: input.customerId }), signal }));
+    const status = value.status;
+    if (status !== "linked" && status !== "already_linked") throw new AccountingApiError("The QuickBooks customer link could not be confirmed. Reload before trying again.", 0, "accounting_invalid_response");
+    return { status };
   },
   async disconnect(organizationId, scope, signal) {
     const value = record(await requestJson(`${basePath(organizationId)}/disconnect`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legalEntityId: scope.legalEntityId, realmId: scope.realmId }), signal }));

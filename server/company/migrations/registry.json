@@ -460,6 +460,15 @@
       "minimumServerContract": 1,
       "minimumClientContract": 1,
       "recovery": "Keep the relocation history. Downloads follow each binding's latest relocation; correct a bad one by appending a reviewed relocation to a verified object (the source bucket is retained 30 days), never by deleting rows."
+    },
+    {
+      "version": 50,
+      "fileName": "050_accounting_qbo_receivables.sql",
+      "sha256": "8eb43fdc0b7a8c901b739af2d2d241768f471f4614b4050a73f5f4eb594c2736",
+      "predecessor": 49,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Stop receivable streams in the worker; keep mirrored documents and append-only revision effects, then apply a reviewed forward repair. QuickBooks remains the authority, so a full replay rebuilds the mirror."
     }
   ]
 }

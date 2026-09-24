@@ -49,6 +49,7 @@ function Library({ identity, organizationId, asOfDate, selector, onOpenProject }
             <td>{item.source === "template" ? `Template · ${item.sourceName}` : <><button type="button" className="ws-link" onClick={() => onOpenProject(item.sourceId)}>{item.sourceName}</button>{item.propertyName ? ` · ${item.propertyName}` : ""}{item.updatedOn ? ` · ${formatIsoDate(item.updatedOn)}` : ""}</>}</td>
             <td>{humanize(item.projectType)}</td>
           </tr>)}</tbody>
+          <tfoot><tr><th scope="row" colSpan={5}>{library.hasNextPage ? "Loaded cost entries" : "Cost entry count"}</th><td className="number">{items.length}</td></tr></tfoot>
         </table>
         {library.hasNextPage && <button type="button" className="rm-button" disabled={library.isFetchingNextPage} onClick={() => void library.fetchNextPage()}>{library.isFetchingNextPage ? "Loading…" : "Show more"}</button>}
       </>}

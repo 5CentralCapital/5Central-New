@@ -5,3 +5,90 @@
 .rm-tenant-record .rm-reference { white-space: nowrap; }
 
 .rm-charge-context { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin: 0 0 .75rem; padding: .75rem 0; border-top: 1px solid var(--rm-line, #e5e5e3); border-bottom: 1px solid var(--rm-line, #e5e5e3); color: #3a3a3c; font-size: .8125rem; }
+
+/* Tenant records get a compact desktop header and filter row.  Mobile keeps
+   the full-size targets supplied by the workspace touch rules. */
+@media (min-width: 769px) and (pointer: fine) {
+  .rm-tenant-record .rm-record-summary {
+    padding: .75rem .875rem;
+  }
+
+  .rm-tenant-record .rm-record-summary-main h2 {
+    font-size: 1.35rem;
+  }
+
+  .rm-tenant-record .rm-ledger-filters {
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .rm-tenant-record .rm-ledger-filters label {
+    gap: 3px;
+  }
+
+  .rm-tenant-record .rm-ledger-filters input {
+    min-height: 30px;
+    padding-block: 3px;
+  }
+
+  .rm-tenant-record .rm-ledger-toolbar {
+    min-height: 28px;
+  }
+
+  .rm-tenant-record .rm-charge-toolbar {
+    margin-bottom: 8px;
+  }
+}
+
+.rm-tenant-record .rm-list-totals {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 1px solid var(--rm-border);
+  border-top: 0;
+  border-radius: 0 0 4px 4px;
+  background: var(--rm-cream);
+  color: var(--rm-muted);
+  font-size: .68rem;
+}
+
+.rm-tenant-record .rm-list-totals-count {
+  white-space: nowrap;
+}
+
+.rm-tenant-record .rm-list-totals-metrics {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 12px;
+  margin: 0;
+}
+
+.rm-tenant-record .rm-list-totals-metrics > div {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.rm-tenant-record .rm-list-totals-metrics dd {
+  margin: 0;
+  color: var(--rm-charcoal);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+@media (max-width: 768px) {
+  .rm-tenant-record .rm-list-totals {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .rm-tenant-record .rm-list-totals-metrics {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}

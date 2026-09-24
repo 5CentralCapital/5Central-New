@@ -13,6 +13,7 @@ import {
   type GridSortDirection,
   type GridSortState,
 } from "./grid-model";
+import { ListTotals, type ListTotalsMetric } from "./list-totals";
 
 export type { GridColumn } from "./grid-model";
 
@@ -28,6 +29,10 @@ export interface DataGridProps<T extends object> {
   initialSort?: GridSortState;
   storageKey?: string;
   onViewChange?: (rows: T[], columns: GridColumn<T>[]) => void;
+  /** Singular label used by the filtered list footer. */
+  summaryLabel?: string;
+  /** Optional metrics derived from the filtered, sorted row set. */
+  getFooterMetrics?: (rows: readonly T[]) => readonly ListTotalsMetric[];
 }
 
 function preferenceStorageKey(storageKey: string | undefined): string | undefined {
@@ -143,6 +148,8 @@ export function DataGrid<T extends object>({
   initialSort,
   storageKey,
   onViewChange,
+  summaryLabel,
+  getFooterMetrics,
 }: DataGridProps<T>) {
   const normalizedStorageKey = preferenceStorageKey(storageKey);
   const normalizedPageSize = Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : DEFAULT_GRID_PAGE_SIZE;
@@ -318,6 +325,13 @@ export function DataGrid<T extends object>({
           </tbody>
         </table>
       </div>
+
+      <ListTotals
+        totalCount={rows.length}
+        visibleCount={sortedRows.length}
+        itemLabel={summaryLabel ?? "record"}
+        metrics={getFooterMetrics?.(sortedRows)}
+      />
 
       {pageData.totalRows > 0 && (
         <div className="rm-pagination" aria-label="Grid pagination">

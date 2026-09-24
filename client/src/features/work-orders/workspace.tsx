@@ -19,6 +19,7 @@ import { formatInputValue, formatMoney, parseMoneyInput } from "../projects/mone
 import { WorkOrderApiError, revisionFrom, workOrderEnvelope, workOrderViewFilters, workOrdersApi, type WorkOrderCommandEnvelope } from "./api";
 import { PRIORITY_LABELS, STATUS_LABELS, categoryLabel, dateLabel, eventSummary, operatingToday, priorityClass, scheduleOrder, statusClass, timestampLabel } from "./format";
 import { PendingEnvelopes } from "./pending";
+import { sumWorkOrderMoneyByCurrency } from "./totals";
 import { invalidateWorkOrderReads } from "../workspaces/work-data";
 import "./work-orders.css";
 
@@ -26,6 +27,18 @@ import { WORK_ORDER_VIEWS, type WorkOrderView } from "./types";
 
 export type { WorkOrderView };
 const VIEW_LABELS: Record<WorkOrderView, string> = { open: "Open", schedule: "Schedule", all: "All", ...STATUS_LABELS };
+
+function workOrderMoneyTotals(items: readonly WorkOrderSummary[], pick: (item: WorkOrderSummary) => string | null): string {
+  const totals = sumWorkOrderMoneyByCurrency(items.map(item => ({ cents: pick(item), currency: item.currency })));
+  if (!totals.length) return "—";
+  return totals.map(total => total.knownCount === 0 ? `${total.currency === "Unknown currency" ? "Unknown currency" : "Unknown"}${total.unknownCount > 1 ? ` (${total.unknownCount})` : ""}` : `${formatMoney(total.cents!, total.currency)}${total.unknownCount ? ` + ${total.unknownCount} unknown` : ""}`).join(" · ");
+}
+
+function actualSummaryCents(item: WorkOrderSummary): string | null {
+  if (item.actualCost.state === "verified") return item.actualCost.linkedCents;
+  if (item.actualCost.state === "manual") return item.actualCost.manualCents;
+  return null;
+}
 
 export interface WorkOrdersWorkspaceProps {
   organizationId: string;
@@ -685,6 +698,7 @@ export function WorkOrdersWorkspace(props: WorkOrdersWorkspaceProps) {
               <span className="wo-list-item-foot"><StatusCapsule status={item.status} /><small>{item.reference} · {item.status === "scheduled" && item.scheduledOn ? `Scheduled ${dateLabel(item.scheduledOn)}` : item.status === "completed" && item.completedOn ? `Done ${dateLabel(item.completedOn)}` : `Reported ${dateLabel(item.reportedOn)}`}{item.vendor ? ` · ${item.vendor.name}` : ""}</small></span>
             </button></Fragment>)}
             {list.hasNextPage && <button type="button" className="rm-button wo-load-more" disabled={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>{list.isFetchingNextPage ? "Loading…" : "Show more"}</button>}
+            <div className="wo-list-summary" aria-label="Work order totals"><span>{list.hasNextPage ? "Shown" : "Filtered"}: {items.length} work orders</span><span>{list.hasNextPage ? "Page totals" : "Filtered totals"}: Estimated {workOrderMoneyTotals(items, item => item.estimatedCostCents)} · Actual {workOrderMoneyTotals(items, actualSummaryCents)}</span><span>{Object.entries(items.reduce<Record<string, number>>((counts, item) => { counts[item.status] = (counts[item.status] ?? 0) + 1; return counts; }, {})).sort(([left], [right]) => left.localeCompare(right)).map(([status, count]) => `${STATUS_LABELS[status as WorkOrderStatus] ?? status} ${count}`).join(" · ")}</span></div>
           </div>}
       </section>
       <div className="rm-record-detail wo-detail-pane">

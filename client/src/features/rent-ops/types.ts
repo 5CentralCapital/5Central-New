@@ -92,6 +92,7 @@ export type TenantTab =
   | "tenancy"
   | "charges"
   | "ledger"
+  | "quickbooks"
   | "deposits"
   | "housing-assistance"
   | "documents"

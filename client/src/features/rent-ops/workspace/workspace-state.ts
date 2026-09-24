@@ -32,7 +32,7 @@ export const PROJECT_NAV_TABS = ['overview', 'schedule', 'budget', 'commitments'
 export type ProjectNavTab = (typeof PROJECT_NAV_TABS)[number];
 export const INVESTOR_NAV_TABS = ['overview', 'payments', 'capital', 'debt', 'contracts', 'activity'] as const;
 export type InvestorNavTab = (typeof INVESTOR_NAV_TABS)[number];
-export const ACCOUNTING_VIEWS = ['overview', 'transactions', 'bills', 'banking', 'pm-settlements', 'close'] as const;
+export const ACCOUNTING_VIEWS = ['overview', 'connections', 'transactions', 'bills', 'banking', 'pm-settlements', 'close'] as const;
 export type AccountingView = (typeof ACCOUNTING_VIEWS)[number];
 export const FORECAST_TABS = ['cash', 'income', 'balance', 'debt', 'scenarios', 'assumptions'] as const;
 export type ForecastTab = (typeof FORECAST_TABS)[number];
@@ -77,7 +77,7 @@ export const COMPANY_SECTIONS: readonly WorkspaceSection[] = [
   'report-library', 'company-reports', 'saved-reports', 'report-packages', 'forecasting',
   'review-queue', 'entities', 'people', 'time', 'company-documents', 'mra-packets', 'settings',
 ];
-const tabs: TenantTab[] = ['summary','household','tenancy','charges','ledger','deposits','housing-assistance','documents','activity'];
+const tabs: TenantTab[] = ['summary','household','tenancy','charges','ledger','quickbooks','deposits','housing-assistance','documents','activity'];
 const uuidPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const recordPattern = /^[A-Za-z0-9:_-]{1,160}$/;
 const includes = <T extends string>(values: readonly T[], value: unknown): value is T => typeof value === 'string' && (values as readonly string[]).includes(value);

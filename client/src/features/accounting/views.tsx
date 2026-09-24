@@ -1,7 +1,8 @@
 import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ConnectorHealth, PmSettlementDetail, PmSettlementSummary, RentalPostingMethod } from "@shared/accounting/operations";
-import { ageLabel, dateLabel, dateTimeLabel, formatCents, isPositiveCents, monthLabel, monthPeriod, newOperationId, previousOperatingMonth, sumCents } from "./format";
+import { ageLabel, dateLabel, dateTimeLabel, formatCents, isPositiveCents, monthLabel, monthPeriod, newOperationId, previousOperatingMonth } from "./format";
+import { summarizeAmounts } from "./list-totals";
 import type { AccountingApi, AccountingCommandEnvelope, AccountingPeriod, AccountingScope, AccountingView } from "./types";
 import { AccountingApiError } from "./api";
 
@@ -87,6 +88,7 @@ export function OverviewPanel({ api, organizationId, legalEntityId, currency, on
   const close = useQuery({ queryKey: ["accounting", "close", organizationId, legalEntityId, period], queryFn: ({ signal }) => api.closeChecklist(organizationId, legalEntityId, period, signal), staleTime: 30_000 });
   const open = useQuery({ queryKey: ["accounting", "pm-open", organizationId, legalEntityId], queryFn: ({ signal }) => api.pmSettlements(organizationId, { legalEntityId, states: ["draft", "exception"] }, signal), staleTime: 30_000 });
   const awaiting = open.data?.items.filter(item => isPositiveCents(item.ownerRemittanceCents) && !item.bankSettledOn) ?? [];
+  const awaitingTotals = summarizeAmounts(awaiting.map(item => ({ currency: item.currency, amountCents: item.ownerRemittanceCents })));
   return <div className="accounting-overview">
     <section aria-labelledby="accounting-health-heading">
       <h2 id="accounting-health-heading" className="accounting-section-title">QuickBooks</h2>
@@ -104,8 +106,8 @@ export function OverviewPanel({ api, organizationId, legalEntityId, currency, on
           {open.isLoading ? <span className="accounting-meta">Loading…</span> : open.error ? <span className="accounting-meta" role="alert">Statements could not be loaded.</span> : open.data && open.data.items.length === 0
             ? <span className="accounting-meta">Every recorded statement is reconciled.</span>
             : <>
-              <p className="accounting-figure">{formatCents(sumCents(awaiting.map(item => item.ownerRemittanceCents)), currency)}</p>
-              <p className="accounting-meta">{awaiting.length} remittance{awaiting.length === 1 ? "" : "s"} awaiting a bank match · {open.data?.items.length ?? 0} open statement{open.data?.items.length === 1 ? "" : "s"}</p>
+              {awaitingTotals.map(total => <p key={total.currency} className="accounting-figure">{formatCents(total.totalCents, total.currency)}</p>)}
+              <p className="accounting-meta">{open.data?.nextCursor ? "First page: " : ""}{awaiting.length} remittance{awaiting.length === 1 ? "" : "s"} awaiting a bank match · {open.data?.items.length ?? 0} open statement{open.data?.items.length === 1 ? "" : "s"}</p>
             </>}
           <button type="button" className="accounting-button" onClick={() => onOpen("pm-settlements")}>Open PM settlements</button>
         </div>
@@ -115,7 +117,7 @@ export function OverviewPanel({ api, organizationId, legalEntityId, currency, on
         <div className="accounting-card-body">
           {close.isLoading ? <span className="accounting-meta">Loading…</span> : close.error ? <span className="accounting-meta" role="alert">Close status could not be loaded.</span> : close.data && <>
             <p className="accounting-figure">{close.data.completeCount} of {close.data.items.length}</p>
-            <p className="accounting-meta">{close.data.items.filter(item => item.state === "blocked" || item.state === "attention").map(item => item.label).join(" · ") || "Ready to close"}</p>
+            <p className="accounting-meta">{close.data.items.filter(item => item.state === "blocked" || item.state === "attention").map(item => item.label).join(" · ") || (close.data.items.length ? "Ready to close" : "No checklist available")}</p>
           </>}
           <button type="button" className="accounting-button" onClick={() => onOpen("close")}>Open period close</button>
         </div>
@@ -130,6 +132,12 @@ export function PayablesView({ api, organizationId, scope, currency }: { readonl
   const cursor = cursors.at(-1);
   const page = useQuery({ queryKey: ["accounting", "payables", scope, kind, cursor], queryFn: ({ signal }) => api.payables(organizationId, scope, kind, cursor, signal), staleTime: 20_000 });
   const choose = (next: "bills" | "payments") => { setKind(next); setCursors([]); };
+  const items = page.data?.items ?? [];
+  const postedTotals = summarizeAmounts(items, { include: item => item.postingState === "posted" && item.mirrored });
+  const openBalanceTotals = summarizeAmounts(items, {
+    amount: item => item.openBalanceCents,
+    include: item => item.postingState === "posted" && item.mirrored,
+  });
   return <section aria-label="Bills and payments">
     <div className="accounting-segmented" role="group" aria-label="Show">
       {(["bills", "payments"] as const).map(value => <button type="button" key={value} aria-pressed={kind === value} className={kind === value ? "is-selected" : ""} onClick={() => choose(value)}>{value === "bills" ? "Bills" : "Bill payments"}</button>)}
@@ -144,22 +152,37 @@ export function PayablesView({ api, organizationId, scope, currency }: { readonl
             <td>{dateLabel(item.transactionDate)}</td><td>{item.vendorName ?? "—"}</td><td>{item.docNumber ?? "—"}</td>
             {kind === "bills" && <td>{dateLabel(item.dueDate)}</td>}
             <td className="is-number">{item.mirrored ? formatCents(item.amountCents, item.currency) : "Not mirrored"}</td>
-            {kind === "bills" && <td className="is-number">{item.openBalanceCents === null ? "—" : formatCents(item.openBalanceCents, item.currency)}</td>}
+            {kind === "bills" && <td className="is-number">{item.openBalanceCents === null ? "Unknown" : formatCents(item.openBalanceCents, item.currency)}</td>}
             <td>{item.postingState === "voided" ? "Voided" : item.postingState === "posted" ? "Posted" : "Unknown"}</td>
           </tr>)}</tbody>
+          <tfoot>
+            {postedTotals.map(total => {
+              const openBalance = openBalanceTotals.find(item => item.currency === total.currency);
+              return <tr key={total.currency} className="is-total">
+                <th scope="row" colSpan={kind === "bills" ? 4 : 3}><span>Page posted total</span><span className="accounting-meta"> · {total.currency} · Posted total (voided/unmirrored excluded)</span></th>
+                <td className="is-number">{formatCents(total.totalCents, total.currency)}</td>
+                {kind === "bills" && <td className="is-number">{formatCents(openBalance?.totalCents ?? null, total.currency)}</td>}
+                <td className="accounting-meta">{total.unknownCount > 0 ? `${total.unknownCount} amount unknown` : kind === "bills" && openBalance?.unknownCount ? `${openBalance.unknownCount} balance unknown` : "Page total"}</td>
+              </tr>;
+            })}
+          </tfoot>
         </table></div>
         <nav className="accounting-pagination" aria-label="Pages">
           <button type="button" className="accounting-button" disabled={!cursors.length} onClick={() => setCursors(cursors.slice(0, -1))}>Previous</button>
           <button type="button" className="accounting-button" disabled={!page.data.nextCursor} onClick={() => page.data?.nextCursor && setCursors([...cursors, page.data.nextCursor])}>Next</button>
         </nav>
       </>}
-    <p className="accounting-meta">Amounts are in {currency}. Pay and edit bills in QuickBooks.</p>
+    <p className="accounting-meta">Amounts are shown in each source currency. Pay and edit bills in QuickBooks.</p>
   </section>;
 }
 
 export function BankingView({ api, organizationId, legalEntityId, currency, onOpen }: { readonly api: AccountingApi; readonly organizationId: string; readonly legalEntityId: string; readonly currency: string; readonly onOpen: (view: AccountingView) => void }) {
-  const open = useQuery({ queryKey: ["accounting", "pm-open", organizationId, legalEntityId], queryFn: ({ signal }) => api.pmSettlements(organizationId, { legalEntityId, states: ["draft", "exception"] }, signal), staleTime: 30_000 });
+  const [cursors, setCursors] = useState<readonly string[]>([]);
+  const cursor = cursors.at(-1);
+  const open = useQuery({ queryKey: ["accounting", "pm-open", organizationId, legalEntityId, cursor], queryFn: ({ signal }) => api.pmSettlements(organizationId, { legalEntityId, states: ["draft", "exception"], ...(cursor ? { cursor } : {}) }, signal), staleTime: 30_000 });
   const awaiting = open.data?.items.filter(item => isPositiveCents(item.ownerRemittanceCents) && !item.bankSettledOn) ?? [];
+  const remittanceTotals = summarizeAmounts(awaiting.map(item => ({ currency: item.currency, amountCents: item.ownerRemittanceCents })));
+  const limited = cursors.length > 0 || Boolean(open.data?.nextCursor);
   return <div className="accounting-stack">
     <section className="accounting-card" aria-labelledby="accounting-rec-heading">
       <div className="accounting-card-header"><h3 id="accounting-rec-heading">Remittances awaiting a bank match</h3></div>
@@ -168,8 +191,13 @@ export function BankingView({ api, organizationId, legalEntityId, currency, onOp
         : <div className="accounting-table-wrap is-flush"><table className="accounting-table" aria-label="Remittances awaiting a bank match">
           <thead><tr><th>Period</th><th>Property</th><th>Manager</th><th className="is-number">Remittance</th><th>Status</th></tr></thead>
           <tbody>{awaiting.map(item => <tr key={item.id}><td>{dateLabel(item.periodStart)} – {dateLabel(item.periodEnd)}</td><td>{item.propertyName ?? item.propertyId}</td><td>{item.managerName}</td><td className="is-number">{formatCents(item.ownerRemittanceCents, item.currency)}</td><td>{item.state === "exception" ? "Exception" : "Not reconciled"}</td></tr>)}</tbody>
+          <tfoot>{remittanceTotals.map(total => <tr key={total.currency} className="is-total"><th scope="row" colSpan={3}>{limited ? "Shown remittances" : "Remittance total"}<span className="accounting-meta"> · {total.currency}</span></th><td className="is-number">{formatCents(total.totalCents, total.currency)}</td><td className="accounting-meta">{limited ? "Current page" : "Page total"}</td></tr>)}</tfoot>
         </table></div>}
-      <div className="accounting-card-footer"><button type="button" className="accounting-button" onClick={() => onOpen("pm-settlements")}>Reconcile in PM settlements</button><span className="accounting-meta">Amounts in {currency}.</span></div>
+      {open.data && <nav className="accounting-pagination" aria-label="Remittance pages">
+        <button type="button" className="accounting-button" disabled={!cursors.length} onClick={() => setCursors(cursors.slice(0, -1))}>Previous</button>
+        <button type="button" className="accounting-button" disabled={!open.data.nextCursor} onClick={() => open.data?.nextCursor && setCursors([...cursors, open.data.nextCursor])}>Next</button>
+      </nav>}
+      <div className="accounting-card-footer"><button type="button" className="accounting-button" onClick={() => onOpen("pm-settlements")}>Reconcile in PM settlements</button><span className="accounting-meta">Amounts shown in each source currency.</span></div>
     </section>
     <Suspense fallback={<Loading label="Loading bank accounts…" />}><RmBanking /></Suspense>
   </div>;
@@ -182,6 +210,22 @@ const KIND_LABEL: Readonly<Record<string, string>> = {
 
 const SETTLEMENT_TONE: Readonly<Record<PmSettlementSummary["state"], Tone>> = { draft: "neutral", reconciled: "positive", exception: "critical" };
 const SETTLEMENT_LABEL: Readonly<Record<PmSettlementSummary["state"], string>> = { draft: "Not reconciled", reconciled: "Reconciled", exception: "Exception" };
+
+function settlementPageTotals(items: readonly PmSettlementSummary[]) {
+  const currencies = Array.from(new Set(items.map(item => item.currency))).sort();
+  const fields = {
+    collected: summarizeAmounts(items.map(item => ({ currency: item.currency, amountCents: item.grossCollectionsCents }))),
+    costs: summarizeAmounts(items.map(item => ({ currency: item.currency, amountCents: item.pmCostsCents }))),
+    remitted: summarizeAmounts(items.map(item => ({ currency: item.currency, amountCents: item.ownerRemittanceCents }))),
+  };
+  const lookup = (totals: readonly { readonly currency: string; readonly totalCents: string | null }[], currency: string): string | null => totals.find(item => item.currency === currency)?.totalCents ?? null;
+  return currencies.map(currency => ({
+    currency,
+    collectedCents: lookup(fields.collected, currency),
+    costsCents: lookup(fields.costs, currency),
+    remittedCents: lookup(fields.remitted, currency),
+  }));
+}
 
 function GrossToNet({ detail }: { readonly detail: PmSettlementDetail }) {
   const g = detail.grossToNet;
@@ -215,6 +259,10 @@ export function SettlementDetail({ api, organizationId, legalEntityId, settlemen
   if (detail.isLoading) return <Loading label="Loading statement…" />;
   if (detail.error || !detail.data) return <ErrorState error={detail.error} retry={() => void detail.refetch()} />;
   const item = detail.data;
+  const lineTotals = Array.from(new Set(item.lines.map(line => line.kind))).map(kind => {
+    const total = summarizeAmounts(item.lines.filter(line => line.kind === kind).map(line => ({ currency: item.currency, amountCents: line.amountCents })))[0];
+    return { kind, total };
+  });
   const scope = { organizationId, legalEntityId: item.legalEntityId };
   const done = async (ok: unknown) => { if (ok) { setMode("none"); setReason(""); await detail.refetch(); onChanged(); } };
   return <article className="accounting-detail" aria-labelledby={`${formId}-title`}>
@@ -250,6 +298,7 @@ export function SettlementDetail({ api, organizationId, legalEntityId, settlemen
       <div className="accounting-table-wrap"><table className="accounting-table" aria-label="Statement lines">
         <thead><tr><th>Line</th><th>Kind</th><th>Description</th><th>Unit</th><th>Date</th><th className="is-number">Amount</th></tr></thead>
         <tbody>{item.lines.map(line => <tr key={line.lineNumber}><td>{line.lineNumber}{line.sourcePage ? <span className="accounting-meta"> · p.{line.sourcePage}</span> : null}</td><td>{KIND_LABEL[line.kind] ?? line.kind}</td><td>{line.description}</td><td>{line.unitId ?? "—"}</td><td>{dateLabel(line.occurredOn)}</td><td className="is-number">{formatCents(line.amountCents, item.currency)}</td></tr>)}</tbody>
+        <tfoot aria-label="Statement line totals by kind">{lineTotals.map(({ kind, total }) => total && <tr key={kind} className="is-total"><th scope="row" colSpan={5}>{KIND_LABEL[kind] ?? kind} total<span className="accounting-meta"> · {item.currency}</span></th><td className="is-number">{formatCents(total.totalCents, item.currency)}</td></tr>)}</tfoot>
       </table></div>
     </section>
   </article>;
@@ -263,6 +312,7 @@ export function PmSettlementsView({ api, organizationId, legalEntityId }: { read
   const cursor = cursors.at(-1);
   const list = useQuery({ queryKey: ["accounting", "pm-list", organizationId, legalEntityId, state, cursor], queryFn: ({ signal }) => api.pmSettlements(organizationId, { legalEntityId, ...(state === "all" ? {} : { states: [state] }), ...(cursor ? { cursor } : {}) }, signal), staleTime: 20_000 });
   useEffect(() => { if (list.data?.items.length && !list.data.items.some(item => item.id === selected)) setSelected(list.data.items[0]!.id); }, [list.data, selected]);
+  const pageTotals = settlementPageTotals(list.data?.items ?? []);
   return <div className="accounting-split">
     <section className="accounting-split-list" aria-label="PM statements">
       <label className="accounting-filter">Status<select value={state} onChange={event => { setState(event.currentTarget.value as typeof state); setCursors([]); setSelected(null); }}>
@@ -276,6 +326,7 @@ export function PmSettlementsView({ api, organizationId, legalEntityId }: { read
             <span className="accounting-meta">{monthLabel(item.periodStart)} · {item.managerName}</span>
             <span className="accounting-record-figures"><span>{formatCents(item.grossCollectionsCents, item.currency)} collected</span><StatePill tone={SETTLEMENT_TONE[item.state]}>{SETTLEMENT_LABEL[item.state]}</StatePill></span>
           </button></li>)}</ul>
+          <div className="accounting-card-footer" aria-label="Page totals"><div><strong>Page totals</strong>{pageTotals.map(total => <div key={total.currency} className="accounting-meta">{total.currency}: {formatCents(total.collectedCents, total.currency)} collected · {formatCents(total.costsCents, total.currency)} PM costs · {formatCents(total.remittedCents, total.currency)} remitted</div>)}</div></div>
           <nav className="accounting-pagination" aria-label="Pages">
             <button type="button" className="accounting-button" disabled={!cursors.length} onClick={() => setCursors(cursors.slice(0, -1))}>Previous</button>
             <button type="button" className="accounting-button" disabled={!list.data.nextCursor} onClick={() => list.data?.nextCursor && setCursors([...cursors, list.data.nextCursor])}>Next</button>
@@ -326,14 +377,19 @@ export function PeriodCloseView({ api, organizationId, legalEntityId, currency }
   const bridge = useQuery({ queryKey: ["accounting", "bridge", organizationId, legalEntityId, period], queryFn: ({ signal }) => api.bridgePreview(organizationId, legalEntityId, period, signal), staleTime: 60_000 });
   const month = period.periodStart.slice(0, 7);
   const totals = bridge.data?.controlTotals;
+  const checklistItems = checklist.data?.items ?? [];
+  const checklistComplete = checklistItems.filter(item => item.state === "complete").length;
+  const checklistAttention = checklistItems.filter(item => item.state === "attention").length;
+  const checklistBlocked = checklistItems.filter(item => item.state === "blocked").length;
+  const checklistNotApplicable = checklistItems.filter(item => item.state === "not_applicable").length;
   return <div className="accounting-stack">
     <label className="accounting-filter">Period<input type="month" value={month} onChange={event => { const value = event.currentTarget.value; if (/^\d{4}-\d{2}$/.test(value)) setPeriod(monthPeriod(new Date(`${value}-15T00:00:00Z`), 0)); }} /></label>
     <section className="accounting-card" aria-labelledby="accounting-checklist-heading">
-      <div className="accounting-card-header"><h3 id="accounting-checklist-heading">{monthLabel(period.periodStart)}</h3>{checklist.data && <span className="accounting-meta">{checklist.data.completeCount} of {checklist.data.items.length} ready</span>}</div>
+      <div className="accounting-card-header"><h3 id="accounting-checklist-heading">{monthLabel(period.periodStart)}</h3>{checklist.data && <span className="accounting-meta">{checklistComplete} of {checklistItems.length} ready</span>}</div>
       {checklist.isLoading ? <Loading label="Checking…" /> : checklist.error ? <ErrorState error={checklist.error} retry={() => void checklist.refetch()} /> : <ul className="accounting-checklist">{checklist.data?.items.map(item => <li key={item.code}>
         <div><strong>{item.label}</strong><span className="accounting-meta">{item.detail}</span></div><StatePill tone={CLOSE_TONE[item.state] ?? "neutral"}>{CLOSE_LABEL[item.state] ?? item.state}</StatePill>
       </li>)}</ul>}
-      <div className="accounting-card-footer"><span className="accounting-meta">Status only. Close the books in QuickBooks.</span></div>
+      <div className="accounting-card-footer"><span className="accounting-meta">{checklist.data ? `${checklistComplete} complete · ${checklistAttention} needs attention · ${checklistBlocked} blocked · ${checklistNotApplicable} not needed. ` : ""}Status only; close the books in QuickBooks.</span></div>
     </section>
     <section className="accounting-card" aria-labelledby="accounting-method-heading">
       <div className="accounting-card-header"><h3 id="accounting-method-heading">Rental accounting method</h3><button type="button" className="accounting-button" aria-expanded={editing} onClick={() => setEditing(!editing)}>{editing ? "Close" : "Set method"}</button></div>
@@ -341,7 +397,7 @@ export function PeriodCloseView({ api, organizationId, legalEntityId, currency }
       {policies.isLoading ? <Loading label="Loading…" /> : policies.error ? <ErrorState error={policies.error} retry={() => void policies.refetch()} /> : !policies.data?.length
         ? <div className="accounting-card-body"><span className="accounting-meta">No method set. Choose one before any rental activity is posted.</span></div>
         : <div className="accounting-table-wrap is-flush"><table className="accounting-table" aria-label="Rental accounting methods"><thead><tr><th>Method</th><th>From</th><th>Until</th><th>Cutoff</th><th>Approved</th></tr></thead>
-          <tbody>{policies.data.map(policy => <tr key={policy.id}><td>{METHOD_LABEL[policy.method]}</td><td>{dateLabel(policy.effectiveFrom)}</td><td>{policy.effectiveUntil ? dateLabel(policy.effectiveUntil) : "Open"}</td><td>{dateLabel(policy.cutoffDate)}</td><td>{dateTimeLabel(policy.approvedAt)}</td></tr>)}</tbody></table></div>}
+          <tbody>{policies.data.map(policy => <tr key={policy.id}><td>{METHOD_LABEL[policy.method]}</td><td>{dateLabel(policy.effectiveFrom)}</td><td>{policy.effectiveUntil ? dateLabel(policy.effectiveUntil) : "Open"}</td><td>{dateLabel(policy.cutoffDate)}</td><td>{dateTimeLabel(policy.approvedAt)}</td></tr>)}</tbody><tfoot><tr><th scope="row" colSpan={4}>Policy count</th><td className="is-number">{policies.data.length}</td></tr></tfoot></table></div>}
     </section>
     <section className="accounting-card" aria-labelledby="accounting-bridge-heading">
       <div className="accounting-card-header"><h3 id="accounting-bridge-heading">Summary bridge preview</h3>{bridge.data && <a className="accounting-button" href={api.bridgeCsvHref(organizationId, legalEntityId, period)} download>Export CSV</a>}</div>

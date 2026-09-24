@@ -4,6 +4,8 @@ import { Building2, Home, Pencil, Plus, Search } from "lucide-react";
 
 import {EntityLink,RecordLink} from "./entity-link";
 import { DataGrid, type GridColumn } from "./grid";
+import { ListTotals, exactCentsMetric } from "./list-totals";
+import { summarizeExactCents } from "./list-totals-model";
 import { formatDate, formatLabel, formatMoney } from "./display";
 import { DATE_MISSING_LABEL, PROPERTY_MISSING_LABEL, STATUS_UNVERIFIED_LABEL, UNIT_MISSING_LABEL, UNKNOWN_AMOUNT_LABEL, UNVERIFIED_LABEL, missingLabel } from "@shared/review-cases/display-labels";
 import {
@@ -149,6 +151,7 @@ function RecordList({ rows, selected, search, onSearch, onSelect }: { rows: Prop
       })}
       {!rows.length && <EmptyState message="No properties or units match this search." />}
     </div>
+    <ListTotals totalCount={rows.length} itemLabel="property or unit record" />
   </aside>;
 }
 
@@ -190,7 +193,7 @@ function UnitGrid({ units, onSelect, onEdit }: { units: AdminUnitView[]; onSelec
     { key: "action", label: "", render: (row) => row.unit.id ? <button type="button" className="rm-button rm-button-small" onClick={(event) => { event.stopPropagation(); onEdit("save-unit", buildUnitEditValues(row.unit)); }}>Edit</button> : null },
   ];
   if (!rows.length) return <EmptyState message="No units are linked to this property." />;
-  return <DataGrid<UnitGridRow> rows={rows} columns={columns} getRowKey={(row) => row.id} emptyMessage="No units are linked to this property." caption="Units at this property" storageKey="rm-property-units" />;
+  return <DataGrid<UnitGridRow> rows={rows} columns={columns} getRowKey={(row) => row.id} emptyMessage="No units are linked to this property." caption="Units at this property" summaryLabel="unit" getFooterMetrics={(visibleRows) => [exactCentsMetric("Potential monthly market rent", summarizeExactCents(visibleRows.map((row) => row.unit.marketRentCents)))]} storageKey="rm-property-units" />;
 }
 
 function PropertyUnits({ units, onSelect, onEdit }: { units: AdminUnitView[]; onSelect: (unitId: string) => void; onEdit: EditAction }) {

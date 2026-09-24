@@ -14,6 +14,7 @@ import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { AccountingError } from "./errors";
 import { CompanyCommandError } from "../company/commands/errors";
 import { assertRentalPostingMethod } from "./posting-policy";
+import { withQboSourceTag } from "./qbo-source-tag";
 
 export type QboWriteOperation = "create" | "update" | "void" | "delete";
 
@@ -248,6 +249,8 @@ export function assertQboWriteFields(request: QboWriteRequest): void {
     if (!request.entityId || !/^[A-Za-z0-9_.:-]{1,160}$/.test(request.entityId)) throw new AccountingError("accounting_validation", "An update needs the QuickBooks record Id");
     if (!request.syncToken || !/^[A-Za-z0-9_.:-]{1,160}$/.test(request.syncToken)) throw new AccountingError("accounting_validation", "An update needs the SyncToken that was read");
   }
+  // The source tag must fit in the internal note; refuse a non-text note up front.
+  withQboSourceTag(request.entity, request.operation, fields, request.operationKey);
 }
 
 function hasCreateReadbackKey(request: QboWriteRequest): boolean {
@@ -287,8 +290,11 @@ export function createQboWriteService(options: {
         }
       }
       assertQboWriteFields(request);
+      // Creates without a natural key carry `5CO:<operation key>` in their
+      // internal note so a lost response can be found in QuickBooks later.
+      const fields = withQboSourceTag(request.entity, request.operation, request.fields, request.operationKey);
       const journal = new PostgresQuickBooksWriteJournal(options.executor, request.scope, { entity: request.entity, operation: request.operation }, options.now);
-      const requestShape: QuickBooksJsonObject = { ...request.fields };
+      const requestShape: QuickBooksJsonObject = { ...fields };
       const requestIdentity: QuickBooksJsonObject = { entity: request.entity, operation: request.operation, entityId: request.entityId ?? null, syncToken: request.syncToken ?? null, fields: requestShape };
       const requestHash = canonicalJsonSha256(requestIdentity);
       const existing = await journal.row(request.operationKey);
@@ -340,7 +346,7 @@ export function createQboWriteService(options: {
           write: async ({ requestId }) => {
             const response = request.operation === "update"
               ? await client.update({ entity: request.entity, id: request.entityId!, syncToken: request.syncToken!, fields: { ...request.fields, sparse: true } }, { requestId })
-              : await client.create(request.entity, request.fields, { requestId });
+              : await client.create(request.entity, fields, { requestId });
             const id = response.entity.Id;
             if (typeof id === "string" || typeof id === "number") createdId = String(id);
             savedEntity = response.entity;

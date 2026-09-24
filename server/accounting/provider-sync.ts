@@ -9,6 +9,9 @@ import { AccountingError } from "./errors";
 import type { QuickBooksCapabilityEvidence, QuickBooksCapabilityStore } from "./capabilities";
 import { versionCompare, type QboAccountingMirrorStore } from "./mirror-store";
 import { PostgresQboCheckpointStore, runQboCatchUp, type QboCatchUpResult, type QboSyncCheckpoint } from "./sync";
+import { QBO_RECEIVABLE_DOCUMENT_TYPES, QBO_RECEIVABLE_STREAMS, receivableStreamFor, type QboReceivableDocumentType } from "../../shared/accounting/receivables";
+import { isQboReceivableType, journalEntryAccountIds, normalizeQboReceivable } from "../integrations/quickbooks/normalize-receivables";
+import { PostgresQboReceivablesStore } from "./receivables-store";
 
 const PAGE_SIZE = 500;
 const TRANSACTION_ENTITY_TYPES = ["Purchase", "Bill", "BillPayment", "Deposit"] as const;
@@ -17,6 +20,13 @@ const REQUIRED_STREAMS = ["accounts", "transactions.purchase", "transactions.bil
 export const QBO_CDC_ENTITIES = [...TRANSACTION_ENTITY_TYPES, "Account"] as const;
 /** Named provider records mirrored for display and mapping. */
 export const QBO_NAMED_ENTITIES = ["Vendor", "Customer", "Employee"] as const;
+/**
+ * Receivables mirror (migration 050): customers first so names and provider
+ * balances exist, then the customer-linked transaction types.
+ */
+export const QBO_RECEIVABLE_CDC_ENTITIES = ["Customer", ...QBO_RECEIVABLE_DOCUMENT_TYPES] as const;
+/** Every stream a verified full replay must fetch before the change chain is anchored. */
+const ANCHOR_STREAMS: readonly string[] = [...REQUIRED_STREAMS, ...QBO_RECEIVABLE_STREAMS];
 /** Checkpoint stream holding the CDC watermark (watermark) and verified full-replay anchor (cursor). */
 export const QBO_CHANGE_STREAM = "changes";
 /** Re-read a short overlap on each CDC call; re-applying the same revision is a no-op. */
@@ -27,10 +37,11 @@ const CDC_SAFE_LOOKBACK_MS = QUICKBOOKS_CDC_LOOKBACK_DAYS * 86_400_000 - 12 * 3_
 export function streamForEntity(entity: string): string | null {
   if ((TRANSACTION_ENTITY_TYPES as readonly string[]).includes(entity)) return `transactions.${entity.toLowerCase()}`;
   if (entity === "Account") return "accounts";
+  if (entity === "Customer" || isQboReceivableType(entity)) return receivableStreamFor(entity as QboReceivableDocumentType | "Customer");
   return null;
 }
 
-type ApplyOutcome = { readonly objectId: string | null; readonly unsupported: number; readonly skipped?: "stale_after_deletion" };
+type ApplyOutcome = { readonly objectId: string | null; readonly unsupported: number; readonly skipped?: "stale_after_deletion" | "stale_revision" };
 
 /**
  * A live provider observation of an object we tombstoned. An inferred
@@ -126,6 +137,78 @@ export async function applyQboTransactionObject(input: {
   }
   await mirror.resolveSyncException({ scope, stream, objectType: value.objectType, objectId: value.objectId, version: value.version, observedAt });
   return { objectId: value.objectId, unsupported: 0 };
+}
+
+/** Mirror one named provider record (Customer, Vendor, Employee) as a source object revision. */
+export async function applyQboNamedObject(mirror: QboAccountingMirrorStore, scopeInput: QuickBooksConnectionScope, objectType: string, item: QuickBooksJsonObject, observedAt: string): Promise<ApplyOutcome> {
+  const scope = scopeOf(scopeInput);
+  const objectId = typeof item.Id === "string" || typeof item.Id === "number" ? String(item.Id).trim() : "";
+  const version = typeof item.SyncToken === "string" || typeof item.SyncToken === "number" ? String(item.SyncToken).trim() : "";
+  const stream = streamForEntity(objectType) ?? objectType.toLowerCase();
+  if (!/^[A-Za-z0-9_.:-]{1,160}$/.test(objectId) || !version) {
+    if (!objectId) throw new AccountingError("accounting_unavailable", `QBO ${objectType} without a usable Id cannot be tracked as an exception`);
+    await mirror.recordSyncException({ scope, stream, objectType, objectId, version: version || null, kind: "unsupported", reasons: [`QBO ${objectType} is missing its Id or SyncToken`], observedAt });
+    return { objectId, unsupported: 1 };
+  }
+  const updated = providerTimestamp(metadataOf(item)?.LastUpdatedTime);
+  if (!(await admitLiveObservation(mirror, scope, objectType, objectId, version, updated))) return { objectId, unsupported: 0, skipped: "stale_after_deletion" };
+  await mirror.ingestSourceObject({ scope, objectType, objectId, version, providerUpdatedAt: updated, providerBody: item, receivedAt: observedAt });
+  await mirror.resolveSyncException({ scope, stream, objectType, objectId, version, observedAt });
+  return { objectId, unsupported: 0 };
+}
+
+/**
+ * Mirror one customer-linked provider revision into the receivables mirror.
+ * Unsupported revisions retire any earlier mirrored revision and stay an
+ * explicit exception; documents that are not receivable activity at all are
+ * not stored unless an earlier revision was.
+ */
+export async function applyQboReceivableObject(input: {
+  readonly mirror: QboAccountingMirrorStore;
+  readonly receivables: PostgresQboReceivablesStore;
+  readonly scope: QuickBooksConnectionScope;
+  readonly entity: QboReceivableDocumentType;
+  readonly item: QuickBooksJsonObject;
+  readonly observedAt: string;
+  readonly currency: QboCurrencyContext | null;
+  readonly entityCurrency?: string | null;
+}): Promise<ApplyOutcome> {
+  const { mirror, receivables, entity, item, observedAt, currency, entityCurrency } = input;
+  const scope = scopeOf(input.scope);
+  const stream = receivableStreamFor(entity);
+  const accountTypes = entity === "JournalEntry" ? await receivables.accountTypes(scope, journalEntryAccountIds(item)) : undefined;
+  const result = normalizeQboReceivable(entity, item, { currency, entityCurrency, accountTypes });
+  const identity = result.status === "supported"
+    ? { objectType: entity, objectId: result.document.objectId, version: result.document.version, providerUpdatedAt: result.document.providerUpdatedAt }
+    : result.identity;
+  if (!identity) {
+    const objectId = typeof item.Id === "string" || typeof item.Id === "number" ? String(item.Id).trim() : "";
+    if (!objectId || objectId.length > 200) throw new AccountingError("accounting_unavailable", `QBO ${entity} object without a usable Id cannot be tracked as an exception`);
+    await mirror.recordSyncException({ scope, stream, objectType: entity, objectId, version: null, kind: "unsupported", reasons: result.status === "unsupported" ? result.reasons : ["QBO object identity is invalid"], observedAt });
+    return { objectId, unsupported: 1 };
+  }
+  if (!(await admitLiveObservation(mirror, scope, entity, identity.objectId, identity.version, identity.providerUpdatedAt))) {
+    return { objectId: identity.objectId, unsupported: 0, skipped: "stale_after_deletion" };
+  }
+  const ingest = () => mirror.ingestSourceObject({ scope, objectType: entity, objectId: identity.objectId, version: identity.version, providerUpdatedAt: identity.providerUpdatedAt, providerBody: item, receivedAt: observedAt });
+  if (result.status === "not_receivable") {
+    if ((await receivables.listDocumentIds(scope, entity, identity.objectId)).length > 0) {
+      const source = await ingest();
+      await receivables.retireNotReceivable(scope, identity, source.id);
+    }
+    await mirror.resolveSyncException({ scope, stream, objectType: entity, objectId: identity.objectId, version: identity.version, observedAt });
+    return { objectId: identity.objectId, unsupported: 0 };
+  }
+  const source = await ingest();
+  if (result.status === "unsupported") {
+    await receivables.retireUnsupported(scope, identity, source.id, result.reasons.join("; "));
+    await mirror.recordSyncException({ scope, stream, objectType: entity, objectId: identity.objectId, version: identity.version, kind: "unsupported", reasons: result.reasons, observedAt });
+    return { objectId: identity.objectId, unsupported: 1 };
+  }
+  const outcome = await receivables.applyDocument(scope, result.document, source.id);
+  if (outcome === "stale") return { objectId: identity.objectId, unsupported: 0, skipped: "stale_revision" };
+  await mirror.resolveSyncException({ scope, stream, objectType: entity, objectId: identity.objectId, version: identity.version, observedAt });
+  return { objectId: identity.objectId, unsupported: 0 };
 }
 
 /** Mirror one provider Account revision (identity for payment and cost classification). */
@@ -353,13 +436,16 @@ export function createQboProviderSync(options: {
   readonly scope: QuickBooksConnectionScope;
   readonly mirror: QboAccountingMirrorStore;
   readonly capabilityStore: QuickBooksCapabilityStore;
+  readonly receivables?: PostgresQboReceivablesStore;
   readonly now?: () => Date;
 }): QboProviderSync {
   const scope = scopeOf(options.scope);
   const now = options.now ?? (() => new Date());
   const checkpointStore = new PostgresQboCheckpointStore(options.executor, now);
+  const receivables = options.receivables ?? new PostgresQboReceivablesStore(options.executor);
   // undefined = not read yet; null = read, but no usable home currency.
   let verifiedCurrency: QboCurrencyContext | null | undefined;
+  let verifiedEntityCurrency: string | null | undefined;
 
   /**
    * CompanyInfo does not carry the home currency. Preferences.CurrencyPrefs is
@@ -376,6 +462,23 @@ export function createQboProviderSync(options: {
       verifiedCurrency = null;
     }
     return verifiedCurrency;
+  }
+
+  /** Currency on the bound legal entity is the reporting currency for reads. */
+  async function loadEntityCurrency(): Promise<string | null> {
+    if (verifiedEntityCurrency !== undefined) return verifiedEntityCurrency;
+    try {
+      const result = await options.executor.query<{ currency: unknown }>(
+        "SELECT currency FROM company_legal_entities WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL",
+        [scope.organizationId, scope.legalEntityId],
+      );
+      const raw = result.rows[0]?.currency;
+      const parsed = typeof raw === "string" && /^[A-Za-z]{3}$/.test(raw) ? currencyCodeSchema.safeParse(raw.toUpperCase()) : null;
+      verifiedEntityCurrency = parsed?.success ? parsed.data : null;
+    } catch {
+      verifiedEntityCurrency = null;
+    }
+    return verifiedEntityCurrency;
   }
 
   const sync: QboProviderSync = {
@@ -408,9 +511,10 @@ export function createQboProviderSync(options: {
     async catchUp(input = {}) {
       await requireReadCapability();
       const currency = await loadCurrencyContext();
+      const entityCurrency = await loadEntityCurrency();
       const fullReplay = input.fullReplay === true;
       const streams: QboProviderStreamResult[] = [];
-      const syncStream = async (entity: string, stream: string, apply: (mirror: QboAccountingMirrorStore, item: QuickBooksJsonObject, observedAt: string) => Promise<ApplyOutcome>) => {
+      const syncStream = async (entity: string, stream: string, apply: (mirror: QboAccountingMirrorStore, item: QuickBooksJsonObject, observedAt: string, executor: RentOpsQueryExecutor) => Promise<ApplyOutcome>) => {
         const before = await checkpointStore.load(scope, stream);
         const hadWatermark = before?.watermark !== null && before?.watermark !== undefined;
         const mode: QboProviderStreamResult["mode"] = fullReplay ? "full_replay" : hadWatermark ? "incremental" : "initial";
@@ -436,7 +540,7 @@ export function createQboProviderSync(options: {
             const mirror = options.mirror.forExecutor(executor);
             const observedAt = now().toISOString();
             for (const item of items) {
-              const outcome = await apply(mirror, item, observedAt);
+              const outcome = await apply(mirror, item, observedAt, executor);
               unsupportedCount += outcome.unsupported;
               if (outcome.objectId) seen.add(outcome.objectId);
             }
@@ -481,7 +585,18 @@ export function createQboProviderSync(options: {
       if (streams.every(stream => stream.result.status === "complete")) {
         await syncStream("Account", "accounts", (mirror, item, observedAt) => applyQboAccountObject(mirror, scope, item, observedAt));
       }
-      const complete = REQUIRED_STREAMS.every(required => streams.some(stream => stream.stream === required && stream.result.status === "complete" && stream.coverageStatus === "complete"));
+      // Receivables follow Account identity (JournalEntry A/R lines are
+      // classified by AccountType) and customers (names, provider balances).
+      if (streams.every(stream => stream.result.status === "complete")) {
+        const customers = await syncStream("Customer", receivableStreamFor("Customer"), (mirror, item, observedAt) => applyQboNamedObject(mirror, scope, "Customer", item, observedAt));
+        if (customers.status !== "failed") {
+          for (const entity of QBO_RECEIVABLE_DOCUMENT_TYPES) {
+            const result = await syncStream(entity, receivableStreamFor(entity), (mirror, item, observedAt, executor) => applyQboReceivableObject({ mirror, receivables: receivables.forExecutor(executor), scope, entity, item, observedAt, currency, entityCurrency }));
+            if (result.status === "failed") break;
+          }
+        }
+      }
+      const complete = ANCHOR_STREAMS.every(required => streams.some(stream => stream.stream === required && stream.result.status === "complete" && stream.coverageStatus === "complete"));
       return { status: complete ? "complete" : "partial", streams };
     },
 
@@ -495,10 +610,11 @@ export function createQboProviderSync(options: {
       if (reason !== null) return fullReplay(reason, checkpoint, input.maxPages);
 
       const currency = await loadCurrencyContext();
+      const entityCurrency = await loadEntityCurrency();
       const since = new Date(Math.max(Date.parse(watermark!) - CDC_OVERLAP_MS, startedAt.getTime() - CDC_SAFE_LOOKBACK_MS)).toISOString();
       let response;
       try {
-        response = await options.client.cdc([...QBO_CDC_ENTITIES], since);
+        response = await options.client.cdc([...QBO_CDC_ENTITIES, ...QBO_RECEIVABLE_CDC_ENTITIES], since);
       } catch (error) {
         return { mode: "cdc", reason: null, status: "failed", appliedCount: 0, deletedCount: 0, unsupportedCount: 0, anchored: checkpoint?.cursor !== null && checkpoint?.cursor !== undefined, watermark, error };
       }
@@ -533,7 +649,27 @@ export function createQboProviderSync(options: {
               else if (!outcome.skipped) tally.applied += 1;
             }
           }
-          for (const stream of REQUIRED_STREAMS) {
+          // Receivables after Account (JournalEntry classification) and Customer.
+          const receivableStore = receivables.forExecutor(executor);
+          for (const entity of QBO_RECEIVABLE_CDC_ENTITIES) {
+            const stream = streamForEntity(entity)!;
+            for (const item of response.entities[entity] ?? []) {
+              if (isDeletedCdcObject(item)) {
+                const objectId = typeof item.Id === "string" || typeof item.Id === "number" ? String(item.Id) : null;
+                if (!objectId) continue;
+                const deletedAt = providerTimestamp(metadataOf(item)?.LastUpdatedTime);
+                const deletion = await mirror.recordDeletion({ scope, objectType: entity, objectId, sourceDeletedAt: deletedAt, detectedVia: "cdc", observedAt });
+                if (deletion.applied) tally.deleted += 1;
+                continue;
+              }
+              const outcome = entity === "Customer"
+                ? await applyQboNamedObject(mirror, scope, "Customer", item, observedAt)
+                : await applyQboReceivableObject({ mirror, receivables: receivableStore, scope, entity, item, observedAt, currency, entityCurrency });
+              if (outcome.unsupported) tally.unsupported.set(stream, (tally.unsupported.get(stream) ?? 0) + outcome.unsupported);
+              else if (!outcome.skipped) tally.applied += 1;
+            }
+          }
+          for (const stream of ANCHOR_STREAMS) {
             const openExceptionCount = (await mirror.listOpenSyncExceptions(scope, stream)).length;
             await recordStreamCoverage(mirror, stream, {
               unsupportedCount: tally.unsupported.get(stream) ?? 0, openExceptionCount, observedAt,
@@ -556,7 +692,7 @@ export function createQboProviderSync(options: {
       const objectType = /^[A-Z][A-Za-z0-9_]{0,119}$/.test(input.objectType) ? input.objectType : (() => { throw new AccountingError("accounting_validation", "QBO object type is invalid"); })();
       const objectId = /^[A-Za-z0-9_.:-]{1,160}$/.test(input.objectId) ? input.objectId : (() => { throw new AccountingError("accounting_validation", "QBO object ID is invalid"); })();
       const operation = input.operation.toLowerCase();
-      const supported = (QBO_CDC_ENTITIES as readonly string[]).includes(objectType) || (QBO_NAMED_ENTITIES as readonly string[]).includes(objectType);
+      const supported = (QBO_CDC_ENTITIES as readonly string[]).includes(objectType) || (QBO_NAMED_ENTITIES as readonly string[]).includes(objectType) || isQboReceivableType(objectType);
       if (!supported) return { status: "unsupported", objectType, objectId, version: null };
       if (!options.executor.transaction) throw new AccountingError("accounting_configuration", "QBO object sync requires transaction support");
       if (operation === "deleted" || operation === "delete") {
@@ -572,17 +708,20 @@ export function createQboProviderSync(options: {
         throw error;
       }
       const currency = (QBO_NAMED_ENTITIES as readonly string[]).includes(objectType) || objectType === "Account" ? null : await loadCurrencyContext();
+      if (isQboReceivableType(objectType)) {
+        const entityCurrency = await loadEntityCurrency();
+        const outcome = await options.executor.transaction(executor => applyQboReceivableObject({ mirror: options.mirror.forExecutor(executor), receivables: receivables.forExecutor(executor), scope, entity: objectType, item: entity, observedAt: now().toISOString(), currency, entityCurrency }));
+        const version = typeof entity.SyncToken === "string" || typeof entity.SyncToken === "number" ? String(entity.SyncToken) : null;
+        return { status: outcome.skipped ? "stale" : outcome.unsupported ? "unsupported" : "applied", objectType, objectId, version };
+      }
       const version = typeof entity.SyncToken === "string" || typeof entity.SyncToken === "number" ? String(entity.SyncToken) : null;
       const outcome = await options.executor.transaction(async executor => {
         const mirror = options.mirror.forExecutor(executor);
         const observedAt = now().toISOString();
         if (objectType === "Account") return applyQboAccountObject(mirror, scope, entity, observedAt);
         if ((QBO_NAMED_ENTITIES as readonly string[]).includes(objectType)) {
-          const updated = providerTimestamp(metadataOf(entity)?.LastUpdatedTime);
           if (version === null) throw new AccountingError("accounting_unavailable", `QBO ${objectType} is missing its SyncToken`);
-          if (!(await admitLiveObservation(mirror, scope, objectType, objectId, version, updated))) return { objectId, unsupported: 0, skipped: "stale_after_deletion" as const };
-          await mirror.ingestSourceObject({ scope, objectType, objectId, version, providerUpdatedAt: updated, providerBody: entity, receivedAt: observedAt });
-          return { objectId, unsupported: 0 };
+          return applyQboNamedObject(mirror, scope, objectType, entity, observedAt);
         }
         return applyQboTransactionObject({ mirror, scope, entity: objectType, stream: streamForEntity(objectType)!, item: entity, observedAt, currency });
       });
@@ -627,7 +766,7 @@ export function createQboProviderSync(options: {
   async function fullReplay(reason: NonNullable<QboChangeSyncResult["reason"]>, before: QboSyncCheckpoint | null, maxPages?: number): Promise<QboChangeSyncResult> {
     const startedAt = now().toISOString();
     const replay = await sync.catchUp({ fullReplay: true, maxPages });
-    const fetched = REQUIRED_STREAMS.every(required => replay.streams.some(stream => stream.stream === required && stream.result.status === "complete"));
+    const fetched = ANCHOR_STREAMS.every(required => replay.streams.some(stream => stream.stream === required && stream.result.status === "complete"));
     const deletedCount = replay.streams.reduce((sum, stream) => sum + stream.missingFromReplayCount, 0);
     const unsupportedCount = replay.streams.reduce((sum, stream) => sum + stream.unsupportedCount, 0);
     const appliedCount = replay.streams.reduce((sum, stream) => sum + stream.result.itemsApplied, 0) - unsupportedCount;

@@ -67,6 +67,7 @@
 .projects-list-row-main small,
 .projects-list-row-side small { color: var(--projects-muted); font-size: 12px; }
 .projects-list-row-side { display: grid; flex: 0 0 auto; justify-items: end; gap: 7px; }
+.projects-list-summary { display: grid; gap: 4px; padding: 10px 14px; border-top: 1px solid var(--projects-line); color: var(--projects-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .projects-status { display: inline-flex; align-items: center; min-height: 22px; padding: 2px 8px; border: 1px solid var(--projects-line-strong); border-radius: 999px; color: var(--projects-muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .projects-status.is-positive { border-color: #b8d6c6; background: var(--projects-success-surface); color: var(--projects-success); }
 .projects-status.is-warning { border-color: #e4cf91; background: var(--projects-warning-surface); color: var(--projects-warning); }
@@ -124,6 +125,8 @@
 .projects-table tbody tr:last-child td { border-bottom: 0; }
 .projects-table tbody tr:hover { background: #fcfcfb; }
 .projects-table .projects-number { text-align: right; white-space: nowrap; }
+.projects-table tfoot th, .projects-table tfoot td { border-top: 1px solid var(--projects-line-strong); border-bottom: 0; color: var(--projects-muted); font-size: 11px; font-weight: 650; }
+.projects-table tfoot .projects-number { color: var(--projects-ink); }
 .projects-table-subline { display: block; margin-top: 3px; color: var(--projects-muted); font-size: 12px; font-weight: 400; }
 .projects-source { display: block; color: var(--projects-muted); font-size: 10px; font-weight: 500; }
 .projects-row-actions { min-width: 126px !important; text-align: right !important; white-space: nowrap; }

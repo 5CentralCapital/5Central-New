@@ -430,6 +430,7 @@ function ReviewQueue({ organizationId, legalEntityId, propertyId, api }: { organ
   const current = detail.data && detail.data.id === selectedId ? detail.data : undefined;
   const total = list.data?.totals;
   const impact = impactTotal(items, Boolean(list.data?.nextCursor));
+  const stateCounts = Object.entries(items.reduce<Record<string, number>>((counts, item) => { counts[item.state] = (counts[item.state] ?? 0) + 1; return counts; }, {})).sort(([left], [right]) => left.localeCompare(right)).map(([state, count]) => `${stateLabel(state as ReviewCaseState)} ${count}`).join(" · ");
   return <div className="rc-workspace">
     <header className="rc-page-header">
       <div>
@@ -465,7 +466,7 @@ function ReviewQueue({ organizationId, legalEntityId, propertyId, api }: { organ
           : <div className="rc-groups">{groups.map(group => <div key={group.key} className="rc-group">
             <div className="rc-group-heading"><span className={materialityClass(group.materiality)}>{materialityLabel(group.materiality)}</span><strong>{familyLabel(group.family)}</strong><small>{group.caseCount} case{group.caseCount === 1 ? "" : "s"} · {group.affectedCount} record{group.affectedCount === 1 ? "" : "s"}</small></div>
             {group.items.map(item => <QueueRow key={item.id} item={item} active={item.id === selectedId} onSelect={() => setSelectedId(item.id)} />)}
-          </div>)}{list.data?.nextCursor && <p className="rc-muted rc-more">Showing the first {items.length}. Narrow the filters to see more.</p>}</div>}
+          </div>)}{list.data?.nextCursor && <p className="rc-muted rc-more">Showing the first {items.length}. Narrow the filters to see more.</p>}<div className="rc-list-summary" aria-label="Review case totals"><span>{list.data?.nextCursor ? "Shown" : "Filtered"}: {items.length} case{items.length === 1 ? "" : "s"}</span><span>{list.data?.nextCursor ? "Page totals" : "Filtered totals"}: impact {impact.label}{impact.complete ? "" : " (partial)"}</span>{stateCounts && <span>{stateCounts}</span>}</div></div>}
       </section>
       <div className="rm-record-detail rc-detail-pane">
         {!selectedId ? <div className="rc-state rc-detail-empty"><ClipboardCheck size={28} aria-hidden="true" /><h3>Select a Case</h3><p>Open a case to see its impact, evidence and fix.</p></div>

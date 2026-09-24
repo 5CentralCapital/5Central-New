@@ -4,6 +4,7 @@ import { AlertCircle, RefreshCw } from "lucide-react";
 import { loadRentOpsPaymentReviewQueue, reconcileRentOpsPayment } from "./api";
 import type { TenantPaymentReview, TenantView } from "./types";
 import { usdCurrencyFormatter } from "../../lib/rent-ops-formatters";
+import { ListTotals } from "./workspace/list-totals";
 
 function money(cents: number): string {
   return usdCurrencyFormatter.format(cents / 100);
@@ -93,5 +94,6 @@ export function PaymentReviewPanel({ tenants }: { tenants: TenantView[] }): JSX.
         <td>{row.queueReason === "stale_active" && <button type="button" className="secondary" disabled={reconciling === row.id} onClick={() => void reconcile(row.id)}>{reconciling === row.id ? "Checking…" : "Reconcile provider"}</button>}</td>
       </tr>)}</tbody>
     </table></div>}
+    {loaded && <ListTotals totalCount={rows.length} itemLabel="payment exception" className="ro-list-totals" />}
   </section>;
 }

@@ -117,6 +117,29 @@
   margin:6px 0 0 16px
 }
 
+.ro-list-totals {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  border: 1px solid var(--ro-line);
+  border-top: 0;
+  background: var(--ro-paper);
+  color: var(--ro-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ro-list-totals-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0;
+}
+.ro-list-totals-metrics div { display: inline-flex; gap: 6px; }
+.ro-list-totals-metrics dt { color: var(--ro-muted); }
+.ro-list-totals-metrics dd { margin: 0; color: var(--ro-ink); font-weight: 650; }
+
 .ro-main {
   min-width:0;
   padding:34px 38px 80px

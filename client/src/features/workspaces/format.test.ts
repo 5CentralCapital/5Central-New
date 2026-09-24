@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addIsoDays, compareCentsText, daysBetween, formatCentsText, formatMeasure, formatMonth, opensInline } from "./format";
+import { addIsoDays, centsSortValue, compareCentsText, daysBetween, formatCentsText, formatKnownSubtotal, formatMeasure, formatMonth, opensInline } from "./format";
 
 test("exact cents render without floating point and unknown never becomes zero", () => {
   assert.equal(formatCentsText("0"), "$0.00");
@@ -12,12 +12,16 @@ test("exact cents render without floating point and unknown never becomes zero",
   assert.equal(formatCentsText("12.5"), "Unknown");
   assert.equal(formatMeasure("100", false), "At least $1.00");
   assert.equal(formatMeasure(null, true), "Unknown");
+  assert.equal(formatKnownSubtotal("100", false), "Known subtotal $1.00 + unknown");
+  assert.equal(formatKnownSubtotal(null, false), "Unknown");
 });
 
 test("cents comparison is exact beyond the safe-integer range", () => {
   assert.equal(compareCentsText("9007199254740993", "9007199254740992"), 1);
   assert.equal(compareCentsText(null, "0"), -1);
   assert.equal(compareCentsText("-1", "-1"), 0);
+  assert.equal(centsSortValue("9007199254740993"), "9007199254740993");
+  assert.equal(centsSortValue("12.5"), null);
 });
 
 test("calendar helpers stay on UTC calendar dates", () => {

@@ -38,6 +38,8 @@ import {
   type ReportSetupState,
 } from "./report-setup-model";
 import { ReportSetup } from "./report-setup";
+import { ListTotals, exactCentsMetric } from "./list-totals";
+import { summarizeExactCents, type CentsValue } from "./list-totals-model";
 import "./reports.css";
 import "./reports-clean.css";
 
@@ -56,6 +58,18 @@ export interface ReportsWorkspaceProps {
 }
 
 const primaryReports: ReportKey[] = ["rent-roll", "occupancy", "delinquency"];
+
+function reportCentsValue(value: unknown): CentsValue {
+  return typeof value === "bigint" || typeof value === "number" || typeof value === "string" || value == null ? value : null;
+}
+
+function reportItemLabel(key: ReportKey): string {
+  if (key === "rent-roll" || key === "occupancy" || key === "lease-expiration" || key === "security-deposit") return "unit row";
+  if (key === "delinquency") return "account";
+  if (key === "tenant-ledger") return "transaction";
+  if (key === "applicant-pipeline") return "application";
+  return "report row";
+}
 
 function readPreference<T>(report: ReportKey, key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
@@ -189,6 +203,11 @@ function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTena
   const optionalColumns = view.optionalColumns.filter(column => column.key !== "propertyName");
   const groups = useMemo(() => groupReportRows(selected, view.displayRows, reportSnapshot, sort), [selected, view.displayRows, reportSnapshot, sort]);
   const config = getReportConfig(selected);
+  const reportTotalColumns = useMemo(() => activeColumns.filter(column => column.subtotal), [activeColumns]);
+  const reportTotalMetrics = useMemo(() => reportTotalColumns.map((column) => exactCentsMetric(
+    column.label,
+    summarizeExactCents(view.displayRows.map((row) => reportCentsValue(column.read(row.__source, reportSnapshot)))),
+  )), [reportSnapshot, reportTotalColumns, view.displayRows]);
   const localFilters = reportSetupLocalFilters(selected, submitted);
   const search = reportSetupSearch(selected, submitted);
   const changeColumns = (next: string[]) => { setExtraColumnKeys(next); savePreference(selected, "columns", next); };
@@ -229,7 +248,7 @@ function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTena
           {group.rows.map(row => <tr key={reportRowKey(row)}>{activeColumns.map(column => <td key={column.key} className={column.align === "right" ? "rm-report-number" : undefined}>{renderReportCell({ row, column, onOpenTenant, onOpenUnit, onOpenProperty })}</td>)}</tr>)}
           <tr className="rm-report-property-total">{activeColumns.map((column, index) => <td key={column.key} className={column.align === "right" ? "rm-report-number" : undefined}>{index === 0 ? `Subtotal · ${group.count} ${selected === "delinquency" ? "accounts" : selected === "rent-roll" || selected === "occupancy" ? "units" : "rows"}` : column.subtotal ? formatReportValue(group.amounts[column.key], column.format) : ""}</td>)}</tr>
         </tbody>)}
-      </table>{!groups.length && <div className="rm-empty">{emptyReportMessage(true)}</div>}</div>}
+      </table>{!groups.length && <div className="rm-empty">{emptyReportMessage(true)}</div>}<ListTotals totalCount={loadedRows.length} visibleCount={view.displayRows.length} itemLabel={reportItemLabel(selected)} metrics={reportTotalMetrics} /></div>}
     </div>}
   </section>;
 }

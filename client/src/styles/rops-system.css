@@ -939,3 +939,38 @@
   .rm-workspace.rops-modern :is(.rm-button, [class$="-button"], .rm-status, input, select) { border: 1px solid var(--ds-hairline-strong); }
   .rm-workspace.rops-modern :is(.rm-record-list-item, .projects-list-row, .investors-list-row, .time-list-row):focus-visible { outline: 2px solid var(--ds-focus-color); outline-offset: 2px; }
 }
+
+/* Compact manager lists. Touch controls retain a 44px target. */
+.rm-workspace.rops-modern .rm-main { padding-top: 12px; }
+.rm-workspace.rops-modern .rm-main > .rm-page-heading { margin: 0 0 10px; }
+.rm-workspace.rops-modern :is(.investors-toolbar, .accounting-toolbar, .time-toolbar, .intake-toolbar) { padding: 0 0 12px; align-items: center; }
+.rm-workspace.rops-modern .accounting-selectors { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+.rm-workspace.rops-modern .accounting-selectors label { display: flex; align-items: center; gap: 10px; flex: 0 1 480px; min-width: 0; }
+.rm-workspace.rops-modern .accounting-selectors select { min-width: 0; }
+.rm-workspace.rops-modern .accounting-main.is-wide { padding: 14px 16px 20px; border-radius: 0 0 var(--ds-r-l) var(--ds-r-l); }
+.rm-workspace.rops-modern .accounting-tabs { margin-bottom: 12px; }
+.rm-workspace.rops-modern .accounting-view-tabs { margin: 0 12px; padding-top: 2px; gap: 2px; }
+.rm-workspace.rops-modern .accounting-tab { padding: 8px 10px; white-space: nowrap; }
+.rm-workspace.rops-modern .accounting-connection { margin: 8px; padding: 10px; gap: 6px; }
+.rm-workspace.rops-modern :is(.rm-table, .ro-table, .investors-table, .accounting-table, .rm-ledger-table, .rm-charge-table) tbody :is(th, td) { height: auto; padding-block: 7px; line-height: 1.4; }
+.rm-workspace.rops-modern :is(.rm-table, .ro-table, .investors-table, .accounting-table, .rm-ledger-table, .rm-charge-table) tfoot :is(th, td) { height: auto; padding: 9px 12px; background: var(--ds-surface-2); border-top: 1px solid var(--ds-hairline-strong); color: var(--ds-ink); font-size: 12px; font-weight: 600; line-height: 1.4; }
+.rm-workspace.rops-modern .accounting-statement tbody th { color: var(--ds-ink); }
+@media (pointer: fine) {
+  .rm-workspace.rops-modern .rm-workspace-toolbar { --ds-control: 34px; gap: 8px; margin-bottom: 12px; }
+  .rm-workspace.rops-modern .rm-workspace-toolbar > label { gap: 3px; }
+  .rm-workspace.rops-modern :is(.accounting-selectors, .accounting-dashboard-filters) { --ds-control: 34px; }
+  .rm-workspace.rops-modern :is(.rm-table, .ro-table, .investors-table, .accounting-table, .rm-ledger-table, .rm-charge-table) :is(button.rm-button, .accounting-button, .investors-button, .rm-icon-button) { min-height: 30px; height: 30px; padding-block: 3px; }
+}
+@media (pointer: coarse) {
+  .accounting-dashboard-filters :is(input, select, button) { min-height: 44px; }
+}
+@media (max-width: 640px) {
+  .rm-workspace.rops-modern .accounting-selectors label { flex: 1; }
+  .rm-workspace.rops-modern .accounting-main.is-wide { padding: 12px 8px 18px; }
+  .rm-workspace.rops-modern .accounting-view-tabs { margin-inline: 0; }
+}
+@media (max-width: 640px) {
+  .rm-workspace.rops-modern .accounting-toolbar { flex-direction: row; align-items: flex-start; gap: 10px; }
+  .rm-workspace.rops-modern .accounting-toolbar h1 { font-size: 24px; }
+  .rm-workspace.rops-modern .accounting-toolbar .accounting-actions { justify-content: flex-end; }
+}

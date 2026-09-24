@@ -37,6 +37,14 @@ export function packageRunSummary(run: ReportPackageRun): { readonly complete: b
   return { complete, label: `Package incomplete: ${parts.join(", ") || "completeness not recorded"}` };
 }
 
+/** Keep legacy package runs with no row count visibly unknown instead of treating them as zero. */
+export function packageRunRowCount(items: readonly { readonly rowCount?: number }[]): { readonly knownRows: number; readonly unknownCount: number } {
+  return {
+    knownRows: items.reduce((total, item) => total + (item.rowCount ?? 0), 0),
+    unknownCount: items.filter(item => item.rowCount === undefined).length,
+  };
+}
+
 /** The part of `window.open` the print action needs. */
 export type OpenWindow = (url: string, target: string) => { opener: unknown } | null;
 

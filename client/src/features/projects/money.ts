@@ -49,6 +49,37 @@ export function formatMoney(value: MoneyCents | string | undefined, currency = "
   return formatMoneyExact(value, currency);
 }
 
+/** Add known signed cents without converting through a JavaScript number. */
+export function sumCents(values: readonly (MoneyCents | string | null | undefined)[]): string | null {
+  let total = BigInt(0);
+  let known = false;
+  let unknown = false;
+  for (const value of values) {
+    if (value === null || value === undefined || value === "" || !/^-?(?:0|[1-9][0-9]*)$/.test(value)) { unknown = true; continue; }
+    total += BigInt(value);
+    known = true;
+  }
+  return known && !unknown ? total.toString() : null;
+}
+
+export interface CurrencyCentsTotal {
+  readonly currency: string;
+  readonly cents: string | null;
+  readonly unknownCount: number;
+}
+
+/** Sum exact cents without crossing currency boundaries. */
+export function sumCentsByCurrency(values: readonly { readonly cents: MoneyCents | string | null | undefined; readonly currency: string }[]): CurrencyCentsTotal[] {
+  const totals = new Map<string, { total: bigint; known: number; unknown: number }>();
+  for (const value of values) {
+    const current = totals.get(value.currency) ?? { total: BigInt(0), known: 0, unknown: 0 };
+    if (value.cents === null || value.cents === undefined || value.cents === "" || !/^-?(?:0|[1-9][0-9]*)$/.test(value.cents)) current.unknown += 1;
+    else { current.total += BigInt(value.cents); current.known += 1; }
+    totals.set(value.currency, current);
+  }
+  return Array.from(totals.entries()).sort(([left], [right]) => left.localeCompare(right)).map(([currency, value]) => ({ currency, cents: value.known ? value.total.toString() : null, unknownCount: value.unknown }));
+}
+
 /**
  * Currency display is intentionally assembled from bigint components. Using
  * Intl on the complete amount would require converting cents to a Number and
