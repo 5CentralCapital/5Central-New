@@ -75,7 +75,9 @@ other state: stop.
 Branch `rops-v49-rehearsal-20260923` from the backup, point `RENT_OPS_MIGRATION_DATABASE_URL` at
 it, and run step 4 in full including `grants-verify` and the relocation plan/apply against it
 (the S3 objects are shared and content-addressed, so this is safe). Optionally point the staging
-web at it for a smoke test. Delete it afterwards.
+web at it for a smoke test. For every grants command in this rehearsal, add
+`--environment staging` and use the staging database/role names; the operator defaults to
+production for compatibility when the flag is omitted. Delete it afterwards.
 
 ### 4. Apply 043–049 and runtime grants
 

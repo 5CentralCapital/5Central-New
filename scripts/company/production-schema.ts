@@ -13,7 +13,7 @@
  *   npm run company:production-schema -- inspect         --url-env RENT_OPS_MIGRATION_DATABASE_URL --through 48
  *   npm run company:production-schema -- compare-backup  --url-env RENT_OPS_MIGRATION_DATABASE_URL --backup-url-env RENT_OPS_BACKUP_DATABASE_URL
  *   npm run company:production-schema -- apply           --url-env ... --through 48 --confirm <planSha256> --apply-reviewed
- *   npm run company:production-schema -- grants-plan     --url-env ... --runtime-role R [--importer-role I --auditor-role A] --backup <ref> --review <ref> --authorization <ref>
+ *   npm run company:production-schema -- grants-plan     --url-env ... --environment production --runtime-role R [--importer-role I --auditor-role A] --backup <ref> --review <ref> --authorization <ref>
  *   npm run company:production-schema -- grants-apply    ...same... --confirm <grantSha256> --apply-reviewed
  *   npm run company:production-schema -- grants-verify   ...same...
  *
@@ -40,6 +40,8 @@ import { RENT_OPS_SCHEMA_VERSION } from "../../server/rent-ops/persistence";
 const COMMANDS = ["describe", "inspect", "compare-backup", "apply", "grants-plan", "grants-apply", "grants-verify"] as const;
 type Command = typeof COMMANDS[number];
 const ENV_NAME = /^[A-Z][A-Z0-9_]{0,127}$/;
+const SECURITY_ENVIRONMENTS = ["staging", "production"] as const;
+type SecurityEnvironment = typeof SECURITY_ENVIRONMENTS[number];
 
 export interface ParsedArgs {
   readonly command: Command;
@@ -63,9 +65,13 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       index += 1;
     }
   }
-  const allowed = new Set(["url-env", "backup-url-env", "through", "confirm", "apply-reviewed", "runtime-role", "importer-role", "auditor-role", "backup", "review", "authorization", "database"]);
+  const allowed = new Set(["url-env", "backup-url-env", "through", "confirm", "apply-reviewed", "environment", "runtime-role", "importer-role", "auditor-role", "backup", "review", "authorization", "database"]);
   const unknown = Object.keys(flags).filter(name => !allowed.has(name));
   if (unknown.length) throw new ProductionSchemaError("cli_usage", `Unknown option(s): ${unknown.map(name => `--${name}`).join(" ")}`);
+  const environment = flags.environment;
+  if (environment !== undefined && (environment === true || !(SECURITY_ENVIRONMENTS as readonly string[]).includes(environment))) {
+    throw new ProductionSchemaError("cli_usage", "--environment must be staging or production");
+  }
   return { command: command as Command, flags };
 }
 
@@ -85,6 +91,14 @@ function throughFlag(flags: ParsedArgs["flags"]): number {
   return value;
 }
 
+function environmentFlag(flags: ParsedArgs["flags"]): SecurityEnvironment {
+  const environment = stringFlag(flags, "environment", "production");
+  if (!(SECURITY_ENVIRONMENTS as readonly string[]).includes(environment)) {
+    throw new ProductionSchemaError("cli_usage", "--environment must be staging or production");
+  }
+  return environment as SecurityEnvironment;
+}
+
 function connectionString(envName: string, env: NodeJS.ProcessEnv): string {
   if (!ENV_NAME.test(envName)) throw new ProductionSchemaError("cli_usage", "Connection variable name is invalid");
   const value = env[envName];
@@ -98,6 +112,10 @@ function connectionString(envName: string, env: NodeJS.ProcessEnv): string {
 export interface SessionHandle {
   readonly session: SchemaSession;
   close(): Promise<void>;
+}
+
+export function exitCodeForOutput(output: Readonly<Record<string, unknown>>): number {
+  return output.command === "compare-backup" && output.matches === false ? 1 : 0;
 }
 
 /** One dedicated connection (transactions need a single session). */
@@ -169,6 +187,7 @@ export async function runCommand(parsed: ParsedArgs, env: NodeJS.ProcessEnv = pr
       case "grants-verify": {
         const describe = await describeSession(session);
         const databaseName = stringFlag(flags, "database", String(describe.database ?? ""));
+        const environment = environmentFlag(flags);
         const plan = planRuntimeGrants(
           {
             runtimeRole: stringFlag(flags, "runtime-role"),
@@ -177,17 +196,18 @@ export async function runCommand(parsed: ParsedArgs, env: NodeJS.ProcessEnv = pr
           },
           { backup: stringFlag(flags, "backup"), review: stringFlag(flags, "review"), authorization: stringFlag(flags, "authorization") },
           databaseName,
+          environment,
         );
         if (command === "grants-plan") {
-          return { command, connection: urlEnv, database: databaseName, runtimeOnly: plan.runtimeOnly, managedRoles: plan.managedRoles, grantSha256: plan.grantSha256, statementCount: plan.statements.length, sql: plan.sql };
+          return { command, connection: urlEnv, environment, database: databaseName, runtimeOnly: plan.runtimeOnly, managedRoles: plan.managedRoles, grantSha256: plan.grantSha256, statementCount: plan.statements.length, sql: plan.sql };
         }
         if (command === "grants-verify") {
           const mismatches = await verifyRuntimeGrants(session, plan);
-          return { command, connection: urlEnv, database: databaseName, verified: mismatches.length === 0, mismatchCount: mismatches.length, mismatches: mismatches.slice(0, 50) };
+          return { command, connection: urlEnv, environment, database: databaseName, verified: mismatches.length === 0, mismatchCount: mismatches.length, mismatches: mismatches.slice(0, 50) };
         }
         if (flags["apply-reviewed"] !== true) throw new ProductionSchemaError("cli_usage", "grants-apply requires --apply-reviewed");
         const result = await applyRuntimeGrants(session, plan, stringFlag(flags, "confirm"));
-        return { command, connection: urlEnv, database: databaseName, grantSha256: plan.grantSha256, ...result };
+        return { command, connection: urlEnv, environment, database: databaseName, grantSha256: plan.grantSha256, ...result };
       }
     }
   } finally {
@@ -199,6 +219,7 @@ async function main(): Promise<void> {
   try {
     const output = await runCommand(parseArgs(process.argv.slice(2)));
     console.log(JSON.stringify(output, null, 2));
+    process.exitCode = exitCodeForOutput(output);
   } catch (error) {
     if (error instanceof ProductionSchemaError) {
       console.error(JSON.stringify({ ok: false, code: error.code, message: error.message, details: error.details }, null, 2));

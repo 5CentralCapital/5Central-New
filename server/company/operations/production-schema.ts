@@ -10,6 +10,7 @@ import {
   RENT_OPS_RUNTIME_PRIVATE_TABLES,
   createRentOpsSecurityManifest,
   renderRentOpsSecuritySql,
+  type RentOpsSecurityEnvironment,
   type RentOpsSecurityManifest,
 } from "../../rent-ops/security/deployment-security";
 import { verifyCompanyMigrationRegistry } from "../migrations/registry";
@@ -226,7 +227,12 @@ const ROLE = /^[a-z_][a-z0-9_]{0,62}$/;
 /** Same shape the security manifest accepts (no spaces). */
 const ATTESTATION = /^[A-Za-z0-9_.:/-]{3,160}$/;
 
-export function planRuntimeGrants(roles: GrantRoles, attestation: GrantAttestation, databaseName: string): GrantPlan {
+export function planRuntimeGrants(
+  roles: GrantRoles,
+  attestation: GrantAttestation,
+  databaseName: string,
+  environment: RentOpsSecurityEnvironment = "production",
+): GrantPlan {
   const hasImporter = roles.importerRole !== undefined;
   const hasAuditor = roles.auditorRole !== undefined;
   if (hasImporter !== hasAuditor) throw new ProductionSchemaError("grant_role_invalid", "Pass both --importer-role and --auditor-role, or neither for a runtime-only plan");
@@ -248,7 +254,7 @@ export function planRuntimeGrants(roles: GrantRoles, attestation: GrantAttestati
     throw new ProductionSchemaError("grant_attestation_invalid", "Backup, review and authorization references are required (letters, digits and _ . : / - only)");
   }
   const definitions = rentOpsMigrationDefinitions();
-  const manifest = createRentOpsSecurityManifest("production", {
+  const manifest = createRentOpsSecurityManifest(environment, {
     target: { databaseName, runtimeRole: resolved.runtimeRole, importerRole: resolved.importerRole, auditorRole: resolved.auditorRole },
     gates: {
       backupVerified: true,
@@ -264,7 +270,10 @@ export function planRuntimeGrants(roles: GrantRoles, attestation: GrantAttestati
       auditorRoleIsDistinct: true,
       auditorRoleNoInherit: true,
     },
-    authorization: { productionExplicitlyAuthorized: true, authorizationReference: attestation.authorization },
+    authorization: {
+      productionExplicitlyAuthorized: environment === "production",
+      authorizationReference: attestation.authorization,
+    },
   });
   const rendered = renderRentOpsSecuritySql(manifest, { mode: "apply" });
   if (!rendered.canApply) throw new ProductionSchemaError("grant_manifest_blocked", "The security manifest is not applicable", { reasons: rendered.blockingReasons });
@@ -276,8 +285,14 @@ export function planRuntimeGrants(roles: GrantRoles, attestation: GrantAttestati
   }
   const sql = `${statements.join("\n")}\n`;
   const managedRoles = runtimeOnly ? [resolved.runtimeRole] : [resolved.runtimeRole, resolved.importerRole, resolved.auditorRole];
-  // Hash only the SQL (not the attestation text) so the digest identifies the privileges.
-  return { statements, sql, grantSha256: sha256(statements.filter(s => !s.startsWith("--")).join("\n")), manifest, runtimeOnly, managedRoles };
+  // Bind the reviewed digest to the target environment and identity as well as the SQL.
+  const grantSha256 = sha256(JSON.stringify({
+    environment,
+    databaseName,
+    managedRoles,
+    sql: statements.filter(s => !s.startsWith("--")).join("\n"),
+  }));
+  return { statements, sql, grantSha256, manifest, runtimeOnly, managedRoles };
 }
 
 type Privilege = "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "TRUNCATE" | "REFERENCES" | "TRIGGER";
