@@ -35,11 +35,11 @@ async function main(): Promise<void> {
   // Production cutover starts held until web/database/document readback passes.
   // Changing the gate requires an operator environment update and redeploy.
   if (process.env.WORKER_START_GATE === "hold") {
-    logger.info("worker held for cutover verification");
     const timer = setInterval(() => undefined, 60_000);
     const stop = () => { clearInterval(timer); process.exit(0); };
     process.once("SIGTERM", stop);
     process.once("SIGINT", stop);
+    logger.info("worker held for cutover verification");
     return;
   }
   if (process.env.WORKER_START_GATE && process.env.WORKER_START_GATE !== "open") throw new Error("invalid_worker_start_gate");
