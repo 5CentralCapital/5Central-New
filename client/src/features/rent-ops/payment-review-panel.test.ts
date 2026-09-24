@@ -8,6 +8,6 @@ import { PaymentReviewPanel } from "./payment-review-panel";
 test("manager income view exposes the payment exception queue", () => {
   const html = renderToStaticMarkup(createElement(PaymentReviewPanel, { tenants: [] }));
   assert.match(html, /Payment exceptions/);
-  assert.match(html, /Disputed or provider-held tenant payments/);
+  assert.match(html, /Disputed, provider-held, or stale tenant payments/);
   assert.match(html, /Refresh queue/);
 });

@@ -63,7 +63,7 @@ import { createDemoAdminSnapshot, DEMO_AS_OF_DATE } from "./demo";
 import { REPORT_KEYS, REPORT_LABELS } from "./types";
 import type { ReportColumn } from "./types";
 import { rentOpsAuthClient } from "./auth";
-import { TENANT_PAYMENT_STATUSES, type TenantPaymentStatus } from "@shared/tenant-payment-contracts";
+import { TENANT_PAYMENT_QUEUE_REASONS, TENANT_PAYMENT_STATUSES, type TenantPaymentQueueReason, type TenantPaymentStatus } from "@shared/tenant-payment-contracts";
 
 /**
  * The browser is an adapter, not a second reporting engine. All financial and
@@ -680,12 +680,15 @@ function decodeTenantPaymentReviewAdjustment(value: unknown): TenantPaymentRevie
 /** Decode the staff-only disputed/held payment queue without accepting a
  * provider payload, checkout URL, or unknown field into browser state. */
 export function decodeTenantPaymentReview(value: unknown): TenantPaymentReview {
-  const input = exactRecord(value, "payment review", ["id", "accountId", "personId", "tenancyId", "propertyId", "unitId", "requestId", "amountCents", "currency", "status", "expiresAt", "createdAt", "updatedAt", "postedOn", "checkoutSessionId", "paymentIntentId", "currentLedgerCents", "ledgerRevision", "adjustments"]);
+  const input = exactRecord(value, "payment review", ["id", "accountId", "personId", "tenancyId", "propertyId", "unitId", "requestId", "amountCents", "currency", "status", "expiresAt", "createdAt", "updatedAt", "postedOn", "checkoutSessionId", "paymentIntentId", "currentLedgerCents", "ledgerRevision", "stale", "queueReason", "adjustments"]);
   const amountCents = requiredMoney(input, "amountCents");
   if (amountCents <= 0) invalidResponse();
   const currentLedgerCents = requiredMoney(input, "currentLedgerCents");
   const ledgerRevision = requiredInteger(input, "ledgerRevision");
   if (ledgerRevision < 0) invalidResponse();
+  const status = requiredAllowed(input, "status", TENANT_PAYMENT_STATUSES) as TenantPaymentStatus;
+  const stale = optionalBoolean(input, "stale") ?? ["creating", "pending", "processing"].includes(status);
+  const queueReason = (optionalAllowed(input, "queueReason", TENANT_PAYMENT_QUEUE_REASONS) ?? (status === "disputed" ? "disputed" : status === "review_required" ? "review_required" : "stale_active")) as TenantPaymentQueueReason;
   return {
     id: requiredId(input, "id"),
     accountId: requiredId(input, "accountId"),
@@ -696,7 +699,7 @@ export function decodeTenantPaymentReview(value: unknown): TenantPaymentReview {
     requestId: requiredId(input, "requestId"),
     amountCents,
     currency: requiredAllowed(input, "currency", ["usd"] as const) as "usd",
-    status: requiredAllowed(input, "status", TENANT_PAYMENT_STATUSES) as TenantPaymentStatus,
+    status,
     expiresAt: requiredTimestamp(input, "expiresAt"),
     createdAt: requiredTimestamp(input, "createdAt"),
     updatedAt: requiredTimestamp(input, "updatedAt"),
@@ -705,6 +708,8 @@ export function decodeTenantPaymentReview(value: unknown): TenantPaymentReview {
     paymentIntentId: optionalId(input, "paymentIntentId"),
     currentLedgerCents,
     ledgerRevision,
+    stale,
+    queueReason,
     adjustments: requiredArrayOf(input, "adjustments", decodeTenantPaymentReviewAdjustment),
   };
 }
@@ -1676,6 +1681,14 @@ export async function loadRentOpsPaymentReviewQueue(signal?: AbortSignal): Promi
   assertNoForbiddenResponseFields(payload);
   if (!Array.isArray(payload)) invalidResponse();
   return payload.map(decodeTenantPaymentReview);
+}
+
+export async function reconcileRentOpsPayment(paymentId: string, signal?: AbortSignal): Promise<TenantPaymentReview | null> {
+  if (!/^[A-Za-z0-9:_-]{1,160}$/.test(paymentId)) throw new Error("The payment record is unavailable.");
+  if (DEMO_ALLOWED) return null;
+  const payload = await requestJson(`/api/rent-ops/tenant-payments/${encodeURIComponent(paymentId)}/reconcile`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal });
+  assertNoForbiddenResponseFields(payload);
+  return payload === null ? null : decodeTenantPaymentReview(payload);
 }
 
 export async function loadRentOpsReport(report: ReportKey, filters: ApiFilters = {}, signal?: AbortSignal): Promise<ReportRow[]> {

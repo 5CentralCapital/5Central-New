@@ -4,7 +4,7 @@ import { tenantCheckoutSchema, type TenantPaymentsView, type TenantCheckoutResul
 import type { RentOpsRepository, RentOpsLedgerTransaction } from '../../../shared/rent-ops-contracts';
 import type { RentOpsQueryExecutor } from '../repositories/postgres';
 import { PostgresTenantPaymentStore, type TenantPaymentStore } from './store';
-import { businessDate, eligibleCharges, exactPaymentTenancy, payableAccount, TenantPaymentError, type TenantPayment, type TenantPaymentReviewView, type ProcessorEvent } from './model';
+import { ACTIVE_TENANT_PAYMENT_STATUSES, businessDate, eligibleCharges, exactPaymentTenancy, paymentIsStale, paymentQueueReason, payableAccount, TenantPaymentError, type TenantPayment, type TenantPaymentReviewView, type ProcessorEvent } from './model';
 import { stripeProvider, type PaymentProvider } from './provider';
 export class TenantPaymentService {
   constructor(readonly store:TenantPaymentStore, readonly provider?:PaymentProvider, readonly now=()=>new Date()) {}
@@ -14,8 +14,12 @@ export class TenantPaymentService {
     return {available:!!this.provider,...(!this.provider?{reason:'stripe_not_configured' as const}:{}),accounts:[account],payments:payments.map(({id,tenancyId,amountCents,currency,status,createdAt,postedOn})=>({id,tenancyId,amountCents,currency,status,createdAt,postedOn}))};
   }
   async reviewQueue(): Promise<TenantPaymentReviewView[]> {
-    const payments = await this.store.reviewQueue();
-    return Promise.all(payments.map(async (payment) => ({
+    const now = this.now();
+    const payments = await this.store.reviewQueue(now);
+    return Promise.all(payments.map(async (payment) => this.reviewView(payment, now)));
+  }
+  private async reviewView(payment: TenantPayment, now = this.now()): Promise<TenantPaymentReviewView> {
+    return {
       id: payment.id, accountId: payment.accountId, personId: payment.personId, tenancyId: payment.tenancyId,
       propertyId: payment.propertyId, unitId: payment.unitId, requestId: payment.requestId,
       amountCents: payment.amountCents, currency: payment.currency, status: payment.status,
@@ -24,8 +28,56 @@ export class TenantPaymentService {
       ...(payment.checkoutSessionId ? { checkoutSessionId: payment.checkoutSessionId } : {}),
       ...(payment.paymentIntentId ? { paymentIntentId: payment.paymentIntentId } : {}),
       currentLedgerCents: payment.currentLedgerCents, ledgerRevision: payment.ledgerRevision,
+      stale: paymentIsStale(payment, now), queueReason: paymentQueueReason(payment),
       adjustments: await this.store.adjustments(payment.id),
-    })));
+    };
+  }
+  async reconcile(paymentId: string): Promise<TenantPaymentReviewView | null> {
+    if (!this.provider?.reconcile) throw new TenantPaymentError('payment_provider_reconciliation_unavailable',503);
+    const initial = await this.store.findById(paymentId);
+    if (!initial) throw new TenantPaymentError('payment_not_found',404);
+    const now = this.now();
+    let payment = initial;
+    // Stripe retains idempotency keys for at least 24 hours. A creating row
+    // younger than that can be retried with the identical payment ID and
+    // request parameters. Older rows stay blocked because local expiry never
+    // proves that a provider-side request was unpaid.
+    const createdAt = Date.parse(payment.createdAt);
+    const safeCreateRetry = payment.status === 'creating' && !payment.checkoutSessionId && !payment.paymentIntentId && Number.isFinite(createdAt) && now.getTime() >= createdAt && now.getTime() - createdAt < 24 * 60 * 60 * 1000;
+    if (safeCreateRetry) {
+      try {
+        const session = await this.provider.createCheckout(payment);
+        await this.store.transaction(async store => {
+          await store.lockAccount(payment.personId);
+          const current = await store.findById(payment.id, true);
+          if (!current) return;
+          if (current.status === 'creating' && !current.checkoutSessionId && !current.paymentIntentId) {
+            current.checkoutSessionId = session.id;
+            current.checkoutUrl = session.url;
+            current.paymentIntentId = session.paymentIntentId;
+            current.status = 'pending';
+            current.updatedAt = this.now().toISOString();
+            await store.save(current);
+          }
+        });
+      } catch {
+        // A failed recovery is still unknown. The stale row remains visible
+        // and reserved for staff; no local expiry release is allowed.
+      }
+      payment = await this.store.findById(paymentId) ?? payment;
+    }
+    if ((ACTIVE_TENANT_PAYMENT_STATUSES as readonly string[]).includes(payment.status)) {
+      try {
+        const truth = await this.provider.reconcile(payment);
+        if (truth.event) await this.process(truth.event);
+      } catch {
+        // Provider errors are unknown state. Preserve the reservation and
+        // return the same visible queue row for a later retry.
+      }
+    }
+    const current = await this.store.findById(paymentId);
+    if (!current || (!(ACTIVE_TENANT_PAYMENT_STATUSES as readonly string[]).includes(current.status) && current.status !== 'review_required' && current.status !== 'disputed')) return null;
+    return this.reviewView(current, this.now());
   }
   async checkout(identity:TenantIdentity, raw:unknown):Promise<TenantCheckoutResult> {
     if(!this.provider) throw new TenantPaymentError('stripe_not_configured',503);
@@ -76,7 +128,7 @@ export class TenantPaymentService {
           if(event.state==='success' && !p.postedOn) p.postedOn=businessDate(this.now());
           if(p.postedOn) {
             const adjustments=await store.adjustments(p.id);const refund=adjustments.filter(a=>a.kind==='refund'&&a.active).reduce((s,a)=>s+a.amountCents,0);const disputed=adjustments.some(a=>a.kind==='dispute'&&a.active);const target=disputed?0:Math.max(0,p.amountCents-refund);
-            await this.reconcile(store,p,target);
+            await this.reconcileLedger(store,p,target);
             p.status=disputed?'disputed':refund>=p.amountCents?'refunded':refund>0?'partially_refunded':'posted';
           } else if(event.state==='processing') p.status='processing'; else if(event.state==='failed'||event.state==='cancelled') p.status=event.state;
         }
@@ -85,7 +137,7 @@ export class TenantPaymentService {
       await store.receipt({id:event.id,eventType:event.type,paymentId:p?.id,providerCreatedAt:event.created,outcome,receivedAt:this.now().toISOString()});
     });
   }
-  private async reconcile(store:TenantPaymentStore,p:TenantPayment,target:number) {
+  private async reconcileLedger(store:TenantPaymentStore,p:TenantPayment,target:number) {
     if(target===p.currentLedgerCents) return;
     const date=businessDate(this.now()); const base={propertyId:p.propertyId,unitId:p.unitId,tenancyId:p.tenancyId,personId:p.personId,category:'other' as const,categoryKnowledge:'manual' as const,status:'posted' as const,postedOn:date,payer:'tenant' as const,payerKnowledge:'manual' as const,dueOn:null,dueOnKnowledge:'unknown' as const,chargeDefinitionId:null,chargeDefinitionLinkKnowledge:'unknown' as const,paymentMethod:null,paymentMethodKnowledge:'unknown' as const,propertyLinkKnowledge:'manual' as const,unitLinkKnowledge:'manual' as const,tenancyLinkKnowledge:'manual' as const,personLinkKnowledge:'manual' as const,amountKnowledge:'known' as const,postedOnKnowledge:'manual' as const,statusKnowledge:'manual' as const,descriptionKnowledge:'manual' as const};
     if(p.currentLedgerId) await store.appendLedger({...base,id:`${p.id}_rev_${p.ledgerRevision}`,kind:'reversal',amountCents:p.currentLedgerCents,reversalOfId:p.currentLedgerId,description:'Processor payment adjustment'});

@@ -147,6 +147,8 @@ test("payment review queue is visible to managers and rejects unsafe response fi
     updatedAt: "2026-09-07T12:36:00.000Z",
     currentLedgerCents: 0,
     ledgerRevision: 0,
+    stale: false,
+    queueReason: "review_required",
     adjustments: [],
   };
   const restore = stubJsonResponse([row]);

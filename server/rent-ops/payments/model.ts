@@ -12,6 +12,9 @@ export interface TenantPayment {
   expiresAt: string; createdAt: string; updatedAt: string; postedOn?: string;
   currentLedgerId?: string; currentLedgerCents: number; ledgerRevision: number;
 }
+export const ACTIVE_TENANT_PAYMENT_STATUSES = ["creating", "pending", "processing"] as const;
+export type ActiveTenantPaymentStatus = typeof ACTIVE_TENANT_PAYMENT_STATUSES[number];
+export type TenantPaymentQueueReason = "review_required" | "disputed" | "stale_active";
 export interface PaymentAdjustment { paymentId: string; providerObjectId: string; kind: "refund" | "dispute"; amountCents: number; active: boolean; providerCreatedAt: number; terminal: boolean }
 /** Staff-facing exception record. Provider payloads and checkout URLs remain
  * out of this queue; opaque IDs and adjustments are enough to investigate a
@@ -21,7 +24,7 @@ export interface TenantPaymentReviewView {
   requestId: string; amountCents: number; currency: "usd"; status: TenantPayment["status"];
   expiresAt: string; createdAt: string; updatedAt: string; postedOn?: string;
   checkoutSessionId?: string; paymentIntentId?: string;
-  currentLedgerCents: number; ledgerRevision: number; adjustments: PaymentAdjustment[];
+  currentLedgerCents: number; ledgerRevision: number; stale: boolean; queueReason: TenantPaymentQueueReason; adjustments: PaymentAdjustment[];
 }
 export interface ProcessorEvent {
   id: string; type: string; created: number; live: boolean;
@@ -51,7 +54,17 @@ export function paymentIsReserved(payment: TenantPayment, now: Date): boolean {
   // success is then held for review without allowing a replacement checkout
   // to capture the same balance first.
   void now;
-  return ["creating", "pending", "processing", "review_required"].includes(payment.status);
+  return [...ACTIVE_TENANT_PAYMENT_STATUSES, "review_required"].includes(payment.status as ActiveTenantPaymentStatus | "review_required");
+}
+export function paymentIsStale(payment: TenantPayment, now: Date): boolean {
+  if (!(ACTIVE_TENANT_PAYMENT_STATUSES as readonly string[]).includes(payment.status)) return false;
+  const expiresAt = Date.parse(payment.expiresAt);
+  return Number.isFinite(expiresAt) && expiresAt <= now.getTime();
+}
+export function paymentQueueReason(payment: TenantPayment): TenantPaymentQueueReason {
+  if (payment.status === "disputed") return "disputed";
+  if (payment.status === "review_required") return "review_required";
+  return "stale_active";
 }
 export function payableAccount(snapshot: RentOpsSnapshot, identity: Pick<TenantIdentity, "personId" | "tenancyId">, payments: TenantPayment[], now: Date): TenantPayableAccount {
   exactPaymentTenancy(snapshot, identity);

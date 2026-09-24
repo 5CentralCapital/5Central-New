@@ -325,6 +325,8 @@ export interface TenantPaymentReview {
   paymentIntentId?: string;
   currentLedgerCents: number;
   ledgerRevision: number;
+  stale: boolean;
+  queueReason: "review_required" | "disputed" | "stale_active";
   adjustments: TenantPaymentReviewAdjustment[];
 }
 export interface AdminLedgerTransactionView {
