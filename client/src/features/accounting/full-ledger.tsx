@@ -1,11 +1,40 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { reportRunRequestSchema, type ReportPage } from "@shared/reporting";
+import { reportRunRequestSchema, type ReportColumn, type ReportPage } from "@shared/reporting";
 import { formatReportValue } from "@shared/reporting/format";
 import type { ReportingApi } from "../reporting/types";
 import { reportingApi } from "../reporting/api";
 import { workspaceToday } from "../rent-ops/workspace/workspace-date";
 import { ErrorState } from "./views";
+
+const LEDGER_INTERNAL_COLUMNS = new Set(["providerPath", "rowKind", "providerGroup", "providerTotalCents"]);
+const LEDGER_COLUMN_ORDER = ["date", "transactionDate", "transactionType", "num", "name", "memoDescription", "account", "split", "debitCents", "creditCents", "amountCents", "balanceCents"];
+
+/**
+ * Native GL columns are stored on the run and returned unchanged with every
+ * page. A blank provider Money cell can still leave a normalized base key
+ * (for example `amount`) alongside the populated `amountCents` key. Prefer
+ * the typed money key when its snapshot metadata exists so later pages cannot
+ * reintroduce a duplicate or lose the actual financial column. Its heading is
+ * still the provider field name (Amount, Balance, Debit, or Credit), while
+ * the underlying key remains the exact cents value.
+ */
+export function selectGeneralLedgerColumns(columns: readonly ReportColumn[]): ReportColumn[] {
+  const visible = columns.filter(column => !LEDGER_INTERNAL_COLUMNS.has(column.id) && !column.id.endsWith("Id"));
+  const moneyIds = new Set(visible.filter(column => column.type === "money").map(column => column.id));
+  const duplicateBaseIds = new Set(visible
+    .filter(column => column.type !== "money" && moneyIds.has(`${column.id}Cents`))
+    .map(column => column.id));
+  return visible
+    .filter(column => !duplicateBaseIds.has(column.id))
+    .map(column => {
+      if (column.type !== "money" || !column.id.endsWith("Cents")) return column;
+      const base = visible.find(candidate => candidate.id === column.id.slice(0, -"Cents".length));
+      const label = base?.label ?? column.label.replace(/\s+Cents$/, "");
+      return label === column.label ? column : { ...column, label };
+    })
+    .sort((a, b) => (LEDGER_COLUMN_ORDER.indexOf(a.id) === -1 ? LEDGER_COLUMN_ORDER.length : LEDGER_COLUMN_ORDER.indexOf(a.id)) - (LEDGER_COLUMN_ORDER.indexOf(b.id) === -1 ? LEDGER_COLUMN_ORDER.length : LEDGER_COLUMN_ORDER.indexOf(b.id)));
+}
 
 /** Complete QuickBooks GL read through the same authorized report service as Reporting. */
 export function FullGeneralLedger({ organizationId, legalEntityId, currency, ready = true, api = reportingApi }: { organizationId: string; legalEntityId: string; currency: string; ready?: boolean; api?: ReportingApi }) {
@@ -16,9 +45,7 @@ export function FullGeneralLedger({ organizationId, legalEntityId, currency, rea
   const cursor = cursors.at(-1);
   const pageQuery = useQuery({ queryKey: ["accounting", "general-ledger-page", organizationId, report.data?.run.id, cursor], queryFn: () => api.page(organizationId, report.data!.run.id, cursor), enabled: ready && Boolean(cursor && report.data), staleTime: 300_000, retry: false });
   const page: ReportPage | undefined = cursor ? pageQuery.data : report.data?.page;
-  const columns = page?.columns.filter(column => !["providerPath", "rowKind", "providerGroup", "providerTotalCents"].includes(column.id) && !column.id.endsWith("Id")) ?? [];
-  const order = ["date", "transactionDate", "transactionType", "num", "name", "memoDescription", "account", "split", "debitCents", "creditCents", "amountCents", "balanceCents"];
-  columns.sort((a, b) => (order.includes(a.id) ? order.indexOf(a.id) : 6) - (order.includes(b.id) ? order.indexOf(b.id) : 6));
+  const columns = page ? selectGeneralLedgerColumns(page.columns) : [];
   const loading = report.isLoading || Boolean(cursor && pageQuery.isLoading);
   const error = report.error ?? (cursor ? pageQuery.error : null);
   const financial = (type: string) => type === "money" || type === "integer" || type === "percent";
