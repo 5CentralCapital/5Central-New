@@ -134,6 +134,7 @@
 .reporting-table-footer .reporting-totals { gap: 6px 22px; margin: 0; padding: 0; border: 0; background: transparent; }
 .reporting-table-footer .reporting-totals dd { font-size: 14px; }
 .reporting-table-footer-missing { color: var(--rp-warning); }
+.reporting-table-empty { display: block; padding: 26px 8px; color: var(--rp-muted); text-align: center; }
 .reporting-workspace .is-numeric { text-align: right; }
 .reporting-more { justify-self: start; }
 
