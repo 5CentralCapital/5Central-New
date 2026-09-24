@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { commandEnvelopeSchema, organizationIdSchema, type CompanyScope } from "../../shared/company";
-import { TIME_COMMAND_KINDS, timeCommandPayloadSchemas, timeConnectionScopeSchema, timeConnectionSetupScopeSchema, timeListQuerySchema, type TimeConnectionSetupScope } from "../../shared/time";
+import { commandEnvelopeSchema, isoDateSchema, organizationIdSchema, type CompanyScope } from "../../shared/company";
+import { TIME_COMMAND_KINDS, timeCommandPayloadSchemas, timeConnectionScopeSchema, timeConnectionSetupScopeSchema, timeListQuerySchema, timeSyncOptionsWithDefault, type TimeConnectionSetupScope } from "../../shared/time";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { attestTransport, authorizeCompanyRead, loadAuthenticatedPrincipal } from "../company/authorization";
 import type { TimeServices } from "./service";
@@ -43,8 +43,13 @@ export function registerTimeMcpTools(register: TimeToolRegistrar, options: TimeM
     async ({ organizationId, legalEntityId }) => read({ organizationId, legalEntityId }, async principal => ({ items: await services.read.listPayrollLinks(principal, { organizationId, legalEntityId }) })));
   register("get_time_coverage", "Read provider synchronization coverage, modified-since watermarks, pagination status and deletion-stream completeness.", { scope: timeConnectionScopeSchema }, false,
     async ({ scope }) => read(scope, principal => services.read.readCoverage(principal, scope)));
-  register("sync_time_records", "Mirror provider users, jobcodes, timesheets and deletion tombstones into 5Central Ops. This does not write back to QuickBooks Time or post payroll.", { scope: timeConnectionScopeSchema, maxPages: z.number().int().min(1).max(10_000).optional() }, true,
-    async ({ scope, maxPages }) => read(scope, () => services.sync.sync(scope, { maxPages })));
+  register("sync_time_records", "Mirror provider users, jobcodes, timesheets and deletion tombstones into 5Central Ops. This does not write back to QuickBooks Time or post payroll.", {
+    scope: timeConnectionScopeSchema,
+    maxPages: z.number().int().min(1).max(10_000).optional(),
+    startDate: isoDateSchema.optional(),
+    endDate: isoDateSchema.optional(),
+  }, true,
+    async ({ scope, maxPages, startDate, endDate }) => read({ organizationId: scope.organizationId, legalEntityId: scope.legalEntityId }, () => services.sync.sync(scope, timeSyncOptionsWithDefault({ maxPages, startDate, endDate }))));
   register("begin_quickbooks_time_connect", "Return a scoped browser setup link for the separate QuickBooks Time connection. OAuth state stays bound to the initiating browser session and cannot be completed through MCP.", { scope: timeConnectionSetupScopeSchema }, true,
     async ({ scope }) => {
       const principal = await principalFor(scope.organizationId);

@@ -302,6 +302,33 @@ export const timeSyncOptionsSchema = z.object({
 });
 export type TimeSyncOptions = z.infer<typeof timeSyncOptionsSchema>;
 
+/** Keep browser and MCP initial reads finite and aligned to the operating day. */
+export const TIME_DEFAULT_SYNC_LOOKBACK_DAYS = 30;
+
+export function defaultTimeSyncWindow(now = new Date()): Pick<TimeSyncOptions, "startDate" | "endDate"> {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, part.value]));
+  const endDate = isoDateSchema.parse(`${values.year}-${values.month}-${values.day}`);
+  const start = new Date(`${endDate}T00:00:00.000Z`);
+  start.setUTCDate(start.getUTCDate() - TIME_DEFAULT_SYNC_LOOKBACK_DAYS);
+  return { startDate: isoDateSchema.parse(start.toISOString().slice(0, 10)), endDate };
+}
+
+/** Supply an initial range for adapters that expose a one-click sync action. */
+export function timeSyncOptionsWithDefault(options: TimeSyncOptions = {}, now = new Date()): TimeSyncOptions {
+  return timeSyncOptionsSchema.parse({
+    ...defaultTimeSyncWindow(now),
+    ...(options.maxPages === undefined ? {} : { maxPages: options.maxPages }),
+    ...(options.startDate === undefined ? {} : { startDate: options.startDate }),
+    ...(options.endDate === undefined ? {} : { endDate: options.endDate }),
+  });
+}
+
 export interface TimeSyncPort {
   sync(scope: TimeConnectionScope, options?: TimeSyncOptions): Promise<{ status: "complete" | "partial"; streams: readonly TimeCoverage[]; conflicts: readonly string[] }>;
 }

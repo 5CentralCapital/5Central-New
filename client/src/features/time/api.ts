@@ -13,6 +13,7 @@ import {
   timeConnectionSummarySchema,
   timeUserSchema,
   timeEnvironmentSchema,
+  timeSyncOptionsWithDefault,
   type TimeConnectionScope,
   type TimeEnvironment,
   type TimeEntry,
@@ -189,7 +190,17 @@ function createApi(): TimeApi {
       return Array.isArray(value) ? value.map(item => timeJobcodeMappingSchema.parse(item)) : [];
     },
     async sync(organizationId, scope, signal) {
-      const value = await requestJson(`${basePath(organizationId)}/sync`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(scope), signal });
+      const value = await requestJson(`${basePath(organizationId)}/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          legalEntityId: scope.legalEntityId,
+          environment: scope.environment,
+          providerCompanyId: scope.providerCompanyId,
+          ...timeSyncOptionsWithDefault(),
+        }),
+        signal,
+      });
       const root = isRecord(value) ? value : {};
       return { status: root.status === "partial" ? "partial" : "complete", streams: parseCoverage(root.streams), conflicts: Array.isArray(root.conflicts) ? root.conflicts.filter((item): item is string => typeof item === "string") : [] };
     },

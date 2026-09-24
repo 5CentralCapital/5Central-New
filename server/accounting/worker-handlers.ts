@@ -93,7 +93,10 @@ export function createAccountingJobHandlers(options: AccountingJobHandlerOptions
           // CompanyInfo is the one-time read capability proof. Re-reading it
           // on every queued job made an otherwise healthy connection fail when
           // Intuit re-rendered the record or temporarily returned it missing;
-          // the durable capability evidence already gates syncChanges.
+          // the durable capability evidence gates access to syncChanges. This
+          // gate is stable capability evidence, not a claim that mutable
+          // CompanyInfo display metadata is current; an explicit reconnect or
+          // metadata probe must refresh that snapshot without blocking sync.
           const capabilityGate = qbo.capabilityGate;
           const readCapabilityEnabled = capabilityGate?.isEnabled
             ? await capabilityGate.isEnabled(scope, "accounting.read")
