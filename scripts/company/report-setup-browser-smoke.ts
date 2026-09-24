@@ -328,7 +328,7 @@ async function runDesktop(page: Page, browserName: string): Promise<Record<strin
   // to `/reports/:report`, so those existing dashboard paths remain harmless.
   await page.goto(`${origin}/ops?section=dashboard&scope=all&asOf=${expected.asOfDate}`);
   await expect(page.getByRole('navigation', { name: 'Main navigation' })).toBeVisible();
-  await expect(page.locator('.rops-dash-row--attention > section')).toHaveCount(2);
+  await expect(page.locator('.ops-widget[data-widget="attention"], .ops-widget[data-widget="balances"]')).toHaveCount(2);
   await expect(page.locator('.rmd-trend-panel')).toHaveCount(1);
   await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
   const baselineAfterDashboard = reportRequests.length;
