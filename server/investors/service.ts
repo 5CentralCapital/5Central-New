@@ -544,10 +544,17 @@ export class InvestorReadService {
          FROM currencies c
        ORDER BY c.account_id, c.currency`, [scope.organizationId, accountIds, scope.legalEntityId ?? null, scope.propertyId ?? null]);
     const obligationRows = await this.executor.query<Record<string, unknown>>(
-      `SELECT o.id, o.account_id, o.instrument_id, o.contract_id, o.contract_version_id, o.organization_id, o.legal_entity_id, o.period_month, o.due_on, o.currency, o.principal_cents, o.interest_cents, o.return_of_capital_cents, o.distribution_cents, o.fee_cents, o.balloon_cents, o.unknown_expected_cents, o.unknown_component_kinds, o.total_expected_cents, o.known_minimum_cents, o.amount_complete, o.record_revision, o.updated_at
-         FROM company_investor_obligations o
-        WHERE o.organization_id=$1 AND o.account_id=ANY($2::uuid[]) AND ($3::uuid IS NULL OR o.legal_entity_id=$3)
-          AND ($4::varchar IS NULL OR EXISTS (SELECT 1 FROM company_investor_instrument_properties ip WHERE ip.organization_id=o.organization_id AND ip.instrument_id=o.instrument_id AND ip.property_id=$4))
+      `WITH eligible_obligations AS (
+         SELECT o.*, ROW_NUMBER() OVER (PARTITION BY o.contract_id,o.period_month ORDER BY v.effective_from DESC,o.id DESC) AS version_rank
+           FROM company_investor_obligations o
+           JOIN company_investor_contract_versions v ON v.organization_id=o.organization_id AND v.contract_id=o.contract_id AND v.id=o.contract_version_id
+          WHERE o.organization_id=$1 AND o.account_id=ANY($2::uuid[]) AND ($3::uuid IS NULL OR o.legal_entity_id=$3)
+            AND ($4::varchar IS NULL OR EXISTS (SELECT 1 FROM company_investor_instrument_properties ip WHERE ip.organization_id=o.organization_id AND ip.instrument_id=o.instrument_id AND ip.property_id=$4))
+            AND o.due_on >= v.effective_from AND (v.effective_to IS NULL OR o.due_on < v.effective_to)
+       )
+       SELECT o.id, o.account_id, o.instrument_id, o.contract_id, o.contract_version_id, o.organization_id, o.legal_entity_id, o.period_month, o.due_on, o.currency, o.principal_cents, o.interest_cents, o.return_of_capital_cents, o.distribution_cents, o.fee_cents, o.balloon_cents, o.unknown_expected_cents, o.unknown_component_kinds, o.total_expected_cents, o.known_minimum_cents, o.amount_complete, o.record_revision, o.updated_at
+         FROM eligible_obligations o
+        WHERE o.version_rank=1
         ORDER BY o.account_id, o.currency, o.due_on, o.id`, [scope.organizationId, accountIds, scope.legalEntityId ?? null, scope.propertyId ?? null]);
     const obligationsByAccountCurrency = new Map<string, InvestorObligation[]>();
     for (const row of obligationRows.rows) {
@@ -637,7 +644,23 @@ export class InvestorReadService {
   }
 
   private async loadObligations(scope: CompanyScope, accountId?: string, instrumentIds?: readonly string[], fromMonth?: string, throughMonth?: string, limit = 10000, cursor?: MonthlyPaymentCursor | null): Promise<InvestorObligation[]> {
-    const result = await this.executor.query<Record<string, unknown>>(`SELECT o.id, o.account_id, o.instrument_id, o.contract_id, o.contract_version_id, o.organization_id, o.legal_entity_id, o.period_month, o.due_on, o.currency, o.principal_cents, o.interest_cents, o.return_of_capital_cents, o.distribution_cents, o.fee_cents, o.balloon_cents, o.unknown_expected_cents, o.unknown_component_kinds, o.total_expected_cents, o.known_minimum_cents, o.amount_complete, o.record_revision, o.updated_at FROM company_investor_obligations o WHERE o.organization_id=$1 AND ($2::uuid IS NULL OR o.account_id=$2) AND ($3::uuid[] IS NULL OR o.instrument_id=ANY($3::uuid[])) AND ($4::date IS NULL OR o.period_month >= $4) AND ($5::date IS NULL OR o.period_month <= $5) AND ($6::uuid IS NULL OR o.legal_entity_id=$6) AND ($7::varchar IS NULL OR EXISTS (SELECT 1 FROM company_investor_instrument_properties ip WHERE ip.organization_id=o.organization_id AND ip.instrument_id=o.instrument_id AND ip.property_id=$7)) AND ($8::date IS NULL OR (o.period_month,o.due_on,o.id) > ($8::date,$9::date,$10::uuid)) ORDER BY o.period_month, o.due_on, o.id LIMIT $11`, [scope.organizationId, accountId ?? null, instrumentIds ?? null, fromMonth ?? null, throughMonth ?? null, scope.legalEntityId ?? null, scope.propertyId ?? null, cursor?.periodMonth ?? null, cursor?.dueOn ?? null, cursor?.id ?? null, limit]);
+    const result = await this.executor.query<Record<string, unknown>>(
+      `WITH eligible_obligations AS (
+         SELECT o.*, ROW_NUMBER() OVER (PARTITION BY o.contract_id,o.period_month ORDER BY v.effective_from DESC,o.id DESC) AS version_rank
+           FROM company_investor_obligations o
+           JOIN company_investor_contract_versions v ON v.organization_id=o.organization_id AND v.contract_id=o.contract_id AND v.id=o.contract_version_id
+          WHERE o.organization_id=$1 AND ($2::uuid IS NULL OR o.account_id=$2) AND ($3::uuid[] IS NULL OR o.instrument_id=ANY($3::uuid[]))
+            AND ($4::date IS NULL OR o.period_month >= $4) AND ($5::date IS NULL OR o.period_month <= $5)
+            AND ($6::uuid IS NULL OR o.legal_entity_id=$6)
+            AND ($7::varchar IS NULL OR EXISTS (SELECT 1 FROM company_investor_instrument_properties ip WHERE ip.organization_id=o.organization_id AND ip.instrument_id=o.instrument_id AND ip.property_id=$7))
+            AND o.due_on >= v.effective_from AND (v.effective_to IS NULL OR o.due_on < v.effective_to)
+       )
+       SELECT o.id, o.account_id, o.instrument_id, o.contract_id, o.contract_version_id, o.organization_id, o.legal_entity_id, o.period_month, o.due_on, o.currency, o.principal_cents, o.interest_cents, o.return_of_capital_cents, o.distribution_cents, o.fee_cents, o.balloon_cents, o.unknown_expected_cents, o.unknown_component_kinds, o.total_expected_cents, o.known_minimum_cents, o.amount_complete, o.record_revision, o.updated_at
+         FROM eligible_obligations o
+        WHERE o.version_rank=1 AND ($8::date IS NULL OR (o.period_month,o.due_on,o.id) > ($8::date,$9::date,$10::uuid))
+        ORDER BY o.period_month, o.due_on, o.id LIMIT $11`,
+      [scope.organizationId, accountId ?? null, instrumentIds ?? null, fromMonth ?? null, throughMonth ?? null, scope.legalEntityId ?? null, scope.propertyId ?? null, cursor?.periodMonth ?? null, cursor?.dueOn ?? null, cursor?.id ?? null, limit],
+    );
     const payments = await this.loadPayments(scope, { accountId, instrumentIds, obligationIds: result.rows.map(row => dbString(row, "id")) });
     const grouped = new Map<string, InvestorPayment[]>(); for (const payment of payments) if (payment.obligationId) grouped.set(String(payment.obligationId), [...(grouped.get(String(payment.obligationId)) ?? []), payment]);
     return result.rows.map(row => mappedObligation(row, grouped.get(dbString(row, "id")) ?? []));

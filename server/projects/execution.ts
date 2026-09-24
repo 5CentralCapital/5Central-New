@@ -161,7 +161,10 @@ export async function resolveProjectFinanceActuals(
   costContext: FinancialProviderCostContextPort,
   input: { organizationId: string; projectId: string; asOf?: IsoDate },
 ): Promise<ProjectFinanceActualReadResult> {
-  const bindingRows = await bindings.listProjectBindings(input);
+  // Released bindings are historical audit records, not unresolved current
+  // cost links. Keeping them in the coverage calculation leaves every later
+  // project read partial after an operator intentionally releases a line.
+  const bindingRows = (await bindings.listProjectBindings(input)).filter((binding) => binding.bindingStatus !== "released");
   const scopes = new Map<string, FinancialSourceScope>();
   for (const binding of bindingRows) scopes.set(financialSourceScopeKey(sourceScope(binding.source)), sourceScope(binding.source));
   const coverages = await Promise.all(Array.from(scopes.values()).map((scope) => source.readCoverage(scope)));

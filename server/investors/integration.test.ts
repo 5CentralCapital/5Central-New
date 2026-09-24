@@ -5,6 +5,7 @@ import { companyScopeSchema } from "../../shared/company";
 import { attestTransport, loadAuthenticatedPrincipal } from "../company/authorization";
 import { createCompanyServices } from "../company/services";
 import { createSyntheticCompanyDatabase, createSyntheticRuntimeExecutor, SYNTHETIC_COMPANY } from "../company/testing/synthetic-database";
+import { createForecastSourceReader } from "../forecasting/sources";
 
 test("investor payment allocation and reversal preserve append-only history", async () => {
   const fixture = await createSyntheticCompanyDatabase();
@@ -60,6 +61,9 @@ test("investor payment allocation and reversal preserve append-only history", as
     assert.equal(correction.allocatedAmounts.principalCents, "-500");
     assert.equal(after.obligations[0]?.totalRecordedCents, "0");
     assert.equal(after.obligations[0]?.status, "expected");
+    const forecast = await createForecastSourceReader(database.executor).read({ organizationId, asOf: "2026-12-31", debtIds: [], today: "2026-12-31" });
+    const forecastInvestorObligations = forecast.items.find((item) => item.key === "investor_obligations");
+    assert.equal(forecastInvestorObligations?.amountCents, "11000", "a reversed payment must restore the full unpaid obligation");
     await assert.rejects(() => execute("investor.payment.reverse", envelope({ paymentId, reason: "Duplicate correction", paymentOn: "2026-02-03" })), /already has a reversal|already reversed/);
     // A reversed payment is void; it cannot later consume a QBO line or gain settlement evidence.
     const qboSource = { provider: "qbo", currency: "USD", amountCents: "500", reference: { provider: "qbo", organizationId, legalEntityId: entityId, environment: "sandbox", realmId: "123", objectType: "Check", objectId: "check-1", lineId: "1", version: "v1" } };
@@ -81,6 +85,32 @@ test("investor payment allocation and reversal preserve append-only history", as
     assert.equal(editedReplacement.amounts.principalCents, "700");
     assert.equal(editedReplacement.allocatedAmounts.principalCents, "700");
     assert.equal(editedDetail.obligations[0]?.totalRecordedCents, "700");
+
+    const amendment = await execute("investor.contract.version.create", envelope({
+      contractId,
+      status: "active",
+      effectiveFrom: "2026-08-01",
+      signedOn: "2026-08-01",
+      terms: {
+        schedule: "monthly", paymentDay: 1, monthEndRule: "calendar_day_or_month_end", annualRate: null, preferredReturnRate: null, returnMultiple: null,
+        fixedPaymentCents: "1000", principalPaymentCents: null, interestPaymentCents: null, returnOfCapitalCents: null, distributionCents: null, balloonCents: null,
+        originalPrincipalCents: "100000", maturityTotalCents: null, fixedProfitCents: null, maturityPayoffCents: null, thirdPartyInstallmentCents: null,
+        investorSpreadCents: null, unknownComponentKinds: [], interestOnly: false, dayCount: "actual_365",
+      },
+      sourceDocumentIds: [documentId],
+    }));
+    const amendmentVersionId = String(amendment.affectedRecordIds[1]);
+    await execute("investor.obligation.generate", envelope({ instrumentId, contractId, fromMonth: "2026-08-01", throughMonth: "2027-01-01" }));
+    const versionDates = await database.db.query<{ id: string; effective_to: string | Date | null }>(
+      `SELECT id,effective_to FROM company_investor_contract_versions WHERE organization_id=$1 AND contract_id=$2 ORDER BY version_no`,
+      [organizationId, contractId],
+    );
+    const dateTextNullable = (value: string | Date | null): string | null => value === null ? null : dateText(value);
+    assert.equal(dateTextNullable(versionDates.rows.find((row) => row.id !== amendmentVersionId)?.effective_to ?? null), "2026-08-01");
+    const amendedDetail = await services.investors.get(access.principal, { scope, accountId });
+    const amendedPeriods = amendedDetail.obligations.map((item) => String(item.periodMonth));
+    assert.equal(amendedPeriods.length, 12, "an amendment should replace the overlapping schedule, not add a second obligation");
+    assert.equal(new Set(amendedPeriods).size, amendedPeriods.length);
   } finally {
     await database.close();
   }

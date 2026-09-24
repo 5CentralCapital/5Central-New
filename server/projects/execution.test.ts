@@ -297,6 +297,36 @@ test("finance bindings use reserved allocation and downgrade stale or ineligible
   const held = await resolveProjectFinanceActuals(source, bindings, unknownAccountContext, { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
   assert.equal(held.coverage, "partial");
   assert.equal(held.actuals.length, 0);
+
+  const releasedAndVerified: ProjectFinanceBindingSource = {
+    async listProjectBindings() {
+      return [
+        projectFinanceBindingSchema.parse({
+          id: SOURCE_ID,
+          projectId: PROJECT_ID,
+          commitmentId: COMMITMENT_ID,
+          scopeItemId: null,
+          source: SOURCE,
+          allocatedCents: "2500",
+          eligible: true,
+          bindingStatus: "verified",
+        }),
+        projectFinanceBindingSchema.parse({
+          id: "52000000-0000-4000-8000-000000000011",
+          projectId: PROJECT_ID,
+          commitmentId: COMMITMENT_ID,
+          scopeItemId: null,
+          source: SOURCE,
+          allocatedCents: "1000",
+          eligible: false,
+          bindingStatus: "released",
+        }),
+      ];
+    },
+  };
+  const afterRelease = await resolveProjectFinanceActuals(source, releasedAndVerified, costContextForLine(line), { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
+  assert.equal(afterRelease.coverage, "complete");
+  assert.deepEqual(afterRelease.actuals.map((actual) => actual.amountCents), ["2500"], "released history must not keep current project coverage partial or duplicate an actual");
 });
 
 test("execution create commands persist through one idempotent company command path", async () => {
@@ -420,6 +450,22 @@ test("execution create commands persist through one idempotent company command p
     assert.equal(executionSnapshot.drawRequests[0]?.grossEligibleCents, "55000");
     assert.equal(executionSnapshot.drawRequests[0]?.retainageCents, "5500");
     assert.equal(executionSnapshot.drawRequests[0]?.netRequestedCents, "49500");
+
+    await update("project.draw_request.update", { drawRequestId: drawId, status: "paid" });
+    await assert.rejects(
+      () => executeProjectExecutionCommand(fixture.executor, "project.draw_request.update", envelope({ drawRequestId: drawId, notes: "Late edit" }, projectRevision), options),
+      /Paid draw requests are immutable/,
+    );
+    await assert.rejects(
+      () => executeProjectExecutionCommand(fixture.executor, "project.draw_request.item.update", envelope({ drawRequestItemId: String(item.affectedRecordIds[0]), requestedCents: "54000" }, projectRevision), options),
+      /Paid draw requests are immutable/,
+    );
+    await assert.rejects(
+      () => executeProjectExecutionCommand(fixture.executor, "project.draw_request.item.create", envelope({ drawRequestId: drawId, sourceType: "commitment", sourceId: commitmentId, eligibleCents: "65000", requestedCents: "1000", retainageEligible: true, retainageCents: "100" }, projectRevision), options),
+      /Paid draw requests are immutable/,
+    );
+    const paidSnapshot = await createProjectExecutionStore(fixture.executor).read({ scope, projectId: PROJECT_ID, asOf: "2026-09-21" });
+    assert.equal(paidSnapshot.drawRequests[0]?.status, "paid");
     const executionDetail = await new ProjectExecutionReadService(createProjectExecutionStore(fixture.executor), unavailableProjectFinanceReadPort).get(principal, { scope, projectId: PROJECT_ID, asOf: "2026-09-21" });
     assert.equal(projectExecutionDetailSchema.parse(executionDetail).projectId, PROJECT_ID);
     const counts = await fixture.db.query<{ assignments: string; milestones: string; inspections: string; punch: string; bids: string; commitments: string; changes: string; purchaseOrders: string; draws: string; scopes: string; tasks: string }>(

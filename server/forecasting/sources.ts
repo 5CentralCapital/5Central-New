@@ -113,18 +113,27 @@ async function investorObligations(executor: RentOpsQueryExecutor, organizationI
   const instruments = await executor.query<{ count: string }>(`SELECT count(*)::text AS count FROM company_investor_instruments WHERE organization_id = $1 AND archived_at IS NULL`, [organizationId]);
   if (Number(instruments.rows[0]?.count ?? 0) === 0) return unknownItem("investor_obligations", "No investor records");
   const result = await executor.query<{ unpaid: string | null; incomplete: string; count: string }>(
-    `WITH paid AS (
+    `WITH eligible_obligations AS (
+       SELECT o.*, ROW_NUMBER() OVER (PARTITION BY o.contract_id,o.period_month ORDER BY v.effective_from DESC,o.id DESC) AS version_rank
+         FROM company_investor_obligations o
+         JOIN company_investor_contract_versions v ON v.organization_id=o.organization_id AND v.contract_id=o.contract_id AND v.id=o.contract_version_id
+        WHERE o.organization_id = $1 AND o.due_on >= v.effective_from AND (v.effective_to IS NULL OR o.due_on < v.effective_to)
+     ), paid AS (
        SELECT a.obligation_id, sum(a.allocated_cents) AS allocated
          FROM company_investor_payment_allocations a
          JOIN company_investor_payments p ON p.organization_id = a.organization_id AND p.id = a.payment_id
         WHERE a.organization_id = $1 AND p.status <> 'reversed' AND p.payment_on <= $2::date
+          AND NOT EXISTS (
+            SELECT 1 FROM company_investor_payments reversal
+             WHERE reversal.organization_id=p.organization_id AND reversal.reverses_payment_id=p.id AND reversal.payment_on <= $2::date
+          )
         GROUP BY a.obligation_id)
-     SELECT sum(GREATEST(o.total_expected_cents - COALESCE(paid.allocated, 0), 0)) FILTER (WHERE o.amount_complete)::text AS unpaid,
+       SELECT sum(GREATEST(o.total_expected_cents - COALESCE(paid.allocated, 0), 0)) FILTER (WHERE o.amount_complete)::text AS unpaid,
             count(*) FILTER (WHERE NOT o.amount_complete)::text AS incomplete,
             count(*)::text AS count
-       FROM company_investor_obligations o
+       FROM eligible_obligations o
        LEFT JOIN paid ON paid.obligation_id = o.id
-      WHERE o.organization_id = $1 AND o.due_on <= $2::date`,
+      WHERE o.version_rank=1 AND o.due_on <= $2::date`,
     [organizationId, asOf],
   );
   const row = result.rows[0];
