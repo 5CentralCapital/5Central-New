@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { COLUMNS, SIZES, compact, emptyCells, firstFit, fromPreset, nearestSize, overlaps, parseSavedLayout, phoneLayout, resolve, settle, sizeOf, type LayoutItem } from "./dashboard-grid-model";
+import { renderToStaticMarkup } from "react-dom/server";
+import type { BankingSnapshot } from "../../../../../shared/rent-ops-banking";
+import { COLUMNS, SIZES, compact, emptyCells, firstFit, fromPreset, nearestSize, overlaps, parseSavedLayout, phoneLayout, resolve, settle, showCompanyPanelsInAttention, sizeOf, type LayoutItem } from "./dashboard-grid-model";
 import { DASHBOARD_PRESETS } from "./dashboard-presets";
-import { WIDGETS, widgetById } from "./dashboard-widgets";
+import { bankingNetCents, bankingStateNotice, WIDGETS, widgetById, type DashboardData, type WidgetMetrics } from "./dashboard-widgets";
 
 const item = (id: string, x: number, y: number, w: number, h: number): LayoutItem => ({ id, x, y, w, h });
 
@@ -72,4 +74,41 @@ test("saved layouts are validated and repaired", () => {
   assert.ok(saved);
   assert.deepEqual(saved!.layout.map(entry => entry.id), ["kpi-due", "cash"]);
   assert.deepEqual(overlaps(saved!.layout), []);
+});
+
+test("banking totals stay unknown until the complete read is ready", () => {
+  const partial = {
+    state: "partial", fetchedAt: "2026-09-24T12:00:00.000Z", fromDate: "2026-08-26", throughDate: "2026-09-24",
+    connections: [{ id: "connection", name: "Operating", balancesState: "ready", transactionsLastSuccessfulUpdate: null, transactionsLastFailedUpdate: null, accounts: [], transactions: [{ id: "deposit", accountId: "account", date: "2026-09-20", description: "Deposit", amountCents: -5000, currency: "USD", pending: false }] }],
+  } as BankingSnapshot;
+  assert.equal(bankingNetCents(partial), undefined);
+  assert.equal(bankingStateNotice(partial.state, "Money in and out")?.title, "Money in and out incomplete");
+  assert.equal(bankingNetCents({ ...partial, state: "ready" }), 5000);
+});
+
+test("banking widgets expose incomplete reads instead of exact or zero totals", () => {
+  const partial = {
+    state: "partial", fetchedAt: "2026-09-24T12:00:00.000Z", fromDate: "2026-08-26", throughDate: "2026-09-24", connections: [],
+  } as BankingSnapshot;
+  const metrics: WidgetMetrics = { size: "M", w: 4, h: 2, bodyWidth: 100, bodyHeight: 100 };
+  const data = { banking: { data: partial, loading: false, refetch: () => {} } } as DashboardData;
+  const moneyMarkup = renderToStaticMarkup(widgetById("money-in-out")!.render({ data, metrics }));
+  const activityMarkup = renderToStaticMarkup(widgetById("bank-activity")!.render({ data, metrics }));
+  assert.match(moneyMarkup, /Money in and out incomplete/);
+  assert.doesNotMatch(moneyMarkup, /Net|\$0/);
+  assert.match(activityMarkup, /Bank activity incomplete/);
+  assert.doesNotMatch(activityMarkup, /No transactions/);
+});
+
+test("cash widget exposes a failed request with a retry action", () => {
+  const metrics: WidgetMetrics = { size: "M", w: 4, h: 2, bodyWidth: 100, bodyHeight: 100 };
+  const data = { cash: { error: "request failed", fetching: false, refetch: () => {} } } as DashboardData;
+  const markup = renderToStaticMarkup(widgetById("cash")!.render({ data, metrics }));
+  assert.match(markup, /Cash balance unavailable/);
+  assert.match(markup, />Retry</);
+});
+
+test("company panels stay in attention only without a company widget", () => {
+  assert.equal(showCompanyPanelsInAttention([item("attention", 0, 0, 8, 3)]), true);
+  assert.equal(showCompanyPanelsInAttention([item("attention", 0, 0, 8, 3), item("company", 0, 3, 4, 3)]), false);
 });

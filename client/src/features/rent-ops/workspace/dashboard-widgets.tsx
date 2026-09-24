@@ -2,7 +2,7 @@
 // take and renders itself for the size it was given; the grid never scrolls a
 // widget that was built to fit. Data comes from one object the dashboard
 // assembles from the requests it already makes (rm-dashboard.tsx).
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import React, { useEffect, useMemo, useState, type ReactNode } from "react";
 import { RefreshCw } from "lucide-react";
 import type { BankingSnapshot } from "../../../../../shared/rent-ops-banking";
 import type { DashboardCash, DashboardTrends } from "../../../../../shared/rent-ops-dashboard";
@@ -23,6 +23,22 @@ export type Column = { key: string; label: string; number?: boolean; render?: (r
 export const numeric = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 export const money = (value: unknown) => numeric(value) ? formatReportValue(value, "currency") : "—";
 export const text = (value: unknown) => value === null || value === undefined || value === "" ? "—" : String(value);
+
+/** A bank read must be complete before its aggregate can be presented as exact. */
+export function bankingNetCents(snapshot: BankingSnapshot): number | undefined {
+  if (snapshot.state !== "ready") return undefined;
+  const transactions = snapshot.connections.flatMap(connection => connection.transactions).filter(transaction => numeric(transaction.amountCents) && !transaction.pending);
+  const inflow = transactions.filter(transaction => (transaction.amountCents as number) < 0).reduce((sum, transaction) => sum - (transaction.amountCents as number), 0);
+  const outflow = transactions.filter(transaction => (transaction.amountCents as number) > 0).reduce((sum, transaction) => sum + (transaction.amountCents as number), 0);
+  return inflow - outflow;
+}
+
+export function bankingStateNotice(state: BankingSnapshot["state"], label = "Bank data") {
+  if (state === "partial") return { title: `${label} incomplete`, detail: "Some accounts or transactions could not be read. Totals are withheld until the bank read is complete." };
+  if (state === "unavailable") return { title: `${label} unavailable`, detail: "The bank did not provide a complete read. No amount is known until it succeeds." };
+  return undefined;
+}
+
 const dollars = (cents: number) => formatWholeDollars(cents);
 const pct = (share: number) => `${Math.round(share * 100)}%`;
 
@@ -54,7 +70,7 @@ export interface DashboardData {
   applicationsError?: boolean;
   onOpenApplication: (id: string) => void;
   trends: { data?: DashboardTrends; loading: boolean; error?: string; retry: () => void; metric: TrendMetric; setMetric: (metric: TrendMetric) => void };
-  cash: { data?: DashboardCash; fetching: boolean; refetch: () => void };
+  cash: { data?: DashboardCash; error?: string; fetching: boolean; refetch: () => void };
   banking: { data?: BankingSnapshot; error?: string; loading: boolean; refetch: () => void };
   onReport: (report: ReportKey) => void;
   onOpenTenant?: (personId: string, tab?: TenantTab) => void;
@@ -311,9 +327,10 @@ export const WIDGETS: readonly WidgetDefinition[] = [
   {
     id: "cash", category: "cash", name: "Cash", description: "Operating account balance from the bank, with this month's rent receipts", sizes: ["M", "MT", "S"], defaultSize: "M",
     render: ({ data, metrics }) => {
+      if (data.cash.error) return <Empty title="Cash balance unavailable"><span>The cash balance could not be loaded.</span><button type="button" className="rops-link" disabled={data.cash.fetching} onClick={data.cash.refetch}>Retry</button></Empty>;
       const cash = data.cash.data;
       if (!cash) return <Skeleton width="8em" />;
-      if (cash.state !== "ready") return <Empty title={cash.state === "unconfigured" ? "No bank connected" : "Bank balance unavailable"}>{cash.state === "unconfigured" ? "Connect the operating account under Accounting › Banking." : "The bank did not answer. Try again in a few minutes."}</Empty>;
+      if (cash.state !== "ready") return <Empty title={cash.state === "unconfigured" ? "No bank connected" : "Bank balance unavailable"}><span>{cash.state === "unconfigured" ? "Connect the operating account under Accounting › Banking." : "The bank did not answer. Try again in a few minutes."}</span><button type="button" className="rops-link" disabled={data.cash.fetching} onClick={data.cash.refetch}>Retry</button></Empty>;
       const receipts = total(data.receipts, "amountCents");
       return <>
         <Tile label={`Available · ${text(cash.name)} ··${cash.mask}`} big={metrics.size === "S"} value={money(cash.availableCents)} detail={metrics.size === "S" ? `${money(cash.currentCents)} current` : undefined} />
@@ -329,6 +346,8 @@ export const WIDGETS: readonly WidgetDefinition[] = [
       if (banking.error) return <Empty title="Bank activity unavailable"><button type="button" className="rops-link" onClick={banking.refetch}>Retry</button></Empty>;
       if (!banking.data) return <Skeleton width="10em" />;
       if (banking.data.state === "unconfigured") return <Empty title="No bank connected">Connect an account under Accounting › Banking.</Empty>;
+      const notice = bankingStateNotice(banking.data.state, "Bank activity");
+      if (notice) return <Empty title={notice.title}><span>{notice.detail}</span><button type="button" className="rops-link" disabled={banking.loading} onClick={banking.refetch}>Retry</button></Empty>;
       const rows: Row[] = banking.data.connections.flatMap(connection => connection.transactions.map(transaction => ({ id: transaction.id, date: transaction.date, description: transaction.description, amountCents: transaction.amountCents, pending: transaction.pending, account: connection.accounts.find(account => account.id === transaction.accountId)?.mask ?? "" }))).sort((a, b) => String(b.date).localeCompare(String(a.date)));
       return <Table rows={rows} limit={fitRows(metrics, TABLE_ROW, 30)} empty="No transactions in the window." columns={[{ key: "description", label: "Description", render: row => <span className="rops-cell-stack"><span>{text(row.description)}</span>{row.pending ? <small>Pending</small> : null}</span> }, { key: "date", label: "Date", render: row => shortDate(data, row.date) }, { key: "amountCents", label: "Amount", number: true, render: row => <span data-tone={numeric(row.amountCents) && row.amountCents < 0 ? "positive" : undefined}>{numeric(row.amountCents) ? `${row.amountCents < 0 ? "+" : "−"}${formatReportValue(Math.abs(row.amountCents), "currency")}` : "—"}</span> }]} footer={<span>{banking.data.fromDate} → {banking.data.throughDate}</span>} />;
     },
@@ -336,14 +355,18 @@ export const WIDGETS: readonly WidgetDefinition[] = [
   {
     id: "money-in-out", category: "cash", name: "Money in and out", description: "Deposits and payments on the connected accounts over the banking window", sizes: ["S", "M", "MT"], defaultSize: "M",
     render: ({ data, metrics }) => {
+      if (data.banking.error) return <Empty title="Money in and out unavailable"><span>The bank activity read could not be loaded.</span><button type="button" className="rops-link" disabled={data.banking.loading} onClick={data.banking.refetch}>Retry</button></Empty>;
       const banking = data.banking.data;
-      if (!banking) return data.banking.error ? <Empty title="Bank activity unavailable" /> : <Skeleton width="10em" />;
+      if (!banking) return <Skeleton width="10em" />;
       if (banking.state === "unconfigured") return <Empty title="No bank connected" />;
+      const notice = bankingStateNotice(banking.state, "Money in and out");
+      if (notice) return <Empty title={notice.title}><span>{notice.detail}</span><button type="button" className="rops-link" disabled={data.banking.loading} onClick={data.banking.refetch}>Retry</button></Empty>;
       const transactions = banking.connections.flatMap(connection => connection.transactions).filter(transaction => numeric(transaction.amountCents) && !transaction.pending);
       const inflow = transactions.filter(t => (t.amountCents as number) < 0).reduce((a, t) => a - (t.amountCents as number), 0);
       const outflow = transactions.filter(t => (t.amountCents as number) > 0).reduce((a, t) => a + (t.amountCents as number), 0);
+      const net = bankingNetCents(banking)!;
       const biggest = [...transactions].sort((a, b) => Math.abs(b.amountCents as number) - Math.abs(a.amountCents as number)).slice(0, fitRows(metrics, LIST_ROW, TILE, 1));
-      return <><Tile label={`Net · ${banking.fromDate} → ${banking.throughDate}`} big={metrics.size === "S"} value={`${inflow - outflow < 0 ? "−" : "+"}${dollars(Math.abs(inflow - outflow))}`} detail={`${dollars(inflow)} in · ${dollars(outflow)} out`} tone={inflow - outflow < 0 ? "attention" : "normal"} />
+      return <><Tile label={`Net · ${banking.fromDate} → ${banking.throughDate}`} big={metrics.size === "S"} value={`${net < 0 ? "−" : "+"}${dollars(Math.abs(net))}`} detail={`${dollars(inflow)} in · ${dollars(outflow)} out`} tone={net < 0 ? "attention" : "normal"} />
         {metrics.size !== "S" && <Rows items={biggest.map(t => ({ key: t.id, label: t.description, detail: shortDate(data, t.date), value: `${(t.amountCents as number) < 0 ? "+" : "−"}${dollars(Math.abs(t.amountCents as number))}`, tone: (t.amountCents as number) < 0 ? "positive" as const : undefined }))} />}</>;
     },
   },

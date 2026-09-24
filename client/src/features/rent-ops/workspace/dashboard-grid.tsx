@@ -6,7 +6,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import * as Dropdown from "@radix-ui/react-dropdown-menu";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { ArrowUpRight, Check, ChevronRight, LayoutGrid, Minus, X } from "lucide-react";
-import { COLUMNS, GAP, PHONE_COLUMNS, SIZES, SIZE_NAMES, compact, firstFit, fromPreset, gridHeight, nearestSize, parseSavedLayout, phoneLayout, pixelRect, resolve, sizeOf, type LayoutItem, type PresetEntry, type WidgetSize } from "./dashboard-grid-model";
+import { COLUMNS, GAP, PHONE_COLUMNS, SIZES, SIZE_NAMES, compact, firstFit, fromPreset, gridHeight, nearestSize, parseSavedLayout, phoneLayout, pixelRect, resolve, showCompanyPanelsInAttention, sizeOf, type LayoutItem, type PresetEntry, type WidgetSize } from "./dashboard-grid-model";
 import { WIDGETS, WIDGET_CATEGORIES, widgetById, type DashboardData, type WidgetCategory, type WidgetDefinition, type WidgetMetrics } from "./dashboard-widgets";
 import { DASHBOARD_PRESETS } from "./dashboard-presets";
 import "./dashboard-grid.css";
@@ -129,6 +129,7 @@ export function DashboardGrid({ data }: { data: DashboardData }) {
 
   useEffect(() => { if (!editing) setQuery(""); }, [editing]);
   const placed = new Set(state.layout.map(item => item.id));
+  const companyWidgetPlaced = !showCompanyPanelsInAttention(state.layout);
   const library = WIDGETS.filter(widget => query.trim() ? `${widget.name} ${widget.description}`.toLowerCase().includes(query.trim().toLowerCase()) : widget.category === category);
   const height = gridHeight(view, rowHeight);
 
@@ -158,7 +159,7 @@ export function DashboardGrid({ data }: { data: DashboardData }) {
             if (!widget) return null;
             const rect = drag?.id === item.id ? drag.rect : pixelRect(item, cell, rowHeight);
             const metrics: WidgetMetrics = { size: sizeOf(item.w, item.h), w: item.w, h: item.h, bodyWidth: rect.width - PAD_X, bodyHeight: rect.height - PAD_Y - (widget.bare ? 0 : HEADER) };
-            return <Widget key={item.id} widget={widget} data={data} metrics={metrics} rect={rect} editing={editing && !phone} dragging={drag?.id === item.id}
+            return <Widget key={item.id} widget={widget} data={data} companyWidgetPlaced={companyWidgetPlaced} metrics={metrics} rect={rect} editing={editing && !phone} dragging={drag?.id === item.id}
               onMove={event => startPointer(event, item.id, "move")} onResize={event => startPointer(event, item.id, "resize")} onRemove={() => removeWidget(item.id)} onSize={size => setSize(item.id, size)} onCustomize={() => setEditing(true)} />;
           })}
           {drag && <div className="ops-grid-ghost" style={pixelStyle(pixelRect(drag.ghost, cell, rowHeight))}><span>{SIZE_NAMES[sizeOf(drag.ghost.w, drag.ghost.h)]}</span></div>}
@@ -203,12 +204,14 @@ export function DashboardGrid({ data }: { data: DashboardData }) {
 
 const pixelStyle = (rect: { left: number; top: number; width: number; height: number }): CSSProperties => ({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });
 
-function Widget({ widget, data, metrics, rect, editing, dragging, onMove, onResize, onRemove, onSize, onCustomize }: {
+function Widget({ widget, data, companyWidgetPlaced, metrics, rect, editing, dragging, onMove, onResize, onRemove, onSize, onCustomize }: {
   widget: WidgetDefinition; data: DashboardData; metrics: WidgetMetrics; rect: { left: number; top: number; width: number; height: number };
+  companyWidgetPlaced: boolean;
   editing: boolean; dragging: boolean; onMove: (event: ReactPointerEvent<HTMLElement>) => void; onResize: (event: ReactPointerEvent<HTMLElement>) => void; onRemove: () => void; onSize: (size: WidgetSize) => void; onCustomize: () => void;
 }) {
-  const open = widget.open?.(data);
-  const body: ReactNode = widget.render({ data, metrics });
+  const widgetData = widget.id === "attention" && companyWidgetPlaced ? { ...data, companyPanels: undefined } : data;
+  const open = widget.open?.(widgetData);
+  const body: ReactNode = widget.render({ data: widgetData, metrics });
   return <ContextMenu.Root modal={false}>
     <ContextMenu.Trigger asChild>
       <section className={`ops-widget rmd-panel${widget.bare ? " is-bare" : ""}${widget.scrolls ? " is-scrolling" : ""}${dragging ? " is-dragging" : ""}`} data-widget={widget.id} data-size={metrics.size} aria-label={widget.name} style={pixelStyle(rect)}>

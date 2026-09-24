@@ -16,6 +16,11 @@ export const GAP = 12;
 export interface LayoutItem { id: string; x: number; y: number; w: number; h: number }
 export interface PresetEntry { id: string; x: number; y: number; size: WidgetSize }
 
+/** Company rows have a dedicated widget when that widget is placed. */
+export function showCompanyPanelsInAttention(layout: readonly LayoutItem[]): boolean {
+  return !layout.some(item => item.id === "company");
+}
+
 export function sizeOf(w: number, h: number): WidgetSize {
   return (Object.keys(SIZES) as WidgetSize[]).find(key => SIZES[key][0] === w && SIZES[key][1] === h) ?? "L";
 }

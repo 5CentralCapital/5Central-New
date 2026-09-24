@@ -91,7 +91,7 @@ export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenU
     rentRoll, dueRows, knownDue, unverifiedDue, dueSplit, receipts, vacancy, vacancySorted, propertyRows, movements,
     applications, applicationsError: !!applicationQuery.error, onOpenApplication: setApplicationId,
     trends: { data: trends.data, loading: trends.isFetching, error: trends.error?.message, retry: () => void trends.refetch(), metric, setMetric },
-    cash: { data: cash.data, fetching: cash.isFetching, refetch: () => void cash.refetch() },
+    cash: { data: cash.data, error: cash.error?.message, fetching: cash.isFetching, refetch: () => void cash.refetch() },
     banking: { data: banking.data, error: banking.error?.message, loading: banking.isFetching, refetch: () => void banking.refetch() },
     onReport, onOpenTenant, onOpenUnit, onOpenProperty, onManageMoves,
   };
