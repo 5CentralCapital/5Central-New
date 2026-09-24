@@ -23,6 +23,7 @@ import { createMagicLinkWebhookNotifierFromEnv } from "./rent-ops/services/notif
 import { pool } from "./db";
 import { createRentOpsPublicRateLimiter } from "./rent-ops/security/deployment-runtime";
 import { createConfiguredRentOpsWebObjectStores } from "./rent-ops/storage/production-store";
+import type { StartupStage } from "./request-errors";
 
 // Helper: coerce ISO date strings to Date objects for Drizzle timestamp fields
 function coerceDates(body: Record<string, any>): Record<string, any> {
@@ -41,8 +42,11 @@ export async function registerRoutes(app: Express, options: {
   onTenantPaymentService?: (service: TenantPaymentService) => void;
   /** lane-b-accounting: raw-body webhooks registered before express.json() reach the runtime database here. */
   onRuntimeExecutor?: (executor: import("./rent-ops/repositories/postgres").RentOpsQueryExecutor) => void;
+  /** Fixed bootstrap labels keep startup diagnostics useful without exposing provider errors. */
+  onStartupStage?: (stage: StartupStage) => void;
 } = {}): Promise<Server> {
   // Auth routes
+  options.onStartupStage?.("route_registration");
   registerAuthRoutes(app);
 
   // 5Central Ops uses its own bounded repository and fails clearly when
@@ -50,38 +54,51 @@ export async function registerRoutes(app: Express, options: {
   // or falls back to demo data in this production application.
   // Development/test may explicitly share the host pool. Production always
   // resolves RENT_OPS_RUNTIME_DATABASE_URL through the dedicated factory.
+  options.onStartupStage?.("runtime_database");
   const rentOpsRuntimeDatabase = await createRentOpsRuntimeDatabase({
     environment: process.env.NODE_ENV,
     sharedExecutor: process.env.NODE_ENV === "production" ? undefined : createRentOpsPoolExecutor(pool),
   });
   const rentOpsRepository = new PostgresRentOpsRepository(rentOpsRuntimeDatabase);
+  options.onStartupStage?.("runtime_schema");
   if (process.env.NODE_ENV === "production") await rentOpsRepository.assertReady();
+  options.onStartupStage?.("object_store");
   const rentOpsObjectStores = process.env.NODE_ENV === "production"
     ? await createConfiguredRentOpsWebObjectStores()
     : undefined;
+  options.onStartupStage?.("public_limiter");
+  const publicRateLimiter = createRentOpsPublicRateLimiter({ executor: rentOpsRuntimeDatabase });
+  options.onStartupStage?.("resume_notifier");
+  const resumeTokenNotifier = createMagicLinkWebhookNotifierFromEnv();
+  options.onStartupStage?.("route_registration");
   registerRentOpsRoutes(app, {
     repository: rentOpsRepository,
     requireAdmin: requireRentOpsAdmin,
-    publicRateLimiter: createRentOpsPublicRateLimiter({ executor: rentOpsRuntimeDatabase }),
-    resumeTokenNotifier: createMagicLinkWebhookNotifierFromEnv(),
+    publicRateLimiter,
+    resumeTokenNotifier,
     ...(rentOpsObjectStores ? {
       documentStorage: rentOpsObjectStores.documentStorage,
       documentUploadStorage: rentOpsObjectStores.documentUploadStorage,
     } : {}),
   });
 
+  options.onStartupStage?.("tenant_portal");
   const tenantPortal = registerTenantPortalRoutes(app, { repository: rentOpsRepository, database: rentOpsRuntimeDatabase, requireAdmin: requireRentOpsAdmin, ...(rentOpsObjectStores ? { documentStorage: rentOpsObjectStores.documentStorage } : {}) });
+  options.onStartupStage?.("company_services");
   const recurringBillingService = new RecurringBillingService(new PostgresBillingStore(rentOpsRuntimeDatabase));
   options.onRuntimeExecutor?.(rentOpsRuntimeDatabase); // lane-b-accounting
   const company = createCompanyServices(rentOpsRuntimeDatabase, rentOpsObjectStores ? { documentStorage: rentOpsObjectStores.documentUploadStorage } : {}); // lane-c-review: documents, MRA packets, review evidence
   registerCompanyRoutes(app, { ...company, requireAdmin: requireRentOpsAdmin, hasAdminSession: hasRentOpsAdminSession });
+  options.onStartupStage?.("mcp_registration");
   await registerRentOpsMcpRoutes(app, rentOpsRepository, process.env, { accountAdmin: tenantPortal.accountAdmin, billing: recurringBillingService, company });
   const tenantPaymentService = createTenantPaymentService({ executor: rentOpsRuntimeDatabase, rentOpsRepository, env: process.env });
   options.onTenantPaymentService?.(tenantPaymentService);
+  options.onStartupStage?.("tenant_routes");
   registerTenantPaymentRoutes(app, { service: tenantPaymentService, requireTenant: tenantPortal.requireTenant, getTenantIdentity: tenantPortal.getTenantIdentity });
   registerRentOpsBillingRoutes(app, { service: recurringBillingService, requireAdmin: requireRentOpsAdmin });
 
   // Admin dashboard API routes
+  options.onStartupStage?.("legacy_routes");
   registerDashboardRoutes(app);
 
   // New feature module routes (payroll, rehab, lease-up, PM, documents, distributions, deals, CRM)

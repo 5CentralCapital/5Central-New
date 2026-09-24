@@ -39,3 +39,9 @@ test("startup failures identify missing runtime schema and privilege probes with
   assert.doesNotMatch(missing, /rent_ops_properties|rent_ops_units/);
   assert.equal(startupFailureSummary(new RentOpsRuntimePrivilegeError()), "RentOpsRuntimePrivilegeError:rent_ops_runtime_privilege_invalid");
 });
+
+test("startup failure stages are fixed labels and preserve redaction", () => {
+  assert.equal(startupFailureSummary(new Error("Gmail tenant delivery configuration is incomplete"), "resume_notifier"), "stage=resume_notifier;Error");
+  assert.equal(startupFailureSummary(new Error("public_database_limiter_configuration_required"), "public_limiter"), "stage=public_limiter;Error:public_database_limiter_configuration_required");
+  assert.equal(startupFailureSummary(new Error("postgres://owner:Secret@db.example/app"), "runtime_database"), "stage=runtime_database;Error");
+});
