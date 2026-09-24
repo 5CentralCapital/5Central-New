@@ -996,3 +996,9 @@
   .rm-workspace.rops-modern .rops-unit-bars > li { grid-template-columns: minmax(0, 1fr) 56px; }
   .rm-workspace.rops-modern .rops-unit-track { display: none; }
 }
+
+/* Data grid toolbar: the column picker is a compact control, not a boxed strip (design audit P4) */
+.rm-workspace.rops-modern .rm-data-grid > .rm-grid-toolbar { justify-content: flex-end; min-height: 0; padding: 6px 10px 0; border: 0; background: transparent; }
+.rm-workspace.rops-modern .rm-grid-columns > summary.rm-button { background: transparent; color: var(--ds-muted); list-style: none; }
+.rm-workspace.rops-modern .rm-grid-columns > summary.rm-button:hover { background: var(--ds-fill); color: var(--ds-ink); }
+.rm-workspace.rops-modern .rm-grid-columns > summary::-webkit-details-marker { display: none; }

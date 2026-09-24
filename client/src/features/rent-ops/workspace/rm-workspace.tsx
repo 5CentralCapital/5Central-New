@@ -17,7 +17,6 @@ import { ChevronLeft, Plus, RefreshCw, Search, X } from 'lucide-react';
 import { loadOperationalScheduleRegister, loadRentOpsPreviewContext, loadRentOpsWorkspaceBootstrap } from '../api';
 import { rentOpsAuthClient } from '../auth';
 import { RentOpsAdminLogin, RentOpsAuthLoading, useRentOpsAuth } from '../auth-ui';
-import { RmBanking } from './rm-banking';
 import type { QuickAction, FormValues } from '../form-payload';
 import { REPORT_KEYS, REPORT_LABELS, type AdminSnapshot, type ReportKey, type TenantTab, type ViewFilters } from '../types';
 import { EntityLink, RecordLink, EntityNavigationContext } from './entity-link';

@@ -120,7 +120,7 @@ export function Collections({ identity, snapshot, filters, businessDate, readOnl
           </Dropdown.Content>
         </Dropdown.Portal>
       </Dropdown.Root>
-      <button type="button" className="rm-button rm-button-primary" aria-expanded={panel === "receipt"} onClick={() => { togglePanel("receipt"); onRequestPaymentContext(); }}><Plus size={14} aria-hidden="true" />Record payment</button>
+      <button type="button" className={`rm-button${panel === "receipt" ? "" : " rm-button-primary"}`} aria-expanded={panel === "receipt"} onClick={() => { togglePanel("receipt"); onRequestPaymentContext(); }}><Plus size={14} aria-hidden="true" />Record payment</button>
     </div>}
     {panel === "receipt" && <ManagerIncomeActions snapshot={snapshot} businessDate={businessDate} propertyId={filters.propertyId} onSaved={onSaved} onRequestPaymentContext={onRequestPaymentContext} paymentContextLoading={paymentContextLoading} />}
     {panel === "billing" && (selected.length > 1

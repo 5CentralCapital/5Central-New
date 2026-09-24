@@ -65,9 +65,14 @@ test('dark tokens reach manager feature modules and the small-screen navigation 
   const dark = darkAppearanceRule(managerCss);
   assert.ok(dark, 'expected a dark manager media block');
   const darkCss = dark.toString();
-  for (const selector of ['.projects-workspace', '.intake-workspace', '.company-documents-workspace', '.rm-tenant-record', '.rmd-dashboard', '.reporting-workspace']) {
-    assert.ok(darkCss.includes(selector), `dark feature overrides include ${selector}`);
+  // Feature stylesheets read the shared --ds-* tokens directly (design audit F1), so the
+  // dark token block reaches them without per-module remaps.
+  for (const file of ['../../projects/projects.css', '../../intake/intake.css', '../../company-documents/company-documents.css', './tenant-record.css', './dashboard-modern.css', '../../accounting/accounting.css', '../../investors/investors.css', '../../time/time.css']) {
+    const css = readFileSync(new URL(file, import.meta.url), 'utf8');
+    assert.match(css, /var\(--ds-/, `${file} reads the shared tokens`);
+    assert.doesNotMatch(css, /var\(--(?:projects|intake|docs|investors|accounting|time|rmd)-(?:ink|muted|faint|line|surface|soft|charcoal|gold|cream|positive|warning|error|success)\b/, `${file} no longer reads a retired module token`);
   }
+  assert.match(darkCss, /--ds-surface:/);
   assert.match(darkCss, /\.rops-primary-navigation\.is-open[\s\S]*?background:\s*var\(--ds-surface\)/);
   assert.match(darkCss, /\.rops-wordmark\s*>\s*span[\s\S]*?color:\s*var\(--ds-gold-ink\)/);
 });
