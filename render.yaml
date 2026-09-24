@@ -10,7 +10,7 @@ projects:
             region: virginia
             branch: production
             numInstances: 1
-            buildCommand: npm ci && npm run build
+            buildCommand: npm ci --include=dev && npm run build
             startCommand: npm start
             autoDeployTrigger: checksPass
             healthCheckPath: /readyz
@@ -57,7 +57,7 @@ projects:
             region: virginia
             branch: production
             numInstances: 1
-            buildCommand: npm ci && npm run build
+            buildCommand: npm ci --include=dev && npm run build
             startCommand: npm run worker
             autoDeployTrigger: checksPass
             envVars:

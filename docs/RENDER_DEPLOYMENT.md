@@ -16,7 +16,7 @@ with one instance apiece. Both run in Render's Virginia region because the
 verified active Rent Ops runtime and host databases are in Neon us-east-1
 (Virginia). S3 remains in us-west-2 (Oregon), so object requests cross regions.
 The service health check is `/readyz`; the web and worker each build with
-`npm ci && npm run build`. Render's `checksPass` auto-deploy trigger waits for
+`npm ci --include=dev && npm run build`. Render's `checksPass` auto-deploy trigger waits for
 the configured GitHub checks.
 
 Render lists Starter at $7 per service per month (0.5 CPU and 512 MB RAM), so
