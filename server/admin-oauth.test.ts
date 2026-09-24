@@ -4,7 +4,7 @@ import express from "express";
 import session from "express-session";
 import { once } from "node:events";
 import { request as httpRequest } from "node:http";
-import { ADMIN_OAUTH_SUBJECT, ADMIN_OAUTH_CALLBACK, ADMIN_OAUTH_ISSUER, BRANDED_ADMIN_OAUTH_ORIGIN, STAGING_ADMIN_OAUTH_ORIGIN, isStagingRenderService, managerOAuthAllowed, managerOAuthOrigin, consumeOAuthPending, registerManagerOAuthRoutes } from "./admin-oauth";
+import { ADMIN_OAUTH_SUBJECT, ADMIN_OAUTH_CALLBACK, ADMIN_OAUTH_ISSUER, BRANDED_ADMIN_OAUTH_ORIGIN, STAGING_ADMIN_OAUTH_ORIGIN, STAGING_RENDER_SERVICE_ID, isStagingRenderService, managerOAuthAllowed, managerOAuthOrigin, consumeOAuthPending, registerManagerOAuthRoutes } from "./admin-oauth";
 const env = { RENT_OPS_ADMIN_OAUTH_CLIENT_ID: "synthetic-client", RENT_OPS_ADMIN_EMAIL: "michael@5central.capital", RENT_OPS_OAUTH_ADMIN_SUBJECTS: ADMIN_OAUTH_SUBJECT };
 test("state is expiring and one-use, allowlist is exact", () => {
  const s={rentOpsOAuthPending:{state:"opaque-state",verifier:"verifier",expiresAt:100}};
@@ -51,11 +51,17 @@ test("canonical origin rejects request-host and malformed URL configuration",()=
  }
 });
 test("the Render staging origin is accepted only inside the staging service and never with QuickBooks production",()=>{
- const staging={...env,RENT_OPS_ADMIN_OAUTH_ORIGIN:STAGING_ADMIN_OAUTH_ORIGIN,RENDER:"true",RENDER_SERVICE_NAME:"5central-ops-staging-web",RENDER_EXTERNAL_HOSTNAME:"fivecentral-ops-staging-web.onrender.com",QBO_ENVIRONMENT:"sandbox"};
+ const staging={...env,RENT_OPS_ADMIN_OAUTH_ORIGIN:STAGING_ADMIN_OAUTH_ORIGIN,RENDER:"true",RENDER_SERVICE_ID:STAGING_RENDER_SERVICE_ID,RENDER_EXTERNAL_HOSTNAME:"fivecentral-ops-staging-web.onrender.com",QBO_ENVIRONMENT:"sandbox"};
  assert.equal(isStagingRenderService(staging),true);
  assert.equal(managerOAuthOrigin(staging),STAGING_ADMIN_OAUTH_ORIGIN);
- for(const override of [{RENDER:undefined},{RENDER_SERVICE_NAME:"5central-ops-web"},{RENDER_EXTERNAL_HOSTNAME:"5central-ops-web.onrender.com"},{QBO_ENVIRONMENT:"production"}]){
+ const stagingUrl={...staging,RENDER_EXTERNAL_HOSTNAME:undefined,RENDER_EXTERNAL_URL:"https://fivecentral-ops-staging-web.onrender.com"};
+ assert.equal(isStagingRenderService(stagingUrl),true);
+ assert.equal(managerOAuthOrigin(stagingUrl),STAGING_ADMIN_OAUTH_ORIGIN);
+ for(const override of [{RENDER:undefined},{RENDER_SERVICE_ID:"srv-other"},{RENDER_EXTERNAL_HOSTNAME:"5central-ops-web.onrender.com"},{QBO_ENVIRONMENT:"production"}]){
   assert.throws(()=>managerOAuthOrigin({...staging,...override}),/approved canonical HTTPS origin/,JSON.stringify(override));
+ }
+ for(const externalUrl of ["http://fivecentral-ops-staging-web.onrender.com", "https://fivecentral-ops-staging-web.onrender.com/path", "https://fivecentral-ops-staging-web.onrender.com@evil.example", "https://fivecentral-ops-web.onrender.com"]){
+  assert.equal(isStagingRenderService({...stagingUrl,RENDER_EXTERNAL_URL:externalUrl}),false,externalUrl);
  }
  for(const origin of ["https://5central-ops-web.onrender.com","https://fivecentral-ops-staging-web.onrender.com/","http://fivecentral-ops-staging-web.onrender.com"]){
   assert.throws(()=>managerOAuthOrigin({...staging,RENT_OPS_ADMIN_OAUTH_ORIGIN:origin}),/approved canonical HTTPS origin/,origin);
