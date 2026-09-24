@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ConnectorHealth, PmSettlementDetail, PmSettlementSummary, RentalPostingMethod } from "@shared/accounting/operations";
-import { ageLabel, dateLabel, dateTimeLabel, formatCents, isPositiveCents, monthLabel, monthPeriod, newOperationId, previousOperatingMonth, sumCents } from "./format";
+import { ageLabel, dateLabel, dateTimeLabel, formatCents, isPositiveCents, monthLabel, monthPeriod, newOperationId, previousOperatingMonth } from "./format";
 import { summarizeAmounts } from "./list-totals";
 import type { AccountingApi, AccountingCommandEnvelope, AccountingPeriod, AccountingScope, AccountingView } from "./types";
 import { AccountingApiError } from "./api";
@@ -88,6 +88,7 @@ export function OverviewPanel({ api, organizationId, legalEntityId, currency, on
   const close = useQuery({ queryKey: ["accounting", "close", organizationId, legalEntityId, period], queryFn: ({ signal }) => api.closeChecklist(organizationId, legalEntityId, period, signal), staleTime: 30_000 });
   const open = useQuery({ queryKey: ["accounting", "pm-open", organizationId, legalEntityId], queryFn: ({ signal }) => api.pmSettlements(organizationId, { legalEntityId, states: ["draft", "exception"] }, signal), staleTime: 30_000 });
   const awaiting = open.data?.items.filter(item => isPositiveCents(item.ownerRemittanceCents) && !item.bankSettledOn) ?? [];
+  const awaitingTotals = summarizeAmounts(awaiting.map(item => ({ currency: item.currency, amountCents: item.ownerRemittanceCents })));
   return <div className="accounting-overview">
     <section aria-labelledby="accounting-health-heading">
       <h2 id="accounting-health-heading" className="accounting-section-title">QuickBooks</h2>
@@ -105,8 +106,8 @@ export function OverviewPanel({ api, organizationId, legalEntityId, currency, on
           {open.isLoading ? <span className="accounting-meta">Loading…</span> : open.error ? <span className="accounting-meta" role="alert">Statements could not be loaded.</span> : open.data && open.data.items.length === 0
             ? <span className="accounting-meta">Every recorded statement is reconciled.</span>
             : <>
-              <p className="accounting-figure">{formatCents(sumCents(awaiting.map(item => item.ownerRemittanceCents)), currency)}</p>
-              <p className="accounting-meta">{awaiting.length} remittance{awaiting.length === 1 ? "" : "s"} awaiting a bank match · {open.data?.items.length ?? 0} open statement{open.data?.items.length === 1 ? "" : "s"}</p>
+              {awaitingTotals.map(total => <p key={total.currency} className="accounting-figure">{formatCents(total.totalCents, total.currency)}</p>)}
+              <p className="accounting-meta">{open.data?.nextCursor ? "First page: " : ""}{awaiting.length} remittance{awaiting.length === 1 ? "" : "s"} awaiting a bank match · {open.data?.items.length ?? 0} open statement{open.data?.items.length === 1 ? "" : "s"}</p>
             </>}
           <button type="button" className="accounting-button" onClick={() => onOpen("pm-settlements")}>Open PM settlements</button>
         </div>
@@ -116,7 +117,7 @@ export function OverviewPanel({ api, organizationId, legalEntityId, currency, on
         <div className="accounting-card-body">
           {close.isLoading ? <span className="accounting-meta">Loading…</span> : close.error ? <span className="accounting-meta" role="alert">Close status could not be loaded.</span> : close.data && <>
             <p className="accounting-figure">{close.data.completeCount} of {close.data.items.length}</p>
-            <p className="accounting-meta">{close.data.items.filter(item => item.state === "blocked" || item.state === "attention").map(item => item.label).join(" · ") || "Ready to close"}</p>
+            <p className="accounting-meta">{close.data.items.filter(item => item.state === "blocked" || item.state === "attention").map(item => item.label).join(" · ") || (close.data.items.length ? "Ready to close" : "No checklist available")}</p>
           </>}
           <button type="button" className="accounting-button" onClick={() => onOpen("close")}>Open period close</button>
         </div>
