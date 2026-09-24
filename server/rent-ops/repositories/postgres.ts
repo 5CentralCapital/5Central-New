@@ -51,12 +51,15 @@ import { RENT_OPS_REQUIRED_TABLES, RENT_OPS_RUNTIME_REQUIRED_TABLES } from "../p
 import { assertPositiveCents, assertCents, assertValidSnapshot, documentReferenceViolations, assertPrivateStorageKey, RentOpsInvariantError } from "../domain/invariants";
 import { assertValidApplicationHistory } from "../domain/application-history";
 import { applicationHistoryCase } from "../application-history/projection";
+import { SnapshotReadCache } from './snapshot-cache';
 
 /**
  * Small adapter interface accepted by node-postgres, Neon Pool, or a wrapper
  * around Drizzle's execute method. No connection is created here.
  */
 export interface RentOpsQueryExecutor {
+  /** Cache invalidation generation; undefined while a local write is in flight. */
+  readCacheVersion?(): number | undefined;
   query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<{ rows: T[] }>;
   /** Optional atomic single-statement read, available on the production pool adapter. */
   readTableBatch?(tables: readonly string[]): Promise<RentOpsTableRows>;
@@ -945,6 +948,7 @@ function sameHistoryValue(left: unknown, right: unknown): boolean {
 
 export class PostgresRentOpsRepository implements RentOpsRepository {
   private ready = false;
+  private readonly readCache = new SnapshotReadCache<RentOpsSnapshot>(() => this.inTransaction ? undefined : this.client.readCacheVersion?.());
 
   constructor(private readonly client: RentOpsQueryExecutor, private readonly inTransaction = false) {}
 
@@ -1146,6 +1150,10 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
   }
 
   async getOperationalSnapshot(): Promise<RentOpsSnapshot> {
+    return this.readCache.read('operational', () => this.loadOperationalSnapshot());
+  }
+
+  private async loadOperationalSnapshot(): Promise<RentOpsSnapshot> {
     await this.assertReady();
     const snapshot = this.client.readTableBatch
       ? await this.loadSnapshot(this.client, false, undefined, await this.client.readTableBatch(RENT_OPS_BATCH_TABLES))
@@ -1157,6 +1165,10 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
   }
 
   async getReportSnapshot(): Promise<RentOpsSnapshot> {
+    return this.readCache.read('report', () => this.loadReportSnapshot());
+  }
+
+  private async loadReportSnapshot(): Promise<RentOpsSnapshot> {
     await this.assertReady();
     // One fixed SELECT shares a statement snapshot across every financial table.
     countRentOpsTiming("batch_calls");

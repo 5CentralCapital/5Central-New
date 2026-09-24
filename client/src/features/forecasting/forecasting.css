@@ -1,6 +1,7 @@
 /* Forecasting — manager workspace. Tokens come from rops-system.css (--ds-*). Opaque content; no glass. */
 
 .rm-workspace.rops-modern .fc-workspace { display: grid; gap: 16px; min-width: 0; }
+.rm-workspace.rops-modern :is(.fc-view, .fc-split) > *, .rm-workspace.rops-modern .fc-scroll { min-width: 0; }
 .rm-workspace.rops-modern .fc-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .rm-workspace.rops-modern .fc-muted { color: var(--ds-muted); font: var(--ds-body); }
 .rm-workspace.rops-modern .fc-spacer { flex: 1 1 auto; }

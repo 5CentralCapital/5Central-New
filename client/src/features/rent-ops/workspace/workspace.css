@@ -352,6 +352,11 @@
   background: var(--rm-surface-subtle);
 }
 
+.rm-main > *, .rm-data-grid {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .rm-main > :where(h1, h2, h3, p) {
   max-width: 100%;
 }

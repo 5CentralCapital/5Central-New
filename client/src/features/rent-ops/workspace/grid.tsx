@@ -231,7 +231,7 @@ export function DataGrid<T extends object>({
   const visibleCount = visibleColumns.length;
 
   return (
-    <section aria-label={caption}>
+    <section className="rm-data-grid" aria-label={caption}>
       <div className="rm-toolbar">
         <details>
           <summary className="rm-button">Columns <span className="rm-muted">{visibleCount}/{columns.length}</span></summary>

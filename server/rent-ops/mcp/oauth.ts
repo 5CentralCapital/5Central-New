@@ -12,6 +12,8 @@ export interface OAuthConfig {
   issuer: string; resource: string; mode?: "jwt" | "introspection"; introspectionEndpoint?: string;
   introspectionClientId?: string; introspectionClientSecret?: string;
   adminSubjects: string[];
+  /** Temporary, explicitly configured migration audiences. Discovery always advertises resource. */
+  legacyAudiences?: string[];
   /** OAuth client IDs (the Codex app) allowed MRA packet ingestion. Empty: no client may stage or apply MRA packets. */
   mraClientIds?: string[];
 }
@@ -36,6 +38,7 @@ export function oauthConfigFromEnv(env: NodeJS.ProcessEnv): OAuthConfig | undefi
     mode,
     issuer: secureUrl(required('RENT_OPS_OAUTH_ISSUER')),
     resource: secureUrl(required('RENT_OPS_MCP_RESOURCE')),
+    legacyAudiences: (env.RENT_OPS_MCP_LEGACY_AUDIENCES ?? '').split(',').map(x => x.trim()).filter(Boolean).map(secureUrl),
     ...(mode === 'introspection' ? { introspectionEndpoint: secureUrl(required('RENT_OPS_OAUTH_INTROSPECTION_ENDPOINT')),
     introspectionClientId: required('RENT_OPS_OAUTH_INTROSPECTION_CLIENT_ID'),
     introspectionClientSecret: required('RENT_OPS_OAUTH_INTROSPECTION_CLIENT_SECRET') } : {}),
@@ -63,7 +66,7 @@ export async function verifyOAuthToken(token: string, config: OAuthConfig, fetch
   const value = await response.json() as Record<string, unknown>;
   const audience = Array.isArray(value.aud) ? value.aud : [value.aud];
   const scopes = typeof value.scope === 'string' ? value.scope.split(' ').filter(Boolean) : [];
-  if (value.active !== true || value.iss !== config.issuer || !audience.includes(config.resource)
+  if (value.active !== true || value.iss !== config.issuer || ![config.resource, ...(config.legacyAudiences ?? [])].some(item => audience.includes(item))
     || typeof value.exp !== 'number' || value.exp <= Date.now() / 1000
     || (typeof value.nbf === 'number' && value.nbf > Date.now() / 1000)
     || typeof value.sub !== 'string' || !config.adminSubjects.includes(value.sub)
@@ -92,7 +95,7 @@ const issuerKeys = new WeakMap<OAuthConfig, JWTVerifyGetKey>();
 /** Auth0 custom API access tokens: exact issuer/audience and RS256 only. */
 export async function verifyJwtToken(token: string, config: OAuthConfig, key: JWTVerifyGetKey): Promise<McpPrincipal> {
   if (!token || token.length > 8192 || /\s/.test(token)) throw new Error('invalid_token');
-  const { payload } = await jwtVerify(token, key, { issuer:config.issuer, audience:config.resource, algorithms:['RS256'], requiredClaims:['exp','iat','sub'], maxTokenAge:900, clockTolerance:0 });
+  const { payload } = await jwtVerify(token, key, { issuer:config.issuer, audience:[config.resource, ...(config.legacyAudiences ?? [])], algorithms:['RS256'], requiredClaims:['exp','iat','sub'], maxTokenAge:900, clockTolerance:0 });
   const scopes = typeof payload.scope === 'string' ? payload.scope.split(' ').filter(Boolean) : [];
   if (typeof payload.sub !== 'string' || !config.adminSubjects.includes(payload.sub) || !scopes.includes(READ_SCOPE)
     || typeof payload.exp !== 'number' || typeof payload.iat !== 'number' || payload.exp - payload.iat > 900) throw new Error('invalid_token');

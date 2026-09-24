@@ -105,6 +105,7 @@ app.use((req, res, next) => {
 
 (async () => {
   let startupStage: StartupStage = "configuration";
+  let closeRuntime: (() => Promise<void>) | undefined;
   try {
     // Keep production configuration failures inside the same redacted startup
     // boundary as runtime dependency failures. The labels and summaries are
@@ -124,6 +125,7 @@ app.use((req, res, next) => {
 
     startupStage = "route_registration";
     const server = await registerRoutes(app, {
+      onRuntimeClose: close => { closeRuntime = close; },
       onStartupStage: (stage) => { startupStage = stage; },
       onTenantPaymentService: (service) => { tenantPaymentService = service; },
       onRuntimeExecutor: (executor) => { quickBooksWebhookExecutor = executor; }, // lane-b-accounting
@@ -172,12 +174,13 @@ app.use((req, res, next) => {
     installGracefulShutdown({
       server,
       markNotReady: readiness.markFailed,
-      cleanup: () => pool.end(),
+      cleanup: async () => { await Promise.all([pool.end(), closeRuntime?.()]); },
       graceMs: shutdownGraceMs(process.env.WEB_SHUTDOWN_GRACE_MS),
       log,
     });
   } catch (error) {
     readiness.markFailed();
+    await closeRuntime?.().catch(() => undefined);
     log(`startup failed: ${startupFailureSummary(error, startupStage)}`);
     process.exitCode = 1;
   }
