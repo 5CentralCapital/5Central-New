@@ -17,10 +17,20 @@ const hostingRunbook = readFileSync(join(repoRoot, "docs/RENDER_DEPLOYMENT.md"),
 function serviceBlock(blueprint: string, name: string): string {
   const nameIndex = blueprint.indexOf(`name: ${name}`);
   assert.notEqual(nameIndex, -1, `missing Render service ${name}`);
-  const start = blueprint.lastIndexOf("  - type:", nameIndex);
-  const next = blueprint.indexOf("\n  - type:", nameIndex);
-  return blueprint.slice(start, next < 0 ? undefined : next);
+  const headers = [...blueprint.matchAll(/^([ \t]*)- type:/gm)];
+  const header = headers.filter(match => match.index! < nameIndex).at(-1);
+  assert.ok(header, `missing service header for ${name}`);
+  const next = headers.find(match => match.index! > nameIndex);
+  return blueprint.slice(header.index, next?.index);
 }
+
+test("Render services belong to the environments that own their external groups", () => {
+  for (const [blueprint, environment] of [[productionBlueprint, "Production"], [stagingBlueprint, "Staging"]] as const) {
+    assert.match(blueprint, new RegExp(`^projects:\\n  - name: 5Central Ops\\n    environments:\\n      - name: ${environment}\\n        services:\\n`));
+    assert.equal([...blueprint.matchAll(/^          - type:/gm)].length, 2);
+    assert.doesNotMatch(blueprint, /^services:/m);
+  }
+});
 
 function completeProductionEnvironment(): Record<string, string> {
   return {
