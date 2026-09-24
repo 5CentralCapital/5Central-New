@@ -1,5 +1,6 @@
 import { scheduleDisplayInterval } from "./schedule-display";
 import { CHARGE_TYPE_MISSING_LABEL, DESCRIPTION_MISSING_LABEL, NAME_MISSING_LABEL, PROPERTY_MISSING_LABEL, SCOPE_MISSING_LABEL, STATUS_UNVERIFIED_LABEL, UNIT_MISSING_LABEL, UNVERIFIED_LABEL, missingLabel } from "@shared/review-cases/display-labels";
+import { summarizeExactCents } from "./list-totals-model";
 import type {
   AdminChargeDefinitionView,
   AdminHouseholdMembershipView,
@@ -645,8 +646,11 @@ export function currentMonthlyTotal(rows: RecurringChargeRow[], candidatesComple
   const selected = rows.filter(row => row.operationalSelected);
   if (selected.some(row => row.state !== "current" || !["monthly", "annual", "quarterly", "weekly", "daily", "one_time"].includes(row.billingFrequency ?? "") || row.scope.warning)) return null;
   const monthly = selected.filter(row => row.billingFrequency === "monthly" && ["base_rent", "recurring_fee"].includes(row.category) && row.scope.type !== "property");
-  if (monthly.some(row => row.amountCents == null || !Number.isFinite(row.amountCents))) return null;
-  return monthly.reduce((sum, row) => sum + row.amountCents!, 0);
+  if (monthly.some(row => row.amountCents == null || !Number.isSafeInteger(row.amountCents))) return null;
+  const total = summarizeExactCents(monthly.map(row => row.amountCents));
+  if (total.total === null) return null;
+  const numeric = Number(total.total);
+  return Number.isSafeInteger(numeric) ? numeric : null;
 }
 
 export function ledgerActionEligibility(row: TenantLedgerRow, rows: TenantLedgerRow[]): { reverse: boolean; allocate: boolean } {

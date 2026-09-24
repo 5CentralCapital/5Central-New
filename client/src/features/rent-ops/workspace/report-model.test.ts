@@ -44,6 +44,15 @@ test("curated report mappings keep drilldown IDs out of display columns", () => 
   assert.equal(view.displayRows[0].unitNumber, "101");
   assert.equal(view.displayRows[0].__source.unitId, "unit:one");
   assert.equal(formatReportValue(view.displayRows[0].marketRentCents, "currency"), "$1,250.00");
+  assert.equal(view.columns.find(column => column.key === "marketRentCents")?.subtotal, true);
+});
+
+test("report subtotals refuse an exact cents sum that exceeds safe number range", () => {
+  const subtotals = buildPropertySubtotals("scheduled-income", [
+    { propertyId: "p", propertyName: "Property", amountCents: 9007199254740991, known: true },
+    { propertyId: "p", propertyName: "Property", amountCents: 1, known: true },
+  ]);
+  assert.equal(subtotals[0].amounts.amountCents, null);
 });
 
 test("property subtotals sum complete amounts and withhold incomplete balance totals", () => {

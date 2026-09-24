@@ -304,7 +304,7 @@ export function ApplicationsWorkspace({ snapshot, filters, onChanged, onEdit }: 
     <header className="rm-panel-title rm-leasing-heading"><div><h2 id="rm-applications-title" className="sr-only">Applications</h2></div><div className="rm-leasing-count"><strong>{visibleApplications.length}</strong><span>matching cases</span></div></header>
     {error && <div className="rm-error" role="alert"><AlertCircle aria-hidden="true" />{error}<button type="button" className="rm-button" onClick={() => setError(undefined)}>Dismiss</button></div>}
     <ApplicationFilterBar snapshot={snapshot} filters={filterState} applications={snapshot.applicants} onChange={setFilterState} />
-    <DataGrid<ApplicationGridRow> rows={rows} columns={columns} getRowKey={(row, index) => row.recordKey || applicationRecordKey(row.application, index)} pageSize={25} emptyMessage="No applications match these filters." caption="Application register" initialSort={{ key: "submittedOn", direction: "desc" }} storageKey="rm-applications" />
+    <DataGrid<ApplicationGridRow> rows={rows} columns={columns} getRowKey={(row, index) => row.recordKey || applicationRecordKey(row.application, index)} pageSize={25} emptyMessage="No applications match these filters." caption="Application register" summaryLabel="application" initialSort={{ key: "submittedOn", direction: "desc" }} storageKey="rm-applications" />
     {selectedApplicationId && selectedSummary && <ApplicationCaseDetail key={selectedApplicationId} applicationId={selectedApplicationId} tenantPersonId={applicationTenantPersonId(snapshot,selectedSummary)} summary={selectedSummary} onClose={() => { setSelectedApplicationId(undefined); onChanged(); }} />}
   </section>;
 }

@@ -2002,6 +2002,65 @@ button.rm-stat:hover {
   }
 }
 
+/* List summaries stay visually subordinate to the data while making the
+   scope of a filtered result explicit. */
+.rm-workspace .rm-list-totals {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  padding: 6px 9px;
+  border: 1px solid var(--rm-line);
+  border-top: 0;
+  border-radius: 0 0 var(--rm-radius-small) var(--rm-radius-small);
+  background: var(--rm-surface-muted);
+  color: var(--rm-muted);
+  font-size: 11px;
+}
+
+.rm-workspace .rm-list-totals-count {
+  white-space: nowrap;
+}
+
+.rm-workspace .rm-list-totals-metrics {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  margin: 0;
+}
+
+.rm-workspace .rm-list-totals-metrics > div {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.rm-workspace .rm-list-totals-metrics dt {
+  color: var(--rm-muted);
+}
+
+.rm-workspace .rm-list-totals-metrics dd {
+  margin: 0;
+  color: var(--rm-ink);
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+@media (max-width: 768px) {
+  .rm-workspace .rm-list-totals {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .rm-workspace .rm-list-totals-metrics {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .rm-workspace *,
   .rm-workspace *::before,

@@ -21,6 +21,7 @@ import type { CompanyContext } from "@shared/company/context";
 import { rentOpsAuthClient } from "../auth";
 import type { AdminSnapshot, AdminTenancyView, TenantView } from "../types";
 import { isCurrentTenancy, resolveTenantContext } from "./tenant-model";
+import { ListTotals } from "./list-totals";
 
 /*
  * The tenancy's QuickBooks customer ledger, read from the verified receivables
@@ -155,6 +156,7 @@ function LedgerView({ ledger, entries, hasMore, loadingMore, pageError, onMore, 
       <tbody>{rows.map(row => <tr key={row.key}><td>{row.date}</td><td>{row.type}{row.voided && <> <span className="rm-status rm-status-muted">Voided</span></>}</td><td className="rm-reference">{row.number}</td><td className="rm-align-right rm-amount">{row.amount}</td><td className="rm-align-right rm-amount">{row.applied}</td><td className="rm-align-right rm-amount">{row.open}</td><td className="rm-align-right rm-amount">{row.balance}</td></tr>)}</tbody>
       {!hasMore && <tfoot><tr><th scope="row" colSpan={6}>Ending balance (complete history)</th><td className="rm-align-right rm-amount"><strong>{ending.amount}</strong></td></tr></tfoot>}
     </table></div>}
+    <ListTotals totalCount={ledger.page.total} visibleCount={entries.length} itemLabel="QuickBooks document" />
     <div className="rm-ledger-toolbar"><span>{entries.length} of {ledger.page.total} document{ledger.page.total === 1 ? "" : "s"} shown</span>{hasMore && <button type="button" className="rm-button" disabled={loadingMore} onClick={onMore}>{loadingMore ? "Loading…" : "Load more"}</button>}</div>
     {pageError !== null && pageError !== undefined && <Notice tone="error" title={messageOf(pageError, "More documents could not be loaded.")}>{" "}<button type="button" className="rm-button" onClick={onReload}>Reload from the first page</button></Notice>}
 
@@ -168,6 +170,7 @@ function LedgerView({ ledger, entries, hasMore, loadingMore, pageError, onMore, 
       <thead><tr><th scope="col">Type</th><th scope="col">Number</th><th scope="col">Date</th><th scope="col">Due</th><th scope="col" className="rm-align-right">Open</th><th scope="col">Past due</th></tr></thead>
       <tbody>{open.map(item => <tr key={item.key}><td>{item.type}</td><td className="rm-reference">{item.number}</td><td>{item.date}</td><td>{item.due}</td><td className="rm-align-right rm-amount">{item.open}</td><td>{item.pastDue}</td></tr>)}</tbody>
     </table></div>}
+    <ListTotals totalCount={open.length} itemLabel="open item" />
   </>;
 }
 

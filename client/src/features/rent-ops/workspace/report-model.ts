@@ -9,6 +9,7 @@ import type {
 } from "../types";
 import { REPORT_KEYS, REPORT_LABELS } from "../types";
 import { formatDate, formatLabel, formatMoney } from "./display";
+import { summarizeExactCents } from "./list-totals-model";
 import { DATE_MISSING_LABEL, DATE_UNVERIFIED_LABEL, LINK_MISSING_LABEL, NO_NOTICE_LABEL, NONE_LABEL, NOT_OVERDUE_LABEL, PERIOD_MISSING_LABEL, PROPERTY_MISSING_LABEL, STATUS_UNVERIFIED_LABEL, UNIT_MISSING_LABEL, UNKNOWN_AMOUNT_LABEL, UNKNOWN_COUNT_LABEL, UNVERIFIED_LABEL } from "@shared/review-cases/display-labels";
 
 export { formatDate, formatLabel, formatMoney } from "./display";
@@ -156,8 +157,8 @@ function field(key: string, format?: ReportColumn["format"], label?: string, sub
   };
 }
 
-function currency(key: string, label?: string): ReportColumnDefinition {
-  return field(key, "currency", label, true, (row) => guardedMoney(row, key));
+function currency(key: string, label?: string, subtotal = true): ReportColumnDefinition {
+  return field(key, "currency", label, subtotal, (row) => guardedMoney(row, key));
 }
 
 function date(key: string, label?: string, read?: RowReader): ReportColumnDefinition {
@@ -637,9 +638,13 @@ export function buildPropertySubtotals(key: ReportKey, rows: readonly ReportRow[
       const amounts: Record<string, number | null> = {};
       for (const column of columns) {
         const values = group.rows.map((row) => column.read(row, snapshot));
-        amounts[column.key] = values.length > 0 && values.every((value, index) => safeSubtotalValue(group.rows[index], column.key, value))
-          ? values.reduce((sum, value) => sum + (value as number), 0)
-          : null;
+        if (!values.length || !values.every((value, index) => safeSubtotalValue(group.rows[index], column.key, value))) {
+          amounts[column.key] = null;
+          continue;
+        }
+        const exact = summarizeExactCents(values as number[]);
+        const numeric = exact.total === null ? null : Number(exact.total);
+        amounts[column.key] = numeric !== null && Number.isSafeInteger(numeric) ? numeric : null;
       }
       return { propertyId: group.propertyId, label: group.label, count: group.rows.length, amounts };
     });
