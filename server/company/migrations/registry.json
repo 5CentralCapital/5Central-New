@@ -487,6 +487,15 @@
       "minimumServerContract": 1,
       "minimumClientContract": 1,
       "recovery": "Additive planning associations must never be converted to legal ownership on rollback; retain the table and restore the reviewed backup if needed."
+    },
+    {
+      "version": 53,
+      "fileName": "053_project_deal_ledger.sql",
+      "sha256": "975deda2dfc6f23f9ad2432e52c67806136346754e5c27e74cc585eaa8e446f8",
+      "predecessor": 52,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Retain whole-deal operational records and source identities; disable new ledger commands on rollback and apply reviewed forward repairs. Never replay QuickBooks cash or historical migrations."
     }
   ]
 }

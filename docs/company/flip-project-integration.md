@@ -21,6 +21,16 @@ An asset account does not qualify as a project cost merely because it is named i
 
 A lender rehab variance must include only the matching rehab scope. Acquisition and carrying costs belong in separate all-in reporting. Unknown allocation, outstanding refundable deposits and untraced canceled payments remain visible uncertainties rather than invented scope allocations or duplicate manual costs.
 
+## Whole-deal view
+
+The Deal costs tab adds acquisition, rehab, financing, holding, selling and needs-allocation categories. Each keeps budget, incurred amount, remaining forecast and settlement evidence separate. A prepaid row represents an asset balance, excluded from incurred costs; recognized expenses are separate source lines. The approved lender rehab budget and remaining cost forecast flow from the existing scope and cost-report workflows once, including an explicit zero remaining-cost override at completion. Those derived rows are read-only in the deal view.
+
+Funding has separate groups for deposits, loan principal, reserves, contributions, intercompany movements, sale proceeds and settlement clearing. Linked funding must resolve to a supported non-cost account classification; expense and capitalized-cost lines cannot be relabeled as funding. These groups are not added to project costs or presented as available cash. An applied deposit and its closing application must not be entered as two costs.
+
+Sale price and remaining selling costs are forecasts. Projected profit is withheld while cost coverage or allocation remains incomplete. A zero estimate is an explicit assumption, while a blank remains unknown. Original payments and subsequent noncash reclassifications must be traced before population; a unique journal line alone does not prove a unique economic cost.
+
+Existing actuals assigned to active rehab scope appear under rehab; unassigned actuals remain in needs allocation. The shared read and command surfaces expose the same scoped ledger to the browser and MCP. Saving an operational record does not post a QuickBooks journal. Production population must preserve current source revisions, evidence references and the owning legal entity. A parent-company advance may support the property's operational reconciliation without becoming an expense in the parent's books.
+
 ## Release and population
 
 1. Pass the repository checks and approving review on the current production base.

@@ -6,6 +6,8 @@ import type { CompanyProjectPort } from './routes';
 import { ProjectExecutionReadService } from '../projects/execution';
 import { ProjectExecutionStore } from '../projects/execution-store';
 import { executeProjectExecutionCommand, type ProjectExecutionFinancePorts } from '../projects/execution-commands';
+import { executeProjectDealCostCommand, ProjectDealCostReadService, type ProjectDealCostFinancePorts } from '../projects/deal-costs';
+import type { ProjectDealCostCommandKind } from '../../shared/projects/deal-costs';
 import { unavailableProjectFinanceReadPort, type ProjectFinanceReadPort } from '../../shared/projects';
 import { companyScopeSchema, isoDateSchema } from '../../shared/company';
 
@@ -36,5 +38,10 @@ export function createCompanyProjectPort(executor: RentOpsQueryExecutor, options
       });
     }),
     executeExecution: (kind, envelope, access) => executeProjectExecutionCommand(executor, kind, envelope, { ...access, financeFactory: options.commandFinanceFactory }),
+    getDealCosts: (principal, query) => read(principal, async (_service, fresh, transaction, finance) => new ProjectDealCostReadService(transaction, finance, options.commandFinanceFactory?.(transaction)).get(fresh, query)),
+    executeDealCost: (kind: ProjectDealCostCommandKind, envelope, access) => executeProjectDealCostCommand(executor, kind, envelope, {
+      ...access,
+      financeFactory: options.commandFinanceFactory as ((transaction: RentOpsQueryExecutor) => ProjectDealCostFinancePorts) | undefined,
+    }),
   };
 }

@@ -4,6 +4,7 @@ import { organizationIdSchema, legalEntityIdSchema, propertyReferenceIdSchema, c
 import { PROJECT_COMMAND_KINDS, projectCommandPayloadSchemas, projectIdSchema, projectStatusSchema } from '../../shared/projects/contracts';
 import type { ProjectCommandKind, ProjectListQuery, ProjectReadContext } from '../../shared/projects/contracts';
 import { projectExecutionCommandKinds, projectExecutionCommandPayloadSchemas, type ProjectExecutionCommandKind } from '../../shared/projects';
+import { PROJECT_DEAL_COST_COMMAND_KINDS, projectDealCostCommandPayloadSchemas, projectDealCostQuerySchema, type ProjectDealCostCommandKind, type ProjectDealCostQuery } from '../../shared/projects/deal-costs';
 import type { RentOpsQueryExecutor } from '../rent-ops/repositories/postgres';
 import { loadAuthenticatedPrincipal, attestTransport, type AuthenticatedPrincipal, type TransportAttestation } from './authorization';
 import { readCompanyContext } from './context';
@@ -49,6 +50,12 @@ export interface CompanyProjectPort {
   }): Promise<unknown>;
   getExecution?(principal: AuthenticatedPrincipal, query: ProjectReadContext & { projectId: string }): Promise<unknown>;
   executeExecution?(kind: ProjectExecutionCommandKind, envelope: unknown, access: {
+    principal: AuthenticatedPrincipal;
+    resolvePrincipal: (executor: RentOpsQueryExecutor) => Promise<AuthenticatedPrincipal>;
+    transport: TransportAttestation;
+  }): Promise<unknown>;
+  getDealCosts?(principal: AuthenticatedPrincipal, query: ProjectDealCostQuery): Promise<unknown>;
+  executeDealCost?(kind: ProjectDealCostCommandKind, envelope: unknown, access: {
     principal: AuthenticatedPrincipal;
     resolvePrincipal: (executor: RentOpsQueryExecutor) => Promise<AuthenticatedPrincipal>;
     transport: TransportAttestation;
@@ -164,6 +171,14 @@ export function registerCompanyRoutes(app: Express, options: {
     const principal = await loadAuthenticatedPrincipal(executor, { actorId: companyWebActor(req), organizationId, role: 'admin' });
     res.json(await projects.getExecution!(principal, { projectId, scope: { organizationId, legalEntityId: query.legalEntityId, propertyId: query.propertyId }, asOf: query.asOf }));
   }));
+  if (projects.getDealCosts) app.get('/api/company/:organizationId/projects/:projectId/deal-costs', requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const projectId = projectIdSchema.parse(req.params.projectId);
+    const query = readQuery.pick({ legalEntityId: true, propertyId: true, asOf: true }).parse(req.query);
+    const principal = await loadAuthenticatedPrincipal(executor, { actorId: companyWebActor(req), organizationId, role: 'admin' });
+    const dealQuery = projectDealCostQuerySchema.parse({ projectId, scope: { organizationId, legalEntityId: query.legalEntityId, propertyId: query.propertyId }, ...(query.asOf ? { asOf: query.asOf } : {}) });
+    res.json(await projects.getDealCosts!(principal, dealQuery));
+  }));
   if (projects.executeExecution) app.post('/api/company/:organizationId/project-execution-commands/:commandKind', requireAdmin, companyReadHandler(async (req, res) => {
     const organizationId = organizationIdSchema.parse(req.params.organizationId);
     const kind = z.enum(projectExecutionCommandKinds).parse(req.params.commandKind);
@@ -176,12 +191,20 @@ export function registerCompanyRoutes(app: Express, options: {
   }));
   app.post('/api/company/:organizationId/project-commands/:commandKind', requireAdmin, companyReadHandler(async (req, res) => {
     const organizationId = organizationIdSchema.parse(req.params.organizationId);
-    const kind = z.enum(PROJECT_COMMAND_KINDS).parse(req.params.commandKind);
-    const envelope = commandEnvelopeSchema(projectCommandPayloadSchemas[kind]).parse(req.body);
-    if (envelope.scope.organizationId !== organizationId) throw new ForbiddenCommandError('Project company does not match this request.');
     const actorId = companyWebActor(req);
     const resolvePrincipal = (transaction: RentOpsQueryExecutor) => loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: 'admin' });
     const principal = await resolvePrincipal(executor);
+    if (PROJECT_DEAL_COST_COMMAND_KINDS.includes(req.params.commandKind as ProjectDealCostCommandKind)) {
+      if (!projects.executeDealCost) throw new ForbiddenCommandError('Deal-cost commands are unavailable in this company runtime.');
+      const kind = z.enum(PROJECT_DEAL_COST_COMMAND_KINDS).parse(req.params.commandKind);
+      const envelope = commandEnvelopeSchema(projectDealCostCommandPayloadSchemas[kind]).parse(req.body);
+      if (envelope.scope.organizationId !== organizationId) throw new ForbiddenCommandError('Project company does not match this request.');
+      res.json(await projects.executeDealCost(kind, envelope, { principal, resolvePrincipal, transport: web }));
+      return;
+    }
+    const kind = z.enum(PROJECT_COMMAND_KINDS).parse(req.params.commandKind);
+    const envelope = commandEnvelopeSchema(projectCommandPayloadSchemas[kind]).parse(req.body);
+    if (envelope.scope.organizationId !== organizationId) throw new ForbiddenCommandError('Project company does not match this request.');
     res.json(await projects.execute(kind, envelope, { principal, resolvePrincipal, transport: web }));
   }));
 }

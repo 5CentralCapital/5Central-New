@@ -7,7 +7,7 @@ import {
   type ProjectCostReportQuery,
   type ProjectEtcOverrideInput,
 } from "../../shared/projects/cost-report";
-import { unavailableProjectFinanceReadPort, type ProjectFinanceReadPort } from "../../shared/projects";
+import { unavailableProjectFinanceReadPort, type ProjectDetail, type ProjectFinanceReadPort } from "../../shared/projects";
 import type { CostSourceLinePage, CostSourceLineQuery } from "../../shared/projects/source-lines";
 import type { ProjectLaborResponse } from "../../shared/time/labor";
 import { loadAuthenticatedPrincipal, type AuthenticatedPrincipal } from "../company/authorization";
@@ -63,6 +63,55 @@ async function lienWaiverCount(executor: RentOpsQueryExecutor, organizationId: s
   return Number(result.rows[0]?.count ?? 0);
 }
 
+type ProjectActualResult = Awaited<ReturnType<ProjectFinanceReadPort["getProjectActuals"]>>;
+
+/**
+ * Build the canonical rehab cost report from the existing project workflow.
+ * Deal-cost reporting calls this helper for ETC; it does not recreate budget,
+ * commitment, labor or override arithmetic in a second ledger.
+ */
+export async function readCanonicalProjectCostReport(
+  executor: RentOpsQueryExecutor,
+  project: ProjectDetail,
+  finance: ProjectFinanceReadPort,
+  asOf: IsoDate,
+  actualResult?: ProjectActualResult,
+): Promise<ProjectCostReport> {
+  const scope = companyScopeSchema.parse({ organizationId: project.organizationId, legalEntityId: project.legalEntityId, propertyId: project.propertyId });
+  const snapshot = await new ProjectExecutionStore(executor).read({ scope, projectId: project.id, asOf });
+  const actuals = actualResult ?? await finance.getProjectActuals({ organizationId: project.organizationId, legalEntityId: project.legalEntityId, projectId: project.id, asOf });
+  const labor = await readProjectLabor(executor, { organizationId: project.organizationId, projectId: project.id, scopeItemIds: project.scopeItems.map((item) => String(item.id)) });
+  const report = calculateProjectCostReport({
+    projectId: project.id,
+    currency: project.currency,
+    asOf,
+    targetOn: project.targetOn,
+    scopeItems: project.scopeItems.filter((item) => item.archivedAt === null).map((item) => ({ id: String(item.id), description: item.description, estimatedCents: item.estimatedCents })),
+    budgetVersions: project.budgetVersions.map((version) => ({
+      versionNo: version.versionNo, status: version.status, totalEstimatedCents: version.totalEstimatedCents,
+      lines: version.lines.map((line) => ({ scopeItemId: line.scopeItemId === null ? null : String(line.scopeItemId), description: line.description, estimatedCents: line.estimatedCents })),
+    })),
+    draftCostCents: project.draftCostCents,
+    etcOverrides: await etcOverrides(executor, project.organizationId, project.id),
+    commitments: snapshot.commitments,
+    bids: snapshot.bids.map((bid) => ({ id: String(bid.id), scopeItemId: bid.scopeItemId === null ? null : String(bid.scopeItemId) })),
+    changeOrders: snapshot.changeOrders,
+    purchaseOrders: snapshot.purchaseOrders,
+    draws: snapshot.drawRequests,
+    punchItems: snapshot.punchItems,
+    tasks: project.tasks.filter((task) => task.archivedAt === null).map((task) => ({
+      id: String(task.id), title: task.title, status: task.status, startsOn: task.startsOn, dueOn: task.dueOn, completedOn: task.completedOn,
+      dependencyTaskIds: task.dependencyTaskIds.map(String),
+    })),
+    actuals: actuals.actuals,
+    actualCoverage: actuals.coverage,
+    labor: labor.rows.map((row) => ({ timesheetId: row.timesheetId, scopeItemId: row.scopeItemId, currency: row.currency, estimatedCents: row.estimatedCents, postedCents: row.postedCents })),
+    lienWaiverDocumentCount: await lienWaiverCount(executor, project.organizationId, project.id),
+  });
+  if (!labor.truncated) return report;
+  return { ...report, warnings: [...report.warnings, "Labor rows exceed the read limit; labor totals are incomplete."].slice(0, 100) };
+}
+
 export function createProjectInsightsPort(executor: RentOpsQueryExecutor, options: CreateProjectInsightsPortOptions = {}): ProjectInsightsPort {
   const today = options.today ?? (() => nowIsoDate());
   async function read<T>(principal: AuthenticatedPrincipal, work: (transaction: RentOpsQueryExecutor, fresh: AuthenticatedPrincipal, finance: ProjectFinanceReadPort) => Promise<T>): Promise<T> {
@@ -78,39 +127,7 @@ export function createProjectInsightsPort(executor: RentOpsQueryExecutor, option
       const query = projectCostReportQuerySchema.parse(input);
       const asOf = isoDateSchema.parse(query.asOf ?? today()) as IsoDate;
       const project = await new ProjectReadService(transaction, finance).get(fresh, { scope: query.scope, projectId: query.projectId });
-      const scope = companyScopeSchema.parse({ organizationId: project.organizationId, legalEntityId: project.legalEntityId, propertyId: project.propertyId });
-      const snapshot = await new ProjectExecutionStore(transaction).read({ scope, projectId: project.id, asOf });
-      const actuals = await finance.getProjectActuals({ organizationId: project.organizationId, legalEntityId: project.legalEntityId, projectId: project.id, asOf });
-      const labor = await readProjectLabor(transaction, { organizationId: project.organizationId, projectId: project.id, scopeItemIds: project.scopeItems.map((item) => String(item.id)) });
-      const report = calculateProjectCostReport({
-        projectId: project.id,
-        currency: project.currency,
-        asOf,
-        targetOn: project.targetOn,
-        scopeItems: project.scopeItems.filter((item) => item.archivedAt === null).map((item) => ({ id: String(item.id), description: item.description, estimatedCents: item.estimatedCents })),
-        budgetVersions: project.budgetVersions.map((version) => ({
-          versionNo: version.versionNo, status: version.status, totalEstimatedCents: version.totalEstimatedCents,
-          lines: version.lines.map((line) => ({ scopeItemId: line.scopeItemId === null ? null : String(line.scopeItemId), description: line.description, estimatedCents: line.estimatedCents })),
-        })),
-        draftCostCents: project.draftCostCents,
-        etcOverrides: await etcOverrides(transaction, project.organizationId, project.id),
-        commitments: snapshot.commitments,
-        bids: snapshot.bids.map((bid) => ({ id: String(bid.id), scopeItemId: bid.scopeItemId === null ? null : String(bid.scopeItemId) })),
-        changeOrders: snapshot.changeOrders,
-        purchaseOrders: snapshot.purchaseOrders,
-        draws: snapshot.drawRequests,
-        punchItems: snapshot.punchItems,
-        tasks: project.tasks.filter((task) => task.archivedAt === null).map((task) => ({
-          id: String(task.id), title: task.title, status: task.status, startsOn: task.startsOn, dueOn: task.dueOn, completedOn: task.completedOn,
-          dependencyTaskIds: task.dependencyTaskIds.map(String),
-        })),
-        actuals: actuals.actuals,
-        actualCoverage: actuals.coverage,
-        labor: labor.rows.map((row) => ({ timesheetId: row.timesheetId, scopeItemId: row.scopeItemId, currency: row.currency, estimatedCents: row.estimatedCents, postedCents: row.postedCents })),
-        lienWaiverDocumentCount: await lienWaiverCount(transaction, project.organizationId, project.id),
-      });
-      if (!labor.truncated) return report;
-      return { ...report, warnings: [...report.warnings, "Labor rows exceed the read limit; labor totals are incomplete."].slice(0, 100) };
+      return readCanonicalProjectCostReport(transaction, project, finance, asOf);
     }),
     labor: (principal, input) => read(principal, async (transaction, fresh, finance) => {
       const project = await new ProjectReadService(transaction, finance).get(fresh, { scope: companyScopeSchema.parse(input.scope), projectId: input.projectId });

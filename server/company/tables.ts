@@ -52,6 +52,7 @@ export const COMPANY_APPLICATION_TABLES = [
   "company_project_draw_request_items",
   "company_project_finance_bindings",
   "company_project_property_plans",
+  "company_project_deal_ledger",
   "time_connections",
   "time_refresh_leases",
   "time_oauth_states",

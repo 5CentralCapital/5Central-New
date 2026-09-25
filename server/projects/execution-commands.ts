@@ -180,6 +180,23 @@ async function assertProjectQboBindingScope(context: CommandHandlerContext<unkno
   if (existing.rows.some(row => String(row.environment) !== source.environment || String(row.realm_id) !== source.realmId)) {
     throw new ValidationCommandError("This project already has an unreleased QBO binding in a different environment or realm", { reason: "project_finance_qbo_scope_mismatch" });
   }
+  // A legacy project can have an active deal classification before its first
+  // finance binding. That classification still fixes the QBO company scope,
+  // so the reverse direction must enforce the same fence.
+  const existingDeal = await context.executor.query<{ environment: unknown; realm_id: unknown }>(
+    `SELECT DISTINCT source_environment AS environment, source_realm_id AS realm_id
+       FROM company_project_deal_ledger
+      WHERE organization_id = $1 AND project_id = $2
+        AND entry_kind IN ('cost', 'funding')
+        AND source_kind = 'qbo'
+        AND archived_at IS NULL
+        AND source_environment IS NOT NULL
+        AND source_realm_id IS NOT NULL`,
+    [context.envelope.scope.organizationId, projectId],
+  );
+  if (existingDeal.rows.some(row => String(row.environment) !== source.environment || String(row.realm_id) !== source.realmId)) {
+    throw new ValidationCommandError("This project already has an active deal classification in a different QBO environment or realm", { reason: "project_finance_qbo_scope_mismatch" });
+  }
 }
 
 async function verifyBindingSource(context: CommandHandlerContext<unknown>, sourceInput: FinancialSourceReference, allocatedCents: string, effectiveDate: string, expectedCurrency: string): Promise<ReturnType<typeof financialSourceLineResolutionSchema.parse>> {

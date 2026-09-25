@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { organizationIdSchema, legalEntityIdSchema, companyScopeSchema, commandEnvelopeSchema, isoDateSchema } from '../../shared/company';
 import { PROJECT_COMMAND_KINDS, projectCommandPayloadSchemas, projectIdSchema, projectListQuerySchema } from '../../shared/projects/contracts';
 import { projectExecutionCommandKinds, projectExecutionCommandPayloadSchemas } from '../../shared/projects';
+import { PROJECT_DEAL_COST_COMMAND_KINDS, projectDealCostCommandPayloadSchemas, projectDealCostQuerySchema } from '../../shared/projects/deal-costs';
 import type { RentOpsQueryExecutor } from '../rent-ops/repositories/postgres';
 import { loadAuthenticatedPrincipal, attestTransport } from './authorization';
 import { readCompanyContext } from './context';
@@ -111,12 +112,23 @@ export function registerCompanyMcpTools(register: CompanyToolRegistrar, options:
   if (projects.getExecution) register('get_project_execution', 'Read project assignments, milestones, inspections, bids, commitments, changes, purchase orders, draws and linked costs.', {
     scope: companyScopeSchema, projectId: projectIdSchema, asOf: isoDateSchema.optional(),
   }, false, async args => projects.getExecution!(await principalFor(args.scope.organizationId), args));
+  if (projects.getDealCosts) register('get_project_deal_costs', 'Read acquisition, unallocated, rehab, financing, holding and selling cost lanes, separate funding groups, sale forecast, QBO coverage and unresolved amounts for one project.', {
+    query: projectDealCostQuerySchema,
+  }, false, async ({ query }) => projects.getDealCosts!(await principalFor(query.scope.organizationId), query));
   if (projects.executeExecution) for (const kind of projectExecutionCommandKinds) {
     register(kind.replaceAll('.', '_'), `Save ${kind.replaceAll('.', ' ')} using the shared project workflow. Supply the current revision and reuse the same operation ID when retrying an uncertain save.`,
       { command: commandEnvelopeSchema(projectExecutionCommandPayloadSchemas[kind]) }, true, async ({ command }) => {
         const organizationId = organizationIdSchema.parse(command.scope.organizationId);
         return projects.executeExecution!(kind, command, { principal: await principalFor(organizationId), transport, resolvePrincipal: transaction => principalFor(organizationId, transaction) });
       });
+  }
+  if (projects.executeDealCost) for (const kind of PROJECT_DEAL_COST_COMMAND_KINDS) {
+    register(kind.replaceAll('.', '_'), `Save ${kind.replaceAll('.', ' ')} in the scoped deal-cost ledger. Supply the current project revision and reuse the identical envelope when retrying an uncertain save. This changes R-Ops classifications and projections only; it does not post to QuickBooks or move funds.`, {
+      command: commandEnvelopeSchema(projectDealCostCommandPayloadSchemas[kind]),
+    }, true, async ({ command }) => {
+      const organizationId = organizationIdSchema.parse(command.scope.organizationId);
+      return projects.executeDealCost!(kind, command, { principal: await principalFor(organizationId), transport, resolvePrincipal: transaction => principalFor(organizationId, transaction) });
+    });
   }
   for (const kind of PROJECT_COMMAND_KINDS) {
     register(kind.replaceAll('.', '_'), `Save ${kind.replaceAll('.', ' ')} in 5Central Ops. Supply a stable operationId/idempotencyKey and exact current revision. Retry an uncertain response with the identical envelope. This does not post to QuickBooks or transfer funds.`,
