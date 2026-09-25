@@ -1,4 +1,4 @@
-import { usdCurrencyFormatter } from '../../lib/rent-ops-formatters';
+import { formatLongDate, formatTimestamp, usdCurrencyFormatter } from '../../lib/rent-ops-formatters';
 import {EntityLink} from "./workspace/entity-link";
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { AlertCircle, Download, FileCheck2, FileText, Loader2, Users, X } from "lucide-react";
@@ -7,6 +7,7 @@ import { downloadRentOpsDocument, loadRentOpsApplication } from "./api";
 import {
   applicationCaseDisplayName,
   applicationCaseFact,
+  applicationCaseFactResolved,
   applicationCaseSectionState,
   applicationHistorySectionState,
   applicationDocumentDownloadable,
@@ -35,7 +36,7 @@ function title(value: unknown): string {
 
 function moneyFact(value: unknown, knowledge?: string): string {
   const fact = applicationCaseFact(value, knowledge);
-  if (fact === "Unknown" || fact === "Needs review") return fact;
+  if (!applicationCaseFactResolved(value, knowledge)) return fact;
   const cents = Number(value);
   return Number.isFinite(cents)
     ? usdCurrencyFormatter.format(cents / 100)
@@ -44,8 +45,11 @@ function moneyFact(value: unknown, knowledge?: string): string {
 
 function dateFact(value: unknown, knowledge?: string): string {
   const fact = applicationCaseFact(value, knowledge);
-  if (fact === "Unknown" || fact === "Needs review") return fact;
-  return fact;
+  return applicationCaseFactResolved(value, knowledge) ? formatLongDate(value) ?? fact : fact;
+}
+
+function timestampText(value: unknown): string {
+  return formatTimestamp(value) ?? String(value);
 }
 
 function Fact({ label, value, knowledge, className = "" }: { label: string; value: unknown; knowledge?: string; className?: string }) {
@@ -137,7 +141,7 @@ function HouseholdSection({ application }: { application: AdminApplicationDetail
       <Fact label="Children" value={summary?.children} />
       <Fact label="Total occupants" value={summary?.totalOccupants} />
     </dl>
-    {!members.length ? <EmptySection message="No household members recorded. Needs review if additional occupants are expected." /> : <div className="ro-case-member-list">
+    {!members.length ? <EmptySection message="No household members recorded. Confirm occupants if others are expected." /> : <div className="ro-case-member-list">
       {members.map((member, index) => <article className="ro-case-member" key={member.id ?? `${member.firstName ?? "member"}-${index}`}>
         <Users aria-hidden="true" />
         <div><strong>{[member.firstName, member.lastName].filter(Boolean).join(" ") || "Unknown household member"}</strong><span>{applicationCaseFact(member.relationship)} · {applicationCaseFact(member.isMinor)}</span><small>{applicationCaseFact(member.email)} · {applicationCaseFact(member.phone)}</small></div>
@@ -195,7 +199,7 @@ function DocumentsSection({ application }: { application: AdminApplicationDetail
         const unavailableMessage = document.availability === "metadata" ? "Metadata only — file unavailable." : "Secure file unavailable.";
         return <article className="ro-case-document" key={document.id ?? `${documentName}-${index}`}>
           <FileCheck2 aria-hidden="true" />
-          <div className="ro-case-document-body"><strong>{documentName}</strong><span>{title(applicationCaseFact(document.type))} · {title(applicationCaseFact(document.state))}</span><small>{canDownload ? "Verified secure document" : unavailableMessage}</small><small>{document.uploadedAt ? `Uploaded ${document.uploadedAt}` : "Upload date unknown"}{document.verifiedAt ? ` · Verified ${document.verifiedAt}` : ""}</small></div>
+          <div className="ro-case-document-body"><strong>{documentName}</strong><span>{title(applicationCaseFact(document.type))} · {title(applicationCaseFact(document.state))}</span><small>{canDownload ? "Verified secure document" : unavailableMessage}</small><small>{document.uploadedAt ? `Uploaded ${timestampText(document.uploadedAt)}` : "Upload date unknown"}{document.verifiedAt ? ` · Verified ${timestampText(document.verifiedAt)}` : ""}</small></div>
           {canDownload ? <button type="button" className="secondary ro-case-download" disabled={downloadingDocumentId === document.id} onClick={() => { void handleDownload(document); }} aria-label={`Download ${documentName}`}><Download aria-hidden="true" />{downloadingDocumentId === document.id ? "Preparing" : "Download"}</button> : <span className="ro-case-not-downloadable">Not downloadable</span>}
         </article>;
       })}
@@ -248,7 +252,7 @@ function HistoryParticipantsSection({ history }: { history: AdminApplicationHist
   const state = applicationHistorySectionState(history, "participants");
   return <section className="ro-case-section ro-history-section" aria-labelledby="application-history-participants">
     <SectionHeading id="application-history-participants" title="Participants" />
-    {state !== "full" ? <EmptySection message={state === "unknown" ? "Historical participant links need review." : "No historical participants were recorded."} /> : <div className="ro-case-member-list">
+    {state !== "full" ? <EmptySection message={state === "unknown" ? "Some historical participants could not be linked to this case." : "No historical participants were recorded."} /> : <div className="ro-case-member-list">
       {history.participants.map((participant, index) => <article className="ro-case-member" key={`historical-participant-${index}`}>
         <Users aria-hidden="true" />
         <div><strong>Participant {index + 1}</strong><span>{applicationCaseFact(participant.role, participant.roleKnowledge)} · {applicationCaseFact(participant.relationship, participant.relationshipKnowledge)}</span><small>{applicationCaseFact(participant.isMinor, participant.minorKnowledge)} minor · {applicationCaseFact(participant.isFinanciallyResponsible, participant.financialResponsibilityKnowledge)} financially responsible</small></div>
@@ -261,7 +265,7 @@ function HistoryRequirementsSection({ history }: { history: AdminApplicationHist
   const state = applicationHistorySectionState(history, "requirements");
   return <section className="ro-case-section ro-history-section" aria-labelledby="application-history-requirements">
     <SectionHeading id="application-history-requirements" title="Requirements" />
-    {state !== "full" ? <EmptySection message={state === "unknown" ? "Historical requirement links need review." : "No historical requirements were recorded."} /> : <div className="ro-case-requirement-list">
+    {state !== "full" ? <EmptySection message={state === "unknown" ? "Some historical requirements could not be linked to this case." : "No historical requirements were recorded."} /> : <div className="ro-case-requirement-list">
       {history.requirements.map((requirement, index) => <article className="ro-case-requirement" key={`historical-requirement-${index}`}>
         <div><strong>{applicationCaseFact(requirement.label)}</strong><span>{title(applicationCaseFact(requirement.status, requirement.statusKnowledge))}</span></div>
         <dl className="ro-case-facts ro-case-facts-compact">
@@ -314,7 +318,7 @@ function HistoryActivitySection({ history }: { history: AdminApplicationHistoryC
     {state !== "full" ? <EmptySection message={state === "unknown" ? "Some historical activity could not be linked to this case." : "No historical activity was recorded."} /> : <div className="ro-case-history-activity-list">
       {history.activities.map((activity, index) => <article className="ro-case-member" key={`historical-activity-${index}`}>
         <FileText aria-hidden="true" />
-        <div><strong>{title(applicationCaseFact(activity.type))}</strong><span>{activity.occurredAt ? new Date(activity.occurredAt).toLocaleString() : applicationCaseFact(undefined, activity.occurredAtKnowledge)}</span><small>{applicationCaseFact(activity.summary, activity.summaryKnowledge)}</small></div>
+        <div><strong>{title(applicationCaseFact(activity.type))}</strong><span>{activity.occurredAt ? timestampText(activity.occurredAt) : applicationCaseFact(undefined, activity.occurredAtKnowledge)}</span><small>{applicationCaseFact(activity.summary, activity.summaryKnowledge)}</small></div>
       </article>)}
     </div>}
   </section>;
@@ -427,7 +431,7 @@ export function ApplicationCaseDetail({ applicationId, summary, onClose, tenantP
         <RequirementsSection application={detail} />
         <DocumentsSection application={detail} />
         {detail.history && <HistoricalCaseSections history={detail.history} />}
-        {applicationCaseSectionState(detail, "overview") === "unknown" && <p className="ro-case-inline-warning"><AlertCircle aria-hidden="true" />Overview facts need review.</p>}
+        {applicationCaseSectionState(detail, "overview") === "unknown" && <p className="ro-case-inline-warning"><AlertCircle aria-hidden="true" />Some overview facts are unverified.</p>}
       </div>}
     </section>
   </div>;

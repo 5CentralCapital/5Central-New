@@ -1,7 +1,7 @@
 import type { Express, Request, RequestHandler, Response } from "express";
 import { ZodError, z } from "zod";
-import { legalEntityIdSchema, organizationIdSchema, propertyReferenceIdSchema, commandEnvelopeSchema, type LegalEntityId, type OrganizationId } from "../../shared/company";
-import { TIME_COMMAND_KINDS, timeCommandPayloadSchemas, timeConnectionScopeSchema, timeConnectionSetupScopeSchema, timeEnvironmentSchema, timeListQuerySchema } from "../../shared/time";
+import { isoDateSchema, legalEntityIdSchema, organizationIdSchema, propertyReferenceIdSchema, commandEnvelopeSchema, type LegalEntityId, type OrganizationId } from "../../shared/company";
+import { TIME_COMMAND_KINDS, timeCommandPayloadSchemas, timeConnectionScopeSchema, timeConnectionSetupScopeSchema, timeEnvironmentSchema, timeListQuerySchema, timeSyncOptionsSchema } from "../../shared/time";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { attestTransport, authorizeCompanyRead, loadAuthenticatedPrincipal } from "../company/authorization";
 import { CompanyCommandError, ForbiddenCommandError } from "../company/commands/errors";
@@ -115,6 +115,12 @@ export function registerTimeHttpRoutes(app: Express, options: TimeHttpRouteOptio
     const { principal } = await authorized(executor, request, scope.organizationId, scope.legalEntityId);
     response.json(await services.read.listJobcodeMappings(principal, scope));
   }));
+  app.get("/api/company/:organizationId/time/payroll-links", requireAdmin, timeHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const legalEntityId = legalEntityIdSchema.parse(queryString(request.query.legalEntityId, "legalEntityId"));
+    const { principal } = await authorized(executor, request, organizationId, legalEntityId);
+    response.json({ items: await services.read.listPayrollLinks(principal, { organizationId, legalEntityId }) });
+  }));
   app.get("/api/company/:organizationId/time/coverage", requireAdmin, timeHandler(async (request, response) => {
     const scope = scopeQuery(request);
     const { principal } = await authorized(executor, request, scope.organizationId, scope.legalEntityId);
@@ -122,9 +128,9 @@ export function registerTimeHttpRoutes(app: Express, options: TimeHttpRouteOptio
   }));
   app.post("/api/company/:organizationId/time/sync", requireAdmin, timeHandler(async (request, response) => {
     const organizationId = organizationIdSchema.parse(request.params.organizationId);
-    const body = z.object({ legalEntityId: legalEntityIdSchema, providerCompanyId: timeConnectionScopeSchema.shape.providerCompanyId, environment: timeEnvironmentSchema, maxPages: z.number().int().min(1).max(10_000).optional() }).strict().parse(request.body);
+    const body = z.object({ legalEntityId: legalEntityIdSchema, providerCompanyId: timeConnectionScopeSchema.shape.providerCompanyId, environment: timeEnvironmentSchema, maxPages: z.number().int().min(1).max(10_000).optional(), startDate: isoDateSchema.optional(), endDate: isoDateSchema.optional() }).strict().parse(request.body);
     await authorized(executor, request, organizationId, body.legalEntityId);
-    response.json(await services.sync.sync({ organizationId, legalEntityId: body.legalEntityId, environment: body.environment, providerCompanyId: body.providerCompanyId }, { maxPages: body.maxPages }));
+    response.json(await services.sync.sync({ organizationId, legalEntityId: body.legalEntityId, environment: body.environment, providerCompanyId: body.providerCompanyId }, timeSyncOptionsSchema.parse({ maxPages: body.maxPages, startDate: body.startDate, endDate: body.endDate })));
   }));
   app.post("/api/company/:organizationId/time-commands/:commandKind", requireAdmin, timeHandler(async (request, response) => {
     const organizationId = organizationIdSchema.parse(request.params.organizationId);

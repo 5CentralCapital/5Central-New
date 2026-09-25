@@ -8,16 +8,29 @@ const suite = process.argv[2] ?? "all";
 const roots = suite === "company"
   ? [
     "server/company", "shared/company", "client/src/features/company",
-    "server/accounting", "shared/accounting", "server/integrations/quickbooks",
+    "server/accounting", "shared/accounting", "server/integrations/quickbooks", "server/jobs", "client/src/features/accounting",
     "server/projects", "shared/projects", "client/src/features/projects",
     "server/investors", "shared/investors", "client/src/features/investors",
     "server/company-documents", "shared/company-documents", "client/src/features/company-documents",
     "server/intake", "shared/intake", "server/time", "shared/time", "client/src/features/time",
     "server/reporting", "shared/reporting", "client/src/features/reporting",
     "server/work-orders", "shared/work-orders", "client/src/features/work-orders",
+    // lane-d-forecast
+    "server/forecasting", "shared/forecasting", "client/src/features/forecasting",
+    // lane-e-nav: manager workspace read models and pages
+    "server/workspaces", "shared/workspaces", "client/src/features/workspaces",
+    // lane-c-review
+    "server/review-cases", "shared/review-cases", "client/src/features/review-cases", "client/src/features/intake",
+    "server/rent-ops/domain/review-detector.test.ts",
+    // lane-a-accounting: /mcp body limit through the real Express parser stack
+    "server/request-body-parsers.test.ts",
+    // Mac app shell: config and navigation-policy contract
+    "scripts/company/desktop-config.test.ts",
+    // shared production entry point (web / worker role)
+    "scripts/deploy/start.test.ts",
   ]
   : suite === "all"
-    ? ["server", "shared", "client/src/features", "scripts", "client/src/components/account-entry.test.ts"]
+    ? ["server", "shared", "client/src", "scripts"]
     : null;
 if (!roots) throw new Error("Unknown test suite; choose company or all");
 const tests = [];
@@ -33,9 +46,10 @@ for (const path of roots) discover(resolve(root, path));
 if (!tests.length) throw new Error("No tests discovered; refusing an empty pass");
 const env = { ...process.env, NODE_ENV: "test" };
 // Tests use synthetic repositories/PGlite. Never inherit live database or
-// service credentials into the default test runner.
+// service credentials into the default test runner. Opt-in real-PostgreSQL
+// tests (RENT_OPS_QA_POSTGRES_URL, *_TEST_URL, PG*) are skipped here too.
 for (const key of Object.keys(env)) {
-  if (/(?:DATABASE_URL|API_KEY|TOKEN|SECRET|PRIVATE_KEY|ENCRYPTION_KEY)$/.test(key)) delete env[key];
+  if (/(?:DATABASE_URL|POSTGRES_URL|_TEST_URL|API_KEY|SECRET_KEY|TOKENS?|SECRET|PASSWORD|PRIVATE_KEY|ENCRYPTION_KEY)$|^PG[A-Z]+$/.test(key)) delete env[key];
 }
 const concurrency = Number(process.env.ROPS_TEST_CONCURRENCY ?? 4);
 if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error("ROPS_TEST_CONCURRENCY must be an integer from 1 to 8");

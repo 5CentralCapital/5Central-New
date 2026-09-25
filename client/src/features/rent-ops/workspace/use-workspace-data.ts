@@ -8,6 +8,16 @@ import { seedWorkspaceDashboardReports } from './dashboard-cache';
 const queryRoot=['rent-ops-workspace'] as const;
 
 /**
+ * Drop every cached read when the manager session ends. Company lanes
+ * (accounting, work orders, review cases, forecasting, reporting, banking) key
+ * their caches by company rather than by manager, so keeping them would show
+ * one manager's records to the next manager who signs in on this tab.
+ */
+export function clearSignedOutQueries(client: QueryClient): void {
+ client.removeQueries();
+}
+
+/**
  * Refresh the workspace for a mutation whose saved state must be reflected in
  * the current view. TanStack Query can resolve an invalidation when a query is
  * paused or when a matching query is no longer active, so the move workflow

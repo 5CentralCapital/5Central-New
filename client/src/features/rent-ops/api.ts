@@ -55,16 +55,19 @@ import type {
   RentOpsMutation,
   RentOpsMutationResult,
   TenantView,
+  TenantPaymentReview,
+  TenantPaymentReviewAdjustment,
   OperationalScheduleRegister,
 } from "./types";
 import { createDemoAdminSnapshot, DEMO_AS_OF_DATE } from "./demo";
 import { REPORT_KEYS, REPORT_LABELS } from "./types";
 import type { ReportColumn } from "./types";
 import { rentOpsAuthClient } from "./auth";
+import { TENANT_PAYMENT_QUEUE_REASONS, TENANT_PAYMENT_STATUSES, type TenantPaymentQueueReason, type TenantPaymentStatus } from "@shared/tenant-payment-contracts";
 
 /**
  * The browser is an adapter, not a second reporting engine. All financial and
- * occupancy calculations happen in the Rent Operations domain service. The
+ * occupancy calculations happen in the 5Central Ops domain service. The
  * client only fetches those rows, normalizes response envelopes, and applies
  * display-only filters/sorts.
  */
@@ -79,7 +82,7 @@ const DEMO_ALLOWED = Boolean(
 
 type JsonRecord = Record<string, unknown>;
 
-const INVALID_RESPONSE_MESSAGE = "Rent Operations API returned an invalid response.";
+const INVALID_RESPONSE_MESSAGE = "5Central Ops API returned an invalid response.";
 const TARGET_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,159}$/;
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const ISO_MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -143,7 +146,7 @@ export class RentOpsApiError extends Error {
           ? "Activity records are append-only; add a new dated event instead."
             : code === "hap_create_requires_provenance"
               ? "New HAP contracts require explicit source provenance and are not available here."
-            : `Rent Operations API returned ${status}.`);
+            : `5Central Ops API returned ${status}.`);
     this.name = "RentOpsApiError";
   }
 }
@@ -614,7 +617,7 @@ function decodeRecurringSchedule(value: unknown): AdminRecurringScheduleView {
   const lineageState = optionalEnum(input, "lineageState", ["valid", "unknown"] as const);
   const resolvedEffectiveTo = nullableDate(input, "resolvedEffectiveTo");
   const canScheduleSuccessor = optionalBoolean(input, "canScheduleSuccessor");
-  if (lineageState === "valid" && resolvedEffectiveTo === undefined || canScheduleSuccessor === true && lineageState !== "valid") throw new Error("Rent Operations returned inconsistent recurring schedule history.");
+  if (lineageState === "valid" && resolvedEffectiveTo === undefined || canScheduleSuccessor === true && lineageState !== "valid") throw new Error("5Central Ops returned inconsistent recurring schedule history.");
   return {
     id: optionalId(input, "id"),
     chargeDefinitionId: nullableId(input, "chargeDefinitionId"),
@@ -654,6 +657,60 @@ function decodeChargeDefinition(value: unknown): AdminChargeDefinitionView {
     active: nullableBoolean(input, "active"),
     activeKnowledge: nullableAllowed(input, "activeKnowledge", FACT_KNOWLEDGE),
     recordRevision: optionalRevision(input),
+  };
+}
+
+function decodeTenantPaymentReviewAdjustment(value: unknown): TenantPaymentReviewAdjustment {
+  const input = exactRecord(value, "payment review adjustment", ["paymentId", "providerObjectId", "kind", "amountCents", "active", "providerCreatedAt", "terminal"]);
+  const amountCents = requiredMoney(input, "amountCents");
+  if (amountCents <= 0) invalidResponse();
+  const providerCreatedAt = requiredInteger(input, "providerCreatedAt");
+  if (providerCreatedAt < 0) invalidResponse();
+  return {
+    paymentId: requiredId(input, "paymentId"),
+    providerObjectId: requiredId(input, "providerObjectId"),
+    kind: requiredAllowed(input, "kind", ["refund", "dispute"] as const) as "refund" | "dispute",
+    amountCents,
+    active: requiredBoolean(input, "active"),
+    providerCreatedAt,
+    terminal: requiredBoolean(input, "terminal"),
+  };
+}
+
+/** Decode the staff-only disputed/held payment queue without accepting a
+ * provider payload, checkout URL, or unknown field into browser state. */
+export function decodeTenantPaymentReview(value: unknown): TenantPaymentReview {
+  const input = exactRecord(value, "payment review", ["id", "accountId", "personId", "tenancyId", "propertyId", "unitId", "requestId", "amountCents", "currency", "status", "expiresAt", "createdAt", "updatedAt", "postedOn", "checkoutSessionId", "paymentIntentId", "currentLedgerCents", "ledgerRevision", "stale", "queueReason", "adjustments"]);
+  const amountCents = requiredMoney(input, "amountCents");
+  if (amountCents <= 0) invalidResponse();
+  const currentLedgerCents = requiredMoney(input, "currentLedgerCents");
+  const ledgerRevision = requiredInteger(input, "ledgerRevision");
+  if (ledgerRevision < 0) invalidResponse();
+  const status = requiredAllowed(input, "status", TENANT_PAYMENT_STATUSES) as TenantPaymentStatus;
+  const stale = optionalBoolean(input, "stale") ?? ["creating", "pending", "processing"].includes(status);
+  const queueReason = (optionalAllowed(input, "queueReason", TENANT_PAYMENT_QUEUE_REASONS) ?? (status === "disputed" ? "disputed" : status === "review_required" ? "review_required" : "stale_active")) as TenantPaymentQueueReason;
+  return {
+    id: requiredId(input, "id"),
+    accountId: requiredId(input, "accountId"),
+    personId: requiredId(input, "personId"),
+    tenancyId: requiredId(input, "tenancyId"),
+    propertyId: requiredId(input, "propertyId"),
+    unitId: requiredId(input, "unitId"),
+    requestId: requiredId(input, "requestId"),
+    amountCents,
+    currency: requiredAllowed(input, "currency", ["usd"] as const) as "usd",
+    status,
+    expiresAt: requiredTimestamp(input, "expiresAt"),
+    createdAt: requiredTimestamp(input, "createdAt"),
+    updatedAt: requiredTimestamp(input, "updatedAt"),
+    postedOn: optionalDate(input, "postedOn"),
+    checkoutSessionId: optionalId(input, "checkoutSessionId"),
+    paymentIntentId: optionalId(input, "paymentIntentId"),
+    currentLedgerCents,
+    ledgerRevision,
+    stale,
+    queueReason,
+    adjustments: requiredArrayOf(input, "adjustments", decodeTenantPaymentReviewAdjustment),
   };
 }
 
@@ -1012,8 +1069,6 @@ export function decodeRentOpsApplicationHistoryCase(value: unknown): AdminApplic
   };
 }
 
-export const decodeRentOpsApplicationHistory = decodeRentOpsApplicationHistoryCase;
-
 /** Decode the current positive `/api/rent-ops/applications/:id` response. */
 export function decodeRentOpsApplicationDetail(value: unknown): AdminApplicationDetailView {
   const input = exactRecord(value, "application detail", [...APPLICATION_RESPONSE_KEYS, "householdMembers", "requirements", "documents", "history"]);
@@ -1214,7 +1269,7 @@ function decodeApiFilters(value: unknown): ApiFilters {
 const DASHBOARD_DRILLDOWN_KEYS = ["occupiedUnits", "futurePreleasedUnits", "genuineVacantUnits", "rentOnlyDelinquencyCents", "securityDepositLiabilityCents"] as const;
 
 function decodeDashboardSummary(value: unknown): DashboardSummary {
-  const input = exactRecord(value, "dashboard summary", ["operationalDelinquencyCents", "operationalBalanceUnresolvedCount","balanceUnresolvedCount", "balanceComplete", "balanceUncertaintyCodes", "asOfDate", "propertyCount", "unitCount", "occupiedUnits", "futurePreleasedUnits", "genuineVacantUnits", "readyVacantUnits", "notReadyUnits", "offMarketUnits", "physicalOccupancyPercent", "scheduledRentConfirmedCents", "scheduledRentUnresolvedCount", "scheduledRentComplete", "scheduledRentCadenceComplete", "scheduledRentCents", "collectedRentCents", "rentOnlyDelinquencyCents", "totalDelinquencyCents", "unappliedCashCents", "expiringIn30Days", "expiringIn60Days", "expiringIn90Days", "monthToMonthCount", "applicationsSubmitted", "applicationsMissingInformation", "securityDepositLiabilityCents", "drilldowns"]);
+  const input = exactRecord(value, "dashboard summary", ["operationalDelinquencyCents", "operationalBalanceUnresolvedCount", "operationalBalanceDueCount", "operationalBalanceDueKnownCents", "balanceUnresolvedCount", "balanceComplete", "balanceUncertaintyCodes", "asOfDate", "propertyCount", "unitCount", "occupiedUnits", "futurePreleasedUnits", "genuineVacantUnits", "readyVacantUnits", "notReadyUnits", "offMarketUnits", "physicalOccupancyPercent", "scheduledRentConfirmedCents", "scheduledRentUnresolvedCount", "scheduledRentComplete", "scheduledRentCadenceComplete", "scheduledRentCents", "collectedRentCents", "rentOnlyDelinquencyCents", "totalDelinquencyCents", "unappliedCashCents", "expiringIn30Days", "expiringIn60Days", "expiringIn90Days", "monthToMonthCount", "applicationsSubmitted", "applicationsMissingInformation", "securityDepositLiabilityCents", "drilldowns"]);
   const drilldownInput = exactRecord(input.drilldowns, "dashboard drilldowns", DASHBOARD_DRILLDOWN_KEYS);
   const drilldowns: DashboardSummary["drilldowns"] = {};
   for (const key of DASHBOARD_DRILLDOWN_KEYS) {
@@ -1226,7 +1281,7 @@ function decodeDashboardSummary(value: unknown): DashboardSummary {
     if (!report) invalidResponse();
     drilldowns[key] = { report, filters: decodeApiFilters(item.filters) };
   }
-  return { operationalDelinquencyCents: nullableMoney(input, "operationalDelinquencyCents"), operationalBalanceUnresolvedCount: optionalInteger(input, "operationalBalanceUnresolvedCount"), balanceUnresolvedCount: optionalInteger(input, "balanceUnresolvedCount"), balanceComplete: optionalBoolean(input, "balanceComplete"), balanceUncertaintyCodes: optionalStrings(input, "balanceUncertaintyCodes"),
+  return { operationalDelinquencyCents: nullableMoney(input, "operationalDelinquencyCents"), operationalBalanceUnresolvedCount: optionalInteger(input, "operationalBalanceUnresolvedCount"), operationalBalanceDueCount: optionalInteger(input, "operationalBalanceDueCount"), operationalBalanceDueKnownCents: optionalInteger(input, "operationalBalanceDueKnownCents"), balanceUnresolvedCount: optionalInteger(input, "balanceUnresolvedCount"), balanceComplete: optionalBoolean(input, "balanceComplete"), balanceUncertaintyCodes: optionalStrings(input, "balanceUncertaintyCodes"),
     asOfDate: requiredDate(input, "asOfDate"),
     propertyCount: requiredInteger(input, "propertyCount"),
     unitCount: requiredInteger(input, "unitCount"),
@@ -1308,7 +1363,7 @@ function decodeCollectedIncomeRow(value: unknown): CollectedIncomeRow {
 }
 
 function decodeScheduledVsCollectedRow(value: unknown): ScheduledVsCollectedRow {
-  const input = exactRecord(value, "scheduled-vs-collected row", ["propertyId", "propertyName", "month", "scheduledCents", "collectedCents", "varianceCents", "scheduledKnownCents", "scheduledUncertainCents", "scheduledUnknownAmountCount", "collectedKnownCents", "collectedUncertainCents", "collectedUnknownAmountCount", "complete", "uncertaintyCodes"]);
+  const input = exactRecord(value, "scheduled-vs-collected row", ["propertyId", "propertyName", "month", "scheduledCents", "collectedCents", "varianceCents", "scheduledKnownCents", "scheduledUncertainCents", "scheduledUnknownAmountCount", "collectedKnownCents", "collectedUncertainCents", "collectedUnknownAmountCount", "scheduleNotApplicableVacantCount", "scheduleNotApplicableOtherTenancyCount", "schedulePrecedenceSuppressedCount", "asOfDate", "scheduleBasis", "complete", "uncertaintyCodes"]);
   return {
     propertyId: nullableId(input, "propertyId"),
     propertyName: nullableText(input, "propertyName"),
@@ -1322,6 +1377,11 @@ function decodeScheduledVsCollectedRow(value: unknown): ScheduledVsCollectedRow 
     collectedKnownCents: nullableMoney(input, "collectedKnownCents"),
     collectedUncertainCents: nullableMoney(input, "collectedUncertainCents"),
     collectedUnknownAmountCount: nullableInteger(input, "collectedUnknownAmountCount"),
+    scheduleNotApplicableVacantCount: optionalInteger(input, "scheduleNotApplicableVacantCount"),
+    scheduleNotApplicableOtherTenancyCount: optionalInteger(input, "scheduleNotApplicableOtherTenancyCount"),
+    schedulePrecedenceSuppressedCount: optionalInteger(input, "schedulePrecedenceSuppressedCount"),
+    asOfDate: optionalDate(input, "asOfDate"),
+    scheduleBasis: optionalAllowed(input, "scheduleBasis", ["as_of", "month_forecast"]) as ScheduledVsCollectedRow["scheduleBasis"],
     complete: nullableBoolean(input, "complete"),
     uncertaintyCodes: optionalStrings(input, "uncertaintyCodes"),
   };
@@ -1338,8 +1398,8 @@ function decodeLeaseExpirationRow(value: unknown): LeaseExpirationRow {
 }
 
 function decodeDepositLiabilityRow(value: unknown): DepositLiabilityRow {
-  const input = exactRecord(value, "security-deposit row", ["propertyId", "propertyName", "unitId", "unitNumber", "tenancyId", "personId", "tenantName", "securityHeldCents", "refundablePetHeldCents", "otherRefundableHeldCents", "totalHeldCents", "sourceBalanceCents", "unknownHeldCount", "dispositionStatus", "unknownReceiptCount", "hasUnknownReceiptDate", "temporalUncertainty"]);
-  return { propertyId: optionalId(input, "propertyId"), propertyName: optionalText(input, "propertyName"), unitId: optionalId(input, "unitId"), unitNumber: optionalText(input, "unitNumber"), tenancyId: optionalId(input, "tenancyId"), personId: optionalId(input, "personId"), tenantName: optionalText(input, "tenantName"), securityHeldCents: nullableMoney(input, "securityHeldCents"), refundablePetHeldCents: nullableMoney(input, "refundablePetHeldCents"), otherRefundableHeldCents: nullableMoney(input, "otherRefundableHeldCents"), totalHeldCents: nullableMoney(input, "totalHeldCents"), sourceBalanceCents: nullableMoney(input, "sourceBalanceCents"), unknownHeldCount: optionalInteger(input, "unknownHeldCount"), dispositionStatus: optionalAllowed(input, "dispositionStatus", DEPOSIT_STATUSES), unknownReceiptCount: optionalInteger(input, "unknownReceiptCount"), hasUnknownReceiptDate: optionalBoolean(input, "hasUnknownReceiptDate"), temporalUncertainty: optionalBoolean(input, "temporalUncertainty") };
+  const input = exactRecord(value, "security-deposit row", ["propertyId", "propertyName", "unitId", "unitNumber", "tenancyId", "personId", "tenantName", "securityHeldCents", "refundablePetHeldCents", "otherRefundableHeldCents", "totalHeldCents", "sourceBalanceCents", "unknownHeldCount", "typeUnknownCount", "unitLinkStatus", "dispositionStatus", "unknownReceiptCount", "hasUnknownReceiptDate", "temporalUncertainty"]);
+  return { propertyId: optionalId(input, "propertyId"), propertyName: optionalText(input, "propertyName"), unitId: optionalId(input, "unitId"), unitNumber: optionalText(input, "unitNumber"), tenancyId: optionalId(input, "tenancyId"), personId: optionalId(input, "personId"), tenantName: optionalText(input, "tenantName"), securityHeldCents: nullableMoney(input, "securityHeldCents"), refundablePetHeldCents: nullableMoney(input, "refundablePetHeldCents"), otherRefundableHeldCents: nullableMoney(input, "otherRefundableHeldCents"), totalHeldCents: nullableMoney(input, "totalHeldCents"), sourceBalanceCents: nullableMoney(input, "sourceBalanceCents"), unknownHeldCount: optionalInteger(input, "unknownHeldCount"), typeUnknownCount: optionalInteger(input, "typeUnknownCount"), unitLinkStatus: optionalAllowed(input, "unitLinkStatus", ["direct", "tenancy", "missing", "conflict"]) as DepositLiabilityRow["unitLinkStatus"], dispositionStatus: optionalAllowed(input, "dispositionStatus", DEPOSIT_STATUSES), unknownReceiptCount: optionalInteger(input, "unknownReceiptCount"), hasUnknownReceiptDate: optionalBoolean(input, "hasUnknownReceiptDate"), temporalUncertainty: optionalBoolean(input, "temporalUncertainty") };
 }
 
 function decodeApplicantPipelineRow(value: unknown): ApplicantPipelineRow {
@@ -1348,8 +1408,8 @@ function decodeApplicantPipelineRow(value: unknown): ApplicantPipelineRow {
 }
 
 function decodeHapRow(value: unknown): HapRow {
-  const input = exactRecord(value, "hap row", ["propertyId", "propertyName", "unitId", "unitNumber", "tenancyId", "tenantName", "agencyName", "month", "agencyObligationCents", "tenantObligationCents", "expectedTotalCents", "receivedAgencyCents", "varianceCents", "exception"]);
-  return { propertyId: optionalId(input, "propertyId"), propertyName: optionalText(input, "propertyName"), unitId: optionalId(input, "unitId"), unitNumber: optionalText(input, "unitNumber"), tenancyId: optionalId(input, "tenancyId"), tenantName: optionalText(input, "tenantName"), agencyName: optionalText(input, "agencyName"), month: optionalMonth(input, "month"), agencyObligationCents: optionalMoney(input, "agencyObligationCents"), tenantObligationCents: optionalMoney(input, "tenantObligationCents"), expectedTotalCents: optionalMoney(input, "expectedTotalCents"), receivedAgencyCents: optionalMoney(input, "receivedAgencyCents"), varianceCents: optionalMoney(input, "varianceCents"), exception: optionalBoolean(input, "exception") };
+  const input = exactRecord(value, "hap row", ["propertyId", "propertyName", "unitId", "unitNumber", "tenancyId", "tenantName", "agencyName", "month", "agencyObligationCents", "tenantObligationCents", "expectedTotalCents", "obligationSource", "receivedAgencyCents", "receivedAgencyKnownCents", "agencyReceiptStatus", "varianceCents", "exception", "receiptCount", "unknownReceiptCount", "uncertainty", "uncertaintyCodes"]);
+  return { propertyId: optionalId(input, "propertyId"), propertyName: optionalText(input, "propertyName"), unitId: optionalId(input, "unitId"), unitNumber: optionalText(input, "unitNumber"), tenancyId: optionalId(input, "tenancyId"), tenantName: optionalText(input, "tenantName"), agencyName: optionalText(input, "agencyName"), month: optionalMonth(input, "month"), agencyObligationCents: optionalMoney(input, "agencyObligationCents"), tenantObligationCents: optionalMoney(input, "tenantObligationCents"), expectedTotalCents: optionalMoney(input, "expectedTotalCents"), obligationSource: optionalAllowed(input, "obligationSource", ["contract", "subsidy_tenant"]) as HapRow["obligationSource"], receivedAgencyCents: nullableMoney(input, "receivedAgencyCents"), receivedAgencyKnownCents: optionalMoney(input, "receivedAgencyKnownCents"), agencyReceiptStatus: optionalAllowed(input, "agencyReceiptStatus", ["received", "none_received", "unknown"]) as HapRow["agencyReceiptStatus"], varianceCents: nullableMoney(input, "varianceCents"), exception: optionalBoolean(input, "exception"), receiptCount: optionalInteger(input, "receiptCount"), unknownReceiptCount: optionalInteger(input, "unknownReceiptCount"), uncertainty: optionalBoolean(input, "uncertainty"), uncertaintyCodes: optionalStrings(input, "uncertaintyCodes") };
 }
 
 function decodeReportRows(key: ReportKey, value: unknown): ReportRow[] {
@@ -1421,13 +1481,13 @@ async function requestJson(path: string, init?: RequestInit): Promise<unknown> {
     const errorPayload = await response.json().catch(() => undefined);
     const code = safeErrorCode(errorPayload);
     const reportRequest = /\/api\/rent-ops\/(?:preview-context|dashboard|snapshot|workspace\/dashboard(?:\?|$)|reports(?:\/|$))/.test(path);
-    const message = code === "not_authorized" ? "Rent Operations authorization is required."
-      : code === "not_found" ? "The requested Rent Operations record was not found."
+    const message = code === "not_authorized" ? "5Central Ops authorization is required."
+      : code === "not_found" ? "The requested 5Central Ops record was not found."
         : code === "conflict" || code === "versioned_schedule_required" ? undefined
           : code === "verified_upload_required" ? "Secure document upload is not available yet."
-            : code === "temporarily_unavailable" ? "Rent Operations is temporarily unavailable."
-              : code === "invalid_input" ? reportRequest ? "The selected report date or filters cannot be used. Choose a valid date and try again." : "Rent Operations request contains invalid input."
-              : `Rent Operations API returned ${response.status}.`;
+            : code === "temporarily_unavailable" ? "5Central Ops is temporarily unavailable."
+              : code === "invalid_input" ? reportRequest ? "The selected report date or filters cannot be used. Choose a valid date and try again." : "5Central Ops request contains invalid input."
+              : `5Central Ops API returned ${response.status}.`;
     if (code === "conflict" || code === "versioned_schedule_required" || code === "activity_append_only" || code === "hap_create_requires_provenance") throw new RentOpsApiError(code, response.status);
     throw new Error(message);
   }
@@ -1444,7 +1504,7 @@ export async function downloadRentOpsDocument(documentId: string): Promise<Blob>
   if (!response.ok) {
     const errorPayload = await response.json().catch(() => undefined);
     const code = safeErrorCode(errorPayload);
-    throw new Error(code === "not_authorized" ? "Rent Operations authorization is required."
+    throw new Error(code === "not_authorized" ? "5Central Ops authorization is required."
       : code === "not_found" ? "The document record was not found."
         : "Secure document download is unavailable.");
   }
@@ -1494,8 +1554,8 @@ function normalizeReport(key: ReportKey, value: unknown): ReportDefinition {
   return {
     key,
     label: label ?? REPORT_LABELS[key],
-    description: description ?? "Server-derived Rent Operations report.",
-    sourceNote: sourceNote ?? "Rows are derived by the Rent Operations domain service.",
+    description: description ?? "Server-derived 5Central Ops report.",
+    sourceNote: sourceNote ?? "Rows are derived by the 5Central Ops domain service.",
     columns: normalizeColumns(columns, rows),
     rows,
   };
@@ -1612,6 +1672,25 @@ export async function loadRentOpsChargeDefinitions(): Promise<AdminChargeDefinit
   return payload.map(decodeChargeDefinition);
 }
 
+/** Load the staff-visible payment exceptions separately from the broad
+ * snapshot so a held or disputed provider event is easy to find and cannot
+ * become an accidental tenant-facing field. */
+export async function loadRentOpsPaymentReviewQueue(signal?: AbortSignal): Promise<TenantPaymentReview[]> {
+  if (DEMO_ALLOWED) return [];
+  const payload = await requestJson("/api/rent-ops/tenant-payments/review", { signal });
+  assertNoForbiddenResponseFields(payload);
+  if (!Array.isArray(payload)) invalidResponse();
+  return payload.map(decodeTenantPaymentReview);
+}
+
+export async function reconcileRentOpsPayment(paymentId: string, signal?: AbortSignal): Promise<TenantPaymentReview | null> {
+  if (!/^[A-Za-z0-9:_-]{1,160}$/.test(paymentId)) throw new Error("The payment record is unavailable.");
+  if (DEMO_ALLOWED) return null;
+  const payload = await requestJson(`/api/rent-ops/tenant-payments/${encodeURIComponent(paymentId)}/reconcile`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal });
+  assertNoForbiddenResponseFields(payload);
+  return payload === null ? null : decodeTenantPaymentReview(payload);
+}
+
 export async function loadRentOpsReport(report: ReportKey, filters: ApiFilters = {}, signal?: AbortSignal): Promise<ReportRow[]> {
   if (DEMO_ALLOWED) return createDemoAdminSnapshot().reports[report].rows;
   const serverName = report === "lease-expiration" ? "lease-expirations" : report === "security-deposit" ? "security-deposit" : report;
@@ -1682,17 +1761,6 @@ export async function loadRentOpsApplication(applicationId: string): Promise<Adm
   const detail = decodeRentOpsApplicationDetail(root);
   if (detail.id !== applicationId) throw new Error(INVALID_RESPONSE_MESSAGE);
   return detail;
-}
-
-/** Load only the historical case when an imported-only target has no native row. */
-export async function loadRentOpsApplicationHistory(applicationId: string): Promise<AdminApplicationHistoryCaseView> {
-  if (!validTargetId(applicationId)) throw new Error("The application record is unavailable.");
-  if (DEMO_ALLOWED) throw new Error("Historical application data is not available in synthetic data.");
-  const payload = await requestJson(`/api/rent-ops/applications/${encodeURIComponent(applicationId)}/history`);
-  assertNoForbiddenResponseFields(payload);
-  const history = decodeRentOpsApplicationHistoryCase(unwrapData(payload));
-  if (history.application?.id !== applicationId) throw new Error(INVALID_RESPONSE_MESSAGE);
-  return history;
 }
 
 const PATCH_ACTION_PATHS: Partial<Record<RentOpsMutation["action"], string>> = {
@@ -1806,7 +1874,7 @@ export async function postRentOpsMutation(mutation: RentOpsMutation): Promise<Re
       };
       break;
     }
-    default: throw new Error(`Unsupported Rent Operations action: ${mutation.action}`);
+    default: throw new Error(`Unsupported 5Central Ops action: ${mutation.action}`);
   }
   const patchBase = PATCH_ACTION_PATHS[mutation.action];
   const revision = source.revision;
@@ -1841,24 +1909,6 @@ export function filterReportRows(report: ReportDefinition, filters: { propertyId
     return propertyMatches && statusMatches && searchMatches;
   });
   return { ...report, rows };
-}
-
-export function sortReportRows(report: ReportDefinition, key: string, direction: "asc" | "desc" = "asc"): ReportDefinition {
-  const factor = direction === "asc" ? 1 : -1;
-  const rows = [...report.rows].sort((left, right) => String(reportCell(left, key) ?? "").localeCompare(String(reportCell(right, key) ?? ""), undefined, { numeric: true }) * factor);
-  return { ...report, rows };
-}
-
-export function reportToCsv(report: ReportDefinition): string {
-  return [report.columns.map((column) => escapeCsvCell(column.label)).join(","), ...report.rows.map((row) => report.columns.map((column) => escapeCsvCell(reportCell(row, column.key))).join(","))].join("\n");
-}
-
-export function escapeCsvCell(value: unknown): string {
-  let text = value == null ? "" : String(value);
-  // Spreadsheet applications can execute formulas embedded in CSV cells.
-  // Prefix after optional leading whitespace while preserving display text.
-  if (/^\s*[=+\-@]/.test(text)) text = `'${text}`;
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }
 
 export function currentLocalIsoDate(date = new Date()): string {
@@ -1926,13 +1976,6 @@ export async function loadRentOpsWorkspaceBootstrap(filters: ApiFilters = {}, si
     return { workspaceVersion: 1, generatedAt: full.generatedAt, loadedCollections: ["properties", "units", "people", "tenancies", "householdMemberships", "leaseTerms", "chargeDefinitions", ...WORKSPACE_COLLECTIONS], snapshot: full.snapshot, chargeDefinitions: full.chargeDefinitions, tenantIndex: full.tenants.map(tenant => ({ person: tenant.person, tenancyIds: (tenant.tenancies ?? (tenant.tenancy ? [tenant.tenancy] : [])).flatMap(t => t.id ? [t.id] : []), accountContact: !tenant.tenancy, selectedTenancyId: tenant.tenancy?.id, category: tenant.tenancy?.status === "current" ? "current" : tenant.tenancy?.status === "former" ? "former" : tenant.tenancy?.status === "future" ? "future" : "unknown" })) };
   }
   return decodeRentOpsWorkspaceBootstrap(await requestJson(`/api/rent-ops/workspace${buildRentOpsQuery(filters)}`, { signal }));
-}
-
-export async function loadRentOpsWorkspaceSummary(filters: ApiFilters = {}, signal?: AbortSignal): Promise<DashboardSummary> {
-  if (DEMO_ALLOWED) return createDemoAdminSnapshot().summary;
-  const value = await requestJson(`/api/rent-ops/dashboard${buildRentOpsQuery(filters)}`, { signal });
-  assertNoForbiddenResponseFields(value);
-  return decodeDashboardSummary(unwrapData(value));
 }
 
 export async function loadDashboardTrends(filters: ApiFilters, signal?: AbortSignal) {

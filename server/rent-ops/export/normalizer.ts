@@ -92,6 +92,10 @@ function value(record: Raw, ...keys: string[]): unknown {
   return undefined;
 }
 
+function isRecordValue(candidate: unknown): candidate is Raw {
+  return typeof candidate === "object" && candidate !== null && !Array.isArray(candidate);
+}
+
 function text(record: Raw, ...keys: string[]): string | undefined {
   const found = value(record, ...keys);
   if (found === undefined) return undefined;
@@ -270,7 +274,7 @@ function selectMarketRent(candidates: readonly Raw[], asOf?: string): { row?: Ra
   if (!asOf) {
     const current = candidates.filter((row) => marketRentExplicitCurrent(row));
     const pool = current.length > 0 ? current : candidates;
-    const sorted = [...pool].sort((left, right) => `${dateKey(text(right, "FromDate", "EffectiveFrom", "StartDate")) ?? ""}|${text(right, "MarketRentID", "RentID", "sourceId") ?? ""}`.localeCompare(`${dateKey(text(left, "FromDate", "EffectiveFrom", "StartDate")) ?? ""}|${text(left, "MarketRentID", "RentID", "sourceId") ?? ""}`));
+    const sorted = [...pool].sort((left, right) => `${dateKey(text(right, "FromDate", "EffectiveFrom", "StartDate")) ?? ""}|${text(right, "MarketRentID", "RentID", "sourceId") ?? ""}`.localeCompare(`${dateKey(text(left, "FromDate", "EffectiveFrom", "StartDate")) ?? ""}|${text(left, "MarketRentID", "RentID", "sourceId") ?? ""}`, "en-US"));
     return { row: sorted[0], ambiguous: false, excludedFutureOrExpired: false };
   }
   const asOfKey = dateKey(asOf ?? new Date().toISOString().slice(0, 10));
@@ -284,7 +288,7 @@ function selectMarketRent(candidates: readonly Raw[], asOf?: string): { row?: Ra
   if (candidatesForSelection.length === 1) return { row: candidatesForSelection[0].row, ambiguous: false, excludedFutureOrExpired };
   const amounts = new Set(candidatesForSelection.map(({ row }) => String(marketRentAmount(row) ?? "")));
   if (amounts.size > 1) return { ambiguous: true, excludedFutureOrExpired };
-  const sorted = [...candidatesForSelection].sort((left, right) => `${right.start ?? ""}|${text(right.row, "MarketRentID", "RentID", "sourceId") ?? ""}`.localeCompare(`${left.start ?? ""}|${text(left.row, "MarketRentID", "RentID", "sourceId") ?? ""}`));
+  const sorted = [...candidatesForSelection].sort((left, right) => `${right.start ?? ""}|${text(right.row, "MarketRentID", "RentID", "sourceId") ?? ""}`.localeCompare(`${left.start ?? ""}|${text(left.row, "MarketRentID", "RentID", "sourceId") ?? ""}`, "en-US"));
   return { row: sorted[0].row, ambiguous: false, excludedFutureOrExpired };
 }
 
@@ -318,7 +322,7 @@ function chooseLeaseFor(leases: readonly Raw[], tenantId?: string, unitId?: stri
     if (start && start > asOfKey) return false;
     if (end && end < asOfKey) return false;
     return true;
-  }).sort((left, right) => `${dateKey(leaseDate(right)) ?? ""}|${text(right, "LeaseID", "leaseId") ?? ""}`.localeCompare(`${dateKey(leaseDate(left)) ?? ""}|${text(left, "LeaseID", "leaseId") ?? ""}`));
+  }).sort((left, right) => `${dateKey(leaseDate(right)) ?? ""}|${text(right, "LeaseID", "leaseId") ?? ""}`.localeCompare(`${dateKey(leaseDate(left)) ?? ""}|${text(left, "LeaseID", "leaseId") ?? ""}`, "en-US"));
   if (candidates.length === 1) return { row: candidates[0], ambiguous: false };
   if (candidates.length > 1) return { ambiguous: true };
   return { ambiguous: false };
@@ -690,13 +694,61 @@ function normalizeLedger(record: Raw, collection: string, tenants: Map<string, R
   return normalized;
 }
 
+/** Activity kind from the RM collection the row came from; tenant History rows carry no kind. */
+const HISTORY_COLLECTION_TYPES: ReadonlyArray<[RegExp, string]> = [
+  [/^historyNotes$/i, "note"],
+  [/^historyCalls$/i, "call"],
+  [/^historySystemNotes$/i, "system"],
+  [/^(?:historyEmails|emailSentItems|emailChains)$/i, "email"],
+  [/^(?:outgoingTexts|incomingTexts|textMessagingConversations)$/i, "text"],
+];
+
+/** Exact RM type/category words that name one of the supported activity kinds. */
+function historyTypeFromSourceValue(raw: string | undefined): string | undefined {
+  const value = raw?.trim().toLowerCase().replace(/[\s_-]+/g, " ");
+  if (!value) return undefined;
+  if (value === "note" || value === "notes" || value === "history note") return "note";
+  if (value === "call" || value === "phone call" || value === "history call") return "call";
+  if (value === "email" || value === "e mail" || value === "history email") return "email";
+  if (value === "text" || value === "text message" || value === "sms") return "text";
+  if (value === "system" || value === "system note" || value === "history system note") return "system";
+  if (value === "notice") return "notice";
+  return undefined;
+}
+
+/** A display name from an embedded RM user object; numeric user IDs are never a name. */
+function embeddedUserName(record: Raw, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const candidate = record[key];
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const user = candidate as Raw;
+    const name = text(user, "Name", "DisplayName", "FullName") ?? ([text(user, "FirstName"), text(user, "LastName")].filter(Boolean).join(" ") || undefined) ?? text(user, "UserName");
+    if (name) return name;
+  }
+  return undefined;
+}
+
 function normalizeHistory(record: Raw, tenants: Map<string, Raw>, properties: Map<string, Raw>, units: Map<string, Raw>, exceptions: NormalizationException[]): Raw {
   const normalized = augment(record, ["HistoryID", "HistoryNoteID", "HistoryEmailID", "EmailSentItemID", "EmailChainID", "OutgoingTextID", "IncomingTextID", "TextID", "ConversationID"], {
     occurredAt: ["OccurredAt", "Date", "HistoryDate"],
     summary: ["Subject", "Summary", "Description"],
-    detail: ["Body", "Notes", "Description"],
+    // RM History and HistoryNotes carry the body as Note; texts as Message.
+    detail: ["Body", "Note", "Notes", "Message", "MessageText", "Description"],
   }, undefined, "activity");
   const sourceCollection = text(normalized, "sourceCollection") ?? "";
+  if (normalized.activityType === undefined) {
+    const explicit = historyTypeFromSourceValue(text(normalized, "HistoryType", "Type", "ActivityType"))
+      ?? historyTypeFromSourceValue(isRecordValue(normalized.HistoryCategory) ? text(normalized.HistoryCategory as Raw, "Name", "Description") : text(normalized, "HistoryCategoryName"));
+    const fromCollection = HISTORY_COLLECTION_TYPES.find(([pattern]) => pattern.test(sourceCollection))?.[1];
+    const type = explicit ?? fromCollection;
+    if (type) normalized.activityType = type;
+  }
+  if (normalized.actor === undefined) {
+    const actor = text(normalized, "CreateUserName", "CreatedByName", "SentUserName", "UserName") ?? embeddedUserName(normalized, "CreateUser", "CreatedBy", "SentUser", "User");
+    if (actor) normalized.actor = actor;
+  }
+  // A body identical to the title is one fact, not two.
+  if (normalized.detail !== undefined && normalized.summary !== undefined && String(normalized.detail).trim() === String(normalized.summary).trim()) delete normalized.detail;
   const requestTenantParent = /^tenantHistory\.(?:current|future|former)$/i.test(sourceCollection)
     ? text(normalized, "_parentSourceId", "parentSourceId")
     : undefined;
@@ -915,8 +967,12 @@ function normalizeSubsidy(
     propertyId: ["PropertyID"],
     unitId: ["UnitID"],
     agencyName: ["AgencyName", "Agency", "HousingAuthority"],
-    agencyObligationCents: ["AgencyObligationCents", "AgencyAmountCents", "AgencyAmount"],
-    tenantObligationCents: ["TenantObligationCents", "TenantAmountCents", "TenantAmount"],
+    // RM amounts are decimal dollars. Keep them under dollar keys; only
+    // explicitly cents-named source fields may populate a *Cents key.
+    agencyObligationCents: ["AgencyObligationCents", "AgencyAmountCents"],
+    agencyAmount: ["AgencyAmount"],
+    tenantObligationCents: ["TenantObligationCents", "TenantAmountCents"],
+    tenantAmount: ["TenantAmount"],
     effectiveFrom: ["EffectiveFrom", "StartDate", "BeginDate"],
     effectiveTo: ["EffectiveTo", "EndDate", "ExpireDate"],
   }, undefined, "subsidy");
@@ -943,7 +999,8 @@ function normalizeSubsidyTenant(
     unitId: ["UnitID", "UnitId"],
     effectiveFrom: ["EffectiveFrom", "StartDate", "BeginDate"],
     effectiveTo: ["EffectiveTo", "EndDate", "ExpireDate"],
-    amountCents: ["AmountCents", "Amount", "TenantAmount", "TenantAmountCents"],
+    amountCents: ["AmountCents", "TenantAmountCents"],
+    amount: ["Amount", "TenantAmount"],
     payer: ["Payer", "PayerType", "PayerCategory"],
   }, "subsidy_tenant", "subsidy_tenant");
   normalized.sourceCollection = "SubsidyTenants";
@@ -966,7 +1023,8 @@ function normalizeSubsidyPayment(
     unitId: ["UnitID", "UnitId"],
     paymentSourceId: ["PaymentID", "PaymentId", "PaymentTransactionID", "PaymentTransactionId"],
     paymentOn: ["PaymentOn", "PaymentDate", "PaidOn", "TransactionDate", "Date"],
-    amountCents: ["AmountCents", "Amount", "PaymentAmount", "PaymentAmountCents"],
+    amountCents: ["AmountCents", "PaymentAmountCents"],
+    amount: ["Amount", "PaymentAmount"],
     payer: ["Payer", "PayerType", "PayerCategory"],
   }, "subsidy_payment", "subsidy_payment");
   normalized.sourceCollection = "SubsidyPayments";
@@ -1092,7 +1150,7 @@ function canonicalAnswerEvidence(valueToCanonicalize: unknown): unknown {
     const source = valueToCanonicalize as Record<string, unknown>;
     return Object.fromEntries(Object.entries(source)
       .filter(([key]) => !["attestation", "answerAttestation", "evidenceAttestation"].includes(key))
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => left.localeCompare(right, "en-US"))
       .map(([key, child]) => [key, canonicalAnswerEvidence(child)]));
   }
   return valueToCanonicalize;
@@ -1462,7 +1520,8 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
       propertyId: ["PropertyID", "PropertyId"],
       unitId: ["UnitID", "UnitId"],
       leaseId: ["LeaseID", "LeaseId", "TenancyID", "TenancyId"],
-      amount: ["Amount", "MonthlyAmount", "RecurringAmount", "AmountCents"],
+      amountCents: ["AmountCents"],
+      amount: ["Amount", "MonthlyAmount", "RecurringAmount"],
       description: ["Description", "Name", "ChargeTypeName"],
       scopeType: ["EntityType", "EntityTypeName", "ScopeType"],
       scopeId: ["EntityKeyID", "EntityKeyId"],
@@ -1868,7 +1927,7 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
   } else if (normalizedHapRows.length > 0) {
     const complete = normalizedHapRows.every((record) => {
       const row = record as Raw;
-      return Boolean(text(row, "agencyName")) && text(row, "effectiveFrom") !== undefined && value(row, "agencyObligationCents") !== undefined && value(row, "tenantObligationCents") !== undefined;
+      return Boolean(text(row, "agencyName")) && text(row, "effectiveFrom") !== undefined && value(row, "agencyObligationCents", "agencyAmount") !== undefined && value(row, "tenantObligationCents", "tenantAmount") !== undefined;
     });
     const subsidyIds = new Set(normalizedHapRows.map((record) => text(record as Raw, "SubsidyID", "subsidyId", "sourceId")));
     const unjoinedRawHap = rawHapRows.filter((row) => {
@@ -1915,4 +1974,3 @@ export function normalizeRentManagerExport(payload: ExportPayload, options: { as
   return { input, exceptions, recordCounts, confidence };
 }
 
-export const normalizeRmExport = normalizeRentManagerExport;

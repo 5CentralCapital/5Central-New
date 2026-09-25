@@ -3,6 +3,7 @@ import {
   centsSchema,
   companyScopeSchema,
   currencyCodeSchema,
+  isIsoDate,
   isoDateSchema,
   isoTimestampSchema,
   legalEntityIdSchema,
@@ -20,6 +21,7 @@ import {
   type OperationId,
   type Revision,
 } from "../company";
+import { timePayrollLinkPayloadSchema, timePayrollUnlinkPayloadSchema } from "./labor";
 
 export const TIME_PROVIDER = "quickbooks_time" as const;
 export const timeProviderSchema = z.literal(TIME_PROVIDER);
@@ -76,8 +78,10 @@ export const timeCorrectionRevisionSchema = z.number().int().nonnegative();
 export type TimeCorrectionRevision = z.infer<typeof timeCorrectionRevisionSchema>;
 
 const localTimestampSchema = z.string().trim().min(1).max(80).refine(value => {
-  const match = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})$/.exec(value);
-  return Boolean(match) && Number.isFinite(Date.parse(value));
+  const match = /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})$/.exec(value);
+  // Date.parse rolls impossible dates and 24:00 forward, so check the fields first.
+  return match !== null && isIsoDate(match[1]) && Number(match[2]) <= 23 && Number(match[3]) <= 59
+    && Number(match[4] ?? "0") <= 59 && Number.isFinite(Date.parse(value));
 }, "Expected an ISO-8601 timestamp with an explicit timezone");
 export type TimeLocalTimestamp = z.infer<typeof localTimestampSchema>;
 
@@ -261,13 +265,15 @@ export const timeMapJobcodePayloadSchema = z.object({
   costCode: z.string().trim().max(160).nullable().optional(),
 }).strict();
 
-export const TIME_COMMAND_KINDS = ["time.review_timesheet", "time.correct_timesheet", "time.map_employee", "time.map_jobcode"] as const;
+export const TIME_COMMAND_KINDS = ["time.review_timesheet", "time.correct_timesheet", "time.map_employee", "time.map_jobcode", "time.payroll.link", "time.payroll.unlink"] as const;
 export type TimeCommandKind = (typeof TIME_COMMAND_KINDS)[number];
 export const timeCommandPayloadSchemas: Readonly<Record<TimeCommandKind, z.ZodTypeAny>> = {
   "time.review_timesheet": timeReviewTimesheetPayloadSchema,
   "time.correct_timesheet": timeCorrectTimesheetPayloadSchema,
   "time.map_employee": timeMapEmployeePayloadSchema,
   "time.map_jobcode": timeMapJobcodePayloadSchema,
+  "time.payroll.link": timePayrollLinkPayloadSchema,
+  "time.payroll.unlink": timePayrollUnlinkPayloadSchema,
 };
 
 export interface TimeReadPort {
@@ -284,8 +290,47 @@ export interface TimeCommandPort {
   execute(kind: TimeCommandKind, envelope: unknown, access: unknown): Promise<import("../company").OperationReceipt>;
 }
 
+export const timeSyncOptionsSchema = z.object({
+  maxPages: z.number().int().min(1).max(10_000).optional(),
+  /** Required for the first timesheet read because the provider endpoint is range-based. */
+  startDate: isoDateSchema.optional(),
+  endDate: isoDateSchema.optional(),
+}).strict().superRefine((value, context) => {
+  if (value.startDate !== undefined && value.endDate !== undefined && value.endDate < value.startDate) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["endDate"], message: "endDate must be on or after startDate" });
+  }
+});
+export type TimeSyncOptions = z.infer<typeof timeSyncOptionsSchema>;
+
+/** Keep browser and MCP initial reads finite and aligned to the operating day. */
+export const TIME_DEFAULT_SYNC_LOOKBACK_DAYS = 30;
+
+export function defaultTimeSyncWindow(now = new Date()): Pick<TimeSyncOptions, "startDate" | "endDate"> {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, part.value]));
+  const endDate = isoDateSchema.parse(`${values.year}-${values.month}-${values.day}`);
+  const start = new Date(`${endDate}T00:00:00.000Z`);
+  start.setUTCDate(start.getUTCDate() - TIME_DEFAULT_SYNC_LOOKBACK_DAYS);
+  return { startDate: isoDateSchema.parse(start.toISOString().slice(0, 10)), endDate };
+}
+
+/** Supply an initial range for adapters that expose a one-click sync action. */
+export function timeSyncOptionsWithDefault(options: TimeSyncOptions = {}, now = new Date()): TimeSyncOptions {
+  return timeSyncOptionsSchema.parse({
+    ...defaultTimeSyncWindow(now),
+    ...(options.maxPages === undefined ? {} : { maxPages: options.maxPages }),
+    ...(options.startDate === undefined ? {} : { startDate: options.startDate }),
+    ...(options.endDate === undefined ? {} : { endDate: options.endDate }),
+  });
+}
+
 export interface TimeSyncPort {
-  sync(scope: TimeConnectionScope, options?: { readonly maxPages?: number }): Promise<{ status: "complete" | "partial"; streams: readonly TimeCoverage[]; conflicts: readonly string[] }>;
+  sync(scope: TimeConnectionScope, options?: TimeSyncOptions): Promise<{ status: "complete" | "partial"; streams: readonly TimeCoverage[]; conflicts: readonly string[] }>;
 }
 
 export type TimeScope = CompanyScope & { readonly legalEntityId: LegalEntityId };

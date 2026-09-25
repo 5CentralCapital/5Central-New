@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createQuickBooksAccountingClient } from "./accounting";
-import { QuickBooksIntegrationError } from "./errors";
+import { QuickBooksIntegrationError, isQuickBooksRequestNotSent } from "./errors";
 import { isQuickBooksAdapterCapabilityImplemented, isQuickBooksCapabilityEnabled } from "../../../shared/accounting/quickbooks";
 import type { QuickBooksTransportRequest, QuickBooksTransportResponse } from "../../../shared/accounting/quickbooks";
 
@@ -167,11 +167,12 @@ test("every write carries a requestid, reuses a caller-supplied one, and reports
     assert.ok(error instanceof QuickBooksIntegrationError);
     assert.equal(error.code, "quickbooks_ambiguous_write");
     assert.equal(error.details.requestId, "op-create-1");
+    assert.equal(isQuickBooksRequestNotSent(error), false, "a request that reached the transport keeps an unknown outcome");
     return true;
   });
   assert.equal(new URL(urls[2]!).searchParams.get("requestid"), "op-create-1");
   await assert.rejects(() => client.create("Vendor", {}, { requestId: "x".repeat(51) }), /requestid is invalid/);
-  await assert.rejects(() => client.create("Vendor", {}, { requestId: "bad id&x=1" }), /requestid is invalid/);
+  await assert.rejects(() => client.create("Vendor", {}, { requestId: "bad id&x=1" }), (error: unknown) => error instanceof QuickBooksIntegrationError && /requestid is invalid/.test(error.message) && isQuickBooksRequestNotSent(error));
   assert.equal(urls.length, 3, "invalid requestids are rejected before sending");
 });
 
@@ -213,6 +214,7 @@ test("HTTP 429 backs off 60 seconds per realm without sending further requests",
       assert.ok(error instanceof QuickBooksIntegrationError);
       assert.equal(error.code, "quickbooks_rate_limited");
       assert.equal(error.ambiguous, false, "nothing was sent, so a blocked write is not ambiguous");
+      assert.equal(isQuickBooksRequestNotSent(error), true, "a write journal can prove the blocked request was never sent");
       assert.ok((error.retryAfterMs ?? 0) > 59_000);
       return true;
     });

@@ -41,3 +41,18 @@ test('directory displays server-derived occupancy and refreshes when the report 
   const future = unitOccupancyMap([{ unitId: 'u', occupancy: 'future_preleased' }] as ReportRow[]);
   assert.equal(propertyUnitListItems(snapshot, { propertyId: 'all', propertyScope: 'active' }, '', future)[1].subtitle, 'Ready');
 });
+
+test('unit tables lead with occupancy and show readiness only when it is recorded', async () => {
+  const { unitOccupancyCell, recordedUnitReadiness } = await import('./unit-readiness-model');
+  assert.deepEqual(unitOccupancyCell('current'), { label: 'Occupied', tone: 'success' });
+  assert.deepEqual(unitOccupancyCell('vacant', 12), { label: 'Vacant · 12 days', tone: 'warning' });
+  assert.deepEqual(unitOccupancyCell('vacant', 1), { label: 'Vacant · 1 day', tone: 'warning' });
+  assert.deepEqual(unitOccupancyCell('vacant'), { label: 'Vacant', tone: 'warning' });
+  assert.equal(unitOccupancyCell('unknown'), undefined);
+  assert.equal(unitOccupancyCell(undefined), undefined);
+  assert.equal(recordedUnitReadiness({ readiness: 'ready' }, 'vacant')?.label, 'Ready');
+  assert.equal(recordedUnitReadiness({ readiness: 'ready', readinessKnowledge: 'unknown' }, 'vacant'), undefined);
+  assert.equal(recordedUnitReadiness({}, 'vacant'), undefined);
+  assert.equal(recordedUnitReadiness({ readiness: 'ready' }, 'current'), undefined);
+  assert.equal(recordedUnitReadiness({ readiness: 'ready' }), undefined);
+});

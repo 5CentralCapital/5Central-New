@@ -4,7 +4,7 @@ import { syntheticRentOpsSnapshot } from '../../../../../server/rent-ops/fixture
 import { serializeWorkspaceBootstrap } from '../../../../../server/rent-ops/presentation/workspace-read';
 import { decodeRentOpsWorkspaceBootstrap } from '../api';
 import type { ViewFilters } from '../types';
-import { composeWorkspaceSnapshot, filterTenantDirectory, indexTenantViews, parseWorkspaceRoute, workspaceApiFilters, workspaceRouteSearch, workspaceRecordInScope, workspaceFiltersForRecord } from './workspace-state';
+import { companyReportNavigation, composeWorkspaceSnapshot, filterTenantDirectory, indexTenantViews, parseWorkspaceRoute, workspaceApiFilters, workspaceRouteSearch, workspaceRecordInScope, workspaceFiltersForRecord } from './workspace-state';
 
 const filters: ViewFilters = {propertyScope:'all',propertyId:'all',asOfDate:'2026-08-15',status:'all',search:''};
 
@@ -21,7 +21,7 @@ test('project bookmarks retain their company and record without changing rental 
 });
 
 test('project subsection bookmarks survive reload and cannot leak into rental routes', () => {
-  for (const projectTab of ['overview', 'scope', 'schedule', 'costs', 'execution']) {
+  for (const projectTab of ['overview', 'schedule', 'budget', 'commitments', 'draws'] as const) {
     const route = parseWorkspaceRoute(`?section=projects&record=project:123&projectTab=${projectTab}`);
     assert.equal(route.projectTab, projectTab);
     assert.deepEqual(parseWorkspaceRoute(workspaceRouteSearch(route)), route);
@@ -45,15 +45,15 @@ test('report library bookmark retains portfolio context independently of legacy 
 test('investor account bookmarks retain company and subsection through reload and clear unrelated tabs', () => {
   const company = '10000000-0000-4000-8000-000000000001';
   const account = '20000000-0000-4000-8000-000000000002';
-  for (const investorTab of ['overview', 'payments', 'contracts', 'debt', 'activity']) {
+  for (const investorTab of ['overview', 'payments', 'capital', 'debt', 'contracts'] as const) {
     const route = parseWorkspaceRoute(`?section=investors&company=${company}&record=${account}&investorTab=${investorTab}`);
     assert.equal(route.organizationId, company);
     assert.equal(route.recordId, account);
     assert.equal(route.investorTab, investorTab);
     assert.deepEqual(parseWorkspaceRoute(workspaceRouteSearch(route)), route);
-    const project = workspaceRouteSearch({ ...route, section: 'projects', projectTab: 'execution' }, undefined, workspaceRouteSearch(route));
+    const project = workspaceRouteSearch({ ...route, section: 'projects', projectTab: 'commitments' }, undefined, workspaceRouteSearch(route));
     assert.equal(new URLSearchParams(project).has('investorTab'), false);
-    assert.equal(parseWorkspaceRoute(project).projectTab, 'execution');
+    assert.equal(parseWorkspaceRoute(project).projectTab, 'commitments');
   }
   assert.equal(parseWorkspaceRoute('?section=investors&investorTab=invalid').investorTab, undefined);
   assert.equal(parseWorkspaceRoute('?section=tenants&investorTab=payments').investorTab, undefined);
@@ -64,6 +64,7 @@ test('workspace links round-trip scoped records and tenant detail tabs without l
   const tenant=parseWorkspaceRoute('?section=tenants&record=person%3Aimport_123&tab=ledger');
   assert.equal(tenant.recordId,'person:import_123');
   assert.deepEqual(parseWorkspaceRoute(workspaceRouteSearch(tenant)),tenant);
+  assert.equal(parseWorkspaceRoute('?section=tenants&record=person-1&tab=quickbooks').tab,'quickbooks');
   const unit=parseWorkspaceRoute('?section=properties&kind=unit&record=unit-12');
   assert.deepEqual(parseWorkspaceRoute(workspaceRouteSearch(unit)),unit);
   const report=parseWorkspaceRoute('?section=reports&report=scheduled-vs-collected');
@@ -227,4 +228,30 @@ test('company report bookmarks preserve report and company without changing lega
   assert.equal(parseWorkspaceRoute(legacy).report,'rent-roll');
   assert.equal(new URLSearchParams(legacy).has('reportId'),false);
   assert.equal(parseWorkspaceRoute('?section=company-reports&reportId=../../private').reportId,undefined);
+});
+
+test('a saved report setup opens company reports with its preset and survives a round trip', () => {
+  const company = '10000000-0000-4000-8000-000000000001';
+  const preset = '50000000-0000-4000-8000-000000000001';
+  const route = parseWorkspaceRoute(`?section=company-reports&company=${company}&reportId=rent-paid&preset=${preset}`);
+  assert.equal(route.presetId, preset);
+  assert.equal(route.reportId, 'rent-paid');
+  assert.match(workspaceRouteSearch(route), new RegExp(`preset=${preset}`));
+  assert.equal(parseWorkspaceRoute(`?section=company-reports&company=${company}&preset=not-a-uuid`).presetId, undefined);
+  assert.equal(parseWorkspaceRoute(`?section=dashboard&preset=${preset}`).presetId, undefined);
+});
+
+test('a saved report setup does not follow navigation to another report or company', () => {
+  const company = '11111111-1111-4111-8111-111111111111';
+  const other = '22222222-2222-4222-8222-222222222222';
+  const preset = '33333333-3333-4333-8333-333333333333';
+  const route = parseWorkspaceRoute(`?section=company-reports&company=${company}&reportId=income-statement&preset=${preset}`);
+  assert.equal(route.presetId, preset);
+  const otherReport = companyReportNavigation(route, company, 'balance-sheet');
+  assert.equal(otherReport.presetId, undefined);
+  assert.equal(otherReport.reportId, 'balance-sheet');
+  assert.doesNotMatch(workspaceRouteSearch(otherReport), /preset=/, 'the stale preset is gone from the URL');
+  assert.equal(companyReportNavigation(route, other, 'income-statement').presetId, undefined, 'another company never inherits the preset');
+  assert.equal(companyReportNavigation(route, company, undefined).presetId, undefined, 'back to the library clears it');
+  assert.equal(companyReportNavigation(route, company, 'income-statement').presetId, preset, 'same report keeps its setup');
 });

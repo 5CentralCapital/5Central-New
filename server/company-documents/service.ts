@@ -28,6 +28,7 @@ import {
 import { companyDocumentContextSchema } from "../../shared/company-documents";
 import { authenticatedPrincipalIdSchema, commandEnvelopeSchema, legalEntityIdSchema, propertyReferenceIdSchema, recordReferenceIdSchema, revisionSchema, documentReferenceIdSchema, type CommandEnvelope, type CompanyScope, type DocumentReferenceId, type OperationReceipt } from "../../shared/company";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
+import { nowIsoDate } from "../rent-ops/domain/dates";
 import { prepareVerifiedImportedDocument } from "../rent-ops/services/service";
 import type { ContentAddressedObjectStore, StorageVersionOptions } from "../rent-ops/storage";
 import type { RentOpsDocumentObjectBinding } from "../../shared/rent-ops-contracts";
@@ -113,9 +114,7 @@ function uploadStageId(organizationId: string, actorId: string, documentIdValue:
 }
 
 function operationalDate(now: () => Date): string {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now());
-  const values = Object.fromEntries(parts.filter(part => part.type !== "literal").map(part => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
+  return nowIsoDate(now());
 }
 
 function safeCursor(value: string | undefined): { updatedAt: string; id: string } | undefined {
@@ -232,19 +231,30 @@ function linkRows(documentId: string, links: readonly CompanyDocumentLink[]): Ar
   return links.map((link) => [documentId, link.kind, link.id, link.label, link.versionId ?? ""]);
 }
 
+/**
+ * The runtime role has no DELETE on links: an unlinked row is marked removed
+ * and relinking clears the mark, so link history is retained.
+ */
 async function replaceLinks(executor: RentOpsQueryExecutor, documentId: string, links: readonly CompanyDocumentLink[]): Promise<void> {
-  await executor.query("DELETE FROM company_document_links WHERE document_id = $1", [documentId]);
+  const keep = links.map((link) => [link.kind, link.id, link.versionId ?? ""]);
+  await executor.query(
+    `UPDATE company_document_links SET removed_at = now()
+      WHERE document_id = $1 AND removed_at IS NULL
+        AND NOT ((link_kind, linked_id, linked_version_id) IN (SELECT * FROM jsonb_to_recordset($2::jsonb) AS k(kind text, id text, version text)))`,
+    [documentId, JSON.stringify(keep.map(([kind, id, version]) => ({ kind, id, version })))],
+  );
   for (const [id, kind, linkedId, label, versionId] of linkRows(documentId, links)) {
     await executor.query(
-      "INSERT INTO company_document_links (document_id, link_kind, linked_id, linked_label, linked_version_id) VALUES ($1,$2,$3,$4,$5)",
-    [id, kind, linkedId, label, versionId],
+      `INSERT INTO company_document_links (document_id, link_kind, linked_id, linked_label, linked_version_id) VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (document_id, link_kind, linked_id, linked_version_id) DO UPDATE SET linked_label = EXCLUDED.linked_label, removed_at = NULL`,
+      [id, kind, linkedId, label, versionId],
     );
   }
 }
 
 async function readLinks(executor: RentOpsQueryExecutor, documentId: string): Promise<Record<string, unknown>[]> {
   return (await executor.query<Record<string, unknown>>(
-    "SELECT link_kind, linked_id, linked_label, linked_version_id FROM company_document_links WHERE document_id = $1 ORDER BY link_kind, linked_id",
+    "SELECT link_kind, linked_id, linked_label, linked_version_id FROM company_document_links WHERE document_id = $1 AND removed_at IS NULL ORDER BY link_kind, linked_id",
     [documentId],
   )).rows;
 }
@@ -267,11 +277,22 @@ async function assertScopeRelationships(executor: RentOpsQueryExecutor, context:
     if (property.rows.length !== 1) throw new CompanyDocumentError("scope_not_found", "The document property is not assigned to the selected legal entity.");
   }
   if (context.projectId) {
-    const project = await executor.query("SELECT id FROM company_projects WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL", [context.organizationId, context.projectId]);
+    // The project must sit inside the document's own entity/property, or a
+    // document authorized for one entity could attach to another entity's project.
+    const project = await executor.query(
+      `SELECT id FROM company_projects WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL
+          AND ($3::uuid IS NULL OR legal_entity_id = $3) AND ($4::varchar IS NULL OR property_id = $4)`,
+      [context.organizationId, context.projectId, context.legalEntityId ?? null, context.propertyId ?? null],
+    );
     if (project.rows.length !== 1) throw new CompanyDocumentError("scope_not_found", "The document project is unavailable.");
   }
   if (context.investorContractId) {
-    const contract = await executor.query("SELECT id FROM company_investor_contracts WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL", [context.organizationId, context.investorContractId]);
+    const contract = await executor.query(
+      `SELECT c.id FROM company_investor_contracts c
+         JOIN company_investor_instruments i ON i.organization_id = c.organization_id AND i.id = c.instrument_id
+        WHERE c.organization_id = $1 AND c.id = $2 AND c.archived_at IS NULL AND ($3::uuid IS NULL OR i.legal_entity_id = $3)`,
+      [context.organizationId, context.investorContractId, context.legalEntityId ?? null],
+    );
     if (contract.rows.length !== 1) throw new CompanyDocumentError("scope_not_found", "The investor contract is unavailable.");
   }
   if (context.investorContractVersionId && context.investorContractId) {

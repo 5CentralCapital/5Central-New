@@ -109,7 +109,7 @@ function requireOwner(options: SeedRentalDemoOptions): void {
 }
 
 /**
- * Seed the complete synthetic Rent Operations snapshot and dated mappings for
+ * Seed the complete synthetic 5Central Ops snapshot and dated mappings for
  * both demo properties. The operation is deliberately owner-only and should
  * be called once while creating the disposable company fixture; a second run
  * with the same IDs fails rather than replacing posted or immutable rows.
@@ -140,7 +140,26 @@ export async function seedRentalDemo(options: SeedRentalDemoOptions): Promise<vo
     for (const member of snapshot.applicationHouseholdMembers) await repository.saveApplicationHouseholdMember(member);
     for (const requirement of snapshot.applicationRequirements) await repository.saveApplicationRequirement(requirement);
 
-    for (const tenancy of snapshot.tenancies) await repository.saveTenancy(tenancy);
+    // The in-memory fixture leaves tenancy knowledge markers implicit, which
+    // the in-memory model reads as known. A durable row without markers reads
+    // as unconfirmed, so tenant-status filters would drop every demo resident.
+    // Record the synthetic current and past relationships as manually entered.
+    // The fixture's future tenancy stays unconfirmed: its dated start is fixed
+    // in August 2026, and confirming it would make every later "today" read
+    // report an elapsed move-in.
+    for (const tenancy of snapshot.tenancies) {
+      if (tenancy.status === "future") { await repository.saveTenancy(tenancy); continue; }
+      const manual = <T,>(value: T | null | undefined, present: unknown) => value ?? (present ? "manual" : "unknown");
+      await repository.saveTenancy({
+        ...tenancy,
+        propertyLinkKnowledge: manual(tenancy.propertyLinkKnowledge, tenancy.propertyId),
+        unitLinkKnowledge: manual(tenancy.unitLinkKnowledge, tenancy.unitId),
+        primaryPersonLinkKnowledge: manual(tenancy.primaryPersonLinkKnowledge, tenancy.primaryPersonId),
+        statusKnowledge: manual(tenancy.statusKnowledge, tenancy.status),
+        actualMoveInKnowledge: manual(tenancy.actualMoveInKnowledge, tenancy.actualMoveInOn),
+        plannedMoveInKnowledge: manual(tenancy.plannedMoveInKnowledge, tenancy.plannedMoveInOn),
+      } as typeof tenancy);
+    }
     for (const membership of snapshot.householdMemberships) await repository.saveHouseholdMembership(membership);
     for (const term of snapshot.leaseTerms) await repository.saveLeaseTerm(term);
 

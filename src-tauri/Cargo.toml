@@ -1,0 +1,31 @@
+[package]
+name = "r-ops-desktop"
+version = "1.0.0"
+description = "5Central Ops for Mac — native window for the 5Central Ops manager"
+authors = ["5Central Capital"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "r_ops_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "r-ops-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-window-state = "2"
+url = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

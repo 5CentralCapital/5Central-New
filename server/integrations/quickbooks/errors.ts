@@ -52,3 +52,20 @@ export class QuickBooksIntegrationError extends Error {
 export function isQuickBooksIntegrationError(value: unknown): value is QuickBooksIntegrationError {
   return value instanceof QuickBooksIntegrationError;
 }
+
+const unsentRequestErrors = new WeakSet<object>();
+
+/**
+ * Tag an error raised before a request reached the transport (capability
+ * gate, rate-limit cooldown, token acquisition, input validation). Only a
+ * tagged error proves a write was never sent; every other failure keeps its
+ * outcome unknown.
+ */
+export function markQuickBooksRequestNotSent<T>(error: T): T {
+  if (error !== null && typeof error === "object") unsentRequestErrors.add(error);
+  return error;
+}
+
+export function isQuickBooksRequestNotSent(error: unknown): boolean {
+  return error !== null && typeof error === "object" && unsentRequestErrors.has(error);
+}

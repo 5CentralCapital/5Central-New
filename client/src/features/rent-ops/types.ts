@@ -1,3 +1,5 @@
+import type { TenantPaymentStatus } from "@shared/tenant-payment-contracts";
+
 export type RentOpsSource = "live" | "synthetic";
 
 export type SectionKey =
@@ -49,6 +51,9 @@ export interface ApiFilters {
 export interface DashboardSummary {
   operationalDelinquencyCents?: number | null;
   operationalBalanceUnresolvedCount?: number;
+  /** Accounts with a known positive balance, separate from unresolved ones. */
+  operationalBalanceDueCount?: number;
+  operationalBalanceDueKnownCents?: number;
   balanceUnresolvedCount?: number;
   balanceComplete?: boolean;
   balanceUncertaintyCodes?: string[];
@@ -87,6 +92,7 @@ export type TenantTab =
   | "tenancy"
   | "charges"
   | "ledger"
+  | "quickbooks"
   | "deposits"
   | "housing-assistance"
   | "documents"
@@ -287,6 +293,41 @@ export interface AdminChargeDefinitionView {
   active?: boolean | null;
   activeKnowledge?: string | null;
   recordRevision?: number;
+}
+
+export interface TenantPaymentReviewAdjustment {
+  paymentId: string;
+  providerObjectId: string;
+  kind: "refund" | "dispute";
+  amountCents: number;
+  active: boolean;
+  providerCreatedAt: number;
+  terminal: boolean;
+}
+
+/** Staff-safe payment exception data returned by the narrow review queue. */
+export interface TenantPaymentReview {
+  id: string;
+  accountId: string;
+  personId: string;
+  tenancyId: string;
+  propertyId: string;
+  unitId: string;
+  requestId: string;
+  amountCents: number;
+  currency: "usd";
+  status: TenantPaymentStatus;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+  postedOn?: string;
+  checkoutSessionId?: string;
+  paymentIntentId?: string;
+  currentLedgerCents: number;
+  ledgerRevision: number;
+  stale: boolean;
+  queueReason: "review_required" | "disputed" | "stale_active";
+  adjustments: TenantPaymentReviewAdjustment[];
 }
 export interface AdminLedgerTransactionView {
   id?: string;
@@ -759,6 +800,13 @@ export interface ScheduledVsCollectedRow {
   collectedKnownCents?: number | null;
   collectedUncertainCents?: number | null;
   collectedUnknownAmountCount?: number | null;
+  /** Audit counts: valid outcomes that do not make the property incomplete. */
+  scheduleNotApplicableVacantCount?: number;
+  scheduleNotApplicableOtherTenancyCount?: number;
+  schedulePrecedenceSuppressedCount?: number;
+  /** The as-of date both sides were pinned to, and how schedules were selected. */
+  asOfDate?: string;
+  scheduleBasis?: "as_of" | "month_forecast";
   complete?: boolean | null;
   uncertaintyCodes?: string[];
 }
@@ -820,6 +868,8 @@ export interface DepositLiabilityRow {
   totalHeldCents?: number | null;
   sourceBalanceCents?: number | null;
   unknownHeldCount?: number;
+  typeUnknownCount?: number;
+  unitLinkStatus?: "direct" | "tenancy" | "missing" | "conflict";
   dispositionStatus?: string;
   unknownReceiptCount?: number;
   hasUnknownReceiptDate?: boolean;
@@ -851,9 +901,17 @@ export interface HapRow {
   agencyObligationCents?: number;
   tenantObligationCents?: number;
   expectedTotalCents?: number;
-  receivedAgencyCents?: number;
-  varianceCents?: number;
+  obligationSource?: "contract" | "subsidy_tenant";
+  /** Null when any agency receipt fact is unresolved. */
+  receivedAgencyCents?: number | null;
+  receivedAgencyKnownCents?: number;
+  agencyReceiptStatus?: "received" | "none_received" | "unknown";
+  varianceCents?: number | null;
   exception?: boolean;
+  receiptCount?: number;
+  unknownReceiptCount?: number;
+  uncertainty?: boolean;
+  uncertaintyCodes?: string[];
 }
 
 export type ReportRow =
@@ -967,7 +1025,7 @@ export const REPORT_LABELS: Record<ReportKey, string> = {
   "scheduled-income": "Scheduled Income",
   "collected-income": "Collected Income",
   "scheduled-vs-collected": "Scheduled vs. Collected",
-  delinquency: "Delinquency",
+  delinquency: "Balances due",
   "tenant-ledger": "Tenant Ledger / Account Statement",
   "lease-expiration": "Lease Expiration / Month-to-Month",
   "security-deposit": "Security-Deposit Liability",

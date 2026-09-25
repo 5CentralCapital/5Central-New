@@ -106,7 +106,7 @@ export default function Investor() {
           <h1 className="text-5xl md:text-6xl font-serif font-bold text-primary mb-6">
             Investor Opportunities
           </h1>
-          <div className="w-24 h-1 bg-accent-gold mx-auto mb-8"></div>
+          <div className="w-24 h-1 bg-warm-brass mx-auto mb-8"></div>
           <p className="text-lg text-gray-700 max-w-3xl mx-auto leading-relaxed">
             Join the investor list for direct updates on new multifamily deals, refinance progress, and source-file-backed portfolio reporting.
           </p>
@@ -133,11 +133,12 @@ export default function Investor() {
                       Initial Investment Amount
                     </Label>
                     <div className="space-y-4">
-                      <div className="text-3xl font-bold text-accent-gold text-center">
+                      <div className="text-3xl font-bold text-warm-brass text-center">
                         {formatCurrency(initialInvestment)}
                       </div>
                       <Slider
                         value={[initialInvestment]}
+                        aria-label="Initial investment amount"
                         onValueChange={(value) => setInitialInvestment(value[0])}
                         max={500000}
                         min={50000}
@@ -158,11 +159,12 @@ export default function Investor() {
                       Investment Duration (Years)
                     </Label>
                     <div className="space-y-4">
-                      <div className="text-3xl font-bold text-accent-gold text-center">
+                      <div className="text-3xl font-bold text-warm-brass text-center">
                         {investmentDuration} years
                       </div>
                       <Slider
                         value={[investmentDuration]}
+                        aria-label="Investment duration in years"
                         onValueChange={(value) => setInvestmentDuration(value[0])}
                         max={10}
                         min={2}
@@ -198,28 +200,28 @@ export default function Investor() {
                   </div>
                   <div className="flex justify-between border-t pt-4">
                     <span className="text-gray-600">Projected Final Value:</span>
-                    <span className="font-bold text-accent-gold text-xl">{formatCurrency(results.finalValue)}</span>
+                    <span className="font-bold text-warm-brass text-xl">{formatCurrency(results.finalValue)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600">Total Returns:</span>
-                    <span className="font-bold text-accent-gold text-xl">{formatCurrency(results.totalReturns)}</span>
+                    <span className="font-bold text-warm-brass text-xl">{formatCurrency(results.totalReturns)}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600">Return Multiple:</span>
-                    <span className="font-bold text-accent-gold text-xl">{results.returnMultiple.toFixed(1)}x</span>
+                    <span className="font-bold text-warm-brass text-xl">{results.returnMultiple.toFixed(1)}x</span>
                   </div>
                 </div>
 
                 <div className="mt-8 pt-8 border-t">
                   <div className="grid grid-cols-2 gap-4 text-center">
                     <div>
-                      <div className="text-2xl font-bold text-accent-gold">
+                      <div className="text-2xl font-bold text-warm-brass">
                         {formatCurrency(results.averageAnnualGain)}
                       </div>
                       <div className="text-sm text-gray-600">Average Annual Gain</div>
                     </div>
                     <div>
-                      <div className="text-2xl font-bold text-accent-gold">30%</div>
+                      <div className="text-2xl font-bold text-warm-brass">30%</div>
                       <div className="text-sm text-gray-600">Target Annual Return</div>
                     </div>
                   </div>
@@ -231,7 +233,7 @@ export default function Investor() {
           {/* Compact Disclaimers and Methodology */}
           <div className="mt-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
             <details className="mb-3">
-              <summary className="text-sm font-semibold text-gray-600 cursor-pointer hover:text-primary">
+              <summary className="text-sm font-semibold text-gray-600 cursor-pointer hover:text-deep-charcoal">
                 Calculation Methodology
               </summary>
               <div className="mt-2 text-xs text-gray-600 space-y-1">
@@ -260,7 +262,7 @@ export default function Investor() {
       </section>
 
       {/* Exclusive Investment Opportunities */}
-      <section className="py-16 px-4 bg-gradient-to-r from-primary to-primary/90 text-white">
+      <section className="py-16 px-4 bg-gradient-to-r from-deep-charcoal to-deep-charcoal/90 text-white">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-12">
             <h2 className="text-4xl font-serif font-bold mb-6">Exclusive Investment Opportunities</h2>
@@ -271,17 +273,17 @@ export default function Investor() {
 
           <div className="grid md:grid-cols-3 gap-8 mb-12">
             <div className="text-center">
-              <div className="text-3xl font-bold text-accent-gold mb-2">3.0x+</div>
-              <div className="text-lg font-semibold mb-2">Avg Equity Multiple</div>
-              <div className="opacity-90">Target equity multiples based on our proven track record of value-add investments</div>
+              <div className="text-3xl font-bold text-warm-brass mb-2">3.0x+</div>
+              <div className="text-lg font-semibold mb-2">Target Equity Multiple</div>
+              <div className="opacity-90">Illustrative target for selected value-add investments; not a historical average or guaranteed outcome</div>
             </div>
             <div className="text-center">
-              <div className="text-3xl font-bold text-accent-gold mb-2">6+</div>
+              <div className="text-3xl font-bold text-warm-brass mb-2">6+</div>
               <div className="text-lg font-semibold mb-2">Years Experience</div>
               <div className="opacity-90">Founder-led with deep market knowledge and proven track record across Florida and Connecticut</div>
             </div>
             <div className="text-center">
-              <div className="text-3xl font-bold text-accent-gold mb-2">VIP</div>
+              <div className="text-3xl font-bold text-warm-brass mb-2">VIP</div>
               <div className="text-lg font-semibold mb-2">Exclusive Access</div>
               <div className="opacity-90">Limited partnerships on hand-selected deals with institutional-quality due diligence</div>
             </div>
@@ -391,7 +393,7 @@ export default function Investor() {
                 
                 <Button
                   type="submit"
-                  className="w-full bg-accent-gold hover:bg-accent-gold/90 text-primary font-bold py-3 text-lg"
+                  className="w-full bg-warm-brass hover:bg-warm-brass/90 text-deep-charcoal font-bold py-3 text-lg"
                   disabled={isSubmitting}
                 >
                   {isSubmitting ? "Submitting..." : "Join Investor List"}
@@ -430,9 +432,9 @@ export default function Investor() {
               <CardContent className="p-8">
                 <h3 className="text-2xl font-bold text-primary mb-6">Investment Structure</h3>
                 <ul className="space-y-3 text-gray-700">
-                  <li>• Minimum investments starting at $50K-$100K</li>
-                  <li>• Quarterly distributions and annual reports</li>
-                  <li>• 3-5 year typical hold periods</li>
+                  <li>• Minimum investment is specified in each offering</li>
+                  <li>• Distribution and reporting terms are deal-specific</li>
+                  <li>• Hold periods depend on each property and offering</li>
                   <li>• Professional property management included</li>
                 </ul>
               </CardContent>
@@ -444,7 +446,7 @@ export default function Investor() {
               The investor portal is currently in development and will launch in 2026.
             </p>
             <Button
-              className="bg-primary hover:bg-primary/90 text-white px-8 py-3 text-lg"
+              className="bg-deep-charcoal hover:bg-deep-charcoal/90 text-warm-white px-8 py-3 text-lg"
               disabled
             >
               Preview Investor Portal (Coming Soon)

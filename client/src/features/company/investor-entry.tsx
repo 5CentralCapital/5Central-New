@@ -1,8 +1,6 @@
 import { lazy, Suspense } from "react";
-import { useQuery } from "@tanstack/react-query";
-import type { CompanyContext } from "@shared/company/context";
+import { useCompanyContext } from "../workspaces/page";
 import type { InvestorTab } from "../investors/types";
-import { rentOpsAuthClient } from "../rent-ops/auth";
 
 const InvestorWorkspace = lazy(() => import("../investors/workspace").then(module => ({ default: module.InvestorWorkspace })));
 
@@ -16,16 +14,7 @@ export function InvestorEntry({ identity, organizationId, accountId, onNavigate,
   onTabChange?: (tab: InvestorTab) => void;
   onNavigate: (organizationId: string, accountId?: string) => void;
 }) {
-  const context = useQuery({
-    queryKey: ["rent-ops-workspace", "company-context", identity],
-    queryFn: async ({ signal }): Promise<CompanyContext> => {
-      const response = await rentOpsAuthClient.request("/api/company/context", { signal });
-      if (!response.ok) throw new Error("Company records could not be loaded.");
-      return response.json();
-    },
-    staleTime: 30_000,
-    retry: false,
-  });
+  const context = useCompanyContext(identity);
   if (context.error) return <div className="rm-notice" role="alert">{context.error.message} <button className="rm-button" onClick={() => void context.refetch()}>Retry</button></div>;
   if (!context.data) return <div className="rm-empty" role="status">Loading investors…</div>;
   const organizations = context.data.organizations;

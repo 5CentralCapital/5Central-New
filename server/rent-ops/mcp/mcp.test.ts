@@ -119,7 +119,9 @@ test('configuration tools enforce revisions, strict patches and write scopes',as
   }
  }finally{await ctx.close();}
  const readonly=await connect([READ_SCOPE]);try{
-  const tools=await readonly.client.listTools();for(const tool of tools.tools.filter(t=>t.annotations?.readOnlyHint===false))assert.equal(tool.annotations?.idempotentHint,false);
+  const tools=await readonly.client.listTools();for(const tool of tools.tools.filter(t=>t.annotations?.readOnlyHint===false))assert.equal(tool.annotations?.idempotentHint,/^(record_manual_payment|create_recurring_schedule|create_charge_definition|replace_recurring_schedule|end_recurring_schedule|post_recurring_billing)$/.test(tool.name),tool.name);
+  for(const tool of tools.tools.filter(t=>t.annotations?.readOnlyHint===true)){assert.equal(tool.annotations?.idempotentHint,true);assert.equal(tool.annotations?.destructiveHint,false);}
+  assert.equal(tools.tools.find(t=>t.name==='update_unit')?.annotations?.destructiveHint,false);assert.equal(tools.tools.find(t=>t.name==='end_recurring_schedule')?.annotations?.destructiveHint,true);
   const row=(await readonly.service.snapshot()).units[0];assert.equal((await readonly.client.callTool({name:'update_unit',arguments:{id:row.id,revision:1,patch:{readiness:'off_market'}}})).isError,true);
  }finally{await readonly.close();}
 });
@@ -127,7 +129,7 @@ test('configuration tools enforce revisions, strict patches and write scopes',as
 test('recurring tools expose curated records and reject missing IDs or invalid successor amounts',async()=>{
  const ctx=await connect([READ_SCOPE,WRITE_SCOPE]);try{
   const snapshot=await ctx.service.snapshot();const propertyId=snapshot.properties[0].id;
-  for(const [name,args] of [['list_charge_definitions',{}],['list_recurring_schedules',{propertyId}]] as const){const result=await ctx.client.callTool({name,arguments:args});assert.notEqual(result.isError,true);const data=(result.structuredContent as any).data;assert.ok(Array.isArray(data));for(const row of data)assert.equal('source' in row,false);}
+  for(const [name,args] of [['list_charge_definitions',{}],['list_recurring_schedules',{propertyId}]] as const){const result=await ctx.client.callTool({name,arguments:args});assert.notEqual(result.isError,true);const data=(result.structuredContent as any).data;assert.ok(Array.isArray(data.rows));assert.equal(typeof data.page.totalRows,'number');for(const row of data.rows)assert.equal('source' in row,false);}
   assert.equal((await ctx.client.callTool({name:'get_recurring_schedule',arguments:{id:'missing'}})).isError,true);
   assert.equal((await ctx.client.callTool({name:'replace_recurring_schedule',arguments:{predecessorId:'missing',successorId:'qa:new',revision:1,effectiveFrom:'2026-10-01',amountCents:-1}})).isError,true);
   assert.equal((await ctx.client.callTool({name:'end_recurring_schedule',arguments:{predecessorId:'missing',successorId:'qa:new',revision:1,effectiveFrom:'2026-10-01'}})).isError,true);
@@ -178,4 +180,46 @@ test('optional account and billing adapters require write scopes and server-owne
   assert.equal((await ctx.client.callTool({name:'reissue_tenant_access',arguments:{id:'qa:account',credentialRevision:3}})).isError,true);
   assert.equal((await ctx.client.callTool({name:'post_recurring_billing',arguments:{month:'2026-09',scope:{},previewToken:'bad'}})).isError,true);
  }finally{await ctx.close();}
+});
+
+test('large row sets are paged with a stable cursor', async () => {
+  const { pageRows } = await import('./tools');
+  const rows = Array.from({ length: 450 }, (_, index) => ({ index }));
+  const first = pageRows(rows);
+  assert.equal(first.rows.length, 200); assert.equal(first.page.nextCursor, '200'); assert.equal(first.page.totalRows, 450);
+  const last = pageRows(rows, 200, '400');
+  assert.equal(last.rows.length, 50); assert.equal(last.page.nextCursor, null);
+});
+
+test('compact catalog discovers exact schemas and preserves write scope and validation', async () => {
+  const ctx = await connect([READ_SCOPE], {catalogMode:'compact'});
+  try {
+    const listed = await ctx.client.listTools();
+    assert.deepEqual(listed.tools.map(tool => tool.name), ['search','fetch','find_ops_tools','call_ops_read','call_ops_write']);
+    assert.ok(JSON.stringify(listed).length < 14000);
+    const found = await ctx.client.callTool({name:'find_ops_tools',arguments:{query:'update_tenant_contact'}});
+    assert.equal((found.structuredContent as any).data.tools[0].name,'update_tenant_contact');
+    const person = (await ctx.service.snapshot()).people[0];
+    const args = {id:person.id,revision:person.recordRevision ?? 1,patch:{phone:'555-0111'}};
+    const denied = await ctx.client.callTool({name:'call_ops_write',arguments:{tool:'update_tenant_contact',arguments:args}});
+    assert.equal(denied.isError,true);
+    assert.match(String(denied._meta?.['mcp/www_authenticate']),/insufficient_scope/);
+    assert.equal((await ctx.client.callTool({name:'call_ops_read',arguments:{tool:'update_tenant_contact',arguments:args}})).isError,true);
+    const report = await ctx.client.callTool({name:'call_ops_read',arguments:{tool:'get_report',arguments:{report:'deposits',filters:{}}}});
+    assert.notEqual(report.isError,true);
+    assert.equal((await ctx.client.callTool({name:'call_ops_read',arguments:{tool:'get_report',arguments:{report:'deposits',unexpected:'no'}}})).isError,true);
+    assert.equal((await ctx.client.callTool({name:'call_ops_read',arguments:{tool:'call_ops_read',arguments:{}}})).isError,true);
+    assert.notEqual((await ctx.service.snapshot()).people[0].phone,'555-0111');
+  } finally { await ctx.close(); }
+});
+
+test('transport scope requirements use the actual registered tool, including compact writes', async () => {
+  const {requiredMcpToolScopes} = await import('./tools');
+  const server = createRentOpsMcpServer(new RentOpsService(createSyntheticRentOpsRepository()),{subject:'admin',scopes:[READ_SCOPE]},config.resource,{catalogMode:'compact'});
+  try {
+    assert.deepEqual(requiredMcpToolScopes(server,{method:'tools/call',params:{name:'update_tenant_contact'}}),[READ_SCOPE,WRITE_SCOPE]);
+    assert.deepEqual(requiredMcpToolScopes(server,{method:'tools/call',params:{name:'call_ops_write'}}),[READ_SCOPE,WRITE_SCOPE]);
+    assert.deepEqual(requiredMcpToolScopes(server,{method:'tools/call',params:{name:'get_report'}}),[READ_SCOPE]);
+    assert.deepEqual(requiredMcpToolScopes(server,{method:'tools/list'}),[]);
+  } finally { await server.close(); }
 });

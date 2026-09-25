@@ -90,6 +90,16 @@ test("resume tokens are scoped to the application, expire, and reject malformed 
   await assert.rejects(() => service.publicApplication(result.resumeToken!), /resume token invalid or expired/i);
 });
 
+test("public application saves cannot supply or overwrite a manager status", async () => {
+  const repository = createSyntheticRentOpsRepository();
+  const service = new RentOpsService(repository, () => new Date("2026-08-16T12:00:00.000Z"), undefined, undefined, true);
+  const started = await service.startApplication({ ...startInput, email: "status-protection@example.test" });
+  const saved = await service.savePublicApplication(started.resumeToken!, { phone: "+1-555-0000", status: "approved" } as never);
+  assert.equal(saved.status, "draft");
+  assert.equal((await repository.getApplicationById(saved.id))?.status, "draft");
+  assert.equal((await repository.getApplicationById(saved.id))?.phone, "+1-555-0000");
+});
+
 test("household members remain token-scoped and metadata-only document writes fail closed", async () => {
   const repository = createSyntheticRentOpsRepository();
   const service = new RentOpsService(repository, () => new Date("2026-08-16T12:00:00.000Z"), undefined, undefined, true);
@@ -197,6 +207,14 @@ test("ledger writes reject malformed adjustments, reversal chains, and allocatio
   const first = await service.reverseLedgerTransaction("demo-credit-1", { id: "credit-reversal", postedOn: "2026-08-12", description: "Correct credit", status: "posted" });
   await assert.rejects(() => service.reverseLedgerTransaction("demo-credit-1", { id: "second-credit-reversal", postedOn: "2026-08-13", description: "Duplicate correction", status: "posted" }), /already been reversed/i);
   await assert.rejects(() => service.reverseLedgerTransaction(first.id, { id: "reversal-chain", postedOn: "2026-08-14", description: "Invalid chain", status: "posted" }), /cannot reverse another reversal/i);
+});
+
+test("manual reversal cannot touch a processor-owned online payment", async () => {
+  const snapshot = syntheticRentOpsSnapshot();
+  const demoPayment = snapshot.ledgerTransactions.find((row) => row.id === "demo-payment-1")!;
+  snapshot.ledgerTransactions.push({ ...demoPayment, id: "tp_0000_ledger_1", paymentMethod: null, description: "Stripe tenant payment" });
+  const service = new RentOpsService(new SyntheticRentOpsRepository(snapshot), () => new Date("2026-08-16T12:00:00.000Z"), undefined, undefined, true);
+  await assert.rejects(() => service.reverseLedgerTransaction("tp_0000_ledger_1", { id: "manual-reversal", postedOn: "2026-08-12", description: "Manual reversal", status: "posted" }), /managed by the payment processor/);
 });
 
 test("conversion rejects occupied units and incomplete lease setup", async () => {

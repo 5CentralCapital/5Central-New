@@ -19,7 +19,7 @@ import {
 } from "../../shared/company";
 import type { IsoDate } from "../../shared/company";
 import type { RentOpsLedgerTransaction, RentOpsSnapshot } from "../../shared/rent-ops-contracts";
-import { MRA_INGESTION_POLICY, assertAuthorizedCommand, type AuthenticatedPrincipal, type TransportAttestation } from "../company/authorization";
+import { MRA_INGESTION_POLICY, assertAuthorizedCommand, authorizeCompanyRead, loadAuthenticatedPrincipal, type AuthenticatedPrincipal, type TransportAttestation } from "../company/authorization";
 import { runCompanyCommand, type CommandHandlerContext, type CommandHandlerResult } from "../company/commands/runner";
 import { ConflictCommandError, ValidationCommandError } from "../company/commands/errors";
 import {
@@ -28,8 +28,12 @@ import {
   intakeLineRecordSchema,
   intakeReconciliationSchema,
   intakeSourceObjectSchema,
+  intakeListQuerySchema,
+  intakePageSchema,
   mraMappingSchema,
   mraPacketCandidateSchema,
+  mraPacketReadModelSchema,
+  mraStagePayloadSchema,
   mraPacketRecordSchema,
   projectCostCandidateSchema,
   projectCostPreviewSchema,
@@ -38,12 +42,16 @@ import {
   type IntakeAmountTotals,
   type IntakeLineOutcome,
   type IntakeLineRecord,
+  type IntakeListQuery,
+  type IntakePage,
   type IntakePacketState,
   type IntakeReconciliation,
   type IntakeSourceObject,
   type MraMapping,
   type MraPacketCandidate,
+  type MraPacketReadModel,
   type MraPacketRecord,
+  type MraStagePayload,
   type ProjectCostCandidate,
   type ProjectCostPreview,
   type ProjectDraftCostCommandInput,
@@ -70,6 +78,8 @@ export interface TenantAccountApplyResult {
   readonly affectedRecordIds: readonly RecordReferenceId[];
   readonly appliedCents: MoneyCents;
   readonly eventKey?: string;
+  /** True when the stable payment already existed (another packet applied this source line). */
+  readonly replayed?: boolean;
 }
 
 export interface TenantAccountApplyPort {
@@ -88,7 +98,7 @@ interface RentOpsTenantAccountCommandService {
     category: "base_rent" | "recurring_fee" | "one_time_fee" | "unapplied_cash" | "other";
     allocations: readonly { chargeTransactionId: string; amountCents: number }[];
     autoAllocate?: boolean;
-  }, context: { actorSubject: string; occurredAt: string }): Promise<{ payment: { id: string; amountCents: number | null } }>;
+  }, context: { actorSubject: string; occurredAt: string }): Promise<{ payment: { id: string; amountCents: number | null }; replayed?: boolean }>;
   saveLedgerTransaction(transaction: RentOpsLedgerTransaction): Promise<RentOpsLedgerTransaction>;
 }
 
@@ -99,10 +109,10 @@ export interface TenantAccountApplyAdapterOptions {
 }
 
 function tenantAccountCommandService(value: unknown): RentOpsTenantAccountCommandService {
-  if (!value || typeof value !== "object") throw packetError("rent_ops_service_unconfigured", "The transaction-bound Rent Operations service is unavailable.");
+  if (!value || typeof value !== "object") throw packetError("rent_ops_service_unconfigured", "The transaction-bound 5Central Ops service is unavailable.");
   const candidate = value as Partial<RentOpsTenantAccountCommandService>;
   if (typeof candidate.snapshot !== "function" || typeof candidate.recordManualPayment !== "function" || typeof candidate.saveLedgerTransaction !== "function") {
-    throw packetError("rent_ops_service_unconfigured", "The transaction-bound Rent Operations service is unavailable.");
+    throw packetError("rent_ops_service_unconfigured", "The transaction-bound 5Central Ops service is unavailable.");
   }
   return candidate as RentOpsTenantAccountCommandService;
 }
@@ -161,12 +171,17 @@ function assertMappingScope(line: IntakeLineRecord, mapping: MraMapping, snapsho
   return { tenancy, unit };
 }
 
-function mraPaymentId(packet: MraPacketRecord, line: IntakeLineRecord): string {
-  return `mra-payment:${createHash("sha256").update(`${packet.id}\u0000${line.sourceLineKey}`).digest("hex")}`;
+/**
+ * Stable per (organization, source line): a revised packet that re-observes the
+ * same source line derives the same payment ID, so a second post replays or
+ * conflicts in the append-only ledger instead of creating a second payment.
+ */
+export function mraPaymentId(packet: Pick<MraPacketRecord, "scope">, line: Pick<IntakeLineRecord, "sourceLineKey">): string {
+  return `mra-payment:${createHash("sha256").update(`${packet.scope.organizationId}\u0000${line.sourceLineKey}`).digest("hex")}`;
 }
 
 /**
- * Default apply adapter for the existing Rent Operations command surface.
+ * Default apply adapter for the existing 5Central Ops command surface.
  * Rent and fee lines with an exact tenancy use recordManualPayment (and its
  * idempotent auto-allocation); HAP, deposit, and other typed lines use the
  * transaction-bound ledger command so their payer/category survives. The
@@ -194,6 +209,16 @@ export function createTenantAccountApplyPort(options: TenantAccountApplyAdapterO
       const unit = scoped.unit;
       const propertyId = mapping.propertyId ?? unit?.propertyId ?? tenancy?.propertyId ?? (mapping.localTargetKind === "property_account" ? mapping.localTargetId : undefined);
       if (!propertyId) throw packetError("mra_property_required", "An exact property or tenant account is required before apply.");
+      // Rental records are not organization-scoped; the target property must
+      // belong to the packet's company (and legal entity) when the money was received.
+      const owned = await context.executor.query(
+        `SELECT 1 FROM company_property_entity_periods
+          WHERE organization_id = $1 AND property_id = $2 AND ($3::uuid IS NULL OR legal_entity_id = $3)
+            AND effective_from <= $4::date AND (effective_until IS NULL OR effective_until > $4::date)
+          LIMIT 1`,
+        [context.packet.scope.organizationId, propertyId, context.packet.scope.legalEntityId ?? null, context.sourceLine.postedOn],
+      );
+      if (!owned.rows.length) throw packetError("mra_mapping_scope_mismatch", "The mapped tenancy, unit, or property is outside the packet's company scope.");
       if (context.sourceLine.payer === "hap") throw packetError("mra_hap_allocation_requires_review", "HAP receipts require a compatible subsidy allocation command before they can be applied.");
       if (payer === "tenant" && (category === "base_rent" || category === "one_time_fee" || category === "other" || category === "unapplied_cash") && tenancy) {
         const saved = await service.recordManualPayment({
@@ -207,7 +232,7 @@ export function createTenantAccountApplyPort(options: TenantAccountApplyAdapterO
           allocations: [],
           autoAllocate: true,
         }, actorContext);
-        return { affectedRecordIds: [saved.payment.id as RecordReferenceId], appliedCents: context.sourceLine.amountCents, eventKey: `mra:${context.packet.id}:${context.sourceLine.sourceLineKey}` };
+        return { affectedRecordIds: [saved.payment.id as RecordReferenceId], appliedCents: context.sourceLine.amountCents, eventKey: `mra:${context.packet.scope.organizationId}:${context.sourceLine.sourceLineKey}`, replayed: (saved as { replayed?: boolean }).replayed === true };
       }
       const transaction: RentOpsLedgerTransaction = {
         id: mraPaymentId(context.packet, context.sourceLine),
@@ -239,8 +264,9 @@ export function createTenantAccountApplyPort(options: TenantAccountApplyAdapterO
         chargeDefinitionId: null,
         chargeDefinitionLinkKnowledge: "unknown",
       };
+      const replayed = snapshot.ledgerTransactions.some(row => row.id === transaction.id);
       const saved = await service.saveLedgerTransaction(transaction);
-      return { affectedRecordIds: [saved.id as RecordReferenceId], appliedCents: context.sourceLine.amountCents, eventKey: `mra:${context.packet.id}:${context.sourceLine.sourceLineKey}` };
+      return { affectedRecordIds: [saved.id as RecordReferenceId], appliedCents: context.sourceLine.amountCents, eventKey: `mra:${context.packet.scope.organizationId}:${context.sourceLine.sourceLineKey}`, replayed };
     },
   };
 }
@@ -269,6 +295,28 @@ export interface IntakeServiceOptions {
 export interface MraCommandAccess {
   readonly principal: AuthenticatedPrincipal;
   readonly transport: TransportAttestation;
+  /** Reload active grants inside the command transaction. Defaults to the principal's identity and role. */
+  readonly resolvePrincipal?: (executor: RentOpsQueryExecutor) => Promise<AuthenticatedPrincipal>;
+}
+
+/** Roles that may read recorded MRA results (the browser view is read-only). */
+export const INTAKE_READ_ROLES = ["owner", "admin", "finance", "operations_pm", "read_only_reviewer"] as const;
+
+function freshPrincipal(access: MraCommandAccess): (executor: RentOpsQueryExecutor) => Promise<AuthenticatedPrincipal> {
+  return access.resolvePrincipal ?? (executor => loadAuthenticatedPrincipal(executor, {
+    actorId: access.principal.actorId, organizationId: access.principal.organizationId, role: access.principal.role, capabilities: access.principal.capabilities,
+  }));
+}
+
+function packetWithinScope(packet: MraPacketRecord, scope: CompanyScope): boolean {
+  return packet.scope.organizationId === scope.organizationId
+    && (scope.legalEntityId === undefined || packet.scope.legalEntityId === scope.legalEntityId)
+    && (scope.propertyId === undefined || packet.scope.propertyId === scope.propertyId);
+}
+
+export function toMraPacketReadModel(packet: MraPacketRecord): MraPacketReadModel {
+  const { candidate, ...rest } = packet;
+  return mraPacketReadModelSchema.parse({ ...rest, candidateWarnings: candidate.extractionWarnings });
 }
 
 export interface MraPacketStageInput {
@@ -396,7 +444,10 @@ export function createIntakeService(options: IntakeServiceOptions) {
     if (!options.documentStorage) throw packetError("document_storage_unconfigured", "The verified private document store is unavailable.");
     const checksum = createHash("sha256").update(input.bytes).digest("hex");
     const existing = await store.findBySource(scope, checksum, executor);
-    if (existing) return existing;
+    if (existing) {
+      if (JSON.stringify(existing.scope) !== JSON.stringify(scope)) throw packetError("source_already_staged", "These packet bytes are already staged under a different company scope.");
+      return existing;
+    }
     const sourceDocumentId = input.documentId ?? `mra-packet:${randomUUID()}`;
     const prepared = await prepareVerifiedImportedDocument(options.documentStorage, {
       documentId: sourceDocumentId,
@@ -446,25 +497,58 @@ export function createIntakeService(options: IntakeServiceOptions) {
     return packet;
   }
 
-  async function stage(input: MraPacketStageInput, envelope: CommandEnvelope<unknown>, access: MraCommandAccess): Promise<OperationReceipt & { packet?: MraPacketRecord }> {
+  /**
+   * Stage verified source bytes. The server binds the bytes' SHA-256 and size
+   * into the command payload before the runner fingerprints it, so replaying an
+   * idempotency key with different bytes is a conflict.
+   */
+  async function stage(input: MraPacketStageInput, rawEnvelope: CommandEnvelope<unknown>, access: MraCommandAccess): Promise<OperationReceipt> {
+    if (!(input.bytes instanceof Uint8Array) || input.bytes.byteLength === 0) throw packetError("source_bytes_required", "The MRA packet must contain source bytes.");
+    const checksum = createHash("sha256").update(input.bytes).digest("hex");
+    const parsed = commandEnvelopeSchema(mraStagePayloadSchema).parse(rawEnvelope) as CommandEnvelope<MraStagePayload>;
+    if (parsed.payload.checksumSha256 !== undefined && parsed.payload.checksumSha256 !== checksum) throw packetError("source_checksum_mismatch", "The supplied checksum does not match the packet bytes.");
+    if (parsed.payload.sizeBytes !== undefined && parsed.payload.sizeBytes !== input.bytes.byteLength) throw packetError("source_size_mismatch", "The supplied size does not match the packet bytes.");
+    if (parsed.payload.fileName !== input.fileName || parsed.payload.declaredContentType !== input.declaredContentType) throw packetError("source_metadata_mismatch", "The packet file name and type must match the command payload.");
+    const envelope: CommandEnvelope<MraStagePayload> = { ...parsed, payload: { ...parsed.payload, checksumSha256: checksum, sizeBytes: input.bytes.byteLength } };
+    if (JSON.stringify(envelope.scope) !== JSON.stringify(scopeForIntake(input.scope))) throw packetError("scope_mismatch", "The packet scope must match the command scope.");
     authorize(access, envelope);
-    const result = await runCompanyCommand(options.executor, {
+    return runCompanyCommand(options.executor, {
       envelope,
       principal: access.principal,
-      resolvePrincipal: async () => access.principal,
+      resolvePrincipal: freshPrincipal(access),
       transport: access.transport,
       policy: MRA_INGESTION_POLICY,
       handler: async (context) => {
         const packet = await stageInTransaction(input, context.executor);
-        return { state: "saved_in_rops", affectedRecordIds: [packet.id], resultingRevisions: [{ recordId: packet.id as RecordReferenceId, revision: revisionSchema.parse(packet.revision) }], validationOutcomes: [{ code: packet.state === "failed" ? "intake.parse.held" : "intake.packet.staged", severity: packet.state === "failed" ? "warning" : "info", message: packet.state === "failed" ? "The verified source is retained, but parsing requires review." : "The verified MRA source packet is staged in R-ops." }] } satisfies CommandHandlerResult;
+        return { state: "saved_in_rops", affectedRecordIds: [packet.id], resultingRevisions: [{ recordId: packet.id as RecordReferenceId, revision: revisionSchema.parse(packet.revision) }], validationOutcomes: [{ code: packet.state === "failed" ? "intake.parse.held" : "intake.packet.staged", severity: packet.state === "failed" ? "warning" : "info", message: packet.state === "failed" ? "The verified source is retained, but parsing requires review." : "The verified MRA source packet is staged." }] } satisfies CommandHandlerResult;
       },
     });
-    return result;
+  }
+
+  /** Authorized read of one packet; the browser receives the read model only. */
+  async function readPacket(principal: AuthenticatedPrincipal, scopeInput: CompanyScope, packetId: string): Promise<MraPacketReadModel> {
+    const scope = scopeForIntake(scopeInput);
+    authorizeCompanyRead(principal, scope, INTAKE_READ_ROLES);
+    const packet = await store.get(scope, packetId);
+    if (!packet || !packetWithinScope(packet, scope)) throw packetError("packet_not_found", "The MRA packet was not found in the requested scope.");
+    authorizeCompanyRead(principal, packet.scope, INTAKE_READ_ROLES);
+    return toMraPacketReadModel(packet);
+  }
+
+  /** Authorized page of packets, newest first. Packets outside the principal's grants are omitted. */
+  async function listPackets(principal: AuthenticatedPrincipal, input: IntakeListQuery): Promise<IntakePage> {
+    const query = intakeListQuerySchema.parse(input);
+    authorizeCompanyRead(principal, query.scope, INTAKE_READ_ROLES);
+    const page = await store.list(query.scope, query.cursor, query.limit);
+    const items = page.items.filter(item => {
+      try { authorizeCompanyRead(principal, item.scope, INTAKE_READ_ROLES); return true; } catch { return false; }
+    });
+    return intakePageSchema.parse({ items, nextCursor: page.nextCursor });
   }
 
   async function getPacket(scope: CompanyScope, packetId: string): Promise<MraPacketRecord> {
     const packet = await store.get(scopeForIntake(scope), packetId);
-    if (!packet) throw packetError("packet_not_found", "The MRA packet was not found in the requested scope.");
+    if (!packet || !packetWithinScope(packet, scopeForIntake(scope))) throw packetError("packet_not_found", "The MRA packet was not found in the requested scope.");
     return readModel(packet);
   }
 
@@ -473,7 +557,14 @@ export function createIntakeService(options: IntakeServiceOptions) {
     const packet = await getPacket(scope, packetId);
     if (packet.state === "applied" || packet.state === "applying") throw packetError("packet_state_invalid", "An applying or applied packet cannot be remapped.");
     const mapByKey = new Map(mappings.map((mapping) => [mapping.sourceLineKey, mraMappingSchema.parse(mapping)]));
-    const lines = packet.lines.map((line) => mapByKey.get(line.sourceLineKey) ? updateLine(line, { mapping: mapByKey.get(line.sourceLineKey)! }) : line);
+    const known = new Set(packet.lines.map((line) => line.sourceLineKey));
+    for (const key of Array.from(mapByKey.keys())) if (!known.has(key)) throw packetError("mapping_line_unknown", `Mapping names a source line that is not in this packet: ${key}`);
+    for (const line of packet.lines) {
+      const mapping = mapByKey.get(line.sourceLineKey);
+      // Applied lines are verified history: their identity cannot be changed by a remap.
+      if (mapping && line.outcome === "applied" && JSON.stringify(mapping) !== JSON.stringify(line.mapping)) throw packetError("applied_line_remap", `An applied line cannot be remapped: ${line.sourceLineKey}`);
+    }
+    const lines = packet.lines.map((line) => mapByKey.get(line.sourceLineKey) && line.outcome !== "applied" ? updateLine(line, { mapping: mapByKey.get(line.sourceLineKey)! }) : line);
     const now = isoNow(clock);
     const next = readModel({ ...packet, state: "mapped", lines, updatedAt: now, mappedAt: now, revision: revisionSchema.parse(packet.revision + 1) });
     await withTransaction(options.executor, async (executor) => store.save(next, packet.revision, executor), options.transactionBound);
@@ -487,6 +578,7 @@ export function createIntakeService(options: IntakeServiceOptions) {
     if (packet.state === "applied" || packet.state === "applying") throw packetError("packet_state_invalid", "An applying or applied packet cannot be previewed again.");
     const lines: IntakeLineRecord[] = [];
     for (const line of packet.lines) {
+      if (line.outcome === "applied") { lines.push(line); continue; }
       if (lineRequiresSemanticReview(line)) {
         lines.push(updateLine(line, { outcome: "held_unsupported", outcomeReason: "The source line is not explicitly identified as an incoming payment; no account change is allowed." }));
         continue;
@@ -496,10 +588,16 @@ export function createIntakeService(options: IntakeServiceOptions) {
         lines.push(updateLine(line, { outcome: line.mapping?.outcome === "ambiguous" ? "held_ambiguous_identity" : "held_missing_identity", outcomeReason: reason }));
         continue;
       }
-      const previous = await store.findLine(scope, line.sourceLineKey);
-      if (previous && previous.packetId !== packet.id) {
+      const previous = await store.findLine(scope, line.sourceLineKey, undefined, packet.id);
+      if (previous) {
         const corrected = line.correctsSourceLineKey === line.sourceLineKey || Boolean(line.correctsSourceLineKey && line.correctsSourceLineKey === previous.sourceRevision);
-        lines.push(updateLine(line, { outcome: corrected ? "corrected" : previous.checksumSha256 === packet.source.checksumSha256 ? "duplicate" : "overlap", outcomeReason: corrected ? "This packet explicitly corrects an earlier source observation." : previous.checksumSha256 === packet.source.checksumSha256 ? "This source line was already staged." : "A different packet already claims this source line identity." }));
+        if (previous.outcome === "applied") {
+          // Money already applied from an earlier packet is verified history; a
+          // revision never re-applies or erases it. Corrections go through Accounting.
+          lines.push(updateLine(line, { outcome: "overlap", outcomeReason: corrected ? "An earlier packet already applied this line; correct applied money through Accounting." : "An earlier packet already applied this source line." }));
+        } else {
+          lines.push(updateLine(line, { outcome: corrected ? "corrected" : previous.checksumSha256 === packet.source.checksumSha256 ? "duplicate" : "overlap", outcomeReason: corrected ? "This packet explicitly corrects an earlier source observation." : previous.checksumSha256 === packet.source.checksumSha256 ? "This source line was already staged." : "A different packet already claims this source line identity." }));
+        }
       } else {
         lines.push(updateLine(line, { outcome: "matched", outcomeReason: null }));
       }
@@ -534,16 +632,34 @@ export function createIntakeService(options: IntakeServiceOptions) {
       const groupKeys = new Set(group.map((line) => line.sourceLineKey));
       const groupAffected: RecordReferenceId[] = [];
       let groupAppliedCount = 0;
+      const groupOverlaps: string[] = [];
       try {
         await withTransaction(options.executor, async (executor) => {
           const txPacket = await store.get(scopeForIntake(scope), packet.id, executor) ?? packet;
           const rentOpsService = options.rentOpsFactory?.(executor);
-          const nextLines = txPacket.lines.map((line) => groupKeys.has(line.sourceLineKey) ? line : line);
+          const nextLines = [...txPacket.lines];
+          groupOverlaps.length = 0;
           for (const line of group) {
+            const index = nextLines.findIndex((candidate) => candidate.sourceLineKey === line.sourceLineKey);
+            // Re-check the registry inside the group savepoint: another packet
+            // (an earlier original or a later revision) may have applied this
+            // source line after this packet was previewed. Applied money is
+            // verified history and is never posted a second time.
+            const previous = await store.findLine(scopeForIntake(scope), line.sourceLineKey, executor, packet.id);
+            if (previous?.outcome === "applied") {
+              if (index >= 0) nextLines[index] = updateLine(nextLines[index]!, { outcome: "overlap", outcomeReason: "Another packet already applied this source line; correct applied money through Accounting." });
+              groupOverlaps.push(line.sourceLineKey);
+              continue;
+            }
             const result = await options.tenantAccountWriter!.applyLine({ executor, packet: txPacket, sourceLine: line, idempotencyKey: `${envelope.idempotencyKey}:${line.sourceLineKey}`, rentOpsService });
+            if (result.replayed) {
+              // The stable payment already exists (a concurrent packet posted it); nothing new was applied.
+              if (index >= 0) nextLines[index] = updateLine(nextLines[index]!, { outcome: "overlap", outcomeReason: "This source line's payment was already recorded by another packet." });
+              groupOverlaps.push(line.sourceLineKey);
+              continue;
+            }
             groupAffected.push(...result.affectedRecordIds);
             groupAppliedCount += 1;
-            const index = nextLines.findIndex((candidate) => candidate.sourceLineKey === line.sourceLineKey);
             if (index >= 0) nextLines[index] = updateLine(nextLines[index]!, { outcome: "applied", outcomeReason: null });
           }
           const next = readModel({ ...txPacket, state: "partially_applied", lines: nextLines, reconciliation: reconciliation(nextLines), updatedAt: isoNow(clock), revision: revisionSchema.parse(txPacket.revision + 1) });
@@ -552,6 +668,7 @@ export function createIntakeService(options: IntakeServiceOptions) {
         }, options.transactionBound);
         affected.push(...groupAffected);
         appliedCount += groupAppliedCount;
+        for (const lineKey of groupOverlaps) validationOutcomes.push({ code: "intake.line.overlap", message: "Another packet already applied this source line; it was not applied again.", lineKey });
       } catch (error) {
         failedCount += group.length;
         const message = error instanceof Error ? error.message : "Tenant account update failed.";
@@ -593,6 +710,8 @@ export function createIntakeService(options: IntakeServiceOptions) {
     stage,
     stageInTransaction,
     getPacket,
+    readPacket,
+    listPackets,
     mapPacket,
     previewPacket,
     applyPacket,
@@ -650,10 +769,27 @@ export async function executeMraIngestionCommand(
       const action = envelope.payload;
       const access = { principal: context.principal, transport: context.transport };
       const transactionService = options.service.serviceForExecutor(context.executor);
-      if (action.action === "map") await transactionService.mapPacket(envelope.scope, action.packetId, action.mappings ?? [], access, envelope);
-      else if (action.action === "preview") await transactionService.previewPacket(envelope.scope, action.packetId, access, envelope);
-      else await transactionService.applyPacket(envelope.scope, action.packetId, access, envelope);
-      return { state: "saved_in_rops", affectedRecordIds: [action.packetId], resultingRevisions: [], validationOutcomes: [{ code: `intake.${action.action}.saved`, severity: "info", message: `MRA ${action.action} result saved in R-ops.` }] };
+      if (action.action === "map" || action.action === "preview") {
+        const packet = action.action === "map"
+          ? await transactionService.mapPacket(envelope.scope, action.packetId, action.mappings ?? [], access, envelope)
+          : await transactionService.previewPacket(envelope.scope, action.packetId, access, envelope);
+        const held = packet.reconciliation?.heldLineCount ?? 0;
+        return {
+          state: "saved_in_rops", affectedRecordIds: [packet.id], resultingRevisions: [{ recordId: packet.id as RecordReferenceId, revision: revisionSchema.parse(packet.revision) }],
+          validationOutcomes: [{ code: `intake.${action.action}.saved`, severity: held ? "warning" : "info", message: action.action === "map" ? "MRA mappings saved. Preview before applying." : `MRA preview saved: ${packet.reconciliation?.matchedLineCount ?? 0} matched, ${held} held, ${packet.reconciliation?.overlapLineCount ?? 0} overlapping.` }],
+        };
+      }
+      const result = await transactionService.applyPacket(envelope.scope, action.packetId, access, envelope);
+      const affected = Array.from(new Set([result.packet.id, ...result.affectedRecordIds])).slice(0, 1_000);
+      return {
+        state: "saved_in_rops",
+        affectedRecordIds: affected,
+        resultingRevisions: [{ recordId: result.packet.id as RecordReferenceId, revision: revisionSchema.parse(result.packet.revision) }],
+        validationOutcomes: [
+          { code: "intake.apply.saved", severity: result.failedLineCount || result.heldLineCount ? "warning" : "info", message: `MRA apply: ${result.appliedLineCount} lines applied, ${result.failedLineCount} failed, ${result.heldLineCount} held. Packet ${result.packet.state.replace("_", " ")}.` },
+          ...result.validationOutcomes.slice(0, 100).map(outcome => ({ code: outcome.code, severity: "warning" as const, message: `${outcome.lineKey ?? "group"}: ${outcome.message}`.slice(0, 2_000) })),
+        ],
+      };
     },
   });
 }

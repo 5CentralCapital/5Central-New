@@ -4,7 +4,17 @@ Projects extends the existing `/ops` manager interface. The dashboard, tenant po
 
 The workspace supports project creation, editing and archiving; scope estimates; approved budget versions; tasks and dependencies; and editable draft costs. The same domain commands serve authenticated web requests and Codex MCP tools. Scope, task and cost changes advance the parent project revision. Approved budgets preserve their saved lines and approval identity.
 
-Money crosses the company boundary as exact decimal strings of integer cents. A quantity times a rate is rounded to cents using the shared exact-decimal implementation. Draft costs never count as QBO posted costs. QBO actual coverage stays unavailable until the verified accounting mirror is implemented.
+Money crosses the company boundary as exact decimal strings of integer cents. A quantity times a rate is rounded to cents using the shared exact-decimal implementation. Draft costs never count as QBO posted costs.
+
+## Sections
+
+- **Overview** — the canonical cost summary, schedule risk, closeout checklist, project facts and templates (apply a saved template or save this project as one).
+- **Schedule** — tasks with named dependencies (edited in the task dialog), assignments, milestones, inspections and punch items.
+- **Budgets & costs** — the cost summary, budget by line with the cost-to-complete override, scope lines and budget approval, QBO costs with the mirror line picker (link and release), labor, and draft costs.
+- **Commitments** — the commitment ledger (received, invoiced, paid, remaining) and procurement: bids, commitments, change orders, purchase orders and vendors.
+- **Draws** — the retainage payable rollforward and draw requests.
+
+The cost figures come from one read (`/projects/:id/cost-report`); the workspace does not recompute them.
 
 ## Development
 
@@ -38,4 +48,4 @@ To run the three real PostgreSQL concurrency regressions, use an isolated develo
 - Storage and permission changes: migration 033, company table registry and rental deployment-security manifest.
 - QuickBooks transport: `server/integrations/quickbooks`; real sandbox acceptance remains unverified.
 
-QBO connection persistence, company-to-realm verification, the durable synchronization worker, accounting mirrors, commitments, draws, contractor agreements, project templates and inspections, MRA ingestion, investors, financial reporting and Mac packaging remain separate implementation packets. Pending browser save envelopes currently survive dialog changes within the active workspace; recovery across a reload, navigation away or app restart still needs the planned durable client recovery layer. This development slice is not a production release or accounting cutover.
+Contractor agreements, MRA ingestion, a cost library and Mac packaging remain separate implementation packets. Pending browser save envelopes currently survive dialog changes within the active workspace; recovery across a reload, navigation away or app restart still needs the planned durable client recovery layer. This development slice is not a production release or accounting cutover.

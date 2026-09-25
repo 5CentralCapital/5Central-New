@@ -1,3 +1,4 @@
+import MarketingImage from "@/components/marketing-image";
 import { useState } from "react";
 import { type Property } from "@shared/schema";
 import PropertyModal from "@/components/property-modal";
@@ -136,7 +137,7 @@ export default function Portfolio() {
   const totalRealizedProfits = soldProperties.reduce((sum, p) => {
     const acquisitionPrice = parseFloat(p.acquisitionPrice);
     const salePrice = parseFloat(p.salePrice || "0");
-    return sum + Math.max(0, salePrice - acquisitionPrice);
+    return sum + salePrice - acquisitionPrice;
   }, 0);
 
   const ctProperties = allProperties.filter(p => p.state === 'CT');
@@ -451,7 +452,7 @@ export default function Portfolio() {
                           onClick={() => openPropertyModal(property)}
                         >
                           <div className="collage-image">
-                            <img
+                            <MarketingImage
                               src={getPublicPropertyImage(property)}
                               alt={property.name}
                               className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
@@ -496,7 +497,7 @@ export default function Portfolio() {
                   <div>
                     <h3 className="text-2xl font-serif font-medium text-foreground">Successful Exits</h3>
                     <p className="text-sm text-muted-foreground mt-1">
-                      {soldProperties.length} realized investments with ${(totalRealizedProfits / 1000).toFixed(0)}K in total profits
+                      {soldProperties.length} realized investments with ${(totalRealizedProfits / 1000).toFixed(0)}K in gross sale-price appreciation
                     </p>
                   </div>
                 </div>
@@ -519,7 +520,7 @@ export default function Portfolio() {
                         onClick={() => openPropertyModal(property)}
                       >
                         <div className="sold-collage-image">
-                          <img
+                          <MarketingImage
                             src={getPublicPropertyImage(property)}
                             alt={property.name}
                             className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
@@ -612,7 +613,7 @@ export default function Portfolio() {
                       onClick={() => openPropertyModal(property)}
                     >
                       <div className="collage-image">
-                        <img
+                        <MarketingImage
                           src={getPublicPropertyImage(property)}
                           alt={property.name}
                           className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
@@ -659,7 +660,7 @@ export default function Portfolio() {
                     <div className="text-2xl md:text-3xl font-serif font-medium text-warm-brass mb-1" data-testid="sold-total-profits">
                       ${(totalRealizedProfits / 1000).toFixed(0)}K
                     </div>
-                    <div className="text-sm text-muted-foreground">Total Realized Profits</div>
+                    <div className="text-sm text-muted-foreground">Gross Sale-Price Appreciation</div>
                     <div className="stat-bar mt-3">
                       <div className="stat-bar-fill" style={{ width: '78%' }} />
                     </div>
@@ -701,7 +702,7 @@ export default function Portfolio() {
                       onClick={() => openPropertyModal(property)}
                     >
                       <div className="sold-collage-image">
-                        <img
+                        <MarketingImage
                           src={getPublicPropertyImage(property)}
                           alt={property.name}
                           className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
@@ -989,20 +990,20 @@ export default function Portfolio() {
               </p>
 
               <div className="flex flex-col sm:flex-row gap-4">
-                <Link href="/founder">
-                  <Button className="btn-accent group w-full sm:w-auto" data-testid="button-schedule-consultation">
+                <Button asChild className="btn-accent group w-full sm:w-auto" data-testid="button-schedule-consultation">
+                  <Link href="/founder">
                     Schedule Consultation
                     <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
-                  </Button>
-                </Link>
-                <Link href="/vision">
-                  <Button
+                  </Link>
+                </Button>
+                <Button asChild
                     className="btn-outline border-white/20 text-white hover:bg-white hover:text-deep-charcoal w-full sm:w-auto"
                     data-testid="button-view-investment-vision"
                   >
+                  <Link href="/vision">
                     View Our Vision
-                  </Button>
-                </Link>
+                  </Link>
+                </Button>
               </div>
             </div>
 

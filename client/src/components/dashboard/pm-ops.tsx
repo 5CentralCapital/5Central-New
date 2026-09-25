@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { localIsoDate } from "@/lib/format";
 import { PropertySubTabs, useProperties } from "./shared/property-subtabs";
 
 interface PmNote {
@@ -524,7 +525,7 @@ export default function PmOps() {
                   {properties.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
                 <input name="author" placeholder="Author" defaultValue="Admin" required style={{ padding: 8, borderRadius: 6, border: "1px solid var(--color-border)" }} />
-                <input name="date" type="date" defaultValue={new Date().toISOString().split("T")[0]} required style={{ padding: 8, borderRadius: 6, border: "1px solid var(--color-border)" }} />
+                <input name="date" type="date" defaultValue={localIsoDate()} required style={{ padding: 8, borderRadius: 6, border: "1px solid var(--color-border)" }} />
                 <select name="category" style={{ padding: 8, borderRadius: 6, border: "1px solid var(--color-border)" }}>
                   {["general", "maintenance", "tenant", "leasing", "financial", "emergency"].map(c => <option key={c} value={c}>{c}</option>)}
                 </select>

@@ -16,7 +16,7 @@ test("unit choices follow property while preserving existing archived or missing
   const choices = (values: Record<string, string>) => scopedFields("save-tenancy", snapshot, {}, values).find(f => f.name === "unitId")!.options;
   assert.deepEqual(choices({ propertyId: "p1" })?.map(x => x[0]), ["u1"]);
   assert.deepEqual(choices({ propertyId: "p1", unitId: "u2" })?.map(x => x[0]), ["u1", "u2"]);
-  assert.equal(choices({ propertyId: "p1", unitId: "missing" })?.at(-1)?.[1], "Existing selection · needs review");
+  assert.equal(choices({ propertyId: "p1", unitId: "missing" })?.at(-1)?.[1], "Existing selection · record missing");
 });
 test("editing unknown facts stays sparse and HAP edits remain status only", () => {
   assert.ok(actionFields("save-property", snapshot, { id: "p1", revision: 2 }).every(f => !f.required));

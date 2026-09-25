@@ -62,8 +62,9 @@ test("protected request timings expose only isolated numeric phases and preserve
     for (const response of [workspace, dashboard, report, tenant, combined]) {
       assert.equal(response.headers.get("x-rent-ops-timing"), response.headers.get("server-timing"));
       const timing = metrics(response.headers.get("server-timing"));
-      assert.equal(timing.get("db_calls"), 1);
-      assert.equal(timing.get("batch_calls"), 1);
+      // Cached or single-flight readers do no database work in their own context.
+      assert.ok([0, 1].includes(timing.get("db_calls")!));
+      assert.equal(timing.get("batch_calls"), timing.get("db_calls"));
       for (const phase of ["db", "decode", "map", "derive", "total"]) assert.ok(timing.has(phase), phase);
       assert.equal(response.headers.get("cache-control"), "no-store");
       if (response !== workspace) assert.ok(timing.has("validate"));

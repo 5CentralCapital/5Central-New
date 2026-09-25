@@ -4,6 +4,7 @@ import { ArrowUpRight, Search, Star } from 'lucide-react';
 import { ReportCatalogSchema } from '@shared/report-catalog';
 import type { CompanyContext } from '@shared/company/context';
 import { reportingApi } from '../../reporting/api';
+import { runtimeStatusLabel } from '../../reporting/workspace-model';
 import { rentOpsAuthClient } from '../auth';
 import { REPORT_KEYS, type ReportKey } from '../types';
 import './report-library.css';
@@ -44,6 +45,7 @@ export function ReportLibrary({ identity, organizationId, onCompanyChange, onOpe
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('all');
   const [view, setView] = useState('all');
+  const [expanded, setExpanded] = useState<string[]>([]);
   const favoriteKey = `rops:report-favorites:${identity}`;
   const [favorites, setFavorites] = useState<string[]>(() => {
     try {
@@ -80,21 +82,49 @@ export function ReportLibrary({ identity, organizationId, onCompanyChange, onOpe
     {groups.map(([key, label]) => {
       const rows = reports?.filter(report => report.category === key);
       if (!rows?.length) return null;
+      // Ready reports first. Reports the company cannot run yet (a known
+      // runtime status that is not executable) collapse under one row.
+      const isRental = (report: typeof rows[number]) => report.availability === 'available' && Boolean(report.reportKey) && REPORT_KEYS.includes(report.reportKey as ReportKey);
+      const isReady = (report: typeof rows[number]) => isRental(report) || Boolean(companyEntries.get(report.id)?.executable);
+      const isBlocked = (report: typeof rows[number]) => !isRental(report) && Boolean(companyEntries.get(report.id)) && !companyEntries.get(report.id)?.executable;
+      const ready = rows.filter(isReady);
+      const pending = rows.filter(report => !isReady(report) && !isBlocked(report));
+      const blocked = rows.filter(isBlocked);
+      const blockedOpen = expanded.includes(key);
+      const renderRow = (report: typeof rows[number]) => {
+        const available = isRental(report);
+        const companyEntry = companyEntries.get(report.id);
+        const companyAvailable = Boolean(organization && companyEntry && onOpenCompany);
+        const isFavorite = favorites.includes(report.id);
+        const blockedRow = isBlocked(report);
+        return <li key={report.id} data-report-id={report.id} className={blockedRow ? 'is-blocked' : undefined}>
+          <button className="rops-report-favorite" type="button" aria-label={`${isFavorite ? 'Remove' : 'Add'} ${report.title} ${isFavorite ? 'from' : 'to'} favorites`} aria-pressed={isFavorite} onClick={() => toggleFavorite(report.id)}>
+            <Star size={17} fill={isFavorite ? 'currentColor' : 'none'} aria-hidden="true"/>
+          </button>
+          {blockedRow && companyEntry
+            ? <div className="rops-report-open rops-report-blocked">
+                <span className="rops-report-blocked-text"><span>{report.title}</span>{companyEntry.runtimeReason && <small>{companyEntry.runtimeReason}</small>}</span>
+                <span className={`rm-status ${companyEntry.runtimeStatus === 'missing_data' ? 'rm-status--warning' : 'rm-status--unknown'}`}>{runtimeStatusLabel(companyEntry.runtimeStatus)}</span>
+              </div>
+            : <button className="rops-report-open" type="button" disabled={!available && !companyAvailable} onClick={() => { if (available) onOpen(report.reportKey as ReportKey); else if (companyAvailable) onOpenCompany?.(organization!.id, report.id); }}>
+                <span>{report.title}</span>{available || companyEntry?.executable ? <ArrowUpRight size={16} aria-hidden="true"/> : <span className="rops-report-availability">{companyCatalog.isFetching || context.isFetching ? 'Checking…' : 'Choose a company'}</span>}
+              </button>}
+        </li>;
+      };
+      const allNeedData = blocked.every(report => companyEntries.get(report.id)?.runtimeStatus === 'missing_data');
+      const blockedCount = allNeedData ? `${blocked.length} ${blocked.length === 1 ? 'needs' : 'need'} data` : `${blocked.length} not available yet`;
+      const blockedNames = blocked.slice(0, 2).map(report => report.title).join(', ') + (blocked.length > 2 ? ', …' : '');
+      const blockedListId = `rops-report-blocked-${key}`;
       return <section className="rops-report-category" key={key} aria-label={`${label} reports`}>
-        <h2>{label}</h2><ul>{rows.map(report => {
-          const available = report.availability === 'available' && report.reportKey && REPORT_KEYS.includes(report.reportKey as ReportKey);
-          const companyEntry = companyEntries.get(report.id);
-          const companyAvailable = Boolean(organization && companyEntry && onOpenCompany);
-          const isFavorite = favorites.includes(report.id);
-          return <li key={report.id} data-report-id={report.id}>
-            <button className="rops-report-favorite" type="button" aria-label={`${isFavorite ? 'Remove' : 'Add'} ${report.title} ${isFavorite ? 'from' : 'to'} favorites`} aria-pressed={isFavorite} onClick={() => toggleFavorite(report.id)}>
-              <Star size={17} fill={isFavorite ? 'currentColor' : 'none'} aria-hidden="true"/>
-            </button>
-            <button className="rops-report-open" type="button" disabled={!available && !companyAvailable} onClick={() => { if (available) onOpen(report.reportKey as ReportKey); else if (companyAvailable) onOpenCompany?.(organization!.id, report.id); }}>
-              <span>{report.title}</span>{available || companyEntry?.executable ? <ArrowUpRight size={16} aria-hidden="true"/> : <span className="rops-report-availability">{report.source === 'quickbooks' || report.source === 'combined' ? 'Awaiting integration' : 'Planned'}</span>}
-            </button>
-          </li>;
-        })}</ul>
+        <h2>{label}</h2>
+        {ready.length + pending.length > 0 && <ul>{[...ready, ...pending].map(renderRow)}</ul>}
+        {blocked.length > 0 && <div className="rops-report-blocked-group">
+          <div className="rops-report-blocked-summary">
+            <span><strong>{blockedCount}</strong><span className="rops-report-blocked-names"> · {blockedNames}</span></span>
+            <button type="button" className="rm-button rm-button--ghost" aria-expanded={blockedOpen} aria-controls={blockedListId} onClick={() => setExpanded(current => current.includes(key) ? current.filter(item => item !== key) : [...current, key])}>{blockedOpen ? 'Hide' : 'Show'}</button>
+          </div>
+          {blockedOpen && <ul id={blockedListId} className="rops-report-blocked-list">{blocked.map(renderRow)}</ul>}
+        </div>}
       </section>;
     })}
   </section>;

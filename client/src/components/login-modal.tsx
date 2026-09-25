@@ -35,23 +35,16 @@ export default function LoginModal({ open, onOpenChange }: LoginModalProps) {
     setIsLoading(true);
 
     const result = await login(email, password);
+    setIsLoading(false);
 
     if (result.success) {
       onOpenChange(false);
       setEmail("");
       setPassword("");
-      // Redirect based on role will be handled by the auth context user change
-      // We need to refetch and redirect
-      const response = await fetch("/api/auth/me", { credentials: "include" });
-      if (response.ok) {
-        const data = await response.json();
-        setLocation(legacyAccountDestination(data.user.role));
-      }
+      setLocation(legacyAccountDestination(result.user.role));
     } else {
-      setError(result.error || "Login failed");
+      setError(result.error);
     }
-
-    setIsLoading(false);
   };
 
   return (

@@ -5,7 +5,7 @@ import { phoneMethodsSchema } from "../domain/phone-methods";
 import { correctChargeSchema, type CorrectChargeInput, correctPaymentSchema, type CorrectPaymentInput, manualPaymentSchema, createChargeDefinitionSchema, patchChargeDefinitionSchema, type CreateChargeDefinitionInput, type PatchChargeDefinitionInput, type ManualPaymentInput } from "./operational-inputs";
 import { postedReversalTargets } from "../domain/invariants";
 import { createHash, randomUUID } from "node:crypto";
-import { Readable, Transform } from "node:stream";
+import { pipeline, Readable, Transform } from "node:stream";
 import type {
   ApplicantSaveInput,
   ApplicantStartInput,
@@ -130,8 +130,12 @@ export interface RentOpsDocumentServiceOptions {
 
 const MAX_DOCUMENT_NAME = 240;
 const MAX_DOCUMENT_MIME = 120;
-// Source filenames may contain ordinary punctuation; paths/control characters remain forbidden.
-const SAFE_DOCUMENT_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._()',&\-]{0,239}$/;
+// Source filenames may contain non-ASCII characters as well as the existing
+// punctuation. Paths, control characters, and hidden/path-like names remain
+// forbidden before a filename reaches object storage. Keep this ES5-compatible
+// because the main TypeScript project leaves its target at the compiler default.
+const SAFE_DOCUMENT_NAME = /^[A-Za-z0-9\u00a0-\uFFFF][A-Za-z0-9\u00a0-\uFFFF ._()',&\-]{0,239}$/;
+const UNSAFE_DOCUMENT_NAME = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
 const SAFE_DOCUMENT_MIMES = new Set([
   "application/pdf",
   "image/jpeg",
@@ -315,9 +319,9 @@ function autoAllocationPlan(snapshot: RentOpsSnapshot, payment: RentOpsLedgerTra
   const resolvedPaymentPostedOn = paymentPostedOn;
   const resolvedPaymentAmountCents = paymentAmountCents;
   if (!payment.tenancyId || payment.tenancyId !== tenancy.id || !payment.propertyId || payment.propertyId !== tenancy.propertyId || !payment.personId || payment.personId !== tenancy.primaryPersonId) {
-    throw new RentOpsInvariantError("Payment account links need review before auto-allocation");
+    throw new RentOpsInvariantError("Payment account links are unverified; confirm them before auto-allocation");
   }
-  if (!transactionLinksKnown(payment)) throw new RentOpsInvariantError("Payment account links need review before auto-allocation");
+  if (!transactionLinksKnown(payment)) throw new RentOpsInvariantError("Payment account links are unverified; confirm them before auto-allocation");
 
   const transactions = new Map(snapshot.ledgerTransactions.map((row) => [row.id, row]));
   const reversed = postedReversalTargets(snapshot.ledgerTransactions);
@@ -377,7 +381,7 @@ function autoAllocationPlan(snapshot: RentOpsSnapshot, payment: RentOpsLedgerTra
       if (!Number.isSafeInteger(appliedToPayment)) throw new RentOpsInvariantError("Payment allocation balance exceeds safe integer range");
     }
   }
-  if (paymentHistoryUncertain) throw new RentOpsInvariantError("Payment allocation history needs review before auto-allocation");
+  if (paymentHistoryUncertain) throw new RentOpsInvariantError("Payment allocation history is incomplete; allocate manually.");
   if (appliedToPayment > resolvedPaymentAmountCents) throw new RentOpsInvariantError("Payment allocations exceed the payment amount");
 
   let remaining = resolvedPaymentAmountCents - appliedToPayment;
@@ -437,13 +441,13 @@ function paymentAllocatedCents(snapshot: RentOpsSnapshot, payment: RentOpsLedger
   for (const allocation of snapshot.paymentAllocations) {
     if (allocation.paymentTransactionId !== payment.id || allocation.kind === "transfer" || allocation.kind === "credit_allocation") continue;
     const charge = allocation.chargeTransactionId ? transactions.get(allocation.chargeTransactionId) : undefined;
-    if (!charge || charge.kind !== "charge") throw new RentOpsInvariantError("Payment allocation history needs review before auto-allocation");
+    if (!charge || charge.kind !== "charge") throw new RentOpsInvariantError("Payment allocation history is incomplete; allocate manually.");
     if (reversed.has(charge.id)) continue;
     if (!Number.isSafeInteger(allocation.amountCents) || !sourceAllocationFactsKnown(allocation) || allocation.amountCents! <= 0 && !isSourceAllocationReversal(allocation) || allocation.amountCents! > 0 && allocation.kind === "reversal") {
-      throw new RentOpsInvariantError("Payment allocation history needs review before auto-allocation");
+      throw new RentOpsInvariantError("Payment allocation history is incomplete; allocate manually.");
     }
     allocated += allocation.amountCents!;
-    if (!Number.isSafeInteger(allocated) || allocated < 0) throw new RentOpsInvariantError("Payment allocation balance needs review before auto-allocation");
+    if (!Number.isSafeInteger(allocated) || allocated < 0) throw new RentOpsInvariantError("Payment allocation balance is invalid; allocate manually.");
   }
   return allocated;
 }
@@ -454,7 +458,7 @@ function patchRow(snapshot: RentOpsSnapshot, entityType: RentOpsPatchEntityType,
 }
 
 function assertDocumentName(fileName: string): string {
-  if (typeof fileName !== "string" || fileName.length < 1 || fileName.length > MAX_DOCUMENT_NAME || !SAFE_DOCUMENT_NAME.test(fileName) || fileName.includes("..")) throw new RentOpsInvariantError("Document filename is invalid");
+  if (typeof fileName !== "string" || fileName.length < 1 || fileName.length > MAX_DOCUMENT_NAME || !SAFE_DOCUMENT_NAME.test(fileName) || UNSAFE_DOCUMENT_NAME.test(fileName) || fileName.includes("..")) throw new RentOpsInvariantError("Document filename is invalid");
   return fileName;
 }
 
@@ -501,7 +505,9 @@ function validatedDocumentStream(source: StorageByteStream, mimeType: string): R
       callback();
     },
   });
-  return Readable.from(source as AsyncIterable<Uint8Array> | Readable).pipe(validator);
+  // pipeline(), unlike pipe(), forwards a source failure (size limit, client
+  // abort) to the returned stream instead of raising an uncaught 'error'.
+  return pipeline(Readable.from(source as AsyncIterable<Uint8Array> | Readable), validator, () => { /* surfaced on validator */ });
 }
 
 function bindingFromStorage(documentId: string, result: { backend: string; logicalKey: string; checksumSha256: string; sizeBytes: number; immutableGeneration?: string; immutableVersion?: string; verifiedAt?: string }): RentOpsDocumentObjectBinding {
@@ -802,8 +808,31 @@ export class RentOpsService {
         }
       }
     }
-    const updated: RentOpsApplicationRecord = { ...application, ...input, updatedAt: this.now().toISOString() };
-    await this.repository.saveApplication(updated);
+    // Re-read under the same application lock used by manager status writes.
+    // A bearer token may have resolved before a manager approved or declined
+    // the application; saving that stale object would otherwise restore the
+    // old status and overwrite the manager's decision.
+    const editable = {
+      ...(input.phone !== undefined ? { phone: input.phone } : {}),
+      ...(input.propertyId !== undefined ? { propertyId: input.propertyId } : {}),
+      ...(input.unitId !== undefined ? { unitId: input.unitId } : {}),
+      ...(input.rentalHistory !== undefined ? { rentalHistory: input.rentalHistory } : {}),
+      ...(input.employment !== undefined ? { employment: input.employment } : {}),
+      ...(input.householdSummary !== undefined ? { householdSummary: input.householdSummary } : {}),
+      ...(input.preferences !== undefined ? { preferences: input.preferences } : {}),
+      ...(input.voucher !== undefined ? { voucher: input.voucher } : {}),
+      ...(input.pets !== undefined ? { pets: input.pets } : {}),
+      ...(input.vehicles !== undefined ? { vehicles: input.vehicles } : {}),
+      ...(input.emergencyContact !== undefined ? { emergencyContact: input.emergencyContact } : {}),
+    };
+    const updated = await this.repository.transaction(async (repository) => {
+      const current = await repository.getApplicationById(application.id);
+      if (!current || current.resumeTokenHash !== application.resumeTokenHash) throw new RentOpsInvariantError("Application resume token invalid or expired");
+      this.assertPublicEditable(current);
+      const next: RentOpsApplicationRecord = { ...current, ...editable, updatedAt: this.now().toISOString() };
+      await repository.saveApplication(next);
+      return next;
+    }, { lockApplicationId: application.id });
     return toApplicantPublicView(await this.snapshot(), updated);
   }
 
@@ -1206,9 +1235,9 @@ export class RentOpsService {
     if (!this.repository.applyRecordPatch || !this.repository.saveRecordChange) throw new RentOpsInvariantError("Record patch persistence is unavailable");
     const snapshot = await this.snapshot();
     const existing = patchRow(snapshot, entityType, targetId);
-    if (!existing) throw new RentOpsInvariantError("Rent Operations record not found");
+    if (!existing) throw new RentOpsInvariantError("5Central Ops record not found");
     const currentRevision = typeof existing.recordRevision === "number" ? existing.recordRevision : 1;
-    if (currentRevision !== expectedRevision) throw new RentOpsInvariantError("Rent Operations record revision is stale");
+    if (currentRevision !== expectedRevision) throw new RentOpsInvariantError("5Central Ops record revision is stale");
     const next = { ...existing } as Record<string, unknown>;
     const changedFields: string[] = [];
     const knowledgeFields = new Map<string, string>();
@@ -1266,7 +1295,7 @@ export class RentOpsService {
     const violationKey = (violation: { code: string; entityId?: string; message: string }): string => `${violation.code}|${violation.entityId ?? ""}|${violation.message}`;
     const baselineViolations = new Set(validateSnapshot(snapshot).map(violationKey));
     const introducedViolations = validateSnapshot(candidate).filter((violation) => !baselineViolations.has(violationKey(violation)));
-    if (introducedViolations.length > 0) throw new RentOpsInvariantError("Patch would violate Rent Operations relationship or sibling invariants", introducedViolations);
+    if (introducedViolations.length > 0) throw new RentOpsInvariantError("Patch would violate 5Central Ops relationship or sibling invariants", introducedViolations);
     if (entityType === "application" && existing.status !== next.status && typeof existing.status === "string" && typeof next.status === "string") assertApplicationStatusTransition(existing.status as RentOpsApplication["status"], next.status as RentOpsApplication["status"]);
     if (entityType === "application" && (existing.propertyId !== next.propertyId || existing.unitId !== next.unitId)) {
       if (existing.status === "converted" || existing.convertedTenancyId) throw new RentOpsInvariantError("Converted application assignment cannot change");
@@ -1573,7 +1602,7 @@ export class RentOpsService {
     const snapshot=await this.snapshot();
     const charge=snapshot.ledgerTransactions.find(row=>row.id===id);
     if (!charge || charge.kind!=="charge" || charge.status!=="posted" || !charge.propertyId || !charge.personId || charge.amountCents===null || !charge.postedOn) throw new RentOpsInvariantError("Only posted charges with a known account, amount and date can be edited");
-    if ([charge.propertyLinkKnowledge,charge.personLinkKnowledge,...(charge.unitId?[charge.unitLinkKnowledge]:[]),...(charge.tenancyId?[charge.tenancyLinkKnowledge]:[])].some(value=>value!=="manual"&&value!=="exact")) throw new RentOpsInvariantError("Charge account links need review before editing");
+    if ([charge.propertyLinkKnowledge,charge.personLinkKnowledge,...(charge.unitId?[charge.unitLinkKnowledge]:[]),...(charge.tenancyId?[charge.tenancyLinkKnowledge]:[])].some(value=>value!=="manual"&&value!=="exact")) throw new RentOpsInvariantError("Charge account links are unverified; confirm them before editing");
     const reversed=new Set(snapshot.ledgerTransactions.filter(row=>row.kind==="reversal"&&row.status==="posted").map(row=>row.reversalOfId));
     if (reversed.has(id)) throw new RentOpsInvariantError("This charge was already corrected or reversed");
     const history=snapshot.paymentAllocations.filter(row=>row.chargeTransactionId===id);
@@ -1626,7 +1655,7 @@ export class RentOpsService {
     if (/^tp_.*_ledger_/.test(id)) throw new RentOpsInvariantError("Online payments are managed by the payment processor");
     if (!payment.propertyId || !payment.personId || (payment.amountCents === null || payment.amountCents <= 0) || !payment.postedOn) throw new RentOpsInvariantError("Payment account or amount must be resolved before editing");
     if (snapshot.ledgerTransactions.some(row => row.reversalOfId === id && row.status === "posted")) throw new RentOpsInvariantError("This payment was already corrected or reversed");
-    if ([payment.propertyLinkKnowledge,payment.personLinkKnowledge,...(payment.unitId?[payment.unitLinkKnowledge]:[]),...(payment.tenancyId?[payment.tenancyLinkKnowledge]:[])].some(value=>value!=="manual"&&value!=="exact")) throw new RentOpsInvariantError("Payment account links need review before editing");
+    if ([payment.propertyLinkKnowledge,payment.personLinkKnowledge,...(payment.unitId?[payment.unitLinkKnowledge]:[]),...(payment.tenancyId?[payment.tenancyLinkKnowledge]:[])].some(value=>value!=="manual"&&value!=="exact")) throw new RentOpsInvariantError("Payment account links are unverified; confirm them before editing");
     const allocations = snapshot.paymentAllocations.filter(row => row.paymentTransactionId === id);
     if (allocations.some(row => (row.kind && row.kind !== "allocation") || !row.chargeTransactionId || row.amountCents === null || row.amountCents < 0)) throw new RentOpsInvariantError("This payment has transfers or unresolved allocations that require reconciliation");
     const expectedRevision = createHash("sha256").update(JSON.stringify({payment, allocations: [...allocations].sort((a,b)=>a.id.localeCompare(b.id))})).digest("hex");
@@ -1665,7 +1694,7 @@ export class RentOpsService {
       await repository.saveLedgerTransaction(payment);
       for (const allocation of input.allocations) {
         const charge = snapshot.ledgerTransactions.find(row=>row.id===allocation.chargeTransactionId);
-        if (!charge?.postedOn) throw new RentOpsInvariantError("Allocation charge date needs review");
+        if (!charge?.postedOn) throw new RentOpsInvariantError("Allocation charge has no posted date; set the charge date first.");
         await service.savePaymentAllocationRecord({id:`corrected-allocation:${createHash("sha256").update(operation+allocation.chargeTransactionId).digest("hex")}`,kind:"allocation",paymentTransactionId:payment.id,chargeTransactionId:charge.id,amountCents:allocation.amountCents,amountKnowledge:"known",allocatedOn:input.postedOn > charge.postedOn ? input.postedOn : charge.postedOn,allocatedOnKnowledge:"manual",paymentLinkKnowledge:"manual",chargeLinkKnowledge:"manual"});
       }
       await repository.saveActivity({id:`payment-correction:${operation}`,propertyId:original.propertyId!,unitId:original.unitId??undefined,tenancyId:original.tenancyId??undefined,personId:original.personId!,type:"system",actor:"admin",occurredAt:context.occurredAt,summary:`Payment ${originalId} corrected by ${context.actorSubject}; request ${requestHash}`});
@@ -1678,14 +1707,14 @@ export class RentOpsService {
     const payment = snapshot.ledgerTransactions.find((row) => row.id === id);
     if (!payment || payment.kind !== "payment" || payment.status !== "posted") throw new RentOpsInvariantError("Only a posted payment can be auto-allocated");
     if (/^tp_.*_ledger_/.test(payment.id)) throw new RentOpsInvariantError("Online payments are managed by the payment processor");
-    if (!payment.tenancyId || !payment.personId || !payment.propertyId) throw new RentOpsInvariantError("Payment account links need review before auto-allocation");
+    if (!payment.tenancyId || !payment.personId || !payment.propertyId) throw new RentOpsInvariantError("Payment account links are unverified; confirm them before auto-allocation");
     const tenancy = snapshot.tenancies.find((row) => row.id === payment.tenancyId);
     const unit = tenancy?.unitId ? snapshot.units.find((row) => row.id === tenancy.unitId) : undefined;
     if (!tenancy || !unit || tenancy.status === "cancelled" || tenancy.primaryPersonId !== payment.personId || tenancy.propertyId !== payment.propertyId || unit.propertyId !== tenancy.propertyId || payment.unitId && payment.unitId !== unit.id) {
       throw new RentOpsInvariantError("Exact payment tenancy required");
     }
     if ((snapshot.modelVersion === 3 || tenancy.source) && [tenancy.propertyLinkKnowledge, tenancy.unitLinkKnowledge, tenancy.primaryPersonLinkKnowledge, unit.propertyLinkKnowledge].some((value) => value !== "manual" && value !== "exact")) {
-      throw new RentOpsInvariantError("Payment tenancy links need review");
+      throw new RentOpsInvariantError("Payment tenancy links are unverified");
     }
 
     const activityId = autoAllocationActivityId(payment.id);
@@ -1743,7 +1772,7 @@ export class RentOpsService {
       const tenancy = snapshot.tenancies.find(row => row.id === input.tenancyId);
       const unit = snapshot.units.find(row => row.id === tenancy?.unitId);
       if (!tenancy || tenancy.primaryPersonId !== initial.primaryPersonId || !unit || unit.propertyId !== tenancy.propertyId || tenancy.status === "cancelled" || !snapshot.people.some(row => row.id === tenancy.primaryPersonId)) throw new RentOpsInvariantError("Exact payment tenancy required");
-      if ((snapshot.modelVersion === 3 || tenancy.source) && [tenancy.propertyLinkKnowledge, tenancy.unitLinkKnowledge, tenancy.primaryPersonLinkKnowledge, unit.propertyLinkKnowledge].some(value => value !== "manual" && value !== "exact")) throw new RentOpsInvariantError("Payment tenancy links need review");
+      if ((snapshot.modelVersion === 3 || tenancy.source) && [tenancy.propertyLinkKnowledge, tenancy.unitLinkKnowledge, tenancy.primaryPersonLinkKnowledge, unit.propertyLinkKnowledge].some(value => value !== "manual" && value !== "exact")) throw new RentOpsInvariantError("Payment tenancy links are unverified");
       const payment: RentOpsLedgerTransaction = { id: input.id, propertyId: tenancy.propertyId, unitId: unit.id, tenancyId: tenancy.id, personId: tenancy.primaryPersonId,
         kind: "payment", category: input.category, categoryKnowledge: "manual", amountCents: input.amountCents, amountKnowledge: "known", status: "posted", statusKnowledge: "manual",
         postedOn: input.postedOn, postedOnKnowledge: "manual", description: input.description, descriptionKnowledge: "manual", paymentMethod: input.paymentMethod, paymentMethodKnowledge: "manual",
@@ -1764,8 +1793,8 @@ export class RentOpsService {
       for (const allocation of allocations) {
         const charge = snapshot.ledgerTransactions.find(row => row.id === allocation.chargeTransactionId);
         if (!charge || charge.kind !== "charge" || charge.status !== "posted" || charge.tenancyId !== tenancy.id || charge.propertyId !== tenancy.propertyId || charge.unitId && charge.unitId !== unit.id || charge.personId !== tenancy.primaryPersonId || charge.payer !== "tenant" || charge.amountCents === null || !Number.isSafeInteger(charge.amountCents) || charge.amountKnowledge === "unknown") throw new RentOpsInvariantError("Allocation requires an exact posted tenant charge");
-        if ((snapshot.modelVersion === 3 || charge.source) && [charge.propertyLinkKnowledge, ...(charge.unitId ? [charge.unitLinkKnowledge] : []), charge.tenancyLinkKnowledge, charge.personLinkKnowledge].some(value => value !== "manual" && value !== "exact")) throw new RentOpsInvariantError("Charge links need review");
-        if (snapshot.paymentAllocations.some(row => row.chargeTransactionId === charge.id && (row.amountCents === null || row.amountKnowledge === "unknown"))) throw new RentOpsInvariantError("Charge allocation amount needs review");
+        if ((snapshot.modelVersion === 3 || charge.source) && [charge.propertyLinkKnowledge, ...(charge.unitId ? [charge.unitLinkKnowledge] : []), charge.tenancyLinkKnowledge, charge.personLinkKnowledge].some(value => value !== "manual" && value !== "exact")) throw new RentOpsInvariantError("Charge links are unverified");
+        if (snapshot.paymentAllocations.some(row => row.chargeTransactionId === charge.id && (row.amountCents === null || row.amountKnowledge === "unknown"))) throw new RentOpsInvariantError("Charge has an allocation with an unknown amount; correct that allocation first.");
       }
       await repository.saveLedgerTransaction(payment);
       for (const allocation of allocations) await service.savePaymentAllocationRecord(allocation);
@@ -1841,11 +1870,13 @@ export class RentOpsService {
     const snapshot = await this.snapshot();
     const original = snapshot.ledgerTransactions.find((transaction) => transaction.id === originalId);
     if (!original) throw new RentOpsInvariantError("Original ledger transaction not found");
+    // The processor reconciler owns these rows and later reverses them itself.
+    if (/^tp_.*_ledger_/.test(original.id)) throw new RentOpsInvariantError("Online payments are managed by the payment processor");
     if (!original.kind || !original.category || !original.propertyId || original.amountCents === null || !original.postedOn || !original.description) throw new RentOpsInvariantError("Original ledger transaction has unresolved financial facts");
-    const reversal = buildReversal(original, { ...input, id: input.id ?? `reversal:${randomUUID()}` });
+    const reversal = withOperatorProvenance(buildReversal(original, { ...input, id: input.id ?? `reversal:${randomUUID()}` }), input);
     const existing = snapshot.ledgerTransactions.find((transaction) => transaction.kind === "reversal" && transaction.status === "posted" && transaction.reversalOfId === originalId);
     if (existing) {
-      if (input.id === existing.id && JSON.stringify(existing) === JSON.stringify(reversal)) return existing;
+      if (input.id === existing.id && sameLedgerFacts(existing, reversal)) return existing;
       throw new RentOpsInvariantError("Ledger transaction has already been reversed");
     }
     const saved = await this.repository.saveLedgerTransaction(reversal);
@@ -1894,4 +1925,33 @@ export class RentOpsService {
     return saved;
   }
   async saveActivity(event: RentOpsActivityEvent): Promise<RentOpsActivityEvent> { if (event.id.startsWith(chargeTermsPrefix) || /recurring_charge_terms_v1/.test(event.detail ?? "")) throw new RentOpsInvariantError("Dedicated charge terms review endpoint required"); if ((await this.snapshot()).activityEvents.some((candidate) => candidate.id === event.id)) throw new RentOpsInvariantError("Activity already exists; use PATCH for an existing record"); const saved = await this.repository.saveActivity(event); await this.recordAdminChange(`Activity ${event.id} recorded`, { propertyId: event.propertyId, unitId: event.unitId, tenancyId: event.tenancyId, personId: event.personId, applicationId: event.applicationId }); return saved; }
+}
+
+
+// A reversal entered through the admin path is an operator entry, not imported
+// evidence. It inherits the original's financial facts but must not claim the
+// original's source binding, source-derived knowledge or due date: an imported
+// charge's markers would violate the ledger source-binding check, and its due
+// date can precede the reversal's posting date. Markers the caller sets
+// explicitly are kept.
+function withOperatorProvenance(reversal: RentOpsLedgerTransaction, input: Partial<RentOpsLedgerTransaction>): RentOpsLedgerTransaction {
+  const next: RentOpsLedgerTransaction = { ...reversal };
+  const record = next as unknown as Record<string, unknown>;
+  const explicit = input as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (!key.endsWith("Knowledge") || key in explicit) continue;
+    if (record[key] === "source" || record[key] === "exact") record[key] = "manual";
+  }
+  if (!("sourceArtifactSha256" in explicit)) record.sourceArtifactSha256 = null;
+  if (!("artifactObservationOn" in explicit)) record.artifactObservationOn = null;
+  if (!("dueOn" in explicit)) { next.dueOn = null; record.dueOnKnowledge = "unknown"; }
+  else if (next.dueOn && next.postedOn && next.dueOn < next.postedOn) throw new RentOpsInvariantError("A reversal's due date cannot precede its posted date");
+  return next;
+}
+
+// Replay comparison: a stored row reads back with null where the built entry
+// has undefined, and with its own key order; neither is a different fact.
+function sameLedgerFacts(left: RentOpsLedgerTransaction, right: RentOpsLedgerTransaction): boolean {
+  const canonical = (row: RentOpsLedgerTransaction) => JSON.stringify(Object.entries(row).filter(([, value]) => value !== null && value !== undefined).sort(([a], [b]) => a.localeCompare(b)));
+  return canonical(left) === canonical(right);
 }

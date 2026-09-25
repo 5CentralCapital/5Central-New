@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { formatDate, formatLabel, formatMoney } from "./display";
+import { UNVERIFIED_LABEL } from "@shared/review-cases/reasons";
 
 export type GridSortDirection = "asc" | "desc";
 
@@ -193,8 +195,44 @@ export function paginateGridRows<T>(
   };
 }
 
-// Short aliases keep the model convenient for non-React report tests while
-// leaving the more explicit names above as the public implementation API.
-export const filterRows = filterGridRows;
-export const sortRows = sortGridRows;
-export const paginateRows = paginateGridRows;
+function identifierColumn(key: string): boolean {
+  return /^(?:id|uuid|key)$/i.test(key) || /(?:Id|Uuid|UUID|ID|Key)$/.test(key) || /(?:^|_)(?:id|uuid|key)$/i.test(key);
+}
+
+function dateColumn(key: string): boolean {
+  return /(?:On|At|Date)$/.test(key) || /(?:_on|_at|_date)$/.test(key);
+}
+
+export function moneyColumn(key: string): boolean {
+  return key === "cents" || /Cents$/.test(key) || /_cents$/.test(key);
+}
+
+function labelColumn(key: string): boolean {
+  return /(?:status|state|type|category|readiness|listing|occupancy|frequency|role|relationship|kind|direction|availability|method|source|confidence)$/i.test(key);
+}
+
+function knowledgeCellValue(value: unknown): string | undefined {
+  if (value === "unknown" || value === "ambiguous" || value === "inferred") return UNVERIFIED_LABEL;
+  if (value === "manual") return "Entered manually";
+  if (value === "source" || value === "exact" || value === "confirmed" || value === "known") return "Known";
+  return undefined;
+}
+
+/**
+ * Text for a grid cell without a custom renderer. A blank cell shows "—":
+ * it never borrows the row's review reason, which describes a different
+ * field (for example a blank phone number is not "Balance unverified").
+ */
+export function gridCellText(key: string, value: unknown): string {
+  // Technical identifiers belong in detail views, not in grid cells.
+  if (identifierColumn(key)) return "—";
+  if (moneyColumn(key)) return formatMoney(value);
+  if (dateColumn(key)) return value === null || value === undefined || value === "" ? "—" : formatDate(value);
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (/knowledge$/i.test(key)) return knowledgeCellValue(value) ?? formatLabel(value);
+  if (labelColumn(key)) return formatLabel(value);
+  if (Array.isArray(value)) return value.length ? value.map(formatLabel).join(", ") : "—";
+  if (typeof value === "object") return UNVERIFIED_LABEL;
+  return String(value);
+}

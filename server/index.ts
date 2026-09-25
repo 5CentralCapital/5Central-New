@@ -1,19 +1,25 @@
 import 'dotenv/config';
 import { registerTenantPaymentWebhook } from './rent-ops/payments/routes';
+// lane-b-accounting
+import { registerQuickBooksWebhookRoute } from './accounting/webhook-route';
+import type { RentOpsQueryExecutor } from './rent-ops/repositories/postgres';
 import type { TenantPaymentService } from './rent-ops/payments/service';
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import path from "path";
 import { registerRoutes } from "./routes";
+import { registerRequestBodyParsers } from "./request-body-parsers"; // lane-a-accounting
 import { setupVite, serveStatic, log } from "./vite";
 import { loadUser } from "./auth";
 import { pool } from "./db";
 import { ensureSchema } from "./ensureSchema";
-import { publicRequestError } from "./request-errors";
+import { publicRequestError, startupFailureSummary, type StartupStage } from "./request-errors";
 import { sanitizeApiPathForLogging } from "./request-logging";
 import { applicantPageSecurityHeaders } from "./applicant-page-security";
 import { securityHeaders } from "./security-headers";
+import { attachedImages, publicAssets } from "./static-assets";
+import { installGracefulShutdown, shutdownGraceMs } from "./graceful-shutdown";
 import {
   assertRentOpsProductionConfiguration,
   createRentOpsReadinessGate,
@@ -36,22 +42,22 @@ app.get("/readyz", (_req, res) => {
   });
 });
 
-if (isProduction && !process.env.SESSION_SECRET) {
-  throw new Error("SESSION_SECRET must be configured in production");
-}
-if (isProduction) {
-  assertRentOpsProductionConfiguration(process.env);
-}
-
-// Trust proxy for Replit (behind reverse proxy)
+// Exactly one trusted reverse-proxy hop (Render's router; Replit's before it).
 app.set("trust proxy", 1);
 app.use(securityHeaders({ production: isProduction }));
+// Public build assets need no session lookup. The build copies and optimizes
+// the same public marketing images; private document routes stay authenticated.
+if (isProduction) app.use(publicAssets(path.resolve(import.meta.dirname, 'public')));
+else app.use('/attached_assets', attachedImages(path.resolve(import.meta.dirname, '..', 'attached_assets')));
 
 let tenantPaymentService: TenantPaymentService | undefined;
 // Signature verification must receive the original bytes before any JSON parser.
 registerTenantPaymentWebhook(app, { getService: () => tenantPaymentService });
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+// lane-b-accounting: QuickBooks CloudEvents need the raw bytes for HMAC verification.
+let quickBooksWebhookExecutor: RentOpsQueryExecutor | undefined;
+registerQuickBooksWebhookRoute(app, { getExecutor: () => quickBooksWebhookExecutor });
+// lane-a-accounting: /mcp gets a larger JSON limit for base64 uploads; every other route keeps the default.
+registerRequestBodyParsers(app);
 
 // PostgreSQL session store
 const PgStore = connectPgSimple(session);
@@ -81,8 +87,6 @@ app.use(
 // Load user from session
 app.use(loadUser);
 
-// Serve attached_assets statically
-app.use('/attached_assets', express.static(path.resolve(import.meta.dirname, '..', 'attached_assets')));
 app.use(/^\/(?:apply|tenant)(?:\/|$)/, applicantPageSecurityHeaders);
 
 app.use((req, res, next) => {
@@ -102,12 +106,32 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  let startupStage: StartupStage = "configuration";
+  let closeRuntime: (() => Promise<void>) | undefined;
   try {
+    // Keep production configuration failures inside the same redacted startup
+    // boundary as runtime dependency failures. The labels and summaries are
+    // fixed; arbitrary provider/configuration messages never enter logs.
+    startupStage = "configuration";
+    if (isProduction && !process.env.SESSION_SECRET) {
+      throw new Error("SESSION_SECRET must be configured in production");
+    }
+    if (isProduction) {
+      assertRentOpsProductionConfiguration(process.env);
+    }
+
     // Production migrations are reviewed and run out-of-band by the importer
     // role. Startup may prepare only the development schema.
+    startupStage = isProduction ? "route_registration" : "development_schema";
     if (!isProduction) await ensureSchema();
 
-    const server = await registerRoutes(app, { onTenantPaymentService: (service) => { tenantPaymentService = service; } });
+    startupStage = "route_registration";
+    const server = await registerRoutes(app, {
+      onRuntimeClose: close => { closeRuntime = close; },
+      onStartupStage: (stage) => { startupStage = stage; },
+      onTenantPaymentService: (service) => { tenantPaymentService = service; },
+      onRuntimeExecutor: (executor) => { quickBooksWebhookExecutor = executor; }, // lane-b-accounting
+    });
 
     app.use((err: unknown, req: Request, res: Response, next: NextFunction) => {
       if (res.headersSent) {
@@ -124,6 +148,7 @@ app.use((req, res, next) => {
     // importantly only setup vite in development and after
     // setting up all the other routes so the catch-all route
     // doesn't interfere with the other routes
+    startupStage = "static_assets";
     if (app.get("env") === "development") {
       await setupVite(app, server);
     } else {
@@ -132,10 +157,11 @@ app.use((req, res, next) => {
 
     // Render supplies PORT. Bind the only externally reachable listener to
     // all interfaces, and do not report readiness until listen succeeds.
+    startupStage = "listener";
     const port = parseInt(process.env.PORT || '10000', 10);
-    server.once("error", () => {
+    server.once("error", (error) => {
       readiness.markFailed();
-      log("startup failed");
+      log(`startup failed: ${startupFailureSummary(error, startupStage)}`);
       process.exitCode = 1;
     });
     server.listen({
@@ -145,9 +171,19 @@ app.use((req, res, next) => {
       readiness.markReady();
       log(`serving on port ${port}`);
     });
-  } catch {
+    // Drain in-flight requests on SIGTERM so deploys never cut off a
+    // QuickBooks callback, webhook acknowledgement or payment request.
+    installGracefulShutdown({
+      server,
+      markNotReady: readiness.markFailed,
+      cleanup: async () => { await Promise.all([pool.end(), closeRuntime?.()]); },
+      graceMs: shutdownGraceMs(process.env.WEB_SHUTDOWN_GRACE_MS),
+      log,
+    });
+  } catch (error) {
     readiness.markFailed();
-    log("startup failed");
+    await closeRuntime?.().catch(() => undefined);
+    log(`startup failed: ${startupFailureSummary(error, startupStage)}`);
     process.exitCode = 1;
   }
 })();

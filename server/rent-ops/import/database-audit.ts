@@ -1749,7 +1749,7 @@ export class DatabaseAuditError extends Error {
   readonly reasons: string[];
 
   constructor(reasons: string[]) {
-    super(`Rent Operations database audit failed: ${reasons.join(", ")}`);
+    super(`5Central Ops database audit failed: ${reasons.join(", ")}`);
     this.name = "DatabaseAuditError";
     this.reasons = reasons;
   }
@@ -1793,7 +1793,7 @@ function hashIdentifier(value: string): string {
 function targetFingerprint(row: Record<string, unknown>): string {
   const direct = row.redacted_fingerprint ?? row.redactedFingerprint ?? row.fingerprint ?? row.target_fingerprint;
   if (typeof direct === "string" && /^[a-f0-9]{16}$/.test(direct)) return direct;
-  const stable = Object.fromEntries(Object.entries(row).filter(([key]) => /database|server|user|identity|fingerprint/i.test(key)).sort(([left], [right]) => left.localeCompare(right)));
+  const stable = Object.fromEntries(Object.entries(row).filter(([key]) => /database|server|user|identity|fingerprint/i.test(key)).sort(([left], [right]) => left.localeCompare(right, "en-US")));
   return hashIdentifier(JSON.stringify(stable));
 }
 

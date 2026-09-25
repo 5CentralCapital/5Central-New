@@ -2,7 +2,7 @@ import { createEmailRecipientPolicy } from "../email/recipient-policy";
 import { resolveHostDatabaseUrl } from "../../host-database-config";
 import { COMPANY_APPLICATION_TABLES, COMPANY_ACCESS_TABLES } from "../../company/tables";
 /**
- * Render and validate the least-privilege role boundary for Rent Ops.
+ * Render and validate the least-privilege role boundary for 5Central Ops.
  *
  * This module is deliberately a pure artifact builder. It never reads an
  * environment variable, opens a database connection, or executes SQL. The
@@ -186,7 +186,7 @@ export const RENT_OPS_RUNTIME_PRIVATE_TABLES = ["rent_ops_document_objects"] as 
 export const RENT_OPS_IMPORTER_PRIVATE_TABLES = [...RENT_OPS_RUNTIME_PRIVATE_TABLES] as const;
 
 /** Independent auditor access covers binding controls, the redacted change ledger, and restricted rows. */
-export const RENT_OPS_AUDITOR_TABLES = [...RENT_OPS_RUNTIME_PRIVATE_TABLES, "rent_ops_record_changes", ...RENT_OPS_RESTRICTED_TABLES] as const;
+export const RENT_OPS_AUDITOR_TABLES = [...RENT_OPS_RUNTIME_PRIVATE_TABLES, "rent_ops_document_object_relocations", "rent_ops_record_changes", ...RENT_OPS_RESTRICTED_TABLES] as const;
 
 /** Application-created accounts, receipts and counters are never imported from RM. */
 export const RENT_OPS_APPLICATION_TABLES = [
@@ -209,9 +209,10 @@ export const RENT_OPS_RUNTIME_EPHEMERAL_TABLES = [
   "accounting_qbo_coverage_gaps",
   "accounting_qbo_source_line_allocations",
   "time_refresh_leases",
+  "company_worker_heartbeats",
 ] as const;
 
-/** All tables created by the current Rent Ops migration, including restricted tables. */
+/** All tables created by the current 5Central Ops migration, including restricted tables. */
 export const RENT_OPS_ALL_TABLES = [
   ...COMPANY_ACCESS_TABLES,
   "rent_ops_schema_meta",
@@ -248,6 +249,7 @@ export const RENT_OPS_ALL_TABLES = [
   "rent_ops_application_history_aggregates",
   "rent_ops_documents",
   ...RENT_OPS_RUNTIME_PRIVATE_TABLES,
+  "rent_ops_document_object_relocations",
   "rent_ops_activity_events",
   "rent_ops_record_changes",
   "rent_ops_source_records",
@@ -302,6 +304,8 @@ export const RENT_OPS_RUNTIME_READ_ONLY_TABLES = [
   "rent_ops_application_history_activities",
   "rent_ops_application_history_blockers",
   "rent_ops_application_history_aggregates",
+  // Storage relocations are recorded by the reviewed operator; the web role only resolves them.
+  "rent_ops_document_object_relocations",
 ] as const;
 
 /** Migration ledgers are inspected by imports but changed only by the migration owner. */
@@ -332,6 +336,12 @@ export const RENT_OPS_APPEND_ONLY_TABLES = [
   "company_report_package_revisions",
   "company_report_package_runs",
   "company_work_order_events",
+  "company_review_case_events",
+  "company_forecast_assumption_versions",
+  "company_forecast_snapshots",
+  "accounting_qbo_deletion_tombstones",
+  "accounting_qbo_receivable_effects",
+  "accounting_qbo_receivable_applications",
   "rent_ops_recurring_charge_schedules",
   "rent_ops_ledger_transactions",
   "rent_ops_payment_allocations",
@@ -358,6 +368,7 @@ export const RENT_OPS_IMPORTER_INSERT_ONLY_TABLES = [
   "rent_ops_application_history_activities",
   "rent_ops_application_history_blockers",
   "rent_ops_application_history_aggregates",
+  "rent_ops_document_object_relocations",
 ] as const;
 
 /** Every normal table queried by the web repository, in loadSnapshot order. */
@@ -883,7 +894,7 @@ function tableStatements(manifest: RentOpsSecurityManifest): string[] {
 function sequenceStatements(manifest: RentOpsSecurityManifest): string[] {
   const { target } = manifest;
   const allSequences = uniqueStrings(Array.from(manifest.runtimeSequences).concat(Array.from(manifest.importerSequences)));
-  if (allSequences.length === 0) return ["-- No Rent Ops sequences are currently defined; no sequence privileges are granted."];
+  if (allSequences.length === 0) return ["-- No 5Central Ops sequences are currently defined; no sequence privileges are granted."];
   return [
     revokeAll("SEQUENCE", joinObjects(target.schemaName, allSequences, "sequence"), target.runtimeRole),
     revokeAll("SEQUENCE", joinObjects(target.schemaName, allSequences, "sequence"), target.importerRole),

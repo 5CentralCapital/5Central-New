@@ -1,11 +1,12 @@
 /** Private evidence stays outside the repository. This CLI has no scenario-specific defaults. */
-import { readFile, open, mkdir } from "node:fs/promises";
+import { readFile, open } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { createRentOpsRuntimeDatabase } from "../server/rent-ops/runtime-database";
 import { createPostgresRentOpsRepository } from "../server/rent-ops/repositories/postgres";
 import { reconcileImportedRecords, reconciliationHash } from "../server/rent-ops/reconciliation/operator";
 import { readPack, bytesHash, requireGuard, snapshotHash, buildMaintenanceManifest, verifyMaintenanceReadback, MaintenanceGuardError } from "../server/rent-ops/reconciliation/maintenance";
 import type { RentOpsSnapshot } from "../shared/rent-ops-contracts";
+import { CliGuardError, privateOutputDirectory } from "./rent-ops-corrections/cli-common";
 const args = process.argv.slice(2), mode = args.shift();
 function option(name: string) { const i = args.indexOf(`--${name}`); requireGuard(i >= 0 && !!args[i + 1], `missing_${name}`); return args[i + 1]; }
 async function durable(path: string, value: unknown) { const file = await open(path, "wx", 0o600); try { await file.writeFile(JSON.stringify(value, null, 2) + "\n"); await file.sync(); } finally { await file.close(); } }
@@ -19,8 +20,7 @@ async function main() {
   requireGuard(new Set(names).size === names.length && (mode === "execute-reviewed" || phases.length === 1), "invalid_phase_selection");
   if (pack.phases[0].id === phases[0].id) requireGuard(baselineSha === pack.initialBaselineSha256, "original_baseline_required");
   if (mode === "apply" || mode === "execute-reviewed") requireGuard(args.includes("--apply-reviewed"), "explicit_reviewed_apply_required");
-  const context = { actor: option("actor"), occurredAt: option("occurred-at"), packPath, packSha256 }, out = resolve(option("out"));
-  await mkdir(out, { recursive: true, mode: 0o700 });
+  const context = { actor: option("actor"), occurredAt: option("occurred-at"), packPath, packSha256 }, out = await privateOutputDirectory(option("out"));
   if (mode === "inspect") { const built = buildMaintenanceManifest(baseline, pack, phases[0], context); await durable(join(out, "inspection.json"), { manifest: built.manifest, baselineHash: snapshotHash(baseline), packSha256 }); console.log(JSON.stringify({ mode, operations: built.manifest.operations.length, saved: true })); return; }
   const db = await createRentOpsRuntimeDatabase();
   try {
@@ -51,4 +51,4 @@ async function main() {
     console.log(JSON.stringify({ mode, phases: phases.length, saved: true, ledgerUnchanged: true }));
   } finally { await db.close(); }
 }
-main().catch(error => { console.error(JSON.stringify({ ok: false, code: error instanceof MaintenanceGuardError ? error.code : "maintenance_failed_details_suppressed" })); process.exitCode = 1; });
+main().catch(error => { console.error(JSON.stringify({ ok: false, code: error instanceof MaintenanceGuardError || error instanceof CliGuardError ? error.code : "maintenance_failed_details_suppressed" })); process.exitCode = 1; });

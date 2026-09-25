@@ -78,6 +78,7 @@ import {
   dbRevision,
   dbString,
   resolveEffectiveDate,
+  userDraftCostPredicate,
 } from "./helpers";
 
 type AnyProjectCommandEnvelope = CommandEnvelope<Record<string, unknown>>;
@@ -113,7 +114,7 @@ function savedResult(recordId: string, revision?: Revision): CommandHandlerResul
     state: "saved_in_rops",
     affectedRecordIds: [recordId],
     resultingRevisions: revision === undefined ? [] : [{ recordId: recordReferenceIdSchema.parse(recordId), revision }],
-    validationOutcomes: [{ code: "project.saved_in_rops", severity: "info", message: "Project record saved in R-ops" }],
+    validationOutcomes: [{ code: "project.saved_in_rops", severity: "info", message: "Project record saved in 5Central Ops" }],
   };
 }
 
@@ -125,7 +126,7 @@ function savedRelatedResult(childId: string, childRevision: Revision, projectId:
       { recordId: recordReferenceIdSchema.parse(childId), revision: childRevision },
       { recordId: recordReferenceIdSchema.parse(projectId), revision: projectRevision },
     ],
-    validationOutcomes: [{ code: "project.saved_in_rops", severity: "info", message: "Project record saved in R-ops" }],
+    validationOutcomes: [{ code: "project.saved_in_rops", severity: "info", message: "Project record saved in 5Central Ops" }],
   };
 }
 
@@ -490,7 +491,7 @@ async function handleApproveBudget(context: CommandHandlerContext<ApproveBudgetP
     state: "saved_in_rops",
     affectedRecordIds: [payload.projectId, budgetId],
     resultingRevisions: [{ recordId: recordReferenceIdSchema.parse(payload.projectId), revision: dbRevision(projectUpdate.rows[0]!.record_revision) }],
-    validationOutcomes: [{ code: "project.budget.approved_in_rops", severity: "info", message: "Budget snapshot approved and saved in R-ops" }],
+    validationOutcomes: [{ code: "project.budget.approved_in_rops", severity: "info", message: "Budget snapshot approved and saved in 5Central Ops" }],
   };
 }
 
@@ -716,7 +717,7 @@ async function handleCreateDraftCost(context: CommandHandlerContext<CreateDraftC
 }
 
 async function loadDraftCostForCommand(context: CommandHandlerContext<unknown>, draftCostId: string): Promise<{ projectId: string; projectRevision: Revision; revision: Revision }> {
-  const result = await context.executor.query<Record<string, unknown>>(`SELECT project_id, record_revision FROM company_project_draft_costs WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL`, [context.envelope.scope.organizationId, draftCostId]);
+  const result = await context.executor.query<Record<string, unknown>>(`SELECT project_id, record_revision FROM company_project_draft_costs WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL AND ${userDraftCostPredicate("company_project_draft_costs")}`, [context.envelope.scope.organizationId, draftCostId]);
   const row = result.rows[0];
   if (!row) throw new ValidationCommandError("Draft cost was not found in the requested company scope", { reason: "draft_cost_not_found" });
   const projectId = dbString(row.project_id, "project_id");

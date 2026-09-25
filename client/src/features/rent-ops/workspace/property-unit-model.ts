@@ -10,6 +10,7 @@ import type {
 } from "../types";
 import type { FormValues } from "../form-payload";
 import { unitReadinessDisplay } from "./unit-readiness-model";
+import { PROPERTY_MISSING_LABEL, SCOPE_MISSING_LABEL, UNIT_MISSING_LABEL } from "@shared/review-cases/display-labels";
 import { scheduleDisplayInterval } from "./schedule-display";
 
 export type PropertyUnitRecordKind = "property" | "unit";
@@ -198,6 +199,17 @@ function propertyInFilters(property: AdminPropertyView, filters: Pick<ViewFilter
 }
 
 /**
+ * "10 units · 4 vacant" when as-of occupancy is known for every unit, else
+ * "10 units". The address stays searchable but is not repeated in the list.
+ */
+export function propertyListSubtitle(units: readonly AdminUnitView[], occupancy?: Map<string, string>): string {
+  const count = `${units.length} ${units.length === 1 ? "unit" : "units"}`;
+  const known = occupancy && units.length > 0 && units.every((unit) => !!unit.id && occupancy.has(unit.id));
+  if (!known) return count;
+  return `${count} · ${units.filter((unit) => occupancy.get(unit.id!) === "vacant").length} vacant`;
+}
+
+/**
  * Build the compact left-hand property/unit list. A property remains visible
  * when one of its units matches the query, and a property match expands to
  * its units so the operator can open the related record immediately.
@@ -231,8 +243,8 @@ export function propertyUnitListItems(
       key: `property:${propertyId ?? propertyIndex}`,
       kind: "property",
       id: propertyId,
-      title: text(property.name) || "Needs review",
-      subtitle: [`${propertyUnits.length} ${propertyUnits.length === 1 ? "unit" : "units"}`, addressLines(property.address).join(", ")].filter(Boolean).join(" · "),
+      title: text(property.name) || PROPERTY_MISSING_LABEL,
+      subtitle: propertyListSubtitle(propertyUnits, occupancy),
       searchText: [property.name, property.slug, formatAddress(property.address)].filter(Boolean).join(" "),
     });
 
@@ -244,7 +256,7 @@ export function propertyUnitListItems(
         kind: "unit",
         id: unitId,
         propertyId,
-        title: text(unit.unitNumber) || "Needs review",
+        title: text(unit.unitNumber) || UNIT_MISSING_LABEL,
         subtitle: [text(unit.unitType), occupancy ? unitReadinessDisplay(unit, occupancy.get(unit.id ?? "")).label : !propertyUnitFieldUnverified(unit.readinessKnowledge) && text(unit.readiness) !== "unknown" ? text(unit.readiness).replaceAll("_", " ") : ""].filter(Boolean).join(" · "),
         searchText: [unit.unitNumber, unit.unitType, unit.readiness, unit.listing, unit.amenities?.join(" "), unit.accessNotes].filter(Boolean).join(" "),
       });
@@ -256,7 +268,7 @@ export function propertyUnitListItems(
 function selectedPropertyForUnit(snapshot: AdminSnapshot, unit?: AdminUnitView): AdminPropertyView | undefined {
   // Keep a unit record open when the source supplied a candidate property id
   // but marked the relationship uncertain. The detail view shows that link as
-  // Needs review; dropping the record would hide useful positive unit facts.
+  // Unverified; dropping the record would hide useful positive unit facts.
   if (!unit?.propertyId) return undefined;
   return snapshot.snapshot.properties.find((property) => property.id === unit.propertyId);
 }
@@ -349,10 +361,6 @@ export function propertyUnits(snapshot: AdminSnapshot, propertyId?: string): Adm
   return snapshot.snapshot.units.filter((unit) => unit.propertyId === propertyId && knownLink(unit.propertyId, unit.propertyLinkKnowledge)).sort(compareUnits);
 }
 
-export function propertyForUnit(snapshot: AdminSnapshot, unit?: AdminUnitView): AdminPropertyView | undefined {
-  return selectedPropertyForUnit(snapshot, unit);
-}
-
 export function knownTenanciesForUnit(snapshot: AdminSnapshot, unitId?: string): AdminTenancyView[] {
   if (!unitId) return [];
   return snapshot.snapshot.tenancies.filter((tenancy) => tenancy.unitId === unitId && knownLink(tenancy.unitId, tenancy.unitLinkKnowledge));
@@ -415,32 +423,6 @@ export function occupancyHistoryForProperty(snapshot: AdminSnapshot, propertyId?
   return units.flatMap((unit) => occupancyHistoryForUnit(snapshot, unit));
 }
 
-export function occupancySummaryForUnits(snapshot: AdminSnapshot, units: AdminUnitView[]): { current: number; future: number; unknown: number; linkedHistory: number } {
-  const rows = units.flatMap((unit) => occupancyHistoryForUnit(snapshot, unit));
-  const byUnit = new Map<string, OccupancyHistoryRecord>();
-  for (const row of rows) {
-    const unitId = row.unit.id;
-    if (!unitId) continue;
-    const current = byUnit.get(unitId);
-    if (!current) {
-      byUnit.set(unitId, row);
-      continue;
-    }
-    const rank = (status: string): number => status === "current" ? 3 : status === "future_preleased" ? 2 : status === "unknown" ? 0 : 1;
-    if (rank(row.occupancyStatus) > rank(current.occupancyStatus)) byUnit.set(unitId, row);
-  }
-  let current = 0;
-  let future = 0;
-  let unknown = 0;
-  for (const unit of units) {
-    const row = unit.id ? byUnit.get(unit.id) : undefined;
-    if (!row || row.occupancyStatus === "unknown") unknown += 1;
-    else if (row.occupancyStatus === "current") current += 1;
-    else if (row.occupancyStatus === "future_preleased") future += 1;
-  }
-  return { current, future, unknown, linkedHistory: rows.filter((row) => row.tenancy).length };
-}
-
 function scheduleMatchesProperty(schedule: AdminRecurringScheduleView, propertyId: string): boolean {
   return schedule.propertyId === propertyId || (schedule.scopeType === "property" && schedule.scopeId === propertyId);
 }
@@ -460,7 +442,7 @@ function relationshipLabel(relationship: RecurringRelationship): string {
     case "inherited": return "Inherited · property";
     case "tenant-linked": return "Tenant-linked";
     case "linked": return "Linked record";
-    default: return "Needs review";
+    default: return SCOPE_MISSING_LABEL;
   }
 }
 

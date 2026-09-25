@@ -221,13 +221,3 @@ function compositeSourceIdentity(
   }
   return undefined;
 }
-
-/** Compatibility entrypoint for the RM raw-to-import normalization boundary. */
-export {
-  normalizeRentManagerExport,
-  normalizeRmExport,
-} from "./normalizer";
-export type {
-  NormalizationException,
-  NormalizedRentManagerImport,
-} from "./normalizer";

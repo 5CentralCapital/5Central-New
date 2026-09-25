@@ -138,6 +138,15 @@ const cents = centsSchema;
 const nonNegativeCentsSchema = cents.refine(value => centsToBigInt(value) >= BigInt(0), "Expected non-negative signed BIGINT cents");
 const positiveCentsSchema = nonNegativeCentsSchema.refine(value => centsToBigInt(value) > BigInt(0), "Expected positive cents");
 const bpsSchema = z.number().int().min(0).max(10_000);
+/**
+ * Rates and multiples are decimal fractions stored as numeric(18,12). Negative
+ * values break the interest and amortization math, and extra precision would
+ * be rounded away silently by PostgreSQL, so both are refused at the boundary.
+ */
+const rateSchema = decimalSchema.refine((value) => {
+  const [integer, fraction = ""] = value.split(".");
+  return !value.startsWith("-") && integer.length <= 6 && fraction.length <= 12;
+}, "Expected a non-negative rate with at most 6 integer and 12 decimal places");
 const monthSchema = isoDateSchema.refine(value => value.endsWith("-01"), "Expected the first day of a calendar month");
 const uuidList = <T extends z.ZodTypeAny>(schema: T, max = 100) => z.array(schema).max(max).superRefine((values, context) => {
   if (new Set(values.map(String)).size !== values.length) context.addIssue({ code: z.ZodIssueCode.custom, message: "References must be unique" });
@@ -252,9 +261,9 @@ export const investorContractTermsSchema = z.object({
   schedule: investorScheduleSchema,
   paymentDay: z.number().int().min(1).max(31).nullable(),
   monthEndRule: investorMonthEndRuleSchema,
-  annualRate: decimalSchema.nullable(),
-  preferredReturnRate: decimalSchema.nullable(),
-  returnMultiple: decimalSchema.nullable(),
+  annualRate: rateSchema.nullable(),
+  preferredReturnRate: rateSchema.nullable(),
+  returnMultiple: rateSchema.nullable(),
   fixedPaymentCents: nonNegativeCentsSchema.nullable(),
   principalPaymentCents: nonNegativeCentsSchema.nullable(),
   interestPaymentCents: nonNegativeCentsSchema.nullable(),
@@ -369,7 +378,7 @@ export const investorDebtSchema = z.object({
   fundedCapitalCents: nonNegativeCentsSchema.nullable(),
   /** Null means the current balance is not documented by an authoritative source. */
   outstandingPrincipalCents: nonNegativeCentsSchema.nullable(),
-  annualRate: decimalSchema,
+  annualRate: rateSchema,
   schedule: investorScheduleSchema,
   paymentDay: z.number().int().min(1).max(31).nullable(),
   monthEndRule: investorMonthEndRuleSchema,
@@ -702,7 +711,7 @@ export const createInvestorDebtPayloadSchema = z.object({
   originalPrincipalCents: nonNegativeCentsSchema,
   fundedCapitalCents: nonNegativeCentsSchema.nullable(),
   outstandingPrincipalCents: nonNegativeCentsSchema.nullable(),
-  annualRate: decimalSchema,
+  annualRate: rateSchema,
   schedule: investorScheduleSchema,
   paymentDay: z.number().int().min(1).max(31).nullable(),
   monthEndRule: investorMonthEndRuleSchema,
@@ -723,7 +732,7 @@ export const updateInvestorDebtPayloadSchema = z.object({
   debtId: investorDebtIdSchema,
   fundedCapitalCents: nonNegativeCentsSchema.nullable().optional(),
   outstandingPrincipalCents: nonNegativeCentsSchema.nullable().optional(),
-  annualRate: decimalSchema.optional(),
+  annualRate: rateSchema.optional(),
   paymentDay: z.number().int().min(1).max(31).nullable().optional(),
   monthEndRule: investorMonthEndRuleSchema.optional(),
   maturityOn: nullableDate,

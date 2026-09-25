@@ -474,7 +474,7 @@ export default function PropertyDetail({ propertyName, property: p, occupancy: o
                       <td>
                         <div style={{ display: "flex", gap: 4 }}>
                           <button className="nav-btn" style={{ fontSize: 9, padding: "2px 6px" }} onClick={() => saveUnit(u.id, unitDraft)}>Save</button>
-                          <button className="nav-btn" style={{ fontSize: 9, padding: "2px 6px" }} onClick={() => setEditingUnit(null)}>×</button>
+                          <button className="nav-btn" style={{ fontSize: 9, padding: "2px 6px" }} onClick={() => setEditingUnit(null)} aria-label="Cancel editing">×</button>
                         </div>
                       </td>
                     </tr>

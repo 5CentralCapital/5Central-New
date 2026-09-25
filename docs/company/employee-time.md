@@ -1,12 +1,12 @@
 # Employee time
 
-Employee time is an R-ops review and costing workspace backed by QuickBooks Time (TSheets). QuickBooks Time remains the place where employees clock in and out. R-ops mirrors those records so an administrator can review, correct, map, approve, and estimate labor before accounting work uses the result.
+Employee time is an 5Central Ops review and costing workspace backed by QuickBooks Time (TSheets). QuickBooks Time remains the place where employees clock in and out. 5Central Ops mirrors those records so an administrator can review, correct, map, approve, and estimate labor before accounting work uses the result.
 
 ## Boundary
 
 The connection is a QuickBooks Time connection. It is separate from QuickBooks Online accounting OAuth and uses its own client credentials, redirect URI, environment, provider company ID, access token, and refresh token. The first browser setup starts with the selected legal entity; QuickBooks Time supplies the provider company identity during OAuth, so an administrator never has to type that ID. A missing or malformed runtime configuration leaves the service unavailable; it does not create a sandbox connection or fall back to synthetic data.
 
-R-ops never writes time records back to QuickBooks Time, posts payroll, creates subscriptions, or runs a live-write provider job. Corrections, review actions, employee mappings, and jobcode mappings are company commands saved in R-ops. Every command has a stable operation ID, idempotency key, receipt, retry path, and audit event.
+5Central Ops never writes time records back to QuickBooks Time, posts payroll, creates subscriptions, or runs a live-write provider job. Corrections, review actions, employee mappings, and jobcode mappings are company commands saved in 5Central Ops. Every command has a stable operation ID, idempotency key, receipt, retry path, and audit event.
 
 ## Provider record meaning
 
@@ -16,13 +16,13 @@ The source normalization keeps the provider's distinction between:
 - a manual entry with a calendar date and duration in seconds; and
 - a clocked-in entry with no end timestamp.
 
-R-ops stores timestamps with their explicit offset and timezone name. It calculates elapsed duration from the timestamps for regular entries, which preserves cross-midnight and daylight-saving transitions. A manual entry never receives synthetic start or end timestamps. An entry with an impossible or mismatched duration stays visible with an `invalid_duration` conflict for review.
+5Central Ops stores timestamps with their explicit offset and timezone name. It calculates elapsed duration from the timestamps for regular entries, which preserves cross-midnight and daylight-saving transitions. A manual entry never receives synthetic start or end timestamps. An entry with an impossible or mismatched duration stays visible with an `invalid_duration` conflict for review.
 
-QuickBooks Time's `locked` flag is stored as provider state. It is not treated as approval. The employee source record's `submitted_to` and `approved_to` dates are stored separately so an administrator can tell whether a locked entry is merely submitted, approved through a date, or still awaiting R-ops review. The provider's one-active-timesheet rule is enforced again while mirroring; a second active clock-in becomes a conflict and is not silently merged.
+QuickBooks Time's `locked` flag is stored as provider state. It is not treated as approval. The employee source record's `submitted_to` and `approved_to` dates are stored separately so an administrator can tell whether a locked entry is merely submitted, approved through a date, or still awaiting 5Central Ops review. The provider's one-active-timesheet rule is enforced again while mirroring; a second active clock-in becomes a conflict and is not silently merged.
 
 ## Sync and source evidence
 
-The sync reads `users`, `jobcodes`, `timesheets`, and `timesheets_deleted` through the official modified-since and paginated endpoints. Each stream has its own checkpoint and watermark. A page limit or object failure produces partial coverage and leaves the prior checkpoint in place so the next run can overlap the last known timestamp safely. Deleted timesheets become inactive R-ops rows and a source tombstone; a later live page cannot erase that deletion history.
+The sync reads `users`, `jobcodes`, `timesheets`, and `timesheets_deleted` through the official modified-since and paginated endpoints. Each stream has its own checkpoint and watermark. A page limit or object failure produces partial coverage and leaves the prior checkpoint in place so the next run can overlap the last known timestamp safely. Deleted timesheets become inactive 5Central Ops rows and a source tombstone; a later live page cannot erase that deletion history.
 
 The provider response body, source version, body hash, last-modified timestamp, and receipt time are retained as source evidence. Read responses identify the environment and provider company in the source reference and expose coverage status (`unavailable`, `partial`, or `complete`) with the observed watermark.
 
@@ -30,9 +30,9 @@ The provider response body, source version, body hash, last-modified timestamp, 
 
 The review state is independent of provider state: `needs_review`, `corrected`, `approved`, or `rejected`. Approval requires an active employee mapping, an active jobcode mapping, no unresolved provider conflict, and an active source record. A provider deletion or changed source record brings an approved entry back to review.
 
-Employee mappings connect a provider user to an R-ops company contact for an effective date range. Hourly rates are optional exact cents with an explicit currency and cannot overlap for the same provider employee. Jobcode mappings connect a provider jobcode to a property, project, and optional cost code.
+Employee mappings connect a provider user to an 5Central Ops company contact for an effective date range. Hourly rates are optional exact cents with an explicit currency and cannot overlap for the same provider employee. Jobcode mappings connect a provider jobcode to a property, project, and optional cost code.
 
-Estimated labor is calculated in integer cents with half-up rounding from `duration_seconds × hourly_rate_cents ÷ 3,600`. It is a separate R-ops estimate. Posted payroll amounts, when a source is later attached, remain separate fields and are never inferred from the estimate.
+Estimated labor is calculated in integer cents with half-up rounding from `duration_seconds × hourly_rate_cents ÷ 3,600`. It is a separate 5Central Ops estimate. Posted payroll amounts, when a source is later attached, remain separate fields and are never inferred from the estimate.
 
 ## Server contracts
 
@@ -60,3 +60,19 @@ Every read and sync request carries an explicit `production` or `sandbox` enviro
 Provider endpoint and object behavior were verified against the [QuickBooks Time API documentation](https://tsheetsteam.github.io/api_docs/) and [QuickBooks Time API guide](https://developers.tsheets.com/docs/api/). The implementation follows the documented token expiry and refresh-token grant flow, regular versus manual timesheet shapes, modified-since pagination, and deletion retention behavior.
 
 The schema is registered as migration 36, `036_company_employee_time.sql`. It is applied only by the reviewed migration process; production startup does not migrate.
+
+## Posted payroll and project labor (U12)
+
+`time.payroll.link` links one posted QBO payroll or journal line to the approved timesheets in a pay period (optionally limited to employees or named timesheets). The line is verified against the live mirror (posted, current revision, entity currency, debit expense/COGS account) and the amount is reserved in the central QBO allocation ledger under consumer `time_payroll`, so the same line cannot also be bound to a project or work order. The amount is split exactly across the timesheets by their estimates, or by hours when any estimate is missing. A timesheet can carry one active payroll link. `time.payroll.unlink` releases the allocation and marks the rows released (kept for audit); the estimate then applies again.
+
+Links are stored in `time_posted_payroll_sources` (`source_kind = qbo_payroll_line`, one row per timesheet, `evidence_state` verified or unverified, batch details in `provider_body`).
+
+Project labor reads approved time through jobcode mappings. A jobcode's cost code equal to a project scope line ID assigns the labor to that budget line; the time UI offers the project's budget lines as cost-code choices. Posted payroll replaces the estimate for the same timesheet in the project cost report.
+
+- `GET /api/company/:org/time/payroll-links?legalEntityId` — MCP `list_time_payroll_links`
+- `GET /api/company/:org/projects/:id/labor` — MCP `get_project_labor`
+- Payroll lines: `GET /api/company/:org/cost-source-lines?purpose=payroll`
+
+The time workspace shows payroll coverage for the listed entries (approved, posted payroll, estimate only, unpriced) and links or releases payroll batches. Duration is always elapsed time between offset timestamps, so overnight shifts and daylight-saving transitions are exact (`shared/time/labor.test.ts`).
+
+Schema follow-up: a dedicated payroll batch table instead of batch details in `provider_body`.

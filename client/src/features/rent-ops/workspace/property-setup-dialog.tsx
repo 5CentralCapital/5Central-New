@@ -8,6 +8,7 @@ interface PropertySetupDialogProps {
   readonly open: boolean;
   readonly onClose: () => void;
   readonly onSaved: (message: string) => void;
+  readonly organizationId?: string;
 }
 
 interface PropertySetupValues {
@@ -28,8 +29,8 @@ interface PropertySetupValues {
   readonly notes: string;
 }
 
-function initialValues(context?: CompanyContext): PropertySetupValues {
-  const organization = context?.organizations[0];
+function initialValues(context?: CompanyContext, preferredOrganizationId?: string): PropertySetupValues {
+  const organization = context?.organizations.find(item => item.id === preferredOrganizationId) ?? context?.organizations[0];
   const entity = organization?.entities[0];
   return {
     organizationId: organization?.id ?? "",
@@ -50,7 +51,7 @@ function initialValues(context?: CompanyContext): PropertySetupValues {
   };
 }
 
-export function PropertySetupDialog({ open, onClose, onSaved }: PropertySetupDialogProps) {
+export function PropertySetupDialog({ open, onClose, onSaved, organizationId }: PropertySetupDialogProps) {
   const [context, setContext] = useState<CompanyContext>();
   const [values, setValues] = useState<PropertySetupValues>(() => initialValues());
   const [loading, setLoading] = useState(false);
@@ -71,12 +72,13 @@ export function PropertySetupDialog({ open, onClose, onSaved }: PropertySetupDia
         const next = await response.json() as CompanyContext;
         if (!active) return;
         setContext(next);
-        setValues(current => ({ ...initialValues(next), ...current, organizationId: current.organizationId || next.organizations[0]?.id || "", legalEntityId: current.legalEntityId || next.organizations[0]?.entities[0]?.id || "" }));
+        const defaults = initialValues(next, organizationId);
+        setValues(current => ({ ...defaults, ...current, organizationId: current.organizationId || defaults.organizationId, legalEntityId: current.legalEntityId || defaults.legalEntityId }));
       })
       .catch(nextError => { if (active) setError(nextError instanceof Error ? nextError.message : "Company records could not be loaded."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [open]);
+  }, [open, organizationId]);
 
   if (!open) return null;
 
@@ -116,7 +118,7 @@ export function PropertySetupDialog({ open, onClose, onSaved }: PropertySetupDia
       if (!response.ok) throw new Error(typeof body?.message === "string" ? body.message : "Property could not be saved.");
       operationReceiptSchema.parse(body);
       onSaved(values.associationType === "legal" ? "Property and legal-entity mapping saved. No units were created." : "Planned property association saved. No legal mapping or rental units were created.");
-      setValues(initialValues(context));
+      setValues(initialValues(context, organizationId));
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Property could not be saved.");
     } finally {

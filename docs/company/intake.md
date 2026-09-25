@@ -1,6 +1,6 @@
 # MRA and company document intake
 
-MRA owner packets enter R-ops through the server-attested Codex ingestion port. The web and Mac company surfaces are read-only for MRA results: they list verified packets, normalized lines, reconciliation totals, outcomes, and source evidence. They do not expose upload, mapping, preview, or apply controls.
+MRA owner packets enter 5Central Ops through the server-attested Codex ingestion port. The web and Mac company surfaces are read-only for MRA results: they list verified packets, normalized lines, reconciliation totals, outcomes, and source evidence. They do not expose upload, mapping, preview, or apply controls.
 
 The ingestion lifecycle is durable and resumable:
 
@@ -9,7 +9,7 @@ The ingestion lifecycle is durable and resumable:
 3. `preview` calculates duplicate, overlap, correction, held, and ready outcomes without changing tenant accounts.
 4. `apply` runs the approved account commands inside the transaction supplied by the company command runner. Account groups use savepoints, deterministic source line identities, and replay-safe record IDs.
 
-The transport must be created by the server Codex adapter with `channel: codex_mcp` and capability `mra_ingestion`. Body fields cannot grant that capability. The service rechecks the command envelope, organization scope, and authenticated principal before each operation. A missing or malformed attestation fails closed.
+The transport must be created by the server Codex adapter with `channel: codex_mcp` and capability `mra_ingestion`. The shared `/mcp` endpoint serves ChatGPT, Claude Code and Codex, so the capability is tied to the caller's OAuth client, not to the endpoint: after verifying the access token, the route reads its client identity (`client_id`, or Auth0's `azp`) and attests `mra_ingestion` only when that ID is listed in `RENT_OPS_MCP_MRA_CLIENT_IDS`. Only that session registers `stage_mra_packet`, `map_mra_packet`, `preview_mra_packet` and `apply_mra_packet`; every other client keeps the read tools. Body fields and tool arguments cannot grant the capability. The service rechecks the command envelope, organization scope, and authenticated principal before each operation. A missing or malformed attestation fails closed.
 
 Every source line retains its provider transaction identity when supplied, or a content fingerprint when the content is unique within the packet. Identical rows without a provider identity are held as ambiguous. A global row number is never used as the durable identity. Corrections must name the earlier source line; a later packet is not allowed to append a second receipt silently.
 

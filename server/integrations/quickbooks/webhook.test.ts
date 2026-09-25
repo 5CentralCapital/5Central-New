@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { filterNewQuickBooksWebhookEvents, parseQuickBooksWebhookPayload, quickBooksWebhookSignature, verifyQuickBooksWebhookSignature } from "./webhook";
+import { filterNewQuickBooksWebhookEvents, parseQuickBooksEventType, parseQuickBooksWebhookPayload, quickBooksWebhookSignature, verifyQuickBooksWebhookSignature } from "./webhook";
 
 test("webhook verification uses the exact raw body and rejects tampering", () => {
   const raw = Buffer.from('{"name":"é"}', "utf8");
@@ -58,13 +58,29 @@ test("legacy eventNotifications and incomplete CloudEvents are rejected", () => 
   assert.throws(() => parseQuickBooksWebhookPayload("[1]"), /event is invalid/);
 });
 
-test("replayed webhook deliveries are dropped by the per-realm event ledger", async () => {
+test("replayed webhook deliveries are dropped by a ledger keyed by CloudEvents source and id", async () => {
   const accepted = new Set<string>();
-  const ledger = { async recordIfNew(realmId: string, eventId: string) { const key = `${realmId}/${eventId}`; if (accepted.has(key)) return false; accepted.add(key); return true; } };
+  const ledger = { async recordIfNew(event: { source: string; id: string }) { const key = `${event.source}/${event.id}`; if (accepted.has(key)) return false; accepted.add(key); return true; } };
   const first = await filterNewQuickBooksWebhookEvents(parseQuickBooksWebhookPayload(JSON.stringify([cloudEvent(), cloudEvent({ id: "evt-2" })])), ledger);
   assert.deepEqual(first.map(event => event.id), ["evt-1", "evt-2"]);
   const replay = await filterNewQuickBooksWebhookEvents(parseQuickBooksWebhookPayload(JSON.stringify([cloudEvent({ id: "evt-2" }), cloudEvent({ id: "evt-3" })])), ledger);
   assert.deepEqual(replay.map(event => event.id), ["evt-3"]);
-  const otherRealm = await filterNewQuickBooksWebhookEvents(parseQuickBooksWebhookPayload(JSON.stringify([cloudEvent({ intuitaccountid: "987" })])), ledger);
-  assert.deepEqual(otherRealm.map(event => event.intuitAccountId), ["987"]);
+  // The same event id from another realm in the same source is the same CloudEvent.
+  const sameSource = await filterNewQuickBooksWebhookEvents(parseQuickBooksWebhookPayload(JSON.stringify([cloudEvent({ intuitaccountid: "987" })])), ledger);
+  assert.deepEqual(sameSource, []);
+  const otherSource = await filterNewQuickBooksWebhookEvents(parseQuickBooksWebhookPayload(JSON.stringify([cloudEvent({ source: "intuit.other-source" })])), ledger);
+  assert.deepEqual(otherSource.map(event => event.source), ["intuit.other-source"]);
+});
+
+test("one delivery collapses duplicates by source and id, not by realm", () => {
+  const events = parseQuickBooksWebhookPayload(JSON.stringify([cloudEvent(), cloudEvent({ intuitaccountid: "987" }), cloudEvent({ source: "intuit.other" })]));
+  assert.deepEqual(events.map(event => [event.source, event.intuitAccountId]), [[cloudEvent().source, "4620816365001234567"], ["intuit.other", "4620816365001234567"]]);
+});
+
+test("event types map to QBO entity names and operations", () => {
+  assert.deepEqual(parseQuickBooksEventType("qbo.bill.created.v1"), { objectType: "Bill", operation: "created" });
+  assert.deepEqual(parseQuickBooksEventType("qbo.billpayment.deleted.v1"), { objectType: "BillPayment", operation: "deleted" });
+  assert.deepEqual(parseQuickBooksEventType("qbo.journalentry.voided.v2"), { objectType: "JournalEntry", operation: "voided" });
+  assert.deepEqual(parseQuickBooksEventType("qbo.widget.touched.v1"), { objectType: "Widget", operation: "other" });
+  assert.throws(() => parseQuickBooksEventType("bill.created"), /invalid/);
 });

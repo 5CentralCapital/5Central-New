@@ -14,6 +14,8 @@ import {
   investorListQuerySchema,
   investorPaymentLogQuerySchema,
 } from "../../shared/investors";
+import { INVESTOR_CALENDAR_STATES } from "../../shared/investors/rollforward";
+import { investorPaymentCalendarQuerySchema } from "../../shared/investors/reports";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { attestTransport, loadAuthenticatedPrincipal } from "../company/authorization";
 import { companyReadHandler, companyWebActor } from "../company/http";
@@ -89,6 +91,31 @@ export function registerInvestorRoutes(app: Express, options: { executor: RentOp
     const principal = await loadAuthenticatedPrincipal(executor, { actorId: companyWebActor(req), organizationId, role: "admin" });
     const { legalEntityId, propertyId, ...queryFields } = query;
     res.json(await investors.monthlyPayments(principal, investorPaymentLogQuerySchema.parse({ ...queryFields, scope: { organizationId, legalEntityId, propertyId } })));
+  }));
+  const monthParam = isoDateSchema.refine(value => value.endsWith("-01"), "Expected the first day of a calendar month");
+  app.get("/api/company/:organizationId/investor-instruments/:instrumentId/financials", requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const query = z.object({ legalEntityId: legalEntityIdSchema.optional(), propertyId: propertyReferenceIdSchema.optional(), fromMonth: monthParam.optional(), throughMonth: monthParam.optional(), asOf: isoDateSchema.optional() }).strict().parse(req.query);
+    const { legalEntityId, propertyId, ...rest } = query;
+    const principal = await loadAuthenticatedPrincipal(executor, { actorId: companyWebActor(req), organizationId, role: "admin" });
+    res.json(await investors.instrumentFinancials(principal, { ...rest, scope: { organizationId, legalEntityId, propertyId }, instrumentId: req.params.instrumentId }));
+  }));
+  app.get("/api/company/:organizationId/investor-payment-calendar", requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const query = z.object({
+      legalEntityId: legalEntityIdSchema, propertyId: propertyReferenceIdSchema.optional(), accountId: z.string().uuid().optional(),
+      fromMonth: monthParam, throughMonth: monthParam, state: z.enum(INVESTOR_CALENDAR_STATES).optional(), asOf: isoDateSchema.optional(),
+      limit: z.coerce.number().int().min(1).max(500).default(200), cursor: z.string().trim().min(1).max(512).optional(),
+    }).strict().parse(req.query);
+    const { legalEntityId, propertyId, ...rest } = query;
+    const principal = await loadAuthenticatedPrincipal(executor, { actorId: companyWebActor(req), organizationId, role: "admin" });
+    res.json(await investors.paymentCalendar(principal, investorPaymentCalendarQuerySchema.parse({ ...rest, scope: { organizationId, legalEntityId, propertyId } })));
+  }));
+  app.get("/api/company/:organizationId/investor-debt-maturities", requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const query = z.object({ legalEntityId: legalEntityIdSchema.optional(), propertyId: propertyReferenceIdSchema.optional(), asOf: isoDateSchema.optional() }).strict().parse(req.query);
+    const principal = await loadAuthenticatedPrincipal(executor, { actorId: companyWebActor(req), organizationId, role: "admin" });
+    res.json(await investors.debtMaturities(principal, { scope: { organizationId, legalEntityId: query.legalEntityId, propertyId: query.propertyId }, asOf: query.asOf }));
   }));
   app.post("/api/company/:organizationId/investor-commands/:commandKind", requireAdmin, companyReadHandler(async (req, res) => {
     const organizationId = organizationIdSchema.parse(req.params.organizationId);

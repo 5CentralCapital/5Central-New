@@ -2,6 +2,7 @@ import type { AdminSnapshot, AdminUnitView, OperationalScheduleRegister } from '
 import { knownLink, recurringSchedulesForProperty, recurringSchedulesForUnit } from './property-unit-model';
 import { selectRecurringRegisterRows, type RecurringRegisterView } from './recurring-register-model';
 import { scheduleDisplayInterval } from './schedule-display';
+import { SCOPE_MISSING_LABEL } from '@shared/review-cases/display-labels';
 
 export function propertyRecurringRows(snapshot: AdminSnapshot, propertyId: string | undefined, unit: AdminUnitView | undefined, metadata: OperationalScheduleRegister, view: RecurringRegisterView) {
   const records = unit ? (unit.propertyId === propertyId ? recurringSchedulesForUnit(snapshot, unit) : []) : recurringSchedulesForProperty(snapshot, propertyId);
@@ -21,7 +22,7 @@ export function propertyRecurringRows(snapshot: AdminSnapshot, propertyId: strin
       unitName: row.scopeType === 'property' ? 'All units' : linkedUnit?.unitNumber ?? 'Unverified',
       tenantName: row.scopeType === 'property' || row.scopeType === 'unit' ? 'Shared charge' : person ? [person.firstName, person.lastName].filter(Boolean).join(' ') || 'Unverified' : 'Unverified',
       chargeName: definition?.displayName ?? (row.category ? row.category.replaceAll('_', ' ') : 'Unverified'),
-      scopeLabel: row.scopeType === 'property' ? 'Shared property charge' : row.scopeType === 'unit' ? 'Shared unit charge' : row.scopeType === 'tenant' ? 'Tenant charge' : 'Needs review',
+      scopeLabel: row.scopeType === 'property' ? 'Shared property charge' : row.scopeType === 'unit' ? 'Shared unit charge' : row.scopeType === 'tenant' ? 'Tenant charge' : SCOPE_MISSING_LABEL,
       scheduledEnd: scheduleDisplayInterval(row, metadata.asOfDate).effectiveTo,
     };
   });

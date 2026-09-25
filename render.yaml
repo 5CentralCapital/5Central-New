@@ -1,72 +1,76 @@
-services:
-  - type: web
-    name: 5central-new-rent-ops
-    runtime: node
-    plan: free
-    numInstances: 1
-    buildCommand: npm ci && npm run check && npm run test:rent-ops && npm run build
-    startCommand: npm start
-    healthCheckPath: /healthz
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: PORT
-        value: "10000"
-      - key: DATABASE_URL
-        sync: false
-      - key: RENT_OPS_RUNTIME_DATABASE_URL
-        sync: false
-      - key: SESSION_SECRET
-        generateValue: true
-      - key: RENT_OPS_SESSION_SECRET
-        generateValue: true
-      - key: RENT_OPS_ADMIN_EMAIL
-        sync: false
-      - key: RENT_OPS_MAGIC_LINK_WEBHOOK_URL
-        sync: false
-      - key: RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET
-        sync: false
-      - key: RENT_OPS_PUBLIC_APP_URL
-        sync: false
-      - key: RENT_OPS_OBJECT_STORE_BACKEND
-        value: private-versioned
-      - key: RENT_OPS_OBJECT_STORE_ENDPOINT
-        sync: false
-      - key: RENT_OPS_OBJECT_STORE_REGION
-        sync: false
-      - key: RENT_OPS_OBJECT_STORE_BUCKET
-        sync: false
-      - key: RENT_OPS_OBJECT_STORE_PREFIX
-        value: rent-ops/private
-      - key: RENT_OPS_OBJECT_STORE_ENCRYPTION
-        value: required
-      - key: RENT_OPS_OBJECT_STORE_VERSIONING
-        value: required
-      - key: RENT_OPS_OBJECT_STORE_RUNTIME_IDENTITY
-        sync: false
-      - key: RENT_OPS_OBJECT_STORE_RUNTIME_TOKEN
-        sync: false
-      - key: RENT_OPS_OBJECT_STORE_UPLOAD_IDENTITY
-        sync: false
-      - key: RENT_OPS_OBJECT_STORE_UPLOAD_TOKEN
-        sync: false
-      - key: RENT_OPS_PUBLIC_LIMITER_MODE
-        value: database
-      - key: RENT_OPS_INSTANCE_MODE
-        value: single
-      - key: PLAID_ENV
-        sync: false
-      - key: PLAID_CLIENT_ID
-        sync: false
-      - key: PLAID_SECRET
-        sync: false
-      - key: PLAID_REDIRECT_URI
-        sync: false
-      - key: RAMP_CLIENT_ID
-        sync: false
-      - key: RAMP_CLIENT_SECRET
-        sync: false
+projects:
+  - name: 5Central Ops
+    environments:
+      - name: Production
+        services:
+          - type: web
+            name: 5central-ops-web
+            runtime: node
+            plan: standard
+            region: virginia
+            branch: production
+            numInstances: 1
+            buildCommand: npm ci --include=dev && npm run build
+            startCommand: npm start
+            autoDeployTrigger: checksPass
+            healthCheckPath: /readyz
+            envVars:
+              - fromGroup: 5central-ops-production
+              - fromGroup: 5central-ops-production-web
+              - key: NODE_ENV
+                value: production
+              - key: NODE_VERSION
+                value: "22"
+              - key: RENT_OPS_ADMIN_OAUTH_ORIGIN
+                value: https://5central.capital
+              - key: QBO_WRITES_ENABLED
+                value: "off"
+              - key: QBO_PRODUCTION_WRITES
+                value: "off"
+              - key: RENT_OPS_OBJECT_STORE_BACKEND
+                value: private-versioned
+              - key: RENT_OPS_OBJECT_STORE_ENDPOINT
+                value: https://s3.us-west-2.amazonaws.com
+              - key: RENT_OPS_OBJECT_STORE_REGION
+                value: us-west-2
+              - key: RENT_OPS_OBJECT_STORE_BUCKET
+                value: fivecentral-ops-production-651532007693
+              - key: RENT_OPS_OBJECT_STORE_PREFIX
+                value: rent-ops/private
+              - key: RENT_OPS_OBJECT_STORE_ENCRYPTION
+                value: required
+              - key: RENT_OPS_OBJECT_STORE_VERSIONING
+                value: required
+              - key: RENT_OPS_PUBLIC_LIMITER_MODE
+                value: database
+              - key: RENT_OPS_INSTANCE_MODE
+                value: single
+              - key: RENT_OPS_TENANT_EMAIL_PROVIDER
+                value: gmail
+              - key: RENT_OPS_TENANT_EMAIL_ENABLED
+                value: "true"
 
-# Optional Stripe connection: add STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET
-# in Render after test-mode verification. Missing keys keep payments disabled.
-# Checkout returns to RENT_OPS_PUBLIC_APP_URL; no Stripe credentials are stored here.
+          - type: worker
+            name: 5central-ops-worker
+            runtime: node
+            plan: starter
+            region: virginia
+            branch: production
+            numInstances: 1
+            buildCommand: npm ci --include=dev && npm run build
+            startCommand: npm run worker
+            autoDeployTrigger: checksPass
+            envVars:
+              - fromGroup: 5central-ops-production
+              - key: NODE_ENV
+                value: production
+              - key: NODE_VERSION
+                value: "22"
+              - key: QBO_WRITES_ENABLED
+                value: "off"
+              - key: QBO_PRODUCTION_WRITES
+                value: "off"
+              - key: WORKER_START_GATE
+                value: "hold"
+              - key: WORKER_SHUTDOWN_GRACE_MS
+                value: "25000"

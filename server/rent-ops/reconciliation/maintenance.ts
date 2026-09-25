@@ -65,7 +65,7 @@ export function buildMaintenanceManifest(snapshot: RentOpsSnapshot, pack: Mainte
   for (const requirement of [...grouped, ...(phase.checks ?? [])]) checkFields(select(snapshot, requirement.target), resolveValue(snapshot, requirement.expected, pack.data));
   const archivedSnapshot = structuredClone(snapshot);
   for (const record of phase.archive ?? []) Object.assign(select(archivedSnapshot, record.target), resolveValue(snapshot, record.expected, pack.data));
-  const allowed = ["account-facts", "tenancy-status", "tenancy-future-departure", "tenancy-expected-departure", "schedule-establish", "lease-term-correction", "manual-schedule-replace", "subsidy-establish", "schedule-end", "manual-schedule-correct", "occupancy-establish", "tenancy-transfer", "balance-review", "vacancy-confirm", "lease-review", "metered-utility"];
+  const allowed = ["account-facts", "tenancy-status", "tenancy-future-departure", "tenancy-expected-departure", "schedule-establish", "lease-term-correction", "manual-schedule-replace", "subsidy-establish", "schedule-end", "manual-schedule-correct", "occupancy-establish", "tenancy-transfer", "balance-review", "vacancy-confirm", "lease-review", "metered-utility", "future-tenancy-unit-link"];
   const operations = phase.operations.map(spec => {
     requireGuard(plain(spec) && typeof spec.reference === "string" && spec.reference.trim(), "evidence_reference_required");
     const target = select(snapshot, spec.target);
@@ -78,6 +78,7 @@ export function buildMaintenanceManifest(snapshot: RentOpsSnapshot, pack: Mainte
     requireGuard(values.kind !== "vacancy-confirm" || spec.target.collection === "units", "operation_collection_mismatch");
     requireGuard(!["tenancy-transfer", "balance-review", "metered-utility"].includes(values.kind) || spec.target.collection === "tenancies", "operation_collection_mismatch");
     requireGuard(values.kind !== "tenancy-expected-departure" || spec.target.collection === "tenancies", "operation_collection_mismatch");
+    requireGuard(values.kind !== "future-tenancy-unit-link" || spec.target.collection === "tenancies", "operation_collection_mismatch");
     const manualSchedule = ["manual-schedule-replace", "manual-schedule-correct"].includes(values.kind);
     const manualReview = values.kind === "balance-review" && spec.target.collection === "tenancies" && !target.source && target.statusKnowledge === "manual";
     requireGuard(manualSchedule ? spec.target.collection === "recurringSchedules" && !target.source : manualReview || target.source?.system === "rent_manager", "operation_source_mismatch");

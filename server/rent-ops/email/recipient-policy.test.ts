@@ -10,10 +10,16 @@ const input = { issuanceId: "qa-issue", accountId: "qa", applicationId: "qa", em
 
 test("recipient restriction rejects missing lists, malformed lists, and header/multiple-recipient injection", () => {
   assert.throws(() => createEmailRecipientPolicy(undefined)(input.email), /not_allowed/);
-  for (const bad of ["", " ", "*", "qa@example.test,", "qa@example.test\n", "Name <qa@example.test>"]) assert.throws(() => createEmailRecipientPolicy(bad), /allowlist_invalid/);
+  for (const bad of ["", " ", "*,qa@example.test", "qa@example.test,*", "qa@example.test,", "qa@example.test\n", "Name <qa@example.test>"]) assert.throws(() => createEmailRecipientPolicy(bad), /allowlist_invalid/);
   const allow = createEmailRecipientPolicy(" QA@example.test , second@example.test ");
   assert.equal(allow("QA@EXAMPLE.TEST"), input.email);
   for (const bad of ["real@example.test", "qa@example.test,real@example.test", "qa@example.test\r\nBcc: real@example.test", "qa+real@example.test"]) assert.throws(() => allow(bad));
+});
+
+test("'*' on its own allows any single well-formed mailbox and still rejects injection", () => {
+  const any = createEmailRecipientPolicy(" * ");
+  assert.equal(any("Tenant.One@Example.test"), "tenant.one@example.test");
+  for (const bad of ["qa@example.test,real@example.test", "qa@example.test\r\nBcc: real@example.test", "Name <qa@example.test>", "not-an-email", ""]) assert.throws(() => any(bad));
 });
 
 for (const transport of ["tenant-webhook", "application-webhook", "gmail-refresh", "gmail-managed", "application-gmail"] as const) {

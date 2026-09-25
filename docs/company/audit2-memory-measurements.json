@@ -1,0 +1,118 @@
+{
+  "schema": "r-ops.audit2-memory-measurements.v1",
+  "purpose": "Synthetic launch memory gate for the f5743cc read cache; no production data or provider calls.",
+  "measuredAt": "2026-09-23",
+  "sourceCommit": "01b045687c0ce594eb655560537c62b988e113d8",
+  "workload": {
+    "runner": "single Node process per scenario with --test-concurrency=1 equivalent; reads inside each wave use Promise.all",
+    "readSet": "mixed",
+    "concurrentDashboardReadsPerWave": 2,
+    "concurrentTenantPortalReadsPerWave": 2,
+    "waves": 3,
+    "cacheTtlMs": 2000,
+    "starterMemoryMiB": 512,
+    "nodeExposeGc": true
+  },
+  "syntheticFixture": {
+    "source": "server/rent-ops/fixtures/synthetic.ts templates expanded in this harness",
+    "externalFixtureBytes": 33273260,
+    "counts": {
+      "properties": 1,
+      "units": 200,
+      "people": 200,
+      "tenancies": 200,
+      "leaseTerms": 200,
+      "recurringSchedules": 200,
+      "ledgerTransactions": 33600,
+      "paymentAllocations": 16800,
+      "monthsPerUnit": 84
+    },
+    "dateRange": "2019-01 through 2025-12 inclusive (84 month-end periods)"
+  },
+  "results": [
+    {
+      "scenario": "cached",
+      "readSet": "mixed",
+      "waves": 3,
+      "counts": {
+        "properties": 1,
+        "units": 200,
+        "people": 200,
+        "tenancies": 200,
+        "leaseTerms": 200,
+        "recurringSchedules": 200,
+        "ledgerTransactions": 33600,
+        "paymentAllocations": 16800,
+        "monthsPerUnit": 84
+      },
+      "fixtureBytes": 33273260,
+      "fixtureReadMs": 53.01,
+      "fixtureReadRssMiB": 204.94,
+      "scenarioStartRssMiB": 204.94,
+      "peakRssMiB": 666.19,
+      "peakDeltaMiB": 461.25,
+      "totalScenarioMs": 4057.86,
+      "coldWaveMs": 1423.47,
+      "warmWaveMs": [
+        1327.01,
+        1305.9
+      ],
+      "waveP50Ms": 1327.01,
+      "waveP95Ms": 1327.01,
+      "loaderCalls": {
+        "report": 3,
+        "operational": 3
+      }
+    },
+    {
+      "scenario": "uncached",
+      "readSet": "mixed",
+      "waves": 3,
+      "counts": {
+        "properties": 1,
+        "units": 200,
+        "people": 200,
+        "tenancies": 200,
+        "leaseTerms": 200,
+        "recurringSchedules": 200,
+        "ledgerTransactions": 33600,
+        "paymentAllocations": 16800,
+        "monthsPerUnit": 84
+      },
+      "fixtureBytes": 33273260,
+      "fixtureReadMs": 15.43,
+      "fixtureReadRssMiB": 202.47,
+      "scenarioStartRssMiB": 202.47,
+      "peakRssMiB": 724.06,
+      "peakDeltaMiB": 521.59,
+      "totalScenarioMs": 4591.24,
+      "coldWaveMs": 1508.39,
+      "warmWaveMs": [
+        1378.32,
+        1702.81
+      ],
+      "waveP50Ms": 1508.39,
+      "waveP95Ms": 1508.39,
+      "loaderCalls": {
+        "report": 6,
+        "operational": 6
+      }
+    }
+  ],
+  "comparison": {
+    "cachedMedianWaveMs": 1327.01,
+    "uncachedMedianWaveMs": 1508.39,
+    "medianLatencyReductionPercent": 12.02,
+    "cachedMaxPeakRssMiB": 666.19,
+    "uncachedMaxPeakRssMiB": 724.06,
+    "maxMeasuredPeakRssMiB": 724.06,
+    "starterGate": "not-cleared",
+    "reason": "Peak RSS is measured inside the child benchmark only and excludes the web host, Postgres, and session overhead; the 512 MiB launch gate therefore has no safe headroom claim."
+  },
+  "limits": [
+    "The loader parses the external synthetic JSON fixture in place of a live Postgres wire response and row decoder.",
+    "The RentOpsService projections, tenant portal projection, Postgres repository cache, TTL, and version path are real code.",
+    "No browser, provider, credentials, live database, or real tenant data were used.",
+    "This probe measures a three-wave mixed burst; it does not establish production capacity or host-level RSS safety."
+  ]
+}

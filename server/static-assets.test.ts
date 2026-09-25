@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { brotliCompressSync, gzipSync } from 'node:zlib';
-import { createPageShell, publicAssets } from './static-assets';
+import { attachedImages, createPageShell, publicAssets } from './static-assets';
 
 test('public asset compression preserves bytes, content type, HEAD and range behavior',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'rent-ops-assets-')); mkdirSync(join(dir,'assets'));
@@ -59,4 +59,21 @@ test('page hints preload only selected route modules and leave style application
     assert.match(mergedTenant,/modulepreload[^>]+tenant-abcdefgh.js/);
     assert.match(mergedTenant,/preload" as="style"[^>]+tenant-abcdefgh.css/);
   }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('attached assets serve marketing images only, never working CSV or text files',async()=>{
+  const dir=mkdtempSync(join(tmpdir(),'rent-ops-attached-'));mkdirSync(join(dir,'gallery'));
+  writeFileSync(join(dir,'gallery','front.jpeg'),'synthetic image');writeFileSync(join(dir,'Logo.JPG'),'synthetic logo');
+  writeFileSync(join(dir,'updated_1.csv'),'synthetic,financials');writeFileSync(join(dir,'Pasted-notes.txt'),'synthetic notes');
+  const app=express();app.use('/attached_assets',attachedImages(dir));app.use((_req,res)=>res.status(404).send('fallback'));
+  const server=app.listen(0,'127.0.0.1');await new Promise<void>(resolve=>server.once('listening',resolve));
+  const origin=`http://127.0.0.1:${(server.address() as {port:number}).port}/attached_assets`;
+  try{
+    assert.equal(await (await fetch(`${origin}/gallery/front.jpeg`)).text(),'synthetic image');
+    assert.equal((await fetch(`${origin}/Logo.JPG`)).status,200);
+    for(const path of ['/updated_1.csv','/Pasted-notes.txt','/updated_1.%63sv','/%E0%A4%A']){
+      const response=await fetch(origin+path);
+      assert.equal(response.status,404,path);assert.doesNotMatch(await response.text(),/synthetic/);
+    }
+  }finally{await new Promise<void>(resolve=>server.close(()=>resolve()));rmSync(dir,{recursive:true,force:true});}
 });

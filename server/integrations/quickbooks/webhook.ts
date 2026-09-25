@@ -81,7 +81,9 @@ export function parseQuickBooksWebhookPayload(rawBody: string | Uint8Array): rea
     const time = requiredText(event, "time", /^[0-9T:.+\-Z]{10,40}$/);
     if (!Number.isFinite(Date.parse(time))) throw new Error("QuickBooks webhook event time is invalid");
     const intuitEntityId = event.intuitentityid === undefined ? undefined : requiredText(event, "intuitentityid", ENTITY_ID);
-    const dedupeKey = `${intuitAccountId}\u0000${id}`;
+    // CloudEvents identity is (source, id); realm IDs are not unique across
+    // environments or event sources.
+    const dedupeKey = `${source}\u0000${id}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
     events.push({
@@ -98,10 +100,10 @@ export function parseQuickBooksWebhookPayload(rawBody: string | Uint8Array): rea
   return events;
 }
 
-/** Durable at-least-once de-duplication, e.g. an INSERT ... ON CONFLICT DO NOTHING keyed by realm and event ID. */
+/** Durable at-least-once de-duplication, e.g. an INSERT ... ON CONFLICT DO NOTHING keyed by environment, source and event ID. */
 export interface QuickBooksWebhookEventLedger {
-  /** Returns true only for the first recording of this realm/event ID. */
-  recordIfNew(realmId: string, eventId: string): Promise<boolean>;
+  /** Returns true only for the first recording of this CloudEvent (source + id). */
+  recordIfNew(event: QuickBooksCloudEvent): Promise<boolean>;
 }
 
 /**
@@ -115,7 +117,34 @@ export async function filterNewQuickBooksWebhookEvents(
 ): Promise<readonly QuickBooksCloudEvent[]> {
   const fresh: QuickBooksCloudEvent[] = [];
   for (const event of events) {
-    if (await ledger.recordIfNew(event.intuitAccountId, event.id)) fresh.push(event);
+    if (await ledger.recordIfNew(event)) fresh.push(event);
   }
   return fresh;
+}
+
+const KNOWN_ENTITY_NAMES: Readonly<Record<string, string>> = {
+  account: "Account", bill: "Bill", billpayment: "BillPayment", budget: "Budget", class: "Class", creditmemo: "CreditMemo",
+  currency: "Currency", customer: "Customer", department: "Department", deposit: "Deposit", employee: "Employee",
+  estimate: "Estimate", invoice: "Invoice", item: "Item", journalcode: "JournalCode", journalentry: "JournalEntry",
+  payment: "Payment", paymentmethod: "PaymentMethod", preferences: "Preferences", purchase: "Purchase",
+  purchaseorder: "PurchaseOrder", refundreceipt: "RefundReceipt", salesreceipt: "SalesReceipt", taxagency: "TaxAgency",
+  term: "Term", timeactivity: "TimeActivity", transfer: "Transfer", vendor: "Vendor", vendorcredit: "VendorCredit",
+};
+
+export type QuickBooksWebhookOperation = "created" | "updated" | "deleted" | "voided" | "merged" | "emailed" | "other";
+
+/**
+ * `qbo.<entity>.<operation>.v<n>` → QBO entity name and operation. Unknown
+ * entities keep a PascalCase name so they are recorded and reported, never
+ * silently dropped.
+ */
+export function parseQuickBooksEventType(type: string): { readonly objectType: string; readonly operation: QuickBooksWebhookOperation } {
+  const parts = type.split(".");
+  if (parts.length < 4 || parts[0] !== "qbo" || !/^v\d{1,3}$/.test(parts.at(-1) ?? "")) throw new Error("QuickBooks webhook event type is invalid");
+  const entity = parts[1]!;
+  const objectType = KNOWN_ENTITY_NAMES[entity] ?? `${entity[0]!.toUpperCase()}${entity.slice(1)}`;
+  if (!/^[A-Z][A-Za-z0-9_]{0,119}$/.test(objectType)) throw new Error("QuickBooks webhook entity is invalid");
+  const verb = parts.at(-2) ?? "";
+  const operation = (["created", "updated", "deleted", "voided", "merged", "emailed"] as const).find(value => value === verb) ?? "other";
+  return { objectType, operation };
 }

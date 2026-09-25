@@ -1,4 +1,6 @@
 import { scheduleDisplayInterval } from "./schedule-display";
+import { CHARGE_TYPE_MISSING_LABEL, DESCRIPTION_MISSING_LABEL, NAME_MISSING_LABEL, PROPERTY_MISSING_LABEL, SCOPE_MISSING_LABEL, STATUS_UNVERIFIED_LABEL, UNIT_MISSING_LABEL, UNVERIFIED_LABEL, missingLabel } from "@shared/review-cases/display-labels";
+import { summarizeExactCents } from "./list-totals-model";
 import type {
   AdminChargeDefinitionView,
   AdminHouseholdMembershipView,
@@ -15,6 +17,39 @@ import type {
   TenantView,
 } from "../types";
 import type { FormValues, QuickAction } from "../form-payload";
+
+/*
+ * Visible tabs. Every TenantTab key stays a valid route (bookmarks, and
+ * rm-workspace sends `tab:'ledger'` / `tab:'charges'` after saves): the keys
+ * folded into a combined tab open that tab and scroll to their section.
+ */
+export const TENANT_RECORD_TABS: TenantTab[] = [
+  "summary",
+  "ledger",
+  "tenancy",
+  "household",
+  "documents",
+  "activity",
+  "quickbooks",
+];
+
+/** Sections stacked inside each visible tab, in display order. */
+export const TENANT_TAB_SECTIONS: Partial<Record<TenantTab, readonly TenantTab[]>> = {
+  summary: ["summary"],
+  ledger: ["ledger", "deposits"],
+  tenancy: ["tenancy", "charges", "housing-assistance"],
+  household: ["household"],
+  documents: ["documents"],
+  activity: ["activity"],
+  quickbooks: ["quickbooks"],
+};
+
+/** The visible tab that shows a (possibly legacy) tab key. */
+export function tenantRecordTabFor(tab: TenantTab): TenantTab {
+  if (TENANT_RECORD_TABS.includes(tab)) return tab;
+  for (const visible of TENANT_RECORD_TABS) if (TENANT_TAB_SECTIONS[visible]?.includes(tab)) return visible;
+  return "summary";
+}
 
 export type RecurringChargeFilter = "all" | "current" | "future" | "ended" | "history" | "review";
 export type RecurringChargeState = "current" | "future" | "ended" | "unknown";
@@ -40,7 +75,9 @@ export interface TenantSummaryModel {
   displayName: string;
   propertyName: string;
   unitLabel: string;
+  /** Readable status, or "Status unverified" when statusVerified is false. */
   status: string;
+  statusVerified: boolean;
   asOfDate: string;
   balance: TenantBalance;
   currentTenancy?: AdminTenancyView;
@@ -53,7 +90,7 @@ export interface HouseholdRow {
   name: string;
   role: string;
   relationship: string;
-  responsibility: "Yes" | "No" | "Needs review";
+  responsibility: "Yes" | "No" | typeof UNVERIFIED_LABEL;
 }
 
 export interface RecurringChargeScope {
@@ -136,7 +173,7 @@ export function dateKey(value: string | null | undefined): string | undefined {
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString().slice(0, 10) : undefined;
 }
 
-export function personDisplayName(person?: AdminPersonView, fallback = "Needs review"): string {
+export function personDisplayName(person?: AdminPersonView, fallback = NAME_MISSING_LABEL): string {
   if (!person) return fallback;
   const first = nonEmpty(person.firstName);
   const last = nonEmpty(person.lastName);
@@ -144,11 +181,11 @@ export function personDisplayName(person?: AdminPersonView, fallback = "Needs re
   return name || fallback;
 }
 
-export function propertyDisplayName(property?: AdminPropertyView, fallback = "Needs review"): string {
+export function propertyDisplayName(property?: AdminPropertyView, fallback = PROPERTY_MISSING_LABEL): string {
   return nonEmpty(property?.name) ?? fallback;
 }
 
-export function unitDisplayName(unit?: AdminUnitView, fallback = "Needs review"): string {
+export function unitDisplayName(unit?: AdminUnitView, fallback = UNIT_MISSING_LABEL): string {
   return nonEmpty(unit?.unitNumber) ?? fallback;
 }
 
@@ -278,11 +315,13 @@ export function buildTenantSummary(tenant: TenantView, snapshot: AdminSnapshot):
   const balance = resolveTenantBalance(tenant, snapshot);
   // The server selects the lease using the same dated tenancy context as rent roll.
   const primaryLease = tenant.primaryLease ?? sourcedCurrentLeaseDates(tenant, context);
+  const knownStatus = tenant.operationalStatus === "unknown" ? undefined : tenant.operationalStatus ?? nonEmpty(context.currentTenancy?.status);
   return {
     displayName: personDisplayName(tenant.person),
     propertyName: propertyDisplayName(context.property),
     unitLabel: unitDisplayName(context.unit),
-    status: tenant.operationalStatus === "unknown" ? "Needs review" : tenant.operationalStatus ?? nonEmpty(context.currentTenancy?.status) ?? "Needs review",
+    status: knownStatus ?? STATUS_UNVERIFIED_LABEL,
+    statusVerified: knownStatus !== undefined,
     asOfDate: context.asOfDate,
     balance,
     currentTenancy: context.currentTenancy,
@@ -296,10 +335,10 @@ export function buildHouseholdRows(tenant: TenantView, snapshot: AdminSnapshot):
     return {
       membership,
       person,
-      name: personDisplayName(person, membership.personId ? "Needs review" : "Unlinked person"),
-      role: nonEmpty(membership.role) ?? "Needs review",
-      relationship: nonEmpty(membership.relationship) ?? "Needs review",
-      responsibility: membership.isFinanciallyResponsible === true ? "Yes" : membership.isFinanciallyResponsible === false ? "No" : "Needs review",
+      name: personDisplayName(person, membership.personId ? NAME_MISSING_LABEL : "Unlinked person"),
+      role: nonEmpty(membership.role) ?? missingLabel("Role"),
+      relationship: nonEmpty(membership.relationship) ?? missingLabel("Relationship"),
+      responsibility: membership.isFinanciallyResponsible === true ? "Yes" : membership.isFinanciallyResponsible === false ? "No" : UNVERIFIED_LABEL,
     };
   });
 }
@@ -324,25 +363,32 @@ export function recurringChargeScope(schedule: AdminRecurringScheduleView, tenan
     ? schedule.personId || schedule.tenancyId ? "tenant" : schedule.unitId ? "unit" : schedule.propertyId ? "property" : "unknown"
     : explicitType;
   const id = scopeIdFor(schedule, type);
-  let label = "Needs review";
+  // `resolved` records whether the scope's record and its display name were found.
+  let label = SCOPE_MISSING_LABEL;
+  let resolved = false;
   if (type === "tenant") {
     const personId = id && snapshot.snapshot.people.some((person) => person.id === id) ? id : schedule.personId;
     const person = personId ? snapshot.snapshot.people.find((candidate) => candidate.id === personId) : undefined;
     const linkedTenancy = schedule.tenancyId ? snapshot.snapshot.tenancies.find((candidate) => candidate.id === schedule.tenancyId) : undefined;
     const linkedPerson = linkedTenancy?.primaryPersonId ? snapshot.snapshot.people.find((candidate) => candidate.id === linkedTenancy.primaryPersonId) : undefined;
-    label = personDisplayName(person ?? linkedPerson ?? (schedule.personId === tenant.person.id ? tenant.person : undefined));
+    const name = personDisplayName(person ?? linkedPerson ?? (schedule.personId === tenant.person.id ? tenant.person : undefined), "");
+    resolved = name !== "";
+    label = name || NAME_MISSING_LABEL;
   } else if (type === "unit") {
     const unit = findUnit(snapshot, id ?? schedule.unitId ?? undefined);
     const property = findProperty(snapshot, unit?.propertyId ?? schedule.propertyId ?? undefined);
-    label = unit ? `${unitDisplayName(unit)} · ${propertyDisplayName(property)}` : "Needs review";
+    resolved = Boolean(unit);
+    label = unit ? `${unitDisplayName(unit)} · ${propertyDisplayName(property)}` : UNIT_MISSING_LABEL;
   } else if (type === "property") {
-    label = propertyDisplayName(findProperty(snapshot, id ?? schedule.propertyId ?? undefined));
+    const name = propertyDisplayName(findProperty(snapshot, id ?? schedule.propertyId ?? undefined), "");
+    resolved = name !== "";
+    label = name || PROPERTY_MISSING_LABEL;
   }
   const identitySource = explicitType === "unknown" ? (type === "unknown" ? "unknown" : "inferred") : "explicit";
   const inheritedIdentity = type === "unknown"
-    ? "Scope needs review"
+    ? SCOPE_MISSING_LABEL
     : identitySource === "explicit" ? `Direct ${type} scope` : `Inferred from ${type} link`;
-  const warning = type === "unknown" || !id || label === "Needs review"
+  const warning = type === "unknown" || !id || !resolved
     ? schedule.scopeType && explicitType === "unknown" ? "The schedule has an unrecognized scope." : "The schedule is missing a confirmed scope."
     : undefined;
   return { type, id, label, identitySource, inheritedIdentity, warning };
@@ -386,9 +432,9 @@ export function buildRecurringChargeRows(tenant: TenantView, snapshot: AdminSnap
     const display = scheduleDisplayInterval(schedule, asOfDate);
     const definition = schedule.chargeDefinitionId ? snapshot.chargeDefinitions.find((candidate) => candidate.id === schedule.chargeDefinitionId) : undefined;
     const scope = recurringChargeScope(schedule, tenant, snapshot);
-    const description = nonEmpty(schedule.description) ?? nonEmpty(definition?.displayName) ?? "Needs review";
-    const definitionName = nonEmpty(definition?.displayName) ?? "Needs review";
-    const category = nonEmpty(schedule.category) ?? nonEmpty(definition?.category) ?? "Needs review";
+    const description = nonEmpty(schedule.description) ?? nonEmpty(definition?.displayName) ?? DESCRIPTION_MISSING_LABEL;
+    const definitionName = nonEmpty(definition?.displayName) ?? CHARGE_TYPE_MISSING_LABEL;
+    const category = nonEmpty(schedule.category) ?? nonEmpty(definition?.category) ?? missingLabel("Category");
     const linkedTenancy = schedule.tenancyId
       ? tenancies.find(candidate => candidate.id === schedule.tenancyId) ?? snapshot.snapshot.tenancies.find(candidate => candidate.id === schedule.tenancyId)
       : undefined;
@@ -402,7 +448,7 @@ export function buildRecurringChargeRows(tenant: TenantView, snapshot: AdminSnap
     let stateReason = tenancyEnded ? `Tenancy ended${moveOut ? ` ${moveOut}` : " (move-out date unavailable)"}` : undefined;
     if (state === "current" && (!selectionComplete || scope.warning || (schedule.tenancyId && (!linkedTenancy || !linkedTenancy.status)))) {
       state = "unknown";
-      stateReason = "Current applicability needs review";
+      stateReason = "Applicability unconfirmed";
     } else if (state === "current" && !operationalSelected) {
       state = "ended";
       stateReason = "Not selected for this tenancy's current charges";
@@ -429,8 +475,6 @@ export function buildRecurringChargeRows(tenant: TenantView, snapshot: AdminSnap
   });
 }
 
-export const getRecurringChargeRows = buildRecurringChargeRows;
-
 export function filterRecurringCharges(rows: RecurringChargeRow[], filter: RecurringChargeFilter): RecurringChargeRow[] {
   if (filter === "all") return rows;
   if (filter === "review") return rows.filter((row) => row.state === "unknown" || row.uncertaintyCodes.length > 0);
@@ -442,7 +486,7 @@ function ledgerUnitLabel(transaction: AdminLedgerTransactionView, tenant: Tenant
   const unit = findUnit(snapshot, transaction.unitId);
   if (unit) return unitDisplayName(unit);
   if (transaction.unitId && tenant.unit?.id === transaction.unitId) return unitDisplayName(tenant.unit);
-  return "Needs review";
+  return UNIT_MISSING_LABEL;
 }
 
 function ledgerEntryKind(kind: string | undefined): "charge" | "payment" | "credit" | "other" {
@@ -491,8 +535,6 @@ export function buildLedgerRows(tenant: TenantView, snapshot: AdminSnapshot): Te
     };
   });
 }
-
-export const getLedgerRows = buildLedgerRows;
 
 function revision(value: number | undefined): number {
   return value ?? 1;
@@ -630,18 +672,6 @@ export function buildTenantEditActions(tenant: TenantView, snapshot: AdminSnapsh
   return actions;
 }
 
-export const getTenantEditActions = buildTenantEditActions;
-
-export function tenancyDates(tenancy: AdminTenancyView): Array<{ label: string; value?: string }> {
-  return [
-    { label: "Planned move-in", value: tenancy.plannedMoveInOn },
-    { label: "Actual move-in", value: tenancy.actualMoveInOn },
-    { label: "Notice", value: tenancy.noticeOn },
-    { label: "Expected move-out", value: tenancy.expectedMoveOutOn },
-    { label: "Actual move-out", value: tenancy.actualMoveOutOn },
-  ];
-}
-
 /** Only the authoritative server selection contributes; history never fills gaps. */
 export function currentMonthlyTotal(rows: RecurringChargeRow[], candidatesComplete?: boolean): number | null {
   if (candidatesComplete === false || (candidatesComplete !== true && !rows.length)
@@ -649,8 +679,11 @@ export function currentMonthlyTotal(rows: RecurringChargeRow[], candidatesComple
   const selected = rows.filter(row => row.operationalSelected);
   if (selected.some(row => row.state !== "current" || !["monthly", "annual", "quarterly", "weekly", "daily", "one_time"].includes(row.billingFrequency ?? "") || row.scope.warning)) return null;
   const monthly = selected.filter(row => row.billingFrequency === "monthly" && ["base_rent", "recurring_fee"].includes(row.category) && row.scope.type !== "property");
-  if (monthly.some(row => row.amountCents == null || !Number.isFinite(row.amountCents))) return null;
-  return monthly.reduce((sum, row) => sum + row.amountCents!, 0);
+  if (monthly.some(row => row.amountCents == null || !Number.isSafeInteger(row.amountCents))) return null;
+  const total = summarizeExactCents(monthly.map(row => row.amountCents));
+  if (total.total === null) return null;
+  const numeric = Number(total.total);
+  return Number.isSafeInteger(numeric) ? numeric : null;
 }
 
 export function ledgerActionEligibility(row: TenantLedgerRow, rows: TenantLedgerRow[]): { reverse: boolean; allocate: boolean } {

@@ -181,16 +181,16 @@ test("provider sync mirrors JournalEntry cost lines and exposes capitalized cost
       Id: "2949", SyncToken: "0", TxnDate: "2026-09-08", CurrencyRef: { value: "USD" },
       MetaData: { LastUpdatedTime: "2026-09-23T19:30:49Z" },
       Line: [
-        { Id: "0", Amount: "1286.44", Description: "Inventory cost", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "inventory-1" }, Entity: { Type: "Customer", EntityRef: { value: "customer-test-42", name: "Synthetic customer" } } } },
-        { Id: "1", Amount: "1286.44", Description: "Refund", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "refund-1" } } },
+        { Id: "0", Amount: "1286.44", Description: "Inventory cost", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "inventory-1" }, Entity: { Type: "Customer", EntityRef: { value: "customer-test-42", name: "Synthetic customer" } } } },
+        { Id: "1", Amount: "1286.44", Description: "Refund", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "refund-1" } } },
       ],
     } as QuickBooksJsonObject;
     const nonCostJournal = {
       Id: "2951", SyncToken: "0", TxnDate: "2026-09-08", CurrencyRef: { value: "USD" },
       MetaData: { LastUpdatedTime: "2026-09-23T19:30:50Z" },
       Line: [
-        { Id: "0", Amount: "10.00", Description: "Security deposit reserve", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "deposit-1" } } },
-        { Id: "1", Amount: "10.00", Description: "Offset", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "refund-1" } } },
+        { Id: "0", Amount: "10.00", Description: "Security deposit reserve", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "deposit-1" } } },
+        { Id: "1", Amount: "10.00", Description: "Offset", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "refund-1" } } },
       ],
     } as QuickBooksJsonObject;
     const inventory = { Id: "inventory-1", SyncToken: "0", AccountType: "Other Current Asset", AccountSubType: "OtherCurrentAssets", MetaData: { LastUpdatedTime: "2026-09-23T19:30:49Z" } } as QuickBooksJsonObject;

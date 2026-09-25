@@ -35,7 +35,3 @@ export function scheduleDisplayInterval(schedule: AdminRecurringScheduleView, as
   }
   return { schedule, effectiveFrom: schedule.effectiveFrom, effectiveTo, state, uncertaintyCodes };
 }
-
-export function buildScheduleDisplayIntervals(schedules: readonly AdminRecurringScheduleView[], asOfDate: string): ScheduleDisplayInterval[] {
-  return schedules.map(schedule => scheduleDisplayInterval(schedule, asOfDate));
-}

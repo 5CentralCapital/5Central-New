@@ -139,7 +139,7 @@ export function serializeScheduledIncomeRow(value: unknown): JsonObject {
   const input = inputOf(value);
   // Charge-definition identifiers and keys are deliberately not part of a
   // report row. The report keeps nullable v8 facts visible so the client can
-  // render Needs review instead of filling in a category or amount.
+  // label them as missing or unknown instead of filling in a category or amount.
   return row(input, {
     propertyId: nullableStringValue(input.propertyId),
     propertyName: nullableStringValue(input.propertyName),
@@ -200,6 +200,11 @@ export function serializeScheduledVsCollectedRow(value: unknown): JsonObject {
     collectedKnownCents: nullableNumberValue(input.collectedKnownCents),
     collectedUncertainCents: nullableNumberValue(input.collectedUncertainCents),
     collectedUnknownAmountCount: nullableNumberValue(input.collectedUnknownAmountCount),
+    scheduleNotApplicableVacantCount: number(input, "scheduleNotApplicableVacantCount"),
+    scheduleNotApplicableOtherTenancyCount: number(input, "scheduleNotApplicableOtherTenancyCount"),
+    schedulePrecedenceSuppressedCount: number(input, "schedulePrecedenceSuppressedCount"),
+    asOfDate: dateText(input, "asOfDate"),
+    scheduleBasis: text(input, "scheduleBasis"),
     complete: nullableBooleanValue(input.complete),
     uncertaintyCodes: strings(input, "uncertaintyCodes"),
   });
@@ -284,6 +289,8 @@ export function serializeDepositLiabilityRow(value: unknown): JsonObject {
     dispositionStatus: text(input, "dispositionStatus"),
     sourceBalanceCents: number(input, "sourceBalanceCents"),
     unknownHeldCount: number(input, "unknownHeldCount"),
+    typeUnknownCount: number(input, "typeUnknownCount"),
+    unitLinkStatus: text(input, "unitLinkStatus"),
     unknownReceiptCount: number(input, "unknownReceiptCount"),
     hasUnknownReceiptDate: bool(input, "hasUnknownReceiptDate"),
     temporalUncertainty: bool(input, "temporalUncertainty"),
@@ -304,9 +311,16 @@ export function serializeHapRow(value: unknown): JsonObject {
     agencyObligationCents: number(input, "agencyObligationCents"),
     tenantObligationCents: number(input, "tenantObligationCents"),
     expectedTotalCents: number(input, "expectedTotalCents"),
-    receivedAgencyCents: number(input, "receivedAgencyCents"),
-    varianceCents: number(input, "varianceCents"),
+    obligationSource: text(input, "obligationSource"),
+    receivedAgencyCents: nullableNumberValue(input.receivedAgencyCents),
+    receivedAgencyKnownCents: number(input, "receivedAgencyKnownCents"),
+    agencyReceiptStatus: text(input, "agencyReceiptStatus"),
+    varianceCents: nullableNumberValue(input.varianceCents),
     exception: bool(input, "exception"),
+    receiptCount: number(input, "receiptCount"),
+    unknownReceiptCount: number(input, "unknownReceiptCount"),
+    uncertainty: bool(input, "uncertainty"),
+    uncertaintyCodes: strings(input, "uncertaintyCodes"),
   });
 }
 
@@ -352,7 +366,6 @@ export function serializeReportRows(report: string, rows: unknown): JsonObject[]
 }
 
 export const serializeCsvRows = serializeReportRows;
-export const serializeReportCsvRows = serializeReportRows;
 
 export interface PresentationReportEnvelope {
   report: string;
@@ -365,7 +378,6 @@ export function serializeReportEnvelope(input: { report: string; filters?: unkno
   return presentationObject({ report: input.report, filters: serializeFilters(input.filters ?? {}), rows: serializeReportRows(input.report, input.rows ?? []) }) as PresentationReportEnvelope;
 }
 
-export const serializeReport = serializeReportEnvelope;
 
 export function serializeReportMap(value: unknown): Record<string, JsonObject[]> {
   const input = inputOf(value);
@@ -403,4 +415,3 @@ export function serializeReportMap(value: unknown): Record<string, JsonObject[]>
   return presentationObject(output);
 }
 
-export const serializeReportRowsForCsv = serializeCsvRows;

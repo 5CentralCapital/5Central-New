@@ -38,6 +38,7 @@ import {
   decodeProjectCursor,
   encodeProjectCursor,
   resolveEffectiveDate,
+  userDraftCostPredicate,
 } from "./helpers";
 import { legalEntityIdSchema } from "../../shared/company";
 import {
@@ -250,6 +251,7 @@ const summarySelect = `
        WHERE c.organization_id = p.organization_id
          AND c.project_id = p.id
          AND c.archived_at IS NULL
+         AND ${userDraftCostPredicate("c")}
     ) dc ON true
     LEFT JOIN LATERAL (
       SELECT SUM(a.amount_cents) AS posted_actual_cents
@@ -274,6 +276,16 @@ function scopeWhere(scope: CompanyScope, asOf?: string, projectId?: string): { s
           AND pep.property_id = p.property_id
           AND pep.effective_from <= $4::date
           AND (pep.effective_until IS NULL OR pep.effective_until > $4::date)
+    ) OR (
+       p.status = 'planning' AND p.unit_id IS NULL
+       AND EXISTS (
+         SELECT 1 FROM company_project_property_plans plan
+          WHERE plan.organization_id = p.organization_id
+            AND plan.legal_entity_id = p.legal_entity_id
+            AND plan.property_id = p.property_id
+            AND plan.status = 'planned'
+            AND plan.assignment_start_on <= $4::date
+       )
     ))`,
   ];
   if (projectId !== undefined) {
@@ -393,6 +405,7 @@ export class ProjectReadService {
            FROM company_project_draft_costs c
            JOIN company_projects p ON p.organization_id = c.organization_id AND p.id = c.project_id
           WHERE c.organization_id = $1 AND c.project_id = $2 AND c.archived_at IS NULL
+            AND ${userDraftCostPredicate("c")}
           ORDER BY c.incurred_on DESC, c.id DESC`, projectValues),
       this.executor.query<Record<string, unknown>>(
         `SELECT a.id, a.project_id, a.scope_item_id, a.provider, a.source_scope, a.external_id, a.description,

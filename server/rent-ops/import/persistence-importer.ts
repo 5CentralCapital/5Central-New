@@ -39,7 +39,6 @@ import type {
   RentOpsSubsidyPayment,
   RentOpsTenancy,
   RentOpsUnit,
-  RentManagerRawRecord,
   RentManagerFinancialSemanticCrosswalk,
   RentOpsChargeDefinition,
   IsoDate,
@@ -274,24 +273,8 @@ export function approvedControlsSha256(value: ImportControlTotals): string {
   return sha256(canonicalJson(value));
 }
 
-function controlMoneyCents(record: RentManagerRawRecord, ...keys: string[]): number {
-  const key = keys.find((candidate) => record[candidate] !== undefined && record[candidate] !== null && record[candidate] !== "");
-  if (!key) return 0;
-  const normalized = String(record[key]).trim().replace(/^\$/, "").replace(/,/g, "");
-  if (!/^\d+(?:\.\d+)?$/.test(normalized)) return 0;
-  const [whole, fraction = ""] = normalized.split(".");
-  const centsInput = key.toLowerCase().includes("cents");
-  if ((centsInput && fraction.length > 0) || (!centsInput && fraction.length > 2)) return 0;
-  const amount = centsInput ? Number(whole) : Number(whole) * 100 + Number((fraction + "00").slice(0, 2));
-  return Number.isSafeInteger(amount) && amount >= 0 ? amount : 0;
-}
-
-function controlMoneyTotal(records: readonly RentManagerRawRecord[] | undefined, ...keys: string[]): number {
-  return (records ?? []).reduce((total, record) => total + controlMoneyCents(record, ...keys), 0);
-}
-
 /** Recomputes approval controls from the exact normalized source, not from the caller-supplied controls object. */
-function controlsForApprovedSource(input: RentManagerImportInput): ImportControlTotals {
+export function controlsForApprovedSource(input: RentManagerImportInput): ImportControlTotals {
   const money = moneyControlCounts(input);
   return {
     counts: {
@@ -313,15 +296,15 @@ function controlsForApprovedSource(input: RentManagerImportInput): ImportControl
       activity: input.activities?.length ?? 0,
     },
     totalsCents: {
-      charges: money.knownTotals.charges ?? controlMoneyTotal(input.charges, "amountCents", "amount"),
-      payments: money.knownTotals.payments ?? controlMoneyTotal(input.payments, "amountCents", "amount"),
-      credits: money.knownTotals.credits ?? controlMoneyTotal(input.credits, "amountCents", "amount"),
-      allocations: money.knownTotals.allocations ?? controlMoneyTotal(input.allocations, "amountCents", "amount"),
-      deposits: money.knownTotals.deposits ?? controlMoneyTotal(input.deposits, "amountHeldCents", "amount", "balance"),
+      charges: money.knownTotals.charges,
+      payments: money.knownTotals.payments,
+      credits: money.knownTotals.credits,
+      allocations: money.knownTotals.allocations,
+      deposits: money.knownTotals.deposits,
     },
     hap: {
-      agencyObligationCents: money.knownTotals.hapAgencyObligationCents ?? controlMoneyTotal(input.subsidies, "agencyObligationCents", "agencyAmountCents", "agencyAmount"),
-      tenantObligationCents: money.knownTotals.hapTenantObligationCents ?? controlMoneyTotal(input.subsidies, "tenantObligationCents", "tenantAmountCents", "tenantAmount"),
+      agencyObligationCents: money.knownTotals.hapAgencyObligationCents,
+      tenantObligationCents: money.knownTotals.hapTenantObligationCents,
     },
     unknownCounts: money.unknownCounts,
     invalidMoneyCounts: money.invalidCounts,
@@ -351,7 +334,7 @@ export function approvedRestrictedRowsSha256(value: RentManagerExportEnvelope): 
   const payload = (record.payload ?? record.input ?? {}) as Record<string, unknown>;
   const collections = Object.entries(payload)
     .filter((entry): entry is [string, unknown[]] => Array.isArray(entry[1]))
-    .sort(([left], [right]) => left.localeCompare(right))
+    .sort(([left], [right]) => left.localeCompare(right, "en-US"))
     .map(([name, rows]) => ({ name, rows }));
   const documentBinaries = Array.isArray(record.documentBinaries)
     ? record.documentBinaries
@@ -574,7 +557,7 @@ export class PersistenceImportPreconditionError extends Error {
 
   constructor(reasons: string[]) {
     const safeReasons = Array.from(new Set(reasons.map(safeCode)));
-    super(`Rent Operations import is blocked: ${safeReasons.join("; ")}`);
+    super(`5Central Ops import is blocked: ${safeReasons.join("; ")}`);
     this.name = "PersistenceImportPreconditionError";
     this.reasons = safeReasons;
   }
@@ -584,7 +567,7 @@ export class PersistenceImportTransactionError extends Error {
   readonly code = "transaction_failed";
 
   constructor() {
-    super("Rent Operations import transaction failed and was rolled back");
+    super("5Central Ops import transaction failed and was rolled back");
     this.name = "PersistenceImportTransactionError";
   }
 }
@@ -1930,8 +1913,4 @@ export class PersistenceImporter {
     catch (error) { if (error instanceof PersistenceImportPreconditionError) throw error; throw new PersistenceImportTransactionError(); }
     return { mode, importRunId: result.importRun.id, sourceManifestHash: result.importRun.sourceManifestHash, wouldWrite: true, committed: true, counts, totalsCents, warningCount, errorCount, blockedReasons: [] };
   }
-}
-
-export function summarizeImportExceptions(exceptions: ImportMappingException[]): { warningCount: number; errorCount: number; codes: string[] } {
-  return { warningCount: exceptions.filter((exception) => exception.severity === "warning").length, errorCount: exceptions.filter((exception) => exception.severity === "error").length, codes: Array.from(new Set(exceptions.map((exception) => safeCode(exception.code)))) };
 }

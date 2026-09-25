@@ -1,5 +1,5 @@
 import type { RentOpsLedgerTransaction, RentOpsPaymentAllocation, RentOpsRepository, RentOpsSnapshot } from "../../../shared/rent-ops-contracts";
-import { PostgresRentOpsRepository, type RentOpsQueryExecutor } from "../repositories/postgres";
+import { dateValue, PostgresRentOpsRepository, type RentOpsQueryExecutor } from "../repositories/postgres";
 import { TenantPaymentError, type PaymentAdjustment, type PaymentReceipt, type ProcessorEvent, type TenantPayment } from "./model";
 
 export interface TenantPaymentStore {
@@ -7,6 +7,8 @@ export interface TenantPaymentStore {
   lockAccount(personId: string): Promise<void>;
   snapshot(): Promise<RentOpsSnapshot>;
   list(personId: string): Promise<TenantPayment[]>;
+  reviewQueue(now?: Date): Promise<TenantPayment[]>;
+  findById(id: string, forUpdate?: boolean): Promise<TenantPayment | undefined>;
   findByRequest(accountId: string, requestId: string): Promise<TenantPayment | undefined>;
   findForEvent(event: ProcessorEvent): Promise<TenantPayment | undefined>;
   insert(payment: TenantPayment): Promise<void>;
@@ -21,7 +23,7 @@ export interface TenantPaymentStore {
 const fields = ["id", "account_id", "person_id", "tenancy_id", "property_id", "unit_id", "request_id", "amount_cents", "currency", "status", "checkout_session_id", "payment_intent_id", "checkout_url", "expires_at", "created_at", "updated_at", "posted_on", "current_ledger_id", "current_ledger_cents", "ledger_revision"] as const;
 function optional(value: unknown): string | undefined { return value == null ? undefined : value instanceof Date ? value.toISOString() : String(value); }
 function payment(row: Record<string, unknown>): TenantPayment {
-  return { id: String(row.id), accountId: String(row.account_id), personId: String(row.person_id), tenancyId: String(row.tenancy_id), propertyId: String(row.property_id), unitId: String(row.unit_id), requestId: String(row.request_id), amountCents: Number(row.amount_cents), currency: "usd", status: row.status as TenantPayment["status"], checkoutSessionId: optional(row.checkout_session_id), paymentIntentId: optional(row.payment_intent_id), checkoutUrl: optional(row.checkout_url), expiresAt: optional(row.expires_at)!, createdAt: optional(row.created_at)!, updatedAt: optional(row.updated_at)!, postedOn: optional(row.posted_on)?.slice(0, 10), currentLedgerId: optional(row.current_ledger_id), currentLedgerCents: Number(row.current_ledger_cents), ledgerRevision: Number(row.ledger_revision) };
+  return { id: String(row.id), accountId: String(row.account_id), personId: String(row.person_id), tenancyId: String(row.tenancy_id), propertyId: String(row.property_id), unitId: String(row.unit_id), requestId: String(row.request_id), amountCents: Number(row.amount_cents), currency: "usd", status: row.status as TenantPayment["status"], checkoutSessionId: optional(row.checkout_session_id), paymentIntentId: optional(row.payment_intent_id), checkoutUrl: optional(row.checkout_url), expiresAt: optional(row.expires_at)!, createdAt: optional(row.created_at)!, updatedAt: optional(row.updated_at)!, postedOn: dateValue(row.posted_on), currentLedgerId: optional(row.current_ledger_id), currentLedgerCents: Number(row.current_ledger_cents), ledgerRevision: Number(row.ledger_revision) };
 }
 function values(row: TenantPayment): unknown[] { return [row.id, row.accountId, row.personId, row.tenancyId, row.propertyId, row.unitId, row.requestId, row.amountCents, row.currency, row.status, row.checkoutSessionId ?? null, row.paymentIntentId ?? null, row.checkoutUrl ?? null, row.expiresAt, row.createdAt, row.updatedAt, row.postedOn ?? null, row.currentLedgerId ?? null, row.currentLedgerCents, row.ledgerRevision]; }
 export class PostgresTenantPaymentStore implements TenantPaymentStore {
@@ -35,6 +37,14 @@ export class PostgresTenantPaymentStore implements TenantPaymentStore {
   async lockAccount(id: string): Promise<void> { await this.executor.query("UPDATE rent_ops_people SET id = id WHERE id = $1 RETURNING id", [id]); }
   snapshot(): Promise<RentOpsSnapshot> { return this.repository.getOperationalSnapshot?.() ?? this.repository.getSnapshot(); }
   async list(personId: string): Promise<TenantPayment[]> { const result = await this.executor.query(`SELECT ${fields.join(",")} FROM rent_ops_tenant_payments WHERE person_id=$1 ORDER BY created_at DESC`, [personId]); return result.rows.map(payment); }
+  async reviewQueue(now = new Date()): Promise<TenantPayment[]> {
+    const result = await this.executor.query(`SELECT ${fields.join(",")} FROM rent_ops_tenant_payments WHERE status IN ('review_required','disputed') OR (status IN ('creating','pending','processing') AND expires_at <= $1) ORDER BY created_at ASC, id ASC`, [now.toISOString()]);
+    return result.rows.map(payment);
+  }
+  async findById(id: string, forUpdate = false): Promise<TenantPayment | undefined> {
+    const result = await this.executor.query(`SELECT ${fields.join(",")} FROM rent_ops_tenant_payments WHERE id=$1${forUpdate && this.insideTransaction ? " FOR UPDATE" : ""}`, [id]);
+    return result.rows[0] && payment(result.rows[0]);
+  }
   async findByRequest(accountId: string, requestId: string): Promise<TenantPayment | undefined> { const result = await this.executor.query(`SELECT ${fields.join(",")} FROM rent_ops_tenant_payments WHERE account_id=$1 AND request_id=$2${this.insideTransaction ? " FOR UPDATE" : ""}`, [accountId, requestId]); return result.rows[0] && payment(result.rows[0]); }
   async findForEvent(event: ProcessorEvent): Promise<TenantPayment | undefined> {
     const result = await this.executor.query(`SELECT ${fields.join(",")} FROM rent_ops_tenant_payments WHERE ($1::text IS NOT NULL AND id=$1) OR ($2::text IS NOT NULL AND payment_intent_id=$2) OR ($3::text IS NOT NULL AND checkout_session_id=$3)`, [event.paymentId ?? null, event.paymentIntentId ?? null, event.checkoutSessionId ?? null]);

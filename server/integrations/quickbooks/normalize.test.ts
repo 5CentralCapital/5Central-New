@@ -149,13 +149,45 @@ test("Deposit detail lines keep their own offset account; linked Payment lines h
   ]);
 });
 
-test("Deposit with cash back is an explicit exception rather than overstated cash", () => {
+test("Deposit cash back is a signed source line and reconciles to net TotalAmt", () => {
   const result = normalizeQboTransaction("Deposit", {
     Id: "302", SyncToken: "0", TxnDate: "2026-09-21", CurrencyRef: { value: "USD" }, TotalAmt: 80, DepositToAccountRef: { value: "35" },
     CashBack: { AccountRef: { value: "36" }, Amount: 20 }, MetaData: { LastUpdatedTime: updated },
     Line: [{ Id: "1", Amount: 100, DepositLineDetail: { AccountRef: { value: "79" } } }],
   });
-  assert.ok(result.unsupportedReasons.some(reason => /cash back/.test(reason)));
+  assert.deepEqual(result.unsupportedReasons, []);
+  assert.deepEqual(result.value?.lines.map(line => [line.lineId, line.amountCents, line.direction, line.flow, line.lineRole, line.accountObjectId]), [
+    ["1", "10000", "debit", "incoming", "receipt", "79"],
+    ["synthetic:cashback", "2000", "debit", "outgoing", "unknown", "36"],
+  ]);
+});
+
+test("cash back synthetic identity collisions remain whole-object exceptions", () => {
+  const result = normalizeQboTransaction("Deposit", {
+    Id: "306", SyncToken: "0", TxnDate: "2026-09-21", CurrencyRef: { value: "USD" }, TotalAmt: 80, DepositToAccountRef: { value: "35" },
+    CashBack: { AccountRef: { value: "36" }, Amount: 20 }, MetaData: { LastUpdatedTime: updated },
+    Line: [{ Id: "synthetic:cashback", Amount: 100, DepositLineDetail: { AccountRef: { value: "79" } } }],
+  });
+  assert.ok(result.unsupportedReasons.some(reason => /duplicate line identities/.test(reason)));
+});
+
+test("cash back without an explicit AccountRef stays unsupported and cannot be netted", () => {
+  const result = normalizeQboTransaction("Deposit", {
+    Id: "307", SyncToken: "0", TxnDate: "2026-09-21", CurrencyRef: { value: "USD" }, TotalAmt: 80, DepositToAccountRef: { value: "35" },
+    CashBack: { Amount: 20 }, MetaData: { LastUpdatedTime: updated },
+    Line: [{ Id: "1", Amount: 100, DepositLineDetail: { AccountRef: { value: "79" } } }],
+  });
+  assert.equal(result.value?.lines.length, 1, "the unclassified cash-back movement is never fabricated");
+  assert.ok(result.unsupportedReasons.some(reason => /CashBack has no AccountRef/.test(reason)));
+});
+
+test("cash back reconciliation uses net movement and rejects an incorrect provider total", () => {
+  const result = normalizeQboTransaction("Deposit", {
+    Id: "308", SyncToken: "0", TxnDate: "2026-09-21", CurrencyRef: { value: "USD" }, TotalAmt: 81, DepositToAccountRef: { value: "35" },
+    CashBack: { AccountRef: { value: "36" }, Amount: 20 }, MetaData: { LastUpdatedTime: updated },
+    Line: [{ Id: "1", Amount: 100, DepositLineDetail: { AccountRef: { value: "79" } } }],
+  });
+  assert.ok(result.unsupportedReasons.some(reason => /do not reconcile/.test(reason)));
 });
 
 test("missing CurrencyRef is never assumed: needs verified home currency with multicurrency off", () => {
@@ -168,13 +200,16 @@ test("missing CurrencyRef is never assumed: needs verified home currency with mu
   assert.equal(normalizeQboTransaction("Deposit", body, { currency: { homeCurrency: "CAD", multiCurrencyEnabled: false } }).value?.currency, "CAD");
 });
 
-test("purchase refunds and taxed transactions are explicit exceptions", () => {
+test("purchase refunds use a signed incoming credit line and taxed transactions remain exceptions", () => {
   const credit = normalizeQboTransaction("Purchase", {
     Id: "401", SyncToken: "0", TxnDate: "2026-09-20", CurrencyRef: { value: "USD" }, PaymentType: "CreditCard", Credit: true, TotalAmt: 12,
     AccountRef: { value: "41" }, MetaData: { LastUpdatedTime: updated },
     Line: [{ Id: "1", Amount: 12, AccountBasedExpenseLineDetail: { AccountRef: { value: "7" } } }],
   });
-  assert.ok(credit.unsupportedReasons.some(reason => /refund/.test(reason)));
+  assert.deepEqual(credit.unsupportedReasons, []);
+  assert.equal(credit.value?.lines[0]?.direction, "credit");
+  assert.equal(credit.value?.lines[0]?.flow, "incoming");
+  assert.equal(credit.value?.lines[0]?.lineRole, "expense");
   const taxed = normalizeQboTransaction("Bill", {
     Id: "402", SyncToken: "0", TxnDate: "2026-09-20", CurrencyRef: { value: "USD" }, TotalAmt: 107, TxnTaxDetail: { TotalTax: 7 },
     MetaData: { LastUpdatedTime: updated }, Line: [{ Id: "1", Amount: 100, AccountBasedExpenseLineDetail: { AccountRef: { value: "7" } } }],
@@ -182,14 +217,42 @@ test("purchase refunds and taxed transactions are explicit exceptions", () => {
   assert.ok(taxed.unsupportedReasons.some(reason => /tax/.test(reason)));
 });
 
-test("an item-based expense line never borrows the payment account as its expense account", () => {
+test("an item-based expense line without an account is an explicit coverage exception", () => {
   const result = normalizeQboTransaction("Purchase", {
     Id: "403", SyncToken: "0", TxnDate: "2026-09-20", CurrencyRef: { value: "USD" }, PaymentType: "Cash", TotalAmt: 5,
     AccountRef: { value: "bank-9" }, MetaData: { LastUpdatedTime: updated },
     Line: [{ Id: "1", Amount: 5, ItemBasedExpenseLineDetail: { ItemRef: { value: "11" } } }],
   });
+  assert.ok(result.unsupportedReasons.some(reason => /ItemBasedExpenseLineDetail/.test(reason)));
+  assert.equal(result.value?.lines.length, 0);
+});
+
+test("an item-based line with an explicit ItemAccountRef carries that account without resolving ItemRef", () => {
+  const result = normalizeQboTransaction("Purchase", {
+    Id: "405", SyncToken: "0", TxnDate: "2026-09-20", CurrencyRef: { value: "USD" }, PaymentType: "Cash", TotalAmt: 5,
+    AccountRef: { value: "bank-9" }, MetaData: { LastUpdatedTime: updated },
+    Line: [{ Id: "1", Amount: 5, ItemBasedExpenseLineDetail: { ItemRef: { value: "11" }, ItemAccountRef: { value: "expense-11" } } }],
+  });
   assert.deepEqual(result.unsupportedReasons, []);
-  assert.equal(result.value?.lines[0]?.accountObjectId, null);
+  assert.equal(result.value?.lines[0]?.accountObjectId, "expense-11");
+});
+
+test("an item-based line without ItemRef stays unsupported even with an explicit account", () => {
+  const result = normalizeQboTransaction("Purchase", {
+    Id: "407", SyncToken: "0", TxnDate: "2026-09-20", CurrencyRef: { value: "USD" }, PaymentType: "Cash", TotalAmt: 5,
+    AccountRef: { value: "bank-9" }, MetaData: { LastUpdatedTime: updated },
+    Line: [{ Id: "1", Amount: 5, ItemBasedExpenseLineDetail: { ItemAccountRef: { value: "expense-11" } } }],
+  });
+  assert.ok(result.unsupportedReasons.some(reason => /has no ItemRef/.test(reason)));
+});
+
+test("a refund with a non-credit-card payment type stays unsupported", () => {
+  const result = normalizeQboTransaction("Purchase", {
+    Id: "406", SyncToken: "0", TxnDate: "2026-09-20", CurrencyRef: { value: "USD" }, PaymentType: "Cash", Credit: true, TotalAmt: 5,
+    AccountRef: { value: "bank-9" }, MetaData: { LastUpdatedTime: updated },
+    Line: [{ Id: "1", Amount: 5, AccountBasedExpenseLineDetail: { AccountRef: { value: "expense-11" } } }],
+  });
+  assert.ok(result.unsupportedReasons.some(reason => /requires CreditCard/.test(reason)));
 });
 
 test("rejection reasons never echo provider values", () => {

@@ -108,7 +108,7 @@ export default function Home() {
   const totalRealizedProfits = soldProperties.reduce((sum, p) => {
     const acquisitionPrice = parseFloat(p.acquisitionPrice);
     const salePrice = parseFloat(p.salePrice || "0");
-    return sum + Math.max(0, salePrice - acquisitionPrice);
+    return sum + salePrice - acquisitionPrice;
   }, 0);
 
   const ctUnits = allProperties.filter(p => p.state === 'CT').reduce((sum, p) => sum + p.units, 0);
@@ -169,15 +169,15 @@ export default function Home() {
           </div>
 
           <div className="text-center">
-            <Link href="/portfolio">
-              <Button
+            <Button asChild
                 className="btn-outline group"
                 data-testid="button-view-complete-portfolio"
               >
+              <Link href="/portfolio">
                 View Complete Portfolio
                 <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
-              </Button>
-            </Link>
+              </Link>
+            </Button>
           </div>
         </div>
       </section>
@@ -332,8 +332,8 @@ export default function Home() {
                   </div>
                   <div className="h-8 w-px bg-white/10" />
                   <div>
-                    <div className="text-emerald-400 font-medium">+200%</div>
-                    <div className="text-[9px] uppercase tracking-wider text-white/40">Equity</div>
+                    <div className="text-white font-medium">Target</div>
+                    <div className="text-[9px] uppercase tracking-wider text-white/40">Subject to execution</div>
                   </div>
                 </div>
               </div>
@@ -343,12 +343,12 @@ export default function Home() {
 
           {/* View Full Strategy Link */}
           <div className="text-center mt-8">
-            <Link href="/portfolio">
-              <Button className="btn-outline group">
+            <Button asChild className="btn-outline group">
+              <Link href="/portfolio">
                 View Full Growth Strategy
                 <ArrowRight className="w-4 h-4 ml-2 transition-transform group-hover:translate-x-1" />
-              </Button>
-            </Link>
+              </Link>
+            </Button>
           </div>
         </div>
       </section>
@@ -475,22 +475,22 @@ export default function Home() {
           </p>
 
           <div className="flex flex-col sm:flex-row gap-4 justify-center mb-20">
-            <Link href="/portfolio">
-              <Button
+            <Button asChild
                 className="btn-accent"
                 data-testid="button-cta-portfolio"
               >
+              <Link href="/portfolio">
                 View Portfolio
-              </Button>
-            </Link>
-            <Link href="/founder">
-              <Button
+              </Link>
+            </Button>
+            <Button asChild
                 className="btn-outline border-white/30 text-white hover:bg-white hover:text-deep-charcoal"
                 data-testid="button-cta-founder"
               >
+              <Link href="/founder">
                 Meet the Founder
-              </Button>
-            </Link>
+              </Link>
+            </Button>
           </div>
 
           <div className="grid md:grid-cols-3 gap-12 pt-12 border-t border-white/10">

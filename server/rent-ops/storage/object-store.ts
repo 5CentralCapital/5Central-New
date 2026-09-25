@@ -638,8 +638,39 @@ function canonicalPath(url: URL): string {
 
 function canonicalQuery(url: URL): string {
   const values = Array.from(url.searchParams.entries()).map(([key, value]) => [awsUriEncode(key), awsUriEncode(value)] as const);
-  values.sort((left, right) => left[0] === right[0] ? left[1].localeCompare(right[1]) : left[0].localeCompare(right[0]));
+  // SigV4 orders by byte value, not locale collation.
+  const byCodePoint = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
+  values.sort((left, right) => byCodePoint(left[0], right[0]) || byCodePoint(left[1], right[1]));
   return values.map(([key, value]) => `${key}=${value}`).join("&");
+}
+
+/**
+ * AWS Signature Version 4 for S3. `headers` must use lowercase names; the
+ * result adds host, x-amz-content-sha256 (empty payload unless supplied),
+ * x-amz-date and Authorization.
+ */
+export function signS3Request(input: {
+  method: string;
+  url: URL;
+  headers?: Record<string, string>;
+  region: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  now: Date;
+}): Record<string, string> {
+  const { short, full } = amzDateParts(input.now);
+  const headers = input.headers ?? {};
+  const payloadHash = headers["x-amz-content-sha256"] ?? EMPTY_PAYLOAD_SHA256;
+  const signed: Record<string, string> = { ...headers, host: input.url.host, "x-amz-content-sha256": payloadHash, "x-amz-date": full };
+  const headerNames = Object.keys(signed).sort();
+  const canonicalHeaders = headerNames.map((key) => `${key}:${canonicalHeaderValue(signed[key])}`).join("\n") + "\n";
+  const signedHeaders = headerNames.join(";");
+  const canonicalRequest = [input.method, canonicalPath(input.url), canonicalQuery(input.url), canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const scope = `${short}/${input.region}/s3/aws4_request`;
+  const signingKey = hmacSha256(hmacSha256(hmacSha256(hmacSha256(`AWS4${input.secretAccessKey}`, short), input.region), "s3"), "aws4_request");
+  const canonicalRequestHash = createHash("sha256").update(canonicalRequest).digest("hex");
+  const signature = hmacHex(signingKey, `AWS4-HMAC-SHA256\n${full}\n${scope}\n${canonicalRequestHash}`);
+  return { ...signed, authorization: `AWS4-HMAC-SHA256 Credential=${input.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}` };
 }
 
 function requiredS3Version(response: Response): string {
@@ -752,22 +783,7 @@ export class S3CompatiblePrivateVersionedObjectStoreClient implements PrivateVer
   }
 
   private async send(method: string, url: URL, headers: Record<string, string> = {}, body?: StorageByteStream): Promise<Response> {
-    const { short, full } = amzDateParts(this.now());
-    const payloadHash = headers["x-amz-content-sha256"] ?? EMPTY_PAYLOAD_SHA256;
-    const signed: Record<string, string> = { ...headers, host: url.host, "x-amz-content-sha256": payloadHash, "x-amz-date": full };
-    const headerNames = Object.keys(signed).map((key) => key.toLowerCase()).sort();
-    const canonicalHeaders = headerNames.map((key) => `${key}:${canonicalHeaderValue(signed[key] ?? "")}`).join("\n") + "\n";
-    const signedHeaders = headerNames.join(";");
-    const canonicalRequest = [method, canonicalPath(url), canonicalQuery(url), canonicalHeaders, signedHeaders, payloadHash].join("\n");
-    const scope = `${short}/${this.region}/s3/aws4_request`;
-    const signingKey = hmacSha256(hmacSha256(hmacSha256(hmacSha256(`AWS4${this.secretAccessKey}`, short), this.region), "s3"), "aws4_request");
-    const canonicalRequestHash = createHash("sha256").update(canonicalRequest).digest("hex");
-    const signature = hmacHex(signingKey, `${full}\n${scope}\n${canonicalRequestHash}`);
-    const wireHeaders = new Headers(headers);
-    wireHeaders.set("host", url.host);
-    wireHeaders.set("x-amz-content-sha256", payloadHash);
-    wireHeaders.set("x-amz-date", full);
-    wireHeaders.set("Authorization", `AWS4-HMAC-SHA256 Credential=${this.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`);
+    const wireHeaders = new Headers(signS3Request({ method, url, headers, region: this.region, accessKeyId: this.accessKeyId, secretAccessKey: this.secretAccessKey, now: this.now() }));
     const requestInit: RequestInit & { duplex?: "half" } = { method, headers: wireHeaders, redirect: "error" };
     if (body !== undefined) {
       const stream = body instanceof Readable ? body : Readable.from(body as AsyncIterable<Uint8Array>);
@@ -884,7 +900,16 @@ export class S3CompatiblePrivateVersionedObjectStoreClient implements PrivateVer
     return { stream: await this.open(logicalKey, verification), verification };
   }
 
-  async probeOperation(operation: "get" | "head" | "put" | "list" | "delete", logicalKey: LogicalObjectKey): Promise<number> {
+  /** The current version of an existing object, or undefined when HEAD is not a 200 with a version. */
+  async probeCurrentVersion(logicalKey: LogicalObjectKey): Promise<string | undefined> {
+    const response = await this.send("HEAD", this.urlFor(this.objectPath(logicalKey)));
+    await discardResponse(response);
+    const version = response.headers.get("x-amz-version-id")?.trim();
+    return response.status === 200 && version && version !== "null" ? version : undefined;
+  }
+
+  /** Get/Head probes read `immutableVersion` when given, as every real read does. */
+  async probeOperation(operation: "get" | "head" | "put" | "list" | "delete", logicalKey: LogicalObjectKey, immutableVersion?: string): Promise<number> {
     const path = this.objectPath(logicalKey);
     if (operation === "list") {
       const url = this.bucketUrl();
@@ -903,7 +928,8 @@ export class S3CompatiblePrivateVersionedObjectStoreClient implements PrivateVer
     const headers: Record<string, string> = operation === "put"
       ? { "content-length": "0", "if-none-match": "*", "x-amz-content-sha256": EMPTY_PAYLOAD_SHA256 }
       : {};
-    const response = await this.send(operation === "put" ? "PUT" : operation === "get" ? "GET" : "HEAD", this.urlFor(path), headers, operation === "put" ? Readable.from([]) : undefined);
+    const url = this.urlFor(path, operation === "put" ? [] : [["versionId", immutableVersion]]);
+    const response = await this.send(operation === "put" ? "PUT" : operation === "get" ? "GET" : "HEAD", url, headers, operation === "put" ? Readable.from([]) : undefined);
     await discardResponse(response);
     return response.status;
   }
@@ -940,13 +966,15 @@ function probeIdentity(client: S3CompatiblePrivateVersionedObjectStoreClient, id
   privileges: Readonly<Record<string, boolean>>;
 }> {
   const canary = `sha256:${"0".repeat(64)}`;
-  return Promise.all([
-    client.probeOperation("get", canary),
-    client.probeOperation("head", canary),
+  // Stored documents are always read by exact version, which S3 authorizes as
+  // s3:GetObjectVersion rather than s3:GetObject. Probe the canary the same way.
+  return client.probeCurrentVersion(canary).then(version => Promise.all([
+    client.probeOperation("get", canary, version),
+    client.probeOperation("head", canary, version),
     client.probeOperation("put", canary),
     client.probeOperation("list", canary),
     client.probeOperation("delete", canary),
-  ]).then(([get, head, put, list, deletion]) => ({
+  ])).then(([get, head, put, list, deletion]) => ({
     identity,
     prefix: client.prefix,
     privileges: Object.freeze({

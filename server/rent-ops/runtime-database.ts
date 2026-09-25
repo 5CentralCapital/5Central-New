@@ -3,7 +3,7 @@ import { buildRentOpsTableBatchSql, decodeRentOpsTableBatch } from "./repositori
 import type { RentOpsQueryExecutor } from "./repositories/postgres";
 
 /**
- * The Rent Operations web runtime is intentionally isolated from the host
+ * The 5Central Ops web runtime is intentionally isolated from the host
  * application's database pool.  Keeping this boundary small makes it
  * possible to grant the web process only the permissions it needs while
  * retaining an explicit dependency seam for tests and local development.
@@ -11,7 +11,8 @@ import type { RentOpsQueryExecutor } from "./repositories/postgres";
 
 export interface RentOpsRuntimePoolClient {
   query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<{ rows: T[] }>;
-  release(): void;
+  /** A truthy argument destroys the connection instead of returning it to the pool. */
+  release(destroy?: boolean | Error): void;
 }
 
 export interface RentOpsRuntimePool {
@@ -48,13 +49,13 @@ export class RentOpsRuntimeDatabaseError extends Error {
 export class RentOpsRetryableConflict extends Error {
   readonly code = "rent_ops_retryable_conflict";
   readonly status = 409;
-  constructor() { super("Rent Operations changed concurrently; retry the same request"); this.name = "RentOpsRetryableConflict"; }
+  constructor() { super("5Central Ops changed concurrently; retry the same request"); this.name = "RentOpsRetryableConflict"; }
 }
 
-const MISSING_CREDENTIAL_MESSAGE = "RENT_OPS_RUNTIME_DATABASE_URL must be configured for the Rent Operations runtime";
+const MISSING_CREDENTIAL_MESSAGE = "RENT_OPS_RUNTIME_DATABASE_URL must be configured for the 5Central Ops runtime";
 const INVALID_CREDENTIAL_MESSAGE = "RENT_OPS_RUNTIME_DATABASE_URL is invalid";
-const INITIALIZATION_MESSAGE = "Rent Operations runtime database could not be initialized";
-const OPERATION_MESSAGE = "Rent Operations database operation failed";
+const INITIALIZATION_MESSAGE = "5Central Ops runtime database could not be initialized";
+const OPERATION_MESSAGE = "5Central Ops database operation failed";
 
 function configurationError(message: string): RentOpsRuntimeDatabaseError {
   return new RentOpsRuntimeDatabaseError(message);
@@ -95,12 +96,20 @@ async function safeQuery<T>(
   }
 }
 
-/** Adapt a pool to the narrow executor consumed by the Rent Operations repository. */
+/** Adapt a pool to the narrow executor consumed by the 5Central Ops repository. */
 export function createRentOpsPoolExecutor(pool: RentOpsRuntimePool): RentOpsRuntimeDatabase {
+  let readGeneration = 0;
+  let activeWrites = 0;
   const executor: RentOpsRuntimeDatabase = {
+    readCacheVersion: () => activeWrites ? undefined : readGeneration,
     async query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<{ rows: T[] }> {
-      const result = await safeQuery<Record<string, unknown>>(pool.query.bind(pool), text, values);
-      return { rows: result.rows as T[] };
+      // Conservatively treat CTEs and unknown statements as writes too.
+      const writes = !/^\s*(SELECT|SHOW|EXPLAIN)\b/i.test(text);
+      if (writes) { activeWrites++; readGeneration++; }
+      try {
+        const result = await safeQuery<Record<string, unknown>>(pool.query.bind(pool), text, values);
+        return { rows: result.rows as T[] };
+      } finally { if (writes) { activeWrites--; readGeneration++; } }
     },
 
     async readTableBatch(tables) {
@@ -132,6 +141,10 @@ export function createRentOpsPoolExecutor(pool: RentOpsRuntimePool): RentOpsRunt
         },
       };
       let began = false;
+      if (!options.readOnly) { activeWrites++; readGeneration++; }
+      // A connection whose transaction state is unknown must never be reused:
+      // the next borrower could run inside a stale, never-committed transaction.
+      let discard = false;
       try {
         await safeQuery(client.query.bind(client), `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ${options.readOnly ? " READ ONLY" : ""}`);
         began = true;
@@ -145,11 +158,13 @@ export function createRentOpsPoolExecutor(pool: RentOpsRuntimePool): RentOpsRunt
           } catch {
             // Preserve the original, already-redacted operation or application
             // error. Rollback diagnostics must not escape this boundary.
+            discard = true;
           }
-        }
+        } else discard = true;
         throw error;
       } finally {
-        client.release();
+        client.release(discard);
+        if (!options.readOnly) { activeWrites--; readGeneration++; }
       }
     },
 
@@ -179,7 +194,7 @@ async function createNeonPool(connectionString: string): Promise<RentOpsRuntimeP
 }
 
 /**
- * Create the dedicated Rent Operations web executor.
+ * Create the dedicated 5Central Ops web executor.
  *
  * Production deliberately has no shared-pool fallback. In development and
  * tests, a caller may pass an explicit shared executor, which keeps that

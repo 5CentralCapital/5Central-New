@@ -14,7 +14,7 @@
     const text = root?.innerText ?? '';
     if (document.querySelector('.rm-report-workspace') && !document.querySelector('.rm-report-table-scroll') && !document.querySelector('[role=alert]')) return false;
     return !!document.querySelector('.rm-body,.ro-workspace,.tp-root,.apply-shell,.ro-app') && text.trim()
-      && !pending && !/Loading (the workspace|portfolio|tenant|records|the selected report|current charge)|Opening Rent Operations|Opening your account|Loading your home|Opening your application|Signing in…/.test(text);
+      && !pending && !/Loading (the workspace|portfolio|tenant|records|the selected report|current charge)|Opening 5Central Ops|Opening Rent Operations|Opening your account|Loading your home|Opening your application|Signing in…/.test(text);
   }
   function schedule() {
     if (window.__performanceAudit.ready) return;

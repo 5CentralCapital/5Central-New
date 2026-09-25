@@ -14,6 +14,7 @@ const PropertyDetailView = lazy(() => import("../components/dashboard/property-d
 const InvestorOverview = lazy(() => import("../components/dashboard/investor-overview"));
 
 import { equityInvestors, mortgageObligations, getInvestorSummary } from "@/lib/investor-data";
+import { occupancyFromRentRolls } from "@/lib/rm-occupancy";
 
 // Dashboard types (inline to avoid external dependency)
 interface TaskItem { id: string; title: string; dueDate?: string; cadence?: string; status: string; property?: string; module?: string; priority?: string; notes?: string; }
@@ -284,7 +285,6 @@ export default function AdminDashboard() {
     try {
       const res = await fetch("/api/rm/vacancies", { credentials: "include" });
       if (!res.ok) return;
-      const report = await res.json();
       // Property mapping: RM ID -> display name
       const propNames: Record<string, string> = { "30": "MLK Apartments", "31": "Hickory Landing", "32": "Sun Cove Apartments", "33": "Lucia Apartments" };
       const propIds = ["30", "31", "32", "33"];
@@ -298,39 +298,15 @@ export default function AdminDashboard() {
           } catch { return null; }
         })
       );
-      // Build per-property RM data keyed by display name
-      const rmByName = new Map<string, { units: number; occupied: number; vacant: number; occRate: number; monthlyRent: number }>();
-      const rmOccupancy: OccupancyRecord[] = perPropReqs
-        .filter((rr): rr is any => rr !== null)
-        .map((rr, i) => {
-          const name = propNames[propIds[i]] || `Property ${propIds[i]}`;
-          const occPct = Math.round(rr.summary.occupancyRate * 1000) / 10;
-          rmByName.set(name, {
-            units: rr.summary.totalUnits,
-            occupied: rr.summary.occupiedUnits,
-            vacant: rr.summary.vacantUnits,
-            occRate: occPct,
-            monthlyRent: rr.summary.totalMonthlyRent,
-          });
-          return {
-            id: `rm-occ-${propIds[i]}`,
-            property: name,
-            units: rr.summary.totalUnits,
-            occupied: rr.summary.occupiedUnits,
-            vacant: rr.summary.vacantUnits,
-            occupancyRate: occPct,
-            monthlyRent: rr.summary.totalMonthlyRent,
-            status: rr.summary.occupancyRate < 0.75 ? "critical" : rr.summary.occupancyRate < 0.9 ? "watch" : "stable",
-          };
-        });
+      const rmOccupancy: OccupancyRecord[] = occupancyFromRentRolls(propIds, propNames, perPropReqs);
       if (rmOccupancy.length > 0) {
         setData((prev) => {
           if (!prev) return prev;
           // Overlay properties with live RM occupancy + unit counts
           const updatedProperties = prev.properties.map((p) => {
-            const rm = rmByName.get(p.name);
+            const rm = rmOccupancy.find((record) => record.property === p.name);
             if (!rm) return p;
-            return { ...p, units: rm.units, occupancyRate: rm.occRate, occupiedUnits: rm.occupied };
+            return { ...p, units: rm.units, occupancyRate: rm.occupancyRate, occupiedUnits: rm.occupied };
           });
           return { ...prev, occupancy: rmOccupancy, properties: updatedProperties };
         });
@@ -362,11 +338,15 @@ export default function AdminDashboard() {
 
   const save = useCallback(
     async (table: keyof DashboardData, payload: unknown, reason = "inline_edit") => {
-      await fetch("/api/dashboard", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ table, data: payload, reason }),
-      });
+      try {
+        await fetch("/api/dashboard", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ table, data: payload, reason }),
+        });
+      } catch {
+        // Reload below shows the stored values.
+      }
       await load();
     },
     [load]
@@ -374,7 +354,11 @@ export default function AdminDashboard() {
 
   const triggerRefresh = useCallback(async () => {
     setRefreshing(true);
-    await fetch("/api/dashboard/refresh", { method: "POST" });
+    try {
+      await fetch("/api/dashboard/refresh", { method: "POST" });
+    } catch {
+      // Reload below still shows the latest stored data.
+    }
     await load();
     setRefreshing(false);
   }, [load]);
@@ -462,6 +446,7 @@ export default function AdminDashboard() {
             <div key={gi} className={`tab-dropdown ${isOpen ? "open" : ""}`}>
               <button
                 className={`nav-btn tab-dropdown-trigger ${hasActive ? "group-active" : ""}`}
+                aria-expanded={isOpen}
                 onClick={() => setOpenGroup(isOpen ? null : (group.label ?? null))}
               >
                 <span className="tab-dropdown-label">{group.label}</span>
@@ -524,7 +509,7 @@ export default function AdminDashboard() {
                   }}>
                     <span style={{ fontWeight: 600, fontSize: 14 }}>{alert.type === "danger" ? "⚠" : "⚡"}</span>
                     <span style={{ flex: 1 }}>{alert.message}</span>
-                    <button onClick={() => setDismissedAlerts(prev => { const next = new Set(Array.from(prev)); next.add(alert.message); return next; })} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", fontSize: 14, padding: "0 4px", opacity: 0.6 }}>✕</button>
+                    <button onClick={() => setDismissedAlerts(prev => { const next = new Set(Array.from(prev)); next.add(alert.message); return next; })} aria-label="Dismiss alert" style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", fontSize: 14, padding: "0 4px", opacity: 0.6 }}>✕</button>
                   </div>
                 ))}
               </div>
@@ -1490,18 +1475,24 @@ function BankingSection({ banking, onRefresh }: { banking?: DashboardData["banki
       const handler = (window as any).Plaid.create({
         token: data.link_token,
         onSuccess: async (publicToken: string, metadata: any) => {
-          await fetch("/api/plaid/exchange-token", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              public_token: publicToken,
-              institution: metadata.institution,
-            }),
-          });
-          // Immediately sync after connecting
-          await fetch("/api/plaid/sync", { method: "POST" });
-          onRefresh();
-          setConnecting(false);
+          try {
+            const exchange = await fetch("/api/plaid/exchange-token", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                public_token: publicToken,
+                institution: metadata.institution,
+              }),
+            });
+            if (!exchange.ok) throw new Error("The bank connection could not be saved.");
+            // Immediately sync after connecting
+            await fetch("/api/plaid/sync", { method: "POST" });
+          } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to connect");
+          } finally {
+            onRefresh();
+            setConnecting(false);
+          }
         },
         onExit: () => setConnecting(false),
       });
@@ -1514,9 +1505,16 @@ function BankingSection({ banking, onRefresh }: { banking?: DashboardData["banki
 
   const syncAccounts = useCallback(async () => {
     setSyncing(true);
-    await fetch("/api/plaid/sync", { method: "POST" });
-    onRefresh();
-    setSyncing(false);
+    setError(null);
+    try {
+      const res = await fetch("/api/plaid/sync", { method: "POST" });
+      if (!res.ok) setError("Bank sync failed. Try again.");
+    } catch {
+      setError("Bank sync failed. Try again.");
+    } finally {
+      onRefresh();
+      setSyncing(false);
+    }
   }, [onRefresh]);
 
   const hasAccounts = banking?.accounts && banking.accounts.length > 0;

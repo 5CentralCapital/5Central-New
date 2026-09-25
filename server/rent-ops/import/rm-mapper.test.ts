@@ -4,6 +4,8 @@ import test from "node:test";
 import { createFinancialSemanticCrosswalkEntry, type RentManagerFinancialSemanticCrosswalk } from "../../../shared/rent-ops-contracts";
 import { serializeAdminRecurringSchedule } from "../presentation";
 import { mapRentManagerExport, reconcileRentManagerImport, type RentOpsTargetIdFactory } from "./rm-mapper";
+import { normalizeRentManagerExport } from "../export/normalizer";
+import { syntheticExportPayload } from "../export/fixtures";
 
 const deterministicTestTargetIdFactory: RentOpsTargetIdFactory = (entityType, sourceId) => `test:${entityType}:${createHash("sha256").update(`${entityType}\u0000${sourceId}`).digest("hex")}`;
 
@@ -529,6 +531,24 @@ test('exact ePay and Void source reversal enums retain dated reversal and source
  }
 });
 
+test("a tenant schedule never borrows a unit whose RM ID equals its lease ID", () => {
+  const artifactSha256 = "a".repeat(64);
+  const financialSemanticCrosswalk: RentManagerFinancialSemanticCrosswalk = { artifactSha256, normalization: "exact_v1", entries: [{ artifactSha256, sourceCollection: "recurringSchedules", sourceField: "EntityType", semanticKind: "recurring_scope", normalization: "exact_v1", normalizedValue: "Tenant", targetValue: "tenant" }] };
+  const mapped = mapRentManagerExport({
+    ...input(),
+    financialSemanticCrosswalk,
+    // RM IDs are per-table integers, so lease 77 and unit 77 can coexist.
+    units: [...input().units, { entityType: "unit", sourceId: "77", propertyId: "p1", unitNumber: "Unrelated" }],
+    leases: [...input().leases, { entityType: "lease", sourceId: "77", propertyId: "p1", tenantId: "t1", moveInDate: "2025-01-01" }],
+    recurringSchedules: [{ sourceId: "unitless-lease-schedule", EntityType: "Tenant", EntityKeyID: "t1", leaseId: "77", amount: 100, effectiveFrom: "2025-01-01" }],
+  }, { fidelityVersion: 3, artifactSha256, targetIdFactory: deterministicTestTargetIdFactory });
+  const lease = mapped.snapshot.tenancies.find((row) => row.source?.sourceId === "77");
+  assert.equal(lease?.unitId, null);
+  const schedule = mapped.snapshot.recurringSchedules.find((row) => row.source?.sourceId === "unitless-lease-schedule");
+  assert.equal(schedule?.tenancyId, lease?.id);
+  assert.equal(schedule?.unitId, null);
+});
+
 test("v3 source-absent recurring amount remains retained unknown; invalid and nonpositive amounts block", () => {
   const artifactSha256 = "a".repeat(64);
   const financialSemanticCrosswalk: RentManagerFinancialSemanticCrosswalk = { artifactSha256, normalization: "exact_v1", entries: [{ artifactSha256, sourceCollection: "recurringSchedules", sourceField: "EntityType", semanticKind: "recurring_scope", normalization: "exact_v1", normalizedValue: "Tenant", targetValue: "tenant" }] };
@@ -637,4 +657,18 @@ test("raw RM account status and posting bounds survive separately from lease occ
  const unknown=mapRentManagerExport({...data,tenants:[{...data.tenants[0],Status:"Unmapped",PostingEndDate:"bad-date"}]},options).snapshot.people[0].sourceAccountFacts!;
  assert.equal(unknown.rawStatus,"Unmapped"); assert.equal(unknown.status,null); assert.equal(unknown.postingEndOn,null); assert.equal(unknown.postingEndKnowledge,"unknown");
  assert.equal(mapRentManagerExport(data,{...options,artifactSha256:"b".repeat(64)}).snapshot.people[0].sourceAccountFacts?.status,null);
+});
+
+test("RM dollar amounts on HAP and recurring rows become exact cents, never cents-as-dollars or dollars-as-cents", () => {
+  const payload = syntheticExportPayload();
+  // The fixture subsidy carries RM's dollar fields AgencyAmount: 700 and TenantAmount: 500.
+  payload.subsidyTenants = [{ SubsidyTenantID: 1, SubsidyID: 1601, TenantID: 201, Amount: 500 }];
+  payload.subsidyPayments = [{ SubsidyPaymentID: 2, SubsidyID: 1601, PaymentAmount: 700.25, PaymentDate: "2025-02-01" }];
+  payload.recurringSchedules = [...(payload.recurringSchedules ?? []), { RecurringChargeID: 9901, EntityType: "Unit", EntityKeyID: 11, UnitID: 11, PropertyID: 1, AmountCents: 1234, FromDate: "2025-01-01" }];
+  const normalized = normalizeRentManagerExport(payload, { asOfDate: "2025-06-01" });
+  const mapped = mapRentManagerExport(normalized.input, { now: new Date("2025-06-01T00:00:00.000Z") });
+  assert.deepEqual(mapped.snapshot.subsidyContracts.map((row) => [row.agencyObligationCents, row.tenantObligationCents]), [[70000, 50000]]);
+  assert.deepEqual(mapped.snapshot.subsidyTenants.map((row) => row.amountCents), [50000]);
+  assert.deepEqual(mapped.snapshot.subsidyPayments.map((row) => [row.amountCents, row.amountKnowledge]), [[70025, "known"]]);
+  assert.equal(mapped.snapshot.recurringSchedules.find((row) => row.source?.sourceId?.endsWith("9901"))?.amountCents, 1234);
 });

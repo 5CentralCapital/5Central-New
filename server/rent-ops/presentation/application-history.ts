@@ -342,4 +342,3 @@ export function serializeAdminApplicationHistoryCase(value: RentOpsApplicationCa
 }
 
 /** Short aliases make the positive boundary easy to use in route adapters. */
-export const serializeApplicationHistoryCase = serializeAdminApplicationHistoryCase;

@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { getQueryFn } from "@/lib/queryClient";
 import { getPropertyImage } from "@/lib/property-data";
+import { formatCalendarDate, formatWholeUsd } from "@/lib/format";
 import PropertyModal from "@/components/property-modal";
 import { type Property } from "@shared/schema";
 import {
@@ -118,25 +119,8 @@ export default function InvestorDashboard() {
   const properties = investorProperties || [];
   const isCompanyPartner = profile?.investorType === "company-partner";
 
-  const formatCurrency = (value: string | number | null | undefined) => {
-    if (!value) return "$0";
-    const num = typeof value === "string" ? parseFloat(value) : value;
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "USD",
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(num);
-  };
-
-  const formatDate = (dateString: string | null) => {
-    if (!dateString) return "N/A";
-    return new Date(dateString).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  };
+  const formatCurrency = formatWholeUsd;
+  const formatDate = (dateString: string | null) => formatCalendarDate(dateString, undefined, "N/A");
 
   const formatPercent = (value: string | number | null | undefined) => {
     if (!value) return "0%";

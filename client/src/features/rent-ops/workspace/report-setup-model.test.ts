@@ -5,6 +5,9 @@ import {
   applyReportSetupLocalFilters,
   createInitialReportSetup,
   normalizeReportSetup,
+  reportRunsAutomatically,
+  reportSetupApplyDelay,
+  reportSetupChips,
   reportSetupQueryFilters,
   reportSetupToUrlValue,
   reportSetupFromUrlValue,
@@ -114,4 +117,54 @@ test("report setup URL round trip retains selections and neutral local filtering
 
   const openingBalance = { rowType: "opening_balance", transaction: { personId: "person-1" } } as unknown as ReportRow;
   assert.equal(applyReportSetupLocalFilters([openingBalance], "tenant-ledger", state).length, 1);
+});
+
+const chipFormat = {
+  longDate: (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) ? `long:${value}` : undefined,
+  monthLabel: (value: string) => /^\d{4}-\d{2}$/.test(value) ? `month:${value}` : undefined,
+};
+
+test("rental reports run on open; other reports keep an explicit run", () => {
+  assert.deepEqual(["rent-roll", "occupancy", "delinquency"].map(key => reportRunsAutomatically(key as never)), [true, true, true]);
+  assert.equal(reportRunsAutomatically("tenant-ledger"), false);
+  assert.equal(reportRunsAutomatically("collected-income"), false);
+});
+
+test("automatic re-runs wait for a typing pause only when search alone changed", () => {
+  const rentRoll = createInitialReportSetup("rent-roll", filters, directory);
+  assert.equal(reportSetupApplyDelay("rent-roll", undefined, rentRoll), 0);
+  assert.equal(reportSetupApplyDelay("rent-roll", rentRoll, { ...rentRoll, values: { ...rentRoll.values, search: "10" } }), 300);
+  assert.equal(reportSetupApplyDelay("rent-roll", rentRoll, { ...rentRoll, values: { ...rentRoll.values, occupancy: ["vacant"] } }), 0);
+  assert.equal(reportSetupApplyDelay("rent-roll", rentRoll, { ...rentRoll, asOfDate: "2026-08-14" }), 0);
+  const occupancy = createInitialReportSetup("occupancy", filters, directory);
+  assert.equal(reportSetupApplyDelay("occupancy", occupancy, { ...occupancy, values: { ...occupancy.values, readiness: ["ready"] } }), 0);
+});
+
+test("setup chips describe the active setup and removing one clears only that filter", () => {
+  const rentRoll = createInitialReportSetup("rent-roll", filters, directory);
+  const chips = reportSetupChips("rent-roll", rentRoll, chipFormat, directory);
+  assert.deepEqual(chips.map(chip => chip.label), ["Active portfolio", "As of long:2026-08-15", "Current"]);
+  assert.equal(chips.find(chip => chip.id === "propertyScope")?.clear, undefined, "portfolio is not removable");
+  assert.equal(chips.find(chip => chip.id === "asOfDate")?.clear, undefined, "period is not removable");
+
+  const occupancyChip = chips.find(chip => chip.id === "occupancy")!;
+  const cleared = occupancyChip.clear!(rentRoll);
+  assert.deepEqual(cleared.values.occupancy, []);
+  assert.equal(cleared.values.balanceStatus, rentRoll.values.balanceStatus);
+  // Removing a chip changes only the setup; the request is built exactly as before.
+  assert.deepEqual(reportSetupQueryFilters("rent-roll", cleared), reportSetupQueryFilters("rent-roll", { ...rentRoll, values: { ...rentRoll.values, occupancy: [] } }));
+
+  const narrowed = updateReportSetup("rent-roll", rentRoll, { propertyIds: ["p1"], values: { ...rentRoll.values, unitId: "u1", search: "101", readiness: ["ready", "not_ready", "off_market"] } }, directory);
+  const labels = reportSetupChips("rent-roll", narrowed, chipFormat, directory).map(chip => chip.label);
+  assert.ok(labels.includes("Active property"));
+  assert.ok(labels.includes("Unit 101"));
+  assert.ok(labels.includes("Search: “101”"));
+  assert.ok(labels.includes("Readiness: Ready, Not ready +1"));
+  const propertyChip = reportSetupChips("rent-roll", narrowed, chipFormat, directory).find(chip => chip.id === "propertyIds")!;
+  assert.deepEqual(propertyChip.clear!(narrowed).propertyIds, []);
+
+  const delinquency = createInitialReportSetup("delinquency", filters, directory);
+  assert.deepEqual(reportSetupChips("delinquency", delinquency, chipFormat, directory).map(chip => chip.label), ["Active portfolio", "As of long:2026-08-15", "Current", "Balance status: Due"]);
+  const scheduled = createInitialReportSetup("scheduled-income", filters, directory);
+  assert.equal(reportSetupChips("scheduled-income", scheduled, chipFormat, directory)[1]?.label, "month:2026-08");
 });

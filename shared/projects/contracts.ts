@@ -381,9 +381,12 @@ export const setTaskDependenciesPayloadSchema = z.object({
 }).strict();
 export type SetTaskDependenciesPayload = z.infer<typeof setTaskDependenciesPayloadSchema>;
 
+/** "system:" vendor names are reserved for derived rows such as ETC overrides. */
+const draftVendorNameSchema = z.string().trim().max(200).refine((value) => !value.toLowerCase().startsWith("system:"), "Vendor names starting with system: are reserved").nullable().optional();
+
 const draftCostInputFields = {
   scopeItemId: scopeItemIdSchema.nullable().optional(),
-  vendorName: z.string().trim().max(200).nullable().optional(),
+  vendorName: draftVendorNameSchema,
   description: text(300),
   amountCents: nonNegativeCentsSchema,
   incurredOn: isoDateSchema,
@@ -393,7 +396,7 @@ export type CreateDraftCostPayload = z.infer<typeof createDraftCostPayloadSchema
 export const updateDraftCostPayloadSchema = z.object({
   draftCostId: draftCostIdSchema,
   scopeItemId: scopeItemIdSchema.nullable().optional(),
-  vendorName: z.string().trim().max(200).nullable().optional(),
+  vendorName: draftVendorNameSchema,
   description: text(300).optional(),
   amountCents: nonNegativeCentsSchema.optional(),
   incurredOn: isoDateSchema.optional(),

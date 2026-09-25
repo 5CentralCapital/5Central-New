@@ -11,12 +11,16 @@ import type {
   InvestorMonthlyPaymentResponse,
   InvestorPaymentLogQuery,
 } from "@shared/investors";
+import type { InvestorDebtMaturityResponse, InvestorInstrumentFinancials, InvestorPaymentCalendarResponse } from "@shared/investors/reports";
+
+export type { InvestorDebtMaturityResponse, InvestorInstrumentFinancials, InvestorPaymentCalendarResponse };
 
 export type InvestorWorkspaceEntity = CompanyContextEntity;
 export type { InvestorAccount, InvestorDetail, InvestorCommandKind };
 
-export const INVESTOR_TABS = ["overview", "payments", "contracts", "debt", "activity"] as const;
+export const INVESTOR_TABS = ["overview", "payments", "capital", "debt", "contracts", "activity"] as const;
 export type InvestorTab = (typeof INVESTOR_TABS)[number];
+export const INVESTOR_TAB_LABELS: Readonly<Record<InvestorTab, string>> = { overview: "Overview", payments: "Payment calendar", capital: "Contributions & distributions", debt: "Debt & maturities", contracts: "Agreements", activity: "Activity" };
 
 export interface InvestorListFilters {
   readonly search?: string;
@@ -31,6 +35,9 @@ export interface InvestorsApi {
   listFinancialSources(organizationId: string, legalEntityId: string, from?: string, through?: string, cursor?: string, signal?: AbortSignal): Promise<InvestorFinancialSourceResponse>;
   listMonthlyPayments(organizationId: string, query: Omit<InvestorPaymentLogQuery, "scope"> & { legalEntityId: string; propertyId?: string }, signal?: AbortSignal): Promise<InvestorMonthlyPaymentResponse>;
   sendCommand<TPayload = unknown>(organizationId: string, kind: InvestorCommandKind, envelope: CommandEnvelope<TPayload>): Promise<OperationReceipt>;
+  getInstrumentFinancials?(organizationId: string, instrumentId: string, query: { legalEntityId: string; asOf?: string }, signal?: AbortSignal): Promise<InvestorInstrumentFinancials>;
+  getPaymentCalendar?(organizationId: string, query: { legalEntityId: string; fromMonth: string; throughMonth: string; accountId?: string; cursor?: string }, signal?: AbortSignal): Promise<InvestorPaymentCalendarResponse>;
+  getDebtMaturities?(organizationId: string, query: { legalEntityId?: string }, signal?: AbortSignal): Promise<InvestorDebtMaturityResponse>;
 }
 
 export interface InvestorWorkspaceProps {

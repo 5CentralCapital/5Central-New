@@ -21,6 +21,8 @@ export default function Navigation() {
 
   const handleLogout = async () => {
     await logout();
+    // The server ends the whole browser session, including a manager sign-in.
+    void rentOpsAuthClient.restore().catch(() => undefined);
     setLocation("/");
   };
 

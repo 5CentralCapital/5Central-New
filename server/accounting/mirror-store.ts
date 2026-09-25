@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { centsFromBigInt, centsSchema, currencyCodeSchema, isoDateSchema, isoTimestampSchema, type MoneyCents } from "../../shared/company";
+import { centsFromBigInt, centsSchema, currencyCodeSchema, isoDateSchema, isoTimestampSchema, type IsoDate, type MoneyCents } from "../../shared/company";
 import {
   financialBasisSchema,
   financialCoverageStatusSchema,
@@ -33,6 +33,7 @@ import {
 } from "../../shared/accounting";
 import type { QuickBooksConnectionScope } from "../../shared/accounting/quickbooks";
 import { canonicalJsonSha256 } from "../company/commands/fingerprint";
+import { QUICKBOOKS_CDC_LOOKBACK_DAYS } from "../integrations/quickbooks/accounting";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { AccountingError } from "./errors";
 import { createAccountingPurposeMappingStore, type AccountingPurposeMappingPort } from "./purpose";
@@ -278,7 +279,8 @@ function decodeLineCursor(value: string, scope: FinancialSourceScope, from: stri
   }
 }
 
-function versionCompare(left: string, right: string): number {
+/** Compare QBO SyncTokens numerically when both are integers, else lexically. */
+export function versionCompare(left: string, right: string): number {
   if (/^\d+$/.test(left) && /^\d+$/.test(right)) {
     const a = BigInt(left);
     const b = BigInt(right);
@@ -364,6 +366,20 @@ function mapCoverage(scope: FinancialSourceScope, row: CoverageRow | null, gaps:
   });
 }
 
+function coverageIsStale(observedAt: string, now: Date): boolean {
+  const observed = Date.parse(observedAt);
+  return Number.isFinite(observed) && now.getTime() - observed > COVERAGE_STALE_AFTER_MS;
+}
+
+function markStaleCoverage(coverage: FinancialSourceCoverage, now: Date): FinancialSourceCoverage {
+  if (coverage.status !== "complete" || !coverageIsStale(coverage.observedAt, now)) return coverage;
+  return financialSourceCoverageSchema.parse({
+    ...coverage,
+    status: "partial",
+    reason: "QBO provider coverage is stale; a successful sync has not been observed within the CDC lookback window",
+  });
+}
+
 export type QboSyncExceptionKind = "unsupported" | "missing_from_full_replay";
 
 export interface QboSyncExceptionInput {
@@ -399,11 +415,51 @@ export interface QboSyncException {
 
 const STREAM_PATTERN = /^[a-z][a-z0-9_.:-]*$/;
 const MAX_EXCEPTION_REASON_LENGTH = 300;
+const COVERAGE_STALE_AFTER_MS = QUICKBOOKS_CDC_LOOKBACK_DAYS * 86_400_000;
 
 function exceptionReasons(reasons: readonly string[]): string[] {
   const cleaned = Array.from(new Set(reasons.map(reason => String(reason).replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, MAX_EXCEPTION_REASON_LENGTH)).filter(reason => reason.length > 0))).slice(0, 50);
   if (cleaned.length === 0) throw new AccountingError("accounting_validation", "QBO sync exception needs at least one reason");
   return cleaned;
+}
+
+export type QboDeletionDetection = "webhook" | "cdc" | "full_replay";
+
+export interface QboDeletionInput {
+  readonly scope: QuickBooksConnectionScope;
+  readonly objectType: string;
+  readonly objectId: string;
+  /** Last provider revision seen before the deletion; defaults to the newest mirrored revision. */
+  readonly lastKnownVersion?: string | null;
+  /** Provider deletion time when the source states it (webhook/CDC). */
+  readonly sourceDeletedAt?: string | null;
+  readonly detectedVia: QboDeletionDetection;
+  readonly observedAt: string;
+}
+
+export interface QboDeletionResult {
+  /** False when a newer live revision proves the deletion notice is stale. */
+  readonly applied: boolean;
+  readonly tombstoneCreated: boolean;
+  readonly retiredLineCount: number;
+  /** Allocations that now point at a deleted source line and are blocked for review. */
+  readonly blockedAllocationCount: number;
+  readonly blockedAllocatedCents: MoneyCents;
+}
+
+export interface QboDeletionWindow {
+  /** Inclusive lower bound on detection time. */
+  readonly detectedFrom?: string;
+  /** Exclusive upper bound on detection time. */
+  readonly detectedBefore?: string;
+}
+
+export interface QboDeletionState {
+  readonly deleted: boolean;
+  readonly detectedVia: QboDeletionDetection;
+  readonly lastKnownVersion: string | null;
+  readonly sourceDeletedAt: string | null;
+  readonly detectedAt: string;
 }
 
 export interface QboAccountingMirrorStore extends FinancialSourceReadPort, FinancialSourceAllocationPort, FinancialProviderPaymentContextPort, FinancialProviderCostContextPort {
@@ -424,6 +480,25 @@ export interface QboAccountingMirrorStore extends FinancialSourceReadPort, Finan
   /** Mirrored transaction object IDs for a type, used to detect objects absent from a full replay. */
   listMirroredObjectIds(scope: QuickBooksConnectionScope, objectType: string): Promise<readonly string[]>;
   listProviderMirrors(scope: QuickBooksConnectionScope, kind: QboProviderMirrorKind): Promise<readonly QboProviderMirror[]>;
+  /**
+   * Record a provider deletion: append the tombstone, mark every mirrored
+   * revision deleted, retire the object's lines (not current, voided) and
+   * block allocations that consumed them. Idempotent.
+   */
+  recordDeletion(input: QboDeletionInput): Promise<QboDeletionResult>;
+  /** The object's tombstone and whether it is still deleted (no live revision since). */
+  readDeletionState(scope: QuickBooksConnectionScope, objectType: string, objectId: string): Promise<QboDeletionState | null>;
+  /**
+   * Undo an inferred (full-replay) deletion when the provider returns the
+   * same revision again. Explicit webhook/CDC deletions are never undone here.
+   */
+  restoreInferredDeletion(scope: QuickBooksConnectionScope, objectType: string, objectId: string, version: string): Promise<boolean>;
+  /**
+   * Objects still deleted whose deletion was detected inside the window
+   * (all time when the window is open). Health uses a recent window and the
+   * close checklist the period, so old reviewed deletions do not linger.
+   */
+  countActiveTombstones(scope: QuickBooksConnectionScope, window?: QboDeletionWindow): Promise<number>;
 }
 
 interface ProviderSourceObjectRow {
@@ -431,6 +506,38 @@ interface ProviderSourceObjectRow {
   provider_updated_at: unknown;
   object_version: unknown;
   received_at?: unknown;
+}
+
+/**
+ * Fields QuickBooks computes when an object is read, without issuing a new
+ * SyncToken: every reference's display name (AccountRef.name is the current
+ * full account path, VendorRef.name the current vendor name), an Account's
+ * FullyQualifiedName and running balances, and a name-list record's balance.
+ * Re-reading an unchanged revision after a rename or a posting returns them
+ * changed; they are ignored when checking that a revision is unchanged.
+ */
+const READ_TIME_TOP_LEVEL_FIELDS: Readonly<Record<string, ReadonlySet<string>>> = {
+  Account: new Set(["FullyQualifiedName", "CurrentBalance", "CurrentBalanceWithSubAccounts"]),
+  Customer: new Set(["FullyQualifiedName", "Balance", "BalanceWithJobs"]),
+  Vendor: new Set(["Balance"]),
+};
+
+function withoutReadTimeFields(objectType: string, value: unknown, topLevel = true): unknown {
+  if (Array.isArray(value)) return value.map(item => withoutReadTimeFields(objectType, item, false));
+  if (!value || typeof value !== "object") return value;
+  const skip = topLevel ? READ_TIME_TOP_LEVEL_FIELDS[objectType] : undefined;
+  const result: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (skip?.has(key)) continue;
+    if (key.endsWith("Ref") && child && typeof child === "object" && !Array.isArray(child)) {
+      const reference = { ...(child as Record<string, unknown>) };
+      delete reference.name;
+      result[key] = withoutReadTimeFields(objectType, reference, false);
+    } else {
+      result[key] = withoutReadTimeFields(objectType, child, false);
+    }
+  }
+  return result;
 }
 
 function providerReference(body: unknown, key: string): string | null {
@@ -504,7 +611,7 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
     const version = stringValue(input.version, "object version", 120);
     if (!input.providerBody || typeof input.providerBody !== "object" || Array.isArray(input.providerBody)) throw new AccountingError("accounting_validation", "QBO provider body must be an object");
     const bodyHash = canonicalJsonSha256(input.providerBody);
-    const id = input.providerBody && typeof input.providerBody.Id === "string" ? randomUUID() : randomUUID();
+    const id = randomUUID();
     const result = await this.executor.query<{ id: string }>(
       `INSERT INTO accounting_qbo_source_objects
         (id, organization_id, legal_entity_id, environment, realm_id, object_type, object_id, object_version, provider_updated_at, body_hash, provider_body, received_at, deleted_at)
@@ -514,13 +621,22 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       [id, ...scopeParts(scope), objectType, objectId, version, input.providerUpdatedAt ?? null, bodyHash, JSON.stringify(input.providerBody), input.receivedAt ?? this.now().toISOString(), input.deletedAt ?? null],
     );
     if (result.rows[0]) return { id: result.rows[0].id, bodyHash };
-    const existing = await this.executor.query<{ id: string; body_hash: string }>(
-      `SELECT id, body_hash FROM accounting_qbo_source_objects
+    const existing = await this.executor.query<{ id: string; body_hash: string; provider_body: unknown }>(
+      `SELECT id, body_hash, provider_body FROM accounting_qbo_source_objects
        WHERE organization_id = $1 AND legal_entity_id = $2 AND environment = $3 AND realm_id = $4 AND object_type = $5 AND object_id = $6 AND object_version = $7`,
       [...scopeParts(scope), objectType, objectId, version],
     );
     const row = existing.rows[0];
-    if (!row || row.body_hash !== bodyHash) throw new AccountingError("accounting_conflict", "QBO source object version changed after it was mirrored");
+    if (!row) throw new AccountingError("accounting_conflict", "QBO source object version changed after it was mirrored");
+    if (row.body_hash !== bodyHash) {
+      // The first-seen body stays (append-only). Only read-time fields may
+      // differ under the same SyncToken; any other difference is a conflict.
+      const stored = typeof row.provider_body === "string" ? JSON.parse(row.provider_body) as unknown : row.provider_body;
+      if (canonicalJsonSha256(withoutReadTimeFields(objectType, stored)) !== canonicalJsonSha256(withoutReadTimeFields(objectType, input.providerBody))) {
+        throw new AccountingError("accounting_conflict", "QBO source object version changed after it was mirrored");
+      }
+      return { id: row.id, bodyHash: row.body_hash };
+    }
     return { id: row.id, bodyHash };
   }
 
@@ -742,14 +858,16 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       `SELECT provider_body, provider_updated_at, object_version
          FROM accounting_qbo_source_objects
         WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
-          AND object_type='Account' AND object_id=$5
-        ORDER BY provider_updated_at DESC NULLS LAST, received_at DESC, object_version DESC LIMIT 1`,
+          AND object_type='Account' AND object_id=$5 AND deleted_at IS NULL
+        ORDER BY CASE WHEN object_version ~ '^[0-9]+$' THEN 0 ELSE 1 END,
+                 CASE WHEN object_version ~ '^[0-9]+$' THEN length(object_version) ELSE 0 END DESC,
+                 CASE WHEN object_version ~ '^[0-9]+$' THEN object_version ELSE '' END DESC,
+                 provider_updated_at DESC NULLS LAST, received_at DESC LIMIT 1`,
       [...scopeParts(source).slice(0, 4), cashAccountObjectId],
     );
     const accountBody = account.rows[0]?.provider_body;
     if (!accountBody || typeof accountBody !== "object" || Array.isArray(accountBody)) return null;
     const accountType = (accountBody as Record<string, unknown>).AccountType;
-    const detailType = (accountBody as Record<string, unknown>).AccountSubType ?? (accountBody as Record<string, unknown>).DetailType;
     const acceptedAccount = typeof accountType === "string" && ["Bank", "Credit Card", "CashOnHand"].includes(accountType);
     if (!acceptedAccount) return null;
     let lineAccountType: string | null = null;
@@ -759,8 +877,11 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
         `SELECT provider_body, provider_updated_at, object_version
            FROM accounting_qbo_source_objects
           WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
-            AND object_type='Account' AND object_id=$5
-          ORDER BY provider_updated_at DESC NULLS LAST, received_at DESC, object_version DESC LIMIT 1`,
+            AND object_type='Account' AND object_id=$5 AND deleted_at IS NULL
+          ORDER BY CASE WHEN object_version ~ '^[0-9]+$' THEN 0 ELSE 1 END,
+                   CASE WHEN object_version ~ '^[0-9]+$' THEN length(object_version) ELSE 0 END DESC,
+                   CASE WHEN object_version ~ '^[0-9]+$' THEN object_version ELSE '' END DESC,
+                   provider_updated_at DESC NULLS LAST, received_at DESC LIMIT 1`,
         [...scopeParts(source).slice(0, 4), resolution.accountObjectId],
       );
       const lineBody = lineAccount.rows[0]?.provider_body;
@@ -803,22 +924,6 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
   async readCostContext(query: FinancialSourceLineQuery): Promise<FinancialProviderCostContext | null> {
     const resolution = await this.resolveLine(query);
     if (!resolution || resolution.postingState !== "posted" || !resolution.accountObjectId) return null;
-    const account = await this.executor.query<ProviderSourceObjectRow>(
-      `SELECT provider_body, provider_updated_at, object_version
-         FROM accounting_qbo_source_objects
-        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
-          AND object_type='Account' AND object_id=$5
-        ORDER BY provider_updated_at DESC NULLS LAST, received_at DESC, object_version DESC LIMIT 1`,
-      [...scopeParts(resolution.source).slice(0, 4), resolution.accountObjectId],
-    );
-    const body = account.rows[0]?.provider_body;
-    if (!body || typeof body !== "object" || Array.isArray(body)) return null;
-    const accountType = (body as Record<string, unknown>).AccountType;
-    const accountSubType = (body as Record<string, unknown>).AccountSubType ?? (body as Record<string, unknown>).DetailType;
-    if (typeof accountType !== "string" || accountType.length === 0 || (accountSubType !== null && accountSubType !== undefined && typeof accountSubType !== "string")) return null;
-    // Capitalized cost is a reviewed, effective-dated purpose mapping. The
-    // provider account type and subtype are evidence for the mapping, but an
-    // account name or subtype alone must never opt an account into cost use.
     const purposeMapping = resolution.postedOn
       ? await this.purposeMappings.readPurposeMapping({
           scope: {
@@ -832,14 +937,35 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
           postedOn: resolution.postedOn,
         })
       : null;
+    // A dated purpose mapping proves the exact Account revision used for that
+    // period. Read that revision for classification so a later provider
+    // revision cannot rewrite historical cost context in place.
+    const mappedAccountVersion = purposeMapping?.accountSourceVersion ?? null;
+    const account = await this.executor.query<ProviderSourceObjectRow>(
+      `SELECT provider_body, provider_updated_at, object_version
+         FROM accounting_qbo_source_objects
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
+          AND object_type='Account' AND object_id=$5 AND deleted_at IS NULL
+          AND ($6::varchar IS NULL OR object_version=$6)
+        ORDER BY CASE WHEN object_version ~ '^[0-9]+$' THEN 0 ELSE 1 END,
+                 CASE WHEN object_version ~ '^[0-9]+$' THEN length(object_version) ELSE 0 END DESC,
+                 CASE WHEN object_version ~ '^[0-9]+$' THEN object_version ELSE '' END DESC,
+                 provider_updated_at DESC NULLS LAST, received_at DESC LIMIT 1`,
+      [...scopeParts(resolution.source).slice(0, 4), resolution.accountObjectId, mappedAccountVersion],
+    );
+    const body = account.rows[0]?.provider_body;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+    const accountType = (body as Record<string, unknown>).AccountType;
+    const accountSubType = (body as Record<string, unknown>).AccountSubType ?? (body as Record<string, unknown>).DetailType;
+    if (typeof accountType !== "string" || accountType.length === 0 || (accountSubType !== null && accountSubType !== undefined && typeof accountSubType !== "string")) return null;
     const classification = purposeMapping?.purpose === "capitalized_cost" ? "capitalized_cost"
       : accountType === "Expense" ? "expense"
       : accountType === "Cost of Goods Sold" ? "cogs"
-      : accountType === "Bank" || accountType === "Credit Card" ? "bank"
-        : accountType === "Equity" ? "equity"
-          : /Liability|Payable|Receivable/.test(accountType) ? "liability"
-            : /Income/.test(accountType) ? "income"
-              : /Asset/.test(accountType) ? "other_asset" : "unknown";
+          : accountType === "Bank" || accountType === "Credit Card" ? "bank"
+            : accountType === "Equity" ? "equity"
+              : /Liability|Payable|Receivable/.test(accountType) ? "liability"
+                : /Income/.test(accountType) ? "income"
+                  : /Asset/.test(accountType) ? "other_asset" : "unknown";
     const providerUpdatedAt = account.rows[0]?.provider_updated_at;
     const updated = providerUpdatedAt instanceof Date ? providerUpdatedAt.toISOString() : typeof providerUpdatedAt === "string" ? providerUpdatedAt : resolution.watermark.observedAt;
     const parsedUpdated = isoTimestampSchema.safeParse(updated);
@@ -863,20 +989,42 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
   async summarizeStream(scopeInput: QuickBooksConnectionScope, streamInput: string): Promise<QboCoverageSummary> {
     const scope = scopeOf(scopeInput);
     const stream = z.string().trim().min(1).max(120).regex(/^[a-z][a-z0-9_.:-]*$/).parse(streamInput);
-    if (stream === "accounts") {
+    if (stream === "accounts" || stream === "customers") {
       const result = await this.executor.query<{ object_count: unknown; latest_watermark: unknown }>(
         `SELECT COUNT(DISTINCT object_id) AS object_count, MAX(provider_updated_at) AS latest_watermark
            FROM accounting_qbo_source_objects
-          WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type='Account'`,
-        scopeParts(scope),
+          WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND deleted_at IS NULL`,
+        [...scopeParts(scope), stream === "accounts" ? "Account" : "Customer"],
       );
       const row = result.rows[0];
       const latest = row?.latest_watermark instanceof Date ? row.latest_watermark.toISOString() : typeof row?.latest_watermark === "string" ? row.latest_watermark : null;
       return { objectCount: Number(row?.object_count ?? 0), transactionCount: 0, lineCount: 0, coveredFrom: null, coveredThrough: null, latestWatermark: latest };
     }
+    const receivable = /^receivables\.(invoice|creditmemo|payment|salesreceipt|refundreceipt|journalentry)$/.exec(stream);
+    if (receivable) {
+      const objectType = ({ invoice: "Invoice", creditmemo: "CreditMemo", payment: "Payment", salesreceipt: "SalesReceipt", refundreceipt: "RefundReceipt", journalentry: "JournalEntry" } as const)[receivable[1] as "invoice"];
+      const result = await this.executor.query<{ object_count: unknown; transaction_count: unknown; line_count: unknown; covered_from: unknown; covered_through: unknown; latest_watermark: unknown }>(
+        `SELECT COUNT(DISTINCT o.object_id) AS object_count,
+                COUNT(DISTINCT d.object_id) FILTER (WHERE d.mirror_state = 'current') AS transaction_count,
+                (SELECT COUNT(*) FROM accounting_qbo_receivable_effects e
+                   JOIN accounting_qbo_receivable_documents cd ON cd.organization_id=e.organization_id AND cd.legal_entity_id=e.legal_entity_id AND cd.environment=e.environment
+                    AND cd.realm_id=e.realm_id AND cd.object_type=e.object_type AND cd.object_id=e.object_id AND cd.object_version=e.object_version AND cd.mirror_state='current'
+                  WHERE e.organization_id=$1 AND e.legal_entity_id=$2 AND e.environment=$3 AND e.realm_id=$4 AND e.object_type=$5) AS line_count,
+                MIN(d.txn_date) AS covered_from, MAX(d.txn_date) AS covered_through, MAX(o.provider_updated_at) AS latest_watermark
+           FROM accounting_qbo_source_objects o
+           LEFT JOIN accounting_qbo_receivable_documents d ON d.organization_id=o.organization_id AND d.legal_entity_id=o.legal_entity_id AND d.environment=o.environment
+            AND d.realm_id=o.realm_id AND d.object_type=o.object_type AND d.object_id=o.object_id
+          WHERE o.organization_id=$1 AND o.legal_entity_id=$2 AND o.environment=$3 AND o.realm_id=$4 AND o.object_type=$5 AND o.deleted_at IS NULL`,
+        [...scopeParts(scope), objectType],
+      );
+      const row = result.rows[0];
+      const toDate = (value: unknown) => value instanceof Date ? value.toISOString().slice(0, 10) : typeof value === "string" ? value.slice(0, 10) : null;
+      const latest = row?.latest_watermark instanceof Date ? row.latest_watermark.toISOString() : typeof row?.latest_watermark === "string" ? row.latest_watermark : null;
+      return { objectCount: Number(row?.object_count ?? 0), transactionCount: Number(row?.transaction_count ?? 0), lineCount: Number(row?.line_count ?? 0), coveredFrom: toDate(row?.covered_from), coveredThrough: toDate(row?.covered_through), latestWatermark: latest };
+    }
     const match = /^transactions\.(purchase|bill|billpayment|deposit|journalentry)$/.exec(stream);
     if (!match) throw new AccountingError("accounting_validation", "QBO coverage stream is unsupported");
-    const entity = match[1] === "billpayment" ? "BillPayment" : match[1] === "journalentry" ? "JournalEntry" : match[1][0].toUpperCase() + match[1].slice(1);
+    const entity = match[1] === "billpayment" ? "BillPayment" : match[1][0].toUpperCase() + match[1].slice(1);
     const result = await this.executor.query<{ object_count: unknown; transaction_count: unknown; line_count: unknown; covered_from: unknown; covered_through: unknown; latest_watermark: unknown }>(
       `SELECT COUNT(DISTINCT o.object_id) AS object_count, COUNT(DISTINCT t.object_id) AS transaction_count,
               COUNT(DISTINCT (b.object_id || ':' || b.line_id)) AS line_count,
@@ -885,7 +1033,7 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
          FROM accounting_qbo_source_objects o
          LEFT JOIN accounting_qbo_transactions t ON t.organization_id=o.organization_id AND t.legal_entity_id=o.legal_entity_id AND t.environment=o.environment AND t.realm_id=o.realm_id AND t.object_type=o.object_type AND t.object_id=o.object_id
          LEFT JOIN accounting_qbo_source_line_balances b ON b.organization_id=o.organization_id AND b.legal_entity_id=o.legal_entity_id AND b.environment=o.environment AND b.realm_id=o.realm_id AND b.object_type=o.object_type AND b.object_id=o.object_id
-        WHERE o.organization_id=$1 AND o.legal_entity_id=$2 AND o.environment=$3 AND o.realm_id=$4 AND o.object_type=$5`,
+        WHERE o.organization_id=$1 AND o.legal_entity_id=$2 AND o.environment=$3 AND o.realm_id=$4 AND o.object_type=$5 AND o.deleted_at IS NULL`,
       [...scopeParts(scope), entity],
     );
     const row = result.rows[0];
@@ -908,7 +1056,11 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
          FROM accounting_qbo_source_objects
         WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
           AND object_type=$5 AND deleted_at IS NULL
-        ORDER BY object_id, provider_updated_at DESC NULLS LAST, received_at DESC, object_version DESC`,
+        ORDER BY object_id,
+                 CASE WHEN object_version ~ '^[0-9]+$' THEN 0 ELSE 1 END,
+                 CASE WHEN object_version ~ '^[0-9]+$' THEN length(object_version) ELSE 0 END DESC,
+                 CASE WHEN object_version ~ '^[0-9]+$' THEN object_version ELSE '' END DESC,
+                 provider_updated_at DESC NULLS LAST, received_at DESC`,
       [...scopeParts(scope), objectType],
     );
     return result.rows.map(row => {
@@ -937,6 +1089,168 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
         providerUpdatedAt,
       };
     }).sort((left, right) => left.displayName.localeCompare(right.displayName) || left.providerObjectId.localeCompare(right.providerObjectId));
+  }
+
+  async recordDeletion(input: QboDeletionInput): Promise<QboDeletionResult> {
+    const scope = scopeOf(input.scope);
+    if (!/^[A-Z][A-Za-z0-9_]{0,119}$/.test(input.objectType)) throw new AccountingError("accounting_validation", "QBO object type is invalid");
+    const objectId = stringValue(input.objectId, "object ID", 200);
+    const observedAt = isoTimestampSchema.parse(input.observedAt);
+    const sourceDeletedAt = input.sourceDeletedAt ? isoTimestampSchema.parse(new Date(input.sourceDeletedAt).toISOString()) : null;
+    const identity = [...scopeParts(scope), input.objectType, objectId];
+    const live = await this.executor.query<{ object_version: string; provider_updated_at: unknown }>(
+      `SELECT object_version, provider_updated_at FROM accounting_qbo_source_objects
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6
+        ORDER BY provider_updated_at DESC NULLS LAST, received_at DESC`,
+      identity,
+    );
+    const newest = live.rows.map(row => String(row.object_version)).sort(versionCompare).at(-1) ?? null;
+    const lastKnownVersion = input.lastKnownVersion === undefined || input.lastKnownVersion === null ? newest : stringValue(input.lastKnownVersion, "object version", 120);
+    // A deletion notice older than a revision we already mirrored as live is stale.
+    const liveRows = await this.executor.query<{ object_version: string; provider_updated_at: unknown }>(
+      `SELECT object_version, provider_updated_at FROM accounting_qbo_source_objects
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6 AND deleted_at IS NULL`,
+      identity,
+    );
+    const newerLive = liveRows.rows.some(row => {
+      if (input.lastKnownVersion && versionCompare(String(row.object_version), input.lastKnownVersion) > 0) return true;
+      const updated = row.provider_updated_at instanceof Date ? row.provider_updated_at.toISOString() : typeof row.provider_updated_at === "string" ? new Date(row.provider_updated_at).toISOString() : null;
+      return sourceDeletedAt !== null && updated !== null && updated > sourceDeletedAt;
+    });
+    if (newerLive) return { applied: false, tombstoneCreated: false, retiredLineCount: 0, blockedAllocationCount: 0, blockedAllocatedCents: centsFromBigInt(BigInt(0)) };
+    // Tombstones are append-only. Add a row when there is none, when explicit
+    // provider evidence follows an inferred (full-replay) deletion, or when
+    // the object was live again (restored or re-created) before this
+    // deletion; otherwise the notice repeats the current tombstone.
+    const latest = await this.executor.query<{ tombstone_seq: unknown; detected_via: string }>(
+      `SELECT tombstone_seq, detected_via FROM accounting_qbo_deletion_tombstones
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6
+        ORDER BY tombstone_seq DESC LIMIT 1`,
+      identity,
+    );
+    const current = latest.rows[0];
+    const currentSeq = current ? Number(current.tombstone_seq) : 0;
+    const supersedesInferred = current !== undefined && current.detected_via === "full_replay" && input.detectedVia !== "full_replay";
+    const deletedAgain = current !== undefined && liveRows.rows.length > 0;
+    const tombstone = current === undefined || supersedesInferred || deletedAgain
+      ? await this.executor.query(
+        `INSERT INTO accounting_qbo_deletion_tombstones
+          (organization_id, legal_entity_id, environment, realm_id, object_type, object_id, last_known_version, source_deleted_at, detected_via, detected_at, tombstone_seq)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT DO NOTHING RETURNING object_id`,
+        [...identity, lastKnownVersion, sourceDeletedAt, input.detectedVia, observedAt, currentSeq + 1],
+      )
+      : { rows: [] };
+    await this.executor.query(
+      `UPDATE accounting_qbo_source_objects SET deleted_at = $7
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6 AND deleted_at IS NULL`,
+      [...identity, sourceDeletedAt ?? observedAt],
+    );
+    const allocations = await this.executor.query<{ allocation_count: unknown; allocated_cents: unknown }>(
+      `SELECT COUNT(*) AS allocation_count, COALESCE(SUM(amount_cents), 0) AS allocated_cents
+         FROM accounting_qbo_source_line_allocations
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6 AND amount_cents > 0`,
+      identity,
+    );
+    const retired = await this.executor.query<{ line_id: string }>(
+      `UPDATE accounting_qbo_source_line_balances b
+          SET is_current = false, posting_state = 'voided', settlement_state = 'voided', settled_on = NULL, settled_amount_cents = NULL,
+              allocation_blocked = b.allocation_blocked OR EXISTS (
+                SELECT 1 FROM accounting_qbo_source_line_allocations a
+                 WHERE a.organization_id=b.organization_id AND a.legal_entity_id=b.legal_entity_id AND a.environment=b.environment
+                   AND a.realm_id=b.realm_id AND a.object_type=b.object_type AND a.object_id=b.object_id AND a.line_id=b.line_id AND a.amount_cents > 0),
+              updated_at = $7
+        WHERE b.organization_id=$1 AND b.legal_entity_id=$2 AND b.environment=$3 AND b.realm_id=$4 AND b.object_type=$5 AND b.object_id=$6
+          AND (b.is_current OR b.posting_state <> 'voided')
+        RETURNING b.line_id`,
+      [...identity, observedAt],
+    );
+    // A full replay is the provider's complete live-object read. Once the
+    // absent object has been tombstoned, its missing-from-replay exception is
+    // resolved as a confirmed deletion so the same object cannot keep the
+    // stream partial forever. The row remains append-only audit evidence.
+    // Explicit webhook/CDC evidence follows the same resolution path.
+    await this.executor.query(
+      `UPDATE accounting_qbo_sync_exceptions SET resolved_at = $7, resolved_version = $8, last_seen_at = GREATEST(last_seen_at, $7)
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6 AND resolved_at IS NULL`,
+      [...identity, observedAt, lastKnownVersion ?? "deleted"],
+    );
+    return {
+      applied: true,
+      tombstoneCreated: tombstone.rows.length === 1,
+      retiredLineCount: retired.rows.length,
+      blockedAllocationCount: Number(allocations.rows[0]?.allocation_count ?? 0),
+      blockedAllocatedCents: centsValue(allocations.rows[0]?.allocated_cents ?? "0", "blocked allocation"),
+    };
+  }
+
+  async readDeletionState(scopeInput: QuickBooksConnectionScope, objectType: string, objectId: string): Promise<QboDeletionState | null> {
+    const scope = scopeOf(scopeInput);
+    const result = await this.executor.query<{ detected_via: string; last_known_version: string | null; source_deleted_at: unknown; detected_at: unknown; deleted: boolean }>(
+      `SELECT t.detected_via, t.last_known_version, t.source_deleted_at, t.detected_at,
+              NOT EXISTS (
+                SELECT 1 FROM accounting_qbo_source_objects o
+                 WHERE o.organization_id=t.organization_id AND o.legal_entity_id=t.legal_entity_id AND o.environment=t.environment
+                   AND o.realm_id=t.realm_id AND o.object_type=t.object_type AND o.object_id=t.object_id AND o.deleted_at IS NULL
+              ) AS deleted
+         FROM accounting_qbo_deletion_tombstones t
+        WHERE t.organization_id=$1 AND t.legal_entity_id=$2 AND t.environment=$3 AND t.realm_id=$4 AND t.object_type=$5 AND t.object_id=$6
+        ORDER BY t.tombstone_seq DESC LIMIT 1`,
+      [...scopeParts(scope), objectType, objectId],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      deleted: row.deleted === true,
+      detectedVia: row.detected_via === "webhook" || row.detected_via === "cdc" ? row.detected_via : "full_replay",
+      lastKnownVersion: row.last_known_version ?? null,
+      sourceDeletedAt: row.source_deleted_at === null || row.source_deleted_at === undefined ? null : timestampValue(row.source_deleted_at, "tombstone deletion time"),
+      detectedAt: timestampValue(row.detected_at, "tombstone detection time"),
+    };
+  }
+
+  async restoreInferredDeletion(scopeInput: QuickBooksConnectionScope, objectType: string, objectId: string, version: string): Promise<boolean> {
+    const scope = scopeOf(scopeInput);
+    const identity = [...scopeParts(scope), objectType, objectId];
+    const state = await this.readDeletionState(scopeInput, objectType, objectId);
+    if (!state?.deleted || state.detectedVia !== "full_replay") return false;
+    const restored = await this.executor.query(
+      `UPDATE accounting_qbo_source_objects SET deleted_at = NULL
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type=$5 AND object_id=$6 AND object_version=$7
+        RETURNING id`,
+      [...identity, version],
+    );
+    if (!restored.rows.length) return false;
+    await this.executor.query(
+      `UPDATE accounting_qbo_source_line_balances b
+          SET is_current = true, posting_state = l.posting_state, settlement_state = l.settlement_state,
+              settled_on = l.settled_on, settled_amount_cents = l.settled_amount_cents, updated_at = $8
+         FROM accounting_qbo_transaction_lines l
+        WHERE b.organization_id=$1 AND b.legal_entity_id=$2 AND b.environment=$3 AND b.realm_id=$4 AND b.object_type=$5 AND b.object_id=$6
+          AND b.latest_version = $7
+          AND l.organization_id=b.organization_id AND l.legal_entity_id=b.legal_entity_id AND l.environment=b.environment AND l.realm_id=b.realm_id
+          AND l.object_type=b.object_type AND l.object_id=b.object_id AND l.source_line_id=b.line_id AND l.source_version=b.latest_version`,
+      [...identity, version, this.now().toISOString()],
+    );
+    return true;
+  }
+
+  async countActiveTombstones(scopeInput: QuickBooksConnectionScope, window: QboDeletionWindow = {}): Promise<number> {
+    const scope = scopeOf(scopeInput);
+    const since = window.detectedFrom === undefined ? null : isoTimestampSchema.parse(new Date(window.detectedFrom).toISOString());
+    const before = window.detectedBefore === undefined ? null : isoTimestampSchema.parse(new Date(window.detectedBefore).toISOString());
+    const result = await this.executor.query<{ count: unknown }>(
+      `SELECT COUNT(DISTINCT (t.object_type, t.object_id)) AS count FROM accounting_qbo_deletion_tombstones t
+        WHERE t.organization_id=$1 AND t.legal_entity_id=$2 AND t.environment=$3 AND t.realm_id=$4
+          AND ($5::timestamptz IS NULL OR t.detected_at >= $5::timestamptz)
+          AND ($6::timestamptz IS NULL OR t.detected_at < $6::timestamptz)
+          AND NOT EXISTS (
+            SELECT 1 FROM accounting_qbo_source_objects o
+             WHERE o.organization_id=t.organization_id AND o.legal_entity_id=t.legal_entity_id AND o.environment=t.environment
+               AND o.realm_id=t.realm_id AND o.object_type=t.object_type AND o.object_id=t.object_id AND o.deleted_at IS NULL)`,
+      [...scopeParts(scope), since, before],
+    );
+    return Number(result.rows[0]?.count ?? 0);
   }
 
   async recordSyncException(input: QboSyncExceptionInput): Promise<void> {
@@ -1060,22 +1374,28 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       const rows = await this.executor.query<CoverageRow>(`SELECT stream,status,evidence,basis,watermark,covered_from,covered_through,observed_at,object_count,transaction_count,line_count,reason FROM accounting_qbo_coverage WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream=$5`, [...scopeParts(scope), stream]);
       const gaps = await this.executor.query<{ gap_from: string; gap_through: string }>(`SELECT gap_from,gap_through FROM accounting_qbo_coverage_gaps WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream=$5 ORDER BY gap_from`, [...scopeParts(scope), stream]);
       const openCount = (await this.openExceptionCounts(scope, stream)).get(stream) ?? 0;
-      const coverage = mapCoverage(scope, rows.rows[0] ?? null, gaps.rows.map((gap) => ({ from: dateValue(gap.gap_from, "gap start"), through: dateValue(gap.gap_through, "gap end") })), stream);
+      const coverage = markStaleCoverage(mapCoverage(scope, rows.rows[0] ?? null, gaps.rows.map((gap) => ({ from: dateValue(gap.gap_from, "gap start"), through: dateValue(gap.gap_through, "gap end") })), stream), this.now());
       return openCount > 0 && coverage.status === "complete" ? financialSourceCoverageSchema.parse({ ...coverage, status: "partial", reason: `${openCount} QBO object(s) have unresolved mirror exceptions` }) : coverage;
     }
-    const rows = await this.executor.query<CoverageRow>(`SELECT stream,status,evidence,basis,watermark,covered_from,covered_through,observed_at,object_count,transaction_count,line_count,reason FROM accounting_qbo_coverage WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 ORDER BY stream`, scopeParts(scope));
+    // The aggregate describes the cash/payables mirror that its existing
+    // readers depend on. Receivable and customer streams are read per stream
+    // by the receivables read service, so their gaps do not degrade it.
+    const isAggregateStream = (name: string) => !name.startsWith("receivables.") && name !== "customers";
+    const allRows = await this.executor.query<CoverageRow>(`SELECT stream,status,evidence,basis,watermark,covered_from,covered_through,observed_at,object_count,transaction_count,line_count,reason FROM accounting_qbo_coverage WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 ORDER BY stream`, scopeParts(scope));
+    const rows = { rows: allRows.rows.filter(row => isAggregateStream(String(row.stream))) };
     const required = ["accounts", "transactions.purchase", "transactions.bill", "transactions.billpayment", "transactions.deposit", "transactions.journalentry"];
     if (rows.rows.length === 0) return mapCoverage(scope, null, [], "aggregate");
     const byStream = new Map(rows.rows.map(row => [String(row.stream), row]));
     const missing = required.filter(name => !byStream.has(name));
-    const openExceptions = Array.from((await this.openExceptionCounts(scope)).values()).reduce((sum, count) => sum + count, 0);
-    const partial = openExceptions > 0 || rows.rows.some(row => row.status !== "complete" || row.evidence !== "live_provider_readback");
+    const openExceptions = Array.from((await this.openExceptionCounts(scope)).entries()).filter(([name]) => isAggregateStream(name)).reduce((sum, [, count]) => sum + count, 0);
+    const partial = openExceptions > 0 || rows.rows.some(row => row.status !== "complete" || row.evidence !== "live_provider_readback" || coverageIsStale(timestampValue(row.observed_at, "coverage timestamp"), this.now()));
     const status = missing.length > 0 || partial ? "partial" : "complete";
     const values = rows.rows.map(row => row.watermark === null || row.watermark === undefined ? null : String(row.watermark)).filter((value): value is string => value !== null);
     const observed = rows.rows.map(row => timestampValue(row.observed_at, "coverage timestamp")).sort();
     const coveredFrom = rows.rows.map(row => row.covered_from).filter((value): value is string => value !== null && value !== undefined).map(value => dateValue(value, "coverage start")).sort()[0] ?? null;
     const coveredThroughValues = rows.rows.map(row => row.covered_through).filter((value): value is string => value !== null && value !== undefined).map(value => dateValue(value, "coverage end")).sort();
-    const reason = [...(missing.length ? [`Missing required QBO streams: ${missing.join(", ")}`] : []), ...(openExceptions > 0 ? [`${openExceptions} QBO object(s) have unresolved mirror exceptions`] : []), ...(partial ? ["One or more QBO streams have partial or non-live evidence"] : [])].join("; ") || null;
+    const stale = rows.rows.some(row => coverageIsStale(timestampValue(row.observed_at, "coverage timestamp"), this.now()));
+    const reason = [...(missing.length ? [`Missing required QBO streams: ${missing.join(", ")}`] : []), ...(openExceptions > 0 ? [`${openExceptions} QBO object(s) have unresolved mirror exceptions`] : []), ...(stale ? ["QBO provider coverage is stale; a successful sync has not been observed within the CDC lookback window"] : []), ...(partial ? ["One or more QBO streams have partial or non-live evidence"] : [])].join("; ") || null;
     return financialSourceCoverageSchema.parse({
       scope, stream: "aggregate", status, evidence: rows.rows.every(row => row.evidence === "live_provider_readback") ? "live_provider_readback" : "unverified", basis: "source_transactions",
       watermark: values.length ? { value: values.sort().at(-1)!, observedAt: observed.at(-1)! } : null,
@@ -1109,6 +1429,75 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
     if (!row) return null;
     const merged = { ...row, transaction_type: row.line_transaction_type, flow: row.line_flow, line_role: row.line_line_role, account_object_id: row.line_account_object_id, counterparty_object_id: row.line_counterparty_object_id };
     return mapResolution(merged);
+  }
+
+  async hasPurchaseCredits(scopeInput: FinancialSourceScope, through?: IsoDate | string): Promise<boolean> {
+    const scope = financialSourceScopeSchema.parse(scopeInput);
+    const values: unknown[] = [...scopeParts(scope)];
+    const clauses = [
+      "b.organization_id=$1", "b.legal_entity_id=$2", "b.environment=$3", "b.realm_id=$4",
+      "b.object_type='Purchase'", "b.transaction_type='Purchase'", "b.is_current=true", "b.posting_state='posted'",
+      "b.allocation_blocked=false", "b.line_role IN ('expense','payable')",
+      "b.direction='credit'", "b.flow='incoming'",
+      `b.amount_cents > COALESCE((
+        SELECT SUM(a.amount_cents)
+          FROM accounting_qbo_source_line_allocations a
+         WHERE a.organization_id=b.organization_id
+           AND a.legal_entity_id=b.legal_entity_id
+           AND a.environment=b.environment
+           AND a.realm_id=b.realm_id
+           AND a.object_type=b.object_type
+           AND a.object_id=b.object_id
+           AND a.line_id=b.line_id
+      ), 0)`,
+    ];
+    if (through !== undefined) {
+      const date = isoDateSchema.parse(through);
+      values.push(date);
+      clauses.push("b.posted_on <= $" + String(values.length));
+    }
+    // Keep this probe narrow: only candidate Purchase credit lines are read,
+    // then each candidate is checked through the same current provider Account
+    // classification path used by project actuals. This avoids treating a
+    // transfer, blocked/deleted line, or unmapped account as a project-cost
+    // refund while still failing closed when a real eligible credit remains.
+    const result = await this.executor.query<{
+      object_id: unknown;
+      line_id: unknown;
+      latest_version: unknown;
+      amount_cents: unknown;
+      currency: unknown;
+      posted_on: unknown;
+      account_object_id: unknown;
+    }>(
+      "SELECT b.object_id,b.line_id,b.latest_version,b.amount_cents,b.currency,b.posted_on,b.account_object_id FROM accounting_qbo_source_line_balances b WHERE " + clauses.join(" AND "),
+      values,
+    );
+    for (const row of result.rows) {
+      const objectId = stringValue(row.object_id, "Purchase credit object ID", 200);
+      const lineId = stringValue(row.line_id, "Purchase credit line ID", 200);
+      const latestVersion = stringValue(row.latest_version, "Purchase credit source version", 120);
+      const context = await this.readCostContext({ scope, objectType: "Purchase", objectId, lineId });
+      if (!context
+        || context.source.provider !== scope.provider
+        || context.source.organizationId !== scope.organizationId
+        || context.source.legalEntityId !== scope.legalEntityId
+        || context.source.environment !== scope.environment
+        || context.source.realmId !== scope.realmId
+        || context.source.objectType !== "Purchase"
+        || context.source.objectId !== objectId
+        || context.source.lineId !== lineId
+        || context.source.version !== latestVersion
+        || context.postingState !== "posted"
+        || !context.eligible
+        || (context.classification !== "expense" && context.classification !== "cogs" && context.classification !== "capitalized_cost")
+        || context.amountCents !== centsValue(row.amount_cents, "Purchase credit amount")
+        || context.currency !== currencyCodeSchema.parse(row.currency)
+        || context.postedOn !== dateValue(row.posted_on, "Purchase credit posted date")
+        || context.accountObjectId !== nullableString(row.account_object_id, "Purchase credit account", 200)) continue;
+      return true;
+    }
+    return false;
   }
 
   async listTransactions(query: { scope: FinancialSourceScope; from?: string; through?: string; limit?: number; cursor?: string }) {

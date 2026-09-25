@@ -16,12 +16,12 @@ test("batch SQL rejects unknown, duplicate, empty and unsafe identifiers before 
   const pool: RentOpsRuntimePool = {query: async () => {queries++; return {rows: []};}, connect: async () => {throw new Error("Unexpected transaction");}};
   const executor = createRentOpsPoolExecutor(pool);
   for (const tables of [[], ["rent_ops_properties", "rent_ops_properties"], ["rent_ops_source_payloads"], ["rent_ops_people; DROP TABLE rent_ops_people"], ["rent_ops_application_answer_occurrences"]]) {
-    assert.throws(() => buildRentOpsTableBatchSql(tables), /Invalid Rent Operations table batch/);
-    await assert.rejects(executor.readTableBatch!(tables), /Invalid Rent Operations table batch/);
+    assert.throws(() => buildRentOpsTableBatchSql(tables), /Invalid 5Central Ops table batch/);
+    await assert.rejects(executor.readTableBatch!(tables), /Invalid 5Central Ops table batch/);
   }
   assert.equal(queries, 0);
-  assert.throws(() => decodeRentOpsTableBatch({}, ["rent_ops_people"]), /Invalid Rent Operations table batch result/);
-  assert.throws(() => decodeRentOpsTableBatch({rent_ops_people: [null]}, ["rent_ops_people"]), /Invalid Rent Operations table batch row/);
+  assert.throws(() => decodeRentOpsTableBatch({}, ["rent_ops_people"]), /Invalid 5Central Ops table batch result/);
+  assert.throws(() => decodeRentOpsTableBatch({rent_ops_people: [null]}, ["rent_ops_people"]), /Invalid 5Central Ops table batch row/);
   assert.deepEqual(decodeRentOpsTableBatch({rent_ops_people: '[{"id":"one","archived":false,"phone_methods":[]}]'}, ["rent_ops_people"]), {rent_ops_people: [{id:"one",archived:false,phone_methods:[]}]});
   assert.match(buildRentOpsReportBatchSql(), /type = 'system'.*historical_leasing_snapshot_v1/);
 });

@@ -1,13 +1,15 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createRentManagerApiGetAdapter, RentManagerAdapterError } from "./adapter";
 import { createRentManagerDocumentBinaryFetcher } from "./binary-fetcher";
 import { createMemoryArchive, createRestrictedArchive, MemoryCheckpointStore } from "./archive";
 import { assertNoCredentialShapedFields, assertReadOnlyRequest, InvalidInlineDocumentBinaryError, RentManagerExportCollector, RestrictedCredentialFieldError } from "./collector";
-import { hashRecord } from "./hash";
+import { canonicalJson, hashRecord } from "./hash";
 import { normalizeRmRecord } from "./normalize";
 import { createApplicationAnswerAttestation, normalizeHapStatusValue, normalizeRentManagerExport } from "./normalizer";
 import { parseRentManagerExportCliArgs, redactedCliSummary } from "./cli";
@@ -344,6 +346,30 @@ test("collector resumes from a page checkpoint after a transient collection fail
   const secondResult = await new RentManagerExportCollector({ transport: second, archive, registry, pageSize: 1, sleep: async () => undefined, runId: "resume-test" }).collect();
   assert.equal(secondResult.envelope.payload.properties?.length, 2);
   assert.equal(secondResult.checkpoint.complete, true);
+});
+
+test("a failed page write is not counted, so resume re-fetches it and still reaches the last page", async () => {
+  const archive = createMemoryArchive();
+  const writePage = archive.writePage.bind(archive);
+  let failNextWrite = true;
+  archive.writePage = async (...args) => {
+    if (failNextWrite) {
+      failNextWrite = false;
+      throw Object.assign(new Error("synthetic disk failure"), { code: "ENOSPC" });
+    }
+    return writePage(...args);
+  };
+  const registry: readonly CollectionDefinition[] = [{ name: "properties", path: "/Properties", idFields: ["PropertyID"], entityType: "property", outputKey: "properties", required: true }];
+  const rows = [{ PropertyID: 1 }, { PropertyID: 2 }];
+  const firstResult = await new RentManagerExportCollector({ transport: fixtureTransport({ "/Properties": rows }), archive, registry, pageSize: 1, sleep: async () => undefined, runId: "write-failure" }).collect();
+  assert.equal(firstResult.checkpoint.complete, false);
+  assert.equal(firstResult.checkpoint.collections.properties.received, 0);
+  assert.deepEqual(firstResult.checkpoint.collections.properties.hashes, []);
+  const secondResult = await new RentManagerExportCollector({ transport: fixtureTransport({ "/Properties": rows }), archive, registry, pageSize: 1, sleep: async () => undefined, runId: "write-failure" }).collect();
+  assert.equal(secondResult.envelope.payload.properties?.length, 2);
+  assert.equal(secondResult.checkpoint.collections.properties.received, 2);
+  const fresh = await new RentManagerExportCollector({ transport: fixtureTransport({ "/Properties": rows }), archive: createMemoryArchive(), registry, pageSize: 1, sleep: async () => undefined, runId: "write-failure-fresh" }).collect();
+  assert.deepEqual(secondResult.checkpoint.collections.properties.hashes, fresh.checkpoint.collections.properties.hashes);
 });
 
 test("resume revalidates an old missing-source gate after composite IDs are archived", async () => {
@@ -987,6 +1013,18 @@ test("missing and duplicate explicit RM IDs make required coverage incomplete", 
   assert.equal(result.manifest.complete, false);
   assert.ok(result.manifest.exceptions.some((exception) => exception.code === "missing_source_id"));
   assert.ok(result.manifest.exceptions.some((exception) => exception.code === "duplicate_source_id"));
+});
+
+test("canonical JSON key order does not depend on the host locale", () => {
+  // Danish collation sorts "aa" last and Lithuanian sorts "y" before "k";
+  // a reviewed digest must be identical on every operator machine.
+  const sample = { aa: 1, b: 2, k: 3, y: 4, Amount: 5, amount: 6 };
+  const expected = canonicalJson(sample);
+  const hashModule = pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "hash.ts")).href;
+  for (const locale of ["da_DK.UTF-8", "lt_LT.UTF-8"]) {
+    const output = execFileSync(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `const { canonicalJson } = await import(${JSON.stringify(hashModule)}); process.stdout.write(canonicalJson(${JSON.stringify(sample)}));`], { env: { ...process.env, LANG: locale, LC_ALL: locale }, encoding: "utf8" });
+    assert.equal(output, expected, locale);
+  }
 });
 
 test("hashes are deterministic and source hashes are not double-hashed during redaction", () => {

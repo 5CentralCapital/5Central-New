@@ -9,6 +9,7 @@ import {
   investorPaymentLogQuerySchema,
   type InvestorCommandKind,
 } from "@shared/investors";
+import { investorDebtMaturityResponseSchema, investorInstrumentFinancialsSchema, investorPaymentCalendarResponseSchema } from "@shared/investors/reports";
 import { rentOpsAuthClient } from "../rent-ops/auth";
 import type { InvestorListFilters, InvestorsApi } from "./types";
 
@@ -86,6 +87,23 @@ function createApi(): InvestorsApi {
       const payload = await requestJson(`${companyPath(organizationId)}/investors/sources?${params}`, { signal });
       return investorFinancialSourceResponseSchema.parse(payload);
     },
+    async getInstrumentFinancials(organizationId, instrumentId, query, signal) {
+      const params = new URLSearchParams({ legalEntityId: query.legalEntityId });
+      if (query.asOf) params.set("asOf", query.asOf);
+      return investorInstrumentFinancialsSchema.parse(await requestJson(`${companyPath(organizationId)}/investor-instruments/${encodeURIComponent(instrumentId)}/financials?${params}`, { signal }));
+    },
+    async getPaymentCalendar(organizationId, query, signal) {
+      const params = new URLSearchParams({ legalEntityId: query.legalEntityId, fromMonth: query.fromMonth, throughMonth: query.throughMonth, limit: "500" });
+      if (query.accountId) params.set("accountId", query.accountId);
+      if (query.cursor) params.set("cursor", query.cursor);
+      return investorPaymentCalendarResponseSchema.parse(await requestJson(`${companyPath(organizationId)}/investor-payment-calendar?${params}`, { signal }));
+    },
+    async getDebtMaturities(organizationId, query, signal) {
+      const params = new URLSearchParams();
+      if (query.legalEntityId) params.set("legalEntityId", query.legalEntityId);
+      const text = params.toString();
+      return investorDebtMaturityResponseSchema.parse(await requestJson(`${companyPath(organizationId)}/investor-debt-maturities${text ? `?${text}` : ""}`, { signal }));
+    },
     async listMonthlyPayments(organizationId, query, signal) {
       const { legalEntityId, propertyId, ...queryFields } = query;
       const parsed = investorPaymentLogQuerySchema.parse({ ...queryFields, scope: { organizationId, legalEntityId, propertyId } });
@@ -111,4 +129,3 @@ function createApi(): InvestorsApi {
 }
 
 export const investorsApi: InvestorsApi = createApi();
-export function createInvestorsApi(): InvestorsApi { return createApi(); }

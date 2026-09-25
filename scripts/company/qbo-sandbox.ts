@@ -224,7 +224,7 @@ const MANUAL_CHECKLIST_ITEMS = [
   "Reconnect after disconnect: run /__sandbox/connect-url again, authorize in a browser, replay/confirm, then run acceptance again.",
   "OAuth failure matrix (invalid grant, expired refresh token, malformed token response, timeout, 429, 5xx): covered by mocked tests; not reproducible on demand against the sandbox.",
   "API failure matrix (401, validation 400, 429, 5xx, timeout, malformed success): covered by mocked tests; stale-token conflict is automated here.",
-  "Webhook: capture one real signed sandbox webhook and verify the raw body with intuit-signature (requires a public HTTPS endpoint).",
+  "Webhook: register https://<public-host>/api/integrations/quickbooks/webhook/sandbox with QBO_WEBHOOK_VERIFIER_TOKEN_SANDBOX set, capture one real signed delivery, and confirm the accounting_qbo_webhook_events row and its fetch job (requires a public HTTPS endpoint and a running worker).",
   "Capability gate: Payments, money movement, and Projects GraphQL stay disabled (unit-tested; no sandbox request is made).",
 ] as const;
 
@@ -463,6 +463,17 @@ export async function createQboSandboxHarness(options: QboSandboxHarnessOptions)
       const exceptions = await demo.services.accounting.mirror.listOpenSyncExceptions(scope);
       return { pass: acceptance.pass, notes: [...acceptance.notes, ...exceptions.slice(0, 40).map(item => `exception ${item.objectType} ${item.objectId} (${item.kind}): ${item.reasons.join(" | ")}`)] };
     });
+    await step("change_data_capture", async () => {
+      // The first run establishes the change chain (full replay when no
+      // watermark exists); the second must use CDC since that watermark.
+      const sync = qbo.createProviderSync(scope);
+      const first = await sync.syncChanges({ maxPages });
+      const second = await sync.syncChanges({ maxPages });
+      return {
+        pass: first.status !== "failed" && second.status !== "failed" && second.mode === "cdc",
+        notes: [`first=${first.mode}/${first.reason ?? "-"}/${first.status}`, `second=${second.mode}/${second.status} applied=${second.appliedCount} deleted=${second.deletedCount}`, `anchored=${second.anchored}`, ...(second.error ? [safeError(second.error)] : [])],
+      };
+    });
     await step("accounting_query", async () => {
       const result = await client.query<QuickBooksJsonObject>("SELECT * FROM Vendor MAXRESULTS 5");
       return { pass: result.status === 200, notes: [`Vendor rows returned=${result.entities.length}`] };
@@ -479,7 +490,7 @@ export async function createQboSandboxHarness(options: QboSandboxHarnessOptions)
       }
       return { pass: true, notes };
     });
-    const displayName = `R-ops sandbox test ${stamp}`;
+    const displayName = `5Central Ops sandbox test ${stamp}`;
     await step("create_and_read_back", async () => {
       const created = await client.create<QuickBooksJsonObject, QuickBooksJsonObject>("Vendor", { DisplayName: displayName });
       const id = String(created.entity.Id ?? "");
@@ -493,7 +504,7 @@ export async function createQboSandboxHarness(options: QboSandboxHarnessOptions)
       const current = vendor as { id: string; syncToken: string };
       const before = await client.read<QuickBooksJsonObject>("Vendor", current.id);
       staleSyncToken = String(before.entity.SyncToken);
-      updatedCompanyName = `R-ops sandbox updated ${stamp}`;
+      updatedCompanyName = `5Central Ops sandbox updated ${stamp}`;
       await client.update({ entity: "Vendor", id: current.id, syncToken: staleSyncToken, fields: { sparse: true, CompanyName: updatedCompanyName } });
       const after = await client.read<QuickBooksJsonObject>("Vendor", current.id);
       const newToken = String(after.entity.SyncToken);
@@ -506,7 +517,7 @@ export async function createQboSandboxHarness(options: QboSandboxHarnessOptions)
       const current = vendor as { id: string; syncToken: string };
       let rejection: string | null = null;
       try {
-        await client.update({ entity: "Vendor", id: current.id, syncToken: staleSyncToken, fields: { sparse: true, CompanyName: `R-ops stale write ${stamp}` } });
+        await client.update({ entity: "Vendor", id: current.id, syncToken: staleSyncToken, fields: { sparse: true, CompanyName: `5Central Ops stale write ${stamp}` } });
       } catch (error) { rejection = safeError(error); }
       const writes = since().filter(call => call.method === "POST" && call.host.endsWith("quickbooks.api.intuit.com")).length;
       const after = await client.read<QuickBooksJsonObject>("Vendor", current.id);

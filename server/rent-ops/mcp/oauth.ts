@@ -2,11 +2,26 @@ import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 /** OAuth resource-server adapter. The established issuer owns PKCE, consent and revocation. */
 export const READ_SCOPE = 'rent-ops:read';
 export const WRITE_SCOPE = 'rent-ops:write';
-export interface McpPrincipal { subject: string; scopes: string[] }
+/**
+ * A verified OAuth caller. clientId is the OAuth client the token was issued
+ * to (client_id, or Auth0's azp); it identifies which agent app is calling and
+ * is never taken from a tool argument.
+ */
+export interface McpPrincipal { subject: string; scopes: string[]; clientId?: string }
 export interface OAuthConfig {
   issuer: string; resource: string; mode?: "jwt" | "introspection"; introspectionEndpoint?: string;
   introspectionClientId?: string; introspectionClientSecret?: string;
   adminSubjects: string[];
+  /** Temporary, explicitly configured migration audiences. Discovery always advertises resource. */
+  legacyAudiences?: string[];
+  /** OAuth client IDs (the Codex app) allowed MRA packet ingestion. Empty: no client may stage or apply MRA packets. */
+  mraClientIds?: string[];
+}
+
+/** The OAuth client a verified token was issued to, from its client_id or azp claim. */
+export function tokenClientId(claims: Record<string, unknown>): string | undefined {
+  const value = typeof claims.client_id === 'string' ? claims.client_id : typeof claims.azp === 'string' ? claims.azp : undefined;
+  return value && value.length <= 200 && !/\s/.test(value) ? value : undefined;
 }
 export function secureUrl(value: string): string {
   const url = new URL(value);
@@ -23,10 +38,12 @@ export function oauthConfigFromEnv(env: NodeJS.ProcessEnv): OAuthConfig | undefi
     mode,
     issuer: secureUrl(required('RENT_OPS_OAUTH_ISSUER')),
     resource: secureUrl(required('RENT_OPS_MCP_RESOURCE')),
+    legacyAudiences: (env.RENT_OPS_MCP_LEGACY_AUDIENCES ?? '').split(',').map(x => x.trim()).filter(Boolean).map(secureUrl),
     ...(mode === 'introspection' ? { introspectionEndpoint: secureUrl(required('RENT_OPS_OAUTH_INTROSPECTION_ENDPOINT')),
     introspectionClientId: required('RENT_OPS_OAUTH_INTROSPECTION_CLIENT_ID'),
     introspectionClientSecret: required('RENT_OPS_OAUTH_INTROSPECTION_CLIENT_SECRET') } : {}),
     adminSubjects: required('RENT_OPS_OAUTH_ADMIN_SUBJECTS').split(',').map(x => x.trim()).filter(Boolean),
+    mraClientIds: (env.RENT_OPS_MCP_MRA_CLIENT_IDS ?? '').split(',').map(x => x.trim()).filter(Boolean),
   };
   if (!config.adminSubjects.length) throw new Error('OAuth requires explicit administrator subjects');
   return config;
@@ -49,12 +66,13 @@ export async function verifyOAuthToken(token: string, config: OAuthConfig, fetch
   const value = await response.json() as Record<string, unknown>;
   const audience = Array.isArray(value.aud) ? value.aud : [value.aud];
   const scopes = typeof value.scope === 'string' ? value.scope.split(' ').filter(Boolean) : [];
-  if (value.active !== true || value.iss !== config.issuer || !audience.includes(config.resource)
+  if (value.active !== true || value.iss !== config.issuer || ![config.resource, ...(config.legacyAudiences ?? [])].some(item => audience.includes(item))
     || typeof value.exp !== 'number' || value.exp <= Date.now() / 1000
     || (typeof value.nbf === 'number' && value.nbf > Date.now() / 1000)
     || typeof value.sub !== 'string' || !config.adminSubjects.includes(value.sub)
     || !scopes.includes(READ_SCOPE)) throw new Error('invalid_token');
-  return { subject: value.sub, scopes };
+  const clientId = tokenClientId(value);
+  return { subject: value.sub, scopes, ...(clientId ? { clientId } : {}) };
 }
 export async function validateIssuer(config: OAuthConfig, fetcher: typeof fetch = fetch): Promise<void> {
   const issuer = new URL(config.issuer);
@@ -77,9 +95,10 @@ const issuerKeys = new WeakMap<OAuthConfig, JWTVerifyGetKey>();
 /** Auth0 custom API access tokens: exact issuer/audience and RS256 only. */
 export async function verifyJwtToken(token: string, config: OAuthConfig, key: JWTVerifyGetKey): Promise<McpPrincipal> {
   if (!token || token.length > 8192 || /\s/.test(token)) throw new Error('invalid_token');
-  const { payload } = await jwtVerify(token, key, { issuer:config.issuer, audience:config.resource, algorithms:['RS256'], requiredClaims:['exp','iat','sub'], maxTokenAge:900, clockTolerance:0 });
+  const { payload } = await jwtVerify(token, key, { issuer:config.issuer, audience:[config.resource, ...(config.legacyAudiences ?? [])], algorithms:['RS256'], requiredClaims:['exp','iat','sub'], maxTokenAge:900, clockTolerance:0 });
   const scopes = typeof payload.scope === 'string' ? payload.scope.split(' ').filter(Boolean) : [];
   if (typeof payload.sub !== 'string' || !config.adminSubjects.includes(payload.sub) || !scopes.includes(READ_SCOPE)
     || typeof payload.exp !== 'number' || typeof payload.iat !== 'number' || payload.exp - payload.iat > 900) throw new Error('invalid_token');
-  return { subject:payload.sub, scopes };
+  const clientId = tokenClientId(payload as Record<string, unknown>);
+  return { subject:payload.sub, scopes, ...(clientId ? { clientId } : {}) };
 }

@@ -1,4 +1,3 @@
-import type { CompanyContextOrganization } from "@shared/company/context";
 import type {
   ReportEntry,
   ReportExportJob,
@@ -7,17 +6,12 @@ import type {
   ReportPackageRun,
   ReportPage,
   ReportPreset,
+  ReportReferenceKind,
+  ReportReferencePage,
   ReportRunRequest,
   ReportRunSummary,
 } from "@shared/reporting";
-
-export interface ReportingWorkspaceProps {
-  readonly identity: string;
-  readonly organization: CompanyContextOrganization;
-  readonly initialReportId?: string;
-  readonly onNavigate?: (organizationId: string, reportId?: string) => void;
-  readonly onOpenLegacy?: (reportId: string) => void;
-}
+import type { ForecastScenarioOption } from "./setup-model";
 
 export interface ReportRunResponse {
   readonly run: ReportRunSummary;
@@ -55,6 +49,8 @@ export interface ReportPackageSaveRequest {
 export interface ReportingApi {
   catalog(organizationId: string, signal?: AbortSignal): Promise<readonly ReportEntry[]>;
   run(organizationId: string, request: ReportRunRequest): Promise<ReportRunResponse>;
+  references(organizationId: string, kind: ReportReferenceKind, query?: { readonly search?: string; readonly cursor?: string | null; readonly limit?: number; readonly legalEntityIds?: readonly string[] }, signal?: AbortSignal): Promise<ReportReferencePage>;
+  forecastScenarios(organizationId: string, signal?: AbortSignal): Promise<ForecastScenarioOption[]>;
   page(organizationId: string, runId: string, cursor?: string | null, limit?: number): Promise<ReportPage>;
   export(organizationId: string, runId: string, format: "csv" | "json" | "html"): Promise<ReportExportJob>;
   listPresets(organizationId: string, signal?: AbortSignal): Promise<readonly ReportPreset[]>;

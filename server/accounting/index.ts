@@ -19,8 +19,10 @@ import { PostgresQuickBooksRefreshLease, newQuickBooksRefreshLeaseOwner, type Qu
 import { createConfiguredQboTokenCipher, type QboTokenCipher } from "./token-crypto";
 import { createQuickBooksTokenRepository, PostgresQuickBooksTokenRepository } from "./connection-store";
 import { AccountingError } from "./errors";
-import { isQuickBooksIntegrationError } from "../integrations/quickbooks/errors";
+import { isQuickBooksIntegrationError, markQuickBooksRequestNotSent } from "../integrations/quickbooks/errors";
 import { authorizeCompanyRead, loadAuthenticatedPrincipal } from "../company/authorization";
+import { createAccountingOperationsPort, type AccountingOperationsPort } from "./operations";
+import { qboWritePolicyFromEnv } from "./qbo-write";
 
 const ACCOUNTING_MUTATION_ROLES = ["owner", "admin", "finance"] as const;
 
@@ -90,6 +92,8 @@ export interface AccountingServices {
   readonly purposeMappings: AccountingPurposeMappingPort;
   readonly purposeCommands: AccountingPurposeCommandPort;
   readonly mirror: QboAccountingMirrorStore;
+  /** Posting policy, PM settlements, bridge preview, connector health and close status. */
+  readonly operations: AccountingOperationsPort;
   readonly qbo: ConfiguredAccountingQboServices | UnconfiguredAccountingQboServices;
 }
 
@@ -206,8 +210,10 @@ export function createAccountingServices(executor: RentOpsQueryExecutor, options
   const mirror = createQboAccountingMirrorStore(executor);
   const purposeMappings = mirror.purposeMappings;
   const purposeCommands = createAccountingPurposeCommandPort(executor, purposeMappings);
+  // The same environment-derived write policy the worker enforces (off by default).
+  const operations = createAccountingOperationsPort(executor, { writePolicy: qboWritePolicyFromEnv(options.environment ?? process.env) });
   const config = environmentConfig(options);
-  if (!config) return { financialSourceReadPort: mirror, financialSourceAllocationPort: mirror, financialProviderPaymentContextPort: mirror, financialProviderCostContextPort: mirror, purposeMappings, purposeCommands, mirror, qbo: { status: "unconfigured", reason: "missing_configuration" } };
+  if (!config) return { financialSourceReadPort: mirror, financialSourceAllocationPort: mirror, financialProviderPaymentContextPort: mirror, financialProviderCostContextPort: mirror, purposeMappings, purposeCommands, mirror, operations, qbo: { status: "unconfigured", reason: "missing_configuration" } };
   try {
     const cipher = config.tokenCipher ?? createConfiguredQboTokenCipher(options.environment ?? process.env);
     const tokenRepository = createQuickBooksTokenRepository(executor, cipher);
@@ -354,8 +360,10 @@ export function createAccountingServices(executor: RentOpsQueryExecutor, options
       return {
         read: (...args) => client.read(...args),
         query: (...args) => client.query(...args),
-        create: (...args) => capabilityGate.requireEnabled(scope, "accounting.create").then(() => client.create(...args)),
-        update: (...args) => capabilityGate.requireEnabled(scope, "accounting.update").then(() => client.update(...args)),
+        cdc: (...args) => client.cdc(...args),
+        // A write refused by its capability gate never reached Intuit.
+        create: (...args) => capabilityGate.requireEnabled(scope, "accounting.create").catch(error => { throw markQuickBooksRequestNotSent(error); }).then(() => client.create(...args)),
+        update: (...args) => capabilityGate.requireEnabled(scope, "accounting.update").catch(error => { throw markQuickBooksRequestNotSent(error); }).then(() => client.update(...args)),
       } as QuickBooksAccountingClient;
     };
     const createProvider = (scope: QuickBooksConnectionScope): QboProviderSync => createQboProviderSync({
@@ -377,9 +385,9 @@ export function createAccountingServices(executor: RentOpsQueryExecutor, options
       readonly organizationId: string;
       readonly legalEntityId: string;
     }): Promise<QuickBooksPendingBindingPreview | null> => new PostgresQuickBooksPendingBindingStore(input.executor, cipher).preview(input.pendingId, input.actorId, input.sessionBindingHash, { organizationId: input.organizationId, legalEntityId: input.legalEntityId });
-    return { financialSourceReadPort: mirror, financialSourceAllocationPort: mirror, financialProviderPaymentContextPort: mirror, financialProviderCostContextPort: mirror, purposeMappings, purposeCommands, mirror, qbo: { status: "configured", environment: config.environment, oauth, tokenManager, tokenRepository, capabilityGate, capabilityStore, oauthConnection, disconnect: input => disconnectQuickBooksConnection({ executor, cipher, oauth, now: config.now, refreshLease: lease }, input), previewPendingBinding, createAccountingClient: createClient, createReportsClient: createReports, createProviderSync: createProvider } };
+    return { financialSourceReadPort: mirror, financialSourceAllocationPort: mirror, financialProviderPaymentContextPort: mirror, financialProviderCostContextPort: mirror, purposeMappings, purposeCommands, mirror, operations, qbo: { status: "configured", environment: config.environment, oauth, tokenManager, tokenRepository, capabilityGate, capabilityStore, oauthConnection, disconnect: input => disconnectQuickBooksConnection({ executor, cipher, oauth, now: config.now, refreshLease: lease }, input), previewPendingBinding, createAccountingClient: createClient, createReportsClient: createReports, createProviderSync: createProvider } };
   } catch (error) {
-    if ((error instanceof AccountingError && error.code === "accounting_configuration") || (isQuickBooksIntegrationError(error) && error.code === "quickbooks_configuration")) return { financialSourceReadPort: mirror, financialSourceAllocationPort: mirror, financialProviderPaymentContextPort: mirror, financialProviderCostContextPort: mirror, purposeMappings, purposeCommands, mirror, qbo: { status: "unconfigured", reason: "invalid_configuration" } };
+    if ((error instanceof AccountingError && error.code === "accounting_configuration") || (isQuickBooksIntegrationError(error) && error.code === "quickbooks_configuration")) return { financialSourceReadPort: mirror, financialSourceAllocationPort: mirror, financialProviderPaymentContextPort: mirror, financialProviderCostContextPort: mirror, purposeMappings, purposeCommands, mirror, operations, qbo: { status: "unconfigured", reason: "invalid_configuration" } };
     throw error;
   }
 }
@@ -398,3 +406,12 @@ export * from "./http";
 export * from "./mcp";
 export * from "./provider-sync";
 export * from "./disconnect";
+export * from "./operations";
+export * from "./posting-policy";
+export * from "./pm-settlements";
+export * from "./rental-bridge";
+export * from "./connector-health";
+export * from "./payables-read";
+export * from "./qbo-write";
+export * from "./webhook-ingest";
+export * from "./webhook-route";

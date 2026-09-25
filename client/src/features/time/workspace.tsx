@@ -1,24 +1,43 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { LoaderCircle, RefreshCw, RotateCcw, Save, Search, UploadCloud } from "lucide-react";
+import { Clock, LoaderCircle, RefreshCw, RotateCcw, Save, Search, UploadCloud } from "lucide-react";
 import { timeEntryTypeSchema, type TimeConnectionScope, type TimeEntry, type TimeEnvironment } from "@shared/time";
-import { commandEnvelope, scopeFromFilters, timeApi } from "./api";
+import { legalEntityIdSchema } from "@shared/company";
+import { commandEnvelope, scopeFromFilters, timeApi, TimeApiError } from "./api";
+import { EmptyState } from "../rent-ops/workspace/ops-ui";
+import { formatLongDate, formatTableDate, formatTimestamp } from "../../lib/rent-ops-formatters";
 import type { TimeApi, TimeConnectionSummary, TimeContactOption, TimeProjectOption, TimeWorkspaceEntity, TimeWorkspaceProps } from "./types";
+import { PayrollPanel } from "./payroll-panel";
+import { sumTimeMoneyByCurrency, type TimeMoneyValue } from "./totals";
 import "./time.css";
+
+const REVIEW_STATE_LABELS: Readonly<Record<TimeEntry["reviewState"], string>> = { needs_review: "Awaiting approval", corrected: "Corrected", approved: "Approved", rejected: "Rejected" };
+
+function reviewStateLabel(value: TimeEntry["reviewState"]): string {
+  return REVIEW_STATE_LABELS[value] ?? label(value);
+}
 
 function label(value: string | null | undefined): string {
   return value ? value.replace(/_/g, " ").replace(/\b\w/g, letter => letter.toUpperCase()) : "—";
 }
 
-function dateLabel(value: string | null | undefined): string {
-  if (!value) return "—";
-  const date = new Date(value.includes("T") ? value : `${value}T00:00:00`);
-  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(date);
+/** List dates: "Jun 1" this year, "Jun 1, 2025" otherwise. */
+function tableDateLabel(value: string | null | undefined): string {
+  return formatTableDate(value) ?? "—";
 }
 
+/** Field dates: "Sep 24, 2026". */
+function dateLabel(value: string | null | undefined): string {
+  return formatLongDate(value) ?? "—";
+}
+
+/** Timestamps without seconds. */
 function dateTimeLabel(value: string | null | undefined): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(date);
+  return formatTimestamp(value) ?? "—";
+}
+
+/** A 400 validation answer means a selection was missing, not that something failed. */
+function isSelectionValidation(reason: unknown): boolean {
+  return reason instanceof TimeApiError && reason.status === 400 && reason.code === "company_validation";
 }
 
 function durationLabel(seconds: number): string {
@@ -33,6 +52,12 @@ function moneyCents(value: string | null, currency: string | null): string {
   const negative = cents < 0;
   const absolute = (negative ? -cents : cents).toString().padStart(3, "0");
   return `${negative ? "-" : ""}${currency ?? "—"} ${absolute.slice(0, -2)}.${absolute.slice(-2)}`;
+}
+
+function moneyTotals(values: readonly TimeMoneyValue[]): string {
+  const totals = sumTimeMoneyByCurrency(values);
+  if (!totals.length) return "—";
+  return totals.map(total => total.knownCount === 0 ? `${total.currency === "Unknown currency" ? "Unknown currency" : "Unknown"}${total.unknownCount > 1 ? ` (${total.unknownCount})` : ""}` : `${moneyCents(total.cents!, total.currency)}${total.unknownCount ? ` + ${total.unknownCount} unknown` : ""}`).join(" · ");
 }
 
 function localInput(value: string | null): string {
@@ -132,9 +157,15 @@ export function TimeWorkspace({ organizationId, organizationName, entities = [],
     limit: 100,
   }), [environment, legalEntityId, mappingStatus, providerCompanyId, reviewState]);
   const [data, setData] = useState<TimeWorkspaceData | null>(null);
+  // Which legal entity and environment the current data belongs to; anything else is still loading.
+  const loadKey = `${legalEntityId}|${environment}`;
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  const [selectionIncomplete, setSelectionIncomplete] = useState(false);
+  const legalEntityValid = legalEntityIdSchema.safeParse(legalEntityId).success;
 
   async function load(signal?: AbortSignal): Promise<void> {
-    if (!legalEntityId) { setData(null); return; }
+    // Every time read needs a valid legal entity; never send a request the server can only reject.
+    if (!legalEntityId || !legalEntityValid) { setData(null); setLoadedKey(loadKey); return; }
     const [connections, contacts, projects] = await Promise.all([
       api.listConnections(organizationId, legalEntityId, undefined, signal),
       api.listContacts(organizationId, signal),
@@ -145,24 +176,34 @@ export function TimeWorkspace({ organizationId, organizationName, entities = [],
     if (!selectedConnection) {
       setProviderCompanyId("");
       setData({ items: [], nextCursor: null, coverage: [], users: [], jobcodes: [], employeeMappings: [], jobcodeMappings: [], connections, contacts, projects });
+      setLoadedKey(loadKey);
       return;
     }
-    if (selectedConnection.scope.providerCompanyId !== providerCompanyId) setProviderCompanyId(selectedConnection.scope.providerCompanyId);
+    // Choosing the connection re-runs this load with it; entries are never requested without one.
+    if (selectedConnection.scope.providerCompanyId !== providerCompanyId) { setProviderCompanyId(selectedConnection.scope.providerCompanyId); return; }
     const selectedScope = scopeFor(organizationId, legalEntityId, environment, selectedConnection.scope.providerCompanyId);
     const [entries, users, jobcodes, employeeMappings, jobcodeMappings] = await Promise.all([
-      api.listEntries(organizationId, entriesQuery, signal),
+      api.listEntries(organizationId, { ...entriesQuery, providerCompanyId: selectedConnection.scope.providerCompanyId }, signal),
       api.listUsers(organizationId, selectedScope, signal),
       api.listJobcodes(organizationId, selectedScope, signal),
       api.listEmployeeMappings(organizationId, selectedScope, signal),
       api.listJobcodeMappings(organizationId, selectedScope, signal),
     ]);
     setData({ ...entries, users, jobcodes, employeeMappings, jobcodeMappings, connections, contacts, projects });
+    setLoadedKey(loadKey);
   }
 
   useEffect(() => {
     const controller = new AbortController();
     setError(null);
-    void load(controller.signal).catch(reason => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Employee time records could not be loaded."); });
+    setSelectionIncomplete(false);
+    void load(controller.signal).catch(reason => {
+      if (controller.signal.aborted) return;
+      setLoadedKey(loadKey);
+      // Opening the page is not an error: a validation answer to a missing selection becomes a prompt to choose one.
+      if (isSelectionValidation(reason)) { setSelectionIncomplete(true); return; }
+      setError(reason instanceof Error ? reason.message : "Employee time records could not be loaded.");
+    });
     return () => controller.abort();
     // The request is intentionally restarted when the named company selectors change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -170,6 +211,10 @@ export function TimeWorkspace({ organizationId, organizationName, entities = [],
 
   const entries = data?.items ?? [];
   const selected = entries.find(entry => entry.id === selectedId) ?? entries[0] ?? null;
+  const entryDurationTotal = entries.reduce((total, entry) => total + entry.durationSeconds, 0);
+  const estimatedTotal = moneyTotals(entries.map(entry => ({ cents: entry.estimatedLaborCostCents, currency: entry.estimatedLaborCurrency })));
+  const postedTotal = moneyTotals(entries.map(entry => ({ cents: entry.postedPayrollCents, currency: entry.postedPayrollCurrency })));
+  const reviewCounts = Object.entries(entries.reduce<Record<string, number>>((counts, entry) => { counts[entry.reviewState] = (counts[entry.reviewState] ?? 0) + 1; return counts; }, {})).sort(([left], [right]) => left.localeCompare(right)).map(([state, count]) => `${reviewStateLabel(state as TimeEntry["reviewState"])} ${count}`).join(" · ");
   useEffect(() => { if (selected && selected.id !== selectedId) setSelectedId(selected.id); }, [selected, selectedId]);
 
   async function execute(kind: string, payload: Record<string, unknown>): Promise<void> {
@@ -177,7 +222,7 @@ export function TimeWorkspace({ organizationId, organizationName, entities = [],
     setSaving(true); setError(null); setNotice(null);
     try {
       const receipt = await api.sendCommand(organizationId, kind, commandEnvelope(scope, payload));
-      setNotice(receipt.validationOutcomes.find(item => item.severity === "info")?.message ?? "Saved in R-ops.");
+      setNotice(receipt.validationOutcomes.find(item => item.severity === "info")?.message ?? "Saved in 5Central Ops.");
       await load();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The action could not be confirmed.");
@@ -217,30 +262,39 @@ export function TimeWorkspace({ organizationId, organizationName, entities = [],
   const connectionOptions = (data?.connections ?? []).filter(connection => connection.scope.environment === environment);
   const connectLabel = selectedConnection?.status === "needs_reconnect" || selectedConnection?.status === "revoked" ? "Reconnect QuickBooks Time" : "Connect QuickBooks Time";
 
+  const needsReconnect = selectedConnection?.status === "needs_reconnect" || selectedConnection?.status === "revoked";
+  const loadingData = Boolean(legalEntityId) && legalEntityValid && loadedKey !== loadKey && !error;
+  const noConnection = Boolean(legalEntityId) && legalEntityValid && !loadingData && !error && !selectionIncomplete && data !== null && connectionOptions.length === 0;
+  const connectButton = <button type="button" className="time-button time-button-primary" onClick={() => void connect()} disabled={!legalEntityId || connecting}>{connecting ? "Opening setup…" : connectLabel}</button>;
+
   return <section className="time-workspace" aria-labelledby="time-workspace-title">
     <header className="time-toolbar">
-      <div><h1 id="time-workspace-title">{organizationName ?? "Company"} employee time</h1></div>
-      <div className="time-actions"><button type="button" className="time-button time-button-secondary" onClick={() => void connect()} disabled={!legalEntityId || saving || syncing || connecting}>{connecting ? "Opening setup…" : connectLabel}</button><button type="button" className="time-button time-button-secondary" onClick={() => void refresh()} disabled={!scope || saving || syncing || connecting}><RefreshCw size={15} />Refresh</button><button type="button" className="time-button time-button-primary" onClick={() => void sync()} disabled={!scope || saving || syncing || connecting}><UploadCloud size={15} />{syncing ? "Syncing…" : "Sync provider records"}</button></div>
+      <div><h1 id="time-workspace-title">Team &amp; time</h1>{organizationName && <p>{organizationName}</p>}</div>
+      {scope && <div className="time-actions">{needsReconnect && <button type="button" className="time-button time-button-secondary" onClick={() => void connect()} disabled={saving || syncing || connecting}>{connecting ? "Opening setup…" : connectLabel}</button>}<button type="button" className="time-button time-button-secondary" onClick={() => void refresh()} disabled={saving || syncing || connecting}><RefreshCw size={15} />Refresh</button><button type="button" className={`time-button ${entries.length ? "time-button-secondary" : "time-button-primary"}`} onClick={() => void sync()} disabled={saving || syncing || connecting}><UploadCloud size={15} />{syncing ? "Syncing…" : "Sync provider records"}</button></div>}
     </header>
     <div className="time-selector-bar">
       <label>Company<select aria-label="Company" value={organizationId} disabled><option value={organizationId}>{organizationName ?? organizationId}</option></select></label>
       <label>Legal entity<select aria-label="Legal entity" value={legalEntityId} onChange={event => setLegalEntityId(event.currentTarget.value)}><option value="">Select legal entity</option>{entities.map(entity => <option key={entity.id} value={entity.id}>{entity.name}</option>)}</select></label>
       <label>Provider environment<select aria-label="Provider environment" value={environment} onChange={event => setEnvironment(event.currentTarget.value as TimeEnvironment)}><option value="production">Production</option><option value="sandbox">Sandbox</option></select></label>
-      <label>Time connection<select aria-label="Time connection" value={providerCompanyId} onChange={event => setProviderCompanyId(event.currentTarget.value)} disabled={!legalEntityId}><option value="">{legalEntityId ? "Select connection" : "Select legal entity first"}</option>{connectionOptions.map(connection => <option key={connection.scope.providerCompanyId} value={connection.scope.providerCompanyId}>{connection.name}{connection.status === "needs_reconnect" ? " · Needs reconnect" : connection.status === "revoked" ? " · Revoked" : ""}</option>)}</select></label>
+      <label>Time connection<select aria-label="Time connection" value={providerCompanyId} onChange={event => setProviderCompanyId(event.currentTarget.value)} disabled={!legalEntityId || !connectionOptions.length}><option value="">{!legalEntityId ? "Select legal entity first" : connectionOptions.length ? "Select connection" : "No connection yet"}</option>{connectionOptions.map(connection => <option key={connection.scope.providerCompanyId} value={connection.scope.providerCompanyId}>{connection.name}{connection.status === "needs_reconnect" ? " · Needs reconnect" : connection.status === "revoked" ? " · Revoked" : ""}</option>)}</select></label>
     </div>
     <Message message={notice} error={error} />
-    {!scope ? <div className="time-empty" role="status"><Search size={22} /><strong>{legalEntityId ? "Connect QuickBooks Time or select a connection." : "Select a legal entity."}</strong>{legalEntityId && <button type="button" className="time-button time-button-primary" onClick={() => void connect()} disabled={connecting}>{connecting ? "Opening setup…" : connectLabel}</button>}</div> : <div className="time-layout">
+    {!legalEntityId || !legalEntityValid ? <div className="time-empty" role="status"><Search size={22} /><strong>Select a legal entity.</strong><span>Time records and QuickBooks Time connections belong to one legal entity.</span></div>
+      : loadingData ? <div className="time-empty" role="status"><LoaderCircle size={18} className="time-spin" />Loading time records…</div>
+      : noConnection ? <EmptyState icon={<Clock size={28} />} title="Connect QuickBooks Time" action={connectButton}>Pull crew hours into 5Central Ops so labor costs land on the right project and property.</EmptyState>
+      : !scope ? (error ? null : <div className="time-empty" role="status"><Search size={22} /><strong>Select a time connection.</strong><span>Choose the QuickBooks Time company whose records you want to review.</span></div>) : <><div className="time-layout">
       <aside className="time-list-pane" aria-label="Time records">
-        <div className="time-filter-bar"><label>Review<select aria-label="Review state" value={reviewState} onChange={event => setReviewState(event.currentTarget.value as typeof reviewState)}><option value="all">All review states</option><option value="needs_review">Needs review</option><option value="corrected">Corrected</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></label><label>Mapping<select aria-label="Mapping status" value={mappingStatus} onChange={event => setMappingStatus(event.currentTarget.value as typeof mappingStatus)}><option value="all">All mappings</option><option value="unmapped_employee">Unmapped employee</option><option value="unmapped_jobcode">Unmapped jobcode</option><option value="mapped">Mapped</option></select></label></div>
-        {entries.length === 0 ? <div className="time-empty time-empty-small">No time records match these filters.</div> : <div className="time-list">{entries.map(entry => <button type="button" key={entry.id} className={`time-list-row ${selected?.id === entry.id ? "is-selected" : ""}`} onClick={() => setSelectedId(entry.id)}><span className="time-list-row-top"><strong>{dateLabel(entry.date)}</strong><span className={badgeClass(entry.reviewState)}>{label(entry.reviewState)}</span></span><span>{entry.type === "manual" ? "Manual time" : entry.onTheClock ? "Clocked in" : `${dateTimeLabel(entry.start)} – ${dateTimeLabel(entry.end)}`}</span><small>{durationLabel(entry.durationSeconds)} · {label(entry.mappingStatus)}</small></button>)}</div>}
+        <div className="time-filter-bar"><label>Review<select aria-label="Review state" value={reviewState} onChange={event => setReviewState(event.currentTarget.value as typeof reviewState)}><option value="all">All review states</option><option value="needs_review">{REVIEW_STATE_LABELS.needs_review}</option><option value="corrected">Corrected</option><option value="approved">Approved</option><option value="rejected">Rejected</option></select></label><label>Mapping<select aria-label="Mapping status" value={mappingStatus} onChange={event => setMappingStatus(event.currentTarget.value as typeof mappingStatus)}><option value="all">All mappings</option><option value="unmapped_employee">Unmapped employee</option><option value="unmapped_jobcode">Unmapped jobcode</option><option value="mapped">Mapped</option></select></label></div>
+        {entries.length === 0 ? <div className="time-empty time-empty-small">No time records match these filters.</div> : <div className="time-list">{entries.map(entry => <button type="button" key={entry.id} className={`time-list-row ${selected?.id === entry.id ? "is-selected" : ""}`} onClick={() => setSelectedId(entry.id)}><span className="time-list-row-top"><strong>{tableDateLabel(entry.date)}</strong><span className={badgeClass(entry.reviewState)}>{reviewStateLabel(entry.reviewState)}</span></span><span>{entry.type === "manual" ? "Manual time" : entry.onTheClock ? "Clocked in" : `${dateTimeLabel(entry.start)} – ${dateTimeLabel(entry.end)}`}</span><small>{durationLabel(entry.durationSeconds)} · {label(entry.mappingStatus)}</small></button>)}</div>}
+        <div className="time-list-summary" aria-label="Time entry totals"><span>{data?.nextCursor ? "Shown" : "Filtered"}: {entries.length} time entr{entries.length === 1 ? "y" : "ies"}</span><span>{data?.nextCursor ? "Page totals" : "Filtered totals"}: {durationLabel(entryDurationTotal)} · Estimated labor {estimatedTotal} · Posted payroll {postedTotal}</span>{reviewCounts && <span>{reviewCounts}</span>}</div>
         {data?.coverage.length ? <div className="time-coverage"><span className="time-eyebrow">Coverage</span>{data.coverage.map(item => <div key={item.stream}><span>{label(item.stream)}</span><span className={badgeClass(item.status)}>{label(item.status)}</span></div>)}</div> : null}
       </aside>
-      <main className="time-main">{selected ? <TimeDetail entry={selected} scope={scope} entities={entities} contacts={data?.contacts ?? []} projects={data?.projects ?? []} users={data?.users ?? []} jobcodes={data?.jobcodes ?? []} employeeMappings={data?.employeeMappings ?? []} jobcodeMappings={data?.jobcodeMappings ?? []} execute={execute} saving={saving} /> : <div className="time-empty">Choose a time record to review.</div>}</main>
-    </div>}
+      <main className="time-main">{selected ? <TimeDetail entry={selected} scope={scope} entities={entities} contacts={data?.contacts ?? []} projects={data?.projects ?? []} users={data?.users ?? []} jobcodes={data?.jobcodes ?? []} employeeMappings={data?.employeeMappings ?? []} jobcodeMappings={data?.jobcodeMappings ?? []} execute={execute} saving={saving} loadScopeItems={api.listProjectScopeItems ? (projectId, signal) => api.listProjectScopeItems!(organizationId, projectId, signal) : undefined} /> : <div className="time-empty">Choose a time record to review.</div>}</main>
+    </div><PayrollPanel api={api} organizationId={organizationId} scope={scope} entries={entries} saving={saving} execute={execute} /></>}
   </section>;
 }
 
-function TimeDetail({ entry, scope, entities, contacts, projects, users, jobcodes, employeeMappings, jobcodeMappings, execute, saving }: { entry: TimeEntry; scope: TimeConnectionScope; entities: readonly TimeWorkspaceEntity[]; contacts: readonly TimeContactOption[]; projects: readonly TimeProjectOption[]; users: Awaited<ReturnType<TimeApi["listUsers"]>>; jobcodes: Awaited<ReturnType<TimeApi["listJobcodes"]>>; employeeMappings: Awaited<ReturnType<TimeApi["listEmployeeMappings"]>>; jobcodeMappings: Awaited<ReturnType<TimeApi["listJobcodeMappings"]>>; execute: (kind: string, payload: Record<string, unknown>) => Promise<void>; saving: boolean }) {
+function TimeDetail({ entry, scope, entities, contacts, projects, users, jobcodes, employeeMappings, jobcodeMappings, execute, saving, loadScopeItems }: { entry: TimeEntry; scope: TimeConnectionScope; entities: readonly TimeWorkspaceEntity[]; contacts: readonly TimeContactOption[]; projects: readonly TimeProjectOption[]; users: Awaited<ReturnType<TimeApi["listUsers"]>>; jobcodes: Awaited<ReturnType<TimeApi["listJobcodes"]>>; employeeMappings: Awaited<ReturnType<TimeApi["listEmployeeMappings"]>>; jobcodeMappings: Awaited<ReturnType<TimeApi["listJobcodeMappings"]>>; execute: (kind: string, payload: Record<string, unknown>) => Promise<void>; saving: boolean; loadScopeItems?: (projectId: string, signal?: AbortSignal) => Promise<readonly { readonly id: string; readonly description: string }[]> }) {
   const user = users.find(item => item.providerUserId === entry.providerUserId);
   const jobcode = jobcodes.find(item => item.providerJobcodeId === entry.providerJobcodeId);
   const employeeMapping = employeeMappings.find(item => item.providerUserId === entry.providerUserId && item.effectiveFrom <= entry.date && (item.effectiveTo === null || entry.date < item.effectiveTo));
@@ -260,6 +314,14 @@ function TimeDetail({ entry, scope, entities, contacts, projects, users, jobcode
   const [costCode, setCostCode] = useState(jobcodeMapping?.costCode ?? "");
   const [activeUserId, setActiveUserId] = useState(entry.providerUserId);
   const [activeJobcodeId, setActiveJobcodeId] = useState(entry.providerJobcodeId);
+  const [scopeItems, setScopeItems] = useState<readonly { readonly id: string; readonly description: string }[]>([]);
+  useEffect(() => {
+    if (!projectId || !loadScopeItems) { setScopeItems([]); return; }
+    const controller = new AbortController();
+    void loadScopeItems(projectId, controller.signal).then(items => { if (!controller.signal.aborted) setScopeItems(items); }).catch(() => { if (!controller.signal.aborted) setScopeItems([]); });
+    return () => controller.abort();
+  }, [loadScopeItems, projectId]);
+  const costCodeIsScope = scopeItems.some(item => item.id === costCode);
   const [startOffset, setStartOffset] = useState("device");
   const [endOffset, setEndOffset] = useState("device");
   const deviceOffset = -new Date().getTimezoneOffset();
@@ -284,11 +346,11 @@ function TimeDetail({ entry, scope, entities, contacts, projects, users, jobcode
 
   const selectedEntity = entities.find(entity => entity.id === scope.legalEntityId);
   return <div className="time-detail">
-    <header className="time-detail-head"><div><h2>{user?.displayName ?? "Employee unavailable"}</h2><p>{jobcode?.name ?? "Jobcode unavailable"} · {dateLabel(entry.date)} · {durationLabel(entry.durationSeconds)}</p></div><div className="time-detail-badges"><span className={badgeClass(entry.reviewState)}>{label(entry.reviewState)}</span><span className={badgeClass(entry.mappingStatus)}>{label(entry.mappingStatus)}</span>{entry.locked && <span className="time-badge">Provider locked</span>}</div></header>
+    <header className="time-detail-head"><div><h2>{user?.displayName ?? "Employee unavailable"}</h2><p>{jobcode?.name ?? "Jobcode unavailable"} · {dateLabel(entry.date)} · {durationLabel(entry.durationSeconds)}</p></div><div className="time-detail-badges"><span className={badgeClass(entry.reviewState)}>{reviewStateLabel(entry.reviewState)}</span><span className={badgeClass(entry.mappingStatus)}>{label(entry.mappingStatus)}</span>{entry.locked && <span className="time-badge">Provider locked</span>}</div></header>
     <div className="time-metrics"><div><span>Provider time</span><strong>{entry.onTheClock ? "Clocked in" : durationLabel(entry.durationSeconds)}</strong></div><div><span>Estimated labor</span><strong>{moneyCents(entry.estimatedLaborCostCents, entry.estimatedLaborCurrency)}</strong></div><div><span>Posted payroll</span><strong>{moneyCents(entry.postedPayrollCents, entry.postedPayrollCurrency)}</strong></div><div><span>Last provider change</span><strong>{dateTimeLabel(entry.lastModified)}</strong></div></div>
     <section className="time-card"><div className="time-card-header"><div><h3>Review</h3></div><div className="time-actions"><button type="button" className="time-button time-button-secondary" disabled={saving} onClick={() => void execute("time.review_timesheet", { environment: scope.environment, providerCompanyId: scope.providerCompanyId, timesheetId: entry.id, action: "request_review" })}><RotateCcw size={14} />Request review</button><button type="button" className="time-button time-button-danger" disabled={saving} onClick={() => void execute("time.review_timesheet", { environment: scope.environment, providerCompanyId: scope.providerCompanyId, timesheetId: entry.id, action: "reject", reason: reason.trim() || undefined })}>Reject</button><button type="button" className="time-button time-button-primary" disabled={saving} onClick={() => void execute("time.review_timesheet", { environment: scope.environment, providerCompanyId: scope.providerCompanyId, timesheetId: entry.id, action: "approve" })}>Approve</button></div></div></section>
-    <section className="time-card"><div className="time-card-header"><div><h3>Correct time</h3><p>Saved in R-ops; provider payroll is unchanged.</p></div></div><form className="time-form" onSubmit={correct}><label>Entry type<select aria-label="Entry type" value={type} onChange={event => { const next = timeEntryTypeSchema.parse(event.currentTarget.value); setType(next); }}><option value="regular">Regular timestamp</option><option value="manual">Manual date and duration</option></select></label>{type === "regular" ? <><label>Start<input aria-label="Start timestamp" type="datetime-local" value={start} onChange={event => setStart(event.currentTarget.value)} /></label><label>Start time offset<select aria-label="Start time offset" value={startOffset} onChange={event => setStartOffset(event.currentTarget.value)}>{offsetChoices.map(choice => <option key={`start-${choice.value}`} value={choice.value}>{choice.text}</option>)}</select></label><label>End<input aria-label="End timestamp" type="datetime-local" value={end} onChange={event => setEnd(event.currentTarget.value)} /></label><label>End time offset<select aria-label="End time offset" value={endOffset} onChange={event => setEndOffset(event.currentTarget.value)}>{offsetChoices.map(choice => <option key={`end-${choice.value}`} value={choice.value}>{choice.text}</option>)}</select></label><div className="time-form-help">Choose an offset when daylight-saving time makes a local time ambiguous.</div></> : <><label>Date<input aria-label="Manual date" type="date" value={date} onChange={event => setDate(event.currentTarget.value)} /></label><label>Hours<input aria-label="Hours" inputMode="numeric" value={hours} onChange={event => setHours(event.currentTarget.value)} /></label><label>Minutes<input aria-label="Minutes" inputMode="numeric" value={minutes} onChange={event => setMinutes(event.currentTarget.value)} /></label></>}<label className="time-form-wide">Correction reason<textarea aria-label="Correction reason" value={reason} onChange={event => setReason(event.currentTarget.value)} minLength={1} required placeholder="Explain the correction" /></label><label className="time-form-wide">Notes<textarea aria-label="Time notes" value={notes} onChange={event => setNotes(event.currentTarget.value)} /></label><div className="time-form-actions"><button type="submit" className="time-button time-button-primary" disabled={saving || !reason.trim()}><Save size={14} />{saving ? "Saving…" : "Save correction"}</button></div></form></section>
-    <section className="time-card"><div className="time-card-header"><div><h3>Mappings</h3><p>Approval requires an employee and jobcode mapping.</p></div></div><div className="time-form time-form-grid"><label>Provider employee<select aria-label="Provider employee" value={activeUserId} onChange={event => setActiveUserId(event.currentTarget.value)}>{users.map(item => <option key={item.providerUserId} value={item.providerUserId}>{item.displayName}</option>)}</select></label><label>R-ops contact<select aria-label="R-ops contact" value={contactId} onChange={event => setContactId(event.currentTarget.value)}><option value="">Select contact</option>{contacts.map(contact => <option key={contact.id} value={contact.id}>{contact.displayName}</option>)}</select></label><label>Hourly rate ({selectedEntity?.currency ?? "currency"})<input aria-label="Hourly rate" inputMode="decimal" value={rate} onChange={event => setRate(event.currentTarget.value)} placeholder="0.00" /></label><label>Provider jobcode<select aria-label="Provider jobcode" value={activeJobcodeId} onChange={event => setActiveJobcodeId(event.currentTarget.value)}>{jobcodes.map(item => <option key={item.providerJobcodeId} value={item.providerJobcodeId}>{item.name}</option>)}</select></label><label>Property<select aria-label="Property for jobcode" value={propertyId} onChange={event => setPropertyId(event.currentTarget.value)}><option value="">No property mapping</option>{selectedEntity?.properties.map(property => <option key={property.id} value={property.id}>{property.name}</option>)}</select></label><label>Project<select aria-label="Project for jobcode" value={projectId} onChange={event => setProjectId(event.currentTarget.value)}><option value="">No project mapping</option>{projects.filter(project => project.legalEntityId === scope.legalEntityId).map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label>Cost code<input aria-label="Cost code" value={costCode} onChange={event => setCostCode(event.currentTarget.value)} placeholder="Optional" /></label><div className="time-form-actions time-form-wide"><button type="button" className="time-button time-button-secondary" disabled={saving || !contactId} onClick={() => void execute("time.map_employee", { environment: scope.environment, providerCompanyId: scope.providerCompanyId, providerUserId: activeUserId, contactId, effectiveFrom: entry.date, effectiveTo: null, hourlyRateCents: centsFromText(rate), currency: rate.trim() ? selectedEntity?.currency ?? null : null })}>Save employee mapping</button><button type="button" className="time-button time-button-secondary" disabled={saving} onClick={() => void execute("time.map_jobcode", { environment: scope.environment, providerCompanyId: scope.providerCompanyId, providerJobcodeId: activeJobcodeId, propertyId: propertyId || null, projectId: projectId || null, costCode: costCode.trim() || null })}>Save jobcode mapping</button></div></div></section>
+    <section className="time-card"><div className="time-card-header"><div><h3>Correct time</h3><p>Saved in 5Central Ops; provider payroll is unchanged.</p></div></div><form className="time-form" onSubmit={correct}><label>Entry type<select aria-label="Entry type" value={type} onChange={event => { const next = timeEntryTypeSchema.parse(event.currentTarget.value); setType(next); }}><option value="regular">Regular timestamp</option><option value="manual">Manual date and duration</option></select></label>{type === "regular" ? <><label>Start<input aria-label="Start timestamp" type="datetime-local" value={start} onChange={event => setStart(event.currentTarget.value)} /></label><label>Start time offset<select aria-label="Start time offset" value={startOffset} onChange={event => setStartOffset(event.currentTarget.value)}>{offsetChoices.map(choice => <option key={`start-${choice.value}`} value={choice.value}>{choice.text}</option>)}</select></label><label>End<input aria-label="End timestamp" type="datetime-local" value={end} onChange={event => setEnd(event.currentTarget.value)} /></label><label>End time offset<select aria-label="End time offset" value={endOffset} onChange={event => setEndOffset(event.currentTarget.value)}>{offsetChoices.map(choice => <option key={`end-${choice.value}`} value={choice.value}>{choice.text}</option>)}</select></label><div className="time-form-help">Choose an offset when daylight-saving time makes a local time ambiguous.</div></> : <><label>Date<input aria-label="Manual date" type="date" value={date} onChange={event => setDate(event.currentTarget.value)} /></label><label>Hours<input aria-label="Hours" inputMode="numeric" value={hours} onChange={event => setHours(event.currentTarget.value)} /></label><label>Minutes<input aria-label="Minutes" inputMode="numeric" value={minutes} onChange={event => setMinutes(event.currentTarget.value)} /></label></>}<label className="time-form-wide">Correction reason<textarea aria-label="Correction reason" value={reason} onChange={event => setReason(event.currentTarget.value)} minLength={1} required placeholder="Explain the correction" /></label><label className="time-form-wide">Notes<textarea aria-label="Time notes" value={notes} onChange={event => setNotes(event.currentTarget.value)} /></label><div className="time-form-actions"><button type="submit" className="time-button time-button-secondary" disabled={saving || !reason.trim()}><Save size={14} />{saving ? "Saving…" : "Save correction"}</button></div></form></section>
+    <section className="time-card"><div className="time-card-header"><div><h3>Mappings</h3><p>Approval requires an employee and jobcode mapping.</p></div></div><div className="time-form time-form-grid"><label>Provider employee<select aria-label="Provider employee" value={activeUserId} onChange={event => setActiveUserId(event.currentTarget.value)}>{users.map(item => <option key={item.providerUserId} value={item.providerUserId}>{item.displayName}</option>)}</select></label><label>Contact<select aria-label="Contact" value={contactId} onChange={event => setContactId(event.currentTarget.value)}><option value="">Select contact</option>{contacts.map(contact => <option key={contact.id} value={contact.id}>{contact.displayName}</option>)}</select></label><label>Hourly rate ({selectedEntity?.currency ?? "currency"})<input aria-label="Hourly rate" inputMode="decimal" value={rate} onChange={event => setRate(event.currentTarget.value)} placeholder="0.00" /></label><label>Provider jobcode<select aria-label="Provider jobcode" value={activeJobcodeId} onChange={event => setActiveJobcodeId(event.currentTarget.value)}>{jobcodes.map(item => <option key={item.providerJobcodeId} value={item.providerJobcodeId}>{item.name}</option>)}</select></label><label>Property<select aria-label="Property for jobcode" value={propertyId} onChange={event => setPropertyId(event.currentTarget.value)}><option value="">No property mapping</option>{selectedEntity?.properties.map(property => <option key={property.id} value={property.id}>{property.name}</option>)}</select></label><label>Project<select aria-label="Project for jobcode" value={projectId} onChange={event => setProjectId(event.currentTarget.value)}><option value="">No project mapping</option>{projects.filter(project => project.legalEntityId === scope.legalEntityId).map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>{projectId && scopeItems.length > 0 ? <label>Project budget line<select aria-label="Project budget line" value={costCodeIsScope ? costCode : ""} onChange={event => setCostCode(event.currentTarget.value)}><option value="">{costCode && !costCodeIsScope ? `Other code (${costCode})` : "No budget line"}</option>{scopeItems.map(item => <option key={item.id} value={item.id}>{item.description}</option>)}</select></label> : <label>Cost code<input aria-label="Cost code" value={costCode} onChange={event => setCostCode(event.currentTarget.value)} placeholder="Optional" /></label>}<div className="time-form-actions time-form-wide"><button type="button" className="time-button time-button-secondary" disabled={saving || !contactId} onClick={() => void execute("time.map_employee", { environment: scope.environment, providerCompanyId: scope.providerCompanyId, providerUserId: activeUserId, contactId, effectiveFrom: entry.date, effectiveTo: null, hourlyRateCents: centsFromText(rate), currency: rate.trim() ? selectedEntity?.currency ?? null : null })}>Save employee mapping</button><button type="button" className="time-button time-button-secondary" disabled={saving} onClick={() => void execute("time.map_jobcode", { environment: scope.environment, providerCompanyId: scope.providerCompanyId, providerJobcodeId: activeJobcodeId, propertyId: propertyId || null, projectId: projectId || null, costCode: costCode.trim() || null })}>Save jobcode mapping</button></div></div></section>
   </div>;
 }
 

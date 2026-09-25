@@ -31,8 +31,12 @@
 
 /* List + detail */
 .rm-workspace.rops-modern .wo-layout { grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 20px; }
+.rm-workspace.rops-modern .wo-layout.is-list-only { grid-template-columns: minmax(0, 1fr); }
+.rm-workspace.rops-modern .wo-empty-page { border-radius: var(--ds-r-l); background: var(--ds-surface); box-shadow: var(--ds-shadow-panel), 0 0 0 1px var(--ds-hairline); }
 .rm-workspace.rops-modern .wo-list { top: 88px; max-height: calc(100vh - 110px); }
 .rm-workspace.rops-modern .wo-list-items { display: block; padding: 4px 0; overflow-y: auto; }
+.rm-workspace.rops-modern .wo-load-more { display: block; margin: 12px auto; min-height: 44px; }
+.rm-workspace.rops-modern .wo-list-summary { display: grid; gap: 4px; margin: 4px 12px 0; padding: 10px 4px 12px; border-top: 1px solid var(--ds-hairline); color: var(--ds-muted); font: var(--ds-caption); font-variant-numeric: tabular-nums; }
 .rm-workspace.rops-modern .wo-list-item { display: grid; gap: 4px; width: calc(100% - 12px); border-bottom: 0; background: transparent; color: var(--ds-ink); text-align: left; cursor: pointer; }
 .rm-workspace.rops-modern .wo-list-item + .wo-list-item { box-shadow: 0 -1px 0 var(--ds-hairline); }
 .rm-workspace.rops-modern .wo-list-item.active + .wo-list-item, .rm-workspace.rops-modern .wo-list-item.active { box-shadow: none; }
@@ -154,3 +158,18 @@
   .rm-workspace.rops-modern .wo-dialog .wo-dialog-footer .rm-button { flex: 1 1 0; justify-content: center; }
   .rm-workspace.rops-modern .wo-choice, .rm-workspace.rops-modern .wo-check { min-height: 44px; }
 }
+
+/* Vendor, cost links, documents and schedule */
+.rm-workspace.rops-modern .wo-fact-action { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.rm-workspace.rops-modern .wo-cost-lines { margin: 12px 0 0; padding: 0; list-style: none; border-top: 1px solid var(--ds-hairline); }
+.rm-workspace.rops-modern .wo-cost-lines li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; min-height: 44px; padding: 8px 0; border-bottom: 1px solid var(--ds-hairline); }
+.rm-workspace.rops-modern .wo-line-option-main { display: grid; gap: 2px; min-width: 0; }
+.rm-workspace.rops-modern .wo-line-option-main small { color: var(--ds-muted); font: var(--ds-callout); }
+.rm-workspace.rops-modern .wo-line-picker { display: grid; max-height: 280px; overflow: auto; margin: 12px 0; border: 1px solid var(--ds-hairline); border-radius: 10px; }
+.rm-workspace.rops-modern .wo-line-option { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 44px; padding: 8px 12px; border-bottom: 1px solid var(--ds-hairline); cursor: pointer; }
+.rm-workspace.rops-modern .wo-line-option:last-child { border-bottom: 0; }
+.rm-workspace.rops-modern .wo-line-option.is-selected { background: var(--ds-fill); }
+.rm-workspace.rops-modern .wo-line-option input { width: 18px; height: 18px; }
+.rm-workspace.rops-modern .wo-line-option:focus-within { outline: 2px solid var(--ds-focus, #d4a843); outline-offset: -2px; }
+.rm-workspace.rops-modern .wo-day-heading { margin: 12px 12px 4px; color: var(--ds-muted); font: var(--ds-callout); font-weight: 600; }
+.wo-dialog .wo-line-picker, .wo-dialog .wo-line-option { font-variant-numeric: tabular-nums; }

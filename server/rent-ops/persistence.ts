@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { COMPANY_APPLICATION_TABLES, COMPANY_ACCESS_TABLES } from "../company/tables";
 
-export const RENT_OPS_SCHEMA_VERSION = 44;
+export const RENT_OPS_SCHEMA_VERSION = 52;
 export const RENT_OPS_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V1_CHECKSUM__";
 export const RENT_OPS_V2_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V2_CHECKSUM__";
 export const RENT_OPS_V3_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V3_CHECKSUM__";
@@ -61,8 +61,16 @@ const RENT_OPS_MIGRATION_FILES = [
   "040_company_work_orders.sql",
   "041_qbo_token_lifecycle.sql",
   "042_qbo_sync_exceptions.sql",
-  "043_qbo_account_purpose.sql",
-  "044_project_property_plans.sql",
+  "043_company_intake.sql",
+  "044_company_documents.sql",
+  "045_company_review_cases.sql",
+  "046_company_jobs.sql",
+  "047_accounting_integration_operations.sql",
+  "048_company_forecasting.sql",
+  "049_rent_ops_document_object_relocations.sql",
+  "050_accounting_qbo_receivables.sql",
+  "051_qbo_account_purpose.sql",
+  "052_project_property_plans.sql",
 ] as const;
 
 export const RENT_OPS_SUPPORTED_SCHEMA_VERSIONS = RENT_OPS_MIGRATION_FILES.map((_, index) => index + 1);
@@ -91,6 +99,7 @@ export const RENT_OPS_REQUIRED_TABLES = [
   "rent_ops_application_requirements",
   "rent_ops_documents",
   "rent_ops_document_objects",
+  "rent_ops_document_object_relocations",
   "rent_ops_activity_events",
   "rent_ops_record_changes",
   "rent_ops_source_records",
@@ -174,7 +183,7 @@ export function rentOpsMigrationSql(): string {
 
 export function rentOpsMigrationSqlForVersion(version: number): string {
   const fileName = Number.isInteger(version) ? RENT_OPS_MIGRATION_FILES[version - 1] : undefined;
-  if (!fileName) throw new Error(`Unknown Rent Operations migration version ${version}`);
+  if (!fileName) throw new Error(`Unknown 5Central Ops migration version ${version}`);
   return readFileSync(fileURLToPath(new URL(`./migrations/${fileName}`, import.meta.url)), "utf8");
 }
 
@@ -188,9 +197,9 @@ export function rentOpsMigrationChecksum(sql = rentOpsMigrationSql()): string {
 }
 
 function migrationSqlWithChecksum(sql: string, checksum: string, version = 1): string {
-  if (!RENT_OPS_SUPPORTED_SCHEMA_VERSIONS.includes(version)) throw new Error(`Unknown Rent Operations migration version ${version}`);
+  if (!RENT_OPS_SUPPORTED_SCHEMA_VERSIONS.includes(version)) throw new Error(`Unknown 5Central Ops migration version ${version}`);
   const token = `__RENT_OPS_V${version}_CHECKSUM__`;
-  if (!sql.includes(token)) throw new Error(`Rent Operations migration is missing ${token}`);
+  if (!sql.includes(token)) throw new Error(`5Central Ops migration is missing ${token}`);
   let rendered = sql.replaceAll(token, checksum);
   for (const priorVersion of RENT_OPS_SUPPORTED_SCHEMA_VERSIONS) {
     if (priorVersion >= version) break;
@@ -337,7 +346,7 @@ export async function ensureRentOpsSchema(options: { executor?: RentOpsSqlExecut
       statementCount: commands.length,
       checksum,
       migrationChecksums: Object.fromEntries(migrations.map((migration) => [migration.version, migration.checksum])),
-      message: "Rent Operations schema is not applied. Wire an explicit executor and apply:true after backup/approval.",
+      message: "5Central Ops schema is not applied. Wire an explicit executor and apply:true after backup/approval.",
     };
   }
   if (process.env.NODE_ENV === "production" && !options.query) throw new Error("rent_ops_migration_query_executor_required");
@@ -381,6 +390,6 @@ export async function ensureRentOpsSchema(options: { executor?: RentOpsSqlExecut
     statementCount: appliedCommands.length,
     checksum,
     migrationChecksums: Object.fromEntries(migrations.map((migration) => [migration.version, migration.checksum])),
-    message: "Rent Operations schema migration applied explicitly inside a transaction.",
+    message: "5Central Ops schema migration applied explicitly inside a transaction.",
   };
 }

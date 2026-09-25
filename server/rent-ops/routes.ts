@@ -528,7 +528,16 @@ function boundedUploadStream(req: Request, maxBytes: number): { stream: Readable
       callback();
     },
   });
+  // The limit can trip before the storage consumer starts reading. The consumer
+  // still observes the failure through the destroyed stream's stored error;
+  // without a listener it would be an uncaught 'error' that stops the process.
+  limiter.on("error", () => {});
   req.pipe(limiter);
+  // pipe() does not forward a client abort; without this the storage consumer
+  // waits forever on a stream that never ends.
+  const interrupted = () => { if (!req.readableEnded) limiter.destroy(new RentOpsInvariantError("Document upload was interrupted")); };
+  req.once("error", interrupted);
+  req.once("close", interrupted);
   return { stream: limiter, ...(declaredSize !== undefined ? { sizeBytes: declaredSize } : {}) };
 }
 
@@ -686,7 +695,7 @@ function adminApplicationView(snapshot: RentOpsSnapshotValue, application: RentO
 }
 
 export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
-  if (options.enableDemoGuard && process.env.NODE_ENV === "production") throw new Error("Rent Operations demo routes cannot be enabled in production");
+  if (options.enableDemoGuard && process.env.NODE_ENV === "production") throw new Error("5Central Ops demo routes cannot be enabled in production");
   if (options.exposeResumeToken && process.env.NODE_ENV === "production") throw new Error("Resume token exposure is disabled in production");
   const configuredDocumentStorage = options.documentStorage ?? options.documentStore;
   const configuredUploadStorage = options.documentUploadStorage ?? options.documentUploadStore;
@@ -777,14 +786,14 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   adminRouter.use(rentOpsRequestTiming);
   adminRouter.use((_req, res, next) => { res.set("Cache-Control", "no-store"); next(); });
   /**
-   * Mutations must be attributable to the dedicated Rent Ops admin session.
+   * Mutations must be attributable to the dedicated 5Central Ops admin session.
    * There is no synthetic fallback and no body-controlled actor field.  The
    * default production middleware sets `rentOpsAdminUser`; custom middleware
    * must do the same before allowing a mutation through.
    */
   const patchActorSubject = (req: Request): string => {
     const subject = req.rentOpsAdminUser?.id;
-    if (typeof subject !== "string" || !subject.trim()) throw new RentOpsInvariantError("Rent Ops administrator subject is required");
+    if (typeof subject !== "string" || !subject.trim()) throw new RentOpsInvariantError("5Central Ops administrator subject is required");
     return subject;
   };
   const patchOccurredAt = (): string => (options.now ?? (() => new Date()))().toISOString();
@@ -1070,7 +1079,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
     await patchAdminRecord(req, res, "application", patchApplicationSchema, async () => {
       const snapshot = await service.snapshot();
       const application = snapshot.applications.find((candidate) => candidate.id === req.params.id);
-      if (!application) throw new RentOpsInvariantError("Rent Operations record not found");
+      if (!application) throw new RentOpsInvariantError("5Central Ops record not found");
       return adminApplicationView(snapshot, application);
     });
   });
@@ -1083,7 +1092,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
       await service.patchApplicationStatus(req.params.id, parsed.data.revision, parsed.data.status, parsed.data.note, { actorSubject, occurredAt: patchOccurredAt() });
       const snapshot = await service.snapshot();
       const updated = snapshot.applications.find((candidate) => candidate.id === req.params.id);
-      if (!updated) throw new RentOpsInvariantError("Rent Operations record not found");
+      if (!updated) throw new RentOpsInvariantError("5Central Ops record not found");
       res.json(adminApplicationView(snapshot, updated));
     } catch (error) { adminError(res, error); }
   });

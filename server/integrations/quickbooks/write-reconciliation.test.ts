@@ -75,3 +75,22 @@ test("a retry after a not-found readback reuses the original requestid so Intuit
   assert.equal(h.vendorCount(), 1);
   assert.notEqual(quickBooksWriteRequestId("vendor-create-3"), expected);
 });
+
+test("readback compares requested numbers with the provider's decimal lexemes by value", async () => {
+  // QuickBooks serializes whole amounts as 200.0; the lossless parser keeps that text.
+  const saved = '{"Bill":{"Id":"77","SyncToken":"0","VendorRef":{"value":"41"},"Line":[{"Amount":200.0,"DetailType":"AccountBasedExpenseLineDetail"}],"TotalAmt":200.00}}';
+  const client = createQuickBooksAccountingClient({ scope, getAccessToken: async () => "access-token", transport: async () => ({ status: 200, body: saved, headers: {} }) });
+  const reconciler = createQuickBooksWriteReconciler(createInMemoryQuickBooksWriteJournal());
+  const fields = { VendorRef: { value: "41" }, Line: [{ Amount: 200, DetailType: "AccountBasedExpenseLineDetail" }], TotalAmt: 200 };
+  const readback = async () => {
+    const found = await client.read("Bill", "77");
+    return { exists: true, providerEntity: found.entity, providerEntityId: "77" };
+  };
+  const result = await reconciler.execute({ operationKey: "bill-200", request: fields, write: ({ requestId }) => client.create("Bill", fields, { requestId }), readback });
+  assert.equal(result.status, "confirmed");
+  await assert.rejects(
+    () => createQuickBooksWriteReconciler(createInMemoryQuickBooksWriteJournal()).execute({ operationKey: "bill-201", request: { ...fields, TotalAmt: 201 }, write: ({ requestId }) => client.create("Bill", fields, { requestId }), readback }),
+    (error: unknown) => error instanceof QuickBooksIntegrationError && error.code === "quickbooks_conflict",
+    "a different amount is still a mismatch",
+  );
+});

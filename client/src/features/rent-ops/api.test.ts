@@ -3,16 +3,10 @@ import test from "node:test";
 
 import { serializeAdminDashboard } from "../../../../server/rent-ops/presentation/dashboard";
 import { createDemoAdminSnapshot } from "./demo";
-import { filterReportRows, buildRentOpsQuery, currentLocalIsoDate, escapeCsvCell, loadRentOpsAdminSnapshot, loadRentOpsChargeDefinitions, loadRentOpsPreviewContext, loadRentOpsReport, postRentOpsMutation, reportCell, RentOpsApiError } from "./api";
+import { filterReportRows, buildRentOpsQuery, currentLocalIsoDate, loadRentOpsAdminSnapshot, loadRentOpsChargeDefinitions, loadRentOpsPaymentReviewQueue, loadRentOpsPreviewContext, loadRentOpsReport, postRentOpsMutation, reportCell, RentOpsApiError } from "./api";
 import type { ReportKey } from "./types";
-import { parseCentsInput, requireCentsInput } from "./money";
+import { parseCentsInput, requireAppliedCents, requireCentsInput } from "./money";
 import { mutationPayload } from "./form-payload";
-
-test("CSV cells cannot become spreadsheet formulas", () => {
-  assert.equal(escapeCsvCell("=2+2"), "'=2+2");
-  assert.equal(escapeCsvCell("  @SUM(A1:A2)"), "'  @SUM(A1:A2)");
-  assert.equal(escapeCsvCell("safe text"), "safe text");
-});
 
 test("live report defaults follow the current local calendar date", () => {
   assert.equal(currentLocalIsoDate(new Date(2027, 1, 3, 23, 45)), "2027-02-03");
@@ -131,6 +125,45 @@ test("charge-definition catalog decodes only positive nullable fields", async ()
   const polluted = stubJsonResponse([{ id: "charge-definition:rent", source: "provider-row" }]);
   try {
     await assert.rejects(loadRentOpsChargeDefinitions(), /invalid response/);
+  } finally {
+    polluted();
+  }
+});
+
+test("payment review queue is visible to managers and rejects unsafe response fields", async () => {
+  const row = {
+    id: "tp_review",
+    accountId: "account:one",
+    personId: "person:one",
+    tenancyId: "tenancy:one",
+    propertyId: "property:one",
+    unitId: "unit:one",
+    requestId: "request:one",
+    amountCents: 10000,
+    currency: "usd",
+    status: "review_required",
+    expiresAt: "2026-09-07T12:35:00.000Z",
+    createdAt: "2026-09-07T12:00:00.000Z",
+    updatedAt: "2026-09-07T12:36:00.000Z",
+    currentLedgerCents: 0,
+    ledgerRevision: 0,
+    stale: false,
+    queueReason: "review_required",
+    adjustments: [],
+  };
+  const restore = stubJsonResponse([row]);
+  try {
+    const [decoded] = await loadRentOpsPaymentReviewQueue();
+    assert.equal(decoded?.id, row.id);
+    assert.equal(decoded?.status, row.status);
+    assert.equal(decoded?.amountCents, row.amountCents);
+    assert.deepEqual(decoded?.adjustments, []);
+  } finally {
+    restore();
+  }
+  const polluted = stubJsonResponse([{ ...row, checkoutUrl: "https://checkout.example.invalid" }]);
+  try {
+    await assert.rejects(loadRentOpsPaymentReviewQueue(), /invalid response/);
   } finally {
     polluted();
   }
@@ -599,4 +632,10 @@ test("tenant payer review uncertainty survives serializer and strict browser dec
       assert.equal((await loadRentOpsAdminSnapshot()).snapshot.tenants[0].payerResponsibilityUnverified, unverified);
     } finally { restore(); }
   }
+});
+
+test("payment correction applied amounts: 0 unapplies, a blank field is an error", () => {
+  assert.deepEqual(requireAppliedCents(["125.00", "0", "0.00"]), [12500, 0, 0]);
+  assert.throws(() => requireAppliedCents(["125.00", ""]), /Applied amount is required/);
+  assert.throws(() => requireAppliedCents(["abc"]), /Applied amount must use dollars/);
 });

@@ -323,6 +323,22 @@ test("tenant home ignores attempted person and tenancy overrides and omits other
   assert.equal(result.headers.get("cache-control"), "no-store");
 });
 
+test("tenant balance date follows Eastern business time across the UTC evening boundary", async (t) => {
+  const f = await fixture(t);
+  const { target } = await f.activate();
+  // 00:30Z is 20:30 Eastern on September 7. The old UTC slice advanced the
+  // displayed balance date here even though the property's business date had
+  // not changed.
+  f.advance(8.5 * 60 * 60 * 1000);
+  const evening = await target.request<TenantHome>(`${tenantPath}/home`);
+  assert.equal(evening.status, 200);
+  assert.equal(evening.body.balance.asOfDate, "2026-09-07");
+  f.advance(4.5 * 60 * 60 * 1000);
+  const morning = await target.request<TenantHome>(`${tenantPath}/home`);
+  assert.equal(morning.status, 200);
+  assert.equal(morning.body.balance.asOfDate, "2026-09-08");
+});
+
 test("a changed source binding blocks an already authenticated tenant on the next request", async (t) => {
   const f = await fixture(t);
   const { target } = await f.activate();
@@ -363,6 +379,15 @@ test("public recovery and login rate limits are shared across clients and reset 
   assert.equal((await f.client().request(`${tenantPath}/auth/login`, { method: "POST", body: { email: "unknown@example.test", password: initialPassword } })).status, 401);
 });
 
+
+test("a rate-limited address stops creating per-account limiter rows", async (t) => {
+  const f = await fixture(t);
+  for (let attempt = 0; attempt < 25; attempt++) {
+    await f.client().request(`${tenantPath}/auth/login`, { method: "POST", body: { email: `sprayed${attempt}@example.test`, password: initialPassword } });
+  }
+  // One address row plus one row per account while the address was still admitted (20).
+  assert.equal(f.store.limits.size, 21);
+});
 
 test("configured reset is nonenumerating, preserves access until use, and rejects replay", async t => {
   const deliveries: TenantAccessDelivery[] = [];

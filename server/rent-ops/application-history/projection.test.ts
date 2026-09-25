@@ -207,6 +207,24 @@ test("Rent and RentCents dollar representations normalize to cents", () => {
   assert.deepEqual(snapshot.interests.map((row) => row.rentCents), [125000, 125000, 125000, 125000]);
 });
 
+test("decimal dollar rents convert to exact cents without floating-point loss", () => {
+  const snapshot = project(input({
+    interestedRentals: [
+      raw({ sourceId: "rent-19-99", ApplicationID: "application-1", Rent: "19.99" }),
+      raw({ sourceId: "rent-1250-10", ApplicationID: "application-1", Rent: "$1,250.10" }),
+      raw({ sourceId: "rent-number", ApplicationID: "application-1", Rent: 0.29 }),
+      raw({ sourceId: "rent-money-scale", ApplicationID: "application-1", Rent: "1250.1000" }),
+      raw({ sourceId: "rent-sub-cent", ApplicationID: "application-1", Rent: "1250.125" }),
+      raw({ sourceId: "rent-cents-fraction", ApplicationID: "application-1", RentCents: "125000.5" }),
+      raw({ sourceId: "rent-negative", ApplicationID: "application-1", Rent: "-5" }),
+    ],
+  }));
+  assert.deepEqual(snapshot.interests.map((row) => [row.rentCents, row.rentKnowledge]), [
+    [1999, "known"], [125010, "known"], [29, "known"], [125010, "known"],
+    [null, "unknown"], [null, "unknown"], [null, "unknown"],
+  ]);
+});
+
 test("artifact projection reuses exact mapped targets and returns aggregate-only blockers", () => {
   const factory = (entityType: string, sourceId: string) => `target:${entityType}:${sourceId}`;
   const payload = input({
@@ -290,4 +308,15 @@ test("unknown and sensitive answer types retain exact linkage without exposing s
   }
   const missing = project(input({ applicationAnswerRecords: [raw({ sourceId: "answer-1", ApplicationID: "application-1", FieldID: "missing" })] }));
   assert.equal(missing.unknownRestricted.unmappedAnswerCount, 1);
+});
+
+test("an unparseable source date or number is unknown, never a source fact with no value", () => {
+  const snapshot = project(input({
+    applications: [raw({ sourceId: "application-1", ProspectID: "prospect-1", SubmittedDate: "03/01/2024", CreatedDate: "2024-02-28T09:00:00" })],
+    interestedRentals: [raw({ sourceId: "interest-1", ApplicationID: "application-1", Bedrooms: "2.5" })],
+  }));
+  const application = snapshot.applications[0];
+  assert.deepEqual([application.submittedOn, application.submittedOnKnowledge], [null, "unknown"]);
+  assert.deepEqual([application.createdOn, application.createdOnKnowledge], ["2024-02-28", "source"]);
+  assert.deepEqual([snapshot.interests[0].bedrooms, snapshot.interests[0].bedroomsKnowledge], [null, "unknown"]);
 });

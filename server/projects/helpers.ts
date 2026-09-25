@@ -12,7 +12,9 @@ import {
 import { multiplyDecimalToCents } from "../../shared/company/money";
 import { ValidationCommandError } from "../company/commands/errors";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
+import { nowIsoDate } from "../rent-ops/domain/dates";
 import { projectIdSchema, projectQuantitySchema, type ProjectId } from "../../shared/projects/contracts";
+import { PROJECT_RESERVED_VENDOR_PREFIX } from "../../shared/projects/cost-report";
 
 export function dbString(value: unknown, field: string): string {
   if (typeof value !== "string" || value.length === 0) {
@@ -98,8 +100,9 @@ export function dbCount(value: unknown, field: string): number {
   return parsed;
 }
 
-export function todayIsoDate(): IsoDate {
-  return isoDateSchema.parse(new Date().toISOString().slice(0, 10));
+/** The company operating date (America/New_York), not the UTC calendar date. */
+export function todayIsoDate(now = new Date()): IsoDate {
+  return isoDateSchema.parse(nowIsoDate(now));
 }
 
 export function resolveEffectiveDate(candidate?: string | null): IsoDate {
@@ -326,4 +329,15 @@ export async function assertScopeItemForProject(
     [input.organizationId, input.projectId, input.scopeItemId],
   );
   if (result.rows.length !== 1) throw new ValidationCommandError("Scope item is not part of the selected project", { reason: "scope_item_project_mismatch" });
+}
+
+/**
+ * SQL predicate that keeps user-entered draft costs and drops rows with a
+ * reserved "system:" vendor (ETC overrides and other derived rows). Every
+ * reader of company_project_draft_costs that means "costs" must use it. A
+ * null vendor is a user cost, so the predicate is null-safe.
+ */
+export function userDraftCostPredicate(alias: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/.test(alias)) throw new Error("Invalid SQL alias");
+  return `lower(coalesce(${alias}.vendor_name, '')) NOT LIKE '${PROJECT_RESERVED_VENDOR_PREFIX}%'`;
 }

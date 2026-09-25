@@ -124,6 +124,24 @@ function exactSourceKey(reference: FinancialSourceReference): string {
 
 const PROJECT_COST_CLASSIFICATIONS = new Set(["expense", "cogs", "capitalized_cost"]);
 
+/**
+ * Project cost bindings point at transaction streams, while aggregate QBO
+ * coverage also includes unrelated streams such as Accounts and Deposits.
+ * Keep the project read tied to the stream that can contain its bound line.
+ * Unknown object types deliberately fall back to aggregate coverage so an
+ * unclassified source cannot be treated as complete without evidence.
+ */
+function projectCostStream(objectType: string): string | undefined {
+  switch (objectType) {
+    case "Purchase": return "transactions.purchase";
+    case "JournalEntry": return "transactions.journalentry";
+    case "Bill": return "transactions.bill";
+    case "BillPayment": return "transactions.billpayment";
+    case "Deposit": return "transactions.deposit";
+    default: return undefined;
+  }
+}
+
 async function isEligibleProjectCostLine(
   costContext: FinancialProviderCostContextPort,
   line: FinancialSourceLineResolution,
@@ -162,11 +180,39 @@ export async function resolveProjectFinanceActuals(
   costContext: FinancialProviderCostContextPort,
   input: { organizationId: string; projectId: string; asOf?: IsoDate },
 ): Promise<ProjectFinanceActualReadResult> {
+  // Released bindings are historical audit records, not unresolved current
+  // cost links. Keeping them in the coverage calculation leaves every later
+  // project read partial after an operator intentionally releases a line.
   const bindingRows = (await bindings.listProjectBindings(input)).filter((binding) => binding.bindingStatus !== "released");
-  const scopes = new Map<string, FinancialSourceScope>();
-  for (const binding of bindingRows) scopes.set(financialSourceScopeKey(sourceScope(binding.source)), sourceScope(binding.source));
-  const coverages = await Promise.all(Array.from(scopes.values()).map((scope) => source.readCoverage(scope)));
+  const coverageQueries = new Map<string, { readonly scope: FinancialSourceScope; readonly stream?: string }>();
+  for (const binding of bindingRows) {
+    const scope = sourceScope(binding.source);
+    const stream = projectCostStream(binding.source.objectType);
+    const key = `${financialSourceScopeKey(scope)}\u0000${stream ?? "aggregate"}`;
+    coverageQueries.set(key, stream === undefined ? { scope } : { scope, stream });
+  }
+  // A project should inherit uncertainty from the QBO stream that can contain
+  // its bound line. The aggregate read remains the company-wide release and
+  // validation signal; this narrower read prevents an unrelated open object
+  // in another stream from making every project partial.
+  const coverages = await Promise.all(Array.from(coverageQueries.values()).map(({ scope, stream }) => source.readCoverage(scope, stream)));
+
   let hasUnresolvedBinding = bindingRows.some((binding) => binding.bindingStatus !== "verified" || !binding.eligible);
+  // A current eligible Purchase refund with an unallocated balance can still
+  // reduce the known cost subtotal. Fully allocated and non-cost credits do
+  // not reduce coverage. Without the narrow provider probe, fail closed
+  // rather than scanning unrelated transaction streams or claiming complete.
+  const purchaseScopes = Array.from(coverageQueries.values())
+    .filter(({ stream }) => stream === "transactions.purchase")
+    .map(({ scope }) => scope);
+  const hasPurchaseCredits = source.hasPurchaseCredits?.bind(source);
+  if (purchaseScopes.length > 0) {
+    if (hasPurchaseCredits === undefined) {
+      hasUnresolvedBinding = true;
+    } else if (await Promise.all(purchaseScopes.map((scope) => hasPurchaseCredits(scope, input.asOf))).then((values) => values.some(Boolean))) {
+      hasUnresolvedBinding = true;
+    }
+  }
   const results = await Promise.all(bindingRows.map(async (binding) => {
     if (binding.bindingStatus !== "verified" || !binding.eligible) return null;
     const resolved = await source.resolveLine({
@@ -205,6 +251,9 @@ export async function resolveProjectFinanceActuals(
       currency: resolved.currency,
       postedOn: resolved.postedOn,
       sourceRevision: resolved.source.version,
+      transactionType: resolved.transactionType,
+      settlement: resolved.settlement,
+      lineAmountCents: resolved.amountCents,
     });
   }));
   return { coverage: mergeFinanceCoverage(coverages, hasUnresolvedBinding), actuals: results.filter((value): value is ProjectFinanceActual => value !== null) };
@@ -299,10 +348,12 @@ export function calculateProjectExecutionTotals(input: {
   // A partial mirror is useful evidence but does not establish a complete
   // remaining balance. Keep its amount visible while withholding the derived
   // exposure that would otherwise look authoritative.
+  // A closed commitment can no longer be billed, so it has no remaining
+  // exposure. This matches the canonical project cost report.
   const unspentCommitment = coverage === "complete"
     ? input.commitments
       .filter((commitment) => commitment.status === "approved" || commitment.status === "closed")
-      .reduce((total, commitment) => total + maxZero(centsToBigInt(commitment.committedCents) - (linkedActualByCommitment.get(commitment.id) ?? BigInt(0))), BigInt(0))
+      .reduce((total, commitment) => total + (commitment.status === "closed" ? BigInt(0) : maxZero(centsToBigInt(commitment.committedCents) - (linkedActualByCommitment.get(commitment.id) ?? BigInt(0)))), BigInt(0))
     : null;
   const remaining = coverage === "complete" && unspentCommitment !== null
     ? revisedBudget - actualTotal - unspentCommitment

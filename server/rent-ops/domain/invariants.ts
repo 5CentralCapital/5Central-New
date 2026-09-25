@@ -800,7 +800,7 @@ export function validateSnapshot(snapshot: RentOpsSnapshot): InvariantViolation[
 
 export function assertValidSnapshot(snapshot: RentOpsSnapshot): void {
   const violations = validateSnapshot(snapshot);
-  if (violations.length > 0) throw new RentOpsInvariantError("Rent Operations snapshot failed invariant validation", violations);
+  if (violations.length > 0) throw new RentOpsInvariantError("5Central Ops snapshot failed invariant validation", violations);
 }
 
 export function buildReversal(

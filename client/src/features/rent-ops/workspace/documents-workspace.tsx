@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { activityDisplay } from "./activity-display";
 import { Activity, AlertCircle, Download, FileClock, FileText, Search } from "lucide-react";
 
 import { downloadRentOpsDocument } from "../api";
@@ -16,6 +17,7 @@ import {
   filterActivities,
   filterDocuments,
   leasingFact,
+  leasingFactResolved,
   linkedRecordLabel,
   linkedRecordPerson,
   propertyDisplayName,
@@ -25,6 +27,7 @@ import {
   type LeasingRegisterFilters,
 } from "./leasing-model";
 import { formatDate, formatLabel } from "./display";
+import { PROPERTY_MISSING_LABEL, UNIT_MISSING_LABEL } from "@shared/review-cases/display-labels";
 import "./leasing.css";
 
 export type DocumentsEditAction = (action: QuickAction, values?: FormValues) => void;
@@ -82,7 +85,7 @@ function initialFilterState(filters: ViewFilters): RecordFilterState {
 
 function knownDate(value: string | undefined, knowledge?: string): string {
   const fact = leasingFact(value, knowledge);
-  return fact === "Unknown" || fact === "Needs review" ? fact : formatDate(value);
+  return leasingFactResolved(value, knowledge) ? formatDate(value) : fact;
 }
 
 function statusClass(value?: string): string {
@@ -92,14 +95,14 @@ function statusClass(value?: string): string {
 
 function propertyOptions(snapshot: AdminSnapshot): Array<[string, string]> {
   return snapshot.snapshot.properties
-    .map((property) => [property.id ?? "", property.name ?? "Needs review"] as [string, string])
+    .map((property) => [property.id ?? "", property.name ?? PROPERTY_MISSING_LABEL] as [string, string])
     .filter(([id]) => Boolean(id));
 }
 
 function unitOptions(snapshot: AdminSnapshot, propertyId: string): Array<[string, string]> {
   return snapshot.snapshot.units
     .filter((unit) => propertyId === "all" || unit.propertyId === propertyId)
-    .map((unit) => [unit.id ?? "", unit.unitNumber ?? "Needs review"] as [string, string])
+    .map((unit) => [unit.id ?? "", unit.unitNumber ?? UNIT_MISSING_LABEL] as [string, string])
     .filter(([id]) => Boolean(id));
 }
 
@@ -207,7 +210,7 @@ export function DocumentsWorkspace({ snapshot, filters, onEdit, onChanged: _onCh
     recordKey: activityRecordKey(activity, index),
     date: activityDateValue(activity),
     type: activity.type,
-    summary: activity.summary ?? "Unknown activity",
+    summary: activityDisplay(activity).title,
     actor: leasingFact(activity.actor, activity.actorKnowledge),
     linked: linkedRecordLabel(snapshot, activity),
     linkedPerson:linkedRecordPerson(snapshot,activity),
@@ -239,12 +242,12 @@ export function DocumentsWorkspace({ snapshot, filters, onEdit, onChanged: _onCh
 
   const rowCount = section === "documents" ? visibleDocuments.length : visibleActivities.length;
   return <section className="rm-panel rm-leasing-workspace" aria-labelledby="rm-documents-title">
-    <header className="rm-panel-title rm-leasing-heading"><div><h2 id="rm-documents-title">Documents &amp; activity</h2></div><button type="button" className="rm-button rm-button-primary" onClick={addActivity}><FileClock aria-hidden="true" />Add activity</button></header>
+    <header className="rm-panel-title rm-leasing-heading"><div><h2 id="rm-documents-title" className="sr-only">Documents &amp; activity</h2></div><button type="button" className="rm-button rm-button-primary" onClick={addActivity}><FileClock aria-hidden="true" />Add activity</button></header>
     <div className="rm-tabs rm-leasing-register-tabs" role="tablist" aria-label="Document and activity records"><button type="button" role="tab" aria-selected={section === "documents"} className={section === "documents" ? "active" : ""} onClick={() => { setSection("documents"); setFilterState((current) => ({ ...current, status: "all", type: "all" })); }}><FileText aria-hidden="true" />Documents <span>{scopedDocuments.length}</span></button><button type="button" role="tab" aria-selected={section === "activity"} className={section === "activity" ? "active" : ""} onClick={() => { setSection("activity"); setFilterState((current) => ({ ...current, status: "all", type: "all" })); }}><Activity aria-hidden="true" />Activity <span>{scopedActivities.length}</span></button></div>
     {error && <div className="rm-error" role="alert"><AlertCircle aria-hidden="true" />{error}<button type="button" className="rm-button" onClick={() => setError(undefined)}>Dismiss</button></div>}
     <DocumentsFilterBar snapshot={snapshot} filters={filterState} documents={scopedDocuments} activities={scopedActivities} section={section} onChange={setFilterState} />
     <div className="rm-leasing-register-meta"><span>{rowCount} matching {section === "documents" ? "documents" : "activities"}</span></div>
-    {section === "documents" ? <DataGrid<DocumentGridRow> rows={documentRows} columns={documentColumns} getRowKey={(row, index) => row.recordKey || documentRecordKey(row.document, index)} pageSize={25} emptyMessage="No documents match these filters." caption="Document register" initialSort={{ key: "date", direction: "desc" }} storageKey="rm-documents" /> : <DataGrid<ActivityGridRow> rows={activityRows} columns={activityColumns} getRowKey={(row, index) => row.recordKey || activityRecordKey(row.activity, index)} pageSize={25} emptyMessage="No activity matches these filters." caption="Activity register" initialSort={{ key: "date", direction: "desc" }} storageKey="rm-activity" />}
+    {section === "documents" ? <DataGrid<DocumentGridRow> rows={documentRows} columns={documentColumns} getRowKey={(row, index) => row.recordKey || documentRecordKey(row.document, index)} pageSize={25} emptyMessage="No documents match these filters." caption="Document register" summaryLabel="document" initialSort={{ key: "date", direction: "desc" }} storageKey="rm-documents" /> : <DataGrid<ActivityGridRow> rows={activityRows} columns={activityColumns} getRowKey={(row, index) => row.recordKey || activityRecordKey(row.activity, index)} pageSize={25} emptyMessage="No activity matches these filters." caption="Activity register" summaryLabel="activity" initialSort={{ key: "date", direction: "desc" }} storageKey="rm-activity" />}
   </section>;
 }
 

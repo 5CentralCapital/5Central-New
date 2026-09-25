@@ -400,18 +400,90 @@
     },
     {
       "version": 43,
-      "fileName": "043_qbo_account_purpose.sql",
-      "sha256": "39470cac7e424941907aa9d0883260ff2b2860136bda8ede62a5e9b711c7f512",
+      "fileName": "043_company_intake.sql",
+      "sha256": "720d625821703fa450a7e60585a48375d147a096c5f3cd7c458b18e05daa4ad6",
       "predecessor": 42,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Disable MRA intake commands; keep staged packets, line registry and account outcomes, then apply a reviewed forward repair."
+    },
+    {
+      "version": 44,
+      "fileName": "044_company_documents.sql",
+      "sha256": "b9da56409ed3e9ee7b52f403a9ae1d8ec630ea3db9b68175b3966ce4d848a203",
+      "predecessor": 43,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Disable company document commands; keep verified immutable sources and links, then apply a reviewed forward repair."
+    },
+    {
+      "version": 45,
+      "fileName": "045_company_review_cases.sql",
+      "sha256": "4e9e61a276cfdba2f1ec1443fe93080dd174ac9f390b1fa2fa796c9a839aa7bf",
+      "predecessor": 44,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Disable review-case commands and the detector job; keep cases and append-only history, then apply a reviewed forward repair."
+    },
+    {
+      "version": 46,
+      "fileName": "046_company_jobs.sql",
+      "sha256": "3a384728eb15bfe53168c7f74729102499903e6e8f29270bdbce49b3fc241bd9",
+      "predecessor": 45,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Stop the worker and outbox dispatcher; keep queued, running and dead jobs for operator recovery, then apply a reviewed forward repair."
+    },
+    {
+      "version": 47,
+      "fileName": "047_accounting_integration_operations.sql",
+      "sha256": "ddd41615b17afe41cbdbcd5d73603a1bf2f38487eb61eb0195dc9fea0bee4dbc",
+      "predecessor": 46,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Disable webhook intake, posting-policy and PM settlement commands; keep ledgers and tombstones, then apply a reviewed forward repair."
+    },
+    {
+      "version": 48,
+      "fileName": "048_company_forecasting.sql",
+      "sha256": "a6d474477faab885de06be7766423dc8b3b516557b4b0e9811f31405e0447ca4",
+      "predecessor": 47,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Disable forecast commands; keep scenarios, immutable assumption versions and snapshots, then apply a reviewed forward repair."
+    },
+    {
+      "version": 49,
+      "fileName": "049_rent_ops_document_object_relocations.sql",
+      "sha256": "0037d1d7a0c13941c55a1f6d5ebdd4054645f951cde9cefaa75069cd14576cdf",
+      "predecessor": 48,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Keep the relocation history. Downloads follow each binding's latest relocation; correct a bad one by appending a reviewed relocation to a verified object (the source bucket is retained 30 days), never by deleting rows."
+    },
+    {
+      "version": 50,
+      "fileName": "050_accounting_qbo_receivables.sql",
+      "sha256": "8eb43fdc0b7a8c901b739af2d2d241768f471f4614b4050a73f5f4eb594c2736",
+      "predecessor": 49,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Stop receivable streams in the worker; keep mirrored documents and append-only revision effects, then apply a reviewed forward repair. QuickBooks remains the authority, so a full replay rebuilds the mirror."
+    },
+    {
+      "version": 51,
+      "fileName": "051_qbo_account_purpose.sql",
+      "sha256": "1ed23ef4f32cd7f119d780318228d6899f42b46698c36e7f2a8e979cb0c1a9b9",
+      "predecessor": 50,
       "minimumServerContract": 1,
       "minimumClientContract": 1,
       "recovery": "Additive purpose mapping records can remain on rollback; disable mapping writes and restore the reviewed backup if schema recovery is required."
     },
     {
-      "version": 44,
-      "fileName": "044_project_property_plans.sql",
-      "sha256": "32d1c0975dc2eb0382b107c86a915774b1c1d6db402327f978856f411c7b70e4",
-      "predecessor": 43,
+      "version": 52,
+      "fileName": "052_project_property_plans.sql",
+      "sha256": "d5e73c247c87c308847d2a703a4fc99ccbdce6fbcddf52ebe0a95a402f549aa3",
+      "predecessor": 51,
       "minimumServerContract": 1,
       "minimumClientContract": 1,
       "recovery": "Additive planning associations must never be converted to legal ownership on rollback; retain the table and restore the reviewed backup if needed."

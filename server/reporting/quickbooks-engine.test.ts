@@ -14,7 +14,7 @@ test("native QBO engine uses typed provider columns and preserves summary rows",
       received = request as Record<string, unknown>;
       return {
         reportName: "ProfitAndLoss", scope: { organizationId, legalEntityId: entityId, realmId: "123", environment: "sandbox" }, accountingMethod: "Cash" as const, currency: "USD", status: 200, intuitTid: "tid-1",
-        raw: { Header: { ReportBasis: "Cash", StartPeriod: "2026-09-01", EndPeriod: "2026-09-30", Currency: "USD" }, Columns: { Column: [{ ColTitle: "Account", ColType: "String" }, { ColTitle: "Total", ColType: "Money" }] }, Rows: { Row: [{ Header: { ColData: [{ value: "Income", id: "section-account-1" }, { value: "" }] }, Rows: { Row: [{ ColData: [{ value: "100", id: "account-100" }, { value: "10.25" }] }] }, Summary: { ColData: [{ value: "Total Income" }, { value: "10.25" }] } }] } },
+        raw: { Header: { ReportBasis: "Cash", StartPeriod: "2026-09-01", EndPeriod: "2026-09-30", Currency: "USD" }, Columns: { Column: [{ ColTitle: "Account", ColType: "String" }, { ColTitle: "Total", ColType: "Money" }] }, Rows: { Row: [{ group: "Income", Header: { ColData: [{ value: "Income", id: "section-account-1" }, { value: "" }] }, Rows: { Row: [{ ColData: [{ value: "100", id: "account-100" }, { value: "10.25" }] }] }, Summary: { ColData: [{ value: "Total Income" }, { value: "10.25" }] } }] } },
       };
     } }),
   });
@@ -24,10 +24,14 @@ test("native QBO engine uses typed provider columns and preserves summary rows",
   assert.equal(received?.account, "100");
   assert.equal(received?.summarizeColumnBy, "Month");
   assert.equal(result.rows.find(row => row.values.rowKind === "detail")?.values.account, "100");
+  assert.equal(result.rows.find(row => row.values.rowKind === "summary")?.values.providerGroup, "Income");
+  assert.equal(result.rows.find(row => row.values.rowKind === "summary")?.values.providerTotalCents, "1025");
+  assert.ok(!result.columns.some(column => column.id === "providerGroup"), "provider metadata is not a visible report column");
   assert.equal(result.rows.find(row => row.values.rowKind === "section")?.values.sectionAccountId, "section-account-1");
   assert.equal(result.rows.find(row => row.values.rowKind === "detail")?.values.accountId, "account-100");
   assert.equal(result.rows.find(row => row.values.rowKind === "detail")?.values.totalCents, "1025");
   assert.equal(result.rows.find(row => row.values.rowKind === "summary")?.values.totalCents, "1025");
+  assert.deepEqual(result.rows.map(row => row.values.rowKind), ["section", "detail", "summary"], "a section's total follows its detail rows");
 });
 
 test("native QBO engine refuses an unmarked empty provider result", async () => {

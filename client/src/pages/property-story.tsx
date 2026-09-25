@@ -1,3 +1,4 @@
+import MarketingImage from "@/components/marketing-image";
 import { Link, useRoute } from "wouter";
 import { ArrowLeft, Camera, FileText, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -103,12 +104,12 @@ export default function PropertyStory() {
     <div className="min-h-screen bg-background pt-24" data-testid="property-story-page">
       <section className="pb-12 border-b border-border">
         <div className="container-wide">
-          <Link href="/portfolio">
-            <Button className="btn-outline mb-8">
+          <Button asChild className="btn-outline mb-8">
+            <Link href="/portfolio">
               <ArrowLeft className="w-4 h-4 mr-2" />
               Portfolio
-            </Button>
-          </Link>
+            </Link>
+          </Button>
 
           <div className="grid lg:grid-cols-5 gap-8 lg:gap-12 items-end">
             <div className="lg:col-span-3">
@@ -143,12 +144,12 @@ export default function PropertyStory() {
           <div className="grid lg:grid-cols-3 gap-8">
             <div className="lg:col-span-2">
               <div className="aspect-[16/9] bg-muted overflow-hidden mb-4">
-                <img src={getPublicPropertyImage(property)} alt={property.name} className="w-full h-full object-cover" />
+                <MarketingImage loading="eager" fetchPriority="high" sizes="(max-width: 1024px) 100vw, 66vw" src={getPublicPropertyImage(property)} alt={property.name} className="w-full h-full object-cover" />
               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {gallery.slice(1).map((photo) => (
                   <div key={photo} className="aspect-square bg-muted overflow-hidden">
-                    <img src={photo} alt={`${property.name} gallery`} className="w-full h-full object-cover" />
+                    <MarketingImage src={photo} alt={`${property.name} gallery`} className="w-full h-full object-cover" />
                   </div>
                 ))}
               </div>
@@ -175,9 +176,9 @@ export default function PropertyStory() {
                 </p>
               </div>
 
-              <Link href="/investor">
-                <Button className="btn-accent w-full">Join Investor List</Button>
-              </Link>
+              <Button asChild className="btn-accent w-full">
+                <Link href="/investor">Join Investor List</Link>
+              </Button>
             </div>
           </div>
         </div>

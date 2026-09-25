@@ -14,12 +14,12 @@ export default function Vision() {
   return (
     <div className="min-h-screen pt-16" data-testid="vision-page">
       {/* Hero Section */}
-      <section className="py-20 bg-gradient-to-br from-primary to-gray-800 text-white relative overflow-hidden">
+      <section className="py-20 bg-gradient-to-br from-deep-charcoal to-gray-800 text-white relative overflow-hidden">
         <div className="geometric-pattern absolute inset-0 opacity-10"></div>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
           <div className="text-center mb-16">
             <h1 className="text-5xl md:text-6xl font-serif font-bold mb-6" data-testid="vision-title">
-              Our <span className="text-accent-gold">Vision</span>
+              Our <span className="text-warm-brass">Vision</span>
             </h1>
             <p className="text-xl text-gray-300 max-w-3xl mx-auto">
               Building a $1 billion real estate portfolio by 2050 through strategic acquisitions and disciplined value creation
@@ -57,9 +57,9 @@ export default function Vision() {
 
             <div className="text-center">
               <div className="relative">
-                <div className="w-64 h-64 mx-auto rounded-full border-8 border-accent-gold/30 flex items-center justify-center mb-8 bg-gradient-to-br from-accent-gold/10 to-bronze/10">
+                <div className="w-64 h-64 mx-auto rounded-full border-8 border-warm-brass/30 flex items-center justify-center mb-8 bg-gradient-to-br from-warm-brass/10 to-warm-stone/10">
                   <div className="text-center">
-                    <div className="text-4xl md:text-5xl font-bold text-accent-gold mb-2" data-testid="vision-goal-amount">$1B</div>
+                    <div className="text-4xl md:text-5xl font-bold text-warm-brass mb-2" data-testid="vision-goal-amount">$1B</div>
                     <div className="text-lg text-gray-600">Portfolio Goal</div>
                     <div className="text-sm text-gray-500 mt-1">by 2050</div>
                   </div>
@@ -67,19 +67,19 @@ export default function Vision() {
                 
                 <div className="grid grid-cols-2 gap-6">
                   <div className="text-center">
-                    <div className="text-2xl font-bold text-accent-gold mb-1" data-testid="vision-stat-units">2,500+</div>
+                    <div className="text-2xl font-bold text-warm-brass mb-1" data-testid="vision-stat-units">2,500+</div>
                     <div className="text-sm text-gray-500">Target Units</div>
                   </div>
                   <div className="text-center">
-                    <div className="text-2xl font-bold text-accent-gold mb-1" data-testid="vision-stat-markets">10+</div>
+                    <div className="text-2xl font-bold text-warm-brass mb-1" data-testid="vision-stat-markets">10+</div>
                     <div className="text-sm text-gray-500">Target Markets</div>
                   </div>
                   <div className="text-center">
-                    <div className="text-2xl font-bold text-accent-gold mb-1" data-testid="vision-stat-irr">20%+</div>
+                    <div className="text-2xl font-bold text-warm-brass mb-1" data-testid="vision-stat-irr">20%+</div>
                     <div className="text-sm text-gray-500">Target IRR</div>
                   </div>
                   <div className="text-center">
-                    <div className="text-2xl font-bold text-accent-gold mb-1" data-testid="vision-stat-multiple">3.0x+</div>
+                    <div className="text-2xl font-bold text-warm-brass mb-1" data-testid="vision-stat-multiple">3.0x+</div>
                     <div className="text-sm text-gray-500">Target Multiple</div>
                   </div>
                 </div>
@@ -102,7 +102,7 @@ export default function Vision() {
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
             <Card className="bg-white rounded-2xl card-shadow premium-border p-8 text-center hover:shadow-xl transition-all duration-300 transform hover:-translate-y-2">
               <CardContent className="p-0">
-                <div className="w-16 h-16 bg-gradient-to-br from-accent-gold to-bronze rounded-full flex items-center justify-center mx-auto mb-6">
+                <div className="w-16 h-16 bg-gradient-to-br from-warm-brass to-warm-stone rounded-full flex items-center justify-center mx-auto mb-6">
                   <TrendingUp className="w-8 h-8 text-white" />
                 </div>
                 <h3 className="text-xl font-serif font-semibold text-primary mb-4">Strategic Growth</h3>
@@ -114,7 +114,7 @@ export default function Vision() {
 
             <Card className="bg-white rounded-2xl card-shadow premium-border p-8 text-center hover:shadow-xl transition-all duration-300 transform hover:-translate-y-2">
               <CardContent className="p-0">
-                <div className="w-16 h-16 bg-gradient-to-br from-accent-gold to-bronze rounded-full flex items-center justify-center mx-auto mb-6">
+                <div className="w-16 h-16 bg-gradient-to-br from-warm-brass to-warm-stone rounded-full flex items-center justify-center mx-auto mb-6">
                   <Target className="w-8 h-8 text-white" />
                 </div>
                 <h3 className="text-xl font-serif font-semibold text-primary mb-4">Market Leadership</h3>
@@ -126,7 +126,7 @@ export default function Vision() {
 
             <Card className="bg-white rounded-2xl card-shadow premium-border p-8 text-center hover:shadow-xl transition-all duration-300 transform hover:-translate-y-2">
               <CardContent className="p-0">
-                <div className="w-16 h-16 bg-gradient-to-br from-accent-gold to-bronze rounded-full flex items-center justify-center mx-auto mb-6">
+                <div className="w-16 h-16 bg-gradient-to-br from-warm-brass to-warm-stone rounded-full flex items-center justify-center mx-auto mb-6">
                   <Globe className="w-8 h-8 text-white" />
                 </div>
                 <h3 className="text-xl font-serif font-semibold text-primary mb-4">Innovation Focus</h3>
@@ -138,7 +138,7 @@ export default function Vision() {
 
             <Card className="bg-white rounded-2xl card-shadow premium-border p-8 text-center hover:shadow-xl transition-all duration-300 transform hover:-translate-y-2">
               <CardContent className="p-0">
-                <div className="w-16 h-16 bg-gradient-to-br from-accent-gold to-bronze rounded-full flex items-center justify-center mx-auto mb-6">
+                <div className="w-16 h-16 bg-gradient-to-br from-warm-brass to-warm-stone rounded-full flex items-center justify-center mx-auto mb-6">
                   <Building className="w-8 h-8 text-white" />
                 </div>
                 <h3 className="text-xl font-serif font-semibold text-primary mb-4">Community Impact</h3>
@@ -163,19 +163,19 @@ export default function Vision() {
 
           <div className="relative">
             {/* Timeline line */}
-            <div className="absolute left-1/2 transform -translate-x-0.5 w-1 h-full bg-accent-gold/30 hidden lg:block"></div>
+            <div className="absolute left-1/2 transform -translate-x-0.5 w-1 h-full bg-warm-brass/30 hidden lg:block"></div>
             
             <div className="space-y-12 lg:space-y-16" data-testid="growth-timeline">
               {milestones.map((milestone, index) => (
                 <div key={milestone.year} className={`flex flex-col lg:flex-row items-center gap-8 ${index % 2 === 0 ? 'lg:flex-row' : 'lg:flex-row-reverse'}`}>
                   {/* Timeline marker */}
-                  <div className="hidden lg:block absolute left-1/2 transform -translate-x-1/2 w-4 h-4 bg-accent-gold rounded-full border-4 border-white shadow-lg z-10"></div>
+                  <div className="hidden lg:block absolute left-1/2 transform -translate-x-1/2 w-4 h-4 bg-warm-brass rounded-full border-4 border-white shadow-lg z-10"></div>
                   
                   <div className={`flex-1 ${index % 2 === 0 ? 'lg:text-right' : 'lg:text-left'}`}>
                     <Card className="bg-gradient-to-br from-secondary to-gray-100 rounded-2xl p-8 card-shadow premium-border hover:shadow-xl transition-all duration-300">
                       <CardContent className="p-0">
                         <div className={`flex items-center gap-4 mb-4 ${index % 2 === 0 ? 'lg:justify-end' : 'lg:justify-start'}`}>
-                          <div className="text-3xl font-bold text-accent-gold" data-testid={`milestone-year-${milestone.year}`}>
+                          <div className="text-3xl font-bold text-warm-brass" data-testid={`milestone-year-${milestone.year}`}>
                             {milestone.year}
                           </div>
                           <div className="text-4xl font-bold text-primary" data-testid={`milestone-target-${milestone.year}`}>
@@ -212,28 +212,28 @@ export default function Vision() {
               <h3 className="text-3xl font-serif font-bold text-primary mb-6">Target Market Criteria</h3>
               <div className="space-y-6">
                 <div className="flex items-start gap-4">
-                  <div className="w-3 h-3 bg-accent-gold rounded-full mt-2 flex-shrink-0"></div>
+                  <div className="w-3 h-3 bg-warm-brass rounded-full mt-2 flex-shrink-0"></div>
                   <div>
                     <h4 className="text-lg font-semibold text-primary mb-2">Population Growth</h4>
                     <p className="text-gray-600">Markets with 2%+ annual population growth and strong job creation</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-4">
-                  <div className="w-3 h-3 bg-accent-gold rounded-full mt-2 flex-shrink-0"></div>
+                  <div className="w-3 h-3 bg-warm-brass rounded-full mt-2 flex-shrink-0"></div>
                   <div>
                     <h4 className="text-lg font-semibold text-primary mb-2">Housing Demand</h4>
                     <p className="text-gray-600">Supply-constrained markets with rental occupancy rates above 95%</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-4">
-                  <div className="w-3 h-3 bg-accent-gold rounded-full mt-2 flex-shrink-0"></div>
+                  <div className="w-3 h-3 bg-warm-brass rounded-full mt-2 flex-shrink-0"></div>
                   <div>
                     <h4 className="text-lg font-semibold text-primary mb-2">Economic Fundamentals</h4>
                     <p className="text-gray-600">Diverse employment base with median incomes supporting target rent levels</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-4">
-                  <div className="w-3 h-3 bg-accent-gold rounded-full mt-2 flex-shrink-0"></div>
+                  <div className="w-3 h-3 bg-warm-brass rounded-full mt-2 flex-shrink-0"></div>
                   <div>
                     <h4 className="text-lg font-semibold text-primary mb-2">Investment Climate</h4>
                     <p className="text-gray-600">Business-friendly regulations and favorable property tax structures</p>
@@ -247,25 +247,25 @@ export default function Vision() {
                 <CardContent className="p-0">
                   <h3 className="text-3xl font-serif font-bold text-primary mb-6">Expansion Timeline</h3>
                   <div className="space-y-6">
-                    <div className="border-l-4 border-accent-gold pl-6">
+                    <div className="border-l-4 border-warm-brass pl-6">
                       <h4 className="text-lg font-semibold text-primary mb-2">Phase 1: 2024-2027</h4>
                       <p className="text-gray-600 mb-2">Consolidate CT and FL markets</p>
-                      <p className="text-sm text-accent-gold font-medium">Target: 150 units</p>
+                      <p className="text-sm text-warm-brass font-medium">Target: 150 units</p>
                     </div>
-                    <div className="border-l-4 border-accent-gold pl-6">
+                    <div className="border-l-4 border-warm-brass pl-6">
                       <h4 className="text-lg font-semibold text-primary mb-2">Phase 2: 2028-2032</h4>
                       <p className="text-gray-600 mb-2">Expand to NC, SC, and GA markets</p>
-                      <p className="text-sm text-accent-gold font-medium">Target: 500 units</p>
+                      <p className="text-sm text-warm-brass font-medium">Target: 500 units</p>
                     </div>
-                    <div className="border-l-4 border-accent-gold pl-6">
+                    <div className="border-l-4 border-warm-brass pl-6">
                       <h4 className="text-lg font-semibold text-primary mb-2">Phase 3: 2033-2040</h4>
                       <p className="text-gray-600 mb-2">Enter TX, TN, and VA markets</p>
-                      <p className="text-sm text-accent-gold font-medium">Target: 1,000 units</p>
+                      <p className="text-sm text-warm-brass font-medium">Target: 1,000 units</p>
                     </div>
-                    <div className="border-l-4 border-accent-gold pl-6">
+                    <div className="border-l-4 border-warm-brass pl-6">
                       <h4 className="text-lg font-semibold text-primary mb-2">Phase 4: 2041-2050</h4>
                       <p className="text-gray-600 mb-2">National platform with selective markets</p>
-                      <p className="text-sm text-accent-gold font-medium">Target: 2,500 units</p>
+                      <p className="text-sm text-warm-brass font-medium">Target: 2,500 units</p>
                     </div>
                   </div>
                 </CardContent>
@@ -276,7 +276,7 @@ export default function Vision() {
       </section>
 
       {/* Call to Action */}
-      <section className="py-20 bg-gradient-to-br from-primary to-gray-800 text-white">
+      <section className="py-20 bg-gradient-to-br from-deep-charcoal to-gray-800 text-white">
         <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <h2 className="text-4xl md:text-5xl font-serif font-bold mb-6">Join Our Vision</h2>
           <p className="text-xl text-gray-300 mb-12 max-w-2xl mx-auto">
@@ -284,36 +284,36 @@ export default function Vision() {
           </p>
           
           <div className="flex flex-col sm:flex-row gap-6 justify-center">
-            <Link href="/founder">
-              <Button 
-                className="bg-gradient-to-r from-accent-gold to-bronze text-white px-10 py-4 rounded-lg font-semibold text-lg hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1"
+            <Button asChild 
+                className="bg-gradient-to-r from-warm-brass to-warm-stone text-deep-charcoal px-10 py-4 rounded-lg font-semibold text-lg hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1"
                 data-testid="button-meet-founder"
               >
+              <Link href="/founder">
                 Meet the Founder
-              </Button>
-            </Link>
-            <Link href="/portfolio">
-              <Button 
+              </Link>
+            </Button>
+            <Button asChild 
                 variant="outline"
-                className="border-2 border-accent-gold text-accent-gold px-10 py-4 rounded-lg font-semibold text-lg hover:bg-accent-gold hover:text-primary transition-all duration-300"
+                className="bg-transparent border-2 border-warm-brass text-warm-white px-10 py-4 rounded-lg font-semibold text-lg hover:bg-warm-brass hover:text-deep-charcoal transition-all duration-300"
                 data-testid="button-view-current-portfolio"
               >
+              <Link href="/portfolio">
                 View Current Portfolio
-              </Button>
-            </Link>
+              </Link>
+            </Button>
           </div>
           
           <div className="mt-16 grid md:grid-cols-3 gap-8 text-center">
             <div>
-              <div className="text-3xl font-bold text-accent-gold mb-2" data-testid="vision-cta-goal">$1B</div>
+              <div className="text-3xl font-bold text-warm-brass mb-2" data-testid="vision-cta-goal">$1B</div>
               <div className="text-gray-300">Portfolio Goal by 2050</div>
             </div>
             <div>
-              <div className="text-3xl font-bold text-accent-gold mb-2" data-testid="vision-cta-experience">6+</div>
+              <div className="text-3xl font-bold text-warm-brass mb-2" data-testid="vision-cta-experience">6+</div>
               <div className="text-gray-300">Years Experience</div>
             </div>
             <div>
-              <div className="text-3xl font-bold text-accent-gold mb-2" data-testid="vision-cta-track-record">3.02x</div>
+              <div className="text-3xl font-bold text-warm-brass mb-2" data-testid="vision-cta-track-record">3.02x</div>
               <div className="text-gray-300">Avg Equity Multiple</div>
             </div>
           </div>

@@ -9,17 +9,65 @@ export interface User {
   createdAt: string;
 }
 
+export type LoginResult = { success: true; user: User } | { success: false; error: string };
+
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  login: (email: string, password: string) => Promise<LoginResult>;
   logout: () => Promise<void>;
   refetch: () => Promise<void>;
 }
 
+type SessionRequest = (url: string, init: RequestInit) => Promise<Response>;
+
+/** Drops React Query data cached for the previous account so the next account
+ * never sees it. AuthProvider renders only inside AppProviders, which already
+ * loaded this module; importing it lazily keeps React Query out of the tenant
+ * and applicant first-page bundle. */
+async function forgetCachedQueries(): Promise<void> {
+  try {
+    (await import("@/lib/queryClient")).queryClient.clear();
+  } catch {
+    // Nothing was cached if the module cannot load.
+  }
+}
+
+export async function signInWebsite(email: string, password: string, request: SessionRequest = fetch): Promise<LoginResult> {
+  try {
+    const response = await request("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ email, password }),
+    });
+    let data: { user?: User; message?: string };
+    try {
+      data = await response.json();
+    } catch {
+      return { success: false, error: "Login service unavailable" };
+    }
+    if (response.ok && data.user) return { success: true, user: data.user };
+    return { success: false, error: data.message || "Login failed" };
+  } catch {
+    return { success: false, error: "Login service unavailable" };
+  }
+}
+
+/** Ends the website session and forgets cached account data. It never rejects:
+ * the local sign-out happens even when the server cannot be reached. */
+export async function endWebsiteSession(request: SessionRequest = fetch, forget: () => Promise<void> = forgetCachedQueries): Promise<void> {
+  try {
+    await request("/api/auth/logout", { method: "POST", credentials: "include" });
+  } catch {
+    // The server session expires on its own.
+  }
+  await forget();
+}
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+export function AuthProvider({ children, restoreSession = true }: { children: ReactNode; restoreSession?: boolean }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -47,47 +95,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    fetchUser();
-  }, [fetchUser]);
+    if (restoreSession) { setIsLoading(true); void fetchUser(); }
+    else setIsLoading(false);
+  }, [fetchUser, restoreSession]);
 
-  const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
-    try {
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        credentials: "include",
-        body: JSON.stringify({ email, password }),
-      });
-
-      let data;
-      try {
-        data = await response.json();
-      } catch {
-        return { success: false, error: "Login service unavailable" };
-      }
-
-      if (response.ok) {
-        setUser(data.user);
-        return { success: true };
-      } else {
-        return { success: false, error: data.message || "Login failed" };
-      }
-    } catch (error) {
-      return { success: false, error: "Login service unavailable" };
+  const login = async (email: string, password: string): Promise<LoginResult> => {
+    const result = await signInWebsite(email, password);
+    if (result.success) {
+      await forgetCachedQueries();
+      setUser(result.user);
     }
+    return result;
   };
 
   const logout = async () => {
-    try {
-      await fetch("/api/auth/logout", {
-        method: "POST",
-        credentials: "include",
-      });
-    } finally {
-      setUser(null);
-    }
+    await endWebsiteSession();
+    setUser(null);
   };
 
   return (

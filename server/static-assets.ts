@@ -2,6 +2,7 @@ import express, { type RequestHandler } from 'express';
 import { existsSync, readFileSync } from 'node:fs';
 import { extname, resolve, sep } from 'node:path';
 import { privatePortalHtml } from './applicant-page-security';
+import { applyPublicPageMetadata } from './public-page-metadata';
 
 interface ManifestChunk { file: string; name?: string; isDynamicEntry?: boolean; imports?: string[]; css?: string[]; }
 type BuildManifest = Record<string, ManifestChunk>;
@@ -27,6 +28,20 @@ export function publicAssets(publicDir: string): RequestHandler {
     res.set('Content-Encoding',encoding as string);
     res.set('Cache-Control','public, max-age=31536000, immutable');
     res.sendFile(file + suffix, {dotfiles:'deny'}, error => { if (error) next(error); });
+  };
+}
+
+const attachedImage = /\.(?:jpe?g|png|webp|gif|heic)$/i;
+
+/** The attached_assets folder also holds working CSV and text files (property
+ * financials); only the marketing images the client references are public. */
+export function attachedImages(dir: string): RequestHandler {
+  const images = express.static(resolve(dir), {index:false, dotfiles:'deny'});
+  return (req,res,next) => {
+    let pathname: string;
+    try { pathname = decodeURIComponent(req.path); } catch { res.sendStatus(404); return; }
+    if (!attachedImage.test(pathname)) { res.sendStatus(404); return; }
+    images(req,res,next);
   };
 }
 
@@ -63,6 +78,6 @@ export function createPageShell(publicDir: string): (url: string) => string {
     const extra = /^\/ops(?:\/|$)/.test(parsed.pathname) ? variants[parsed.searchParams.get('ui')==='classic'?'classic':'ops']
       : /^\/tenant(?:\/|$)/.test(parsed.pathname) ? variants.tenant
       : /^\/apply(?:\/|$)/.test(parsed.pathname) ? variants.apply : '';
-    return privatePortalHtml(html,url).replace('</head>',`${extra}</head>`);
+    return privatePortalHtml(applyPublicPageMetadata(html,url),url).replace('</head>',`${extra}</head>`);
   };
 }

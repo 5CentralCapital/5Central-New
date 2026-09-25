@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 import test from "node:test";
 import {
   S3CompatiblePrivateVersionedObjectStoreClient,
+  signS3Request,
   createProductionRentOpsObjectStoresFromEnv,
   createProductionRentOpsWebObjectStoresFromEnv,
   type S3CompatibleTransport,
@@ -21,6 +22,16 @@ function signedIdentity(init?: RequestInit): string {
   const authorization = new Headers(init?.headers).get("authorization") ?? "";
   return /Credential=([^/]+)/.exec(authorization)?.[1] ?? "";
 }
+
+test("SigV4 signatures match the published AWS S3 examples", () => {
+  // AWS S3 API reference, "Signature Calculations for the Authorization Header":
+  // GET Object with a Range header, and GET Bucket (list) with a query string.
+  const credentials = { region: "us-east-1", accessKeyId: "AKIAIOSFODNN7EXAMPLE", secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", now: new Date("2013-05-24T00:00:00Z") };
+  const object = signS3Request({ ...credentials, method: "GET", url: new URL("https://examplebucket.s3.amazonaws.com/test.txt"), headers: { range: "bytes=0-9" } });
+  assert.equal(object.authorization, "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41");
+  const list = signS3Request({ ...credentials, method: "GET", url: new URL("https://examplebucket.s3.amazonaws.com/?max-keys=2&prefix=J") });
+  assert.equal(list.authorization, "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=34b48302e7b5fa45bde8084f4b7868a86f0a534bc59db6670ed5711ef69dc6f7");
+});
 
 test("S3-compatible adapter signs HTTPS requests, streams bodies, and binds exact version IDs", async () => {
   const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -59,7 +70,7 @@ test("S3-compatible adapter signs HTTPS requests, streams bodies, and binds exac
   await assert.rejects(() => client.open(logicalKey, { immutableVersion: "wrong-version" }), /storage_version_mismatch/);
 });
 
-function productionFixture(overrides: Partial<Record<"head" | "put" | "list" | "delete", number>> = {}) {
+function productionFixture(overrides: Partial<Record<"head" | "put" | "list" | "delete" | "versionedRead", number>> = {}) {
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const transport: S3CompatibleTransport = async (input, init = {}) => {
     const url = String(input);
@@ -71,6 +82,7 @@ function productionFixture(overrides: Partial<Record<"head" | "put" | "list" | "
     if (method === "HEAD" && !new Headers(init.headers).has("authorization")) return new Response(null, { status: 403 });
     if (parsed.searchParams.get("list-type") === "2") return new Response(null, { status: overrides.list ?? 403 });
     if (method === "DELETE") return new Response(null, { status: overrides.delete ?? 403 });
+    if ((method === "GET" || method === "HEAD") && parsed.searchParams.has("versionId") && overrides.versionedRead) return new Response(null, { status: overrides.versionedRead });
     if (method === "GET") return new Response(Buffer.from("probe"), { status: 200, headers: { "x-amz-version-id": "probe-version" } });
     if (method === "HEAD") {
       return new Response(null, { status: overrides.head ?? 200, headers: { "x-amz-version-id": "probe-version", "content-length": "5" } });
@@ -109,6 +121,8 @@ test("production S3 factory accepts S3 Head/Get runtime permissions and rejects 
   assert.equal(stores.privilegeReport.uploadWriter?.privileges.put, true);
   assert.equal(stores.privilegeReport.importer.privileges.delete, false);
   assert.ok(calls.length >= 15);
+  const reads = calls.filter(call => ["GET", "HEAD"].includes(String(call.init.method)) && new URL(call.url).pathname.endsWith("/sha256/" + "0".repeat(64)) && new Headers(call.init.headers).has("authorization"));
+  assert.ok(reads.some(call => String(call.init.method) === "GET" && new URL(call.url).searchParams.get("versionId") === "probe-version"), "the canary GET probe is an exact-version read");
   assert.equal(JSON.stringify(calls).includes("runtime-secret"), false);
   assert.equal(JSON.stringify(calls).includes("upload-secret"), false);
   assert.equal(JSON.stringify(calls).includes("importer-secret"), false);
@@ -125,6 +139,7 @@ test("S3 startup rejects denied reads, successful forbidden operations, and inco
     { list: 500 },
     { delete: 400 },
     { delete: 404 },
+    { versionedRead: 403 },
   ]) {
     const { transport, env } = productionFixture(overrides);
     await assert.rejects(() => createProductionRentOpsObjectStoresFromEnv({ env, transport }), /storage_privilege_probe_failed/);

@@ -51,12 +51,15 @@ import { RENT_OPS_REQUIRED_TABLES, RENT_OPS_RUNTIME_REQUIRED_TABLES } from "../p
 import { assertPositiveCents, assertCents, assertValidSnapshot, documentReferenceViolations, assertPrivateStorageKey, RentOpsInvariantError } from "../domain/invariants";
 import { assertValidApplicationHistory } from "../domain/application-history";
 import { applicationHistoryCase } from "../application-history/projection";
+import { SnapshotReadCache } from './snapshot-cache';
 
 /**
  * Small adapter interface accepted by node-postgres, Neon Pool, or a wrapper
  * around Drizzle's execute method. No connection is created here.
  */
 export interface RentOpsQueryExecutor {
+  /** Cache invalidation generation; undefined while a local write is in flight. */
+  readCacheVersion?(): number | undefined;
   query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<{ rows: T[] }>;
   /** Optional atomic single-statement read, available on the production pool adapter. */
   readTableBatch?(tables: readonly string[]): Promise<RentOpsTableRows>;
@@ -65,18 +68,21 @@ export interface RentOpsQueryExecutor {
 }
 
 export class RentOpsTablesMissingError extends Error {
+  readonly code = "rent_ops_runtime_tables_missing";
   readonly missingTables: string[];
 
   constructor(missingTables: string[]) {
-    super(`Rent Operations tables are missing: ${missingTables.join(", ")}. Run the explicit v1 migration before enabling production routes.`);
+    super(`5Central Ops tables are missing: ${missingTables.join(", ")}. Run the explicit v1 migration before enabling production routes.`);
     this.name = "RentOpsTablesMissingError";
     this.missingTables = missingTables;
   }
 }
 
 export class RentOpsRuntimePrivilegeError extends Error {
+  readonly code = "rent_ops_runtime_privilege_invalid";
+
   constructor() {
-    super("Rent Operations runtime role has a forbidden table privilege");
+    super("5Central Ops runtime role has a forbidden table privilege");
     this.name = "RentOpsRuntimePrivilegeError";
   }
 }
@@ -311,10 +317,18 @@ function assertRecurringChange(change: RentOpsRecordChange, successor: RentOpsRe
   if (change.origin === "admin" && !change.actorSubject) throw new RentOpsInvariantError("Recurring schedule admin change actor is required");
 }
 
-function dateValue(value: unknown): string | undefined {
+/** Read a SQL DATE. node-postgres decodes DATE at local midnight and PGlite at
+ * UTC midnight; `toISOString()` alone shifts the former back a day whenever the
+ * process time zone is east of UTC. */
+export function dateValue(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value === "string") return value.slice(0, 10);
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) return undefined;
+    const local = value.getHours() === 0 && value.getMinutes() === 0 && value.getSeconds() === 0 && value.getMilliseconds() === 0;
+    const parts = local ? [value.getFullYear(), value.getMonth() + 1, value.getDate()] : [value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate()];
+    return `${String(parts[0]).padStart(4, "0")}-${String(parts[1]).padStart(2, "0")}-${String(parts[2]).padStart(2, "0")}`;
+  }
   return String(value).slice(0, 10);
 }
 
@@ -934,6 +948,7 @@ function sameHistoryValue(left: unknown, right: unknown): boolean {
 
 export class PostgresRentOpsRepository implements RentOpsRepository {
   private ready = false;
+  private readonly readCache = new SnapshotReadCache<RentOpsSnapshot>(() => this.inTransaction ? undefined : this.client.readCacheVersion?.());
 
   constructor(private readonly client: RentOpsQueryExecutor, private readonly inTransaction = false) {}
 
@@ -955,7 +970,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
         throw error;
       }
     }
-    if (!this.client.transaction) throw new RentOpsInvariantError("Rent Operations database executor does not support atomic transactions");
+    if (!this.client.transaction) throw new RentOpsInvariantError("5Central Ops database executor does not support atomic transactions");
     await this.assertReady();
     return this.client.transaction(async (executor) => {
       const repository = new PostgresRentOpsRepository(executor, true);
@@ -1042,7 +1057,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
 
     if (options.lockRecord) {
       const table = patchTables[options.lockRecord.entityType];
-      if (!table) throw new RentOpsInvariantError("Unknown Rent Operations patch target");
+      if (!table) throw new RentOpsInvariantError("Unknown 5Central Ops patch target");
       if (options.lockTenancySiblings) {
         const requestedUnitIds = Array.from(new Set(options.lockTenancyUnitIds ?? [])).filter((id) => id.length > 0).sort();
         await this.client.query(
@@ -1100,7 +1115,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
   }
 
   private async rows(tableName: string, executor: RentOpsQueryExecutor = this.client): Promise<Record<string, unknown>[]> {
-    if (!tableNames.has(tableName)) throw new Error(`Unsafe Rent Operations table name: ${tableName}`);
+    if (!tableNames.has(tableName)) throw new Error(`Unsafe 5Central Ops table name: ${tableName}`);
     const result = await executor.query<Record<string, unknown>>(`SELECT * FROM ${tableName}`);
     return result.rows;
   }
@@ -1135,6 +1150,10 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
   }
 
   async getOperationalSnapshot(): Promise<RentOpsSnapshot> {
+    return this.readCache.read('operational', () => this.loadOperationalSnapshot());
+  }
+
+  private async loadOperationalSnapshot(): Promise<RentOpsSnapshot> {
     await this.assertReady();
     const snapshot = this.client.readTableBatch
       ? await this.loadSnapshot(this.client, false, undefined, await this.client.readTableBatch(RENT_OPS_BATCH_TABLES))
@@ -1146,6 +1165,10 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
   }
 
   async getReportSnapshot(): Promise<RentOpsSnapshot> {
+    return this.readCache.read('report', () => this.loadReportSnapshot());
+  }
+
+  private async loadReportSnapshot(): Promise<RentOpsSnapshot> {
     await this.assertReady();
     // One fixed SELECT shares a statement snapshot across every financial table.
     countRentOpsTiming("batch_calls");
@@ -1235,7 +1258,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     const rows = (table: string) => {
       if (selectedTable && selectedTable !== table) return Promise.resolve([]);
       if (batch) {
-        if (!Object.prototype.hasOwnProperty.call(batch, table)) throw new RentOpsInvariantError("Incomplete Rent Operations table batch");
+        if (!Object.prototype.hasOwnProperty.call(batch, table)) throw new RentOpsInvariantError("Incomplete 5Central Ops table batch");
         return Promise.resolve(batch[table]);
       }
       return this.rows(table, executor);
@@ -1333,7 +1356,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
   }
 
   private async upsert(tableName: string, columns: string[], values: unknown[], updateColumns = columns.slice(1)): Promise<void> {
-    if (!tableNames.has(tableName)) throw new Error(`Unsafe Rent Operations table name: ${tableName}`);
+    if (!tableNames.has(tableName)) throw new Error(`Unsafe 5Central Ops table name: ${tableName}`);
     if (runtimeCreateOnlyTables.has(tableName)) {
       await this.insertOnlyCreate(tableName, columns, values);
       return;
@@ -1362,7 +1385,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
   }
 
   private async insertOnlyCreate(tableName: string, columns: string[], values: unknown[]): Promise<void> {
-    if (!tableNames.has(tableName)) throw new Error(`Unsafe Rent Operations table name: ${tableName}`);
+    if (!tableNames.has(tableName)) throw new Error(`Unsafe 5Central Ops table name: ${tableName}`);
     await this.assertReady();
     const placeholders = columns.map((_, index) => `$${index + 1}`).join(", ");
     const inserted = await this.client.query<Record<string, unknown>>(`INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders}) ON CONFLICT (id) DO NOTHING RETURNING id`, values);
@@ -1371,7 +1394,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
   }
 
   private async insertOnly(tableName: string, columns: string[], values: unknown[]): Promise<void> {
-    if (!tableNames.has(tableName)) throw new Error(`Unsafe Rent Operations table name: ${tableName}`);
+    if (!tableNames.has(tableName)) throw new Error(`Unsafe 5Central Ops table name: ${tableName}`);
     await this.assertReady();
     const placeholders = columns.map((_, index) => `$${index + 1}`).join(", ");
     const inserted = await this.client.query<Record<string, unknown>>(`INSERT INTO ${tableName} (${columns.join(", ")}) VALUES (${placeholders}) ON CONFLICT (id) DO NOTHING RETURNING id`, values);
@@ -1413,7 +1436,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
 
   async applyRecordPatch(update: RentOpsRecordPatchUpdate): Promise<void> {
     const table = patchTables[update.entityType];
-    if (!table) throw new RentOpsInvariantError("Unknown Rent Operations patch target");
+    if (!table) throw new RentOpsInvariantError("Unknown 5Central Ops patch target");
     const allowed = patchColumns[update.entityType];
     const entries = Object.entries(update.values).filter(([column]) => allowed.has(column));
     if (entries.length !== Object.keys(update.values).length) throw new RentOpsInvariantError("Patch contains a field outside the positive allowlist");
@@ -1428,8 +1451,8 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     );
     if (result.rows.length > 0) return;
     const current = await this.client.query<{ id?: string; record_revision?: number }>(`SELECT id, record_revision FROM ${table} WHERE id = $1 LIMIT 1`, [update.targetId]);
-    if (current.rows.length === 0) throw new RentOpsInvariantError("Rent Operations record not found");
-    throw new RentOpsInvariantError("Rent Operations record revision is stale");
+    if (current.rows.length === 0) throw new RentOpsInvariantError("5Central Ops record not found");
+    throw new RentOpsInvariantError("5Central Ops record revision is stale");
   }
 
   async saveRecordChange(change: RentOpsRecordChange): Promise<void> {
@@ -1567,7 +1590,7 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
       await this.writeApplicationHistory(this.client, history);
       return;
     }
-    if (!this.client.transaction) throw new RentOpsInvariantError("Rent Operations database executor does not support atomic application history writes");
+    if (!this.client.transaction) throw new RentOpsInvariantError("5Central Ops database executor does not support atomic application history writes");
     await this.client.transaction(async (executor) => {
       const repository = new PostgresRentOpsRepository(executor, true);
       repository.ready = true;
@@ -1715,10 +1738,36 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     return value;
   }
   async saveDocument(value: RentOpsDocument): Promise<RentOpsDocument> { if (value.storageKey !== undefined && value.storageKey !== null) assertPrivateStorageKey(value.storageKey); const snapshot = await this.getSnapshot(); const violations = documentReferenceViolations(snapshot, value); if (violations.length > 0) throw new RentOpsInvariantError("Document references are invalid", violations); await this.upsert("rent_ops_documents", ["id", "property_id", "unit_id", "person_id", "tenancy_id", "application_id", "type", "type_knowledge", "state", "state_knowledge", "file_name", "mime_type", "size_bytes", "checksum_sha256", "storage_key", "uploaded_at", "verified_at", "availability", "storage_key_knowledge", "metadata_size_bytes", "metadata_checksum_sha256", "source_system", "source_id"], [value.id, value.propertyId, value.unitId, value.personId, value.tenancyId, value.applicationId, value.type, value.typeKnowledge, value.state, value.stateKnowledge, value.fileName, value.mimeType, value.sizeBytes, value.checksumSha256, value.storageKey, value.uploadedAt, value.verifiedAt, value.availability, value.storageKeyKnowledge, value.metadataSizeBytes, value.metadataChecksumSha256, value.source?.system, value.source?.sourceId]); return value; }
+  /**
+   * The effective binding: the immutable original overlaid with its latest
+   * append-only storage relocation (same content, exact version in the new
+   * backend). Downloads and availability checks use this.
+   */
   async getDocumentObjectBinding(documentId: string): Promise<RentOpsDocumentObjectBinding | undefined> {
+    return this.readDocumentObjectBinding(documentId, true);
+  }
+  private async readDocumentObjectBinding(documentId: string, effective: boolean): Promise<RentOpsDocumentObjectBinding | undefined> {
     await this.assertReady();
     const result = await this.client.query<Record<string, unknown>>(
-      "SELECT document_id, binding_kind, source_binary_id, import_run_id, source_system, source_collection, backend, logical_key, checksum_sha256, size_bytes, immutable_generation, immutable_version, verified_at FROM rent_ops_document_objects WHERE document_id = $1 LIMIT 1",
+      effective
+        ? `SELECT o.document_id, o.binding_kind, o.source_binary_id, o.import_run_id, o.source_system, o.source_collection,
+                  CASE WHEN r.document_id IS NULL THEN o.backend ELSE r.to_backend END AS backend,
+                  o.logical_key, o.checksum_sha256, o.size_bytes,
+                  CASE WHEN r.document_id IS NULL THEN o.immutable_generation ELSE r.to_immutable_generation END AS immutable_generation,
+                  CASE WHEN r.document_id IS NULL THEN o.immutable_version ELSE r.to_immutable_version END AS immutable_version,
+                  CASE WHEN r.document_id IS NULL THEN o.verified_at ELSE r.verified_at END AS verified_at,
+                  r.checksum_sha256 AS relocation_checksum_sha256, r.size_bytes AS relocation_size_bytes, r.logical_key AS relocation_logical_key
+             FROM rent_ops_document_objects o
+             LEFT JOIN LATERAL (
+               SELECT document_id, to_backend, to_immutable_generation, to_immutable_version, verified_at, checksum_sha256, size_bytes, logical_key
+                 FROM rent_ops_document_object_relocations
+                WHERE document_id = o.document_id
+                ORDER BY relocation_sequence DESC
+                LIMIT 1
+             ) r ON true
+            WHERE o.document_id = $1
+            LIMIT 1`
+        : "SELECT document_id, binding_kind, source_binary_id, import_run_id, source_system, source_collection, backend, logical_key, checksum_sha256, size_bytes, immutable_generation, immutable_version, verified_at FROM rent_ops_document_objects WHERE document_id = $1 LIMIT 1",
       [documentId],
     );
     const row = result.rows[0];
@@ -1738,11 +1787,16 @@ export class PostgresRentOpsRepository implements RentOpsRepository {
     if ((bindingKind === "applicant" || bindingKind === "admin") && (sourceBinaryId || importRunId || sourceSystem || sourceCollection)) throw new RentOpsInvariantError("Applicant document binding cannot reference an import source");
     if (bindingKind === "import" && (!sourceBinaryId || !importRunId || !sourceSystem || !sourceCollection)) throw new RentOpsInvariantError("Imported document binding is missing its exact source identity");
     if (!textValue(row, "immutableGeneration", "immutable_generation") && !textValue(row, "immutableVersion", "immutable_version")) throw new RentOpsInvariantError("Verified document binding version is missing");
+    const relocationChecksum = textValue(row, "relocationChecksumSha256", "relocation_checksum_sha256");
+    if (relocationChecksum !== undefined && (relocationChecksum !== checksumSha256 || numberValue(row, "relocationSizeBytes", "relocation_size_bytes") !== sizeBytes || textValue(row, "relocationLogicalKey", "relocation_logical_key") !== logicalKey)) {
+      throw new RentOpsInvariantError("Verified document relocation does not match its binding");
+    }
     return { documentId: bindingDocumentId, bindingKind, ...(sourceBinaryId ? { sourceBinaryId } : {}), ...(importRunId ? { importRunId } : {}), ...(sourceSystem ? { sourceSystem } : {}), ...(sourceCollection ? { sourceCollection } : {}), backend, logicalKey, checksumSha256, sizeBytes, immutableGeneration: textValue(row, "immutableGeneration", "immutable_generation"), immutableVersion: textValue(row, "immutableVersion", "immutable_version"), verifiedAt };
   }
   async saveDocumentObjectBinding(value: RentOpsDocumentObjectBinding): Promise<RentOpsDocumentObjectBinding> {
     await this.assertReady();
-    const existing = await this.getDocumentObjectBinding(value.documentId);
+    // Idempotent retries compare against the original row, not a later relocation.
+    const existing = await this.readDocumentObjectBinding(value.documentId, false);
     if (existing) {
       if (JSON.stringify(existing) !== JSON.stringify(value)) throw new RentOpsInvariantError("Verified document object binding is immutable");
       return value;

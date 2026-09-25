@@ -44,6 +44,15 @@ test("curated report mappings keep drilldown IDs out of display columns", () => 
   assert.equal(view.displayRows[0].unitNumber, "101");
   assert.equal(view.displayRows[0].__source.unitId, "unit:one");
   assert.equal(formatReportValue(view.displayRows[0].marketRentCents, "currency"), "$1,250.00");
+  assert.equal(view.columns.find(column => column.key === "marketRentCents")?.subtotal, true);
+});
+
+test("report subtotals refuse an exact cents sum that exceeds safe number range", () => {
+  const subtotals = buildPropertySubtotals("scheduled-income", [
+    { propertyId: "p", propertyName: "Property", amountCents: 9007199254740991, known: true },
+    { propertyId: "p", propertyName: "Property", amountCents: 1, known: true },
+  ]);
+  assert.equal(subtotals[0].amounts.amountCents, null);
 });
 
 test("property subtotals sum complete amounts and withhold incomplete balance totals", () => {
@@ -107,9 +116,12 @@ test("missing base rent, uncertain deposits and HAP exceptions never display fal
   assert.equal(rent.displayRows[0].totalScheduledCents, null);
   const deposits = createReportViewModel("security-deposit", [{ totalHeldCents: 10000, unknownHeldCount: 1 }]);
   assert.equal(deposits.displayRows[0].totalHeldCents, null);
-  const hap = createReportViewModel("hap", [{ expectedTotalCents: 0, receivedAgencyCents: 5000, exception: true }]);
-  assert.equal(hap.displayRows[0].expectedTotalCents, null);
+  // HAP obligations come from the effective contract and stay visible on an
+  // exception row; only the receipt-dependent variance is withheld.
+  const hap = createReportViewModel("hap", [{ agencyObligationCents: 40000, expectedTotalCents: 120000, receivedAgencyCents: 5000, varianceCents: -35000, exception: true, uncertainty: true }]);
+  assert.equal(hap.displayRows[0].expectedTotalCents, 120000);
   assert.equal(hap.displayRows[0].receivedAgencyCents, 5000);
+  assert.equal(hap.displayRows[0].varianceCents, null);
 });
 
 test("all eleven reports have explicit columns and ledger running balance is not additive", () => {
@@ -255,7 +267,7 @@ test("grouping retains accounts with blank or missing property identity", () => 
   const view = createReportViewModel("delinquency", [{ propertyName: "", personId: "one" }, { personId: "two" }]);
   const groups = groupReportRows("delinquency", view.displayRows);
   assert.equal(groups.length, 1);
-  assert.equal(groups[0].label, "Needs review");
+  assert.equal(groups[0].label, "Property missing");
   assert.equal(groups[0].rows.length, 2);
 });
 
@@ -333,4 +345,19 @@ test("tenant defaults do not impose tenant status on vacancies, rent-roll occupa
   }
   assert.equal(defaultReportOccupancy("rent-roll"), "current");
   assert.equal(defaultReportOccupancy("occupancy"), "vacant");
+});
+
+test("tenant ledger labels fields that do not apply instead of calling them missing", () => {
+  const columns = getReportConfig("tenant-ledger").columns;
+  const column = (key: string) => columns.find((item) => item.key === key)!;
+  const cell = (source: Record<string, unknown>, key: string) => formatReportCellValue({ __source: source } as never, column(key));
+  const payment = { rowType: "transaction", transaction: { kind: "payment", dueOn: null } };
+  const charge = { rowType: "transaction", transaction: { kind: "charge", dueOn: null } };
+  const opening = { rowType: "opening_balance" };
+  assert.equal(cell(payment, "dueOn"), "—");
+  assert.equal(cell(charge, "dueOn"), "Date missing");
+  assert.equal(cell(opening, "kind"), "Opening balance");
+  assert.equal(cell(opening, "category"), "—");
+  assert.equal(cell(opening, "unitNumber"), "—");
+  assert.equal(cell(charge, "category"), "Status unverified");
 });

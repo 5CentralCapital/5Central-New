@@ -1,5 +1,5 @@
 import type { CommandEnvelope, OperationReceipt } from "@shared/company/commands";
-import type { CompanyContextEntity, CompanyContextProperty } from "@shared/company/context";
+import type { CompanyContextEntity } from "@shared/company/context";
 import type {
   ProjectCommandKind,
   ProjectExecutionCommandKind,
@@ -14,9 +14,13 @@ import type {
   ProjectTaskStatus,
   ProjectType,
 } from "@shared/projects";
+import type { ProjectCostReport } from "@shared/projects/cost-report";
+import type { CostSourceLinePage } from "@shared/projects/source-lines";
+import type { ProjectLaborResponse } from "@shared/time/labor";
 import type { QboProjectRecordKind } from "@shared/projects";
 
-export type ProjectWorkspaceProperty = CompanyContextProperty;
+export type { ProjectCostReport, CostSourceLinePage, ProjectLaborResponse };
+
 export type ProjectWorkspaceEntity = CompanyContextEntity;
 export type ProjectSummary = SharedProjectSummary;
 export type ProjectDetail = SharedProjectDetail;
@@ -68,6 +72,9 @@ export interface ProjectsApi {
     kind: ProjectCommandKind,
     envelope: ProjectCommandEnvelope<TPayload>,
   ): Promise<ProjectCommandResult>;
+  getCostReport?(organizationId: string, projectId: string, scope: { legalEntityId: string; propertyId: string }, signal?: AbortSignal): Promise<ProjectCostReport>;
+  getLabor?(organizationId: string, projectId: string, scope: { legalEntityId: string; propertyId: string }, signal?: AbortSignal): Promise<ProjectLaborResponse>;
+  searchCostSourceLines?(organizationId: string, query: { legalEntityId: string; purpose: "cost" | "payroll"; projectId?: string; environment?: "sandbox" | "production"; realmId?: string; includeRefunds?: boolean; search?: string; cursor?: string }, signal?: AbortSignal): Promise<CostSourceLinePage>;
   sendExecutionCommand<TPayload = unknown>(
     organizationId: string,
     kind: ProjectExecutionCommandKind,
@@ -75,8 +82,16 @@ export interface ProjectsApi {
   ): Promise<ProjectCommandResult>;
 }
 
-export const PROJECT_TABS = ["overview", "scope", "schedule", "costs", "execution"] as const;
+/** Route values. "scope" and "costs" open Budgets & costs; "execution" opens Commitments. */
+export const PROJECT_TABS = ["overview", "schedule", "budget", "commitments", "draws", "scope", "costs", "execution"] as const;
 export type ProjectTab = (typeof PROJECT_TABS)[number];
+export type ProjectSection = "overview" | "schedule" | "budget" | "commitments" | "draws";
+export const PROJECT_SECTIONS: readonly (readonly [ProjectSection, string])[] = [["overview", "Overview"], ["schedule", "Schedule"], ["budget", "Budgets & costs"], ["commitments", "Commitments"], ["draws", "Draws"]];
+export function projectSectionFor(tab: ProjectTab | undefined): ProjectSection {
+  if (tab === "scope" || tab === "costs") return "budget";
+  if (tab === "execution") return "commitments";
+  return tab ?? "overview";
+}
 
 export interface ProjectWorkspaceProps {
   readonly organizationId: string;

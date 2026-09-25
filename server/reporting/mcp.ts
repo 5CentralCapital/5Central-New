@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { organizationIdSchema } from "../../shared/company";
-import { reportExportRequestSchema, reportRecordIdSchema, reportRunRequestSchema } from "../../shared/reporting";
+import { legalEntityIdSchema } from "../../shared/company";
+import { reportExportRequestSchema, reportRecordIdSchema, reportReferenceKindSchema, reportRunRequestSchema } from "../../shared/reporting";
 import { publicReportRunResponse, type ReportingAccess, type ReportingPort } from "./service";
 
 export type ReportingToolRegistrar = (name: string, description: string, schema: z.ZodRawShape, write: boolean, handler: (args: any) => Promise<unknown>) => void;
@@ -14,9 +15,11 @@ const organizationInput = { organizationId: organizationIdSchema };
 
 /** MCP and web calls share the same service, authorization, snapshots, and exports. */
 export function registerReportingMcpTools(register: ReportingToolRegistrar, options: ReportingMcpOptions): void {
-  register("list_company_reports", "List the authorized report library. Planned entries remain visible with their dependency reason and cannot be run until an executable engine is registered.", organizationInput, false,
+  register("list_company_reports", "List the report library with each report's runtime status: available, missing_data (runtimeReason names the missing source or connection) or not_implemented. Only available reports can run. Each entry lists its setup sections, filters, basis and period mode.", organizationInput, false,
     async ({ organizationId }) => options.service.catalog(await options.resolveAccess(organizationId)));
-  register("run_company_report", "Run one report only after supplying its report-specific period, scope, basis, currency, and other setup filters. The response is an immutable snapshot with paging and export IDs.", { request: reportRunRequestSchema }, false,
+  register("list_company_report_references", "Search the named choices for a report reference filter (account, investor, project, vendor, staff, tenant, tenancy). Results are limited to authorized records; follow nextCursor for more.", { organizationId: organizationIdSchema, kind: reportReferenceKindSchema, search: z.string().trim().max(120).optional(), cursor: z.string().max(1_024).nullable().optional(), limit: z.number().int().min(1).max(100).optional(), legalEntityIds: z.array(legalEntityIdSchema).max(100).optional() }, false,
+    async ({ organizationId, kind, search, cursor, limit, legalEntityIds }) => options.service.references(await options.resolveAccess(organizationId), { kind, search, cursor: cursor ?? null, limit: limit ?? 50, legalEntityIds: legalEntityIds ?? [] }));
+  register("run_company_report", "Run one available report. Supply the period in `period` (not filters), basis and currency as request fields, only the filters the catalog entry lists, `forecast` (scenario and versions) for forecast reports and `consolidation` for consolidated reports. The response is an immutable snapshot with totals, coverage and missing data, plus paging and export IDs.", { request: reportRunRequestSchema }, false,
     async ({ request }) => publicReportRunResponse(await options.service.run(await options.resolveAccess(request.scope.organizationId), request)));
   register("get_company_report_page", "Read a page from an immutable report snapshot. Use nextCursor until it is null.", { organizationId: organizationIdSchema, runId: reportRecordIdSchema, cursor: z.string().max(1_024).nullable().optional(), limit: z.number().int().min(1).max(1_000).optional() }, false,
     async ({ organizationId, runId, cursor, limit }) => options.service.page(await options.resolveAccess(organizationId), { runId, cursor: cursor ?? null, limit: limit ?? 100 }));
@@ -34,7 +37,7 @@ export function registerReportingMcpTools(register: ReportingToolRegistrar, opti
     async ({ organizationId }) => options.service.listPackages(await options.resolveAccess(organizationId)));
   register("save_company_report_package", "Save a versioned package with frozen constituent report filters and explicit scopes.", { organizationId: organizationIdSchema, package: z.record(z.unknown()) }, true,
     async ({ organizationId, package: pkg }) => options.service.savePackage(await options.resolveAccess(organizationId), pkg));
-  register("run_company_report_package", "Run every frozen package item and return durable item run IDs. A failed item is retained as failed instead of becoming an empty success.", { organizationId: organizationIdSchema, packageId: reportRecordIdSchema }, false,
+  register("run_company_report_package", "Run every frozen package item and return durable item run IDs. A failed or partial item leaves the package run marked incomplete; it is never reported as a complete package.", { organizationId: organizationIdSchema, packageId: reportRecordIdSchema }, false,
     async ({ organizationId, packageId }) => options.service.runPackage(await options.resolveAccess(organizationId), packageId));
   register("get_company_report_package_run", "Read a durable package run and its constituent report run IDs.", { organizationId: organizationIdSchema, runId: reportRecordIdSchema }, false,
     async ({ organizationId, runId }) => options.service.getPackageRun(await options.resolveAccess(organizationId), runId));

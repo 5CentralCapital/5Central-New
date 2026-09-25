@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import express from "express";
-import { publicRequestError } from "./request-errors";
+import { publicRequestError, startupFailureSummary } from "./request-errors";
+import { RentOpsRuntimePrivilegeError, RentOpsTablesMissingError } from "./rent-ops/repositories/postgres";
 
 test("malformed tenant and auth JSON never echoes submitted credentials", async () => {
   const app = express();
@@ -21,4 +22,26 @@ test("malformed tenant and auth JSON never echoes submitted credentials", async 
       assert.equal(await response.text(), '{"message":"Invalid request"}');
     }
   } finally { await new Promise<void>((resolve,reject) => server.close(error => error ? reject(error) : resolve())); }
+});
+
+test("startup failures log their class and stable code, never free-text messages", () => {
+  class StorageError extends Error { readonly code = "storage_privilege_probe_failed"; }
+  assert.equal(startupFailureSummary(new StorageError("storage_privilege_probe_failed")), "StorageError:storage_privilege_probe_failed");
+  assert.equal(startupFailureSummary(Object.assign(new Error("listen EADDRINUSE: address already in use 0.0.0.0:10000"), { code: "EADDRINUSE" })), "Error:EADDRINUSE");
+  assert.equal(startupFailureSummary(new Error("public_database_limiter_configuration_required")), "Error:public_database_limiter_configuration_required");
+  assert.equal(startupFailureSummary(new Error("connect failed for postgres://owner:Secret@db.example/app")), "Error");
+  assert.equal(startupFailureSummary("postgres://owner:Secret@db.example/app"), "unclassified");
+});
+
+test("startup failures identify missing runtime schema and privilege probes without table names", () => {
+  const missing = startupFailureSummary(new RentOpsTablesMissingError(["rent_ops_properties", "rent_ops_units"]));
+  assert.equal(missing, "RentOpsTablesMissingError:rent_ops_runtime_tables_missing");
+  assert.doesNotMatch(missing, /rent_ops_properties|rent_ops_units/);
+  assert.equal(startupFailureSummary(new RentOpsRuntimePrivilegeError()), "RentOpsRuntimePrivilegeError:rent_ops_runtime_privilege_invalid");
+});
+
+test("startup failure stages are fixed labels and preserve redaction", () => {
+  assert.equal(startupFailureSummary(new Error("Gmail tenant delivery configuration is incomplete"), "resume_notifier"), "stage=resume_notifier;Error");
+  assert.equal(startupFailureSummary(new Error("public_database_limiter_configuration_required"), "public_limiter"), "stage=public_limiter;Error:public_database_limiter_configuration_required");
+  assert.equal(startupFailureSummary(new Error("postgres://owner:Secret@db.example/app"), "runtime_database"), "stage=runtime_database;Error");
 });

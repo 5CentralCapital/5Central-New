@@ -1,7 +1,10 @@
 function safeCsvCell(value: unknown): string {
   if (value === undefined || value === null) return "";
+  // Numbers and booleans cannot carry a formula; guarding them would turn a
+  // negative amount such as -5025 into the text '-5025.
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
   let text = typeof value === "string" ? value : JSON.stringify(value);
-  if (/^[=+\-@]/.test(text)) text = `'${text}`;
+  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 

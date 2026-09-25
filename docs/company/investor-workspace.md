@@ -9,7 +9,7 @@ This slice owns the company investor account, investment instrument, contract, d
 - `registerInvestorRoutes` adds the company-scoped HTTP handlers.
 - `registerInvestorMcpTools` registers read and command tools using the same port.
 - `createInvestorPort(executor, options)` accepts `sourceReadFactory(transaction)` and `sourceResolverFactory(transaction)`. The factories are important: financial reads and source allocations must use the transaction that owns the company snapshot or command. `sourceRead` and `sourceResolver` remain compatibility injection points for tests and transitional wiring.
-- `InvestorEntry` and `InvestorWorkspace` export the manager entry props used by root navigation. The tabs are `overview`, `payments`, `contracts`, `debt` and `activity`.
+- `InvestorEntry` and `InvestorWorkspace` export the manager entry props used by root navigation. The tabs are `overview`, `payments` (Payment calendar), `capital` (Contributions & distributions), `debt` (Debt & maturities), `contracts` (Agreements) and `activity`.
 
 All command envelopes are schema parsed, bind the authenticated principal inside a fresh transaction, enforce organization/legal-entity/property scope, and use operation idempotency plus expected record revisions. Historical payments and contract versions are append-only. A correction creates a reversal row and negative allocation; it does not edit the original payment. Editing an unverified manual payment uses the same append-only path and adds a replacement manual row; payments with QBO or bank evidence remain immutable.
 
@@ -17,7 +17,7 @@ All command envelopes are schema parsed, bind the authenticated principal inside
 
 An account must link either an existing scoped `company_contacts` row or a newly created contact in the same account command. Instruments retain the legal entity, currency, properties and projects, with commitment and face principal stored independently. A debt row retains original principal, funded capital, outstanding principal, schedule, month-end rule, maturity, balloon and day-count basis. Funded capital and the current outstanding balance can remain null until supported by an authoritative statement; neither is inferred from face principal or an agreement.
 
-Contract versions reference existing authorized R-ops documents by ID. Active versions require a document reference and approval. A version stores explicit principal, interest, return-of-capital, distribution, fee, balloon and rate terms. Monthly, quarterly, annual and maturity schedules can be generated; custom schedules are rejected until a dated obligation set is supplied. Actual/360, actual/365 and 30/360 interest require the appropriate accrual period. An unknown opening funded principal never becomes zero by default.
+Contract versions reference existing authorized company documents by ID. Active versions require a document reference and approval. A version stores explicit principal, interest, return-of-capital, distribution, fee, balloon and rate terms. Monthly, quarterly, annual and maturity schedules can be generated; custom schedules are rejected until a dated obligation set is supplied. Actual/360, actual/365 and 30/360 interest require the appropriate accrual period. An unknown opening funded principal never becomes zero by default.
 
 The obligation generator creates a bounded month range with deterministic month-end dates and preserves the contract version used to calculate each row. Scheduled principal and maturity balloon are capped against known outstanding principal; ambiguous rate, interest-only or unsupported split terms fail validation instead of inventing an amortization.
 
@@ -38,3 +38,26 @@ The current default source resolver is fail-closed. Production wiring must suppl
 Migration 37 follows the company foundation, contacts, legal entities, documents and project/property tables in the ordered migration chain. It should instantiate one port and pass the same authenticated executor into the HTTP and Codex registrations. Existing legacy investor storage and `/api/admin/investors` routes remain outside this module; any migration of a verified cohort needs an explicit identity and source reconciliation plan.
 
 The source resolver's provider context callback must be backed by actual mirrored provider object data. It must establish the investor/contact or authorized remittance payee relationship, receiving legal entity, cash account, direction, currency, posting state and eligible transaction subtype before returning context. Matching a line's arbitrary counterparty back to itself is not an ownership proof. A source reference, prepared suggestion or bank posting without that context remains unverified.
+
+## Rollforward, schedule and calendar (U11)
+
+`shared/investors/rollforward.ts` is pure and exact:
+
+- `buildAmortizationSchedule` projects debt service from the stored debt terms on the funded principal (original principal, flagged, when funding is undocumented): interest-only periods until `interestOnlyUntil`, then a level payment computed on exact rationals, a balloon at maturity, and 30/360, actual/360 or actual/365 interest. A documented balloon that differs from the computed remaining principal is flagged. Custom schedules stay unsupported.
+- `buildInstrumentRollforward` rolls the balance monthly: closing = opening + funded − principal repaid − return of capital ± corrections. Reversals net against the reversed payment's kind. An unknown bank split (`unclassifiedCents`) never reduces principal. The derived outstanding balance is compared with the manual balance (`matches`, `mismatch`, `manual_missing`, `unknown`); a mismatch is flagged, never overwritten. A contractual fixed profit survives prepayment as guaranteed return remaining.
+- `investorCalendarState` maps obligation status to scheduled, overdue, partial, recorded, posted, settled, overpaid, review or reversed.
+
+Reads (same port for HTTP and MCP):
+
+- `GET /api/company/:org/investor-instruments/:id/financials` — `get_investor_instrument_financials`
+- `GET /api/company/:org/investor-payment-calendar?legalEntityId&fromMonth&throughMonth` — `list_investor_payment_calendar` (cursor paged)
+- `GET /api/company/:org/investor-debt-maturities` — `list_investor_debt_maturities`
+
+Posted and settled amounts count only while their QBO source re-reads as current (or a bank settlement source exists); otherwise the payment is treated as manually recorded in the rollforward.
+
+## Interface
+
+- **Payment calendar** — six months of obligations with state and remaining amount, above the recorded obligations table with its link, settle and reverse actions.
+- **Contributions & distributions** — committed, contributed (recorded and verified), returned, distributed and net invested per instrument, and the capital activity list.
+- **Debt & maturities** — maturity ladder with documented or estimated balloon and the balance check, then one instrument's debt service schedule and monthly rollforward.
+- **Agreements** — agreements with versions (new version, generate obligations), QBO payee mappings and remittance instructions (create and archive).

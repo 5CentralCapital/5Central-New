@@ -49,6 +49,37 @@ export function formatMoney(value: MoneyCents | string | undefined, currency = "
   return formatMoneyExact(value, currency);
 }
 
+/** Add known signed cents without converting through a JavaScript number. */
+export function sumCents(values: readonly (MoneyCents | string | null | undefined)[]): string | null {
+  let total = BigInt(0);
+  let known = false;
+  let unknown = false;
+  for (const value of values) {
+    if (value === null || value === undefined || value === "" || !/^-?(?:0|[1-9][0-9]*)$/.test(value)) { unknown = true; continue; }
+    total += BigInt(value);
+    known = true;
+  }
+  return known && !unknown ? total.toString() : null;
+}
+
+export interface CurrencyCentsTotal {
+  readonly currency: string;
+  readonly cents: string | null;
+  readonly unknownCount: number;
+}
+
+/** Sum exact cents without crossing currency boundaries. */
+export function sumCentsByCurrency(values: readonly { readonly cents: MoneyCents | string | null | undefined; readonly currency: string }[]): CurrencyCentsTotal[] {
+  const totals = new Map<string, { total: bigint; known: number; unknown: number }>();
+  for (const value of values) {
+    const current = totals.get(value.currency) ?? { total: BigInt(0), known: 0, unknown: 0 };
+    if (value.cents === null || value.cents === undefined || value.cents === "" || !/^-?(?:0|[1-9][0-9]*)$/.test(value.cents)) current.unknown += 1;
+    else { current.total += BigInt(value.cents); current.known += 1; }
+    totals.set(value.currency, current);
+  }
+  return Array.from(totals.entries()).sort(([left], [right]) => left.localeCompare(right)).map(([currency, value]) => ({ currency, cents: value.known ? value.total.toString() : null, unknownCount: value.unknown }));
+}
+
 /**
  * Currency display is intentionally assembled from bigint components. Using
  * Intl on the complete amount would require converting cents to a Number and
@@ -66,10 +97,24 @@ export function formatMoneyExact(value: MoneyCents | string | undefined, currenc
   return `${negative ? "-" : ""}${symbol}${groupedWhole}.${fraction}`;
 }
 
-export function assertCanonicalCents(value: string): MoneyCents {
-  const parsed = BigInt(value);
-  if (parsed < BIGINT_CENTS_MIN || parsed > BIGINT_CENTS_MAX || !/^(0|-?[1-9]\d*)$/.test(value)) {
-    throw new Error("Expected canonical signed cents.");
-  }
-  return value as MoneyCents;
+/**
+ * An amount qualified by how much of it is known: exact when complete,
+ * "Known $X" when some contributors are missing (partial QuickBooks
+ * coverage or unpriced labor), and "Unknown" when nothing could be read.
+ * Unknown refunds can reduce a positive subtotal, so partial is not a minimum.
+ */
+export function formatQualifiedMoney(value: MoneyCents | string | null | undefined, completeness: "complete" | "partial" | "unavailable", currency = "USD"): string {
+  if (value === null || value === undefined || completeness === "unavailable") return "Unknown";
+  return completeness === "complete" ? formatMoney(value, currency) : `Known ${formatMoney(value, currency)}`;
+}
+
+/** Incurred on the cost summary: a known subtotal until coverage and labor are complete. */
+export function incurredLabel(summary: { currency: string; completeness: "complete" | "partial" | "unavailable"; incurred: { totalCents: MoneyCents | string | null } }): string {
+  return formatQualifiedMoney(summary.incurred.totalCents, summary.completeness, summary.currency);
+}
+
+/** Paid on the cost summary: unknown when unavailable, a known subtotal when partial. */
+export function paidLabel(summary: { currency: string; paid: { cents: MoneyCents | string | null; knownCents: MoneyCents | string; coverage: "complete" | "partial" | "unavailable" } }): string {
+  const { paid } = summary;
+  return paid.coverage === "complete" && paid.cents !== null ? formatMoney(paid.cents, summary.currency) : formatQualifiedMoney(paid.knownCents, paid.coverage === "complete" ? "partial" : paid.coverage, summary.currency);
 }

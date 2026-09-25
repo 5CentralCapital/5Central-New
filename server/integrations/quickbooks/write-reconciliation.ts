@@ -1,9 +1,16 @@
 import { createHash } from "node:crypto";
 import type { QuickBooksApiResponse, QuickBooksJsonObject } from "../../../shared/accounting/quickbooks";
+import { canonicalizeDecimal, legacyNumberToDecimal } from "../../../shared/company";
 import { canonicalJsonSha256 } from "../../company/commands/fingerprint";
-import { QuickBooksIntegrationError } from "./errors";
+import { QuickBooksIntegrationError, isQuickBooksRequestNotSent } from "./errors";
 
-export type QuickBooksWriteJournalState = "started" | "ambiguous" | "confirmed" | "failed";
+/**
+ * prepared → validated → started → confirmed | ambiguous | failed. `prepared`
+ * and `validated` never reached the provider. `failed` is recorded only for a
+ * definitive provider rejection (HTTP 4xx, e.g. a stale SyncToken); any
+ * unknown outcome is `ambiguous` and is resolved by readback, never reposted.
+ */
+export type QuickBooksWriteJournalState = "prepared" | "validated" | "started" | "ambiguous" | "confirmed" | "failed";
 
 export interface QuickBooksWriteJournalEntry {
   readonly operationKey: string;
@@ -46,6 +53,11 @@ export interface QuickBooksWriteReconciler {
     readonly operationKey: string;
     readonly request: TRequest;
     /**
+     * Identity bound to the operation key when it is wider than the fields
+     * compared on readback (e.g. entity, operation, record Id and SyncToken).
+     */
+    readonly requestIdentity?: QuickBooksJsonObject;
+    /**
      * Performs the provider write. It must forward `requestId` to the
      * Accounting client (`create(..., { requestId })` / `update(..., { requestId })`)
      * so that a reconciled retry of the same operation key is de-duplicated
@@ -80,8 +92,26 @@ function providerVersion(response: QuickBooksApiResponse): string | undefined {
   return typeof value === "string" || typeof value === "number" ? String(value) : undefined;
 }
 
+function decimalText(value: unknown): string | null {
+  try {
+    if (typeof value === "number") return legacyNumberToDecimal(value);
+    if (typeof value === "string") return canonicalizeDecimal(value);
+  } catch {
+    // Not a plain decimal; the comparison fails closed.
+  }
+  return null;
+}
+
+/**
+ * Provider responses are parsed losslessly, so a number arrives as its JSON
+ * lexeme ("200.0"), while the request holds a JavaScript number (200).
+ * Numbers therefore compare as canonical decimals, never as raw text.
+ */
 function scalarEqual(left: unknown, right: unknown): boolean {
-  if (typeof left === "number" || typeof right === "number") return String(left) === String(right);
+  if (typeof left === "number" || typeof right === "number") {
+    const leftDecimal = decimalText(left);
+    return leftDecimal !== null && leftDecimal === decimalText(right);
+  }
   return left === right;
 }
 
@@ -117,6 +147,11 @@ function unresolvedWriteError(cause?: unknown, intuitTid?: string): QuickBooksIn
   });
 }
 
+/** A provider HTTP 4xx answer to the write itself: the request was refused, not lost. */
+function isDefinitiveRejection(error: unknown): error is QuickBooksIntegrationError {
+  return error instanceof QuickBooksIntegrationError && !error.ambiguous && typeof error.status === "number" && error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429;
+}
+
 async function saveAmbiguous(journal: QuickBooksWriteJournal, entry: QuickBooksWriteJournalEntry): Promise<void> {
   // A journal persistence failure is itself an unknown outcome. Never replace
   // it with `failed`, which would make a later worker replay a provider write.
@@ -133,7 +168,7 @@ export function createQuickBooksWriteReconciler(journal: QuickBooksWriteJournal)
     async execute(input) {
       const key = operationKey(input.operationKey);
       const requestId = quickBooksWriteRequestId(key);
-      const requestHash = canonicalJsonSha256(input.request);
+      const requestHash = canonicalJsonSha256(input.requestIdentity ?? input.request);
       const existing = await journal.load(key);
       if (existing && existing.requestHash !== requestHash) throw new QuickBooksIntegrationError("quickbooks_conflict", "QuickBooks operation key is bound to different input");
       if (existing?.state === "confirmed") return { status: "confirmed", ...(existing.providerEntityId ? { providerEntityId: existing.providerEntityId } : {}), ...(existing.providerVersion ? { providerVersion: existing.providerVersion } : {}), ...(existing.intuitTid ? { intuitTid: existing.intuitTid } : {}) };
@@ -155,12 +190,16 @@ export function createQuickBooksWriteReconciler(journal: QuickBooksWriteJournal)
         // A prior attempt is safe to retry only after the independent readback
         // established that no matching provider object exists.
       }
+      // `prepared`/`validated` entries never reached the provider; the first
+      // provider attempt starts here.
       try { await journal.save({ operationKey: key, requestHash, state: "started" }); }
       catch (error) { throw new QuickBooksIntegrationError("quickbooks_token_store", "QuickBooks write journal could not be started", { cause: error }); }
+      let responded = false;
       try {
         // A retry after a "not found" readback reuses the same requestid, so
         // an original write that Intuit did commit is returned, not duplicated.
         const response = await input.write({ requestId });
+        responded = true;
         // Provider success is not enough: a separate read proves the request
         // was committed under the expected identity and fields.
         let readback: QuickBooksReadbackResult;
@@ -177,7 +216,23 @@ export function createQuickBooksWriteReconciler(journal: QuickBooksWriteJournal)
         try { await journal.save(confirmed); } catch (error) { await saveAmbiguous(journal, { ...confirmed, state: "ambiguous" }); throw unresolvedWriteError(error, confirmed.intuitTid); }
         return { status: "confirmed", ...(confirmed.providerEntityId ? { providerEntityId: confirmed.providerEntityId } : {}), ...(confirmed.providerVersion ? { providerVersion: confirmed.providerVersion } : {}), ...(confirmed.intuitTid ? { intuitTid: confirmed.intuitTid } : {}) };
       } catch (error) {
+        if (!responded && isQuickBooksRequestNotSent(error)) {
+          // The request never left this process (capability gate, 429
+          // cooldown, token failure, validation). Return the journal to the
+          // state it had before this attempt so the next attempt is not held
+          // as a possibly recorded write. If that cannot be saved, it stays
+          // "started" and is treated as unknown.
+          const before: QuickBooksWriteJournalEntry = existing && (existing.state === "ambiguous" || existing.state === "failed") ? existing : { operationKey: key, requestHash, state: "validated" };
+          try { await journal.save(before); } catch { /* fail closed */ }
+          throw error;
+        }
         const intuitTid = error instanceof QuickBooksIntegrationError ? error.intuitTid : undefined;
+        if (isDefinitiveRejection(error)) {
+          // Intuit answered and refused the request, so nothing was committed.
+          try { await journal.save({ operationKey: key, requestHash, state: "failed", ...(intuitTid ? { intuitTid } : {}) }); }
+          catch { await saveAmbiguous(journal, { operationKey: key, requestHash, state: "ambiguous", ...(intuitTid ? { intuitTid } : {}) }); }
+          throw error;
+        }
         await saveAmbiguous(journal, { operationKey: key, requestHash, state: "ambiguous", ...(intuitTid ? { intuitTid } : {}) });
         if (error instanceof QuickBooksIntegrationError && error.code === "quickbooks_conflict") throw error;
         // Any transport/provider exception leaves the side effect unknown. Do

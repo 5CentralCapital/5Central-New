@@ -18,7 +18,26 @@ import { registerReportingHttpRoutes, type ReportingPort } from '../reporting';
 import { registerWorkOrderRoutes } from '../work-orders/http';
 import type { WorkOrderPort } from '../work-orders/port';
 import { PROPERTY_COMMAND_KINDS, propertyCommandPayloadSchemas } from '../../shared/company/property-contracts';
+import { LEGAL_ENTITY_COMMAND_KINDS, legalEntityCommandPayloadSchemas } from '../../shared/company/legal-entity-contracts';
 import type { CompanyPropertyPort } from './property-port';
+import type { CompanyLegalEntityPort } from './legal-entity-port';
+// lane-b-accounting
+import { registerJobRoutes, type JobsPort } from '../jobs/operator';
+// lane-c-review
+import { registerReviewCaseRoutes } from '../review-cases/http';
+import type { ReviewCasePort } from '../review-cases/port';
+import { registerIntakeRoutes } from '../intake/http';
+import type { IntakePort } from '../intake/port';
+import { registerCompanyDocumentRoutes } from '../company-documents/http';
+import type { CompanyDocumentsPort } from '../company-documents/port';
+// lane-d-forecast
+import { registerForecastingRoutes } from '../forecasting/http';
+import type { ForecastingPort } from '../forecasting/port';
+import { registerProjectInsightRoutes } from '../projects/http'; // lane-f
+import type { ProjectInsightsPort } from '../projects/insights'; // lane-f
+// lane-e-nav: manager workspace read endpoints
+import { registerWorkspaceRoutes } from '../workspaces/routes';
+import { workspaceProjectFinanceFactory } from '../workspaces/port'; // lane-e-nav
 
 export interface CompanyProjectPort {
   list(principal: AuthenticatedPrincipal, query: ProjectListQuery): Promise<unknown>;
@@ -46,19 +65,42 @@ const readQuery = z.object({
   cursor: z.string().min(1).max(512).optional(),
 }).strict();
 
+async function assertLegalEntityScopeExists(executor: RentOpsQueryExecutor, organizationId: string, legalEntityId: string): Promise<void> {
+  const result = await executor.query(
+    `SELECT 1 FROM company_legal_entities WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL`,
+    [organizationId, legalEntityId],
+  );
+  if (result.rows.length !== 1) throw new ForbiddenCommandError('Requested legal entity is outside the company scope.', { reason: 'scope_grant' });
+}
+
 export function registerCompanyRoutes(app: Express, options: {
   executor: RentOpsQueryExecutor; requireAdmin: RequestHandler; projects: CompanyProjectPort;
   properties?: CompanyPropertyPort;
+  legalEntities?: CompanyLegalEntityPort;
   accounting?: AccountingServices;
   investors?: InvestorPort;
   time?: TimeServices;
   reporting?: ReportingPort;
   workOrders?: WorkOrderPort;
+  jobs?: JobsPort; // lane-b-accounting
   /** Browser-session presence check used for OAuth callback redirects (production wiring only). */
   hasAdminSession?: (request: Request) => boolean;
+  // lane-c-review
+  reviewCases?: ReviewCasePort;
+  intake?: IntakePort;
+  documents?: CompanyDocumentsPort;
+  forecasting?: ForecastingPort; // lane-d-forecast
+  projectInsights?: ProjectInsightsPort; // lane-f
 }): void {
   const { executor, requireAdmin, projects } = options;
   if (options.workOrders) registerWorkOrderRoutes(app, { executor, requireAdmin, workOrders: options.workOrders });
+  if (options.jobs) registerJobRoutes(app, { executor, requireAdmin, jobs: options.jobs }); // lane-b-accounting
+  // lane-c-review
+  if (options.reviewCases) registerReviewCaseRoutes(app, { executor, requireAdmin, reviewCases: options.reviewCases });
+  if (options.intake) registerIntakeRoutes(app, { executor, requireAdmin, intake: options.intake });
+  if (options.documents) registerCompanyDocumentRoutes(app, { executor, requireAdmin, documents: options.documents });
+  if (options.forecasting) registerForecastingRoutes(app, { executor, requireAdmin, forecasting: options.forecasting }); // lane-d-forecast
+  if (options.projectInsights) registerProjectInsightRoutes(app, { executor, requireAdmin, insights: options.projectInsights }); // lane-f
   if (options.accounting) registerAccountingHttpRoutes(app, { executor, requireAdmin, services: options.accounting, ...(options.hasAdminSession ? { hasAdminSession: options.hasAdminSession } : {}) });
   if (options.investors) registerInvestorRoutes(app, { executor, requireAdmin, investors: options.investors });
   if (options.time) registerTimeHttpRoutes(app, { executor, requireAdmin, services: options.time });
@@ -68,6 +110,8 @@ export function registerCompanyRoutes(app: Express, options: {
       actorId: companyWebActor(request), organizationId, role: 'admin',
     }) }),
   });
+  // lane-e-nav: manager workspace read endpoints
+  registerWorkspaceRoutes(app, { executor, requireAdmin, projectFinanceFactory: workspaceProjectFinanceFactory(options.accounting) });
   const web = attestTransport('web');
   app.get('/api/company/context', requireAdmin, companyReadHandler(async (req, res) => {
     res.json(await readCompanyContext(executor, companyWebActor(req), 'admin'));
@@ -83,10 +127,22 @@ export function registerCompanyRoutes(app: Express, options: {
     const kind = z.enum(PROPERTY_COMMAND_KINDS).parse(req.params.commandKind);
     const envelope = commandEnvelopeSchema(propertyCommandPayloadSchemas[kind]).parse(req.body);
     if (envelope.scope.organizationId !== organizationId) throw new ForbiddenCommandError('Property company does not match this request.');
+    if (envelope.scope.legalEntityId !== undefined) await assertLegalEntityScopeExists(executor, organizationId, envelope.scope.legalEntityId);
     const actorId = companyWebActor(req);
     const resolvePrincipal = (transaction: RentOpsQueryExecutor) => loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: 'admin' });
     const principal = await resolvePrincipal(executor);
     res.json(await options.properties!.execute(kind, envelope, { principal, resolvePrincipal, transport: web }));
+  }));
+  if (options.legalEntities) app.post('/api/company/:organizationId/legal-entity-commands/:commandKind', requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const kind = z.enum(LEGAL_ENTITY_COMMAND_KINDS).parse(req.params.commandKind);
+    const envelope = commandEnvelopeSchema(legalEntityCommandPayloadSchemas[kind]).parse(req.body);
+    if (envelope.scope.organizationId !== organizationId) throw new ForbiddenCommandError('Legal entity company does not match this request.');
+    if (envelope.scope.legalEntityId !== undefined) await assertLegalEntityScopeExists(executor, organizationId, envelope.scope.legalEntityId);
+    const actorId = companyWebActor(req);
+    const resolvePrincipal = (transaction: RentOpsQueryExecutor) => loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: 'admin' });
+    const principal = await resolvePrincipal(executor);
+    res.json(await options.legalEntities!.execute(kind, envelope, { principal, resolvePrincipal, transport: web }));
   }));
   app.get('/api/company/:organizationId/projects', requireAdmin, companyReadHandler(async (req, res) => {
     const organizationId = organizationIdSchema.parse(req.params.organizationId);

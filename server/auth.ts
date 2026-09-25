@@ -24,7 +24,7 @@ function passwordKey(password: string, salt: string): Promise<Buffer> {
 declare module "express-session" {
   interface SessionData {
     userId?: string;
-    /** Dedicated Rent Ops admin identity; never treated as a generic user session. */
+    /** Dedicated 5Central Ops admin identity; never treated as a generic user session. */
     rentOpsAdminUserId?: string;
     rentOpsCsrfToken?: string;
   }
@@ -74,14 +74,15 @@ export function createLoginAttemptLimiter(now: () => number = Date.now) {
     if (email) keys.push({ key: `account:${createHash("sha256").update(email).digest("hex")}`, maximum: 10 });
     const missing = keys.filter(({ key }) => !attempts.has(key)).length;
     if (attempts.size + missing > maximumEntries) return Math.ceil(windowMs / 1000);
-    let retryAfter = 0;
     for (const { key, maximum } of keys) {
       const entry = attempts.get(key) ?? { count: 0, expiresAt: currentTime + windowMs };
       entry.count = Math.min(entry.count + 1, maximum + 1);
       attempts.set(key, entry);
-      if (entry.count > maximum) retryAfter = Math.max(retryAfter, Math.ceil((entry.expiresAt - currentTime) / 1000));
+      // Stop at the first exhausted key: a blocked address must not keep adding
+      // account entries until the shared table is full for every other client.
+      if (entry.count > maximum) return Math.ceil((entry.expiresAt - currentTime) / 1000);
     }
-    return retryAfter;
+    return 0;
   };
 }
 
@@ -163,6 +164,57 @@ function sameSecret(left: string | undefined, right: string | undefined): boolea
   }
 }
 
+const SAFE_HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+function originOf(value: string | undefined): string | undefined {
+  if (!value || value === "null") return undefined;
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+    return parsed.origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function requestOrigin(req: Request): string | undefined {
+  const host = req.get?.("host");
+  if (!host) return undefined;
+  return originOf(`${req.protocol || "http"}://${host}`);
+}
+
+/**
+ * Browser cookie requests must prove they originated at this application.
+ * Same-origin fetches and forms supply Origin; Referer is the compatibility
+ * fallback for older browsers. API-key automation is handled separately.
+ */
+export function requestHasSameOrigin(req: Request): boolean {
+  const originHeader = req.get?.("origin");
+  // An explicit Origin header is authoritative, even when it is malformed or
+  // the browser supplies the opaque `null` origin. Never downgrade that signal
+  // to a same-origin Referer value.
+  const candidate = originHeader !== undefined ? originOf(originHeader) : originOf(req.get?.("referer"));
+  if (!candidate) return false;
+
+  const allowed = new Set<string>();
+  const localOrigin = requestOrigin(req);
+  if (localOrigin) allowed.add(localOrigin);
+  for (const configuredOrigin of [process.env.RENT_OPS_PUBLIC_APP_URL, process.env.RENT_OPS_ADMIN_OAUTH_ORIGIN]) {
+    const normalized = originOf(configuredOrigin);
+    if (normalized) allowed.add(normalized);
+  }
+  return allowed.has(candidate);
+}
+
+/** Same-origin guard for legacy cookie-authenticated mutations and public forms. */
+export function requireSameOriginForMutation(req: Request, res: Response, next: NextFunction) {
+  if (SAFE_HTTP_METHODS.has(req.method) || requestHasSameOrigin(req)) {
+    next();
+    return;
+  }
+  res.status(403).json({ code: "csrf_required" });
+}
+
 export function createRentOpsCsrfToken(): string {
   return randomBytes(32).toString("base64url");
 }
@@ -218,34 +270,37 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   if (req.user.role !== "admin") {
     return res.status(403).json({ message: "Admin access required" });
   }
+  if (!SAFE_HTTP_METHODS.has(req.method) && !hasValidApiKey(req) && !requestHasSameOrigin(req)) {
+    return res.status(403).json({ code: "csrf_required" });
+  }
   next();
 }
 
 /**
- * Rent Ops deliberately does not accept the generic userId session, investor
+ * 5Central Ops deliberately does not accept the generic userId session, investor
  * sessions, or any legacy API-key header. The dedicated marker is set only by
- * the Rent Ops admin login and every mutating request also needs its CSRF
- * token. This middleware is injected into the Rent Ops router only.
+ * the 5Central Ops admin login and every mutating request also needs its CSRF
+ * token. This middleware is injected into the 5Central Ops router only.
  */
-/** True when the browser still carries the dedicated Rent Ops admin session marker. */
+/** True when the browser still carries the dedicated 5Central Ops admin session marker. */
 export function hasRentOpsAdminSession(req: Request): boolean {
   return Boolean(req.session?.rentOpsAdminUserId);
 }
 
 export async function requireRentOpsAdmin(req: Request, res: Response, next: NextFunction) {
   if (extractApiKey(req) || !req.session?.rentOpsAdminUserId) {
-    res.status(401).json({ message: "Rent Ops administrator authentication required" });
+    res.status(401).json({ message: "5Central Ops administrator authentication required" });
     return;
   }
   try {
     if (req.session.rentOpsOAuthSubject && !managerOAuthAllowed(process.env, req.session.rentOpsOAuthSubject)) {
-      res.status(403).json({ message: "Rent Ops administrator access required" });
+      res.status(403).json({ message: "5Central Ops administrator access required" });
       return;
     }
     const user = await storage.getUser(req.session.rentOpsAdminUserId);
     const configuredEmail = normalizedEmail(process.env.RENT_OPS_ADMIN_EMAIL);
     if (!user || user.role !== "admin" || (configuredEmail && normalizedEmail(user.email) !== configuredEmail)) {
-      res.status(403).json({ message: "Rent Ops administrator access required" });
+      res.status(403).json({ message: "5Central Ops administrator access required" });
       return;
     }
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && !rentOpsSessionHasCsrf(req)) {
@@ -255,21 +310,26 @@ export async function requireRentOpsAdmin(req: Request, res: Response, next: Nex
     req.rentOpsAdminUser = user;
     next();
   } catch {
-    res.status(503).json({ message: "Rent Ops administrator authentication unavailable" });
+    res.status(503).json({ message: "5Central Ops administrator authentication unavailable" });
   }
 }
 
 // Middleware: accept admin session OR X-API-Key header (for OpenClaw / external agents)
 export function requireAdminOrApiKey(req: Request, res: Response, next: NextFunction) {
-  // Path 1: already authenticated via session
-  if (req.user && req.user.role === "admin") {
+  // Path 1: explicit API-key automation. API keys are not browser cookies and
+  // therefore do not need an Origin check; production startup rejects these
+  // legacy keys unless a deployment explicitly keeps the non-production path.
+  if (hasValidApiKey(req)) {
+    // Mark request as API-key-authenticated (no user object, but authorized).
+    (req as any).apiKeyAuth = true;
     return next();
   }
 
-  // Path 2: API key in header
-  if (hasValidApiKey(req)) {
-    // Mark request as API-key-authenticated (no user object, but authorized)
-    (req as any).apiKeyAuth = true;
+  // Path 2: already authenticated via a browser session.
+  if (req.user && req.user.role === "admin") {
+    if (!SAFE_HTTP_METHODS.has(req.method) && !requestHasSameOrigin(req)) {
+      return res.status(403).json({ code: "csrf_required" });
+    }
     return next();
   }
 
@@ -299,8 +359,8 @@ export function registerAuthRoutes(app: Express) {
     }
     next();
   };
-  // Dedicated Rent Ops admin login. It never populates the generic userId
-  // session, so investor/user logins cannot access Rent Ops admin routes.
+  // Dedicated 5Central Ops admin login. It never populates the generic userId
+  // session, so investor/user logins cannot access 5Central Ops admin routes.
   app.post("/api/rent-ops/auth/login", loginRateLimit, async (req: Request, res: Response) => {
     try {
       const credentials = loginCredentials(req.body);
@@ -340,7 +400,7 @@ export function registerAuthRoutes(app: Express) {
     // the safe user shape and an in-memory CSRF token; the session cookie
     // remains the only persisted credential.
     if (!req.rentOpsAdminUser) {
-      res.status(401).json({ message: "Rent Ops administrator authentication required" });
+      res.status(401).json({ message: "5Central Ops administrator authentication required" });
       return;
     }
     if (!req.session.rentOpsCsrfToken) req.session.rentOpsCsrfToken = createRentOpsCsrfToken();
@@ -389,7 +449,7 @@ export function registerAuthRoutes(app: Express) {
   });
 
   // Logout route
-  app.post("/api/auth/logout", (req: Request, res: Response) => {
+  app.post("/api/auth/logout", requireSameOriginForMutation, (req: Request, res: Response) => {
     req.session.destroy((err) => {
       if (err) {
         return res.status(500).json({ message: "Logout failed" });

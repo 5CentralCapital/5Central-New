@@ -1,3 +1,4 @@
+import React from "react";
 import { LegalPage, LegalSection, LEGAL_CONTACT_EMAIL } from "./legal-layout";
 
 export default function PrivacyPolicy() {
@@ -5,7 +6,7 @@ export default function PrivacyPolicy() {
     <LegalPage title="Privacy Policy" testId="privacy-policy-page">
       <LegalSection title="1. Who we are">
         <p>
-          5Central Capital LLC ("5Central," "we," "us") operates 5Central Rent Ops ("Rent Ops" or the "App"), a private
+          5Central Capital LLC ("5Central," "we," "us") operates 5Central Ops, formerly 5Central Rent Ops ("5Central Ops" or the "App"), a private
           property-management and accounting application used to run 5Central's own real estate business and affiliated
           entities. This policy explains what information the App collects, how it is used, and the choices available,
           including for data accessed through the QuickBooks Online integration.
@@ -63,7 +64,7 @@ export default function PrivacyPolicy() {
         <p>We rely on service providers that process information on our behalf, including:</p>
         <ul className="list-disc pl-6 space-y-2">
           <li>Intuit (QuickBooks Online), for accounting data the administrator connects;</li>
-          <li>Replit, for application hosting and database services;</li>
+          <li>Render, for application hosting; Neon, for database services; and Amazon Web Services (S3), for private document storage;</li>
           <li>Auth0 and Google, for manager sign-in;</li>
           <li>Stripe, for hosted card and ACH payments;</li>
           <li>Plaid, for bank-account data;</li>

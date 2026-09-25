@@ -1,8 +1,11 @@
 import { usdCurrencyFormatter } from '../../lib/rent-ops-formatters';
+import { BLOCKED_LABEL, UNKNOWN_AMOUNT_LABEL } from '@shared/review-cases/display-labels';
 import {EntityLink,EntityNavigationContext} from "./workspace/entity-link";
 import React, { useState, useContext } from "react";
 import { z } from "zod";
 import { rentOpsAuthClient } from "./auth";
+import { ListTotals, exactCentsMetric } from "./workspace/list-totals";
+import { summarizeExactCents } from "./workspace/list-totals-model";
 
 const cents = z.number().int().nonnegative().safe();
 const previewSchema = z.object({
@@ -24,8 +27,8 @@ const errorMessages: Record<string, string> = {
   no_ready_charges: "There are no new charges ready to post.",
   billing_unavailable: "Billing is unavailable. The database setup must be complete before charges can be posted.",
 };
-const money = (value: number | null): string => value === null ? "Needs review" : usdCurrencyFormatter.format(value / 100);
-const statusLabels = { ready: "Ready", blocked: "Needs review", posted: "Posted", excluded: "Separate workflow" };
+const money = (value: number | null): string => value === null ? UNKNOWN_AMOUNT_LABEL : usdCurrencyFormatter.format(value / 100);
+const statusLabels = { ready: "Ready", blocked: BLOCKED_LABEL, posted: "Posted", excluded: "Separate workflow" };
 
 async function requestBilling(path: string, body?: { month: string; previewToken: string; scope?: { propertyId?: string } }): Promise<unknown> {
   const response = await rentOpsAuthClient.request(`/api/rent-ops/billing/${path}`, body ? {
@@ -82,7 +85,7 @@ export function RecurringBillingPanel({ onPosted, businessDate, propertyId }: { 
     {result && <p role="status" style={{ padding: "0 20px" }}>{result}</p>}
     {preview && <>
       <div className="ro-panel-heading">
-        <p>{preview.readyCount} ready · {money(preview.readyCents)} · {preview.blockedCount} need review · {preview.postedCount} already posted</p>
+        <p>{preview.readyCount} ready · {money(preview.readyCents)} · {preview.blockedCount} blocked · {preview.postedCount} already posted</p>
         <button type="button" className="primary" disabled={busy || preview.readyCount === 0} onClick={() => void post()}>Post {preview.readyCount} ready charges · {money(preview.readyCents)}</button>
       </div>
       <p style={{ padding: "0 20px" }}>Charges post and become due on {preview.billingOn}. Partial months need a confirmed manual charge. Subsidies, deposits, and one-time fees use their separate workflows.</p>
@@ -90,6 +93,7 @@ export function RecurringBillingPanel({ onPosted, businessDate, propertyId }: { 
         {preview.rows.map((row, index) => <tr key={`${row.scheduleId}:${index}`}><td>{row.propertyName} / {row.unitNumber}</td><td>{navigation.onTenant?<EntityLink personId={row.personId}>{row.tenantName}</EntityLink>:row.tenantName}</td><td>{navigation.onTenant?<EntityLink personId={row.personId} tab="charges">{row.description}</EntityLink>:row.description}</td><td className="number">{navigation.onTenant?<EntityLink personId={row.personId} tab="charges">{money(row.amountCents)}</EntityLink>:money(row.amountCents)}</td><td>{statusLabels[row.status]}{row.reasons.map((reason) => <div key={reason} style={{ fontSize: 12, marginTop: 4 }}>{reason}</div>)}</td></tr>)}
         {!preview.rows.length && <tr><td colSpan={5}>No applicable recurring charges for this month.</td></tr>}
       </tbody></table></div>
+      <ListTotals totalCount={preview.rows.length} itemLabel="billing preview row" metrics={[exactCentsMetric("Ready charges", summarizeExactCents([preview.readyCents])), exactCentsMetric("Already posted", summarizeExactCents([preview.postedCents]))]} className="ro-list-totals" />
     </>}
   </section>;
 }

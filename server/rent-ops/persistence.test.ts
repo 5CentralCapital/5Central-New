@@ -18,7 +18,7 @@ import {
   renderRentOpsMigrationSqlForVersion,
 } from "./persistence";
 
-test("Rent Operations dry-run is read-only and exposes the version/checksum plan", async () => {
+test("5Central Ops dry-run is read-only and exposes the version/checksum plan", async () => {
   let calls = 0;
   const result = await ensureRentOpsSchema({ apply: false, executor: async () => { calls += 1; } });
   assert.equal(calls, 0);
@@ -30,7 +30,7 @@ test("Rent Operations dry-run is read-only and exposes the version/checksum plan
   assert.ok(result.statementCount > RENT_OPS_REQUIRED_TABLES.length);
 });
 
-test("Rent Operations apply wraps the one SQL source in BEGIN/COMMIT", async () => {
+test("5Central Ops apply wraps the one SQL source in BEGIN/COMMIT", async () => {
   const statements: string[] = [];
   const result = await ensureRentOpsSchema({ apply: true, executor: async (statement) => { statements.push(statement); } });
   assert.equal(result.mode, "applied");
@@ -43,7 +43,7 @@ test("Rent Operations apply wraps the one SQL source in BEGIN/COMMIT", async () 
   assert.ok(!body.includes(RENT_OPS_MIGRATION_CHECKSUM_TOKEN));
 });
 
-test("Rent Operations apply rolls back and rethrows the original SQL error", async () => {
+test("5Central Ops apply rolls back and rethrows the original SQL error", async () => {
   const statements: string[] = [];
   await assert.rejects(
     () => ensureRentOpsSchema({ apply: true, executor: async (statement) => {
@@ -157,7 +157,7 @@ test("additive application migrations preserve all previously recorded source ch
     assert.match(definition.renderedSql, new RegExp(`version\\s*=\\s*${definition.version} AND checksum_sha256\\s*=\\s*'${definition.checksum}'`));
   }
   for (const version of [0, -1, 1.5, Number.NaN, RENT_OPS_SCHEMA_VERSION + 1]) {
-    assert.throws(() => renderRentOpsMigrationSqlForVersion(version), /Unknown Rent Operations migration version/);
+    assert.throws(() => renderRentOpsMigrationSqlForVersion(version), /Unknown 5Central Ops migration version/);
   }
 });
 

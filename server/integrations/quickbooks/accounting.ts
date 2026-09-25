@@ -10,7 +10,7 @@ import type {
   QuickBooksUpdateInput,
 } from "../../../shared/accounting/quickbooks";
 import { randomUUID } from "node:crypto";
-import { QuickBooksIntegrationError, isQuickBooksIntegrationError } from "./errors";
+import { QuickBooksIntegrationError, isQuickBooksIntegrationError, markQuickBooksRequestNotSent } from "./errors";
 import { parseJsonLosslessNumbers } from "./json-lossless";
 
 export const QUICKBOOKS_SANDBOX_ACCOUNTING_BASE_URL = "https://sandbox-quickbooks.api.intuit.com";
@@ -22,6 +22,27 @@ export const QUICKBOOKS_RATE_LIMIT_BACKOFF_MS = 60_000;
 /** Intuit's stale-object (SyncToken mismatch) fault code, returned with HTTP 400. */
 export const QUICKBOOKS_STALE_OBJECT_FAULT_CODE = "5010";
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,50}$/;
+
+/** Intuit's change data capture returns at most 1,000 objects per response. */
+export const QUICKBOOKS_CDC_MAX_OBJECTS = 1_000;
+/** Intuit's change data capture looks back at most 30 days. */
+export const QUICKBOOKS_CDC_LOOKBACK_DAYS = 30;
+const CDC_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Parsed `/cdc` response. Deleted objects appear inside an entity list with
+ * `status: "Deleted"` and only Id/MetaData. `truncated` is true when the
+ * response reached Intuit's object cap, so the window may be incomplete and
+ * the caller must fall back to a full replay.
+ */
+export interface QuickBooksCdcResponse {
+  readonly entities: Readonly<Record<string, readonly QuickBooksJsonObject[]>>;
+  readonly objectCount: number;
+  readonly truncated: boolean;
+  readonly time?: string;
+  readonly intuitTid?: string;
+  readonly status: number;
+}
 
 /** Options for a provider write. `requestId` must be reused verbatim when retrying the same logical write. */
 export interface QuickBooksWriteOptions {
@@ -37,6 +58,41 @@ const rateLimitCooldowns = new WeakMap<QuickBooksTransport, Map<string, number>>
 
 function cooldownKey(scope: QuickBooksAccountingClientConfig["scope"]): string {
   return `${scope.environment}:${scope.realmId}`;
+}
+
+function cooldownsFor(transport: QuickBooksTransport): Map<string, number> {
+  const existing = rateLimitCooldowns.get(transport);
+  if (existing) return existing;
+  const created = new Map<string, number>();
+  rateLimitCooldowns.set(transport, created);
+  return created;
+}
+
+/**
+ * Refuse to send while this realm is inside an HTTP 429 back-off. Shared by
+ * the Accounting and Reports clients so a throttled realm stops all traffic.
+ */
+export function assertQuickBooksRealmNotCoolingDown(transport: QuickBooksTransport, scope: QuickBooksAccountingClientConfig["scope"]): void {
+  const cooldowns = cooldownsFor(transport);
+  const key = cooldownKey(scope);
+  const until = cooldowns.get(key);
+  if (until === undefined) return;
+  const remaining = until - Date.now();
+  if (remaining <= 0) {
+    cooldowns.delete(key);
+    return;
+  }
+  // Nothing was sent, so this is definitive for reads and writes alike.
+  throw new QuickBooksIntegrationError("quickbooks_rate_limited", "QuickBooks rate limit back-off is in effect for this company", {
+    status: 429,
+    retryable: true,
+    retryAfterMs: remaining,
+  });
+}
+
+/** Start the realm's back-off after an HTTP 429 (Retry-After, at least 60 seconds). */
+export function recordQuickBooksRateLimit(transport: QuickBooksTransport, scope: QuickBooksAccountingClientConfig["scope"], response: QuickBooksTransportResponse): void {
+  if (response.status === 429) cooldownsFor(transport).set(cooldownKey(scope), Date.now() + (quickBooksRetryAfterMs(response) ?? QUICKBOOKS_RATE_LIMIT_BACKOFF_MS));
 }
 
 const BLOCKED_CAPABILITY_NAMES = new Set([
@@ -97,7 +153,7 @@ function safeString(value: unknown, max = 240): string | undefined {
   return text ? text.slice(0, max) : undefined;
 }
 
-function retryAfterMs(response: QuickBooksTransportResponse): number | undefined {
+export function quickBooksRetryAfterMs(response: QuickBooksTransportResponse): number | undefined {
   const value = header(response, "retry-after");
   let parsed: number | undefined;
   if (value && /^\d+(?:\.\d+)?$/.test(value)) parsed = Math.max(0, Number(value) * 1_000);
@@ -132,7 +188,7 @@ function responseError(response: QuickBooksTransportResponse, method: "GET" | "P
       ambiguous: true,
       retryable: false,
       intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid"),
-      retryAfterMs: retryAfterMs(response),
+      retryAfterMs: quickBooksRetryAfterMs(response),
       details,
     });
   }
@@ -149,7 +205,7 @@ function responseError(response: QuickBooksTransportResponse, method: "GET" | "P
     status: response.status,
     retryable: method === "GET" && transient,
     intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid"),
-    retryAfterMs: retryAfterMs(response),
+    retryAfterMs: quickBooksRetryAfterMs(response),
     details,
   });
 }
@@ -184,6 +240,32 @@ function queryFromEnvelope<T extends QuickBooksJsonObject>(body: string): QuickB
   };
 }
 
+function cdcFromEnvelope(body: string, requested: readonly string[]): Omit<QuickBooksCdcResponse, "status" | "intuitTid"> | undefined {
+  const parsed = parseObject(body);
+  const responses = parsed?.CDCResponse;
+  if (!parsed || !Array.isArray(responses)) return undefined;
+  const allowed = new Set(requested);
+  const entities: Record<string, QuickBooksJsonObject[]> = Object.fromEntries(requested.map(name => [name, [] as QuickBooksJsonObject[]]));
+  let objectCount = 0;
+  for (const response of responses) {
+    if (!response || typeof response !== "object" || Array.isArray(response)) return undefined;
+    const queries = (response as Record<string, unknown>).QueryResponse;
+    const list = Array.isArray(queries) ? queries : queries === undefined ? [] : [queries];
+    for (const query of list) {
+      if (!query || typeof query !== "object" || Array.isArray(query)) return undefined;
+      for (const [key, value] of Object.entries(query as Record<string, unknown>)) {
+        if (!Array.isArray(value)) continue;
+        if (!allowed.has(key)) return undefined;
+        if (value.some(item => !item || typeof item !== "object" || Array.isArray(item))) return undefined;
+        entities[key]!.push(...value as QuickBooksJsonObject[]);
+        objectCount += value.length;
+      }
+    }
+  }
+  const time = typeof parsed.time === "string" && Number.isFinite(Date.parse(parsed.time)) ? parsed.time : undefined;
+  return { entities, objectCount, truncated: objectCount >= QUICKBOOKS_CDC_MAX_OBJECTS, ...(time ? { time } : {}) };
+}
+
 function safeNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value;
   if (typeof value === "string" && /^\d+$/.test(value)) {
@@ -210,6 +292,15 @@ function wrapUnknownWriteError(error: unknown, requestId: string): QuickBooksInt
   });
 }
 
+/** Run write validation that happens before any request is sent. */
+function beforeSend<T>(work: () => T): T {
+  try {
+    return work();
+  } catch (error) {
+    throw markQuickBooksRequestNotSent(error);
+  }
+}
+
 function writeRequestId(options: QuickBooksWriteOptions | undefined): string {
   if (options?.requestId === undefined) return randomUUID();
   if (typeof options.requestId !== "string" || !REQUEST_ID_PATTERN.test(options.requestId)) {
@@ -224,6 +315,8 @@ export interface QuickBooksAccountingClient {
   /** Every write carries a `requestid`; pass the same `requestId` when retrying the same logical write. */
   create<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(entity: QuickBooksEntityName, fields: TFields, options?: QuickBooksWriteOptions): Promise<QuickBooksApiResponse<TResult>>;
   update<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(input: QuickBooksUpdateInput<TFields>, options?: QuickBooksWriteOptions): Promise<QuickBooksApiResponse<TResult>>;
+  /** Change data capture since `changedSince` (≤ 30 days ago), including deletions. */
+  cdc(entities: readonly QuickBooksEntityName[], changedSince: string): Promise<QuickBooksCdcResponse>;
 }
 
 /** QBO REST resource paths are lowercase (`companyinfo`, `vendor`); entity names in bodies stay PascalCase. */
@@ -250,31 +343,18 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
   if (typeof config.getAccessToken !== "function") throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks access-token provider is required");
   if (typeof config.transport !== "function") throw new QuickBooksIntegrationError("quickbooks_configuration", "QuickBooks Accounting transport is required");
   const minorVersion = config.minorVersion ?? DEFAULT_QUICKBOOKS_MINOR_VERSION;
-  const cooldowns = rateLimitCooldowns.get(config.transport) ?? new Map<string, number>();
-  rateLimitCooldowns.set(config.transport, cooldowns);
-  const realmKey = cooldownKey(config.scope);
-
-  function assertNotCoolingDown(): void {
-    const until = cooldowns.get(realmKey);
-    if (until === undefined) return;
-    const remaining = until - Date.now();
-    if (remaining <= 0) {
-      cooldowns.delete(realmKey);
-      return;
-    }
-    // Nothing was sent, so this is definitive for reads and writes alike.
-    throw new QuickBooksIntegrationError("quickbooks_rate_limited", "QuickBooks rate limit back-off is in effect for this company", {
-      status: 429,
-      retryable: true,
-      retryAfterMs: remaining,
-    });
-  }
 
   async function call(method: "GET" | "POST", path: string, body?: QuickBooksJsonObject, requestId?: string): Promise<QuickBooksTransportResponse> {
-    assertNotCoolingDown();
-    const accessToken = await config.getAccessToken();
-    if (typeof accessToken !== "string" || accessToken.length === 0) {
-      throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks access token is unavailable");
+    let accessToken: string;
+    try {
+      assertQuickBooksRealmNotCoolingDown(config.transport, config.scope);
+      accessToken = await config.getAccessToken();
+      if (typeof accessToken !== "string" || accessToken.length === 0) {
+        throw new QuickBooksIntegrationError("quickbooks_unauthorized", "QuickBooks access token is unavailable");
+      }
+    } catch (error) {
+      // Nothing reached Intuit: a write journal may treat this as definitive.
+      throw markQuickBooksRequestNotSent(error);
     }
     try {
       const response = await config.transport({
@@ -287,7 +367,7 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
         },
         ...(body ? { body: JSON.stringify(body) } : {}),
       });
-      if (response.status === 429) cooldowns.set(realmKey, Date.now() + (retryAfterMs(response) ?? QUICKBOOKS_RATE_LIMIT_BACKOFF_MS));
+      recordQuickBooksRateLimit(config.transport, config.scope, response);
       if (response.status < 200 || response.status >= 300) throw responseError(response, method, requestId);
       return response;
     } catch (error) {
@@ -320,10 +400,33 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
       return { ...parsed, status: response.status, intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") };
     },
 
+    async cdc(entities: readonly QuickBooksEntityName[], changedSince: string): Promise<QuickBooksCdcResponse> {
+      if (!Array.isArray(entities) || entities.length === 0 || entities.length > 30 || new Set(entities).size !== entities.length) {
+        throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks change data capture entities are invalid");
+      }
+      for (const entity of entities) assertEntity(entity);
+      if (typeof changedSince !== "string" || !CDC_TIMESTAMP.test(changedSince) || !Number.isFinite(Date.parse(changedSince))) {
+        throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks change data capture timestamp is invalid");
+      }
+      const oldest = Date.now() - QUICKBOOKS_CDC_LOOKBACK_DAYS * 86_400_000;
+      if (Date.parse(changedSince) < oldest) {
+        throw new QuickBooksIntegrationError("quickbooks_validation", "QuickBooks change data capture cannot look back more than 30 days");
+      }
+      const params = new URLSearchParams({ entities: entities.join(","), changedSince });
+      const response = await call("GET", `cdc?${params.toString()}`);
+      const fault = quickBooksProviderFaultError(response);
+      if (fault) throw fault;
+      const parsed = cdcFromEnvelope(response.body, entities);
+      if (!parsed) throw new QuickBooksIntegrationError("quickbooks_api", "QuickBooks change data capture response could not be confirmed", { status: response.status });
+      return { ...parsed, status: response.status, intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") };
+    },
+
     async create<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(entity: QuickBooksEntityName, fields: TFields, options?: QuickBooksWriteOptions): Promise<QuickBooksApiResponse<TResult>> {
-      assertEntity(entity);
-      assertPlainObject(fields, "create fields");
-      const requestId = writeRequestId(options);
+      const requestId = beforeSend(() => {
+        assertEntity(entity);
+        assertPlainObject(fields, "create fields");
+        return writeRequestId(options);
+      });
       const response = await call("POST", entityPath(entity), fields, requestId);
       const parsed = entityFromEnvelope<TResult>(entity, response.body);
       if (!parsed) throw new QuickBooksIntegrationError("quickbooks_ambiguous_write", "QuickBooks create response could not be confirmed; reconcile before retrying", { ambiguous: true, status: response.status, details: { requestId } });
@@ -331,11 +434,13 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
     },
 
     async update<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(input: QuickBooksUpdateInput<TFields>, options?: QuickBooksWriteOptions): Promise<QuickBooksApiResponse<TResult>> {
-      assertEntity(input.entity);
-      assertIdentifier(input.id, "entity ID");
-      assertIdentifier(input.syncToken, "SyncToken");
-      assertPlainObject(input.fields, "update fields");
-      const requestId = writeRequestId(options);
+      const requestId = beforeSend(() => {
+        assertEntity(input.entity);
+        assertIdentifier(input.id, "entity ID");
+        assertIdentifier(input.syncToken, "SyncToken");
+        assertPlainObject(input.fields, "update fields");
+        return writeRequestId(options);
+      });
       const payload = { ...input.fields, Id: input.id, SyncToken: input.syncToken };
       const response = await call("POST", entityPath(input.entity), payload, requestId);
       const parsed = entityFromEnvelope<TResult>(input.entity, response.body);

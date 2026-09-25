@@ -9,6 +9,7 @@ import { newOperationId } from "../../shared/company";
 import { createSyntheticCompanyDatabase, SYNTHETIC_COMPANY } from "../company/testing/synthetic-database";
 import { ProjectService } from "./service";
 import { executeProjectCommand } from "./commands";
+import { resolveEffectiveDate, todayIsoDate } from "./helpers";
 import type { CompanyScope } from "../../shared/company";
 
 const scope: CompanyScope = {
@@ -289,4 +290,11 @@ test("ordinary project reads survive a later property/entity transfer while expl
   } finally {
     await fixture.close();
   }
+});
+
+test("project default effective date is the New York operating date, not the UTC date", () => {
+  // 11pm EST on March 7, 2027 is already March 8 in UTC.
+  assert.equal(todayIsoDate(new Date("2027-03-08T04:00:00.000Z")), "2027-03-07");
+  assert.equal(todayIsoDate(new Date("2027-07-01T03:30:00.000Z")), "2027-06-30");
+  assert.equal(resolveEffectiveDate("2026-01-02"), "2026-01-02");
 });

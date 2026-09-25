@@ -8,7 +8,7 @@ import test from "node:test";
 process.env.DATABASE_URL ??= "postgresql://synthetic:synthetic@localhost/synthetic";
 const auth = await import("./auth");
 
-test("Rent Ops CSRF tokens are opaque and checked with the dedicated header", () => {
+test("5Central Ops CSRF tokens are opaque and checked with the dedicated header", () => {
   const token = auth.createRentOpsCsrfToken();
   assert.match(token, /^[A-Za-z0-9_-]{40,}$/);
   const request = {
@@ -20,7 +20,7 @@ test("Rent Ops CSRF tokens are opaque and checked with the dedicated header", ()
   assert.equal(auth.rentOpsSessionHasCsrf(wrongHeader), false);
 });
 
-test("Rent Ops admin middleware rejects generic sessions and every API-key path", async () => {
+test("5Central Ops admin middleware rejects generic sessions and every API-key path", async () => {
   const responses: Array<{ status: number; body: unknown }> = [];
   const res = {
     status(code: number) { return { json(body: unknown) { responses.push({ status: code, body }); } }; },
@@ -32,7 +32,7 @@ test("Rent Ops admin middleware rejects generic sessions and every API-key path"
   assert.deepEqual(responses.map((value) => value.status), [401, 401]);
 });
 
-test("Rent Ops auth boundary names dedicated session, CSRF, and legacy-key rejection", () => {
+test("5Central Ops auth boundary names dedicated session, CSRF, and legacy-key rejection", () => {
   const source = readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "auth.ts"), "utf8");
   assert.match(source, /rentOpsAdminUserId/);
   assert.match(source, /rentOpsCsrfToken/);
@@ -52,6 +52,12 @@ test("host login limiter bounds account attempts across IPs and expires", () => 
   assert.equal(limit("new-ip", "resident@example.test"), 0);
   for (let i = 0; i < 30; i++) assert.equal(limit("one-ip", `account-${i}`), 0);
   assert.equal(limit("one-ip", "new-account"), 900);
+});
+
+test("host login limiter: one blocked address cannot fill the table and lock out everyone", () => {
+  const limit = auth.createLoginAttemptLimiter(() => 0);
+  for (let i = 0; i < 12000; i++) limit("attacker-ip", `sprayed-${i}@example.test`);
+  assert.equal(limit("administrator-ip", "admin@example.test"), 0);
 });
 
 test("OAuth manager session rejects a removed subject allowlist before loading the host user", async () => {

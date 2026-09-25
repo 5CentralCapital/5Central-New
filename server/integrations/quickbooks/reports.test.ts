@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DEFAULT_QUICKBOOKS_MINOR_VERSION } from "./accounting";
+import { createQuickBooksAccountingClient, DEFAULT_QUICKBOOKS_MINOR_VERSION } from "./accounting";
 import { QuickBooksIntegrationError } from "./errors";
 import { createQuickBooksReportsClient } from "./reports";
 
@@ -100,4 +100,19 @@ test("keeps large report monetary cells as exact text", async () => {
   const result = await client.getReport("ProfitAndLoss", { startDate: "2026-09-01", endDate: "2026-09-21", accountingMethod: "Cash" });
   const row = (result.raw.Rows as { Row: Array<{ ColData: Array<{ value: unknown }> }> }).Row[0];
   assert.equal(row?.ColData[0]?.value, "90071992547409.93");
+});
+
+test("a report HTTP 429 starts the realm's back-off, which report and accounting requests both honour", async () => {
+  let calls = 0;
+  const transport = async () => {
+    calls += 1;
+    return { status: 429, headers: { "retry-after": "90" }, body: JSON.stringify({ Fault: { Error: [{ code: "003001" }] } }) };
+  };
+  const reportsScope = { ...scope, realmId: "7654321" };
+  const reports = createQuickBooksReportsClient({ scope: reportsScope, getAccessToken: async () => "access", transport });
+  await assert.rejects(() => reports.getReport("ProfitAndLoss"), (error: unknown) => error instanceof QuickBooksIntegrationError && error.code === "quickbooks_rate_limited" && error.retryAfterMs === 90_000);
+  await assert.rejects(() => reports.getReport("BalanceSheet"), (error: unknown) => error instanceof QuickBooksIntegrationError && error.code === "quickbooks_rate_limited" && (error.retryAfterMs ?? 0) > 80_000);
+  const accounting = createQuickBooksAccountingClient({ scope: reportsScope, getAccessToken: async () => "access", transport });
+  await assert.rejects(() => accounting.query("select * from Account"), (error: unknown) => error instanceof QuickBooksIntegrationError && error.code === "quickbooks_rate_limited");
+  assert.equal(calls, 1, "nothing more is sent to a throttled realm");
 });

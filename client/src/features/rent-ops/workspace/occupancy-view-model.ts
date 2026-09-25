@@ -1,4 +1,5 @@
 import type { AdminLeaseTermView, AdminSnapshot, AdminTenancyView, AdminUnitView, RentRollRow } from "../types";
+import { formatLongDate } from "../../../lib/rent-ops-formatters";
 import { knownLeaseTermsForTenancy, knownLink, occupancyHistoryForUnit, type OccupancyHistoryRecord } from "./property-unit-model";
 
 export type OccupancyDisplayStatus = "current" | "past" | "future" | "unknown" | "vacant";
@@ -13,6 +14,8 @@ export interface OccupancyViewRecord extends OccupancyHistoryRecord {
   currentUnitState: boolean;
 }
 
+/** Reasons are shown to people, so their dates use the shared long-date format. */
+const shown = (value?: string) => formatLongDate(value) ?? value ?? "";
 const confirmed = (knowledge?: string) => knowledge === undefined || knowledge === "source" || knowledge === "manual";
 function date(value?: string): string | undefined {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined;
@@ -41,19 +44,19 @@ function selectLease(terms: AdminLeaseTermView[], asOf: string, status: Occupanc
 }
 function historicalStatus(tenancy: AdminTenancyView, reports: readonly RentRollRow[], asOf: string): Pick<OccupancyViewRecord, "displayStatus" | "statusReason"> {
   const out = confirmed(tenancy.actualMoveOutKnowledge) ? date(tenancy.actualMoveOutOn) : undefined;
-  if (out && out <= asOf) return { displayStatus: "past", statusReason: `Moved out ${out}` };
+  if (out && out <= asOf) return { displayStatus: "past", statusReason: `Moved out ${shown(out)}` };
   const start = moveIn(tenancy);
   const planned = confirmed(tenancy.plannedMoveInKnowledge) ? date(tenancy.plannedMoveInOn) : undefined;
-  if ((start && start > asOf) || (confirmed(tenancy.statusKnowledge) && tenancy.status === "future" && planned && planned > asOf)) return { displayStatus: "future", statusReason: `Move-in after ${asOf}` };
+  if ((start && start > asOf) || (confirmed(tenancy.statusKnowledge) && tenancy.status === "future" && planned && planned > asOf)) return { displayStatus: "future", statusReason: `Move-in after ${shown(asOf)}` };
   // A source status alone is undated. Require positive temporal evidence before
   // using a replacement or transfer to classify an imported uncertain tenancy.
   if (start && start <= asOf) {
     const successor = reports.find(report => report.occupancy === "current" && report.tenancyId && report.tenancyId !== tenancy.id && date(report.actualMoveInOn) && report.actualMoveInOn! > start && report.actualMoveInOn! <= asOf && (
       report.unitId === tenancy.unitId || (knownLink(tenancy.primaryPersonId, tenancy.primaryPersonLinkKnowledge) && report.currentPersonId === tenancy.primaryPersonId)
     ));
-    if (successor) return { displayStatus: "past", statusReason: successor.unitId === tenancy.unitId ? `Replaced by the current tenancy beginning ${successor.actualMoveInOn}` : `Same tenant moved to another unit on ${successor.actualMoveInOn}` };
+    if (successor) return { displayStatus: "past", statusReason: successor.unitId === tenancy.unitId ? `Replaced by the current tenancy beginning ${shown(successor.actualMoveInOn)}` : `Same tenant moved to another unit on ${shown(successor.actualMoveInOn)}` };
   }
-  return { displayStatus: "unknown", statusReason: `Occupancy history is not confirmed as of ${asOf}` };
+  return { displayStatus: "unknown", statusReason: `Occupancy history is not confirmed as of ${shown(asOf)}` };
 }
 
 /** Pure presentation projection. Callers must supply the rent roll for asOfDate,
@@ -69,7 +72,7 @@ export function occupancyViewForUnits(snapshot: AdminSnapshot, units: readonly A
     let hasReportTenancy = false;
     for (const row of Array.from(tenancies.values())) {
       const authoritative = !!report?.tenancyId && row.tenancy?.id === report.tenancyId && ["current", "future_preleased"].includes(report.occupancy ?? "");
-      const status = authoritative ? { displayStatus: (report!.occupancy === "current" ? "current" : "future") as OccupancyDisplayStatus, statusReason: `Rent roll as of ${asOfDate}` } : historicalStatus(row.tenancy!, rentRollRows, asOfDate);
+      const status = authoritative ? { displayStatus: (report!.occupancy === "current" ? "current" : "future") as OccupancyDisplayStatus, statusReason: `Rent roll as of ${shown(asOfDate)}` } : historicalStatus(row.tenancy!, rentRollRows, asOfDate);
       const leaseHistory = knownLeaseTermsForTenancy(snapshot, row.tenancy?.id);
       result.push({ ...row, key: `occupancy:${unit.id}:${row.tenancy?.id ?? result.length}`, ...status, occupantName: row.occupantName ?? (authoritative ? report?.currentTenantName ?? report?.futureTenantName : undefined), occupancyStatus: status.displayStatus, lease: selectLease(leaseHistory, asOfDate, status.displayStatus), leaseHistory, authoritativeReport: authoritative ? report : undefined, currentUnitState: authoritative });
       if (authoritative) hasReportTenancy = true;
@@ -80,7 +83,7 @@ export function occupancyViewForUnits(snapshot: AdminSnapshot, units: readonly A
       // its tenancy. Never attach an unrelated historical tenant to this row.
       const tenancy = report?.tenancyId && ["current", "future"].includes(displayStatus) ? snapshot.snapshot.tenancies.find(t => t.id === report.tenancyId) ?? { id: report.tenancyId, unitId: unit.id, primaryPersonId: report.currentPersonId ?? report.futurePersonId } : undefined;
       const leaseHistory = knownLeaseTermsForTenancy(snapshot, tenancy?.id);
-      result.push({ key: `unit:${unit.id}:as-of`, unit, tenancy, occupantName: displayStatus === "current" ? report?.currentTenantName : displayStatus === "future" ? report?.futureTenantName : undefined, displayStatus, occupancyStatus: displayStatus, statusReason: report ? `Rent roll as of ${asOfDate}` : `No rent-roll evidence as of ${asOfDate}`, lease: selectLease(leaseHistory, asOfDate, displayStatus), leaseHistory, authoritativeReport: report, currentUnitState: true });
+      result.push({ key: `unit:${unit.id}:as-of`, unit, tenancy, occupantName: displayStatus === "current" ? report?.currentTenantName : displayStatus === "future" ? report?.futureTenantName : undefined, displayStatus, occupancyStatus: displayStatus, statusReason: report ? `Rent roll as of ${shown(asOfDate)}` : `No rent-roll evidence as of ${shown(asOfDate)}`, lease: selectLease(leaseHistory, asOfDate, displayStatus), leaseHistory, authoritativeReport: report, currentUnitState: true });
     }
   }
   const rank: Record<OccupancyDisplayStatus, number> = { current: 0, past: 1, future: 2, vacant: 3, unknown: 4 };

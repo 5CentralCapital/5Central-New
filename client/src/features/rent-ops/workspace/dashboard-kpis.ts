@@ -1,9 +1,10 @@
 // Headline figures for the dashboard summary strip.
+import { reviewLabelForCodes, reviewReason, UNKNOWN_AMOUNT_LABEL, UNVERIFIED_LABEL } from "@shared/review-cases/reasons";
 // Derived only from rows the dashboard already loads. Unknown inputs never render as zero.
 
 type Row = Record<string, unknown>;
 
-export type KpiTone = "normal" | "attention" | "review";
+export type KpiTone = "normal" | "attention" | "review" | "loading";
 
 export interface DashboardKpi {
   key: "occupancy" | "rent" | "receipts" | "due";
@@ -15,13 +16,56 @@ export interface DashboardKpi {
   share?: number;
 }
 
-const REVIEW = "Needs review";
+/** Unknown quantities read "Unknown", never zero; details carry the specific review label. */
+const REVIEW = UNKNOWN_AMOUNT_LABEL;
 const isCents = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value);
 const count = (value: unknown) => (typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined);
 
 export function formatWholeDollars(cents: number): string {
   const sign = cents < 0 ? "−" : "";
   return `${sign}$${Math.round(Math.abs(cents) / 100).toLocaleString("en-US")}`;
+}
+
+/** Most material review label across the balance rows that are not known. */
+function dueReviewLabel(rows: Row[]): string {
+  const codes = rows.filter(row => !isCents(row.operationalBalanceCents))
+    .flatMap(row => Array.isArray(row.balanceUncertaintyCodes) ? row.balanceUncertaintyCodes.filter((code): code is string => typeof code === "string") : []);
+  return reviewLabelForCodes(codes);
+}
+
+export interface DueSplit {
+  /** Sum of known positive balances. */
+  knownCents: number;
+  /** Accounts with a known amount due. */
+  knownCount: number;
+  /** Accounts whose balance is unresolved; never counted as due or as zero. */
+  unverifiedCount: number;
+}
+
+/** Separate accounts with a known amount due from accounts with an unresolved balance. */
+export function splitDueRows(rows: Row[]): DueSplit {
+  let knownCents = 0, knownCount = 0, unverifiedCount = 0;
+  for (const row of rows) {
+    const value = row.operationalBalanceCents;
+    if (!isCents(value)) { unverifiedCount += 1; continue; }
+    if (value > 0) { knownCents += value; knownCount += 1; }
+  }
+  return { knownCents, knownCount, unverifiedCount };
+}
+
+function dueDetail(split: DueSplit, rows: Row[]): string {
+  if (!split.knownCount && !split.unverifiedCount) return "No open balances";
+  const reason = dueReviewLabel(rows);
+  const unverified = `${split.unverifiedCount} not verified${reason && reason !== UNVERIFIED_LABEL ? ` (${reason})` : ""}`;
+  if (!split.knownCount) return unverified;
+  const known = `${split.knownCount} account${split.knownCount === 1 ? "" : "s"}`;
+  return split.unverifiedCount ? `${known} · ${unverified}` : known;
+}
+
+/** Exact dollars and cents for money owed. */
+export function formatExactDollars(cents: number): string {
+  const sign = cents < 0 ? "−" : "";
+  return `${sign}$${(Math.abs(cents) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function sum(rows: Row[] | undefined, key: string): number | undefined {
@@ -59,7 +103,9 @@ export function dashboardKpis(input: {
     units += values[0]!; occupied += values[1]!; vacant += values[2]!; preleased += values[3]!; unknown += values[4]!;
     rentUnknown += count(row.rentUnknown) ?? 1;
   }
-  const occupancy: DashboardKpi = !occupancyKnown || units === 0
+  const loading = (key: DashboardKpi["key"], label: string, detail: string): DashboardKpi => ({ key, label, value: "", detail, tone: "loading" });
+  const occupancy: DashboardKpi = !propertyRows ? loading("occupancy", "Occupancy", "Occupied units")
+    : !occupancyKnown || units === 0
     ? { key: "occupancy", label: "Occupancy", value: propertyRows && units === 0 && occupancyKnown ? "—" : REVIEW, detail: "Occupied units", tone: "review" }
     : {
         key: "occupancy",
@@ -71,35 +117,37 @@ export function dashboardKpis(input: {
       };
 
   const rentTotal = sum(propertyRows, "rent");
-  const rent: DashboardKpi = rentTotal === undefined || !occupancyKnown || rentUnknown || unknown
-    ? { key: "rent", label: "Occupied base rent", value: REVIEW, detail: "Some rents or occupancy are unconfirmed", tone: "review" }
+  const rent: DashboardKpi = !propertyRows ? loading("rent", "Occupied base rent", "Monthly, current tenancies")
+    : rentTotal === undefined || !occupancyKnown || rentUnknown || unknown
+    ? { key: "rent", label: "Occupied base rent", value: REVIEW, detail: rentUnknown ? reviewReason("rent_amount_unknown").shortLabel : UNVERIFIED_LABEL, tone: "review" }
     : { key: "rent", label: "Occupied base rent", value: formatWholeDollars(rentTotal), detail: "Monthly, current tenancies", tone: "normal" };
 
   const receiptTotal = sum(receipts, "amountCents");
-  const collected: DashboardKpi = receiptTotal === undefined
-    ? { key: "receipts", label: "Rent received", value: REVIEW, detail: `Posted receipts · ${period}`, tone: "review" }
+  const collectedShare = receiptTotal !== undefined && rentTotal !== undefined && rentTotal > 0 && rent.tone === "normal" ? Math.min(1, receiptTotal / rentTotal) : undefined;
+  const collected: DashboardKpi = !receipts ? loading("receipts", "Rent collected", `Posted receipts · ${period}`)
+    : receiptTotal === undefined
+    ? { key: "receipts", label: "Rent collected", value: REVIEW, detail: `Posted receipts · ${period}`, tone: "review" }
     : {
         key: "receipts",
-        label: "Rent received",
+        label: "Rent collected",
         value: formatWholeDollars(receiptTotal),
-        detail: `${receipts!.length} posted receipt${receipts!.length === 1 ? "" : "s"} · ${period}`,
+        detail: `${receipts!.length} receipt${receipts!.length === 1 ? "" : "s"} · ${period}${collectedShare !== undefined ? ` · ${Math.round(collectedShare * 100)}% of base rent` : ""}`,
         tone: "normal",
         ...(rentTotal !== undefined && rentTotal > 0 && rent.tone === "normal" ? { share: Math.min(1, receiptTotal / rentTotal) } : {}),
       };
 
-  const dueTotal = sum(dueRows, "operationalBalanceCents");
-  const accounts = dueRows?.length ?? 0;
-  const due: DashboardKpi = !dueRows
-    ? { key: "due", label: "Balances due", value: REVIEW, detail: "Delinquency not loaded", tone: "review" }
-    : dueTotal === undefined
-      ? { key: "due", label: "Balances due", value: REVIEW, detail: `${accounts} account${accounts === 1 ? " needs" : "s need"} review`, tone: "review" }
-      : {
-          key: "due",
-          label: "Balances due",
-          value: formatWholeDollars(dueTotal),
-          detail: accounts ? `${accounts} account${accounts === 1 ? "" : "s"}` : "No open balances",
-          tone: dueTotal > 0 ? "attention" : "normal",
-        };
+  const dueSplit = dueRows ? splitDueRows(dueRows) : undefined;
+  const due: DashboardKpi = !dueRows || !dueSplit
+    ? loading("due", "Balances due", "Current tenants")
+    : {
+        key: "due",
+        label: "Balances due",
+        // With no known amount due and some unverified balances the total is
+        // unknown, never "$0".
+        value: dueSplit.knownCount === 0 && dueSplit.unverifiedCount > 0 ? REVIEW : formatExactDollars(dueSplit.knownCents),
+        detail: dueDetail(dueSplit, dueRows),
+        tone: dueSplit.unverifiedCount ? "review" : dueSplit.knownCents > 0 ? "attention" : "normal",
+      };
 
   return [occupancy, rent, collected, due];
 }

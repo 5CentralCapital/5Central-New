@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { formatCalendarDate } from "@/lib/format";
 
 /* ══════════════════════════════════════════════════════════════
    Investor Overview — 5Central Capital
@@ -49,18 +50,14 @@ const fmt = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigi
 const fmtDec = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const pct = (n: number) => (n * 100).toFixed(2) + "%";
 const num = (v: string | null | undefined) => parseFloat(v || "0") || 0;
-const shortDate = (v: string | null | undefined) => {
-  if (!v) return "—";
-  const d = new Date(v);
-  if (isNaN(d.getTime())) return v;
-  return d.toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
-};
+const shortDate = (v: string | null | undefined) => formatCalendarDate(v, { month: "2-digit", day: "2-digit", year: "numeric" }, v || "—");
 
 export default function InvestorOverview() {
   const [profiles, setProfiles] = useState<InvestorProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedInvestor, setExpandedInvestor] = useState<string | null>(null);
 
+  const [loadFailed, setLoadFailed] = useState(false);
   useEffect(() => {
     fetch("/api/admin/investors", { credentials: "include" })
       .then(r => { if (!r.ok) throw new Error("Failed to fetch"); return r.json(); })
@@ -68,7 +65,7 @@ export default function InvestorOverview() {
         if (Array.isArray(data)) setProfiles(data);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch(() => { setLoadFailed(true); setLoading(false); });
   }, []);
 
   /* ── Computed data ── */
@@ -100,6 +97,8 @@ export default function InvestorOverview() {
   const totalBalloon = totalDealBalloon;
 
   if (loading) return <div style={{ textAlign: "center", padding: 60, color: "var(--color-text-muted)" }}>Loading investor data…</div>;
+  // Without this, a failed load rendered every total as $0.
+  if (loadFailed) return <div role="alert" style={{ textAlign: "center", padding: 60, color: "var(--color-danger)" }}>Investor data could not be loaded. Reload the page to try again.</div>;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>

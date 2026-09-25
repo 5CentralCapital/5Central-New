@@ -402,13 +402,13 @@ export class SyntheticRentOpsRepository implements RentOpsRepository {
       activity: "activityEvents",
     };
     const collection = collections[update.entityType];
-    if (!collection) throw new RentOpsInvariantError("Unknown Rent Operations patch target");
+    if (!collection) throw new RentOpsInvariantError("Unknown 5Central Ops patch target");
     const rows = this.state[collection] as unknown as Array<Record<string, unknown>>;
     const index = rows.findIndex((row) => row.id === update.targetId);
-    if (index < 0) throw new RentOpsInvariantError("Rent Operations record not found");
+    if (index < 0) throw new RentOpsInvariantError("5Central Ops record not found");
     const current = rows[index];
     const currentRevision = typeof current.recordRevision === "number" ? current.recordRevision : 1;
-    if (currentRevision !== update.expectedRevision) throw new RentOpsInvariantError("Rent Operations record revision is stale");
+    if (currentRevision !== update.expectedRevision) throw new RentOpsInvariantError("5Central Ops record revision is stale");
     const next = clone(current);
     for (const [column, value] of Object.entries(update.values)) {
       const camel = column.replace(/_([a-z])/g, (_match, letter: string) => letter.toUpperCase());

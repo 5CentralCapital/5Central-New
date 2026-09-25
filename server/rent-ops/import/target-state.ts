@@ -7,6 +7,8 @@ import type { RentOpsQueryExecutor } from "../repositories/postgres";
 export const RENT_OPS_TARGET_STATE_VERSION = "rent-ops-target-state/v1" as const;
 
 const SCHEMA_TABLES = new Set(["rent_ops_schema_meta", "rent_ops_schema_migrations"]);
+/** Operator storage records (append-only, keyed by document and sequence), not RM target state. */
+const OPERATOR_TABLES = new Set(["rent_ops_document_object_relocations"]);
 const SAFE_CODE = /^[A-Za-z0-9_.:-]{1,160}$/;
 const MAX_ROWS = 750_000;
 const MAX_CANONICAL_BYTES = 512 * 1024 * 1024;
@@ -14,6 +16,7 @@ const MAX_CANONICAL_BYTES = 512 * 1024 * 1024;
 /** RM target tables only; application accounts, receipts and counters are outside importer access. */
 export const RENT_OPS_TARGET_STATE_TABLES = RENT_OPS_REQUIRED_TABLES.filter((table) =>
   !SCHEMA_TABLES.has(table)
+  && !OPERATOR_TABLES.has(table)
   && !(RENT_OPS_APPLICATION_TABLES as readonly string[]).includes(table)
   && !(COMPANY_ACCESS_TABLES as readonly string[]).includes(table));
 
@@ -69,7 +72,7 @@ export const RENT_OPS_TARGET_STATE_IDENTITY_COLUMNS = {
 } as const;
 
 const missingIdentityColumns = RENT_OPS_TARGET_STATE_TABLES.filter((table) => !(table in RENT_OPS_TARGET_STATE_IDENTITY_COLUMNS));
-if (missingIdentityColumns.length > 0) throw new Error("Rent Operations target-state identity inventory is incomplete");
+if (missingIdentityColumns.length > 0) throw new Error("5Central Ops target-state identity inventory is incomplete");
 
 const MONEY_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   rent_ops_units: ["market_rent_cents", "default_deposit_cents"],
@@ -104,7 +107,7 @@ export class RentOpsTargetStateError extends Error {
 
   constructor(reasons: readonly string[]) {
     const safe = Array.from(new Set(reasons.map((reason) => SAFE_CODE.test(reason) ? reason : "target_state_failed"))).sort();
-    super(`Rent Operations target-state proof failed: ${safe.join("; ")}`);
+    super(`5Central Ops target-state proof failed: ${safe.join("; ")}`);
     this.name = "RentOpsTargetStateError";
     this.reasons = safe;
   }
@@ -134,7 +137,7 @@ function cents(value: unknown): bigint {
 function tableState(table: string, rawRows: readonly unknown[]): RentOpsTargetTableState {
   const identityColumn = RENT_OPS_TARGET_STATE_IDENTITY_COLUMNS[table as keyof typeof RENT_OPS_TARGET_STATE_IDENTITY_COLUMNS];
   if (!identityColumn) throw new RentOpsTargetStateError(["target_state_identity_column_missing"]);
-  const rows = rawRows.map(rowObject).sort((left, right) => rowId(left, identityColumn).localeCompare(rowId(right, identityColumn)));
+  const rows = rawRows.map(rowObject).sort((left, right) => rowId(left, identityColumn).localeCompare(rowId(right, identityColumn), "en-US"));
   for (let index = 1; index < rows.length; index += 1) {
     if (rowId(rows[index - 1], identityColumn) === rowId(rows[index], identityColumn)) throw new RentOpsTargetStateError(["target_row_identity_duplicate"]);
   }

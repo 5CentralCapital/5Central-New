@@ -14,6 +14,7 @@ import type { TenantIdentity, TenantSessionResponse } from "../../../shared/tena
 import type { RentOpsQueryExecutor } from "../repositories/postgres";
 import { hashTenantPassword, validTenantPassword, verifyTenantPassword } from "./passwords";
 import { presentTenantHome, resolveTenantBinding } from "./presentation";
+import { nowIsoDate } from "../domain/dates";
 import { PostgresTenantAccountStore, type TenantAccountRecord, type TenantAccountStore } from "./store";
 
 declare module "express-session" {
@@ -113,7 +114,8 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
   async function limit(req: Request, scope: string, max = 20, identity?: string) {
     const timestamp = now().toISOString();
     const accepted = await store.consumeRateLimit(digest(`${scope}:ip:${req.ip ?? req.socket.remoteAddress ?? "unknown"}`), max, AUTH_WINDOW_MS, timestamp);
-    const accountAccepted = !identity || await store.consumeRateLimit(digest(`${scope}:account:${identity}`), 10, AUTH_WINDOW_MS, timestamp);
+    // A rejected address adds no per-account rows, so one client cannot grow the table without bound.
+    const accountAccepted = accepted && (!identity || await store.consumeRateLimit(digest(`${scope}:account:${identity}`), 10, AUTH_WINDOW_MS, timestamp));
     if (!accepted || !accountAccepted) throw new TenantPortalError(429, "Too many attempts. Please try again in 15 minutes.");
   }
 
@@ -219,7 +221,7 @@ export function registerTenantPortalRoutes(app: Express, options: TenantPortalOp
   const getTenantHome = async (identity: TenantIdentity) => {
     const snapshot = await operationalSnapshot();
     const transfers = await options.repository.readPortalTransferHistory?.(identity.id) ?? [];
-    const home = presentTenantHome(snapshot, identity, now().toISOString().slice(0, 10), transfers);
+    const home = presentTenantHome(snapshot, identity, nowIsoDate(now()), transfers);
     if (!home) return home;
     // A positive metadata label alone must not advertise a downloadable file.
     const available = await Promise.all(home.leaseFiles.map(async file => {

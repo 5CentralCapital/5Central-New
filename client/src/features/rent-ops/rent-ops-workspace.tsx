@@ -1,6 +1,7 @@
 import { ReportExportDialog } from "./workspace/report-export-dialog";
 import { reportQueryFilters } from "./workspace/report-model";
 import { usdCurrencyFormatter } from '../../lib/rent-ops-formatters';
+import { NONE_LABEL, DATE_MISSING_LABEL, DESCRIPTION_MISSING_LABEL, NAME_MISSING_LABEL, PROPERTY_MISSING_LABEL, STATUS_UNVERIFIED_LABEL, UNIT_MISSING_LABEL, UNKNOWN_AMOUNT_LABEL, UNKNOWN_COUNT_LABEL, UNVERIFIED_LABEL, CHARGE_TYPE_MISSING_LABEL, missingLabel } from "../../../../shared/review-cases/display-labels";
 import { APPLICATION_STATUS_TRANSITIONS } from "../../../../shared/application-status-transitions";
 import { ManagerLeaseUpload } from "./manager-lease-upload";
 import { useCallback, useEffect, useMemo, useState, useRef, type FormEvent } from "react";
@@ -36,11 +37,12 @@ import {
 } from "./api";
 import { rentOpsAuthClient } from "./auth";
 import { RentOpsAdminLogin, RentOpsAuthLoading, useRentOpsAuth } from "./auth-ui";
-import { handleRentOpsMutationError, refreshRentOpsAfterConflict, sectionCreateAction, scheduledRentNeedsReview, balanceMetric } from "./ui";
+import { handleRentOpsMutationError, refreshRentOpsAfterConflict, sectionCreateAction, scheduledRentNeedsReview, balanceMetric, unverifiedBalanceMessage, unconfirmedScheduleMessage } from "./ui";
 import { ApplicationCaseDetail } from "./application-case-detail";
 import { PhoneMethodsEditor } from "./phone-methods-editor";
 import { ManagerIncomeActions } from "./manager-income-actions";
 import { RecurringBillingPanel } from "./recurring-billing-panel";
+import { PaymentReviewPanel } from "./payment-review-panel";
 import { depositAmounts, depositMoney } from "../tenant-portal/deposit-view";
 import { TenantPortalAccountsPanel } from "../tenant-portal/admin-accounts";
 import { mutationPayload, RENT_OPS_QUICK_ADD_ACTIONS, type FormValues, type QuickAction } from "./form-payload";
@@ -82,19 +84,34 @@ function title(value: unknown): string {
 }
 
 function money(cents: unknown): string {
-  if (cents == null || cents === "") return "Needs review";
+  if (cents == null || cents === "") return UNKNOWN_AMOUNT_LABEL;
   const amount = typeof cents === "number" ? cents : Number(cents);
-  if (!Number.isFinite(amount)) return "Needs review";
+  if (!Number.isFinite(amount)) return UNKNOWN_AMOUNT_LABEL;
   return usdCurrencyFormatter.format(amount / 100);
 }
 
+/** What to show when a cell has no value: specific to the kind of value that is absent. */
+function absentCellLabel(key: string, format?: string): string {
+  if (format === "currency" || /Cents$/.test(key)) return UNKNOWN_AMOUNT_LABEL;
+  if (/(On|Date|At)$/.test(key)) return DATE_MISSING_LABEL;
+  if (/(Count|Units)$/.test(key) || /^(bedrooms|bathrooms|squareFeet)$/.test(key)) return UNKNOWN_COUNT_LABEL;
+  if (format === "status" || /status|state|occupancy|readiness/i.test(key)) return STATUS_UNVERIFIED_LABEL;
+  return UNVERIFIED_LABEL;
+}
+
+function personName(firstName: string | null | undefined, lastName: string | null | undefined): string {
+  return [firstName, lastName].filter(part => part != null && part.trim() !== "").join(" ") || NAME_MISSING_LABEL;
+}
+
 function formatCell(value: unknown, key: string, format?: string): string {
-  if (key === "balanceComplete") return value === false ? "Needs review" : value === true ? "Complete" : "Needs review";
-  if (key === "balanceUncertaintyCodes" && Array.isArray(value) && !value.length) return "—";
+  if (key === "balanceComplete") return value === false ? "Incomplete" : value === true ? "Complete" : UNVERIFIED_LABEL;
+  // An empty (or omitted) review-code list means nothing is uncertain.
+  if (Array.isArray(value) && !value.length) return NONE_LABEL;
+  if (/Codes$/.test(key) && value == null) return NONE_LABEL;
   if (/HeldCents$/.test(key) || key === "sourceBalanceCents") return depositMoney(value);
-  if (value == null || value === "") return "Needs review";
+  if (value == null || value === "") return absentCellLabel(key, format);
   if (/knowledge/i.test(key)) {
-    if (["unknown", "ambiguous", "inferred"].includes(String(value))) return "Needs review";
+    if (["unknown", "ambiguous", "inferred"].includes(String(value))) return UNVERIFIED_LABEL;
     if (String(value) === "manual") return "Entered manually";
     if (["source", "exact", "confirmed", "known"].includes(String(value))) return "Known";
   }
@@ -104,8 +121,8 @@ function formatCell(value: unknown, key: string, format?: string): string {
     return Number.isFinite(number) ? `${(Math.abs(number) <= 1 ? number * 100 : number).toFixed(1)}%` : String(value);
   }
   if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (Array.isArray(value)) return value.length ? value.map(title).join(", ") : "Needs review";
-  if (typeof value === "object") return Object.values(value).filter(value => value != null && value !== "").join(", ") || "Needs review";
+  if (Array.isArray(value)) return value.map(title).join(", ");
+  if (typeof value === "object") return Object.values(value).filter(value => value != null && value !== "").join(", ") || absentCellLabel(key, format);
   return format === "status" || /status|state|occupancy|readiness/i.test(key) ? title(value) : String(value);
 }
 
@@ -159,13 +176,13 @@ type Field = { name: string; label: string; type?: "text" | "date" | "datetime-l
 
 function baseOptions(snapshot: AdminSnapshot) {
   return {
-    properties: snapshot.snapshot.properties.map((item) => [item.id, item.name ?? "Needs review"] as [string, string]),
-    units: snapshot.snapshot.units.map((item) => [item.id, `${snapshot.snapshot.properties.find((p) => p.id === item.propertyId)?.name ?? "Needs review"} · ${item.unitNumber ?? "Needs review"}`] as [string, string]),
-    people: snapshot.snapshot.people.map((item) => [item.id, `${item.firstName ?? "Needs review"} ${item.lastName ?? "Needs review"}`] as [string, string]),
-    tenancies: snapshot.snapshot.tenancies.map((item) => [item.id, `${snapshot.snapshot.units.find((unit) => unit.id === item.unitId)?.unitNumber ?? "Needs review"} · ${title(item.status)}`] as [string, string]),
-    payments: snapshot.snapshot.ledgerTransactions.filter((item) => item.kind === "payment").map((item) => [item.id, `${item.postedOn ?? "Needs review"} · ${money(item.amountCents)} · ${item.description ?? "Needs review"}`] as [string, string]),
-    charges: snapshot.snapshot.ledgerTransactions.filter((item) => item.kind === "charge").map((item) => [item.id, `${item.postedOn ?? "Needs review"} · ${money(item.amountCents)} · ${item.description ?? "Needs review"}`] as [string, string]),
-    ledger: snapshot.snapshot.ledgerTransactions.filter((item) => item.status === "posted").map((item) => [item.id, `${title(item.kind)} · ${item.postedOn ?? "Needs review"} · ${money(item.amountCents)}`] as [string, string]),
+    properties: snapshot.snapshot.properties.map((item) => [item.id, item.name ?? PROPERTY_MISSING_LABEL] as [string, string]),
+    units: snapshot.snapshot.units.map((item) => [item.id, `${snapshot.snapshot.properties.find((p) => p.id === item.propertyId)?.name ?? PROPERTY_MISSING_LABEL} · ${item.unitNumber ?? UNIT_MISSING_LABEL}`] as [string, string]),
+    people: snapshot.snapshot.people.map((item) => [item.id, personName(item.firstName, item.lastName)] as [string, string]),
+    tenancies: snapshot.snapshot.tenancies.map((item) => [item.id, `${snapshot.snapshot.units.find((unit) => unit.id === item.unitId)?.unitNumber ?? UNIT_MISSING_LABEL} · ${item.status ? title(item.status) : STATUS_UNVERIFIED_LABEL}`] as [string, string]),
+    payments: snapshot.snapshot.ledgerTransactions.filter((item) => item.kind === "payment").map((item) => [item.id, `${item.postedOn ?? DATE_MISSING_LABEL} · ${money(item.amountCents)} · ${item.description ?? DESCRIPTION_MISSING_LABEL}`] as [string, string]),
+    charges: snapshot.snapshot.ledgerTransactions.filter((item) => item.kind === "charge").map((item) => [item.id, `${item.postedOn ?? DATE_MISSING_LABEL} · ${money(item.amountCents)} · ${item.description ?? DESCRIPTION_MISSING_LABEL}`] as [string, string]),
+    ledger: snapshot.snapshot.ledgerTransactions.filter((item) => item.status === "posted").map((item) => [item.id, `${title(item.kind)} · ${item.postedOn ?? DATE_MISSING_LABEL} · ${money(item.amountCents)}`] as [string, string]),
   };
 }
 
@@ -177,9 +194,9 @@ function rawActionFields(action: QuickAction, snapshot: AdminSnapshot, initialVa
   const person: Field = { name: "personId", label: "Resident", type: "select", options: options.people };
   const dollars: Field = { name: "amountDollars", label: "Amount", type: "number", required: true };
   const confirmedDefinitions = snapshot.chargeDefinitions.filter((definition) => definition.id && definition.category && definition.active === true && (definition.activeKnowledge === "source" || definition.activeKnowledge === "manual") && (definition.categoryKnowledge === "source" || definition.categoryKnowledge === "manual"));
-  const definitionOptions: Array<[string, string]> = confirmedDefinitions.map((definition) => [definition.id!, `${definition.displayName ?? "Needs review"} · ${title(definition.category)}`]);
+  const definitionOptions: Array<[string, string]> = confirmedDefinitions.map((definition) => [definition.id!, `${definition.displayName ?? NAME_MISSING_LABEL} · ${title(definition.category)}`]);
   const categoryOptions: Array<[string, string]> = Array.from(new Set(confirmedDefinitions.map((definition) => definition.category).filter((category): category is string => Boolean(category)))).map((category) => [category, title(category)]);
-  const conversionDefinitionOptions: Array<[string, string]> = confirmedDefinitions.filter((definition) => definition.category === "base_rent").map((definition) => [definition.id!, `${definition.displayName ?? "Needs review"} · Base rent`]);
+  const conversionDefinitionOptions: Array<[string, string]> = confirmedDefinitions.filter((definition) => definition.category === "base_rent").map((definition) => [definition.id!, `${definition.displayName ?? NAME_MISSING_LABEL} · Base rent`]);
   const scopeOptions: Array<[string, string]> = [
     ...options.properties.map(([id, label]) => [id, `Property · ${label}`] as [string, string]),
     ...options.units.map(([id, label]) => [id, `Unit · ${label}`] as [string, string]),
@@ -346,10 +363,11 @@ function TenantDetail({ tenant, tab, onTab, onEdit, onChanged, chargeDefinitions
     summary: [{ ...tenant.person, phoneMethods: undefined }, ...(tenant.person.phoneMethods ?? []).map(method => ({ phoneNumber: method.value, phoneType: method.type, primaryNumber: method.isPrimary, textEnabled: method.isTextReady })), tenant.property, tenant.unit],
     household: tenant.household ?? [],
     tenancy: [...(tenant.tenancies ?? (tenant.tenancy ? [tenant.tenancy] : [])), ...(tenant.leaseTerms ?? [])],
-    charges: (tenant.schedules ?? []).map(schedule => ({ ...schedule, chargeType: chargeDefinitions.find(definition => definition.id === schedule.chargeDefinitionId)?.displayName ?? "Needs review", billingFrequency: schedule.billingFrequency ?? "Unverified" })),
+    charges: (tenant.schedules ?? []).map(schedule => ({ ...schedule, chargeType: chargeDefinitions.find(definition => definition.id === schedule.chargeDefinitionId)?.displayName ?? CHARGE_TYPE_MISSING_LABEL, billingFrequency: schedule.billingFrequency ?? "Unverified" })),
     ledger: (tenant.ledger ?? []).map(row => ({ ...row.transaction, allocatedCents: row.allocatedCents, openCents: row.openCents, runningBalanceCents: row.runningBalanceCents, balanceComplete: row.balanceComplete, balanceUncertaintyCodes: row.balanceUncertaintyCodes })),
     deposits: (tenant.deposits ?? []).map((deposit) => ({ type: deposit.type, amountHeldCents: deposit.amountHeldCents, sourceBalanceCents: deposit.sourceBalanceCents, dispositionStatus: deposit.dispositionStatus, receivedOn: deposit.receivedOn, disposedOn: deposit.disposedOn, dispositionNotes: deposit.dispositionNotes })),
     "housing-assistance": tenant.subsidyContracts ?? [],
+    quickbooks: [],
     documents: tenant.documents ?? [],
     activity: tenant.activity ?? [],
   };
@@ -367,7 +385,7 @@ function TenantDetail({ tenant, tab, onTab, onEdit, onChanged, chargeDefinitions
     editButtons.push({ label: `Replace charge ${index + 1}`, action: "replace-recurring-schedule", values: { ...values, amountDollars: "", effectiveFrom: "" } });
     editButtons.push({ label: `End charge ${index + 1}`, action: "end-recurring-schedule", values: { ...values, effectiveFrom: "" } });
   });
-  return <section className="ro-panel tenant-detail"><div className="ro-panel-heading"><div><span className="eyebrow">Resident profile</span><h2>{tenant.person.firstName ?? "Needs review"} {tenant.person.lastName ?? "Needs review"}</h2><p>{tenant.property?.name ?? "Needs review"} · {tenant.unit?.unitNumber ?? "Needs review"}</p></div></div><div className="ro-tabs" role="tablist">{TENANT_TABS.map((item) => <button role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} key={item} onClick={() => onTab(item)}>{title(item)}</button>)}</div>{editButtons.length ? <div className="ro-inline-actions ro-tab-actions">{editButtons.map((button) => <button className="secondary" key={`${button.action}-${button.values.id ?? button.values.predecessorId}`} onClick={() => onEdit(button.action, button.values)}>{button.label}</button>)}</div> : null}{tab === "documents" && tenant.tenancy?.id && <ManagerLeaseUpload key={tenant.tenancy.id} tenancyId={tenant.tenancy.id} files={tenant.documents} onSaved={onChanged} />}{tab === "charges" && tenant.schedules.some(schedule => schedule.active == null) && <p className="ro-panel-message">For an imported charge with unverified active status, end that schedule, then add a new monthly charge with the confirmed amount, effective date and active status. If only monthly frequency is unverified and the charge is already active, use Replace charge to confirm monthly frequency.</p>}<div className="ro-record-grid">{items[tab].filter((item) => item != null).map((item, index) => <dl key={index}>{Object.entries(item as Record<string, unknown>).filter(([key]) => !["id", "phoneMethods", "recordRevision", "createdAt", "updatedAt", "source", "storageKey", "checksumSha256", "metadataChecksumSha256", "sourceArtifactSha256", "lineageRootId", "supersedesId"].includes(key) && !key.endsWith("Id")).map(([key, value]) => <div key={key}><dt>{title(key)}</dt><dd>{formatCell(value, key)}</dd></div>)}</dl>)}</div>{tab === "summary" && tenant.person.id && <PhoneMethodsEditor key={`phones:${tenant.person.id}:${tenant.person.recordRevision}`} person={tenant.person} onSaved={onChanged} />}{tab === "summary" && tenant.person.id && <TenantPortalAccountsPanel key={tenant.person.id} personId={tenant.person.id} personName={`${tenant.person.firstName ?? ""} ${tenant.person.lastName ?? ""}`.trim()} email={tenant.person.email} />}{!items[tab].filter((item) => item != null).length && <EmptyState message={`No ${title(tab).toLowerCase()} records yet.`} />}</section>;
+  return <section className="ro-panel tenant-detail"><div className="ro-panel-heading"><div><span className="eyebrow">Resident profile</span><h2>{personName(tenant.person.firstName, tenant.person.lastName)}</h2><p>{tenant.property?.name ?? PROPERTY_MISSING_LABEL} · {tenant.unit?.unitNumber ?? UNIT_MISSING_LABEL}</p></div></div><div className="ro-tabs" role="tablist">{TENANT_TABS.map((item) => <button role="tab" aria-selected={tab === item} className={tab === item ? "active" : ""} key={item} onClick={() => onTab(item)}>{title(item)}</button>)}</div>{editButtons.length ? <div className="ro-inline-actions ro-tab-actions">{editButtons.map((button) => <button className="secondary" key={`${button.action}-${button.values.id ?? button.values.predecessorId}`} onClick={() => onEdit(button.action, button.values)}>{button.label}</button>)}</div> : null}{tab === "documents" && tenant.tenancy?.id && <ManagerLeaseUpload key={tenant.tenancy.id} tenancyId={tenant.tenancy.id} files={tenant.documents} onSaved={onChanged} />}{tab === "charges" && tenant.schedules.some(schedule => schedule.active == null) && <p className="ro-panel-message">For an imported charge with unverified active status, end that schedule, then add a new monthly charge with the confirmed amount, effective date and active status. If only monthly frequency is unverified and the charge is already active, use Replace charge to confirm monthly frequency.</p>}<div className="ro-record-grid">{items[tab].filter((item) => item != null).map((item, index) => <dl key={index}>{Object.entries(item as Record<string, unknown>).filter(([key]) => !["id", "phoneMethods", "recordRevision", "createdAt", "updatedAt", "source", "storageKey", "checksumSha256", "metadataChecksumSha256", "sourceArtifactSha256", "lineageRootId", "supersedesId"].includes(key) && !key.endsWith("Id")).map(([key, value]) => <div key={key}><dt>{title(key)}</dt><dd>{formatCell(value, key)}</dd></div>)}</dl>)}</div>{tab === "summary" && tenant.person.id && <PhoneMethodsEditor key={`phones:${tenant.person.id}:${tenant.person.recordRevision}`} person={tenant.person} onSaved={onChanged} />}{tab === "summary" && tenant.person.id && <TenantPortalAccountsPanel key={tenant.person.id} personId={tenant.person.id} personName={`${tenant.person.firstName ?? ""} ${tenant.person.lastName ?? ""}`.trim()} email={tenant.person.email} />}{!items[tab].filter((item) => item != null).length && <EmptyState message={`No ${title(tab).toLowerCase()} records yet.`} />}</section>;
 }
 
 function PropertyPanels({ snapshot, filters, onEdit }: { snapshot: AdminSnapshot; filters: ViewFilters; onEdit: (action: QuickAction, initialValues: FormValues) => void }) {
@@ -376,11 +394,11 @@ function PropertyPanels({ snapshot, filters, onEdit }: { snapshot: AdminSnapshot
     const units = snapshot.snapshot.units.filter((unit) => unit.propertyId === property.id);
     return <section className="ro-panel" key={property.id}>
       <div className="ro-panel-heading">
-        <div><span className="eyebrow">{formatCell(property.state, "state")}</span><h2>{property.name ?? "Needs review"}</h2><p>{property.address?.line1 ?? "Needs review"}, {property.address?.city ?? "Needs review"}, {property.address?.state ?? "Needs review"} {property.address?.postalCode ?? "Needs review"}</p></div>
+        <div><span className="eyebrow">{formatCell(property.state, "state")}</span><h2>{property.name ?? NAME_MISSING_LABEL}</h2><p>{property.address?.line1 ?? missingLabel("Street")}, {property.address?.city ?? missingLabel("City")}, {property.address?.state ?? missingLabel("State")} {property.address?.postalCode ?? missingLabel("ZIP")}</p></div>
         <div className="ro-actions"><strong>{units.length} units</strong><button className="secondary" onClick={() => onEdit("save-unit", { propertyId: property.id })}>Add unit</button><button className="secondary" onClick={() => onEdit("save-property", { id: property.id, revision: property.recordRevision ?? 1, name: property.name, slug: property.slug, address1: property.address?.line1 ?? "", city: property.address?.city ?? "", stateCode: property.address?.state ?? "", postalCode: property.address?.postalCode ?? "", propertyType: property.propertyType, propertyState: property.state, operatingContact: property.operatingContact ?? "" })}>Edit property</button></div>
       </div>
       <div className="ro-unit-list">{units.map((unit) => <div key={unit.id}>
-        <strong>{unit.unitNumber ?? "Needs review"}<small>{unit.unitType ?? "Type needs review"}</small></strong><span>{unit.bedrooms ?? "Needs review"} bd · {unit.bathrooms ?? "Needs review"} ba<small>{unit.squareFeet == null ? "Area needs review" : `${unit.squareFeet} sq ft`}</small></span><span className={`status ${unit.readiness ?? "unknown"}`}>{formatCell(unit.readiness, "readiness")}</span><span>{money(unit.marketRentCents)} rent<small>{money(unit.defaultDepositCents)} deposit</small></span>
+        <strong>{unit.unitNumber ?? UNIT_MISSING_LABEL}<small>{unit.unitType ?? missingLabel("Type")}</small></strong><span>{unit.bedrooms ?? UNKNOWN_COUNT_LABEL} bd · {unit.bathrooms ?? UNKNOWN_COUNT_LABEL} ba<small>{unit.squareFeet == null ? missingLabel("Area") : `${unit.squareFeet} sq ft`}</small></span><span className={`status ${unit.readiness ?? "unknown"}`}>{formatCell(unit.readiness, "readiness")}</span><span>{money(unit.marketRentCents)} rent<small>{money(unit.defaultDepositCents)} deposit</small></span>
         <button className="secondary" onClick={() => onEdit("save-unit", { id: unit.id, revision: unit.recordRevision ?? 1, propertyId: unit.propertyId, unitNumber: unit.unitNumber, unitType: unit.unitType ?? "", squareFeet: unit.squareFeet == null ? "" : String(unit.squareFeet), defaultDepositDollars: unit.defaultDepositCents == null ? "" : String(unit.defaultDepositCents / 100), amenitiesText: unit.amenities?.join("\n") ?? "", accessNotes: unit.accessNotes ?? "", bedrooms: unit.bedrooms == null ? "" : String(unit.bedrooms), bathrooms: unit.bathrooms == null ? "" : String(unit.bathrooms), marketRentDollars: unit.marketRentCents == null ? "" : String(unit.marketRentCents / 100), readiness: unit.readiness, listing: unit.listing })}>Edit</button>
       </div>)}</div>
     </section>;
@@ -476,7 +494,7 @@ export default function RentOpsWorkspace() {
     }).catch((cause) => {
       if (cancelled) return;
       setLoading(false);
-      setError(cause instanceof Error ? cause.message : "Rent Operations preview context could not be loaded.");
+      setError(cause instanceof Error ? cause.message : "5Central Ops preview context could not be loaded.");
     });
     return () => { cancelled = true; };
   }, [auth.status]);
@@ -491,7 +509,7 @@ export default function RentOpsWorkspace() {
       setSnapshot({ ...result.snapshot, chargeDefinitions });
       setWarning(result.warning);
     }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Rent Operations could not be loaded."); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "5Central Ops could not be loaded."); }
     finally { setLoading(false); }
   }, [filters.propertyScope, filters.propertyId, filters.asOfDate]);
   useEffect(() => {
@@ -515,8 +533,8 @@ export default function RentOpsWorkspace() {
 
   if (auth.status === "unknown") return <RentOpsAuthLoading />;
   if (auth.status === "unauthenticated") return <RentOpsAdminLogin message={auth.message} />;
-  if (loading && !snapshot) return <main className="ro-loading"><Loader2 className="spin" /><h1>Loading Rent Operations</h1><p>Building the current rent roll and tenant records…</p></main>;
-  if (error && !snapshot) return <main className="ro-loading error"><AlertCircle /><h1>Rent Operations is unavailable</h1><p>{error}</p><button className="primary" onClick={() => void load()}>Try again</button></main>;
+  if (loading && !snapshot) return <main className="ro-loading"><Loader2 className="spin" /><h1>Loading 5Central Ops</h1><p>Building the current rent roll and tenant records…</p></main>;
+  if (error && !snapshot) return <main className="ro-loading error"><AlertCircle /><h1>5Central Ops is unavailable</h1><p>{error}</p><button className="primary" onClick={() => void load()}>Try again</button></main>;
   if (!snapshot) return null;
 
   const summary = snapshot.summary;
@@ -526,13 +544,13 @@ export default function RentOpsWorkspace() {
   const sectionReport: Partial<Record<SectionKey, ReportKey>> = { "rent-roll": "rent-roll", leases: "lease-expiration", income: "scheduled-vs-collected" };
   const scopeLabel = filters.propertyId !== "all" ? "Selected property" : filters.propertyScope === "all" ? "All imported properties" : "Active portfolio";
   return <main className="rent-ops-shell">
-    <aside className="ro-sidebar"><div className="ro-brand"><span>5C</span><div><strong>Rent Operations</strong><small>Single-admin workspace</small></div></div><a className="ro-back-link" href="https://5central.capital">← 5Central website</a><nav>{SECTIONS.map(({ key, label, icon: Icon }) => <button key={key} className={section === key ? "active" : ""} onClick={() => setSection(key)}><Icon />{label}</button>)}</nav><div className="ro-source"><span className={source === "live" ? "live" : "demo"} />{source === "live" ? "Live operational data" : "Synthetic development data"}<small>Updated {new Date(snapshot.generatedAt).toLocaleString()}</small><button className="ro-logout" type="button" onClick={() => { void rentOpsAuthClient.logout(); }}><LogOut /> Sign out</button></div></aside>
+    <aside className="ro-sidebar"><div className="ro-brand"><span>5C</span><div><strong>5Central Ops</strong><small>Single-admin workspace</small></div></div><a className="ro-back-link" href="https://5central.capital">← 5Central website</a><nav>{SECTIONS.map(({ key, label, icon: Icon }) => <button key={key} className={section === key ? "active" : ""} onClick={() => setSection(key)}><Icon />{label}</button>)}</nav><div className="ro-source"><span className={source === "live" ? "live" : "demo"} />{source === "live" ? "Live operational data" : "Synthetic development data"}<small>Updated {new Date(snapshot.generatedAt).toLocaleString()}</small><button className="ro-logout" type="button" onClick={() => { void rentOpsAuthClient.logout(); }}><LogOut /> Sign out</button></div></aside>
     <div className="ro-main"><header className="ro-topbar"><div><span className="eyebrow">{scopeLabel} · {summary.propertyCount} propert{summary.propertyCount === 1 ? "y" : "ies"} · {summary.unitCount} units</span><h1>{SECTIONS.find((item) => item.key === section)?.label}</h1></div>{createAction && <button className="primary" onClick={() => openAction(createAction.action)}><Plus /> {createAction.label}</button>}{section === "applicants" && <a className="primary" href="/apply">Open application form</a>}</header>
       {(warning || notice || error) && <div className={`ro-banner ${error ? "error" : ""}`}><AlertCircle />{error ?? notice ?? warning}<button onClick={() => { setNotice(undefined); setError(undefined); }} aria-label="Dismiss"><X /></button></div>}
       <FilterBar filters={filters} snapshot={snapshot} onChange={setFilters} onRefresh={() => void load()} refreshing={loading} />
-      {section === "dashboard" && <><div className="ro-stats"><StatCard label="Occupied" value={`${summary.occupiedUnits}/${summary.unitCount}`} onClick={() => openDrilldown("occupiedUnits", "occupancy")} /><StatCard label="Ready vacancies" value={String(summary.readyVacantUnits)} tone={summary.readyVacantUnits ? "warn" : "good"} onClick={() => openDrilldown("genuineVacantUnits", "occupancy")} /><StatCard label="Confirmed recurring configuration" value={summary.scheduledRentConfirmedCents !== undefined ? money(summary.scheduledRentConfirmedCents) : rentNeedsReview ? "Needs review" : money(summary.scheduledRentCents)} onClick={() => openDrilldown("scheduledRentCents", "scheduled-income")} /><StatCard label="Rent delinquency" value={money(debtMetric.amountCents)} tone={debtMetric.tone} onClick={() => openDrilldown("rentOnlyDelinquencyCents", "delinquency")} /><StatCard label="Expiring ≤ 60 days" value={String(summary.expiringIn60Days)} onClick={() => openDrilldown("expiringIn60Days", "lease-expiration")} /><StatCard label="Deposit liability" value={depositMoney(summary.securityDepositLiabilityCents)} onClick={() => openDrilldown("securityDepositLiabilityCents", "security-deposit")} /></div><div className="ro-inline-actions"><button className="primary" onClick={() => setSection("income")}>Monthly billing & payments</button><button className="secondary" onClick={() => setSection("tenants")}>Tenant accounts</button><button className="secondary" onClick={() => { setReportKey("delinquency"); setSection("reports"); }}>Review balances</button></div>{summary.balanceComplete === false && <p className="ro-panel-message" role="status">{summary.balanceUnresolvedCount ?? "Some"} balances need review because the available history is incomplete.</p>}{(rentNeedsReview || summary.scheduledRentCadenceComplete === false) && <section className="ro-panel"><div className="ro-panel-heading"><h2>Recurring configuration</h2><button className="secondary" onClick={() => { setReportKey("scheduled-income"); setSection("reports"); }}>Review schedules</button></div><p className="ro-panel-message">{rentNeedsReview && <>{summary.scheduledRentUnresolvedCount ?? "Some"} schedules need amount, category, or date review. </>}{summary.scheduledRentCadenceComplete === false && <>Cadence unverified. This configuration total is not confirmed monthly expected income.</>}</p></section>}<section className="ro-panel"><div className="ro-panel-heading"><h2>Current rent roll</h2><button className="secondary" onClick={() => setSection("rent-roll")}>Open rent roll</button></div><DataTable report={filterReportRows(snapshot.reports["rent-roll"], filters, snapshot)} /></section></>}
+      {section === "dashboard" && <><div className="ro-stats"><StatCard label="Occupied" value={`${summary.occupiedUnits}/${summary.unitCount}`} onClick={() => openDrilldown("occupiedUnits", "occupancy")} /><StatCard label="Ready vacancies" value={String(summary.readyVacantUnits)} tone={summary.readyVacantUnits ? "warn" : "good"} onClick={() => openDrilldown("genuineVacantUnits", "occupancy")} /><StatCard label="Confirmed recurring configuration" value={summary.scheduledRentConfirmedCents !== undefined ? money(summary.scheduledRentConfirmedCents) : rentNeedsReview ? UNKNOWN_AMOUNT_LABEL : money(summary.scheduledRentCents)} onClick={() => openDrilldown("scheduledRentCents", "scheduled-income")} /><StatCard label="Rent delinquency" value={money(debtMetric.amountCents)} tone={debtMetric.tone} onClick={() => openDrilldown("rentOnlyDelinquencyCents", "delinquency")} /><StatCard label="Expiring ≤ 60 days" value={String(summary.expiringIn60Days)} onClick={() => openDrilldown("expiringIn60Days", "lease-expiration")} /><StatCard label="Deposit liability" value={depositMoney(summary.securityDepositLiabilityCents)} onClick={() => openDrilldown("securityDepositLiabilityCents", "security-deposit")} /></div><div className="ro-inline-actions"><button className="primary" onClick={() => setSection("income")}>Monthly billing & payments</button><button className="secondary" onClick={() => setSection("tenants")}>Tenant accounts</button><button className="secondary" onClick={() => { setReportKey("delinquency"); setSection("reports"); }}>Review balances</button></div>{summary.balanceComplete === false && <p className="ro-panel-message" role="status">{unverifiedBalanceMessage(summary.balanceUnresolvedCount)}</p>}{(rentNeedsReview || summary.scheduledRentCadenceComplete === false) && <section className="ro-panel"><div className="ro-panel-heading"><h2>Recurring configuration</h2><button className="secondary" onClick={() => { setReportKey("scheduled-income"); setSection("reports"); }}>Review schedules</button></div><p className="ro-panel-message">{rentNeedsReview && <>{unconfirmedScheduleMessage(summary.scheduledRentUnresolvedCount)} </>}{summary.scheduledRentCadenceComplete === false && <>Cadence unverified. This configuration total is not confirmed monthly expected income.</>}</p></section>}<section className="ro-panel"><div className="ro-panel-heading"><h2>Current rent roll</h2><button className="secondary" onClick={() => setSection("rent-roll")}>Open rent roll</button></div><DataTable report={filterReportRows(snapshot.reports["rent-roll"], filters, snapshot)} /></section></>}
       {section === "reports" && <Reports snapshot={snapshot} filters={filters} selected={reportKey} onSelect={setReportKey} />}
-      {section === "income" && <><ManagerIncomeActions snapshot={snapshot} businessDate={businessDate} propertyId={filters.propertyId} onSaved={load} /><RecurringBillingPanel key={filters.propertyId} onPosted={load} businessDate={businessDate} propertyId={filters.propertyId === "all" ? undefined : filters.propertyId} /></>}
+      {section === "income" && <><PaymentReviewPanel tenants={snapshot.tenants} /><ManagerIncomeActions snapshot={snapshot} businessDate={businessDate} propertyId={filters.propertyId} onSaved={load} /><RecurringBillingPanel key={filters.propertyId} onPosted={load} businessDate={businessDate} propertyId={filters.propertyId === "all" ? undefined : filters.propertyId} /></>}
       {sectionReport[section] && <Reports snapshot={snapshot} filters={filters} selected={sectionReport[section]!} onSelect={(key) => { setReportKey(key); setSection("reports"); }} />}
       {section === "tenants" && <div className="ro-split"><section className="ro-panel tenant-list"><div className="ro-panel-heading"><div><span className="eyebrow">People, not ledger accounts</span><h2>{visibleTenants.length} residents</h2></div><button className="secondary" onClick={() => openAction("save-person")}><Plus /> Resident</button></div>{visibleTenants.map((tenant) => <button key={tenant.person.id} className={selectedTenant?.person.id === tenant.person.id ? "active" : ""} onClick={() => { setSelectedTenantId(tenant.person.id); setTenantTab("summary"); }}><strong>{tenant.person.firstName} {tenant.person.lastName}</strong><span>{tenant.property?.name ?? "No property"} · {tenant.unit?.unitNumber ?? "No unit"}</span></button>)}</section>{selectedTenant ? <TenantDetail chargeDefinitions={snapshot.chargeDefinitions} tenant={selectedTenant} tab={tenantTab} onTab={setTenantTab} onEdit={openAction} onChanged={() => { void load(); }} /> : <section className="ro-panel"><EmptyState message="No tenant profiles match the current filters." /></section>}</div>}
       {section === "properties" && <><div className="ro-inline-actions"><button className="primary" onClick={() => openAction("save-property")}><Plus /> Property</button><button className="secondary" onClick={() => openAction("save-unit")}><Plus /> Unit</button></div><PropertyPanels snapshot={snapshot} filters={filters} onEdit={openAction} /></>}

@@ -112,8 +112,8 @@ export default function PerformanceMetrics({
             prefix="$"
             suffix={getSuffix(totalPortfolioValue)}
             decimals={getDecimals(totalPortfolioValue)}
-            label="Total Portfolio Value"
-            sublabel="Current + Sold"
+            label="Current Values + Realized Exits"
+            sublabel="Includes sold assets; not current AUM"
             icon={DollarSign}
           />
           <MetricCard
@@ -134,7 +134,7 @@ export default function PerformanceMetrics({
             value={avgReturn}
             suffix="%"
             decimals={1}
-            label="Avg Annualized Return"
+            label="Avg Realized Annualized Return"
             icon={BarChart3}
           />
         </div>
@@ -189,7 +189,7 @@ export default function PerformanceMetrics({
                 </span>
               </div>
               <div className="flex items-center justify-between pt-2">
-                <span className="text-muted-foreground font-medium">Total Realized Profits</span>
+                <span className="text-muted-foreground font-medium">Gross Sale-Price Appreciation</span>
                 <span className="font-serif text-2xl text-warm-brass font-medium" data-testid="realized-profits">
                   ${(totalRealizedProfits / 1000).toFixed(0)}K
                 </span>

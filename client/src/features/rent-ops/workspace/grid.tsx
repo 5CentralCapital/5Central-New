@@ -1,9 +1,10 @@
 import * as React from "react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
-import { formatDate, formatLabel, formatMoney } from "./display";
 import {
   clampGridPage,
   DEFAULT_GRID_PAGE_SIZE,
+  gridCellText,
+  moneyColumn,
   filterGridRows,
   getGridPageCount,
   paginateGridRows,
@@ -12,10 +13,9 @@ import {
   type GridSortDirection,
   type GridSortState,
 } from "./grid-model";
+import { ListTotals, type ListTotalsMetric } from "./list-totals";
 
 export type { GridColumn } from "./grid-model";
-
-const NEEDS_REVIEW = "Needs review";
 
 export interface DataGridProps<T extends object> {
   rows: T[];
@@ -29,6 +29,10 @@ export interface DataGridProps<T extends object> {
   initialSort?: GridSortState;
   storageKey?: string;
   onViewChange?: (rows: T[], columns: GridColumn<T>[]) => void;
+  /** Singular label used by the filtered list footer. */
+  summaryLabel?: string;
+  /** Optional metrics derived from the filtered, sorted row set. */
+  getFooterMetrics?: (rows: readonly T[]) => readonly ListTotalsMetric[];
 }
 
 function preferenceStorageKey(storageKey: string | undefined): string | undefined {
@@ -99,42 +103,6 @@ function defaultRowKey<T extends object>(row: T, index: number): string {
   return candidate === null || candidate === undefined || candidate === "" ? String(index) : String(candidate);
 }
 
-function identifierColumn(key: string): boolean {
-  return /^(?:id|uuid|key)$/i.test(key) || /(?:Id|Uuid|UUID|ID|Key)$/.test(key) || /(?:^|_)(?:id|uuid|key)$/i.test(key);
-}
-
-function dateColumn(key: string): boolean {
-  return /(?:On|At|Date)$/.test(key) || /(?:_on|_at|_date)$/.test(key);
-}
-
-function moneyColumn(key: string): boolean {
-  return key === "cents" || /Cents$/.test(key) || /_cents$/.test(key);
-}
-
-function labelColumn(key: string): boolean {
-  return /(?:status|state|type|category|readiness|listing|occupancy|frequency|role|relationship|kind|direction|availability|method|source|confidence)$/i.test(key);
-}
-
-function knowledgeCellValue(value: unknown): string | undefined {
-  if (value === "unknown" || value === "ambiguous" || value === "inferred") return NEEDS_REVIEW;
-  if (value === "manual") return "Entered manually";
-  if (value === "source" || value === "exact" || value === "confirmed" || value === "known") return "Known";
-  return undefined;
-}
-
-function defaultCellValue(key: string, value: unknown): ReactNode {
-  if (identifierColumn(key)) return NEEDS_REVIEW;
-  if (moneyColumn(key)) return formatMoney(value);
-  if (dateColumn(key)) return formatDate(value);
-  if (value === null || value === undefined || value === "") return NEEDS_REVIEW;
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (/knowledge$/i.test(key)) return knowledgeCellValue(value) ?? formatLabel(value);
-  if (labelColumn(key)) return formatLabel(value);
-  if (Array.isArray(value)) return value.length ? value.map(formatLabel).join(", ") : NEEDS_REVIEW;
-  if (typeof value === "object") return NEEDS_REVIEW;
-  return String(value);
-}
-
 function interactiveTarget(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest("button, a, input, select, textarea, summary, [role='button'], [role='link']"));
 }
@@ -180,6 +148,8 @@ export function DataGrid<T extends object>({
   initialSort,
   storageKey,
   onViewChange,
+  summaryLabel,
+  getFooterMetrics,
 }: DataGridProps<T>) {
   const normalizedStorageKey = preferenceStorageKey(storageKey);
   const normalizedPageSize = Number.isFinite(pageSize) && pageSize > 0 ? Math.floor(pageSize) : DEFAULT_GRID_PAGE_SIZE;
@@ -268,10 +238,10 @@ export function DataGrid<T extends object>({
   const visibleCount = visibleColumns.length;
 
   return (
-    <section aria-label={caption}>
-      <div className="rm-toolbar">
-        <details>
-          <summary className="rm-button">Columns <span className="rm-muted">{visibleCount}/{columns.length}</span></summary>
+    <section className="rm-data-grid" aria-label={caption}>
+      <div className="rm-toolbar rm-grid-toolbar">
+        <details className="rm-grid-columns">
+          <summary className="rm-button rm-button--small" aria-label={`Columns: ${visibleCount} of ${columns.length} shown`}>Columns{visibleCount < columns.length && <span className="rm-muted"> {visibleCount}/{columns.length}</span>}</summary>
           <div role="group" aria-label="Visible columns">
             {columns.map((column) => {
               const checked = !hiddenColumns.has(column.key);
@@ -345,7 +315,7 @@ export function DataGrid<T extends object>({
                         className={column.align === "right" || moneyColumn(column.key) ? "rm-amount" : undefined}
                         style={{ width: widthStyle(column.width), textAlign: column.align }}
                       >
-                        {column.render ? column.render(row) : defaultCellValue(column.key, value)}
+                        {column.render ? column.render(row) : gridCellText(column.key, value)}
                       </td>
                     );
                   })}
@@ -355,6 +325,13 @@ export function DataGrid<T extends object>({
           </tbody>
         </table>
       </div>
+
+      <ListTotals
+        totalCount={rows.length}
+        visibleCount={sortedRows.length}
+        itemLabel={summaryLabel ?? "record"}
+        metrics={getFooterMetrics?.(sortedRows)}
+      />
 
       {pageData.totalRows > 0 && (
         <div className="rm-pagination" aria-label="Grid pagination">

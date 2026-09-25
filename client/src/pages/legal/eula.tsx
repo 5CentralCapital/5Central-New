@@ -1,3 +1,4 @@
+import React from "react";
 import { LegalPage, LegalSection, LEGAL_CONTACT_EMAIL } from "./legal-layout";
 
 export default function EndUserLicenseAgreement() {
@@ -6,7 +7,7 @@ export default function EndUserLicenseAgreement() {
       <LegalSection title="1. Agreement">
         <p>
           This End-User License Agreement ("Agreement") is between 5Central Capital LLC ("5Central," "we," "us") and each
-          person or entity that accesses 5Central Rent Ops (the "App"), including its QuickBooks Online integration
+          person or entity that accesses 5Central Ops (formerly 5Central Rent Ops, the "App"), including its QuickBooks Online integration
           ("you"). By accessing the App or connecting a QuickBooks Online company to it, you agree to this Agreement. If
           you do not agree, do not use the App.
         </p>
@@ -55,7 +56,7 @@ export default function EndUserLicenseAgreement() {
       <LegalSection title="7. Third-party services">
         <p>
           The App works with third-party services, including Intuit QuickBooks Online, Stripe, Plaid, Auth0, Google,
-          Replit, and OpenAI. Your use of those services is governed by their own terms. Intuit and QuickBooks are
+          Render, Neon, Amazon Web Services and OpenAI. Your use of those services is governed by their own terms. Intuit and QuickBooks are
           trademarks of Intuit Inc. Intuit is not a party to this Agreement and is not responsible for the App.
         </p>
       </LegalSection>

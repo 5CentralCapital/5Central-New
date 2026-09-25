@@ -22,7 +22,7 @@ const timestampColumns = new Set([
 
 export function buildRentOpsTableBatchSql(tables: readonly string[]): string {
   if (!tables.length || tables.length > RENT_OPS_BATCH_TABLES.length || new Set(tables).size !== tables.length || tables.some(table => !allowedTables.has(table))) {
-    throw new Error("Invalid Rent Operations table batch");
+    throw new Error("Invalid 5Central Ops table batch");
   }
   // One SELECT means one statement snapshot without opening a separate transaction.
   // Like the legacy SELECT *, aggregation retains the table scan's row order;
@@ -32,21 +32,21 @@ export function buildRentOpsTableBatchSql(tables: readonly string[]): string {
 
 export function decodeRentOpsTableBatch(value: unknown, tables: readonly string[]): RentOpsTableRows {
   buildRentOpsTableBatchSql(tables);
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid Rent Operations table batch result");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid 5Central Ops table batch result");
   const result: RentOpsTableRows = {};
   for (const table of tables) {
     let rows = (value as Record<string, unknown>)[table];
     // Drivers ordinarily parse json OIDs already. The string case supports
     // compatible executors with explicitly disabled JSON type parsing.
     if (typeof rows === "string") rows = JSON.parse(rows);
-    if (!Array.isArray(rows)) throw new Error("Invalid Rent Operations table batch result");
+    if (!Array.isArray(rows)) throw new Error("Invalid 5Central Ops table batch result");
     result[table] = rows.map(row => {
-      if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error("Invalid Rent Operations table batch row");
+      if (!row || typeof row !== "object" || Array.isArray(row)) throw new Error("Invalid 5Central Ops table batch row");
       const restored = {...row} as Record<string, unknown>;
       for (const column of Array.from(timestampColumns)) {
         const timestamp = restored[column];
         if (timestamp === null || timestamp === undefined || timestamp instanceof Date) continue;
-        if (typeof timestamp !== "string" || !Number.isFinite(Date.parse(timestamp))) throw new Error("Invalid Rent Operations table batch timestamp");
+        if (typeof timestamp !== "string" || !Number.isFinite(Date.parse(timestamp))) throw new Error("Invalid 5Central Ops table batch timestamp");
         restored[column] = new Date(timestamp);
       }
       return restored;

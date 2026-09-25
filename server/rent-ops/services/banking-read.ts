@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { BankingSnapshot } from "../../../shared/rent-ops-banking";
+import { addDays, nowIsoDate } from "../domain/dates";
 
 type Environment = Record<string, string | undefined>;
 const opaque = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 24);
@@ -12,9 +13,9 @@ const timestamp = (value: unknown) => typeof value === "string" && /^\d{4}-\d{2}
 
 /** Read-only bank evidence. Never creates ledger records or assigns an entity. */
 export async function readBanking(env: Environment = process.env, request: typeof fetch = fetch, now = new Date()): Promise<BankingSnapshot> {
-  const throughDate = now.toISOString().slice(0, 10);
-  const from = new Date(now); from.setUTCDate(from.getUTCDate() - 29);
-  const result: BankingSnapshot = { state: "unconfigured", fetchedAt: now.toISOString(), fromDate: from.toISOString().slice(0, 10), throughDate, connections: [] };
+  // Business-day window: a UTC date runs a day ahead every New York evening.
+  const throughDate = nowIsoDate(now);
+  const result: BankingSnapshot = { state: "unconfigured", fetchedAt: now.toISOString(), fromDate: addDays(throughDate, -29), throughDate, connections: [] };
   const tokens = Array.from(new Set((env.PLAID_ACCESS_TOKENS || env.PLAID_ACCESS_TOKEN || "").split(",").map(value => value.trim()).filter(Boolean)));
   if (env.PLAID_ENV !== "production" || !env.PLAID_CLIENT_ID || !env.PLAID_SECRET || !tokens.length) return result;
   async function call(endpoint: string, token: string, fields: Record<string, unknown> = {}) {

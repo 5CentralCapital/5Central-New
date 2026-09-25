@@ -105,7 +105,7 @@ function toRows(reportId: RentalReportId, sourceRows: readonly unknown[]): { row
 }
 
 /**
- * Adapter around the accepted Rent Operations report service. It preserves the
+ * Adapter around the accepted 5Central Ops report service. It preserves the
  * legacy derivations while converting every `*Cents` value to the versioned
  * string boundary before a run is snapshotted.
  */

@@ -2,10 +2,11 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { rentOpsAuthClient } from "../auth";
-import { requireCentsInput } from "../money";
+import { requireAppliedCents, requireCentsInput } from "../money";
 import "./payment-edit-dialog.css";
 
 type EditContext = { expectedRevision: string; payment: {amountCents:number;postedOn:string;paymentMethod?:string;description?:string}; allocations:{chargeTransactionId:string;amountCents:number}[] };
+type CorrectionBody = { id:string; expectedRevision:string; amountCents:number; postedOn:string; paymentMethod:string; description:string; allocations:{chargeTransactionId:string;amountCents:number}[] };
 async function request(path:string, body?:unknown) {
   const response=await rentOpsAuthClient.request(`/api/rent-ops/${path}`,body?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}:{});
   const data=await response.json();
@@ -19,7 +20,7 @@ export function PaymentEditDialog({id,tenantName,onClose,onSaved,tenancyId,busin
   const [allocations,setAllocations]=useState<string[]>([]);
   const [error,setError]=useState("");const [busy,setBusy]=useState(false);const [saved,setSaved]=useState(false);
   const [operationId]=useState(()=>crypto.randomUUID());
-  const [pending,setPending]=useState<object>();
+  const [pending,setPending]=useState<CorrectionBody>();
   useEffect(()=>{if(tenancyId){setContext({expectedRevision:"",payment:{amountCents:0,postedOn:businessDate??""},allocations:[]});setDate(businessDate??"");setDescription("Payment");return;}let active=true;request(`payments/${encodeURIComponent(id)}/edit`).then((data:EditContext)=>{if(!active)return;setContext(data);setAmount((data.payment.amountCents/100).toFixed(2));setDate(data.payment.postedOn);setMethod(data.payment.paymentMethod??"");setDescription(data.payment.description??"Payment");setAllocations(data.allocations.map(row=>(row.amountCents/100).toFixed(2)));}).catch(err=>{if(active)setError(err.message);});return()=>{active=false;};},[id,tenancyId,businessDate]);
   async function refresh(){
     // Reports and the workspace use separate cache roots. Invalidate both,
@@ -28,11 +29,11 @@ export function PaymentEditDialog({id,tenantName,onClose,onSaved,tenancyId,busin
     await onSaved();onClose();
   }
   async function save(event:FormEvent){event.preventDefault();if(!context||busy)return;setBusy(true);setError("");try{
-    if(!saved){const body=pending??{id:operationId,expectedRevision:context.expectedRevision,amountCents:requireCentsInput(amount,"Amount"),postedOn:date,paymentMethod:method,description,allocations:context.allocations.map((row,i)=>({chargeTransactionId:row.chargeTransactionId,amountCents:allocations[i].trim()==="0"||Number(allocations[i])===0?0:requireCentsInput(allocations[i],"Applied amount")})).filter(row=>row.amountCents>0)};
-      setPending(body);await request(tenancyId?"manual-payments":`payments/${encodeURIComponent(id)}/corrections`,tenancyId?{id:operationId,tenancyId,amountCents:(body as any).amountCents,postedOn:(body as any).postedOn,paymentMethod:(body as any).paymentMethod,description:(body as any).description,category:"unapplied_cash",allocations:[]}:body);setSaved(true);}
+    if(!saved){const applied=pending?[]:requireAppliedCents(allocations);const body:CorrectionBody=pending??{id:operationId,expectedRevision:context.expectedRevision,amountCents:requireCentsInput(amount,"Amount"),postedOn:date,paymentMethod:method,description,allocations:context.allocations.map((row,i)=>({chargeTransactionId:row.chargeTransactionId,amountCents:applied[i]!})).filter(row=>row.amountCents>0)};
+      setPending(body);await request(tenancyId?"manual-payments":`payments/${encodeURIComponent(id)}/corrections`,tenancyId?{id:operationId,tenancyId,amountCents:body.amountCents,postedOn:body.postedOn,paymentMethod:body.paymentMethod,description:body.description,category:"unapplied_cash",allocations:[]}:body);setSaved(true);}
     await refresh();
   }catch(err){if((err as {definitive?:boolean})?.definitive)setPending(undefined);setError(err instanceof Error?err.message:"Unable to save payment.");}finally{setBusy(false);}}
-  return <Dialog open onOpenChange={open=>{if(!open&&!busy)onClose();}}><DialogContent className="rops-payment-dialog" onEscapeKeyDown={e=>{if(busy)e.preventDefault();}} onPointerDownOutside={e=>e.preventDefault()}><DialogHeader><DialogTitle>{tenancyId?"Add payment":"Edit payment"}</DialogTitle><DialogDescription>{tenantName}</DialogDescription></DialogHeader>
+  return <Dialog open onOpenChange={open=>{if(!open&&!busy)onClose();}}><DialogContent className="rops-payment-dialog" onEscapeKeyDown={e=>{if(busy)e.preventDefault();}} onPointerDownOutside={e=>e.preventDefault()}><DialogHeader><DialogTitle>{tenancyId?"Record payment":"Edit payment"}</DialogTitle><DialogDescription>{tenantName}</DialogDescription></DialogHeader>
     <form onSubmit={save}>
       {!context&&!error&&<p role="status">Loading payment…</p>}
       {context&&<fieldset disabled={busy||saved||!!pending}><div className="rops-payment-fields">

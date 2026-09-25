@@ -53,3 +53,10 @@ test("freshness outage or malformed timestamps never erase balances or transacti
   assert.equal(data.connections[0].accounts[0].currentCents, 12345); assert.equal(data.connections[0].transactions[0].amountCents, -5025);
  }
 });
+
+test("the 30-day window follows the New York business date, not the UTC date", async () => {
+ const evening = new Date("2026-09-13T02:00:00Z"); // 22:00 on 12 September in New York
+ const data = await readBanking({}, undefined, evening);
+ assert.equal(data.throughDate, "2026-09-12");
+ assert.equal(data.fromDate, "2026-08-14");
+});

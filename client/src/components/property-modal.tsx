@@ -1,8 +1,10 @@
+import MarketingImage from "@/components/marketing-image";
 import { useState } from "react";
 import { Link } from "wouter";
 import { type Property } from "@shared/schema";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { getPublicPropertyImage, getPublicPropertyMeta } from "@/lib/public-portfolio-data";
+import { formatCalendarDate } from "@/lib/format";
 import { SimpleMetric } from "@/components/modals/MetricRow";
 import { HeroMetricsBar } from "@/components/modals/HeroMetricsBar";
 import { TimelineNode, InvestmentTimeline } from "@/components/modals/TimelineNode";
@@ -52,7 +54,7 @@ function SingleGallery({ photos, title }: { photos: string[]; title: string }) {
   return (
     <div className="relative">
       <div className="aspect-[4/3] bg-muted rounded-lg overflow-hidden">
-        <img
+        <MarketingImage
           src={photos[currentIndex]}
           alt={`${title} - Photo ${currentIndex + 1}`}
           className="w-full h-full object-cover"
@@ -309,8 +311,8 @@ function SoldPropertyTimelineView({ property }: { property: Property }) {
   const saleDate = property.saleDate ? new Date(property.saleDate) : new Date();
   const yearsHeld = ((saleDate.getTime() - acquisitionDate.getTime()) / (1000 * 60 * 60 * 24 * 365.25)).toFixed(1);
 
-  const acquiredDateStr = acquisitionDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
-  const soldDateStr = saleDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+  const acquiredDateStr = formatCalendarDate(acquisitionDate, { month: 'short', year: 'numeric' });
+  const soldDateStr = formatCalendarDate(saleDate, { month: 'short', year: 'numeric' });
 
   return (
     <div className="space-y-6">
@@ -388,7 +390,7 @@ function FlipProjectView({ property }: { property: Property }) {
   return (
     <div className="space-y-6">
       <div className="mb-6 aspect-[21/9] bg-muted rounded-lg overflow-hidden">
-        <img
+        <MarketingImage
           src={getPublicPropertyImage(property)}
           alt={property.name}
           className="w-full h-full object-cover"
@@ -466,11 +468,7 @@ export default function PropertyModal({ property, isOpen, onClose }: PropertyMod
   const meta = getPublicPropertyMeta(property);
   const isFlip = meta?.assetClass === "single_family_flip";
 
-  const acquisitionDate = new Date(property.acquisitionDate);
-  const formattedDate = acquisitionDate.toLocaleDateString('en-US', {
-    month: 'long',
-    year: 'numeric'
-  });
+  const formattedDate = formatCalendarDate(property.acquisitionDate, { month: 'long', year: 'numeric' });
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -520,7 +518,7 @@ export default function PropertyModal({ property, isOpen, onClose }: PropertyMod
           {/* Property image for sold properties */}
           {property.status === "sold" && (
             <div className="mb-6 aspect-[21/9] bg-muted rounded-lg overflow-hidden">
-              <img
+              <MarketingImage
                 src={getPublicPropertyImage(property)}
                 alt={property.name}
                 className="w-full h-full object-cover"

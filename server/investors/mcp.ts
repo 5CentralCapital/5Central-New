@@ -6,6 +6,7 @@ import {
   investorListQuerySchema,
   investorPaymentLogQuerySchema,
 } from "../../shared/investors";
+import { investorDebtMaturityQuerySchema, investorInstrumentFinancialsQuerySchema, investorPaymentCalendarQuerySchema } from "../../shared/investors/reports";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { attestTransport, loadAuthenticatedPrincipal } from "../company/authorization";
 import type { InvestorPort } from "./port";
@@ -29,8 +30,17 @@ export function registerInvestorMcpTools(register: InvestorToolRegistrar, option
     async args => investors.get(await principalFor(args.scope.organizationId), args));
   register("list_investor_monthly_payments", "Read expected, manual, verified QBO-posted, independently settled, partial, overpaid, and reversed monthly rows.", { query: investorPaymentLogQuerySchema }, false,
     async ({ query }) => investors.monthlyPayments(await principalFor(query.scope.organizationId), query));
+  register("get_investor_instrument_financials", "Read one instrument's debt service schedule (interest-only periods, level amortization, balloon) and monthly balance rollforward. The derived outstanding balance is compared with the manual balance; a mismatch is flagged, never overwritten. Unknown bank splits stay unclassified.",
+    { query: investorInstrumentFinancialsQuerySchema }, false,
+    async ({ query }) => investors.instrumentFinancials(await principalFor(query.scope.organizationId), query));
+  register("list_investor_payment_calendar", "Read the investor payment calendar for a month range: scheduled, overdue, partial, recorded, posted, settled and reversed obligations with remaining amounts. Scope needs legalEntityId. Follow nextCursor to continue.",
+    { query: investorPaymentCalendarQuerySchema }, false,
+    async ({ query }) => investors.paymentCalendar(await principalFor(query.scope.organizationId), query));
+  register("list_investor_debt_maturities", "Read the debt maturity ladder: maturity date, months remaining, rate, documented or computed balloon, and derived vs manual outstanding principal.",
+    { query: investorDebtMaturityQuerySchema }, false,
+    async ({ query }) => investors.debtMaturities(await principalFor(query.scope.organizationId), query));
   for (const kind of INVESTOR_COMMAND_KINDS) {
-    register(kind.replaceAll(".", "_"), `Save ${kind.replaceAll(".", " ")} in R-ops. Supply a stable operationId/idempotencyKey and the current revision for edits. QBO and settlement links remain fail closed until verified source evidence is available.`, { command: commandEnvelopeSchema(investorCommandPayloadSchemas[kind]) }, true,
+    register(kind.replaceAll(".", "_"), `Save ${kind.replaceAll(".", " ")} in 5Central Ops. Supply a stable operationId/idempotencyKey and the current revision for edits. QBO and settlement links remain fail closed until verified source evidence is available.`, { command: commandEnvelopeSchema(investorCommandPayloadSchemas[kind]) }, true,
       async ({ command }) => {
         const organizationId = organizationIdSchema.parse(command.scope.organizationId);
         const principal = await principalFor(organizationId);

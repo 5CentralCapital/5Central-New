@@ -1,0 +1,42 @@
+import type { ComponentType } from "react";
+import { AccountingEntry } from "../accounting/entry";
+import type { AccountingView } from "../rent-ops/workspace/workspace-state";
+import { ReviewQueueEntry as ReviewQueue } from "../review-cases/entry";
+import { IntakeResultsEntry as IntakeResults } from "../intake/entry";
+import { CompanyDocumentsEntry as CompanyDocuments } from "../company-documents/entry";
+import { ForecastingEntry as Forecasting } from "../forecasting/workspace";
+import { forecastingRoutePatch, type ForecastingRoutePatch, type ForecastTab } from "../forecasting/params";
+
+/** Mount points the manager shell uses for company workspaces. */
+export interface LaneEntryProps {
+  readonly identity: string;
+  readonly organizationId?: string;
+  readonly onNavigate: (organizationId: string) => void;
+  readonly propertyId?: string;
+}
+
+export function ReviewQueueEntry({ organizationId, propertyId, onNavigate }: LaneEntryProps) {
+  return <ReviewQueue organizationId={organizationId} propertyId={propertyId ?? null} onNavigate={onNavigate} />;
+}
+
+export function IntakeResultsEntry({ organizationId, propertyId, onNavigate }: LaneEntryProps) {
+  return <IntakeResults organizationId={organizationId} propertyId={propertyId ?? null} onNavigate={onNavigate} />;
+}
+
+export function CompanyDocumentsEntry({ organizationId, propertyId, onNavigate }: LaneEntryProps) {
+  return <CompanyDocuments organizationId={organizationId} propertyId={propertyId ?? null} onNavigate={onNavigate} />;
+}
+
+/** Forecasting mount: each location change (tab, scenario or company) is one route update honoring replace. */
+export function ForecastingEntry({ identity, organizationId, scenarioId, legalEntityId, propertyId, tab, onLocationChange }: Omit<LaneEntryProps, "onNavigate"> & {
+  readonly scenarioId?: string;
+  readonly legalEntityId?: string;
+  readonly tab?: string;
+  readonly onLocationChange: (patch: ForecastingRoutePatch, replace: boolean) => void;
+}) {
+  const location = { tab: (tab ?? "cash") as ForecastTab, ...(scenarioId ? { scenarioId } : {}), ...(propertyId ? { propertyId } : {}), ...(legalEntityId ? { entityId: legalEntityId } : {}) };
+  return <Forecasting identity={identity} organizationId={organizationId} location={location}
+    onNavigate={(next, options) => onLocationChange(forecastingRoutePatch(next, options), options.replace ?? false)} />;
+}
+
+export const AccountingEntryWithView = AccountingEntry as ComponentType<Parameters<typeof AccountingEntry>[0] & { view?: AccountingView }>;

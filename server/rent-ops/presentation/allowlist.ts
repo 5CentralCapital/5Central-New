@@ -1,5 +1,5 @@
 /**
- * Small runtime helpers used by every Rent Operations response serializer.
+ * Small runtime helpers used by every 5Central Ops response serializer.
  *
  * The persistence and import layers intentionally have a much wider shape
  * than the browser/API contract. Presentation code therefore constructs

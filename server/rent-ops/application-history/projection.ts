@@ -200,13 +200,20 @@ function decimalCents(row: Raw, ...keys: string[]): number | undefined {
   }
   if (candidate === undefined) return undefined;
   const normalized = String(candidate).trim().replace(/^\$/, "").replace(/,/g, "");
-  const amount = Number(normalized);
-  if (!Number.isFinite(amount) || amount < 0) return undefined;
+  // Parse the decimal text exactly: `19.99 * 100` is 1998.9999999999998 in
+  // floating point, which would silently discard a valid amount.
+  const match = /^(\d+)(?:\.(\d*))?$/.exec(normalized);
+  if (!match) return undefined;
+  const [, whole, fraction = ""] = match;
   // The matched source field, rather than the JavaScript representation,
   // determines units. RM may return either 1250 or "1250" for dollars, and
   // either 125000 or "125000" for an explicitly cents-named field.
   const centsInput = matchedKey?.toLowerCase().includes("cents") === true;
-  const cents = centsInput ? amount : amount * 100;
+  const scale = centsInput ? 0 : 2;
+  // Sub-cent precision is never rounded; only trailing zeros are accepted.
+  if (/[^0]/.test(fraction.slice(scale))) return undefined;
+  // An integer digit string converts exactly while it remains a safe integer.
+  const cents = Number(`${whole}${fraction.slice(0, scale).padEnd(scale, "0")}`);
   return Number.isSafeInteger(cents) ? cents : undefined;
 }
 
@@ -522,9 +529,9 @@ function buildProspects(rows: readonly Raw[], options: ApplicationHistoryProject
       status: text(row, "status", "Status", "ProspectStatus") ?? null,
       statusKnowledge: fact(value(row, "status", "Status", "ProspectStatus")),
       createdOn: dateValue(row, "createdOn", "CreatedOn", "CreatedDate", "CreateDate") ?? null,
-      createdOnKnowledge: fact(value(row, "createdOn", "CreatedOn", "CreatedDate", "CreateDate")),
+      createdOnKnowledge: fact(dateValue(row, "createdOn", "CreatedOn", "CreatedDate", "CreateDate")),
       updatedOn: dateValue(row, "updatedOn", "UpdatedOn", "UpdatedDate", "ModifiedDate") ?? null,
-      updatedOnKnowledge: fact(value(row, "updatedOn", "UpdatedOn", "UpdatedDate", "ModifiedDate")),
+      updatedOnKnowledge: fact(dateValue(row, "updatedOn", "UpdatedOn", "UpdatedDate", "ModifiedDate")),
       recordRevision: 1,
     } satisfies RentOpsProspect];
   });
@@ -546,7 +553,6 @@ function buildApplications(rows: readonly Raw[], prospects: ReadonlyMap<string, 
     const personSource = rawPersonId(row);
     const personId = personSource ? linkedTarget(options, "person", personSource) : undefined;
     const mappedStatus = statusFromCrosswalk(row, rowCollection(row), options);
-    const rawStatus = value(row, "status", "Status", "applicationStatus", "ApplicationStatus");
     return [{
       id,
       source: sourceRef(row, rowCollection(row), "application", source),
@@ -557,13 +563,13 @@ function buildApplications(rows: readonly Raw[], prospects: ReadonlyMap<string, 
       email: text(row, "email", "Email", "EmailAddress") ?? null,
       phone: text(row, "phone", "Phone", "PhoneNumber", "Mobile") ?? null,
       status: mappedStatus ?? null,
-      statusKnowledge: mappedStatus ? "source" as const : rawStatus === undefined ? "unknown" as const : "unknown" as const,
+      statusKnowledge: mappedStatus ? "source" as const : "unknown" as const,
       submittedOn: dateValue(row, "submittedOn", "SubmittedOn", "SubmittedDate", "ApplicationDate", "ApplicationSubmissionDate") ?? null,
-      submittedOnKnowledge: fact(value(row, "submittedOn", "SubmittedOn", "SubmittedDate", "ApplicationDate", "ApplicationSubmissionDate")),
+      submittedOnKnowledge: fact(dateValue(row, "submittedOn", "SubmittedOn", "SubmittedDate", "ApplicationDate", "ApplicationSubmissionDate")),
       createdOn: dateValue(row, "createdOn", "CreatedOn", "CreatedDate", "CreateDate") ?? null,
-      createdOnKnowledge: fact(value(row, "createdOn", "CreatedOn", "CreatedDate", "CreateDate")),
+      createdOnKnowledge: fact(dateValue(row, "createdOn", "CreatedOn", "CreatedDate", "CreateDate")),
       updatedOn: dateValue(row, "updatedOn", "UpdatedOn", "UpdatedDate", "ModifiedDate") ?? null,
-      updatedOnKnowledge: fact(value(row, "updatedOn", "UpdatedOn", "UpdatedDate", "ModifiedDate")),
+      updatedOnKnowledge: fact(dateValue(row, "updatedOn", "UpdatedOn", "UpdatedDate", "ModifiedDate")),
       recordRevision: 1,
     } satisfies RentOpsHistoricalApplication];
   });
@@ -598,11 +604,11 @@ function buildInterests(rows: readonly Raw[], appTargets: ReadonlyMap<string, st
       preference: text(row, "preference", "Preference", "InterestType", "InterestedType") ?? null,
       preferenceKnowledge: fact(value(row, "preference", "Preference", "InterestType", "InterestedType")),
       interestedOn: dateValue(row, "interestedOn", "InterestedOn", "InterestedDate", "CreatedDate") ?? null,
-      interestedOnKnowledge: fact(value(row, "interestedOn", "InterestedOn", "InterestedDate", "CreatedDate")),
+      interestedOnKnowledge: fact(dateValue(row, "interestedOn", "InterestedOn", "InterestedDate", "CreatedDate")),
       rentCents: rent ?? null,
       rentKnowledge: amountKnowledge(rent),
       bedrooms: numberValue(row, "bedrooms", "Bedrooms") ?? null,
-      bedroomsKnowledge: fact(value(row, "bedrooms", "Bedrooms")),
+      bedroomsKnowledge: fact(numberValue(row, "bedrooms", "Bedrooms")),
       status: text(row, "status", "Status", "InterestStatus") ?? null,
       statusKnowledge: fact(value(row, "status", "Status", "InterestStatus")),
       recordRevision: 1,
@@ -632,9 +638,9 @@ function buildParticipants(rows: readonly Raw[], appTargets: ReadonlyMap<string,
       relationship: text(row, "relationship", "Relationship", "Relation") ?? null,
       relationshipKnowledge: fact(value(row, "relationship", "Relationship", "Relation")),
       isMinor: minor ?? null,
-      minorKnowledge: fact(value(row, "isMinor", "IsMinor", "Minor")),
+      minorKnowledge: fact(minor),
       isFinanciallyResponsible: responsible ?? null,
-      financialResponsibilityKnowledge: fact(value(row, "isFinanciallyResponsible", "IsFinanciallyResponsible", "FinanciallyResponsible", "Responsible")),
+      financialResponsibilityKnowledge: fact(responsible),
       origin: "source" as ApplicationHistoryOrigin,
       recordRevision: 1,
     } satisfies RentOpsApplicationParticipant];
@@ -666,9 +672,9 @@ function buildRequirements(
       status: status ?? null,
       statusKnowledge: status ? "source" as const : "unknown" as const,
       requestedOn: dateValue(row, "requestedOn", "RequestedOn", "RequestedDate") ?? null,
-      requestedOnKnowledge: fact(value(row, "requestedOn", "RequestedOn", "RequestedDate")),
+      requestedOnKnowledge: fact(dateValue(row, "requestedOn", "RequestedOn", "RequestedDate")),
       resolvedOn: dateValue(row, "resolvedOn", "ResolvedOn", "ResolvedDate") ?? null,
-      resolvedOnKnowledge: fact(value(row, "resolvedOn", "ResolvedOn", "ResolvedDate")),
+      resolvedOnKnowledge: fact(dateValue(row, "resolvedOn", "ResolvedOn", "ResolvedDate")),
       ...(documentId ? { documentId, documentLinkKnowledge: "exact" as const } : { documentLinkKnowledge: documentSource ? "unknown" as const : null }),
       origin: "source" as const,
       recordRevision: 1,
@@ -708,7 +714,7 @@ function buildTemplates(rows: readonly Raw[], options: ApplicationHistoryProject
       name: text(row, "name", "Name", "TemplateName", "Label") ?? null,
       nameKnowledge: fact(value(row, "name", "Name", "TemplateName", "Label")),
       active: booleanValue(row, "active", "Active", "IsActive") ?? null,
-      activeKnowledge: fact(value(row, "active", "Active", "IsActive")),
+      activeKnowledge: fact(booleanValue(row, "active", "Active", "IsActive")),
       recordRevision: 1,
     });
   });

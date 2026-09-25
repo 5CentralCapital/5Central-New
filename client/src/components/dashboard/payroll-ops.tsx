@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { localIsoDate } from "@/lib/format";
 import { PropertySubTabs, useProperties } from "./shared/property-subtabs";
 
 interface Worker {
@@ -36,7 +37,7 @@ export default function PayrollOps() {
   const [selectedWeek, setSelectedWeek] = useState(() => {
     const d = new Date(); const day = d.getDay();
     const diff = d.getDate() - day + (day === 0 ? -6 : 1) + 6;
-    return new Date(d.setDate(diff)).toISOString().split("T")[0];
+    return localIsoDate(new Date(d.setDate(diff)));
   });
   const [showAddWorker, setShowAddWorker] = useState(false);
   const [showAddEntry, setShowAddEntry] = useState(false);
@@ -368,7 +369,7 @@ function AddWorkerForm({ onSave, onCancel }: { onSave: (w: any) => void; onCance
 }
 
 function AddEntryForm({ workers, weekEnding: parentWeekEnding, onSave, onCancel }: { workers: Worker[]; weekEnding: string; onSave: (e: any) => void; onCancel: () => void }) {
-  const [form, setForm] = useState({ workerId: workers[0]?.id || "", task: "paint", date: new Date().toISOString().split("T")[0], hours: "8", rate: workers[0]?.defaultRate || "20", unitNumber: "", weekEnding: parentWeekEnding || "", notes: "" });
+  const [form, setForm] = useState({ workerId: workers[0]?.id || "", task: "paint", date: localIsoDate(), hours: "8", rate: workers[0]?.defaultRate || "20", unitNumber: "", weekEnding: parentWeekEnding || "", notes: "" });
   const total = (Number(form.hours) * Number(form.rate)).toFixed(2);
   return (
     <div style={{ padding: 12, marginBottom: 10, borderRadius: 8, border: "1px solid var(--color-border)", background: "var(--color-surface-alt)" }}>

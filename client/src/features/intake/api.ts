@@ -45,4 +45,3 @@ function createApi(): IntakeApi {
 }
 
 export const intakeApi: IntakeApi = createApi();
-export function createIntakeApi(): IntakeApi { return createApi(); }

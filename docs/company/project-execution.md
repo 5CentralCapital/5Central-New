@@ -96,11 +96,83 @@ project execution command route. Forms require an injected command callback
 and remain disabled when the record is read-only. The execution read includes
 named employee, person, team, and project-vendor options for assignment search;
 the form never asks a manager to enter a raw assignee reference. They do not
-claim persistence without a real adapter. The manager tab set is exported as
-`PROJECT_TABS` in `client/src/features/projects/types.ts`:
+claim persistence without a real adapter. The manager route values are
+exported as `PROJECT_TABS` in `client/src/features/projects/types.ts`:
 
-`overview`, `scope`, `schedule`, `costs`, `execution`.
+`overview`, `schedule`, `budget`, `commitments`, `draws`, plus the aliases
+`scope` and `costs` (open Budgets & costs) and `execution` (opens Commitments).
+`projectSectionFor` maps a route value to the visible section.
 
 The execution UI uses the existing project charcoal/gold/cream tokens and
 opaque content surfaces. It keeps QBO coverage visible beside the financial
 values and does not use placeholder financial numbers.
+
+## Canonical cost report (U10)
+
+`shared/projects/cost-report.ts` computes one cost summary that the Overview,
+Budgets & costs, Commitments and Draws sections all read
+(`GET /api/company/:org/projects/:id/cost-report`, MCP
+`get_project_cost_report`). Every value is exact signed cents; an unknown value
+is `null`, never zero.
+
+- Original budget is the first approved budget version; revised budget is the
+  latest approved version plus approved change orders not yet included in a
+  budget version. Approved changes = revised − original. With no approved
+  budget both are zero and a warning is returned.
+- Committed is approved and closed commitments (original + approved changes).
+- Incurred = verified QBO actual (current finance bindings) + posted payroll
+  labor + estimated labor. Estimated labor is shown separately and is replaced
+  by posted payroll for the same timesheet, so payroll is never counted twice.
+  An unavailable QBO mirror makes verified actual and incurred `null`; a partial
+  mirror shows the known subtotal and withholds cost to complete and forecast.
+- Paid uses mirror settlement (pro-rated for a partially paid line); a bound
+  line without settlement leaves paid unknown.
+- Remaining commitment = committed − linked actual per commitment (closed
+  commitments release their unbilled balance).
+- Cost to complete per line = max(revised − incurred, remaining commitment),
+  unless an explicit ETC override with a reason exists. Forecast final cost =
+  incurred + cost to complete; variance = revised − forecast.
+- Schedule risk derives late tasks, dependency-driven slips and a projected
+  finish from task dates and dependencies against the target date.
+- The commitment ledger derives receipts from purchase-order receiving and
+  invoices from bound QBO bill lines (with settlement state).
+- Retainage payable is a rollforward over approved/paid draws: withheld per
+  draw, released as the growth of requested-above-eligible, outstanding balance;
+  draft/submitted draws are pending.
+- The closeout checklist (commitments invoiced, retainage released, punch items
+  closed, final draw paid, lien-waiver documents linked, tasks complete) is
+  read-only. Lien waivers are verified company documents on the project tagged
+  `lien waiver`.
+
+Conservation: one QBO line allocated across projects, work orders and payroll
+links sums through the central `accounting_qbo_source_line_allocations` ledger
+and cannot exceed the line; a commitment, its bill and the bill payment are one
+cost (tests in `shared/projects/cost-report.test.ts` and
+`server/projects/cost-report.integration.test.ts`).
+
+### Commands added
+
+- `project.etc_override.set` / `project.etc_override.clear` (MCP
+  `project_etc_override_set` / `_clear`). Stored as a draft project cost row
+  with the reserved vendor marker `system:etc_override`; project reads exclude
+  it from draft costs and user draft costs may not use the `system:` prefix.
+- `project.template.create` now accepts inline `scopeItems` and `tasks`, or
+  `fromProjectId` to copy a project's current lines and tasks (relative days
+  from the project start).
+- Draw capacity is checked net of retainage (sum of requested − retainage ≤
+  eligible), so a retainage release is expressible on a later draw.
+
+### Reads added
+
+- `GET /api/company/:org/projects/:id/labor` (MCP `get_project_labor`):
+  approved time mapped to the project by jobcode, with cost code → scope line.
+- `GET /api/company/:org/cost-source-lines?legalEntityId&purpose=cost|payroll`
+  (MCP `search_cost_source_lines`): current posted QBO lines with their
+  unallocated balance, keyset paged. The finance binding picker uses it.
+
+### Schema follow-ups
+
+- A dedicated ETC override table (reason, author, history) instead of the
+  reserved draft-cost marker.
+- `company_document_links.link_kind` for `work_order`; lien-waiver documents
+  currently rely on a tag.

@@ -239,6 +239,8 @@ export async function fetchRMRecurringCharges(opts: {
  * Payments are in a separate /Payments resource from Charges.
  * NOTE: Payments do NOT have PropertyID. Filter by AccountID (tenant ID).
  * For multiple tenants, fetches each tenant's payments individually (API doesn't support bulk filter).
+ * A failed read is an error, never an empty list: balances are charges less
+ * payments, so a silent empty list would show every tenant as delinquent.
  */
 export async function fetchRMPayments(opts: {
   tenantId?: string;
@@ -246,34 +248,30 @@ export async function fetchRMPayments(opts: {
   fromDate?: string;
   toDate?: string;
 }): Promise<any[]> {
-  try {
-    // If multiple tenant IDs, fetch each individually and combine
-    if (opts.tenantIds && opts.tenantIds.length > 0 && !opts.tenantId) {
-      const results = await Promise.all(
-        opts.tenantIds.map(tid =>
-          fetchRMPayments({ tenantId: String(tid), fromDate: opts.fromDate, toDate: opts.toDate })
-        )
-      );
-      return results.flat();
-    }
-
-    const params: Record<string, string> = {
-      pagesize: "500",
-      orderby: "TransactionDate desc",
-    };
-    const filters: string[] = [];
-    if (opts.tenantId) {
-      filters.push(`AccountID,eq,${opts.tenantId}`);
-      filters.push(`AccountType,eq,Customer`);
-    }
-    if (opts.fromDate) filters.push(`TransactionDate,ge,${opts.fromDate}`);
-    if (opts.toDate) filters.push(`TransactionDate,le,${opts.toDate}`);
-    if (filters.length) params.filters = filters.join(";");
-
-    return await rmGet("/Payments", params);
-  } catch {
-    return [];
+  // If multiple tenant IDs, fetch each individually and combine
+  if (opts.tenantIds && opts.tenantIds.length > 0 && !opts.tenantId) {
+    const results = await Promise.all(
+      opts.tenantIds.map(tid =>
+        fetchRMPayments({ tenantId: String(tid), fromDate: opts.fromDate, toDate: opts.toDate })
+      )
+    );
+    return results.flat();
   }
+
+  const params: Record<string, string> = {
+    pagesize: "500",
+    orderby: "TransactionDate desc",
+  };
+  const filters: string[] = [];
+  if (opts.tenantId) {
+    filters.push(`AccountID,eq,${opts.tenantId}`);
+    filters.push(`AccountType,eq,Customer`);
+  }
+  if (opts.fromDate) filters.push(`TransactionDate,ge,${opts.fromDate}`);
+  if (opts.toDate) filters.push(`TransactionDate,le,${opts.toDate}`);
+  if (filters.length) params.filters = filters.join(";");
+
+  return await rmGet("/Payments", params);
 }
 
 /** Get service issues (work orders / maintenance). */

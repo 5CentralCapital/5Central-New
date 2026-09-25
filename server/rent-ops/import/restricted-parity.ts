@@ -574,7 +574,7 @@ function streamCollectionDigest(state: StreamCollectionState): RestrictedCollect
 }
 
 function streamCollectionsDigest(states: readonly StreamCollectionState[]): string {
-  return sha256(canonicalJson(states.map(streamCollectionDigest).sort((left, right) => left.path.localeCompare(right.path))));
+  return sha256(canonicalJson(states.map(streamCollectionDigest).sort((left, right) => left.path.localeCompare(right.path, "en-US"))));
 }
 
 function streamPayload(canonicalPayload: string, limits: StreamLimits): { payload: JsonRecord; valid: boolean; credentialShapedFieldCount: number } {
@@ -748,7 +748,7 @@ function collectExpected(
     });
     if (collections.length > options.limits.maxCollections) throw new Error("restricted_parity_collection_limit");
   };
-  for (const [name, value] of Object.entries(payload).sort(([left], [right]) => left.localeCompare(right))) {
+  for (const [name, value] of Object.entries(payload).sort(([left], [right]) => left.localeCompare(right, "en-US"))) {
     if (Array.isArray(value)) pushCollection(`payload.${name}`, name, value);
   }
   const envelopeRecord = envelope as unknown as JsonRecord;
@@ -761,7 +761,7 @@ function collectExpected(
     if (collections.some((collection) => collection.path === path)) return;
     collections.push({ path, present: false, rows: [], orderedRowsSha256: emptyRowsDigest(), sourceIdentityRowsSha256: emptyRowsDigest() });
   });
-  collections.sort((left, right) => left.path.localeCompare(right.path));
+  collections.sort((left, right) => left.path.localeCompare(right.path, "en-US"));
   if (allRows.length > options.limits.maxRows) throw new Error("restricted_parity_row_limit");
   const credentialShapedFieldCount = findCredentialShapedFields(envelope, options.limits).length;
   return {
@@ -1014,7 +1014,7 @@ function streamCollectionStatesWithObservation(
       identityDigests: [],
     });
   }
-  return Array.from(states.values()).sort((left, right) => left.path.localeCompare(right.path));
+  return Array.from(states.values()).sort((left, right) => left.path.localeCompare(right.path, "en-US"));
 }
 
 /** Builds an observation while consuming bounded source chunks, without retaining payloads. */
@@ -1032,7 +1032,7 @@ export function createRestrictedImportObservationFromChunks(
   const reasons = new Set<string>();
   const source = scanRestrictedSourceChunks(input.sourceChunks, limits, reasons);
   if (reasons.size > 0) throw new Error(Array.from(reasons)[0]);
-  const collections = Array.from(source.states.values()).map(streamCollectionDigest).sort((left, right) => left.path.localeCompare(right.path));
+  const collections = Array.from(source.states.values()).map(streamCollectionDigest).sort((left, right) => left.path.localeCompare(right.path, "en-US"));
   return deepFreeze({
     version: RESTRICTED_PARITY_VERSION,
     source: "rent_manager",

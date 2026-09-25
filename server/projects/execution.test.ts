@@ -24,6 +24,7 @@ import {
   type ProjectExecutionBudgetSnapshot,
 } from "../../shared/projects";
 import { createSyntheticCompanyDatabase, SYNTHETIC_COMPANY } from "../company/testing/synthetic-database";
+import { createQboAccountingMirrorStore } from "../accounting/mirror-store";
 import { calculateProjectExecutionTotals, ProjectExecutionReadService, resolveProjectFinanceActuals, type ProjectFinanceBindingSource } from "./execution";
 import { executeProjectExecutionCommand } from "./execution-commands";
 import { createProjectExecutionStore, createProjectFinanceBindingStore } from "./execution-store";
@@ -189,8 +190,8 @@ test("execution totals preserve snapshots and do not double count commitment act
   assert.equal(totals.commitmentCents, "80000");
   assert.equal(totals.linkedActualCents, "10000");
   assert.equal(totals.actualCents, "15000");
-  assert.equal(totals.unspentCommitmentCents, "70000");
-  assert.equal(totals.remainingCents, "33000");
+  assert.equal(totals.unspentCommitmentCents, "50000", "a closed commitment releases its unbilled balance");
+  assert.equal(totals.remainingCents, "53000");
   const partial = calculateProjectExecutionTotals({
     currency: "USD",
     budgets: BUDGETS,
@@ -298,6 +299,7 @@ test("finance bindings use reserved allocation and downgrade stale or ineligible
   assert.equal(held.coverage, "partial");
   assert.equal(held.actuals.length, 0);
 
+
   const refundLine = financialSourceLineResolutionSchema.parse({ ...line, direction: "credit", flow: "incoming" });
   const refundSource = { ...source, async resolveLine() { return refundLine; } };
   const refund = await resolveProjectFinanceActuals(refundSource, bindings, costContextForLine(refundLine), { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
@@ -306,15 +308,334 @@ test("finance bindings use reserved allocation and downgrade stale or ineligible
   const refundHeld = await resolveProjectFinanceActuals(refundSource, bindings, unknownAccountContext, { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
   assert.equal(refundHeld.coverage, "partial");
   assert.equal(refundHeld.actuals.length, 0);
-  const withReleased: ProjectFinanceBindingSource = {
-    async listProjectBindings(input) {
-      const active = await bindings.listProjectBindings(input);
-      return [...active, projectFinanceBindingSchema.parse({ ...active[0], id: "52000000-0000-4000-8000-000000000011", bindingStatus: "released", eligible: false })];
+  const releasedAndVerified: ProjectFinanceBindingSource = {
+    async listProjectBindings() {
+      return [
+        projectFinanceBindingSchema.parse({
+          id: SOURCE_ID,
+          projectId: PROJECT_ID,
+          commitmentId: COMMITMENT_ID,
+          scopeItemId: null,
+          source: SOURCE,
+          allocatedCents: "2500",
+          eligible: true,
+          bindingStatus: "verified",
+        }),
+        projectFinanceBindingSchema.parse({
+          id: "52000000-0000-4000-8000-000000000011",
+          projectId: PROJECT_ID,
+          commitmentId: COMMITMENT_ID,
+          scopeItemId: null,
+          source: SOURCE,
+          allocatedCents: "1000",
+          eligible: false,
+          bindingStatus: "released",
+        }),
+      ];
     },
   };
-  const afterCorrection = await resolveProjectFinanceActuals(source, withReleased, costContextForLine(line), { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
-  assert.equal(afterCorrection.coverage, "complete");
-  assert.equal(afterCorrection.actuals.length, 1);
+  const afterRelease = await resolveProjectFinanceActuals(source, releasedAndVerified, costContextForLine(line), { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
+  assert.equal(afterRelease.coverage, "complete");
+  assert.deepEqual(afterRelease.actuals.map((actual) => actual.amountCents), ["2500"], "released history must not keep current project coverage partial or duplicate an actual");
+});
+
+test("project cost coverage follows the bound QBO stream without hiding aggregate uncertainty", async () => {
+  const line = financialSourceLineResolutionSchema.parse({
+    source: SOURCE,
+    direction: "debit",
+    flow: "outgoing",
+    lineRole: "expense",
+    amountCents: "10000",
+    currency: "USD",
+    transactionType: "Bill",
+    accountObjectId: "expense-account",
+    counterpartyObjectId: "vendor-42",
+    description: "Synthetic posted bill",
+    postingState: "posted",
+    postedOn: "2026-09-20",
+    settlement: { state: "unknown", settledOn: null, settledAmountCents: null },
+    watermark: { value: "stream-watermark", observedAt: "2026-09-21T00:00:00.000Z" },
+  });
+  const aggregateCoverage = financialSourceCoverageSchema.parse({
+    scope: SCOPE,
+    stream: "aggregate",
+    status: "partial",
+    evidence: "live_provider_readback",
+    basis: "source_transactions",
+    watermark: { value: "aggregate-watermark", observedAt: "2026-09-21T00:00:00.000Z" },
+    coveredFrom: "2026-01-01",
+    coveredThrough: "2026-12-31",
+    observedAt: "2026-09-21T00:00:00.000Z",
+    objectCount: 2,
+    transactionCount: 2,
+    lineCount: 1,
+    missingIntervals: [],
+    reason: "One unrelated QBO account object remains unresolved",
+  });
+  const billCoverage = financialSourceCoverageSchema.parse({
+    ...aggregateCoverage,
+    stream: "transactions.bill",
+    status: "complete",
+    reason: null,
+  });
+  const bindingSource: ProjectFinanceBindingSource = {
+    async listProjectBindings() {
+      return [projectFinanceBindingSchema.parse({
+        id: SOURCE_ID,
+        projectId: PROJECT_ID,
+        commitmentId: COMMITMENT_ID,
+        scopeItemId: null,
+        source: SOURCE,
+        allocatedCents: "2500",
+        eligible: true,
+        bindingStatus: "verified",
+      })];
+    },
+  };
+  const requestedStreams: (string | undefined)[] = [];
+  let relevantCoverage = billCoverage;
+  const source: FinancialSourceReadPort = {
+    async resolveLine() { return line; },
+    async readCoverage(_scope, stream) {
+      requestedStreams.push(stream);
+      return stream === "transactions.bill" ? relevantCoverage : aggregateCoverage;
+    },
+    async listTransactions() { return { items: [line], nextCursor: null, coverage: relevantCoverage }; },
+  };
+  const complete = await resolveProjectFinanceActuals(source, bindingSource, costContextForLine(line), { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
+  assert.equal(complete.coverage, "complete", "an unrelated aggregate exception must not downgrade a fully covered bound Bill stream");
+  assert.deepEqual(requestedStreams, ["transactions.bill"]);
+  assert.equal(complete.actuals[0]?.amountCents, "2500");
+
+  relevantCoverage = financialSourceCoverageSchema.parse({ ...billCoverage, status: "partial", reason: "The bound Bill stream has an unresolved object" });
+  const partial = await resolveProjectFinanceActuals(source, bindingSource, costContextForLine(line), { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
+  assert.equal(partial.coverage, "partial", "relevant stream uncertainty must remain visible even when the exact line resolves");
+  assert.equal(partial.actuals[0]?.amountCents, "2500");
+});
+
+test("a Purchase credit keeps a Purchase-bound project cost report partial", async () => {
+  const purchaseSource = financialSourceReferenceSchema.parse({ ...SOURCE, objectType: "Purchase", objectId: "purchase-42" });
+  const refundSource = financialSourceReferenceSchema.parse({ ...SOURCE, objectType: "Purchase", objectId: "purchase-refund-42" });
+  const coverage = financialSourceCoverageSchema.parse({
+    scope: SCOPE,
+    stream: "transactions.purchase",
+    status: "complete",
+    evidence: "live_provider_readback",
+    basis: "source_transactions",
+    watermark: { value: "purchase-watermark", observedAt: "2026-09-21T00:00:00.000Z" },
+    coveredFrom: "2026-01-01",
+    coveredThrough: "2026-12-31",
+    observedAt: "2026-09-21T00:00:00.000Z",
+    objectCount: 2,
+    transactionCount: 2,
+    lineCount: 2,
+    missingIntervals: [],
+    reason: null,
+  });
+  const purchaseLine = financialSourceLineResolutionSchema.parse({
+    source: purchaseSource,
+    direction: "debit",
+    flow: "outgoing",
+    lineRole: "expense",
+    amountCents: "10000",
+    currency: "USD",
+    transactionType: "Purchase",
+    accountObjectId: "expense-account",
+    counterpartyObjectId: "vendor-42",
+    description: "Synthetic posted purchase",
+    postingState: "posted",
+    postedOn: "2026-09-20",
+    settlement: { state: "unknown", settledOn: null, settledAmountCents: null },
+    watermark: coverage.watermark,
+  });
+  const refundLine = financialSourceLineResolutionSchema.parse({
+    source: refundSource,
+    direction: "credit",
+    flow: "incoming",
+    lineRole: "expense",
+    amountCents: "2500",
+    currency: "USD",
+    transactionType: "Purchase",
+    accountObjectId: "expense-account",
+    counterpartyObjectId: "vendor-42",
+    description: "Synthetic purchase refund",
+    postingState: "posted",
+    postedOn: "2026-09-21",
+    settlement: { state: "unknown", settledOn: null, settledAmountCents: null },
+    watermark: coverage.watermark,
+  });
+  let listTransactionsCalls = 0;
+  let hasPurchaseCreditsCalls = 0;
+  const source: FinancialSourceReadPort = {
+    async resolveLine() { return purchaseLine; },
+    async readCoverage() { return coverage; },
+    async listTransactions() {
+      listTransactionsCalls += 1;
+      return { items: [purchaseLine, refundLine], nextCursor: null, coverage };
+    },
+    async hasPurchaseCredits(_scope, through) {
+      hasPurchaseCreditsCalls += 1;
+      assert.equal(through, "2026-09-21");
+      return true;
+    },
+  };
+  const bindings: ProjectFinanceBindingSource = {
+    async listProjectBindings() {
+      return [projectFinanceBindingSchema.parse({
+        id: SOURCE_ID,
+        projectId: PROJECT_ID,
+        commitmentId: COMMITMENT_ID,
+        scopeItemId: null,
+        source: purchaseSource,
+        allocatedCents: "2500",
+        eligible: true,
+        bindingStatus: "verified",
+      })];
+    },
+  };
+  const result = await resolveProjectFinanceActuals(source, bindings, costContextForLine(purchaseLine), {
+    organizationId: SYNTHETIC_COMPANY.organizationId,
+    projectId: PROJECT_ID,
+    asOf: "2026-09-21",
+  });
+  assert.equal(result.coverage, "partial");
+  assert.deepEqual(result.actuals.map((actual) => actual.amountCents), ["2500"]);
+  assert.equal(hasPurchaseCreditsCalls, 1);
+  assert.equal(listTransactionsCalls, 0, "project coverage uses the narrow provider probe instead of scanning all lines");
+
+  // The provider probe owns the distinction between a remaining eligible
+  // refund and a credit already consumed or excluded by accounting controls.
+  // A false result must let the exact bound line establish complete coverage
+  // for fully allocated, blocked and non-cost credits alike.
+  for (const excludedReason of ["fully allocated", "blocked", "non-cost"] as const) {
+    const excluded: FinancialSourceReadPort = {
+      ...source,
+      async hasPurchaseCredits(_scope, through) {
+        assert.equal(through, "2026-09-21");
+        return false;
+      },
+    };
+    const covered = await resolveProjectFinanceActuals(excluded, bindings, costContextForLine(purchaseLine), {
+      organizationId: SYNTHETIC_COMPANY.organizationId,
+      projectId: PROJECT_ID,
+      asOf: "2026-09-21",
+    });
+    assert.equal(covered.coverage, "complete", `${excludedReason} Purchase credit should not downgrade coverage`);
+    assert.deepEqual(covered.actuals.map((actual) => actual.amountCents), ["2500"]);
+  }
+
+  const withoutProbe: FinancialSourceReadPort = { ...source, hasPurchaseCredits: undefined };
+  const unavailable = await resolveProjectFinanceActuals(withoutProbe, bindings, costContextForLine(purchaseLine), {
+    organizationId: SYNTHETIC_COMPANY.organizationId,
+    projectId: PROJECT_ID,
+    asOf: "2026-09-21",
+  });
+  assert.equal(unavailable.coverage, "partial", "missing provider probe must fail closed");
+  assert.equal(listTransactionsCalls, 0);
+
+});
+
+test("the Purchase credit probe excludes allocated, blocked and non-cost credits", async () => {
+  const fixture = await createSyntheticCompanyDatabase();
+  const mirror = createQboAccountingMirrorStore(fixture.executor);
+  const scope = {
+    provider: "qbo" as const,
+    organizationId: SYNTHETIC_COMPANY.organizationId,
+    legalEntityId: SYNTHETIC_COMPANY.entityId,
+    environment: "sandbox" as const,
+    realmId: "12345",
+  };
+  const sourceFor = (objectId: string) => financialSourceReferenceSchema.parse({
+    provider: "qbo",
+    ...scope,
+    objectType: "Purchase",
+    objectId,
+    lineId: "1",
+    version: "0",
+  });
+  const accountFor = async (objectId: string, accountType: string) => {
+    await mirror.ingestSourceObject({
+      scope,
+      objectType: "Account",
+      objectId,
+      version: "0",
+      providerUpdatedAt: "2026-09-20T12:00:00Z",
+      providerBody: { Id: objectId, AccountType: accountType },
+    });
+  };
+  const seedCredit = async (objectId: string, accountObjectId: string) => {
+    const source = sourceFor(objectId);
+    const sourceObject = await mirror.ingestSourceObject({
+      scope,
+      objectType: "Purchase",
+      objectId,
+      version: "0",
+      providerUpdatedAt: "2026-09-20T12:00:00Z",
+      providerBody: { Id: objectId },
+    });
+    const transaction = await mirror.ingestTransaction({
+      sourceObjectId: sourceObject.id,
+      scope,
+      objectType: "Purchase",
+      objectId,
+      version: "0",
+      transactionDate: "2026-09-20",
+      postingState: "posted",
+      currency: "USD",
+      watermark: "2026-09-20T12:00:00Z",
+      updatedAt: "2026-09-20T12:00:00Z",
+    });
+    await mirror.ingestTransactionLine({
+      transactionId: transaction.id,
+      sourceObjectId: sourceObject.id,
+      source,
+      lineNumber: 1,
+      transactionType: "Purchase",
+      direction: "credit",
+      flow: "incoming",
+      lineRole: "expense",
+      amountCents: "1000",
+      currency: "USD",
+      postingState: "posted",
+      postedOn: "2026-09-20",
+      settlementState: "unknown",
+      settledOn: null,
+      settledAmountCents: null,
+      accountObjectId,
+      counterpartyObjectId: null,
+      description: `Synthetic ${objectId}`,
+      watermark: "2026-09-20T12:00:00Z",
+      updatedAt: "2026-09-20T12:00:00Z",
+    });
+    return source;
+  };
+  try {
+    await accountFor("refund-expense", "Expense");
+    await accountFor("refund-bank", "Bank");
+    const unallocated = await seedCredit("purchase-unallocated", "refund-expense");
+    const fullyAllocated = await seedCredit("purchase-allocated", "refund-expense");
+    await seedCredit("purchase-non-cost", "refund-bank");
+    await seedCredit("purchase-blocked", "refund-expense");
+    await fixture.executor.query(
+      `UPDATE accounting_qbo_source_line_balances
+          SET allocation_blocked=true
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
+          AND object_type='Purchase' AND object_id='purchase-blocked' AND line_id='1'`,
+      [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId],
+    );
+
+    // The unallocated eligible refund is the only candidate that should keep
+    // the project coverage probe open; the other three are excluded by their
+    // allocation, provider Account classification or allocation block.
+    assert.equal(await mirror.hasPurchaseCredits(scope, "2026-09-20"), true);
+    await mirror.reserve({ source: unallocated, consumerKind: "project", consumerId: "project-1", amountCents: "400", currency: "USD" });
+    assert.equal(await mirror.hasPurchaseCredits(scope, "2026-09-20"), true, "remaining unallocated cents keep coverage partial");
+    await mirror.reserve({ source: unallocated, consumerKind: "project", consumerId: "project-2", amountCents: "600", currency: "USD" });
+    await mirror.reserve({ source: fullyAllocated, consumerKind: "project", consumerId: "project-3", amountCents: "1000", currency: "USD" });
+    assert.equal(await mirror.hasPurchaseCredits(scope, "2026-09-20"), false, "fully allocated, blocked and non-cost credits are excluded");
+  } finally {
+    await fixture.close();
+  }
 });
 
 test("execution create commands persist through one idempotent company command path", async () => {
@@ -355,12 +676,20 @@ test("execution create commands persist through one idempotent company command p
       legalEntityId: SYNTHETIC_COMPANY.entityId,
       propertyId: SYNTHETIC_COMPANY.propertyId,
     };
+    const organizationScope = { organizationId: SYNTHETIC_COMPANY.organizationId };
     const envelope = (payload: Record<string, unknown>, expectedRevision?: number) => ({
       operationId: newOperationId(),
       idempotencyKey: `execution-test-${newOperationId()}`,
       scope,
       effectiveDate: "2026-09-21",
       ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      payload,
+    });
+    const organizationEnvelope = (payload: Record<string, unknown>) => ({
+      operationId: newOperationId(),
+      idempotencyKey: `execution-test-org-${newOperationId()}`,
+      scope: organizationScope,
+      effectiveDate: "2026-09-21",
       payload,
     });
     const templateReceipt = await executeProjectExecutionCommand(fixture.executor, "project.template.create", envelope({ name: "Turn template", projectType: "unit_turn", description: null, currency: "USD" }), options);
@@ -377,8 +706,31 @@ test("execution create commands persist through one idempotent company command p
     );
     const instantiate = await executeProjectExecutionCommand(fixture.executor, "project.template.instantiate", envelope({ projectId: PROJECT_ID, templateId, startOn: "2026-09-21" }, 1), options);
     let projectRevision = Number(instantiate.resultingRevisions.find((item) => String(item.recordId) === PROJECT_ID)?.revision);
-    const vendor = await executeProjectExecutionCommand(fixture.executor, "project.vendor.create", envelope({ name: "Synthetic vendor", notes: null }), options);
+    const vendor = await executeProjectExecutionCommand(fixture.executor, "project.vendor.create", organizationEnvelope({ name: "Synthetic vendor", notes: null }), options);
     const vendorId = String(vendor.affectedRecordIds[0]);
+    const restrictedActor = "project-entity-admin";
+    await fixture.db.query(
+      `INSERT INTO company_access_grants(id,organization_id,actor_id,role,legal_entity_id)
+       VALUES ('57000000-0000-4000-8000-000000000010',$1,$2,'admin',$3)`,
+      [SYNTHETIC_COMPANY.organizationId, restrictedActor, SYNTHETIC_COMPANY.entityId],
+    );
+    const restrictedResolve = (executor: typeof fixture.executor) => loadAuthenticatedPrincipal(executor, {
+      actorId: restrictedActor,
+      organizationId: SYNTHETIC_COMPANY.organizationId,
+      role: "admin",
+    });
+    const restrictedOptions = {
+      principal: await restrictedResolve(fixture.executor),
+      transport: attestTransport("web"),
+      resolvePrincipal: restrictedResolve,
+    };
+    await assert.rejects(
+      () => executeProjectExecutionCommand(fixture.executor, "project.vendor.update", envelope({ vendorId, name: "Unauthorized vendor rename" }), restrictedOptions),
+      /scope level/,
+      "an entity-scoped administrator cannot edit the organization-wide vendor registry",
+    );
+    const vendorRow = await fixture.db.query<{ name: string }>("SELECT name FROM company_project_vendors WHERE organization_id=$1 AND id=$2", [SYNTHETIC_COMPANY.organizationId, vendorId]);
+    assert.equal(vendorRow.rows[0]?.name, "Synthetic vendor");
     const assignment = await executeProjectExecutionCommand(fixture.executor, "project.assignment.create", envelope({ projectId: PROJECT_ID, assigneeType: "vendor", assigneeRef: vendorId, role: "General contractor" }, projectRevision), options);
     projectRevision = Number(assignment.resultingRevisions.find((item) => String(item.recordId) === PROJECT_ID)?.revision);
     const milestone = await executeProjectExecutionCommand(fixture.executor, "project.milestone.create", envelope({ projectId: PROJECT_ID, name: "Rough inspection" }, projectRevision), options);
@@ -423,7 +775,8 @@ test("execution create commands persist through one idempotent company command p
       () => executeProjectExecutionCommand(fixture.executor, "project.draw_request.item.update", envelope({ drawRequestItemId: String(item.affectedRecordIds[0]), requestedCents: "66000" }, projectRevision), options),
       /Draw request exceeds the source eligibility|Draw item amounts are not eligible/,
     );
-    await update("project.draw_request.update", { drawRequestId: drawId, status: "submitted" });
+    // The edit form always resends the percent; item retainage stays authoritative.
+    await update("project.draw_request.update", { drawRequestId: drawId, status: "submitted", retainagePercent: "5" });
     const executionSnapshot = await createProjectExecutionStore(fixture.executor).read({ scope, projectId: PROJECT_ID, asOf: "2026-09-21" });
     assert.equal(executionSnapshot.assigneeOptions.some((option) => option.label === "Synthetic project manager" && option.type === "employee"), true);
     assert.equal(executionSnapshot.assignments[0]?.status, "accepted");
@@ -437,6 +790,22 @@ test("execution create commands persist through one idempotent company command p
     assert.equal(executionSnapshot.drawRequests[0]?.grossEligibleCents, "55000");
     assert.equal(executionSnapshot.drawRequests[0]?.retainageCents, "5500");
     assert.equal(executionSnapshot.drawRequests[0]?.netRequestedCents, "49500");
+
+    await update("project.draw_request.update", { drawRequestId: drawId, status: "paid" });
+    await assert.rejects(
+      () => executeProjectExecutionCommand(fixture.executor, "project.draw_request.update", envelope({ drawRequestId: drawId, notes: "Late edit" }, projectRevision), options),
+      /Paid draw requests are immutable/,
+    );
+    await assert.rejects(
+      () => executeProjectExecutionCommand(fixture.executor, "project.draw_request.item.update", envelope({ drawRequestItemId: String(item.affectedRecordIds[0]), requestedCents: "54000" }, projectRevision), options),
+      /Paid draw requests are immutable/,
+    );
+    await assert.rejects(
+      () => executeProjectExecutionCommand(fixture.executor, "project.draw_request.item.create", envelope({ drawRequestId: drawId, sourceType: "commitment", sourceId: commitmentId, eligibleCents: "65000", requestedCents: "1000", retainageEligible: true, retainageCents: "100" }, projectRevision), options),
+      /Paid draw requests are immutable/,
+    );
+    const paidSnapshot = await createProjectExecutionStore(fixture.executor).read({ scope, projectId: PROJECT_ID, asOf: "2026-09-21" });
+    assert.equal(paidSnapshot.drawRequests[0]?.status, "paid");
     const executionDetail = await new ProjectExecutionReadService(createProjectExecutionStore(fixture.executor), unavailableProjectFinanceReadPort).get(principal, { scope, projectId: PROJECT_ID, asOf: "2026-09-21" });
     assert.equal(projectExecutionDetailSchema.parse(executionDetail).projectId, PROJECT_ID);
     const counts = await fixture.db.query<{ assignments: string; milestones: string; inspections: string; punch: string; bids: string; commitments: string; changes: string; purchaseOrders: string; draws: string; scopes: string; tasks: string }>(

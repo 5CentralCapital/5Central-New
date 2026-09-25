@@ -29,3 +29,17 @@ test("release check requires an external trusted coverage inventory", async () =
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("the evaluation is never written over the evidence file", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "r-ops-performance-cli-"));
+  try {
+    const inputPath = join(directory, "evidence.json");
+    const evidence = JSON.stringify({ schema: "r-ops.performance-evidence.v1", coverage: [], measurements: [] });
+    await writeFile(inputPath, evidence);
+    const exitCode = await runPerformanceCli("report", ["--input", inputPath, "--out", join(directory, ".", "evidence.json")]);
+    assert.equal(exitCode, 2);
+    assert.equal(await readFile(inputPath, "utf8"), evidence);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

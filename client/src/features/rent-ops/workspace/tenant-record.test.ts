@@ -7,7 +7,7 @@ function createDemoAdminSnapshot() {
   snapshot.tenants.forEach(tenant => tenant.schedules.forEach(schedule => Object.assign(schedule, { lineageState: "valid", resolvedEffectiveTo: schedule.effectiveTo ?? null, canScheduleSuccessor: true })));
   return snapshot;
 }
-import type { TenantView } from "../types";
+import type { TenantTab, TenantView } from "../types";
 import {
   currentMonthlyTotal,
   ledgerEntryReference,
@@ -23,6 +23,9 @@ import {
   recurringChargeIssueLabels,
   recurringChargeScope,
   resolveTenantBalance,
+  TENANT_RECORD_TABS,
+  TENANT_TAB_SECTIONS,
+  tenantRecordTabFor,
 } from "./tenant-model";
 
 test("recurring charges retain scope identity and classify date boundaries", () => {
@@ -135,7 +138,7 @@ test("recurring scope labels flag missing identity instead of showing an opaque 
   const tenant = snapshot.tenants[0];
   const scope = recurringChargeScope({ id: "scope-unknown", amountCents: 1000, effectiveFrom: "2026-08-01", active: true }, tenant, snapshot);
   assert.equal(scope.type, "unknown");
-  assert.equal(scope.label, "Needs review");
+  assert.equal(scope.label, "Scope missing");
   assert.equal(scope.identitySource, "unknown");
   assert.ok(scope.warning);
 });
@@ -309,4 +312,19 @@ test("confirmed open-ended schedule stays distinct from unknown end date", () =>
   assert.equal(confirmed.effectiveTo, null);
   assert.equal(unknown.effectiveTo, undefined);
   assert.ok(unknown.uncertaintyCodes.includes("schedule_lineage_unconfirmed"));
+});
+
+test("tenant record shows six tabs plus QuickBooks and every existing tab key still opens its section", () => {
+  assert.deepEqual(TENANT_RECORD_TABS, ["summary", "ledger", "tenancy", "household", "documents", "activity", "quickbooks"]);
+  const keys: TenantTab[] = ["summary", "household", "tenancy", "charges", "ledger", "quickbooks", "deposits", "housing-assistance", "documents", "activity"];
+  for (const key of keys) {
+    const visible = tenantRecordTabFor(key);
+    assert.ok(TENANT_RECORD_TABS.includes(visible), `${key} maps to a visible tab`);
+    assert.ok(TENANT_TAB_SECTIONS[visible]?.includes(key), `${key} is rendered inside ${visible}`);
+  }
+  assert.equal(tenantRecordTabFor("deposits"), "ledger");
+  assert.equal(tenantRecordTabFor("charges"), "tenancy");
+  assert.equal(tenantRecordTabFor("housing-assistance"), "tenancy");
+  assert.deepEqual(TENANT_TAB_SECTIONS.ledger, ["ledger", "deposits"]);
+  assert.deepEqual(TENANT_TAB_SECTIONS.tenancy, ["tenancy", "charges", "housing-assistance"]);
 });

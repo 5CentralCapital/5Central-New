@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 
 export interface Property {
   id: string;
@@ -36,6 +36,8 @@ export function PropertySubTabs({ selected, onSelect, properties, showAll = fals
     }}>
       {showAll && (
         <button
+          type="button"
+          aria-pressed={selected === "all"}
           onClick={() => onSelect("all")}
           style={{
             padding: "6px 16px",
@@ -60,6 +62,8 @@ export function PropertySubTabs({ selected, onSelect, properties, showAll = fals
         return (
           <button
             key={p.id}
+            type="button"
+            aria-pressed={isActive}
             onClick={() => onSelect(p.id)}
             style={{
               padding: "6px 16px",

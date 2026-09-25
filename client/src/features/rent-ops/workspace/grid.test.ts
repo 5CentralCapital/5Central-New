@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { centsSortValue } from "../../workspaces/format";
 import { formatDate, formatLabel, formatMoney } from "./display";
 import { filterGridRows, paginateGridRows, sortGridRows, type GridColumn } from "./grid-model";
 
@@ -13,14 +14,14 @@ const columns: GridColumn<Row>[] = [
 test("money display preserves zero and marks unknown cents", () => {
   assert.equal(formatMoney(0), "$0.00");
   assert.equal(formatMoney(125050), "$1,250.50");
-  assert.equal(formatMoney(null), "Needs review");
-  assert.equal(formatMoney(""), "Needs review");
-  assert.equal(formatMoney(10.5), "Needs review");
+  assert.equal(formatMoney(null), "Unknown");
+  assert.equal(formatMoney(""), "Unknown");
+  assert.equal(formatMoney(10.5), "Unknown");
 });
 
 test("date and label display values are readable and deterministic", () => {
   assert.equal(formatDate("2026-01-05"), "Jan 5, 2026");
-  assert.equal(formatDate(undefined), "Needs review");
+  assert.equal(formatDate(undefined), "Unverified");
   assert.equal(formatLabel("future_preleased"), "Future Preleased");
   assert.equal(formatLabel("monthToMonth"), "Month To Month");
 });
@@ -34,6 +35,18 @@ test("grid sorting is numeric, stable, and leaves unknown values last", () => {
   ];
   assert.deepEqual(sortGridRows(rows, { key: "cents", direction: "asc" }, columns).map((row) => row.name), ["two", "two again", "ten", "unknown"]);
   assert.deepEqual(sortGridRows(rows, { key: "cents", direction: "desc" }, columns).map((row) => row.name), ["ten", "two", "two again", "unknown"]);
+});
+
+test("grid sorting keeps large cent strings exact", () => {
+  type LargeMoneyRow = { name: string; cents: string | null; position: number };
+  const rows: LargeMoneyRow[] = [
+    { name: "larger", cents: "9007199254740993", position: 0 },
+    { name: "smaller", cents: "9007199254740992", position: 1 },
+    { name: "unknown", cents: null, position: 2 },
+  ];
+  const moneyColumns: GridColumn<LargeMoneyRow>[] = [{ key: "cents", label: "Amount", sortValue: row => centsSortValue(row.cents) }];
+  assert.deepEqual(sortGridRows(rows, { key: "cents", direction: "asc" }, moneyColumns).map(row => row.name), ["smaller", "larger", "unknown"]);
+  assert.deepEqual(sortGridRows(rows, { key: "cents", direction: "desc" }, moneyColumns).map(row => row.name), ["larger", "smaller", "unknown"]);
 });
 
 test("search and paging do not mutate rows and clamp out of bounds pages", () => {

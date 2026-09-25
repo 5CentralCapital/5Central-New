@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { DESCRIPTION_MISSING_LABEL, NAME_MISSING_LABEL, PROPERTY_MISSING_LABEL, UNIT_MISSING_LABEL } from "../../../shared/review-cases/display-labels";
 import type { IsoMonth, RentOpsLedgerTransaction, RentOpsSnapshot } from "../../../shared/rent-ops-contracts";
 import { financialMonthInterval, projectFinancialOccupancy, projectFinancialSchedules, resolveEffectiveScheduleVersions } from "../domain/financial-projection";
+import { postedReversalTargets } from "../domain/invariants";
 
 export interface BillingReceipt {
   lineageRootId: string;
@@ -99,6 +101,7 @@ function planBilling(data: BillingData, month: IsoMonth, scope?: BillingScope): 
   const interval = financialMonthInterval(month);
   const receipts = data.receipts.filter((receipt) => receipt.billingOn === interval.start && inScope(snapshot.tenancies.find(row => row.id === receipt.tenancyId)?.propertyId, receipt.tenancyId));
   const projection = projectFinancialSchedules(snapshot, month);
+  const reversedTargets = postedReversalTargets(snapshot.ledgerTransactions);
   const schedules = new Map(snapshot.recurringSchedules.map((schedule) => [schedule.id, schedule]));
   const prior = new Map(receipts.map((receipt) => [receipt.lineageRootId, receipt]));
   const charges: PlannedCharge[] = [];
@@ -111,9 +114,9 @@ function planBilling(data: BillingData, month: IsoMonth, scope?: BillingScope): 
     shownReceipts.add(receipt.lineageRootId);
     return { lineageRootId: receipt.lineageRootId, row: {
       scheduleId: receipt.scheduleId,
-      propertyName: snapshot.properties.find((entry) => entry.id === transaction?.propertyId)?.name ?? "Needs review",
-      unitNumber: snapshot.units.find((entry) => entry.id === transaction?.unitId)?.unitNumber ?? "Needs review",
-      tenantName: person ? `${person.firstName ?? ""} ${person.lastName ?? ""}`.trim() : "Needs review",
+      propertyName: snapshot.properties.find((entry) => entry.id === transaction?.propertyId)?.name ?? PROPERTY_MISSING_LABEL,
+      unitNumber: snapshot.units.find((entry) => entry.id === transaction?.unitId)?.unitNumber ?? UNIT_MISSING_LABEL,
+      tenantName: person ? `${person.firstName ?? ""} ${person.lastName ?? ""}`.trim() || NAME_MISSING_LABEL : NAME_MISSING_LABEL,
       ...(person?.id?{personId:person.id}:{}),
       description: transaction?.description ?? "Monthly charge",
       amountCents: receipt.amountCents, billingOn: receipt.billingOn, status: "posted", reasons: [],
@@ -130,10 +133,10 @@ function planBilling(data: BillingData, month: IsoMonth, scope?: BillingScope): 
       continue;
     }
     const row: BillingPreviewRow = {
-      scheduleId: schedule.id, propertyName: projected.propertyName ?? "Needs review",
-      unitNumber: projected.unitNumber ?? "Needs review", tenantName: projected.tenantName ?? "Needs review",
+      scheduleId: schedule.id, propertyName: projected.propertyName ?? PROPERTY_MISSING_LABEL,
+      unitNumber: projected.unitNumber ?? UNIT_MISSING_LABEL, tenantName: projected.tenantName ?? NAME_MISSING_LABEL,
       ...(projected.personId?{personId:projected.personId}:{}),
-      description: projected.description ?? "Needs review", amountCents: projected.amountCents,
+      description: projected.description ?? DESCRIPTION_MISSING_LABEL, amountCents: projected.amountCents,
       billingOn: interval.start, status: "ready", reasons: [],
     };
     const plan: PlannedCharge = { row, lineageRootId };
@@ -145,9 +148,10 @@ function planBilling(data: BillingData, month: IsoMonth, scope?: BillingScope): 
     }
     const reasons = row.reasons;
     if (schedule.billingFrequency !== "monthly" || schedule.versionOrigin !== "manual") reasons.push("Billing frequency is unverified; explicitly configure a monthly successor before posting.");
-    if (projected.known !== true) reasons.push("Schedule facts or tenant assignment need review.");
+    if (projected.known !== true) reasons.push("Schedule facts or tenant assignment are unconfirmed.");
     if (typeof projected.amountCents !== "number" || !Number.isSafeInteger(projected.amountCents) || projected.amountCents <= 0 || projected.amountKnowledge !== "known") reasons.push("A confirmed positive amount is required.");
-    if (!schedule.category || !billableCategories.has(schedule.category)) reasons.push("Charge category needs review.");
+    if (!schedule.category) reasons.push("Charge category is missing.");
+    else if (!billableCategories.has(schedule.category)) reasons.push("Charge category is not billable here.");
     if (!schedule.description?.trim()) reasons.push("Charge description is missing.");
     if (!schedule.effectiveFrom || schedule.effectiveFrom > interval.start || (schedule.effectiveTo && schedule.effectiveTo < interval.end)) reasons.push("Partial-month schedule requires an explicit manual charge.");
     const tenancy = snapshot.tenancies.find((entry) => entry.id === projected.tenancyId);
@@ -157,7 +161,7 @@ function planBilling(data: BillingData, month: IsoMonth, scope?: BillingScope): 
     if (!property || property.state !== "active") reasons.push("Property must be active.");
     if (unit) {
       const occupancy = projectFinancialOccupancy(snapshot, unit, month);
-      if (occupancy.occupancy !== "current" || occupancy.tenancyId !== tenancy?.id) reasons.push("Occupancy needs review.");
+      if (occupancy.occupancy !== "current" || occupancy.tenancyId !== tenancy?.id) reasons.push("Occupancy for this month does not confirm this tenancy.");
       if (occupancy.partialMonth) reasons.push("Partial-month occupancy requires an explicit manual charge.");
     }
     if (tenancy && snapshot.leaseTerms.some((term) => term.tenancyId === tenancy.id && ["executed", "month_to_month"].includes(term.status)
@@ -169,6 +173,7 @@ function planBilling(data: BillingData, month: IsoMonth, scope?: BillingScope): 
     // that an existing charge represents this schedule, or charge twice.
     const otherCharge = snapshot.ledgerTransactions.some((entry) => entry.kind === "charge"
       && entry.tenancyId === projected.tenancyId && entry.status !== "voided"
+      && !reversedTargets.has(entry.id)
       && (!entry.postedOn || entry.postedOn.slice(0, 7) === month || entry.dueOn?.slice(0, 7) === month)
       && (entry.chargeDefinitionId === schedule.chargeDefinitionId || !entry.category || entry.category === schedule.category)
       && !receipts.some((receipt) => receipt.ledgerTransactionId === entry.id));
@@ -195,9 +200,9 @@ function planBilling(data: BillingData, month: IsoMonth, scope?: BillingScope): 
     const root = schedule.lineageRootId ?? schedule.id;
     if (!schedule.effectiveFrom || schedule.effectiveFrom <= interval.start || schedule.effectiveFrom > interval.end || prior.has(root) || (schedule.category && !billableCategories.has(schedule.category))) continue;
     charges.push({ lineageRootId: root, row: {
-      scheduleId: schedule.id, propertyName: snapshot.properties.find((entry) => entry.id === schedule.propertyId)?.name ?? "Needs review",
-      unitNumber: snapshot.units.find((entry) => entry.id === schedule.unitId)?.unitNumber ?? "Needs review",
-      tenantName: "Needs review", description: schedule.description ?? "Monthly charge", amountCents: null,
+      scheduleId: schedule.id, propertyName: snapshot.properties.find((entry) => entry.id === schedule.propertyId)?.name ?? PROPERTY_MISSING_LABEL,
+      unitNumber: snapshot.units.find((entry) => entry.id === schedule.unitId)?.unitNumber ?? UNIT_MISSING_LABEL,
+      tenantName: NAME_MISSING_LABEL, description: schedule.description ?? "Monthly charge", amountCents: null,
       billingOn: interval.start, status: "blocked", reasons: ["Schedule ends during this month; enter the confirmed partial-month charge manually."],
     } });
   }

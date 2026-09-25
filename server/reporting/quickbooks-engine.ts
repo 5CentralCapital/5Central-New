@@ -82,6 +82,9 @@ function addCells(values: Record<string, unknown>, cells: unknown, columns: read
     if (/money|amount|currency/.test(type)) {
       const cents = typeof value === "string" ? decimalToCents(value) : undefined;
       values[`${baseKey}Cents`] = cents ?? null;
+      // Ungrouped financial statements have one monetary column. Preserve it
+      // independently of the provider's localized/display column title.
+      if (columns.filter(column => /money|amount|currency/i.test(column.type)).length === 1) values.providerTotalCents = cents ?? null;
       return;
     }
     values[baseKey] = value;
@@ -103,20 +106,23 @@ function rowsOf(raw: QuickBooksJsonObject): unknown[] {
       const cells = object.ColData;
       const header = object.Header;
       const summary = object.Summary;
-      const values: Record<string, unknown> = { providerPath: base, rowKind: "detail" };
+      const group = typeof object.group === "string" ? object.group : null;
+      const values: Record<string, unknown> = { providerPath: base, rowKind: "detail", ...(group ? { providerGroup: group } : {}) };
       if (header && typeof header === "object" && !Array.isArray(header)) {
         values.rowKind = "section";
         addCells(values, (header as QuickBooksJsonObject).ColData, columns, "section");
       }
       if (Array.isArray(cells)) addCells(values, cells, columns);
-      if (summary && typeof summary === "object" && !Array.isArray(summary)) {
-        if (header) output.push(values);
-        const summaryValues: Record<string, unknown> = { providerPath: `${base}.summary`, rowKind: "summary" };
-        addCells(summaryValues, (summary as QuickBooksJsonObject).ColData, columns);
-        output.push(summaryValues);
-      } else if (Array.isArray(cells) || header) output.push(values);
+      const hasSummary = Boolean(summary && typeof summary === "object" && !Array.isArray(summary));
+      // Statement order: section header, its detail rows, then its total.
+      if (header || (Array.isArray(cells) && !hasSummary)) output.push(values);
       const nested = object.Rows;
       if (nested && typeof nested === "object" && !Array.isArray(nested)) visit(nested as QuickBooksJsonObject, `${path}.${index}`);
+      if (hasSummary) {
+        const summaryValues: Record<string, unknown> = { providerPath: `${base}.summary`, rowKind: "summary", ...(group ? { providerGroup: group } : {}) };
+        addCells(summaryValues, (summary as QuickBooksJsonObject).ColData, columns);
+        output.push(summaryValues);
+      }
     });
   };
   visit(rows as QuickBooksJsonObject, "rows");
@@ -125,7 +131,7 @@ function rowsOf(raw: QuickBooksJsonObject): unknown[] {
 
 function columnsFor(rows: readonly ReportRow[]): ReportColumn[] {
   const keys = new Set<string>();
-  for (const row of rows) for (const key of Object.keys(row.values)) keys.add(key);
+  for (const row of rows) for (const key of Object.keys(row.values)) if (key !== "providerGroup" && key !== "providerTotalCents") keys.add(key);
   return Array.from(keys).sort().map(key => ({
     id: key,
     label: key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, value => value.toUpperCase()),

@@ -1,4 +1,5 @@
 import {
+  assertExpectedRevision,
   commandEnvelopeSchema,
   newPropertyId,
   newRecordId,
@@ -72,6 +73,9 @@ function savedResult(propertyId: string, associationId: string, associationType:
 }
 
 function ensureLegalEntityScope(context: CommandHandlerContext<unknown>): string {
+  if (context.envelope.scope.propertyId !== undefined) {
+    throw new ValidationCommandError("Property setup and planned-property conversion require legal-entity scope", { reason: "property_scope_unsupported" });
+  }
   const legalEntityId = context.envelope.scope.legalEntityId;
   if (legalEntityId === undefined) {
     throw new ValidationCommandError("Property setup requires a legal entity scope", { reason: "property_entity_scope_required" });
@@ -177,6 +181,8 @@ async function handlePropertyPlanConvert(context: CommandHandlerContext<Property
   const planRow = plan.rows[0];
   if (!planRow) throw new ValidationCommandError("Planned property association was not found in the requested scope", { reason: "property_plan_not_found" });
   const propertyId = String(planRow.property_id);
+  const planRevision = revisionSchema.parse(typeof planRow.record_revision === "string" ? Number(planRow.record_revision) : planRow.record_revision);
+  assertExpectedRevision(planRevision, context.envelope.expectedRevision);
   if (context.envelope.scope.propertyId !== undefined && context.envelope.scope.propertyId !== propertyId) {
     throw new ValidationCommandError("Planned property is outside the requested scope", { reason: "property_plan_property_scope" });
   }
@@ -208,9 +214,9 @@ async function handlePropertyPlanConvert(context: CommandHandlerContext<Property
   const converted = await context.executor.query<{ record_revision: unknown }>(
     `UPDATE company_project_property_plans
         SET status = 'converted', record_revision = record_revision + 1, updated_at = now()
-      WHERE organization_id = $1 AND id = $2 AND legal_entity_id = $3 AND status = 'planned'
+      WHERE organization_id = $1 AND id = $2 AND legal_entity_id = $3 AND status = 'planned' AND record_revision = $4
       RETURNING record_revision`,
-    [organizationId, payload.planId, legalEntityId],
+    [organizationId, payload.planId, legalEntityId, planRevision],
   );
   if (converted.rows.length !== 1) throw new ConflictCommandError("Planned property association changed while it was being converted", { reason: "property_plan_revision_conflict" });
   const revisionValue = converted.rows[0]?.record_revision;

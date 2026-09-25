@@ -155,6 +155,50 @@ test("list filters, open default, search and cursor pagination", async () => {
   }
 });
 
+test("schedule view is ordered by agenda date on the server and pages without gaps", async () => {
+  const { fixture, port, access, scope, run } = await setup();
+  try {
+    // Emergencies rank first by priority but are scheduled latest here, so a
+    // priority-ordered first page would miss the earliest scheduled work.
+    const created: Array<{ id: string; on: string }> = [];
+    const plan = [
+      { priority: "emergency", scheduledOn: "2026-10-30" }, { priority: "emergency", scheduledOn: "2026-10-29" },
+      { priority: "low", scheduledOn: "2026-10-01" }, { priority: "normal", scheduledOn: "2026-10-05" },
+      { priority: "low", scheduledOn: "2026-10-01" }, { priority: "high", scheduledOn: null },
+    ] as const;
+    for (const [index, item] of plan.entries()) {
+      const receipt = await run("work_order.create", { propertyId, title: `Synthetic scheduled ${index}`, priority: item.priority, reportedOn: "2026-09-20", category: "general", ...(item.scheduledOn ? { scheduledOn: item.scheduledOn, status: "scheduled" } : {}) });
+      const id = String(receipt.affectedRecordIds[0]);
+      if (!item.scheduledOn) {
+        const detail = await port.get(access.principal, { scope, workOrderId: id });
+        await run("work_order.status.change", { workOrderId: id, status: "in_progress" }, detail.recordRevision);
+      }
+      created.push({ id, on: item.scheduledOn ?? "2026-09-23" }); // high priority: reported + 3 days
+    }
+    const expected = [...created].sort((left, right) => left.on.localeCompare(right.on) || left.id.localeCompare(right.id)).map(item => item.id);
+    const statuses = ["scheduled", "in_progress"] as const;
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    do {
+      const page = await port.list(access.principal, { scope, statuses: [...statuses], sort: "schedule", limit: 2, cursor });
+      seen.push(...page.items.map(item => item.id));
+      cursor = page.nextCursor ?? undefined;
+      pages += 1;
+    } while (cursor);
+    assert.equal(pages, 3);
+    assert.deepEqual(seen, expected, "earliest agenda date first across pages, unscheduled work at its target date");
+    const firstPage = await port.list(access.principal, { scope, statuses: [...statuses], sort: "schedule", limit: 2 });
+    assert.deepEqual(firstPage.items.map(item => item.scheduledOn), [null, "2026-10-01"], "the first page holds the earliest work, not the most urgent");
+    // A cursor from one ordering cannot continue the other.
+    const priorityPage = await port.list(access.principal, { scope, statuses: [...statuses], limit: 2 });
+    await rejectsWith(port.list(access.principal, { scope, statuses: [...statuses], sort: "schedule", cursor: priorityPage.nextCursor! }), "validation", "invalid_work_order_cursor");
+    await rejectsWith(port.list(access.principal, { scope, statuses: [...statuses], cursor: firstPage.nextCursor! }), "validation", "invalid_work_order_cursor");
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("invalid input and links are rejected without partial writes", async () => {
   const { fixture, db, port, access, scope, run } = await setup();
   try {

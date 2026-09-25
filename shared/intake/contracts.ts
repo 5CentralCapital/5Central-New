@@ -372,3 +372,30 @@ export type IntakeDocumentId = ReturnType<typeof documentReferenceIdSchema.parse
 export type IntakeCurrency = CurrencyCode;
 export type IntakePacketDate = IsoDate;
 export type IntakeRecordedAt = IsoTimestamp;
+
+/**
+ * Stage command payload. The server computes the SHA-256 of the received bytes
+ * and binds it (and the size) into this payload before the command runs, so the
+ * idempotency key covers the exact bytes: replaying a key with different bytes
+ * is a conflict, never a silent reuse.
+ */
+export const mraStagePayloadSchema = z.object({
+  action: z.literal("stage"),
+  fileName: sourceText(240),
+  declaredContentType: sourceText(120),
+  checksumSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  sizeBytes: z.number().int().positive().max(50 * 1024 * 1024).optional(),
+  /** Stage from an existing verified company document instead of uploaded bytes. */
+  sourceDocumentId: documentReferenceIdSchema.optional(),
+}).strict();
+export type MraStagePayload = z.infer<typeof mraStagePayloadSchema>;
+
+export const MRA_INGESTION_ACTIONS = ["map", "preview", "apply"] as const;
+export type MraIngestionActionName = (typeof MRA_INGESTION_ACTIONS)[number];
+
+export const intakeListQuerySchema = z.object({
+  scope: companyScopeSchema,
+  cursor: z.string().min(1).max(512).optional(),
+  limit: z.number().int().min(1).max(100).default(50),
+}).strict();
+export type IntakeListQuery = z.input<typeof intakeListQuerySchema>;

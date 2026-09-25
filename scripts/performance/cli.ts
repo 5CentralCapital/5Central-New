@@ -30,6 +30,8 @@ const parseArguments = (mode: PerformanceCliMode, argv: readonly string[]): { in
     }
   }
   if (!input || !out) return { error: usage, input, out, coverage };
+  // Omit `out` so the error result is not written over the evidence file.
+  if (resolve(input) === resolve(out)) return { error: "--out must not be the --input evidence file.", input, coverage };
   if (mode === "check" && !coverage) return { error: "Check mode requires --coverage <trusted-coverage-inventory.json>.", input, out, coverage };
   return { input, out, coverage };
 };

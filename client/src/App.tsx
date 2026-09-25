@@ -1,8 +1,10 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Switch, Route, useLocation } from "wouter";
+import { publicPageMetadataForPath } from "@shared/public-page-metadata";
 import { AuthProvider } from "@/contexts/auth-context";
 import { ACCOUNT_ENTRY_ROUTES } from "@/components/account-entry";
 import ProtectedRoute from "@/components/protected-route";
+import { appSurfaceForPath, type AppSurface } from "@/lib/routes";
 const AppProviders = lazy(() => import("@/components/app-providers"));
 const Toaster = lazy(() => import("@/components/ui/toaster").then(module => ({ default: module.Toaster })));
 const Navigation = lazy(() => import("@/components/navigation"));
@@ -61,29 +63,33 @@ function Router() {
   );
 }
 
-function AppContent() {
-  const [location] = useLocation();
-  const isApplicantRoute = location === "/apply" || location.startsWith("/apply/");
-  const isRentOpsRoute = location === "/ops" || location.startsWith("/ops/");
-  const isTenantRoute = location === "/tenant";
+function AppContent({ surface }: { surface: AppSurface }) {
+  const [path] = useLocation();
+  const showInvestmentNotice = ["/", "/founder", "/vision", "/portfolio", "/investor", "/flips"].includes(path) || path.startsWith("/portfolio/");
   return (
     <>
-      {!isApplicantRoute && !isRentOpsRoute && !isTenantRoute && <Suspense fallback={null}><Navigation /></Suspense>}
-      {!isApplicantRoute && !isTenantRoute && <Suspense fallback={null}><Toaster /></Suspense>}
+      {surface === "site" && <Suspense fallback={null}><Navigation /></Suspense>}
+      {(surface === "site" || surface === "manager") && <Suspense fallback={null}><Toaster /></Suspense>}
       <Suspense fallback={<div role="status" className="p-6 text-sm">Loading…</div>}><Router /></Suspense>
+      {showInvestmentNotice && <footer className="border-t border-border bg-background px-6 py-8 text-sm text-muted-foreground"><div className="mx-auto max-w-5xl"><p>For information only. This website is not an offer to sell or a solicitation to buy securities. Any investment is subject to its offering documents. Investments can lose value, including the full amount invested. Historical results do not assure future returns. Projections and targets are estimates and may not be achieved.</p><a className="mt-3 inline-block underline" href="/legal/privacy">Privacy policy</a></div></footer>}
     </>
   );
 }
 
 function App() {
   const [location] = useLocation();
+  const surface = appSurfaceForPath(location);
+  useEffect(() => {
+    const metadata = publicPageMetadataForPath(location);
+    if (metadata) document.title = metadata.title;
+  }, [location]);
   // These self-contained portals use their own account and form state. Avoid
   // downloading staff query, tooltip and toast libraries for their first page.
-  if (location === "/tenant" || location === "/apply" || location.startsWith("/apply/")) return <AppContent />;
+  if (surface === "tenant" || surface === "applicant") return <AppContent surface={surface} />;
   return (
     <Suspense fallback={<div role="status" className="p-6 text-sm">Loading…</div>}>
       <AppProviders>
-        {location === "/ops" || location.startsWith("/ops/") ? <AppContent /> : <AuthProvider><AppContent /></AuthProvider>}
+        {surface === "manager" ? <AppContent surface={surface} /> : <AuthProvider restoreSession={["/admin", "/data-room", "/investor-dashboard"].includes(location)}><AppContent surface={surface} /></AuthProvider>}
       </AppProviders>
     </Suspense>
   );

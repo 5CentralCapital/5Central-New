@@ -24,13 +24,22 @@ export interface IntakeStore {
   findBySource(scope: CompanyScope, checksumSha256: string, executor?: RentOpsQueryExecutor): Promise<MraPacketRecord | undefined>;
   save(packet: MraPacketRecord, expectedRevision: number, executor?: RentOpsQueryExecutor): Promise<void>;
   recordLines(packet: MraPacketRecord, lines: readonly IntakeLineRecord[], executor?: RentOpsQueryExecutor): Promise<void>;
-  findLine(scope: CompanyScope, sourceLineKey: string, executor?: RentOpsQueryExecutor): Promise<IntakeSourceLineMatch | undefined>;
+  /** Latest observation of a source line in another packet (the current packet is excluded). */
+  findLine(scope: CompanyScope, sourceLineKey: string, executor?: RentOpsQueryExecutor, excludePacketId?: string): Promise<IntakeSourceLineMatch | undefined>;
   list(scope: CompanyScope, cursor: string | undefined, limit: number, executor?: RentOpsQueryExecutor): Promise<IntakePage>;
 }
 
 function jsonRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("intake_store_json_invalid");
   return value as Record<string, unknown>;
+}
+
+/** PostgreSQL drivers return timestamptz as Date objects; normalize to canonical UTC ISO text. */
+function timestampText(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  const text = String(value);
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) && !/Z$/.test(text) ? new Date(parsed).toISOString() : text;
 }
 
 function parsePacket(row: Record<string, unknown>): MraPacketRecord {
@@ -44,7 +53,7 @@ function parsePacket(row: Record<string, unknown>): MraPacketRecord {
     logicalKey: String(row.source_logical_key),
     ...(row.source_immutable_generation ? { immutableGeneration: String(row.source_immutable_generation) } : {}),
     ...(row.source_immutable_version ? { immutableVersion: String(row.source_immutable_version) } : {}),
-    verifiedAt: isoTimestampSchema.parse(String(row.source_verified_at)),
+    verifiedAt: isoTimestampSchema.parse(timestampText(row.source_verified_at)),
   };
   const candidateJson = mraPacketCandidateSchema.parse(row.candidate_json);
   const linesJson = Array.isArray(row.lines_json) ? row.lines_json : [];
@@ -56,11 +65,11 @@ function parsePacket(row: Record<string, unknown>): MraPacketRecord {
     candidate: candidateJson,
     lines: linesJson.map((line) => intakeLineRecordSchema.parse(line)),
     reconciliation: row.reconciliation_json ?? null,
-    createdAt: isoTimestampSchema.parse(String(row.created_at)),
-    updatedAt: isoTimestampSchema.parse(String(row.updated_at)),
-    mappedAt: row.mapped_at ? isoTimestampSchema.parse(String(row.mapped_at)) : null,
-    previewedAt: row.previewed_at ? isoTimestampSchema.parse(String(row.previewed_at)) : null,
-    appliedAt: row.applied_at ? isoTimestampSchema.parse(String(row.applied_at)) : null,
+    createdAt: isoTimestampSchema.parse(timestampText(row.created_at)),
+    updatedAt: isoTimestampSchema.parse(timestampText(row.updated_at)),
+    mappedAt: row.mapped_at ? isoTimestampSchema.parse(timestampText(row.mapped_at)) : null,
+    previewedAt: row.previewed_at ? isoTimestampSchema.parse(timestampText(row.previewed_at)) : null,
+    appliedAt: row.applied_at ? isoTimestampSchema.parse(timestampText(row.applied_at)) : null,
     revision: typeof row.record_revision === "number" ? row.record_revision : Number(row.record_revision),
   };
   return mraPacketRecordSchema.parse(record);
@@ -154,7 +163,8 @@ export class SqlIntakeStore implements IntakeStore {
           SET state=$1, candidate_json=$2::jsonb, lines_json=$3::jsonb,
               reconciliation_json=$4::jsonb, updated_at=$5, mapped_at=$6,
               previewed_at=$7, applied_at=$8, record_revision=record_revision+1
-        WHERE organization_id=$9 AND id=$10 AND record_revision=$11`,
+        WHERE organization_id=$9 AND id=$10 AND record_revision=$11
+        RETURNING id`,
       [packet.state, JSON.stringify(packet.candidate), JSON.stringify(packet.lines), packet.reconciliation ? JSON.stringify(packet.reconciliation) : null, packet.updatedAt, packet.mappedAt, packet.previewedAt, packet.appliedAt, packet.scope.organizationId, packet.id, expectedRevision],
     );
     if (result.rows.length !== 1) throw new Error("intake_revision_conflict");
@@ -176,13 +186,14 @@ export class SqlIntakeStore implements IntakeStore {
     }
   }
 
-  async findLine(scope: CompanyScope, sourceLineKey: string, executor?: RentOpsQueryExecutor): Promise<IntakeSourceLineMatch | undefined> {
+  async findLine(scope: CompanyScope, sourceLineKey: string, executor?: RentOpsQueryExecutor, excludePacketId?: string): Promise<IntakeSourceLineMatch | undefined> {
+    // Applied observations win over later held ones so a revision can never hide money already applied.
     const result = await this.use(executor).query<Record<string, unknown>>(
       `SELECT packet_id, source_checksum_sha256, outcome, source_revision
          FROM company_intake_line_registry
-        WHERE organization_id=$1 AND source_line_key=$2
-        ORDER BY observed_at DESC, packet_id DESC LIMIT 1`,
-      [scope.organizationId, sourceLineKey],
+        WHERE organization_id=$1 AND source_line_key=$2 AND ($3::uuid IS NULL OR packet_id <> $3::uuid)
+        ORDER BY (outcome = 'applied') DESC, observed_at DESC, packet_id DESC LIMIT 1`,
+      [scope.organizationId, sourceLineKey, excludePacketId ?? null],
     );
     const row = result.rows[0];
     return row ? { packetId: String(row.packet_id), checksumSha256: String(row.source_checksum_sha256), outcome: String(row.outcome), sourceRevision: String(row.source_revision) } : undefined;
@@ -216,14 +227,15 @@ export class SqlIntakeStore implements IntakeStore {
       row.reconciliation_json = parseJsonColumn(row, "reconciliation_json");
       items.push(parsePacket(row));
     }
-    const nextCursor = rows.length > pageRows.length && pageRows.length > 0 ? encodeCursor(String(pageRows.at(-1)!.updated_at), String(pageRows.at(-1)!.id)) : null;
+    const nextCursor = rows.length > pageRows.length && pageRows.length > 0 ? encodeCursor(timestampText(pageRows.at(-1)!.updated_at), String(pageRows.at(-1)!.id)) : null;
     return { items: items.map((item) => { const { candidate, ...rest } = item; return mraPacketReadModelSchema.parse({ ...rest, candidateWarnings: candidate.extractionWarnings }); }), nextCursor };
   }
 }
 
 export class MemoryIntakeStore implements IntakeStore {
   private readonly packets = new Map<string, MraPacketRecord>();
-  private readonly lines = new Map<string, IntakeSourceLineMatch>();
+  private readonly observations = new Map<string, IntakeSourceLineMatch & { organizationId: string; sourceLineKey: string; sequence: number }>();
+  private sequence = 0;
 
   async create(packet: MraPacketRecord): Promise<void> {
     if (this.packets.has(packet.id)) throw new Error("intake_duplicate_packet");
@@ -245,11 +257,19 @@ export class MemoryIntakeStore implements IntakeStore {
     await this.recordLines(packet, packet.lines);
   }
   async recordLines(packet: MraPacketRecord, lines: readonly IntakeLineRecord[]): Promise<void> {
-    for (const line of lines) this.lines.set(`${packet.scope.organizationId}\u0000${line.sourceLineKey}`, { packetId: packet.id, checksumSha256: packet.source.checksumSha256, outcome: line.outcome ?? "matched", sourceRevision: line.sourceRevision });
+    for (const line of lines) {
+      this.sequence += 1;
+      this.observations.set(`${packet.scope.organizationId}\u0000${line.sourceLineKey}\u0000${packet.source.checksumSha256}`, {
+        organizationId: packet.scope.organizationId, sourceLineKey: line.sourceLineKey, packetId: packet.id, checksumSha256: packet.source.checksumSha256,
+        outcome: line.outcome ?? "matched", sourceRevision: line.sourceRevision, sequence: this.sequence,
+      });
+    }
   }
-  async findLine(scope: CompanyScope, sourceLineKey: string): Promise<IntakeSourceLineMatch | undefined> {
-    const value = this.lines.get(`${scope.organizationId}\u0000${sourceLineKey}`);
-    return value ? { ...value } : undefined;
+  async findLine(scope: CompanyScope, sourceLineKey: string, _executor?: RentOpsQueryExecutor, excludePacketId?: string): Promise<IntakeSourceLineMatch | undefined> {
+    const matches = Array.from(this.observations.values()).filter(value => value.organizationId === scope.organizationId && value.sourceLineKey === sourceLineKey && value.packetId !== excludePacketId)
+      .sort((left, right) => Number(right.outcome === "applied") - Number(left.outcome === "applied") || right.sequence - left.sequence);
+    const value = matches[0];
+    return value ? { packetId: value.packetId, checksumSha256: value.checksumSha256, outcome: value.outcome, sourceRevision: value.sourceRevision } : undefined;
   }
   async list(scope: CompanyScope, cursorValue: string | undefined, limit: number): Promise<IntakePage> {
     const cursor = decodeCursor(cursorValue);

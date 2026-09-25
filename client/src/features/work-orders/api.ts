@@ -4,6 +4,10 @@ import {
   workOrderDetailSchema,
   workOrderListResponseSchema,
   workOrderTenantOptionsResponseSchema,
+  workOrderDocumentOptionsResponseSchema,
+  workOrderVendorOptionsResponseSchema,
+  type WorkOrderDocumentOptionsResponse,
+  type WorkOrderVendorOptionsResponse,
   type WorkOrderCategory,
   type WorkOrderCommandKind,
   type WorkOrderDetail,
@@ -12,6 +16,7 @@ import {
   type WorkOrderStatus,
   type WorkOrderTenantOption,
 } from "@shared/work-orders";
+import { costSourceLinePageSchema, type CostSourceLinePage } from "@shared/projects/source-lines";
 import { rentOpsAuthClient } from "../rent-ops/auth";
 
 export class WorkOrderApiError extends Error {
@@ -56,6 +61,30 @@ export interface WorkOrderListFilters {
   readonly propertyId?: string;
   readonly search?: string;
   readonly cursor?: string;
+  /** Server ordering; the schedule view reads in agenda order so paging never skips earlier work. */
+  readonly sort?: "priority" | "schedule";
+}
+
+/** Status and ordering for one list view. */
+export function workOrderViewFilters(view: string): Pick<WorkOrderListFilters, "openOnly" | "statuses" | "sort"> {
+  if (view === "schedule") return { openOnly: true, statuses: ["scheduled", "in_progress"], sort: "schedule" };
+  if (view === "open") return { openOnly: true };
+  if (view === "all") return { openOnly: false };
+  return { openOnly: false, statuses: [view as WorkOrderStatus] };
+}
+
+/** Query string for a list request; one page holds at most 100 work orders. */
+export function workOrderListSearch(filters: WorkOrderListFilters): URLSearchParams {
+  const params = new URLSearchParams({ limit: "100", openOnly: String(filters.openOnly) });
+  if (filters.statuses?.length) params.set("status", filters.statuses.join(","));
+  if (filters.priority) params.set("priority", filters.priority);
+  if (filters.category) params.set("category", filters.category);
+  if (filters.legalEntityId) params.set("legalEntityId", filters.legalEntityId);
+  if (filters.propertyId) params.set("propertyId", filters.propertyId);
+  if (filters.search?.trim()) params.set("search", filters.search.trim());
+  if (filters.sort && filters.sort !== "priority") params.set("sort", filters.sort);
+  if (filters.cursor) params.set("cursor", filters.cursor);
+  return params;
 }
 
 export interface WorkOrderCommandEnvelope {
@@ -75,14 +104,7 @@ export function workOrderEnvelope(organizationId: string, legalEntityId: string,
 
 export const workOrdersApi = {
   async list(organizationId: string, filters: WorkOrderListFilters, signal?: AbortSignal): Promise<WorkOrderListResponse> {
-    const params = new URLSearchParams({ limit: "100", openOnly: String(filters.openOnly) });
-    if (filters.statuses?.length) params.set("status", filters.statuses.join(","));
-    if (filters.priority) params.set("priority", filters.priority);
-    if (filters.category) params.set("category", filters.category);
-    if (filters.legalEntityId) params.set("legalEntityId", filters.legalEntityId);
-    if (filters.propertyId) params.set("propertyId", filters.propertyId);
-    if (filters.search?.trim()) params.set("search", filters.search.trim());
-    if (filters.cursor) params.set("cursor", filters.cursor);
+    const params = workOrderListSearch(filters);
     return workOrderListResponseSchema.parse(await requestJson(`${companyPath(organizationId)}/work-orders?${params}`, { signal }));
   },
   async get(organizationId: string, workOrderId: string, signal?: AbortSignal): Promise<WorkOrderDetail> {
@@ -96,6 +118,18 @@ export const workOrdersApi = {
     const params = new URLSearchParams({ legalEntityId, propertyId, limit: "100" });
     const value = projectListResponseSchema.parse(await requestJson(`${companyPath(organizationId)}/projects?${params}`, { signal }));
     return value.items.map(item => ({ id: String(item.id), name: item.name }));
+  },
+  async vendorOptions(organizationId: string, legalEntityId: string, signal?: AbortSignal): Promise<WorkOrderVendorOptionsResponse["items"]> {
+    return workOrderVendorOptionsResponseSchema.parse(await requestJson(`${companyPath(organizationId)}/work-orders/vendor-options?${new URLSearchParams({ legalEntityId })}`, { signal })).items;
+  },
+  async documentOptions(organizationId: string, legalEntityId: string, propertyId: string, signal?: AbortSignal): Promise<WorkOrderDocumentOptionsResponse["items"]> {
+    return workOrderDocumentOptionsResponseSchema.parse(await requestJson(`${companyPath(organizationId)}/work-orders/document-options?${new URLSearchParams({ legalEntityId, propertyId })}`, { signal })).items;
+  },
+  async costLines(organizationId: string, legalEntityId: string, search?: string, cursor?: string, signal?: AbortSignal): Promise<CostSourceLinePage> {
+    const params = new URLSearchParams({ legalEntityId, limit: "50" });
+    if (search?.trim()) params.set("search", search.trim());
+    if (cursor) params.set("cursor", cursor);
+    return costSourceLinePageSchema.parse(await requestJson(`${companyPath(organizationId)}/work-orders/cost-lines?${params}`, { signal }));
   },
   async command(organizationId: string, kind: WorkOrderCommandKind, envelope: WorkOrderCommandEnvelope): Promise<OperationReceipt> {
     const value = await requestJson(`${companyPath(organizationId)}/work-order-commands/${encodeURIComponent(kind)}`, {

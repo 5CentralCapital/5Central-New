@@ -1035,7 +1035,6 @@ export function serializeAdminApplication(value: RentOpsApplication | RentOpsApp
   });
 }
 
-export const serializeAdminApplicationRecord = serializeAdminApplication;
 
 export interface AdminApplicationViewWithRecords extends AdminApplicationView {
   householdMembers: AdminApplicationHouseholdMemberView[];
@@ -1062,6 +1061,8 @@ export function serializeAdminApplicationView(input: AdminApplicationContext): A
 export interface AdminDashboardSummaryView {
   operationalDelinquencyCents?: number | null;
   operationalBalanceUnresolvedCount?: number;
+  operationalBalanceDueCount?: number;
+  operationalBalanceDueKnownCents?: number;
   balanceComplete?: boolean;
   balanceUncertaintyCodes?: string[];
   balanceUnresolvedCount?: number;
@@ -1188,6 +1189,8 @@ export function serializeDashboardSummary(value: DashboardSummary): AdminDashboa
     balanceUnresolvedCount: number(input, "balanceUnresolvedCount"),
     operationalDelinquencyCents: nullableNumberValue(input.operationalDelinquencyCents),
     operationalBalanceUnresolvedCount: number(input, "operationalBalanceUnresolvedCount"),
+    operationalBalanceDueCount: number(input, "operationalBalanceDueCount"),
+    operationalBalanceDueKnownCents: number(input, "operationalBalanceDueKnownCents"),
     rentOnlyDelinquencyCents: nullableNumberValue(input.rentOnlyDelinquencyCents),
     totalDelinquencyCents: nullableNumberValue(input.totalDelinquencyCents),
     unappliedCashCents: nullableNumberValue(input.unappliedCashCents),
@@ -1246,25 +1249,7 @@ export function serializeAdminSnapshot(value: RentOpsSnapshot): AdminSnapshotVie
   });
 }
 
-export const serializeSnapshot = serializeAdminSnapshot;
-export const serializeSnapshotArrays = serializeAdminSnapshot;
 
-export const serializeProperty = serializeAdminProperty;
-export const serializeUnit = serializeAdminUnit;
-export const serializePerson = serializeAdminPerson;
-export const serializeHouseholdMembership = serializeAdminHouseholdMembership;
-export const serializeTenancy = serializeAdminTenancy;
-export const serializeLeaseTerm = serializeAdminLeaseTerm;
-export const serializeRecurringSchedule = serializeAdminRecurringSchedule;
-export const serializeLedgerTransaction = serializeAdminLedgerTransaction;
-export const serializePaymentAllocation = serializeAdminPaymentAllocation;
-export const serializeSecurityDeposit = serializeAdminSecurityDeposit;
-export const serializeSubsidyContract = serializeAdminSubsidyContract;
-export const serializeApplication = serializeAdminApplication;
-export const serializeApplicationHouseholdMember = serializeAdminApplicationHouseholdMember;
-export const serializeApplicationRequirement = serializeAdminApplicationRequirement;
-export const serializeDocument = serializeAdminDocument;
-export const serializeActivity = serializeAdminActivity;
 
 export interface AdminTenantProfileView {
   meteredUtilities?: RentOpsMeteredUtilityView[];
@@ -1338,4 +1323,3 @@ export function serializeAdminTenantProfile(value: TenantProfile | unknown, comp
   });
 }
 
-export const serializeTenantProfile = serializeAdminTenantProfile;

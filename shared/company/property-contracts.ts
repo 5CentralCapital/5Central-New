@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { isoDateSchema, isoTimestampSchema } from "./dates";
-import { currencyCodeSchema } from "./identifiers";
-import { legalEntityIdSchema, organizationIdSchema, propertyReferenceIdSchema, recordIdSchema, revisionSchema } from "./identifiers";
+import { legalEntityIdSchema, organizationIdSchema, propertyReferenceIdSchema, recordIdSchema } from "./identifiers";
+import { currencyCodeSchema } from "./money";
+import { revisionSchema } from "./revisions";
 import type { IsoDate } from "./dates";
 import type { LegalEntityId } from "./identifiers";
 

@@ -8,7 +8,7 @@ import {
   type CurrencyCode,
   type MoneyCents,
 } from "../../../shared/company";
-import type { QuickBooksConnectionScope, QuickBooksJsonObject } from "../../../shared/accounting/quickbooks";
+import type { QuickBooksJsonObject } from "../../../shared/accounting/quickbooks";
 import type { FinancialProviderPaymentSubtype, FinancialSourceFlow, FinancialSourceLineRole } from "../../../shared/accounting/source";
 
 const SUPPORTED_TRANSACTION_TYPES = ["Purchase", "Bill", "BillPayment", "Deposit", "JournalEntry"] as const;
@@ -64,7 +64,7 @@ export interface QboNormalizationResult {
  * from normalizer-authored text plus provider identifiers, never from raw
  * provider values or third-party library messages.
  */
-class QboNormalizationError extends Error {}
+export class QboNormalizationError extends Error {}
 
 function reject(message: string): never {
   throw new QboNormalizationError(message);
@@ -143,7 +143,7 @@ function currencyCode(value: unknown, field: string): CurrencyCode {
  * currency read from the realm's Preferences with multicurrency confirmed off
  * may be applied; a missing currency is never assumed to be USD.
  */
-function currency(value: QuickBooksJsonObject, context: QboCurrencyContext | null | undefined): CurrencyCode {
+export function resolveQboCurrency(value: QuickBooksJsonObject, context: QboCurrencyContext | null | undefined): CurrencyCode {
   const supplied = record(value.CurrencyRef)?.value;
   if (supplied !== undefined && supplied !== null) return currencyCode(supplied, "CurrencyRef.value");
   if (!context) reject("QBO CurrencyRef is absent and no verified home currency is available");
@@ -203,14 +203,19 @@ function lineRole(type: SupportedQboTransactionType): FinancialSourceLineRole {
   return "expense";
 }
 
-function lineFlow(type: SupportedQboTransactionType): FinancialSourceFlow {
+function lineFlow(type: SupportedQboTransactionType, body: QuickBooksJsonObject): FinancialSourceFlow {
+  // QBO marks a credit-card Purchase refund with Credit=true. The provider
+  // line still points at the expense account, but its economic flow reverses
+  // the original outgoing charge.
+  if (type === "Purchase" && body.Credit === true) return "incoming";
   return type === "Deposit" ? "incoming" : "outgoing";
 }
 
-function lineDirection(type: SupportedQboTransactionType): "debit" | "credit" {
+function lineDirection(type: SupportedQboTransactionType, body: QuickBooksJsonObject): "debit" | "credit" {
   // The line role carries the economic flow. A BillPayment line is a cash
   // credit only when its actual payment account is present; its generic Line
   // amount must never be treated as an AP debit by inference.
+  if (type === "Purchase" && body.Credit === true) return "credit";
   return type === "BillPayment" ? "credit" : "debit";
 }
 
@@ -252,6 +257,7 @@ function lineIdentity(type: SupportedQboTransactionType, line: QuickBooksJsonObj
 }
 
 const DEPOSIT_LINKED_TYPES = new Set(["Payment", "SalesReceipt"]);
+const CASH_BACK_LINE_ID = "synthetic:cashback";
 
 function sumCents(values: readonly MoneyCents[]): bigint {
   return values.reduce((total, value) => total + BigInt(value), BigInt(0));
@@ -269,7 +275,7 @@ function optionalAmount(value: unknown, field: string): MoneyCents | null {
 function objectLevelReasons(type: SupportedQboTransactionType, body: QuickBooksJsonObject, lines: readonly NormalizedQboLine[], rawLineCount: number): string[] {
   const reasons: string[] = [];
   const label = `QBO ${type}`;
-  if (type === "Purchase" && body.Credit === true) reasons.push(`${label} is a credit (refund); refunds are not mirrored as outgoing expense`);
+  if (type === "Purchase" && body.Credit === true && body.PaymentType !== "CreditCard") reasons.push(`${label} credit/refund requires CreditCard PaymentType`);
   if (type === "Purchase" && body.PaymentType !== undefined && paymentSubtype(type, body) === null) reasons.push(`${label} has unsupported PaymentType`);
   if ((type === "BillPayment" || type === "Deposit") && paymentCashAccount(type, body) === null) reasons.push(`${label} has no actual cash account reference`);
   if (type === "BillPayment" && body.PayType !== undefined && body.PayType !== "Check" && body.PayType !== "CreditCard") reasons.push(`${label} has unsupported PayType`);
@@ -284,14 +290,21 @@ function objectLevelReasons(type: SupportedQboTransactionType, body: QuickBooksJ
     reasons.push(reasonOf(error, `${label} totals are invalid`));
   }
   if (totalTax !== null && BigInt(totalTax) !== BigInt(0)) reasons.push(`${label} carries transaction tax, which is not mirrored as a source line`);
-  if (cashBack !== null && BigInt(cashBack) !== BigInt(0)) reasons.push(`${label} has cash back, which is not mirrored as a source line`);
+  if (type === "Deposit" && body.CashBack !== undefined && body.CashBack !== null && !record(body.CashBack)) reasons.push(`${label} CashBack is not a JSON object`);
+  if (type === "Deposit" && record(body.CashBack) && cashBack === null) reasons.push(`${label} CashBack.Amount is missing or invalid`);
   if (rawLineCount === 0) reasons.push(`${label} has no transaction lines`);
   const ids = lines.map(line => line.lineId);
   if (new Set(ids).size !== ids.length) reasons.push(`${label} has duplicate line identities`);
   // Reconcile only when every line was understood; otherwise the line-level
   // reasons already explain the gap.
-  if (total !== null && lines.length === rawLineCount && rawLineCount > 0 && reasons.length === 0) {
-    const lineTotal = sumCents(lines.map(line => line.amountCents));
+  const expectedLineCount = rawLineCount + (type === "Deposit" && cashBack !== null && BigInt(cashBack) > BigInt(0) ? 1 : 0);
+  if (total !== null && lines.length === expectedLineCount && rawLineCount > 0 && reasons.length === 0) {
+    // Deposit.TotalAmt is net of CashBack. Keep every source line and
+    // reconcile the signed cash flow instead of netting away the receipt or
+    // inventing a negative source amount.
+    const lineTotal = type === "Deposit"
+      ? lines.reduce((sum, line) => sum + (line.flow === "outgoing" ? -BigInt(line.amountCents) : BigInt(line.amountCents)), BigInt(0))
+      : sumCents(lines.map(line => line.amountCents));
     if (lineTotal !== BigInt(total)) reasons.push(`${label} line amounts do not reconcile to TotalAmt`);
   }
   if (type === "JournalEntry" && lines.length === rawLineCount && rawLineCount > 0 && reasons.length === 0) {
@@ -300,6 +313,42 @@ function objectLevelReasons(type: SupportedQboTransactionType, body: QuickBooksJ
     if (debitTotal !== creditTotal) reasons.push(`${label} debit and credit lines do not balance`);
   }
   return reasons;
+}
+
+function normalizeCashBackLine(body: QuickBooksJsonObject, rawLineCount: number, date: string, currencyCode: CurrencyCode, state: "posted" | "voided" | "unknown"): NormalizedQboLine | null {
+  const cashBack = record(body.CashBack);
+  if (!cashBack) return null;
+  const amount = optionalAmount(cashBack.Amount, "Deposit.CashBack.Amount");
+  if (amount === null || BigInt(amount) === BigInt(0)) return null;
+  if (BigInt(amount) < BigInt(0)) reject("QBO Deposit.CashBack.Amount is negative");
+  const accountObjectId = referenceId(cashBack.AccountRef);
+  if (accountObjectId === null) reject("QBO Deposit.CashBack has no AccountRef");
+  const cashAccountObjectId = paymentCashAccount("Deposit", body);
+  if (cashAccountObjectId === null) reject("QBO Deposit has no actual cash account reference");
+  return {
+    lineId: CASH_BACK_LINE_ID,
+    lineNumber: rawLineCount + 1,
+    transactionType: "Deposit",
+    // CashBack.AccountRef is the account debited by the cash withdrawal. Its
+    // account type is resolved later from the mirrored Account object; the
+    // normalizer therefore keeps the role unknown rather than assuming this
+    // is an expense or owner draw.
+    direction: "debit",
+    flow: "outgoing",
+    lineRole: "unknown",
+    amountCents: amount,
+    currency: currencyCode,
+    postingState: state,
+    postedOn: date,
+    ...(state === "voided"
+      ? { settlementState: "voided" as const, settledOn: null, settledAmountCents: null }
+      : { settlementState: "unknown" as const, settledOn: null, settledAmountCents: null }),
+    accountObjectId,
+    counterpartyObjectId: null,
+    cashAccountObjectId,
+    paymentSubtype: null,
+    description: optionalText(cashBack.Memo ?? body.PrivateNote ?? body.Memo, "cashback description", 500),
+  };
 }
 
 function normalizeLine(type: SupportedQboTransactionType, body: QuickBooksJsonObject, line: QuickBooksJsonObject, index: number, date: string, currencyCode: CurrencyCode, state: "posted" | "voided" | "unknown"): NormalizedQboLine {
@@ -371,17 +420,36 @@ function normalizeLine(type: SupportedQboTransactionType, body: QuickBooksJsonOb
       counterpartyObjectId = null;
     }
   } else {
-    const detail = record(line.AccountBasedExpenseLineDetail) ?? record(line.ItemBasedExpenseLineDetail);
-    if (!detail) reject(`QBO ${lineLabel} has unsupported DetailType`);
-    accountObjectId = referenceId(detail.AccountRef);
+    const accountDetail = record(line.AccountBasedExpenseLineDetail);
+    const itemDetail = record(line.ItemBasedExpenseLineDetail);
+    if (!accountDetail) {
+      // ItemBasedExpenseLineDetail.ItemRef identifies a product or service,
+      // not the expense account that receives the posting. Without the
+      // provider's mirrored expense account, retaining the line would make a
+      // complete transaction look classified while cost reads silently omit
+      // it. An explicit ItemAccountRef is a line-level account override in
+      // the provider response and is safe to carry by ID; ItemRef alone is
+      // not. The common ItemRef-only shape remains unsupported until the
+      // provider Item is fetched, its type-specific posting account is
+      // resolved (for example ExpenseAccountRef for service items or the
+      // inventory/COGS path for inventory), and the referenced Account
+      // revision is mirrored.
+      if (itemDetail) {
+        if (referenceId(itemDetail.ItemRef) === null) reject(`QBO ${lineLabel} ItemBasedExpenseLineDetail has no ItemRef`);
+        accountObjectId = referenceId(itemDetail.ItemAccountRef);
+        if (accountObjectId === null) reject(`QBO ${lineLabel} uses ItemBasedExpenseLineDetail without a mirrored expense account`);
+      } else reject(`QBO ${lineLabel} has unsupported DetailType`);
+    } else {
+      accountObjectId = referenceId(accountDetail.AccountRef);
+    }
     counterpartyObjectId = transactionCounterparty(type, body);
   }
   return {
     lineId,
     lineNumber: index + 1,
     transactionType: type,
-    direction: lineDirection(type),
-    flow: lineFlow(type),
+    direction: lineDirection(type, body),
+    flow: lineFlow(type, body),
     lineRole: lineRole(type),
     amountCents: amount,
     currency: currencyCode,
@@ -423,7 +491,7 @@ export function normalizeQboTransaction(type: string, input: unknown, options: {
     const date = isoDateSchema.safeParse(text(body.TxnDate, `${objectType}.TxnDate`));
     if (!date.success) reject(`QBO ${objectType}.TxnDate is not a calendar date`);
     transactionDate = date.data;
-    currencyCodeValue = currency(body, options.currency);
+    currencyCodeValue = resolveQboCurrency(body, options.currency);
   } catch (error) {
     return { value: null, unsupportedReasons: [reasonOf(error, "QBO object identity is invalid")] };
   }
@@ -442,6 +510,14 @@ export function normalizeQboTransaction(type: string, input: unknown, options: {
       unsupported.push(reasonOf(error, `QBO ${objectType} line ${index + 1} is unsupported`));
     }
   });
+  if (objectType === "Deposit") {
+    try {
+      const cashBackLine = normalizeCashBackLine(body, rawLines.length, transactionDate, currencyCodeValue, state);
+      if (cashBackLine) lines.push(cashBackLine);
+    } catch (error) {
+      unsupported.push(reasonOf(error, "QBO Deposit cash back is unsupported"));
+    }
+  }
   unsupported.push(...objectLevelReasons(objectType, body, lines, rawLines.length));
   return {
     value: {
@@ -458,8 +534,4 @@ export function normalizeQboTransaction(type: string, input: unknown, options: {
     },
     unsupportedReasons: unsupported,
   };
-}
-
-export function qboSourceScope(scope: QuickBooksConnectionScope) {
-  return scope;
 }

@@ -35,3 +35,16 @@ test("a retryable token-store conflict asks for a retry, not a reconnect", () =>
   const broken = publicFinancialError(new QuickBooksIntegrationError("quickbooks_token_store", "store unavailable"));
   assert.equal(broken?.recovery, "reconnect");
 });
+
+test("transient OAuth token failures ask for a retry, while a non-transient OAuth error asks for reconnect", () => {
+  const throttled = publicFinancialError(new QuickBooksIntegrationError("quickbooks_oauth", "private", { status: 429, retryable: true, retryAfterMs: 90_000 }));
+  assert.deepEqual(
+    { status: throttled?.status, retryable: throttled?.retryable, recovery: throttled?.recovery },
+    { status: 429, retryable: true, recovery: "retry_same_operation" },
+  );
+  const unavailable = publicFinancialError(new QuickBooksIntegrationError("quickbooks_oauth", "private", { status: 503, retryable: true }));
+  assert.equal(unavailable?.recovery, "retry_same_operation");
+  assert.equal(unavailable?.retryable, true);
+  const invalid = publicFinancialError(new QuickBooksIntegrationError("quickbooks_oauth", "private", { status: 400, retryable: false }));
+  assert.equal(invalid?.recovery, "reconnect");
+});

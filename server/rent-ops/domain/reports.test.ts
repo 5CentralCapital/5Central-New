@@ -492,7 +492,9 @@ test("HAP child receipts are counted once, linked ledger allocations are not dou
   genericPayment.payer = "unknown";
   genericPayment.description = "Housing agency HAP payment";
   const inferred = deriveHap(textualOnly, { month: "2026-08", asOfDate }).find((row) => row.tenancyId === "demo-tenancy-1");
-  assert.equal(inferred?.receivedAgencyCents, 0);
+  // An unknown payer makes the agency receipt total unknown, never $0.
+  assert.equal(inferred?.receivedAgencyCents, null);
+  assert.equal(inferred?.agencyReceiptStatus, "unknown");
   assert.equal(inferred?.uncertainty, true);
   assert.ok(inferred?.uncertaintyCodes?.includes("generic_payment_payer_unknown"));
 });

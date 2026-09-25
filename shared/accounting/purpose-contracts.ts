@@ -5,8 +5,12 @@ const providerAccountIdSchema = z.string().trim().min(1).max(200).regex(/^[^\u00
 const accountSourceVersionSchema = z.string().trim().min(1).max(120).regex(/^[^\u0000-\u001f\u007f]+$/, "QuickBooks Account revision is invalid");
 const reviewEvidenceSchema = z.string().trim().min(1).max(1_000).regex(/^[^\u0000-\u001f\u007f]+$/, "Review evidence is invalid");
 const realmIdSchema = z.string().regex(/^\d{1,32}$/, "QuickBooks realm ID is invalid");
+const recordRevisionSchema = z.number().int().positive().safe();
 
-export const ACCOUNTING_PURPOSE_COMMAND_KINDS = ["accounting.qbo_purpose.map_capitalized_cost"] as const;
+export const ACCOUNTING_PURPOSE_COMMAND_KINDS = [
+  "accounting.qbo_purpose.map_capitalized_cost",
+  "accounting.qbo_purpose.reattest_capitalized_cost",
+] as const;
 export type AccountingPurposeCommandKind = (typeof ACCOUNTING_PURPOSE_COMMAND_KINDS)[number];
 
 /**
@@ -29,8 +33,27 @@ export const mapCapitalizedCostPayloadSchema = z.object({
 });
 export type MapCapitalizedCostPayload = z.infer<typeof mapCapitalizedCostPayloadSchema>;
 
+/**
+ * A re-attestation closes the old effective period and creates a new immutable
+ * mapping revision. A same-day boundary is allowed only for a newer Account
+ * revision. It explicitly reviews the same purpose for the whole effective
+ * day and retains the previous review as an empty historical interval.
+ */
+export const reattestCapitalizedCostPayloadSchema = z.object({
+  mappingId: providerAccountIdSchema,
+  expectedRecordRevision: recordRevisionSchema,
+  providerAccountId: providerAccountIdSchema,
+  accountSourceVersion: accountSourceVersionSchema,
+  environment: z.enum(["sandbox", "production"]),
+  realmId: realmIdSchema,
+  effectiveFrom: isoDateSchema,
+  reviewEvidence: reviewEvidenceSchema,
+}).strict();
+export type ReattestCapitalizedCostPayload = z.infer<typeof reattestCapitalizedCostPayloadSchema>;
+
 export const accountingPurposeCommandPayloadSchemas = {
   "accounting.qbo_purpose.map_capitalized_cost": mapCapitalizedCostPayloadSchema,
+  "accounting.qbo_purpose.reattest_capitalized_cost": reattestCapitalizedCostPayloadSchema,
 } as const;
 
 /** Scope used by the purpose-mapping directory and its browser/MCP reads. */

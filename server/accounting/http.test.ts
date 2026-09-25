@@ -55,6 +55,29 @@ test("Accounting HTTP maps a reviewed capitalized-cost Account through the share
   const origin = `http://127.0.0.1:${(listener.address() as AddressInfo).port}`;
   const base = `${origin}/api/company/${scope.organizationId}/accounting/qbo`;
   try {
+    await fixture.database.executor.query(
+      `INSERT INTO accounting_qbo_connections
+        (organization_id, legal_entity_id, environment, realm_id,
+         encrypted_access_token, access_token_iv, access_token_auth_tag,
+         encrypted_refresh_token, refresh_token_iv, refresh_token_auth_tag,
+         access_token_expires_at, status)
+       VALUES ($1,$2,'sandbox','123456','access','iv','tag','refresh','iv','tag',now() + interval '1 hour','active')`,
+      [scope.organizationId, scope.legalEntityId],
+    );
+    await fixture.database.executor.query(
+      `INSERT INTO accounting_qbo_realm_bindings
+        (organization_id, legal_entity_id, environment, realm_id, provider_company_id,
+         evidence_version, company_info_hash, confirmed_by)
+       VALUES ($1,$2,'sandbox','123456','synthetic-company','v1',$3,'synthetic-admin')`,
+      [scope.organizationId, scope.legalEntityId, "f".repeat(64)],
+    );
+    await fixture.database.executor.query(
+      `INSERT INTO accounting_qbo_capabilities
+        (organization_id, legal_entity_id, environment, realm_id, capability,
+         enabled, evidence, evidence_version, verified_at)
+       VALUES ($1,$2,'sandbox','123456','accounting.read',true,'live_provider_readback','v1',now())`,
+      [scope.organizationId, scope.legalEntityId],
+    );
     await fixture.services.accounting.mirror.ingestSourceObject({
       scope,
       objectType: "Account",

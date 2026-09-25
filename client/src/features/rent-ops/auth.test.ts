@@ -95,15 +95,15 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-test('denied company scope preserves a valid session while CSRF rejection still expires it', async () => {
+for (const code of ['company_forbidden', 'report_forbidden']) test(`denied ${code} scope preserves a valid session while CSRF rejection still expires it`, async () => {
   const client = new RentOpsAuthClient({ fetchImpl: async input => {
     if (String(input) === RENT_OPS_AUTH_ROUTES.session) return response({ user, csrfToken });
-    return response({ code: String(input).endsWith('/denied') ? 'company_forbidden' : 'csrf_required' }, 403);
+    return response({ code: String(input).endsWith('/denied') ? code : 'csrf_required' }, 403);
   } });
   await client.restore();
   const denied = await client.request('/api/company/denied');
   assert.equal(denied.status, 403);
-  assert.equal((await denied.json()).code, 'company_forbidden');
+  assert.equal((await denied.json()).code, code);
   assert.equal(client.getSnapshot().status, 'authenticated');
   await assert.rejects(client.request('/api/company/csrf'), /session has ended/);
   assert.equal(client.getSnapshot().status, 'unauthenticated');
@@ -119,7 +119,7 @@ for (const status of [200, 401, 403]) {
     } });
     await client.login(user.email, 'synthetic');
     const pending = client.request('/api/rent-ops/old-profile');
-    const rejected = assert.rejects(pending, /earlier Rent Operations session/);
+    const rejected = assert.rejects(pending, /earlier 5Central Ops session/);
     await client.logout();
     nextUser = { ...user, id: 'user:second' };
     await client.login(nextUser.email, 'synthetic');
@@ -150,7 +150,7 @@ test('a delayed restore response cannot restore a session after logout', async (
   const old = deferred<Response>();
   const client = new RentOpsAuthClient({ fetchImpl: async () => old.promise });
   const restore = client.restore();
-  const rejected = assert.rejects(restore, /earlier Rent Operations session/);
+  const rejected = assert.rejects(restore, /earlier 5Central Ops session/);
   await client.logout();
   old.resolve(response({ user, csrfToken }));
   await rejected;
@@ -172,7 +172,7 @@ test('a superseded CSRF fetch cannot replace the later login token', async () =>
     return response({ user, csrfToken: newToken });
   } });
   const first = client.request('/api/rent-ops/properties', {method:'POST'});
-  const rejected = assert.rejects(first, /earlier Rent Operations session/);
+  const rejected = assert.rejects(first, /earlier 5Central Ops session/);
   await entered.promise;
   await client.login(user.email, 'synthetic');
   old.resolve(response({ csrfToken }));
@@ -187,7 +187,7 @@ test('startup shares one restore and rejects late results after session expiry',
   const client = new RentOpsAuthClient({fetchImpl:async()=>{calls++;return pending.promise;}});
   const first = client.initialize(); const second = client.initialize();
   assert.equal(first, second); assert.equal(calls,1);
-  const rejected = assert.rejects(first, /earlier Rent Operations session/);
+  const rejected = assert.rejects(first, /earlier 5Central Ops session/);
   client.expireSession(); pending.resolve(response({user,csrfToken}));
   await rejected;
   assert.equal(client.getSnapshot().status,'unauthenticated');

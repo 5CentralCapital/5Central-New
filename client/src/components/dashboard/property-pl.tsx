@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { localIsoDate } from "@/lib/format";
 import { PropertySubTabs, useProperties } from "./shared/property-subtabs";
 
 // ─── Types ──────────────────────────────────────────────
@@ -120,7 +121,7 @@ export default function PropertyPL() {
       // End of last month
       const [y, m] = lastMonth.split("-").map(Number);
       const endDate = new Date(y, m, 0); // last day of month
-      const toDate = endDate.toISOString().substring(0, 10);
+      const toDate = localIsoDate(endDate);
 
       const res = await fetch(`/api/rm/monthly-rent?propertyId=${rmId}&fromDate=${fromDate}&toDate=${toDate}`, { credentials: "include" });
       if (!res.ok) return localData;
@@ -662,7 +663,7 @@ export default function PropertyPL() {
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                   <span style={{ fontSize: 11, fontWeight: 500, color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Month</span>
-                  <input name="month" type="month" required style={inputStyle} defaultValue={new Date().toISOString().slice(0, 7)} />
+                  <input name="month" type="month" required style={inputStyle} defaultValue={localIsoDate().slice(0, 7)} />
                 </label>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                   <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>

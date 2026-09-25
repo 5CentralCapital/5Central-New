@@ -71,7 +71,9 @@ export function financialSourceScopeKey(scope: FinancialSourceScope): string {
 
 export function financialSourceReferenceKey(reference: FinancialSourceReference): string {
   const parsed = financialSourceReferenceSchema.parse(reference);
-  return [financialSourceScopeKey(parsed), parsed.objectType, parsed.objectId, parsed.lineId ?? "*", parsed.version].join("\u0000");
+  // Key only the scope fields; the strict scope schema rejects the reference's extra fields.
+  const scope = { provider: parsed.provider, organizationId: parsed.organizationId, legalEntityId: parsed.legalEntityId, environment: parsed.environment, realmId: parsed.realmId };
+  return [financialSourceScopeKey(scope), parsed.objectType, parsed.objectId, parsed.lineId ?? "*", parsed.version].join("\u0000");
 }
 
 export const FINANCIAL_COVERAGE_STATUSES = ["unavailable", "partial", "complete"] as const;
@@ -191,6 +193,7 @@ export const financialAccountingPurposeMappingSchema = z.object({
   reviewedBy: sourceText(200),
   reviewedAt: isoTimestampSchema,
   createdAt: isoTimestampSchema,
+  recordRevision: z.number().int().positive().safe(),
 }).strict();
 export type FinancialAccountingPurposeMapping = z.infer<typeof financialAccountingPurposeMappingSchema>;
 
@@ -278,6 +281,14 @@ export interface FinancialSourceReadPort {
   resolveLine(query: FinancialSourceLineQuery): Promise<FinancialSourceLineResolution | null>;
   readCoverage(scope: FinancialSourceScope, stream?: string): Promise<FinancialSourceCoverage>;
   listTransactions(query: FinancialSourceTransactionQuery): Promise<FinancialSourceTransactionPage>;
+  /**
+   * Narrow provider-truth probe used by project cost coverage. Implementations
+   * should return true only for a current, posted, eligible Purchase credit
+   * with unallocated cents remaining; fully allocated, blocked, non-cost and
+   * unmapped credits are excluded without materializing the full transaction
+   * stream. Consumers fail closed when it is absent.
+   */
+  hasPurchaseCredits?(scope: FinancialSourceScope, through?: IsoDate | string): Promise<boolean>;
 }
 
 export interface FinancialSourceTransactionPage {
