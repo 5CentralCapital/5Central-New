@@ -201,6 +201,14 @@ test("named profile conflicts retain every same-token observation and do not dea
     );
     assert.equal(observations.rows.length, 3);
     assert.deepEqual(observations.rows.map(row => row.material_conflict === true || row.material_conflict === "true"), [false, true, false]);
+    // Re-reading the unchanged latest body does not append another row.
+    await apply(first, "2026-09-26T16:00:00Z");
+    assert.equal((await synthetic.executor.query(
+      `SELECT 1 FROM accounting_qbo_named_observations
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
+          AND object_type='Customer' AND object_id='58' AND object_version='0'`,
+      [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId],
+    )).rows.length, 3);
     assert.equal((await mirror.listOpenSyncExceptions(scope, "customers")).length, 1);
     const profile = await mirror.listProviderMirrors(scope, "customers");
     assert.equal(profile.find(item => item.providerObjectId === "58")?.displayName, "Synthetic Customer");

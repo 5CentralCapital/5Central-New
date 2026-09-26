@@ -295,8 +295,12 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
   app.get("/api/company/:organizationId/accounting/qbo/receivables/tenancy-source-resolution", requireAdmin, companyReadHandler(async (request, response) => {
     const organizationId = organizationIdSchema.parse(request.params.organizationId);
     const query = z.object({
-      tenancyId: z.string().min(1).max(160), environment: environmentSchema.default("production"), asOf: z.string().date().optional(),
+      tenancyId: z.string().min(1).max(160), environment: environmentSchema.optional(), asOf: z.string().date().optional(),
     }).strict().parse(request.query);
+    // The tenant screen does not know the deployment's QuickBooks
+    // environment. Default to the configured one so a sandbox deployment
+    // resolves sandbox bindings instead of silently selecting production.
+    const environment = query.environment ?? (services.qbo.status === "configured" ? services.qbo.environment : "production");
     if (!executor.transaction) throw new AccountingError("accounting_configuration", "Accounting reads require a transactional company database");
     const actorId = companyWebActor(request);
     const result = await executor.transaction(async transaction => {
@@ -304,7 +308,7 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
       const resolution = await resolveTenancySource(transaction, {
         organizationId,
         tenancyId: query.tenancyId,
-        environment: query.environment,
+        environment,
         asOf: query.asOf ?? businessToday(),
       });
       if (!resolution) return null;

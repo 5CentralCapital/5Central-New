@@ -249,7 +249,15 @@ export async function resolveTenancyHistory(
   });
   const overlappingPeriods = periods.filter(period => period.overlapsTenancy);
   const ownerIds = Array.from(new Set(overlappingPeriods.map(period => period.legalEntityId)));
-  const completeCoverage = coverageComplete(periods, startOn, intervalThrough);
+  // A tenant who moved in before the company acquired the property (an
+  // inherited tenant) has no company owner for the pre-acquisition months,
+  // so there is no competing QuickBooks company for that stretch. Coverage
+  // is therefore measured from the later of move-in and the property's first
+  // company ownership date. Gaps after acquisition, a second owner, or an
+  // uncovered end of tenancy still require review.
+  const firstOwnedFrom = periods.reduce<string | null>((earliest, period) => earliest === null || period.effectiveFrom < earliest ? period.effectiveFrom : earliest, null);
+  const coverageStart = startOn !== null && firstOwnedFrom !== null && firstOwnedFrom > startOn ? firstOwnedFrom : startOn;
+  const completeCoverage = coverageComplete(periods, coverageStart, intervalThrough);
   const ownershipResolved = ownerIds.length === 1 && completeCoverage;
   const effectiveLegalEntityId = ownershipResolved ? ownerIds[0]! : null;
   const effectiveOwner = ownershipResolved ? overlappingPeriods.find(period => period.legalEntityId === effectiveLegalEntityId) : undefined;

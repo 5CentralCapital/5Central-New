@@ -9,7 +9,8 @@ import { percentageToBasisPoints, percentageToRateDecimal } from "./percent";
 import { workspaceToday } from "../rent-ops/workspace/workspace-date";
 import type { InvestorTab, InvestorWorkspaceEntity, InvestorWorkspaceProps, InvestorsApi } from "./types";
 import { INVESTOR_TABS, INVESTOR_TAB_LABELS } from "./types";
-import { sumMoneyByCurrency, type MoneyValue } from "./totals";
+import { partiallyKnownMoneyValues, sumMoneyByCurrency, type MoneyValue } from "./totals";
+import { COMPANY_DOCUMENT_ID_PREFIX, investorDocumentDownloadHref } from "./documents";
 import { Dialog as DialogRoot } from "@/components/ui/dialog";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { EmptyState } from "../rent-ops/workspace/ops-ui";
@@ -56,10 +57,6 @@ function obligationDueLabel(obligation: InvestorDetail["obligations"][number]): 
   return obligation.remainingDueCents === null ? `${money(obligation.knownMinimumCents, obligation.currency)} + unknown` : money(obligation.remainingDueCents, obligation.currency);
 }
 function paymentHistorySort(left: InvestorPayment, right: InvestorPayment): number { return left.paymentOn.localeCompare(right.paymentOn) || left.createdAt.localeCompare(right.createdAt) || String(left.id).localeCompare(String(right.id)); }
-function investorDocumentDownloadHref(organizationId: string, documentId: string, legalEntityId: string): string {
-  const params = new URLSearchParams({ legalEntityId });
-  return `/api/company/${encodeURIComponent(organizationId)}/documents/${encodeURIComponent(documentId)}/download?${params.toString()}`;
-}
 function Field({ label: fieldLabel, children, wide = false }: { label: string; children: ReactNode; wide?: boolean }) {
   const labelId = `investor-field-${useId().replace(/:/g, "")}`;
   const describedById = `${labelId}-help`;
@@ -145,7 +142,7 @@ function TermsFields({ onChange, values }: { values: Record<string, string | boo
 }
 
 function ContractEditor({ detail, instrumentId, documents: sourceDocuments, onInstrumentChange, onSave, onClose, saving, error, contract }: { detail: InvestorDetail; instrumentId: string; documents: readonly InvestorDocumentOption[]; onInstrumentChange: (instrumentId: string) => void; onSave: (payload: Record<string, unknown>) => void; onClose: () => void; saving: boolean; error: unknown; contract?: InvestorContract }) {
-  const documents = sourceDocuments.filter(document => !document.id.startsWith("company-document:") || ["contract", "loan", "investor_agreement"].includes(document.type));
+  const documents = sourceDocuments.filter(document => !document.id.startsWith(COMPANY_DOCUMENT_ID_PREFIX) || ["contract", "loan", "investor_agreement"].includes(document.type));
   const [title, setTitle] = useState(""); const [kind, setKind] = useState("investment_agreement"); const [status, setStatus] = useState("draft"); const [effectiveFrom, setEffectiveFrom] = useState(workspaceToday()); const [signedOn, setSignedOn] = useState(""); const [docs, setDocs] = useState<string[]>([]); const [terms, setTerms] = useState<Record<string, string | boolean | null>>({ schedule: "monthly", paymentDay: "31", monthEndRule: "calendar_day_or_month_end", dayCount: "actual_365", interestOnly: false });
   const updateTerm = (key: string, value: string | boolean | null) => setTerms(current => ({ ...current, [key]: value }));
   const amount = (key: string) => terms[key] ? cents(String(terms[key])) : null;
@@ -260,7 +257,11 @@ function InvestorSummary({ account }: { account: InvestorDetail }) {
   const debtRecords = account.debt;
   const remainingPrincipal = summaryMoneyTotals(debtRecords.map(debt => ({ cents: debt.outstandingPrincipalCents, currency: debt.currency })));
   const openObligations = account.obligations.filter(obligationIsOpen).sort((left, right) => left.dueOn.localeCompare(right.dueOn) || String(left.id).localeCompare(String(right.id)));
-  const openObligationAmount = openObligations.length ? moneyTotals(openObligations.map(item => ({ cents: item.remainingDueCents ?? item.knownMinimumCents, currency: item.currency }))) : account.obligations.length ? "No open amount" : "Unknown";
+  // An unknown remaining amount keeps its known minimum and is also counted
+  // as unknown, so the metric reads "$X + 1 unknown", never an exact $0.
+  const openObligationAmount = openObligations.length
+    ? moneyTotals(partiallyKnownMoneyValues(openObligations.map(item => ({ exactCents: item.remainingDueCents, knownMinimumCents: item.knownMinimumCents, currency: item.currency }))))
+    : account.obligations.length ? "No open amount" : "Unknown";
   const next = openObligations[0];
   const nextValue = next ? obligationDueLabel(next) : account.obligations.length ? "No open payment" : "Unknown";
   const nextDetail = next ? `${dateLabel(next.dueOn)} · ${label(next.status)}` : account.obligations.length ? "All loaded obligations are closed" : "No obligation data loaded";

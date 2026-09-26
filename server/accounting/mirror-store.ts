@@ -349,6 +349,20 @@ function mapResolution(row: LineRow): FinancialSourceLineResolution {
   });
 }
 
+/**
+ * Machine marker stored in a stream's coverage reason proving the stream was
+ * fetched from the beginning. The sync reads it from the raw coverage row;
+ * it is never part of the human-facing coverage reason.
+ */
+export const QBO_FULL_REPLAY_ANCHOR = "QBO_FULL_REPLAY_ANCHOR_V2";
+
+/** Remove the replay marker from a stored coverage reason before display. */
+export function coverageReasonForDisplay(reason: string | null | undefined): string | null {
+  if (reason === null || reason === undefined) return null;
+  const parts = reason.split("; ").filter(part => part !== QBO_FULL_REPLAY_ANCHOR);
+  return parts.length ? parts.join("; ") : null;
+}
+
 function mapCoverage(scope: FinancialSourceScope, row: CoverageRow | null, gaps: readonly { from: string; through: string }[] = [], stream = "aggregate"): FinancialSourceCoverage {
   if (!row) {
     return financialSourceCoverageSchema.parse({
@@ -370,7 +384,7 @@ function mapCoverage(scope: FinancialSourceScope, row: CoverageRow | null, gaps:
     observedAt: timestampValue(row.observed_at, "coverage observed at"),
     objectCount: Number(row.object_count ?? 0), transactionCount: Number(row.transaction_count ?? 0), lineCount: Number(row.line_count ?? 0),
     missingIntervals: gaps,
-    reason: row.reason === null || row.reason === undefined ? null : stringValue(row.reason, "coverage reason", 500),
+    reason: row.reason === null || row.reason === undefined ? null : coverageReasonForDisplay(stringValue(row.reason, "coverage reason", 500)),
   });
 }
 
@@ -693,13 +707,24 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
     const stored = typeof row.provider_body === "string" ? JSON.parse(row.provider_body) as unknown : row.provider_body;
     const materialConflict = row.body_hash !== bodyHash
       && canonicalJsonSha256(withoutReadTimeFields(objectType, stored)) !== canonicalJsonSha256(withoutReadTimeFields(objectType, input.providerBody));
-    // Keep every named profile observation, including a repeated first body.
-    // This makes A -> B -> A deterministic and prevents an old observation
-    // from remaining selected after the provider returns to A.
+    // Record each change of named profile body, including a return to the
+    // first body. This makes A -> B -> A deterministic and prevents an old
+    // observation from remaining selected after the provider returns to A.
     // `observation_order` is a database identity column and is the tie-breaker
     // when several provider observations share the same received timestamp.
     const orderedObservedAt = isoTimestampSchema.parse(receivedAt);
-    await this.executor.query(
+    // Every sync re-reads unchanged profiles. Appending an identical body
+    // again adds nothing (the latest observation is already that body), so
+    // only a change from the latest observation is recorded. A -> B -> A is
+    // still recorded as three rows because each step differs from the last.
+    const latest = (await this.executor.query<{ body_hash: string }>(
+      `SELECT body_hash FROM accounting_qbo_named_observations
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
+          AND object_type=$5 AND object_id=$6 AND object_version=$7
+        ORDER BY observed_at DESC, observation_order DESC LIMIT 1`,
+      [...scopeParts(scope), objectType, objectId, version],
+    )).rows[0];
+    if (latest?.body_hash !== bodyHash) await this.executor.query(
       `INSERT INTO accounting_qbo_named_observations
         (id, organization_id, legal_entity_id, environment, realm_id, object_type, object_id, object_version, source_object_id, provider_updated_at, body_hash, provider_body, observed_at, material_conflict)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14)`,
@@ -1466,11 +1491,10 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       const coverage = markStaleCoverage(mapCoverage(scope, rows.rows[0] ?? null, gaps.rows.map((gap) => ({ from: dateValue(gap.gap_from, "gap start"), through: dateValue(gap.gap_through, "gap end") })), stream), this.now());
       if (openCount > 0 && coverage.status === "complete") {
         const openReason = `${openCount} QBO object(s) have unresolved mirror exceptions`;
-        // Keep machine-readable replay proofs when the coverage is projected
-        // to partial because a per-object hold is still open. Replacing the
-        // reason would make a later CDC run mistake a pre-migration global
-        // checkpoint for a verified baseline and skip the required replay.
-        const reason = coverage.reason ? `${coverage.reason}; ${openReason}` : openReason;
+        // Keep any stored human reason alongside the open-hold count. (The
+        // replay marker is read from the raw coverage row by the sync, and
+        // is stripped from this display reason by mapCoverage.)
+        const reason = (coverage.reason ? `${coverage.reason}; ${openReason}` : openReason).slice(0, 500);
         return financialSourceCoverageSchema.parse({ ...coverage, status: "partial", reason });
       }
       return coverage;

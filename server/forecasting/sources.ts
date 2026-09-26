@@ -15,7 +15,12 @@ import type { ForecastQboAmount, ForecastQboOpeningBalance, ForecastQboOpeningBa
  * zero) and must be supplied as an approved opening-balance override.
  */
 export interface ForecastSourceReader {
-  read(input: { organizationId: string; asOf: string; debtIds: readonly string[]; today: string }): Promise<ForecastSourceData>;
+  /**
+   * `currency` is the scenario currency. Provider amounts reported in any
+   * other currency are never copied into the scenario; they become unknown
+   * opening items that must be supplied as approved overrides.
+   */
+  read(input: { organizationId: string; asOf: string; debtIds: readonly string[]; today: string; currency: string }): Promise<ForecastSourceData>;
 }
 
 export interface ForecastSourceReaderOptions {
@@ -203,9 +208,9 @@ function qboOpeningItem(key: OpeningItemKey, amount: ForecastQboAmount | undefin
 /** Database-backed reader over the rental, PM settlement, investor and project records. */
 export function createForecastSourceReader(executor: RentOpsQueryExecutor, options: ForecastSourceReaderOptions = {}): ForecastSourceReader {
   return {
-    async read({ organizationId, asOf, debtIds, today }) {
+    async read({ organizationId, asOf, debtIds, today, currency }) {
       const properties = await mappedProperties(executor, organizationId, asOf);
-      const ledger = options.qboBalanceSource ? "QuickBooks opening balance source did not provide a verifiable amount" : "QuickBooks balance-sheet reads are not connected; enter an approved opening balance";
+      let ledger = options.qboBalanceSource ? "QuickBooks opening balance source did not provide a verifiable amount" : "QuickBooks balance-sheet reads are not connected; enter an approved opening balance";
       let qbo: ForecastQboOpeningBalance | undefined;
       let qboError: unknown;
       if (options.qboBalanceSource) {
@@ -216,6 +221,13 @@ export function createForecastSourceReader(executor: RentOpsQueryExecutor, optio
           // provider/configuration failure must never become a zero balance.
           qboError = error;
         }
+      }
+      if (qbo && qbo.currency !== currency) {
+        // Amounts are integer cents with no currency of their own. Copying a
+        // balance reported in another currency would silently relabel it as
+        // the scenario currency, so the whole provider read is withheld.
+        ledger = `QuickBooks reports opening balances in ${qbo.currency}, but this scenario uses ${currency}; enter an approved opening balance in ${currency}`;
+        qbo = undefined;
       }
       const items: ForecastOpeningItem[] = [
         options.qboBalanceSource ? qboOpeningItem("cash_operating", qbo?.operatingCash, ledger, qbo, qboError) : unknownItem("cash_operating", ledger),

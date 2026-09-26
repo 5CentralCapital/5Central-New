@@ -8,6 +8,7 @@ import {
   createForecastScenarioPayloadSchema,
   createForecastSnapshotPayloadSchema,
   forecastCommandPayloadSchemas,
+  qboOpeningApprovalIssue,
   saveForecastAssumptionsPayloadSchema,
   setForecastOverridePayloadSchema,
   updateForecastScenarioPayloadSchema,
@@ -87,15 +88,7 @@ function assertCompatible(assumptions: ForecastAssumptions, scenario: { startDat
  * been independently reconciled.  Snapshot metadata records these facts so
  * approval does not have to reopen provider data or infer them from amounts.
  */
-export function qboOpeningApprovalIssue(snapshot: ForecastSnapshotMeta): string | null {
-  if (snapshot.qboOpeningCoverage === undefined || snapshot.qboOpeningCoverage === null) return null;
-  const issues: string[] = [];
-  if (snapshot.qboOpeningCoverage !== "complete") issues.push(`coverage ${snapshot.qboOpeningCoverage}`);
-  if (snapshot.qboOpeningMappingCoverage !== "complete") issues.push(`account mapping ${snapshot.qboOpeningMappingCoverage ?? "unknown"}`);
-  if (snapshot.qboOpeningReconciliation !== "reconciled") issues.push(`reconciliation ${snapshot.qboOpeningReconciliation ?? "unknown"}`);
-  if (snapshot.qboOpeningFreshness !== "live_read") issues.push(`freshness ${snapshot.qboOpeningFreshness ?? "unknown"}`);
-  return issues.length ? issues.join(", ") : null;
-}
+export { qboOpeningApprovalIssue };
 
 async function currentAssumptions(context: Context, scenario: ScenarioRow): Promise<{ assumptions: ForecastAssumptions; sha256: string }> {
   if (scenario.currentAssumptionVersion < 1) return { assumptions: emptyForecastAssumptions(addDays(scenario.startDate, -1), scenario.currency), sha256: "" };

@@ -11,6 +11,7 @@ import {
 } from "../../shared/accounting/receivables";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { AccountingError } from "./errors";
+import { coverageReasonForDisplay } from "./mirror-store";
 import { currentBusinessDate, resolveTenancyHistory } from "./tenancy-source-resolution";
 
 /*
@@ -265,7 +266,7 @@ export async function readCustomerLedger(executor: RentOpsQueryExecutor, query: 
   const missing = QBO_RECEIVABLE_STREAMS.filter(stream => !covered.has(stream));
   if (missing.length) reasons.push(`QuickBooks receivables have not been read yet for: ${missing.join(", ")}`);
   for (const row of coverageRows) {
-    if (row.status !== "complete" || row.evidence !== "live_provider_readback") reasons.push(`${row.stream}: ${row.reason ?? "partial coverage"}`);
+    if (row.status !== "complete" || row.evidence !== "live_provider_readback") reasons.push(`${row.stream}: ${coverageReasonForDisplay(row.reason) ?? "partial coverage"}`);
   }
   const openExceptions = exceptions.reduce((sum, row) => sum + Number(row.open_count ?? 0), 0);
   if (openExceptions > 0) reasons.push(`${openExceptions} QuickBooks receivable record(s) could not be mirrored and are excluded until resolved`);

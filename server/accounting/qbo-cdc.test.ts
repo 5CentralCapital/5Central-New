@@ -174,9 +174,9 @@ test("a pre-existing verified changes checkpoint cannot skip the per-stream full
     assert.equal(second.status, "complete");
     assert.equal(h.cdc.calls.length, 1);
 
-    // A per-object hold projects a complete stream to partial. That read
-    // must retain the replay proof or the next run would schedule another
-    // unnecessary full replay.
+    // A per-object hold projects a complete stream to partial. The stored
+    // replay proof must survive (or the next run would schedule another
+    // unnecessary full replay), but it is never shown as a human reason.
     await h.executor.query(
       `INSERT INTO accounting_qbo_sync_exceptions
         (organization_id, legal_entity_id, environment, realm_id, stream, object_type, object_id, object_version, exception_kind, reasons, first_seen_at, last_seen_at)
@@ -185,7 +185,15 @@ test("a pre-existing verified changes checkpoint cannot skip the per-stream full
     );
     const accountCoverage = await h.mirror.readCoverage(sourceScope, "accounts");
     assert.equal(accountCoverage.status, "partial");
-    assert.match(accountCoverage.reason ?? "", /QBO_FULL_REPLAY_ANCHOR_V2/);
+    assert.doesNotMatch(accountCoverage.reason ?? "", /QBO_FULL_REPLAY_ANCHOR/);
+    assert.match(accountCoverage.reason ?? "", /unresolved mirror exceptions/);
+    const stored = await h.executor.query<{ reason: string | null }>(
+      `SELECT reason FROM accounting_qbo_coverage WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream='accounts'`,
+      [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId],
+    );
+    assert.match(stored.rows[0]?.reason ?? "", /QBO_FULL_REPLAY_ANCHOR_V2/);
+    h.cdc.queue.push(cdcResponse({}, "2026-09-22T00:00:00Z"));
+    assert.equal((await h.sync.syncChanges()).mode, "cdc", "an open hold must not force another full replay");
   } finally {
     await h.close();
   }

@@ -64,6 +64,21 @@ export const forecastSnapshotMetaSchema = z.object({
 }).strict();
 export type ForecastSnapshotMeta = z.infer<typeof forecastSnapshotMetaSchema>;
 
+/**
+ * Why a snapshot's QBO opening position needs an approval acknowledgement,
+ * or null when it does not. Shared so the approval screen asks for the same
+ * acknowledgement the server requires.
+ */
+export function qboOpeningApprovalIssue(snapshot: ForecastSnapshotMeta): string | null {
+  if (snapshot.qboOpeningCoverage === undefined || snapshot.qboOpeningCoverage === null) return null;
+  const issues: string[] = [];
+  if (snapshot.qboOpeningCoverage !== "complete") issues.push(`coverage ${snapshot.qboOpeningCoverage}`);
+  if (snapshot.qboOpeningMappingCoverage !== "complete") issues.push(`account mapping ${snapshot.qboOpeningMappingCoverage ?? "unknown"}`);
+  if (snapshot.qboOpeningReconciliation !== "reconciled") issues.push(`reconciliation ${snapshot.qboOpeningReconciliation ?? "unknown"}`);
+  if (snapshot.qboOpeningFreshness !== "live_read") issues.push(`freshness ${snapshot.qboOpeningFreshness ?? "unknown"}`);
+  return issues.length ? issues.join(", ") : null;
+}
+
 export const forecastScenarioSummarySchema = z.object({
   id: forecastScenarioIdSchema,
   organizationId: organizationIdSchema,

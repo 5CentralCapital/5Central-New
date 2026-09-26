@@ -7,7 +7,7 @@ import { normalizeQboTransaction, type QboCurrencyContext } from "../integration
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { AccountingError } from "./errors";
 import type { QuickBooksCapabilityEvidence, QuickBooksCapabilityStore } from "./capabilities";
-import { versionCompare, type QboAccountingMirrorStore } from "./mirror-store";
+import { QBO_FULL_REPLAY_ANCHOR, versionCompare, type QboAccountingMirrorStore } from "./mirror-store";
 import { PostgresQboCheckpointStore, runQboCatchUp, type QboCatchUpResult, type QboSyncCheckpoint } from "./sync";
 import { QBO_RECEIVABLE_DOCUMENT_TYPES, QBO_RECEIVABLE_STREAMS, receivableStreamFor, type QboReceivableDocumentType } from "../../shared/accounting/receivables";
 import { isQboReceivableType, journalEntryAccountIds, normalizeQboReceivable } from "../integrations/quickbooks/normalize-receivables";
@@ -33,12 +33,12 @@ export const QBO_CHANGE_STREAM = "changes";
 const CDC_OVERLAP_MS = 5 * 60_000;
 /** Fall back to a full replay well before Intuit's 30-day CDC horizon. */
 const CDC_SAFE_LOOKBACK_MS = QUICKBOOKS_CDC_LOOKBACK_DAYS * 86_400_000 - 12 * 3_600_000;
-/**
- * Per-stream marker proving that the stream was fetched from the beginning.
- * The global `changes` checkpoint predates migration 050 in some connections,
- * so a verified CDC anchor alone cannot prove that receivables were backfilled.
+/*
+ * QBO_FULL_REPLAY_ANCHOR (from mirror-store) is the per-stream marker proving
+ * that the stream was fetched from the beginning. The global `changes`
+ * checkpoint predates migration 050 in some connections, so a verified CDC
+ * anchor alone cannot prove that receivables were backfilled.
  */
-const QBO_FULL_REPLAY_ANCHOR = "QBO_FULL_REPLAY_ANCHOR_V2";
 
 export function streamForEntity(entity: string): string | null {
   if ((TRANSACTION_ENTITY_TYPES as readonly string[]).includes(entity)) return `transactions.${entity.toLowerCase()}`;
@@ -789,8 +789,14 @@ export function createQboProviderSync(options: {
   }
 
   async function hasVerifiedFullReplayBaseline(): Promise<boolean> {
-    const coverage = await Promise.all(ANCHOR_STREAMS.map(stream => options.mirror.readCoverage(scopeOf(scope), stream)));
-    return coverage.every(item => item.reason?.split("; ").includes(QBO_FULL_REPLAY_ANCHOR));
+    // Read the stored rows directly: the display coverage strips the marker.
+    const rows = await options.executor.query<{ stream: string; reason: string | null }>(
+      `SELECT stream, reason FROM accounting_qbo_coverage
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream = ANY($5::text[])`,
+      [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId, [...ANCHOR_STREAMS]],
+    );
+    const anchored = new Set(rows.rows.filter(row => typeof row.reason === "string" && row.reason.split("; ").includes(QBO_FULL_REPLAY_ANCHOR)).map(row => String(row.stream)));
+    return ANCHOR_STREAMS.every(stream => anchored.has(stream));
   }
 
   async function recordStreamCoverage(mirror: QboAccountingMirrorStore, stream: string, input: { readonly unsupportedCount: number; readonly openExceptionCount: number; readonly observedAt: string; readonly baselineVerified: boolean; readonly extraReason: string | null }): Promise<void> {

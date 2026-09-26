@@ -6,6 +6,7 @@ import { createSyntheticCompanyDatabase, SYNTHETIC_COMPANY } from "../company/te
 import { linkTenancyToQboCustomer } from "./receivables-links";
 import { resolveTenancyCustomer } from "./receivables-read";
 import { resolveTenancySource } from "./tenancy-source-resolution";
+import { createQboTokenCipher } from "./token-crypto";
 
 const ENVIRONMENT = "production" as const;
 const REALM = "4620816365000001";
@@ -189,6 +190,42 @@ test("partial historical ownership coverage enters review instead of selecting t
   }
 });
 
+test("a tenant inherited at acquisition resolves to the acquiring entity for the owned period", async () => {
+  const fixture = await createSyntheticCompanyDatabase();
+  try {
+    await fixture.db.exec(`
+      INSERT INTO rent_ops_properties(id,name,slug) VALUES ('resolver-acquired-property','Acquired property','resolver-acquired-property');
+      INSERT INTO rent_ops_units(id,property_id,unit_number) VALUES ('resolver-acquired-unit','resolver-acquired-property','1');
+      INSERT INTO company_property_entity_periods(id,organization_id,legal_entity_id,property_id,effective_from)
+        VALUES ('30000000-0000-4000-8000-000000000052','${SYNTHETIC_COMPANY.organizationId}','${SYNTHETIC_COMPANY.entityId}','resolver-acquired-property','2025-06-01');
+    `);
+    // Moved in under the prior owner, still in place after the acquisition.
+    await seedTenancy(fixture.db, { id: "resolver-inherited", propertyId: "resolver-acquired-property", unitId: "resolver-acquired-unit", personId: "resolver-person-inherited", status: "current", moveIn: "2022-03-01" });
+    const result = await resolveTenancySource(fixture.executor, {
+      organizationId: SYNTHETIC_COMPANY.organizationId,
+      tenancyId: "resolver-inherited",
+      environment: ENVIRONMENT,
+      asOf: "2026-09-26",
+    });
+    assert.ok(result);
+    assert.equal(result.ownership.coverageComplete, true);
+    assert.equal(result.ownership.effectiveLegalEntityId, SYNTHETIC_COMPANY.entityId);
+    assert.notEqual(result.currentState, "ownership_review");
+
+    // A tenancy that ended before the acquisition is not attributed to the acquirer.
+    await seedTenancy(fixture.db, { id: "resolver-pre-acquisition", propertyId: "resolver-acquired-property", unitId: "resolver-acquired-unit", personId: "resolver-person-pre", status: "past", moveIn: "2021-01-01", moveOut: "2024-12-31" });
+    const prior = await resolveTenancySource(fixture.executor, {
+      organizationId: SYNTHETIC_COMPANY.organizationId,
+      tenancyId: "resolver-pre-acquisition",
+      environment: ENVIRONMENT,
+      asOf: "2026-09-26",
+    });
+    assert.equal(prior?.ownership.effectiveLegalEntityId, null);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("missing archive dates and a null status remain local history with an explicit ownership review", async () => {
   const fixture = await createSyntheticCompanyDatabase();
   try {
@@ -366,6 +403,50 @@ test("the HTTP resolver authorizes the historical entity and returns an unlinked
     assert.equal(body.currentState, "unlinked");
     assert.equal(body.qbo.state, "unlinked");
     assert.equal(body.qbo.scope?.legalEntityId, SYNTHETIC_COMPANY.entityId);
+  } finally {
+    await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
+    await fixture.close();
+  }
+});
+
+test("the HTTP resolver defaults to the deployment's configured QuickBooks environment", async () => {
+  const fixture = await createCompanyDemoApp({
+    accountingQbo: {
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      redirectUri: "http://localhost:4178/api/accounting/qbo/callback",
+      environment: "sandbox",
+      tokenCipher: createQboTokenCipher(Buffer.alloc(32, 7)),
+      discovery: false,
+    },
+  });
+  const listener = fixture.app.listen(0, "127.0.0.1");
+  await new Promise<void>(resolve => listener.once("listening", resolve));
+  try {
+    const tenancy = (await fixture.database.executor.query<{ id: string }>(
+      `SELECT t.id FROM rent_ops_tenancies t
+        WHERE t.property_id=$1 AND EXISTS (
+          SELECT 1 FROM company_property_entity_periods m
+           WHERE m.organization_id=$2 AND m.property_id=t.property_id
+        ) ORDER BY t.id LIMIT 1`,
+      [SYNTHETIC_COMPANY.propertyId, SYNTHETIC_COMPANY.organizationId],
+    )).rows[0];
+    assert.ok(tenancy);
+    // Only a production binding exists. A sandbox deployment must not select it.
+    await fixture.database.executor.query(
+      `INSERT INTO accounting_qbo_realm_bindings
+        (organization_id,legal_entity_id,environment,realm_id,provider_company_id,provider_company_name,evidence_version,company_info_hash,confirmed_by)
+       VALUES ($1,$2,'production',$3,'synthetic-company','Synthetic QBO','v1',$4,'synthetic-admin')`,
+      [SYNTHETIC_COMPANY.organizationId, SYNTHETIC_COMPANY.entityId, REALM, "c".repeat(64)],
+    );
+    const port = (listener.address() as AddressInfo).port;
+    const url = `http://127.0.0.1:${port}/api/company/${SYNTHETIC_COMPANY.organizationId}/accounting/qbo/receivables/tenancy-source-resolution?${new URLSearchParams({ tenancyId: tenancy.id, asOf: "2026-09-26" })}`;
+    const response = await fetch(url);
+    assert.equal(response.status, 200, await response.clone().text());
+    const body = await response.json() as { qbo: { environment: string; binding: unknown; scope: unknown } };
+    assert.equal(body.qbo.environment, "sandbox");
+    assert.equal(body.qbo.binding, null);
+    assert.equal(body.qbo.scope, null);
   } finally {
     await new Promise<void>((resolve, reject) => listener.close(error => error ? reject(error) : resolve()));
     await fixture.close();

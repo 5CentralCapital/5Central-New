@@ -76,6 +76,32 @@ test("unmapped properties are explicit holds and never local-only rows", () => {
   assert.ok(unmapped.holdReasons.includes("property_not_assigned_to_company"));
 });
 
+test("explicit tenant, amount, and date uncertainty keeps an otherwise eligible row on hold", () => {
+  const input = baseInput();
+  const eligible = input.transactions[0]!;
+  const uncertainRows = [
+    { ...eligible, id: "tx-ambiguous-tenant", sourceId: "charge:ambiguous-tenant", tenancyLinkKnowledge: "ambiguous" },
+    { ...eligible, id: "tx-unknown-amount", sourceId: "charge:unknown-amount", amountKnowledge: "unknown" },
+    { ...eligible, id: "tx-unknown-date", sourceId: "charge:unknown-date", postedOnKnowledge: "unknown" },
+    { ...eligible, id: "tx-ambiguous-person", sourceId: "charge:ambiguous-person", personId: null, personLinkKnowledge: "ambiguous" },
+  ];
+  const preview = buildTenantQboMigrationPreview({ ...input, transactions: [...input.transactions, ...uncertainRows] });
+  const expected: Record<string, string> = {
+    "tx-ambiguous-tenant": "tenancy_link_uncertain",
+    "tx-unknown-amount": "amount_unknown_or_invalid",
+    "tx-unknown-date": "posted_date_unknown_or_invalid",
+    "tx-ambiguous-person": "person_link_uncertain",
+  };
+  for (const [id, reason] of Object.entries(expected)) {
+    const row = findTransaction(preview, id);
+    assert.deepEqual([row.route, row.eligibility], ["hold", "hold"], id);
+    assert.ok(row.holdReasons.includes(reason), `${id} should hold for ${reason}`);
+  }
+  // An absent optional person with `unknown` knowledge is not uncertainty.
+  const noPerson = buildTenantQboMigrationPreview({ ...input, transactions: [{ ...eligible, personId: null, personLinkKnowledge: "unknown" }] });
+  assert.equal(noPerson.transactions[0]!.eligibility, "eligible");
+});
+
 test("readTenantQboMigrationPreview reads persisted R-ops tables without a write-capable query", async () => {
   const input = baseInput();
   const crossOrgTransaction = {

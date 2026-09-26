@@ -2,7 +2,7 @@ import React from "react";
 import { useMemo, useState, type FormEvent } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { FORECAST_SCENARIO_KINDS, FORECAST_SCENARIO_KIND_LABELS, type ForecastScenarioKind, type ForecastScenarioSummary, type ForecastSnapshotMeta } from "@shared/forecasting/contracts";
+import { FORECAST_SCENARIO_KINDS, FORECAST_SCENARIO_KIND_LABELS, qboOpeningApprovalIssue, type ForecastScenarioKind, type ForecastScenarioSummary, type ForecastSnapshotMeta } from "@shared/forecasting/contracts";
 import { FORECAST_MODEL_VERSION } from "@shared/forecasting/result";
 import { formatInputValue, parseMoneyInput } from "../projects/money";
 import { forecastApi } from "./api";
@@ -160,25 +160,34 @@ export function ScenariosView({ organizationId, scenarios, selected, onSelect, c
   </div>;
 }
 
-/** Approval pins the snapshot; unknown opening cash needs a recorded reason. */
+/**
+ * Approval pins the snapshot. Unknown opening cash, or a QBO opening position
+ * that is partial, unreconciled, or stale, needs a recorded reason; the rule
+ * is shared with the server so the screen always offers the acknowledgement
+ * the server will require.
+ */
 export function ApproveDialog({ scenario, snapshot, onClose, onConfirm }: { scenario: ForecastScenarioSummary; snapshot: ForecastSnapshotMeta; onClose: () => void; onConfirm: (reason: string | null) => Promise<void> }) {
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>();
   const cashUnknown = !snapshot.openingCashKnown;
+  const qboIssue = qboOpeningApprovalIssue(snapshot);
+  const needsReason = cashUnknown || qboIssue !== null;
+  const reasonLabel = cashUnknown && qboIssue ? "Reason for approving with an incomplete opening position"
+    : cashUnknown ? "Reason for approving without opening cash"
+      : "Reason for approving with an incomplete QuickBooks opening";
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (cashUnknown && !reason.trim()) { setError(new Error("Give a reason for approving without opening cash.")); return; }
+    if (needsReason && !reason.trim()) { setError(new Error(cashUnknown ? "Give a reason for approving without opening cash." : "Give a reason for approving with an incomplete QuickBooks opening.")); return; }
     setSaving(true); setError(undefined);
-    try { await onConfirm(cashUnknown ? reason.trim() : null); } catch (problem) { setError(problem); setSaving(false); }
+    try { await onConfirm(needsReason ? reason.trim() : null); } catch (problem) { setError(problem); setSaving(false); }
   };
   return <Dialog title={`Approve ${scenario.name}`} onClose={onClose} onSubmit={submit} saving={saving} submitLabel="Approve">
     <Notice error={error} />
     <p className="fc-dialog-note">Approval pins the snapshot from {dateLabel(snapshot.createdAt.slice(0, 10), "long")} (version {snapshot.assumptionVersion}). Editing assumptions or settings later returns the scenario to draft.</p>
-    {cashUnknown && <>
-      <p className="fc-dialog-note">Opening cash is unknown, so cash balances in this snapshot are relative movements and the reserve floor cannot be tested.</p>
-      <Field label="Reason for approving without opening cash" wide><textarea data-autofocus rows={3} maxLength={1000} value={reason} onChange={event => setReason(event.currentTarget.value)} /></Field>
-    </>}
+    {cashUnknown && <p className="fc-dialog-note">Opening cash is unknown, so cash balances in this snapshot are relative movements and the reserve floor cannot be tested.</p>}
+    {qboIssue && <p className="fc-dialog-note">The QuickBooks opening balances are not fully verified ({qboIssue}). Approving records that you reviewed them anyway.</p>}
+    {needsReason && <Field label={reasonLabel} wide><textarea data-autofocus rows={3} maxLength={1000} value={reason} onChange={event => setReason(event.currentTarget.value)} /></Field>}
   </Dialog>;
 }
 

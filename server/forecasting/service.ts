@@ -80,7 +80,7 @@ export function parseForecastAssumptions(document: unknown): ForecastAssumptions
 /** Read sources, run the deterministic engine and fingerprint inputs and output. */
 export async function computeForecast(executor: RentOpsQueryExecutor, runtime: ForecastRuntime, scenario: ScenarioRow, assumptions: ForecastAssumptions): Promise<{ result: ForecastResult; sources: ForecastSourceData; sourceFingerprint: string; resultSha256: string }> {
   const debtIds = Array.from(new Set(assumptions.loans.flatMap(loan => (loan.sourceDebtId ? [loan.sourceDebtId] : [])))).sort();
-  const sources = await runtime.sources(executor).read({ organizationId: scenario.organizationId, asOf: assumptions.actualsCutoff, debtIds, today: runtime.today() });
+  const sources = await runtime.sources(executor).read({ organizationId: scenario.organizationId, asOf: assumptions.actualsCutoff, debtIds, today: runtime.today(), currency: scenario.currency });
   const sourceFingerprint = canonicalJsonSha256({ modelVersion: FORECAST_MODEL_VERSION, asOf: assumptions.actualsCutoff, sources });
   const result = runEngine({
     scenario: { name: scenario.name, kind: scenario.kind, startDate: scenario.startDate, horizonWeeks: scenario.horizonWeeks, horizonMonths: scenario.horizonMonths, reserveFloorCents: scenario.reserveFloorCents, currency: scenario.currency },

@@ -365,6 +365,32 @@ function pushReason(reasons: string[], reason: string): void {
   if (!reasons.includes(reason)) reasons.push(reason);
 }
 
+/*
+ * Imported rows carry explicit knowledge flags. A value the importer marked
+ * unknown, ambiguous, or inferred is not evidence, even when a placeholder
+ * value is present, so it must hold the row instead of letting it migrate.
+ * A missing flag (legacy rows written before the flag existed) is judged by
+ * the value checks alone.
+ */
+const CERTAIN_LINK_KNOWLEDGE = new Set(["exact", "manual"]);
+const CERTAIN_AMOUNT_KNOWLEDGE = new Set(["known"]);
+const CERTAIN_DATE_KNOWLEDGE = new Set(["source", "manual"]);
+
+function uncertain(knowledge: string | null, certain: ReadonlySet<string>): boolean {
+  const value = text(knowledge);
+  return value !== null && !certain.has(value);
+}
+
+/**
+ * A link is uncertain when the importer flagged it ambiguous, or when an ID is
+ * present but its knowledge is not exact/manual. An absent optional link with
+ * `unknown` knowledge (for example, a payment with no person) is not a hold.
+ */
+function linkUncertain(id: string | null, knowledge: string | null): boolean {
+  if (text(knowledge) === "ambiguous") return true;
+  return text(id) !== null && uncertain(knowledge, CERTAIN_LINK_KNOWLEDGE);
+}
+
 function sortDateId(leftDate: string | null, leftId: string, rightDate: string | null, rightId: string): number {
   const left = leftDate ?? "";
   const right = rightDate ?? "";
@@ -412,8 +438,12 @@ export function buildTenantQboMigrationPreview(input: TenantQboMigrationPreviewI
     if (tenancy && row.unitId && tenancy.unitId && tenancy.unitId !== row.unitId) pushReason(reasons, "transaction_tenancy_unit_mismatch");
     if (!row.sourceSystem || !row.sourceId) pushReason(reasons, "source_identity_missing");
     if (row.sourceSystem !== null && row.sourceId !== null && row.sourceSystem.trim() === "" && row.sourceId.trim() === "") pushReason(reasons, "source_identity_missing");
-    if (amountCents === null) pushReason(reasons, "amount_unknown_or_invalid");
-    if (!postedOn) pushReason(reasons, "posted_date_unknown_or_invalid");
+    if (amountCents === null || uncertain(row.amountKnowledge, CERTAIN_AMOUNT_KNOWLEDGE)) pushReason(reasons, "amount_unknown_or_invalid");
+    if (!postedOn || uncertain(row.postedOnKnowledge, CERTAIN_DATE_KNOWLEDGE)) pushReason(reasons, "posted_date_unknown_or_invalid");
+    if (linkUncertain(row.tenancyId, row.tenancyLinkKnowledge)) pushReason(reasons, "tenancy_link_uncertain");
+    if (linkUncertain(row.personId, row.personLinkKnowledge)) pushReason(reasons, "person_link_uncertain");
+    if (linkUncertain(row.propertyId, row.propertyLinkKnowledge)) pushReason(reasons, "property_link_uncertain");
+    if (linkUncertain(row.unitId, row.unitLinkKnowledge)) pushReason(reasons, "unit_link_uncertain");
     if (row.status !== "posted") pushReason(reasons, row.status === null ? "status_unknown" : "transaction_not_posted");
     if (!row.kind || !targetObjectType) pushReason(reasons, row.kind === "reversal" ? "reversal_requires_linked_source" : "transaction_kind_unknown");
     if (!row.category) pushReason(reasons, "category_unknown");
@@ -505,8 +535,11 @@ export function buildTenantQboMigrationPreview(input: TenantQboMigrationPreviewI
       if (relatedIds.length === 0) pushReason(reasons, "allocation_has_no_transaction_link");
       if (related.some(item => !item)) pushReason(reasons, "allocation_transaction_missing");
       if (!row.sourceSystem || !row.sourceId) pushReason(reasons, "source_identity_missing");
-      if (amountCents === null) pushReason(reasons, "allocation_amount_unknown_or_invalid");
-      if (!allocatedOn) pushReason(reasons, "allocation_date_unknown_or_invalid");
+      if (amountCents === null || uncertain(row.amountKnowledge, CERTAIN_AMOUNT_KNOWLEDGE)) pushReason(reasons, "allocation_amount_unknown_or_invalid");
+      if (!allocatedOn || uncertain(row.allocatedOnKnowledge, CERTAIN_DATE_KNOWLEDGE)) pushReason(reasons, "allocation_date_unknown_or_invalid");
+      if (linkUncertain(row.paymentTransactionId, row.paymentLinkKnowledge)
+        || linkUncertain(row.chargeTransactionId, row.chargeLinkKnowledge)
+        || linkUncertain(row.creditTransactionId, row.creditLinkKnowledge)) pushReason(reasons, "allocation_link_uncertain");
       if (!row.kind) pushReason(reasons, "allocation_kind_unknown");
       const knownRelated = related.filter((item): item is TenantQboMigrationTransactionPreview => item !== undefined);
       const relatedRoutes = new Set(knownRelated.map(item => item.route));

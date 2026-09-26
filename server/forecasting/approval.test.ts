@@ -9,6 +9,7 @@ import type { ForecastQboOpeningBalance } from "./source-port";
 import { forecastSnapshotMetaSchema } from "../../shared/forecasting/contracts";
 import { OPENING_ITEM_KEYS, OPENING_ITEM_LABELS } from "../../shared/forecasting/assumptions";
 import { qboOpeningApprovalIssue } from "./commands";
+import { createForecastSourceReader } from "./sources";
 import { syntheticForecastAssumptionsInput, SYNTHETIC_FORECAST_CUTOFF, SYNTHETIC_FORECAST_START, syntheticForecastSources } from "./testing/fixture";
 
 const base = {
@@ -54,6 +55,38 @@ test("QBO approval guard allows complete live reconciled evidence", () => {
 test("snapshots without QBO evidence keep the existing unknown-cash approval path", () => {
   const snapshot = forecastSnapshotMetaSchema.parse(base);
   assert.equal(qboOpeningApprovalIssue(snapshot), null);
+});
+
+test("QBO opening balances in another currency are withheld instead of relabeled", async () => {
+  const fixture = await createSyntheticCompanyDatabase();
+  try {
+    const executor = await createSyntheticRuntimeExecutor(fixture.db);
+    const { organizationId } = SYNTHETIC_COMPANY;
+    const qboAmount = (amountCents: string) => ({ amountCents, state: "sourced" as const, asOf: SYNTHETIC_FORECAST_CUTOFF, sourceIds: ["qbo:balance-sheet"] });
+    const qbo: ForecastQboOpeningBalance = {
+      organizationId, legalEntityId: "entity-qbo", entityScope: ["entity-qbo"], realmId: "realm-qbo", environment: "production",
+      asOf: SYNTHETIC_FORECAST_CUTOFF, basis: "Accrual", currency: "USD", observedAt: "2026-12-28T12:00:00.000Z", freshness: "live_read",
+      coverage: "complete", mappingCoverage: "complete", reconciliation: "reconciled", reportSourceId: "qbo:balance-sheet", sourceIds: ["qbo:balance-sheet"],
+      operatingCash: qboAmount("12000000"), restrictedCash: qboAmount("1000000"), accountsPayable: qboAmount("610000"), propertyBookBalances: {},
+    };
+    const reader = createForecastSourceReader(executor, { qboBalanceSource: { read: async () => qbo } });
+    const read = (currency: string) => reader.read({ organizationId, asOf: SYNTHETIC_FORECAST_CUTOFF, debtIds: [], today: "2026-12-28", currency });
+
+    const cad = await read("CAD");
+    assert.equal(cad.qboOpening, undefined);
+    for (const key of ["cash_operating", "cash_restricted", "accounts_payable"]) {
+      const item = cad.items.find(entry => entry.key === key)!;
+      assert.equal(item.amountCents, null, key);
+      assert.equal(item.state, "unknown", key);
+      assert.match(item.source, /USD.*CAD/);
+    }
+
+    const usd = await read("USD");
+    assert.equal(usd.qboOpening?.currency, "USD");
+    assert.equal(usd.items.find(entry => entry.key === "cash_operating")?.amountCents, "12000000");
+  } finally {
+    await fixture.close();
+  }
 });
 
 test("scenario approval refuses a stored partial QBO opening until it is acknowledged", async () => {
