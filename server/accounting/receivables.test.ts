@@ -423,3 +423,25 @@ test("customer ledger uses accepted same-version observations without accepting 
     assert.equal(original.provider_body.Balance, "1225.00");
   } finally { await h.close(); }
 });
+
+test("a conflicting customer profile degrades only that customer's ledger, not the whole company", async () => {
+  const store = baseStore();
+  const h = await harness(store);
+  try {
+    await h.sync.syncChanges();
+    assert.equal((await h.ledger()).verification.state, "verified");
+    // QuickBooks returns customer 59 with a material change but the same SyncToken.
+    store.Customer = [customer("58", "1225.00"), customer("59", 0, { Taxable: true })];
+    h.advance(60_000);
+    await h.sync.syncChanges({ forceFullReplay: true });
+
+    const unaffected = await h.ledger("58");
+    assert.equal(unaffected.coverage.status, "complete", unaffected.coverage.reasons.join("; "));
+    assert.equal(unaffected.verification.state, "verified");
+
+    const affected = await h.ledger("59");
+    assert.equal(affected.coverage.status, "partial");
+    assert.ok(affected.coverage.reasons.some(reason => /This customer's QuickBooks profile has an unresolved sync exception/.test(reason)), affected.coverage.reasons.join("; "));
+    assert.equal(affected.coverage.reasons.some(reason => /QBO_FULL_REPLAY_ANCHOR/.test(reason)), false);
+  } finally { await h.close(); }
+});

@@ -3,6 +3,7 @@ import { centsFromBigInt, isoDateSchema, type IsoDate, type MoneyCents } from ".
 import { financialSourceScopeSchema, type FinancialSourceScope } from "../../shared/accounting";
 import {
   QBO_RECEIVABLE_STREAMS,
+  receivableStreamFor,
   type QboAgingBuckets,
   type QboCustomerLedger,
   type QboCustomerLedgerEntry,
@@ -103,6 +104,17 @@ interface DocRow {
   kinds: string | null;
   total_count: unknown;
   latest_mirrored_at: unknown;
+}
+
+/** Coverage stream holding QuickBooks Customer profiles. */
+const CUSTOMER_PROFILE_STREAM = receivableStreamFor("Customer");
+/** Reasons the sync writes when a stream is partial only because of per-object exceptions. */
+const PROFILE_EXCEPTION_REASON = /^(?:\d+ provider object or line records in this run were not mirrorable|\d+ QBO object\(s\) have unresolved mirror exceptions)$/;
+
+function onlyProfileExceptionReasons(reason: string | null): boolean {
+  const display = coverageReasonForDisplay(reason);
+  if (display === null) return false;
+  return display.split("; ").every(part => PROFILE_EXCEPTION_REASON.test(part));
 }
 
 export async function readCustomerLedger(executor: RentOpsQueryExecutor, query: CustomerLedgerQuery): Promise<QboCustomerLedger> {
@@ -255,21 +267,34 @@ export async function readCustomerLedger(executor: RentOpsQueryExecutor, query: 
       WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream = ANY($5::text[])`,
     [...parts, [...QBO_RECEIVABLE_STREAMS]],
   )).rows;
+  // Customer-profile exceptions (a conflicting same-version profile, or a
+  // customer QuickBooks stopped returning) describe one customer, not the
+  // company's receivables. They count only against that customer's ledger;
+  // receivable-document exceptions still count company-wide because a
+  // document that could not be mirrored may belong to any customer.
   const exceptions = (await executor.query<{ stream: string; open_count: unknown }>(
     `SELECT stream, COUNT(*) AS open_count FROM accounting_qbo_sync_exceptions
       WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND resolved_at IS NULL AND stream = ANY($5::text[])
+        AND (stream <> $6 OR object_id = $7)
       GROUP BY stream`,
-    [...parts, [...QBO_RECEIVABLE_STREAMS]],
+    [...parts, [...QBO_RECEIVABLE_STREAMS], CUSTOMER_PROFILE_STREAM, customerObjectId],
   )).rows;
+  const ownProfileExceptions = Number(exceptions.find(row => row.stream === CUSTOMER_PROFILE_STREAM)?.open_count ?? 0);
   const covered = new Map(coverageRows.map(row => [row.stream, row]));
   const reasons: string[] = [];
   const missing = QBO_RECEIVABLE_STREAMS.filter(stream => !covered.has(stream));
   if (missing.length) reasons.push(`QuickBooks receivables have not been read yet for: ${missing.join(", ")}`);
   for (const row of coverageRows) {
-    if (row.status !== "complete" || row.evidence !== "live_provider_readback") reasons.push(`${row.stream}: ${coverageReasonForDisplay(row.reason) ?? "partial coverage"}`);
+    if (row.status === "complete" && row.evidence === "live_provider_readback") continue;
+    // The customer-profile stream is partial whenever any customer has an
+    // open profile exception. When that is its only reason and this customer
+    // is not one of them, it does not affect this ledger.
+    if (row.stream === CUSTOMER_PROFILE_STREAM && row.evidence === "live_provider_readback" && ownProfileExceptions === 0 && onlyProfileExceptionReasons(row.reason)) continue;
+    reasons.push(`${row.stream}: ${coverageReasonForDisplay(row.reason) ?? "partial coverage"}`);
   }
-  const openExceptions = exceptions.reduce((sum, row) => sum + Number(row.open_count ?? 0), 0);
-  if (openExceptions > 0) reasons.push(`${openExceptions} QuickBooks receivable record(s) could not be mirrored and are excluded until resolved`);
+  const openDocumentExceptions = exceptions.filter(row => row.stream !== CUSTOMER_PROFILE_STREAM).reduce((sum, row) => sum + Number(row.open_count ?? 0), 0);
+  if (openDocumentExceptions > 0) reasons.push(`${openDocumentExceptions} QuickBooks receivable record(s) could not be mirrored and are excluded until resolved`);
+  if (ownProfileExceptions > 0) reasons.push("This customer's QuickBooks profile has an unresolved sync exception (conflicting details under the same QuickBooks version, or no longer returned by QuickBooks). Balances stay unverified until it clears; editing and saving the customer in QuickBooks refreshes it on the next sync.");
   const currencyGaps = (await executor.query<{ count: unknown; currencies: string | null }>(
     `SELECT COUNT(*) AS count, string_agg(DISTINCT d.currency, ',') AS currencies
        FROM accounting_qbo_receivable_documents d
