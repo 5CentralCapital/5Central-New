@@ -5,7 +5,7 @@ import type { QuickBooksAccountingClient } from "../integrations/quickbooks/acco
 import type { QuickBooksJsonObject } from "../../shared/accounting/quickbooks";
 import { createQboAccountingMirrorStore } from "./mirror-store";
 import { PostgresQuickBooksCapabilityStore } from "./capabilities";
-import { createQboProviderSync } from "./provider-sync";
+import { applyQboNamedObject, createQboProviderSync } from "./provider-sync";
 
 const scope = {
   organizationId: SYNTHETIC_COMPANY.organizationId,
@@ -168,6 +168,42 @@ test("provider sync orders only by LastUpdatedTime and preserves overlap paginat
       [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId, "Purchase", "101", "0"],
     );
     assert.equal(Number(persisted.rows[0]?.count), 1);
+  } finally {
+    await synthetic.close();
+  }
+});
+
+test("named profile conflicts retain every same-token observation and do not dead-letter the sync", async () => {
+  const synthetic = await createSyntheticCompanyDatabase();
+  try {
+    const mirror = createQboAccountingMirrorStore(synthetic.executor);
+    const first = {
+      Id: "58", SyncToken: "0", DisplayName: "Synthetic Customer", Taxable: true,
+      MetaData: { LastUpdatedTime: "2026-09-21T14:00:00Z" },
+    } as QuickBooksJsonObject;
+    const changed = { ...first, Taxable: false } as QuickBooksJsonObject;
+    const apply = (item: QuickBooksJsonObject, observedAt: string) => synthetic.executor.transaction!(async executor =>
+      applyQboNamedObject(mirror.forExecutor(executor), scope, "Customer", item, observedAt));
+
+    const sameObservedAt = "2026-09-26T15:00:00Z";
+    assert.deepEqual(await apply(first, sameObservedAt), { objectId: "58", unsupported: 0 });
+    assert.deepEqual(await apply(changed, sameObservedAt), { objectId: "58", unsupported: 1 });
+    // The provider can return the original body again under the same token;
+    // the earlier material conflict remains open until a newer revision.
+    assert.deepEqual(await apply(first, sameObservedAt), { objectId: "58", unsupported: 1 });
+
+    const observations = await synthetic.executor.query<{ body_hash: string; material_conflict: boolean | string }>(
+      `SELECT body_hash, material_conflict FROM accounting_qbo_named_observations
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
+          AND object_type='Customer' AND object_id='58' AND object_version='0'
+        ORDER BY observed_at, observation_order`,
+      [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId],
+    );
+    assert.equal(observations.rows.length, 3);
+    assert.deepEqual(observations.rows.map(row => row.material_conflict === true || row.material_conflict === "true"), [false, true, false]);
+    assert.equal((await mirror.listOpenSyncExceptions(scope, "customers")).length, 1);
+    const profile = await mirror.listProviderMirrors(scope, "customers");
+    assert.equal(profile.find(item => item.providerObjectId === "58")?.displayName, "Synthetic Customer");
   } finally {
     await synthetic.close();
   }

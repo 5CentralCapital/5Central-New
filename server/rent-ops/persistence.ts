@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { COMPANY_APPLICATION_TABLES, COMPANY_ACCESS_TABLES } from "../company/tables";
 
-export const RENT_OPS_SCHEMA_VERSION = 53;
+export const RENT_OPS_SCHEMA_VERSION = 54;
 export const RENT_OPS_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V1_CHECKSUM__";
 export const RENT_OPS_V2_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V2_CHECKSUM__";
 export const RENT_OPS_V3_MIGRATION_CHECKSUM_TOKEN = "__RENT_OPS_V3_CHECKSUM__";
@@ -72,6 +72,7 @@ const RENT_OPS_MIGRATION_FILES = [
   "051_qbo_account_purpose.sql",
   "052_project_property_plans.sql",
   "053_project_deal_ledger.sql",
+  "054_qbo_named_observations.sql",
 ] as const;
 
 export const RENT_OPS_SUPPORTED_SCHEMA_VERSIONS = RENT_OPS_MIGRATION_FILES.map((_, index) => index + 1);

@@ -317,6 +317,7 @@ export const RENT_OPS_IMPORTER_READ_ONLY_TABLES = [
 
 /** Append-only tables use INSERT plus idempotency SELECT, never UPDATE/DELETE. */
 export const RENT_OPS_APPEND_ONLY_TABLES = [
+  "accounting_qbo_named_observations",
   "accounting_qbo_binding_confirmations",
   "accounting_qbo_connection_events",
   "accounting_qbo_realm_bindings",
@@ -388,7 +389,7 @@ export const RENT_OPS_IMPORTER_TABLES = [
   ...RENT_OPS_IMPORTER_READ_ONLY_TABLES,
 ] as const;
 
-/** The migration uses application-assigned varchar IDs, so no sequence is needed today. */
+/** Identity columns use table INSERT authority; no direct sequence access is granted. */
 export const RENT_OPS_SEQUENCE_NAMES = [] as const;
 
 const SAFE_IDENTIFIER = /^[a-z_][a-z0-9_]{0,62}$/;

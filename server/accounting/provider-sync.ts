@@ -33,6 +33,12 @@ export const QBO_CHANGE_STREAM = "changes";
 const CDC_OVERLAP_MS = 5 * 60_000;
 /** Fall back to a full replay well before Intuit's 30-day CDC horizon. */
 const CDC_SAFE_LOOKBACK_MS = QUICKBOOKS_CDC_LOOKBACK_DAYS * 86_400_000 - 12 * 3_600_000;
+/**
+ * Per-stream marker proving that the stream was fetched from the beginning.
+ * The global `changes` checkpoint predates migration 050 in some connections,
+ * so a verified CDC anchor alone cannot prove that receivables were backfilled.
+ */
+const QBO_FULL_REPLAY_ANCHOR = "QBO_FULL_REPLAY_ANCHOR_V2";
 
 export function streamForEntity(entity: string): string | null {
   if ((TRANSACTION_ENTITY_TYPES as readonly string[]).includes(entity)) return `transactions.${entity.toLowerCase()}`;
@@ -161,7 +167,24 @@ export async function applyQboNamedObject(mirror: QboAccountingMirrorStore, scop
   }
   const updated = providerTimestamp(metadataOf(item)?.LastUpdatedTime);
   if (!(await admitLiveObservation(mirror, scope, objectType, objectId, version, updated))) return { objectId, unsupported: 0, skipped: "stale_after_deletion" };
-  await mirror.ingestSourceObject({ scope, objectType, objectId, version, providerUpdatedAt: updated, providerBody: item, receivedAt: observedAt });
+  const source = await mirror.ingestNamedObject({ scope, objectType, objectId, version, providerUpdatedAt: updated, providerBody: item, receivedAt: observedAt });
+  if (source.conflict) {
+    // Same-token named-object bodies are retained as profile observations,
+    // but they cannot safely rewrite the immutable first-seen source row.
+    // Keep the conflict durable and let the rest of the stream commit so one
+    // inconsistent Customer/Vendor/Employee cannot dead-letter the company sync.
+    await mirror.recordSyncException({
+      scope,
+      stream,
+      objectType,
+      objectId,
+      version,
+      kind: "unsupported",
+      reasons: [`QBO ${objectType} revision ${version} returned conflicting provider bodies; both profile observations were retained for review`],
+      observedAt,
+    });
+    return { objectId, unsupported: 1 };
+  }
   await mirror.resolveSyncException({ scope, stream, objectType, objectId, version, observedAt });
   return { objectId, unsupported: 0 };
 }
@@ -269,7 +292,7 @@ export interface QboProviderSyncResult {
 export interface QboChangeSyncResult {
   readonly mode: "cdc" | "full_replay";
   /** Why a full replay was chosen, when it was. */
-  readonly reason: "no_checkpoint" | "checkpoint_expired" | "cdc_overflow" | "requested" | null;
+  readonly reason: "no_checkpoint" | "checkpoint_expired" | "cdc_overflow" | "missing_baseline" | "requested" | null;
   readonly status: "complete" | "partial" | "failed";
   readonly appliedCount: number;
   readonly deletedCount: number;
@@ -573,6 +596,7 @@ export function createQboProviderSync(options: {
             openExceptionCount = (await mirror.listOpenSyncExceptions(scope, stream)).length;
             await recordStreamCoverage(mirror, stream, {
               unsupportedCount, openExceptionCount, observedAt,
+              baselineVerified: fullReplay,
               extraReason: mode === "incremental" ? "Incremental QBO query overlap is applied, but deletion tombstones are not returned by this source; run a full replay to establish complete coverage" : null,
             });
           },
@@ -615,7 +639,9 @@ export function createQboProviderSync(options: {
       const checkpoint = await checkpointStore.load(scope, QBO_CHANGE_STREAM);
       const watermark = checkpoint?.watermark ?? null;
       const age = watermark === null ? Infinity : startedAt.getTime() - Date.parse(watermark);
-      const reason: QboChangeSyncResult["reason"] = input.forceFullReplay ? "requested" : watermark === null ? "no_checkpoint" : !(age <= CDC_SAFE_LOOKBACK_MS) ? "checkpoint_expired" : null;
+      const globalAnchorVerified = typeof checkpoint?.cursor === "string" && checkpoint.cursor.startsWith("verified:");
+      const baselineVerified = input.forceFullReplay || watermark === null || (globalAnchorVerified && await hasVerifiedFullReplayBaseline());
+      const reason: QboChangeSyncResult["reason"] = input.forceFullReplay ? "requested" : watermark === null ? "no_checkpoint" : !(age <= CDC_SAFE_LOOKBACK_MS) ? "checkpoint_expired" : !baselineVerified ? "missing_baseline" : null;
       if (reason !== null) return fullReplay(reason, checkpoint, input.maxPages);
 
       const currency = await loadCurrencyContext();
@@ -633,7 +659,7 @@ export function createQboProviderSync(options: {
       // instants, never strings, and store the watermark as UTC ISO.
       const next = new Date(response.time !== undefined ? Date.parse(response.time) : startedAt.getTime() - 60_000).toISOString();
       const advanced = Date.parse(next) > Date.parse(watermark!) ? next : new Date(Date.parse(watermark!)).toISOString();
-      const anchored = typeof checkpoint?.cursor === "string" && checkpoint.cursor.startsWith("verified:");
+      const anchored = globalAnchorVerified;
       if (!options.executor.transaction) throw new AccountingError("accounting_configuration", "QBO change sync requires transaction support");
       try {
         const counts = await options.executor.transaction(async executor => {
@@ -682,6 +708,7 @@ export function createQboProviderSync(options: {
             const openExceptionCount = (await mirror.listOpenSyncExceptions(scope, stream)).length;
             await recordStreamCoverage(mirror, stream, {
               unsupportedCount: tally.unsupported.get(stream) ?? 0, openExceptionCount, observedAt,
+              baselineVerified,
               extraReason: anchored ? null : "Change capture is not yet anchored to a verified full replay",
             });
           }
@@ -761,13 +788,23 @@ export function createQboProviderSync(options: {
     if (!evidence?.enabled || evidence.evidence !== "live_provider_readback") throw new AccountingError("accounting_capability_disabled", "Run the read-only QuickBooks CompanyInfo probe before mirroring transactions", { capability: "accounting.read" });
   }
 
-  async function recordStreamCoverage(mirror: QboAccountingMirrorStore, stream: string, input: { readonly unsupportedCount: number; readonly openExceptionCount: number; readonly observedAt: string; readonly extraReason: string | null }): Promise<void> {
+  async function hasVerifiedFullReplayBaseline(): Promise<boolean> {
+    const coverage = await Promise.all(ANCHOR_STREAMS.map(stream => options.mirror.readCoverage(scopeOf(scope), stream)));
+    return coverage.every(item => item.reason?.split("; ").includes(QBO_FULL_REPLAY_ANCHOR));
+  }
+
+  async function recordStreamCoverage(mirror: QboAccountingMirrorStore, stream: string, input: { readonly unsupportedCount: number; readonly openExceptionCount: number; readonly observedAt: string; readonly baselineVerified: boolean; readonly extraReason: string | null }): Promise<void> {
     const summary = await mirror.summarizeStream(scope, stream);
     const reasons = [
       input.unsupportedCount > 0 ? `${input.unsupportedCount} provider object or line records in this run were not mirrorable` : null,
       input.openExceptionCount > 0 ? `${input.openExceptionCount} QBO object(s) have unresolved mirror exceptions` : null,
       input.extraReason,
     ].filter((value): value is string => value !== null);
+    // Store the replay proof ahead of human-facing reasons. Coverage remains
+    // complete when the replay fetched every object but left explicit holds;
+    // those holds still make the stream partial through the normal status and
+    // exception checks.
+    const storedReason = [input.baselineVerified ? QBO_FULL_REPLAY_ANCHOR : null, ...reasons].filter((value): value is string => value !== null);
     await mirror.recordCoverage({
       scope,
       stream,
@@ -781,7 +818,7 @@ export function createQboProviderSync(options: {
       objectCount: summary.objectCount,
       transactionCount: summary.transactionCount,
       lineCount: summary.lineCount,
-      reason: reasons.length ? reasons.join("; ").slice(0, 500) : null,
+      reason: storedReason.length ? storedReason.join("; ").slice(0, 500) : null,
     });
   }
 

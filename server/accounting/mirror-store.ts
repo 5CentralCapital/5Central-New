@@ -49,6 +49,14 @@ interface SourceObjectInput {
   readonly deletedAt?: string | null;
 }
 
+interface NamedObjectObservationResult {
+  /** The immutable first-seen source row for this provider revision. */
+  readonly sourceObjectId: string;
+  readonly bodyHash: string;
+  /** A different body under the same SyncToken changed a material field. */
+  readonly conflict: boolean;
+}
+
 export interface QboTransactionInput {
   readonly id?: string;
   readonly sourceObjectId: string;
@@ -466,6 +474,13 @@ export interface QboAccountingMirrorStore extends FinancialSourceReadPort, Finan
   readonly purposeMappings: AccountingPurposeMappingPort;
   forExecutor(executor: RentOpsQueryExecutor): QboAccountingMirrorStore;
   ingestSourceObject(input: SourceObjectInput): Promise<{ readonly id: string; readonly bodyHash: string }>;
+  /**
+   * Ingest a named QBO profile while preserving every distinct body observed
+   * for the same provider revision. Financial source rows remain immutable;
+   * material same-token drift is returned as a per-object conflict so one
+   * profile cannot roll back the whole sync transaction.
+   */
+  ingestNamedObject(input: SourceObjectInput): Promise<NamedObjectObservationResult>;
   ingestTransaction(input: QboTransactionInput): Promise<{ readonly id: string }>;
   beginTransactionRevision(input: QboTransactionRevisionInput): Promise<void>;
   ingestTransactionLine(input: QboTransactionLineInput): Promise<void>;
@@ -529,6 +544,15 @@ function withoutReadTimeFields(objectType: string, value: unknown, topLevel = tr
   const result: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
     if (skip?.has(key)) continue;
+    // Name-list records can be returned with a newer read timestamp while
+    // QuickBooks keeps the same SyncToken. The timestamp is retained in each
+    // raw observation, but it is not itself a material profile change.
+    if (topLevel && (objectType === "Customer" || objectType === "Vendor" || objectType === "Employee") && key === "MetaData" && child && typeof child === "object" && !Array.isArray(child)) {
+      const metadata = { ...(child as Record<string, unknown>) };
+      delete metadata.LastUpdatedTime;
+      result[key] = withoutReadTimeFields(objectType, metadata, false);
+      continue;
+    }
     if (key.endsWith("Ref") && child && typeof child === "object" && !Array.isArray(child)) {
       const reference = { ...(child as Record<string, unknown>) };
       delete reference.name;
@@ -638,6 +662,59 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       return { id: row.id, bodyHash: row.body_hash };
     }
     return { id: row.id, bodyHash };
+  }
+
+  async ingestNamedObject(input: SourceObjectInput): Promise<NamedObjectObservationResult> {
+    const scope = scopeOf(input.scope);
+    const objectType = /^(Customer|Vendor|Employee)$/.test(input.objectType) ? input.objectType : (() => { throw new AccountingError("accounting_validation", "QBO named object type is invalid"); })();
+    const objectId = stringValue(input.objectId, "object ID", 200);
+    const version = stringValue(input.version, "object version", 120);
+    if (!input.providerBody || typeof input.providerBody !== "object" || Array.isArray(input.providerBody)) throw new AccountingError("accounting_validation", "QBO provider body must be an object");
+    const bodyHash = canonicalJsonSha256(input.providerBody);
+    const id = randomUUID();
+    const receivedAt = input.receivedAt ?? this.now().toISOString();
+    const inserted = await this.executor.query<{ id: string }>(
+      `INSERT INTO accounting_qbo_source_objects
+        (id, organization_id, legal_entity_id, environment, realm_id, object_type, object_id, object_version, provider_updated_at, body_hash, provider_body, received_at, deleted_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13)
+       ON CONFLICT (organization_id, legal_entity_id, environment, realm_id, object_type, object_id, object_version)
+       DO NOTHING RETURNING id`,
+      [id, ...scopeParts(scope), objectType, objectId, version, input.providerUpdatedAt ?? null, bodyHash, JSON.stringify(input.providerBody), receivedAt, input.deletedAt ?? null],
+    );
+    const row = inserted.rows[0]
+      ? { id: inserted.rows[0].id, body_hash: bodyHash, provider_body: input.providerBody }
+      : (await this.executor.query<{ id: string; body_hash: string; provider_body: unknown }>(
+        `SELECT id, body_hash, provider_body FROM accounting_qbo_source_objects
+         WHERE organization_id = $1 AND legal_entity_id = $2 AND environment = $3 AND realm_id = $4 AND object_type = $5 AND object_id = $6 AND object_version = $7`,
+        [...scopeParts(scope), objectType, objectId, version],
+      )).rows[0];
+    if (!row) throw new AccountingError("accounting_conflict", "QBO source object version changed after it was mirrored");
+
+    const stored = typeof row.provider_body === "string" ? JSON.parse(row.provider_body) as unknown : row.provider_body;
+    const materialConflict = row.body_hash !== bodyHash
+      && canonicalJsonSha256(withoutReadTimeFields(objectType, stored)) !== canonicalJsonSha256(withoutReadTimeFields(objectType, input.providerBody));
+    // Keep every named profile observation, including a repeated first body.
+    // This makes A -> B -> A deterministic and prevents an old observation
+    // from remaining selected after the provider returns to A.
+    // `observation_order` is a database identity column and is the tie-breaker
+    // when several provider observations share the same received timestamp.
+    const orderedObservedAt = isoTimestampSchema.parse(receivedAt);
+    await this.executor.query(
+      `INSERT INTO accounting_qbo_named_observations
+        (id, organization_id, legal_entity_id, environment, realm_id, object_type, object_id, object_version, source_object_id, provider_updated_at, body_hash, provider_body, observed_at, material_conflict)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14)`,
+      [randomUUID(), ...scopeParts(scope), objectType, objectId, version, row.id, input.providerUpdatedAt ?? null, bodyHash, JSON.stringify(input.providerBody), orderedObservedAt, materialConflict],
+    );
+    const prior = await this.executor.query<{ has_conflict: boolean | string }>(
+      `SELECT EXISTS(
+         SELECT 1 FROM accounting_qbo_named_observations
+          WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
+            AND object_type=$5 AND object_id=$6 AND object_version=$7 AND material_conflict=true
+       ) AS has_conflict`,
+      [...scopeParts(scope), objectType, objectId, version],
+    );
+    const hasPriorConflict = prior.rows[0]?.has_conflict === true || prior.rows[0]?.has_conflict === "true";
+    return { sourceObjectId: row.id, bodyHash, conflict: materialConflict || hasPriorConflict };
   }
 
   async ingestTransaction(input: QboTransactionInput): Promise<{ readonly id: string }> {
@@ -1051,16 +1128,28 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       object_version: unknown;
       provider_body: unknown;
       provider_updated_at: unknown;
-    }>(
-      `SELECT DISTINCT ON (object_id) object_id, object_version, provider_body, provider_updated_at
-         FROM accounting_qbo_source_objects
-        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
-          AND object_type=$5 AND deleted_at IS NULL
-        ORDER BY object_id,
-                 CASE WHEN object_version ~ '^[0-9]+$' THEN 0 ELSE 1 END,
-                 CASE WHEN object_version ~ '^[0-9]+$' THEN length(object_version) ELSE 0 END DESC,
-                 CASE WHEN object_version ~ '^[0-9]+$' THEN object_version ELSE '' END DESC,
-                 provider_updated_at DESC NULLS LAST, received_at DESC`,
+      }>(
+      `SELECT DISTINCT ON (o.object_id) o.object_id, o.object_version,
+              COALESCE(ob.provider_body, o.provider_body) AS provider_body,
+              COALESCE(ob.provider_updated_at, o.provider_updated_at) AS provider_updated_at
+         FROM accounting_qbo_source_objects o
+         LEFT JOIN LATERAL (
+           SELECT provider_body, provider_updated_at
+             FROM accounting_qbo_named_observations n
+            WHERE n.organization_id=o.organization_id AND n.legal_entity_id=o.legal_entity_id
+              AND n.environment=o.environment AND n.realm_id=o.realm_id
+              AND n.object_type=o.object_type AND n.object_id=o.object_id AND n.object_version=o.object_version
+              AND n.material_conflict=false
+            ORDER BY n.observed_at DESC, n.observation_order DESC
+            LIMIT 1
+         ) ob ON true
+        WHERE o.organization_id=$1 AND o.legal_entity_id=$2 AND o.environment=$3 AND o.realm_id=$4
+          AND o.object_type=$5 AND o.deleted_at IS NULL
+        ORDER BY o.object_id,
+                 CASE WHEN o.object_version ~ '^[0-9]+$' THEN 0 ELSE 1 END,
+                 CASE WHEN o.object_version ~ '^[0-9]+$' THEN length(o.object_version) ELSE 0 END DESC,
+                 CASE WHEN o.object_version ~ '^[0-9]+$' THEN o.object_version ELSE '' END DESC,
+                 COALESCE(ob.provider_updated_at, o.provider_updated_at) DESC NULLS LAST, o.received_at DESC`,
       [...scopeParts(scope), objectType],
     );
     return result.rows.map(row => {
@@ -1375,7 +1464,16 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       const gaps = await this.executor.query<{ gap_from: string; gap_through: string }>(`SELECT gap_from,gap_through FROM accounting_qbo_coverage_gaps WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream=$5 ORDER BY gap_from`, [...scopeParts(scope), stream]);
       const openCount = (await this.openExceptionCounts(scope, stream)).get(stream) ?? 0;
       const coverage = markStaleCoverage(mapCoverage(scope, rows.rows[0] ?? null, gaps.rows.map((gap) => ({ from: dateValue(gap.gap_from, "gap start"), through: dateValue(gap.gap_through, "gap end") })), stream), this.now());
-      return openCount > 0 && coverage.status === "complete" ? financialSourceCoverageSchema.parse({ ...coverage, status: "partial", reason: `${openCount} QBO object(s) have unresolved mirror exceptions` }) : coverage;
+      if (openCount > 0 && coverage.status === "complete") {
+        const openReason = `${openCount} QBO object(s) have unresolved mirror exceptions`;
+        // Keep machine-readable replay proofs when the coverage is projected
+        // to partial because a per-object hold is still open. Replacing the
+        // reason would make a later CDC run mistake a pre-migration global
+        // checkpoint for a verified baseline and skip the required replay.
+        const reason = coverage.reason ? `${coverage.reason}; ${openReason}` : openReason;
+        return financialSourceCoverageSchema.parse({ ...coverage, status: "partial", reason });
+      }
+      return coverage;
     }
     // The aggregate describes the cash/payables mirror that its existing
     // readers depend on. Receivable and customer streams are read per stream

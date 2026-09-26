@@ -119,6 +119,48 @@ test("sync strategy: full replay without a checkpoint, CDC within 30 days, full 
   }
 });
 
+test("a pre-existing verified changes checkpoint cannot skip the per-stream full baseline", async () => {
+  const h = await harness({}, "2026-09-20T00:00:00Z");
+  try {
+    // This is the state created by the pre-receivables synchronizer: the
+    // global change chain is marked verified, but migration 050 streams have
+    // never been fetched from the beginning. The first post-migration sync
+    // must replay every required stream before it can use CDC.
+    await h.executor.query(
+      `INSERT INTO accounting_qbo_sync_checkpoints
+        (organization_id, legal_entity_id, environment, realm_id, stream, watermark, cursor, version, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,1,$8)`,
+      [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId, QBO_CHANGE_STREAM, "2026-09-19T00:00:00.000Z", "verified:2026-09-19T00:00:00.000Z", "2026-09-20T00:00:00.000Z"],
+    );
+    const first = await h.sync.syncChanges();
+    assert.equal(first.mode, "full_replay");
+    assert.equal(first.reason, "missing_baseline");
+    assert.equal(first.anchored, true);
+    assert.equal(h.cdc.calls.length, 0, "a legacy global anchor cannot trigger CDC before every stream is replayed");
+
+    h.cdc.queue.push(cdcResponse({}, "2026-09-21T00:00:00Z"));
+    const second = await h.sync.syncChanges();
+    assert.equal(second.mode, "cdc");
+    assert.equal(second.status, "complete");
+    assert.equal(h.cdc.calls.length, 1);
+
+    // A per-object hold projects a complete stream to partial. That read
+    // must retain the replay proof or the next run would schedule another
+    // unnecessary full replay.
+    await h.executor.query(
+      `INSERT INTO accounting_qbo_sync_exceptions
+        (organization_id, legal_entity_id, environment, realm_id, stream, object_type, object_id, object_version, exception_kind, reasons, first_seen_at, last_seen_at)
+       VALUES ($1,$2,$3,$4,'accounts','Account','7','0','unsupported','["synthetic"]'::jsonb,$5,$5)`,
+      [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId, "2026-09-21T00:00:00.000Z"],
+    );
+    const accountCoverage = await h.mirror.readCoverage(sourceScope, "accounts");
+    assert.equal(accountCoverage.status, "partial");
+    assert.match(accountCoverage.reason ?? "", /QBO_FULL_REPLAY_ANCHOR_V2/);
+  } finally {
+    await h.close();
+  }
+});
+
 test("coverage becomes partial when no successful provider read is observed beyond the CDC lookback", async () => {
   const store: Store = { Bill: [bill("50", "0", "2026-09-10T10:00:00Z")], Account: [{ Id: "7", SyncToken: "0", AccountType: "Expense", MetaData: { LastUpdatedTime: "2026-09-01T00:00:00Z" } }] };
   const h = await harness(store, "2026-09-20T00:00:00Z");
