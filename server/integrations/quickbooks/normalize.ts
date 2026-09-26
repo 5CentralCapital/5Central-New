@@ -90,6 +90,18 @@ function optionalText(value: unknown, field: string, max = 255): string | null {
   return text(value, field, max);
 }
 
+/**
+ * QBO descriptions are provider metadata, not accounting amounts. Intuit can
+ * return up to 2,000 characters here, while the source-line read contract
+ * intentionally exposes a 500-character display field. Keep the raw provider
+ * body on the source object and project the display value safely instead of
+ * rejecting an otherwise mirrorable transaction.
+ */
+export function normalizeQboLineDescription(value: unknown, field = "line description"): string | null {
+  const description = optionalText(value, field, 2_000);
+  return description === null ? null : description.slice(0, 500);
+}
+
 function providerTimestamp(value: unknown): string {
   const raw = text(value, "provider update timestamp", 100);
   const parsed = new Date(raw);
@@ -172,7 +184,7 @@ function transactionCounterparty(type: SupportedQboTransactionType, body: QuickB
 }
 
 function lineDescription(body: QuickBooksJsonObject, line: QuickBooksJsonObject): string | null {
-  return optionalText(line.Description ?? line.Memo ?? body.PrivateNote ?? body.Memo, "line description", 500);
+  return normalizeQboLineDescription(line.Description ?? line.Memo ?? body.PrivateNote ?? body.Memo);
 }
 
 function paymentCashAccount(type: SupportedQboTransactionType, body: QuickBooksJsonObject): string | null {
@@ -298,7 +310,7 @@ function objectLevelReasons(type: SupportedQboTransactionType, body: QuickBooksJ
   // Reconcile only when every line was understood; otherwise the line-level
   // reasons already explain the gap.
   const expectedLineCount = rawLineCount + (type === "Deposit" && cashBack !== null && BigInt(cashBack) > BigInt(0) ? 1 : 0);
-  if (total !== null && lines.length === expectedLineCount && rawLineCount > 0 && reasons.length === 0) {
+  if (type !== "JournalEntry" && total !== null && lines.length === expectedLineCount && rawLineCount > 0 && reasons.length === 0) {
     // Deposit.TotalAmt is net of CashBack. Keep every source line and
     // reconcile the signed cash flow instead of netting away the receipt or
     // inventing a negative source amount.

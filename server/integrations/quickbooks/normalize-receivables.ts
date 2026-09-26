@@ -10,7 +10,7 @@ import {
   type QboReceivableEffect,
   type QboReceivableEffectKind,
 } from "../../../shared/accounting/receivables";
-import { QboNormalizationError, qboAmountToCents, resolveQboCurrency, type QboCurrencyContext } from "./normalize";
+import { normalizeQboLineDescription, QboNormalizationError, qboAmountToCents, resolveQboCurrency, type QboCurrencyContext } from "./normalize";
 
 /*
  * Normalizes QuickBooks customer-linked transactions into receivable
@@ -158,7 +158,7 @@ function salesLineEffects(body: QuickBooksJsonObject, context: SalesLineContext,
     }
     const amount = qboAmountToCents(line.Amount, `${label} Amount`);
     const lineId = text(line.Id, `${label} Id`, 200);
-    const description = optionalText(line.Description, `${label} Description`, 500) ?? context.txnDescription;
+    const description = normalizeQboLineDescription(line.Description, `${label} Description`) ?? context.txnDescription;
     if (detailType === SALES_DETAIL) {
       const detail = record(line.SalesItemLineDetail);
       if (!detail) reject(`QBO ${label} has no SalesItemLineDetail`);
@@ -403,7 +403,7 @@ function normalizeJournalEntry(body: QuickBooksJsonObject, identity: ReceivableI
       classObjectId: referenceId(detail.ClassRef, `${label} ClassRef`),
       departmentObjectId: referenceId(detail.DepartmentRef, `${label} DepartmentRef`),
       serviceDate: null,
-      description: optionalText(line.Description, `${label} Description`, 500),
+      description: normalizeQboLineDescription(line.Description, `${label} Description`),
     });
   });
   if (debits !== credits) reject("QBO JournalEntry debits and credits do not balance");

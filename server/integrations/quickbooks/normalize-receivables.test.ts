@@ -47,6 +47,14 @@ test("an invoice becomes signed charge and discount effects that reconcile to To
   assert.deepEqual([document.emailStatus, document.allowOnlineCard, document.allowOnlineAch, document.allowIpn, document.billEmailPresent], ["NotSet", false, false, false, false]);
 });
 
+test("projects a valid long receivable line description to the source display limit", () => {
+  const description = "D".repeat(2_000);
+  const document = supported(normalizeQboReceivable("Invoice", invoice({
+    Line: [{ Id: "1", Amount: 1275, DetailType: "SalesItemLineDetail", Description: description, SalesItemLineDetail: { ItemRef: { value: "10" } } }],
+  }), { currency: usd }));
+  assert.equal(document.effects[0]?.description, description.slice(0, 500));
+});
+
 test("string decimals are accepted exactly and sub-cent precision is refused", () => {
   const exact = supported(normalizeQboReceivable("Invoice", invoice({ TotalAmt: "1275.00", Balance: "0", Line: [{ Id: "1", Amount: "1275.00", DetailType: "SalesItemLineDetail", SalesItemLineDetail: {} }] }), { currency: usd }));
   assert.equal(exact.openBalanceCents, "0");

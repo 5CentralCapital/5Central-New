@@ -40,7 +40,7 @@ test("normalizes provider Purchase, Bill, and BillPayment lines with exact cent 
 
 test("normalizes JournalEntry debit cost and credit refund lines with exact source identities", () => {
   const result = normalizeQboTransaction("JournalEntry", {
-    Id: "2949", SyncToken: "0", TxnDate: "2026-09-08", CurrencyRef: { value: "USD" },
+    Id: "2949", SyncToken: "0", TxnDate: "2026-09-08", CurrencyRef: { value: "USD" }, TotalAmt: 0,
     MetaData: { LastUpdatedTime: updated },
     Line: [
       { Id: "0", Amount: "1286.44", Description: "Inventory cost", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "inventory-1" } } },
@@ -59,6 +59,32 @@ test("normalizes JournalEntry debit cost and credit refund lines with exact sour
     { lineId: "0", accountObjectId: "inventory-1", amountCents: "128644", direction: "debit", flow: "outgoing", lineRole: "expense" },
     { lineId: "1", accountObjectId: "refund-1", amountCents: "128644", direction: "credit", flow: "incoming", lineRole: "expense" },
   ]);
+});
+
+test("accepts QBO JournalEntry TotalAmt zero when debit and credit lines balance", () => {
+  const result = normalizeQboTransaction("JournalEntry", {
+    Id: "2949-total-zero", SyncToken: "0", TxnDate: "2026-09-08", CurrencyRef: { value: "USD" }, TotalAmt: 0,
+    MetaData: { LastUpdatedTime: updated },
+    Line: [
+      { Id: "0", Amount: "1286.44", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "inventory-1" } } },
+      { Id: "1", Amount: "1286.44", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "refund-1" } } },
+    ],
+  });
+  assert.deepEqual(result.unsupportedReasons, []);
+});
+
+test("projects a valid long QBO line description to the source display limit", () => {
+  const description = "D".repeat(2_000);
+  const result = normalizeQboTransaction("JournalEntry", {
+    Id: "2949-long-description", SyncToken: "0", TxnDate: "2026-09-08", CurrencyRef: { value: "USD" }, TotalAmt: 0,
+    MetaData: { LastUpdatedTime: updated },
+    Line: [
+      { Id: "0", Amount: "10.00", Description: description, JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "inventory-1" } } },
+      { Id: "1", Amount: "10.00", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "refund-1" } } },
+    ],
+  });
+  assert.deepEqual(result.unsupportedReasons, []);
+  assert.equal(result.value?.lines[0]?.description, description.slice(0, 500));
 });
 
 test("rejects an unbalanced JournalEntry instead of mirroring partial cost lines", () => {
