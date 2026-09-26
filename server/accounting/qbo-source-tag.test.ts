@@ -8,7 +8,7 @@ import { assertQboWriteFields, createQboWriteService, qboWritePolicyFromEnv } fr
 import { hasQboSourceTag, qboSourceTag, withQboSourceTag } from "./qbo-source-tag";
 
 test("creates without a natural key get a stable 5CO tag line in their internal note", () => {
-  for (const entity of ["Invoice", "Payment", "CreditMemo", "JournalEntry", "Bill"]) {
+  for (const entity of ["Invoice", "Payment", "CreditMemo", "SalesReceipt", "RefundReceipt", "JournalEntry", "Bill"]) {
     assert.deepEqual(withQboSourceTag(entity, "create", { TxnDate: "2026-09-01" }, "cmd:op-1"), { TxnDate: "2026-09-01", PrivateNote: "5CO:cmd:op-1" }, entity);
   }
   // Customer has no PrivateNote in the QuickBooks API; its internal note is Notes.

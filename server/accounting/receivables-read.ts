@@ -11,6 +11,7 @@ import {
 } from "../../shared/accounting/receivables";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { AccountingError } from "./errors";
+import { currentBusinessDate, resolveTenancyHistory } from "./tenancy-source-resolution";
 
 /*
  * The one read path for QuickBooks-backed tenant/customer financial history
@@ -329,28 +330,26 @@ export async function readCustomerLedger(executor: RentOpsQueryExecutor, query: 
  * external identity map. Returns null when the tenancy is not linked yet —
  * callers must show "not linked", never a zero balance.
  */
-export async function resolveTenancyCustomer(executor: RentOpsQueryExecutor, input: { readonly organizationId: string; readonly tenancyId: string; readonly environment: "sandbox" | "production" }): Promise<{ readonly scope: FinancialSourceScope; readonly customerObjectId: string } | null> {
+export async function resolveTenancyCustomer(executor: RentOpsQueryExecutor, input: { readonly organizationId: string; readonly tenancyId: string; readonly environment: "sandbox" | "production"; readonly asOf?: string }): Promise<{ readonly scope: FinancialSourceScope; readonly customerObjectId: string } | null> {
+  const history = await resolveTenancyHistory(executor, {
+    organizationId: input.organizationId,
+    tenancyId: input.tenancyId,
+    asOf: input.asOf ?? currentBusinessDate(),
+  });
+  // A customer link is usable only when the full historical tenancy interval
+  // resolves to one owner. The identity map alone is not an ownership proof.
+  if (!history?.effectiveLegalEntityId) return null;
   const rows = (await executor.query<{ legal_entity_id: string; source_scope: string; external_id: string }>(
     `SELECT i.legal_entity_id, i.source_scope, i.external_id
        FROM company_external_identities i
-       JOIN rent_ops_tenancies t ON t.id=i.local_id
       WHERE i.organization_id=$1 AND i.provider='qbo' AND i.record_kind='Customer' AND i.local_kind='tenancy' AND i.local_id=$2 AND i.source_scope LIKE $3
-        AND EXISTS (
-          SELECT 1
-            FROM company_property_entity_periods m
-           WHERE m.organization_id=i.organization_id AND m.legal_entity_id=i.legal_entity_id AND m.property_id=t.property_id
-             AND m.effective_from <= GREATEST(
-               COALESCE(t.actual_move_in_on, t.planned_move_in_on, (t.created_at AT TIME ZONE 'America/New_York')::date),
-               COALESCE(t.actual_move_out_on, (t.ended_at AT TIME ZONE 'America/New_York')::date, (CURRENT_TIMESTAMP AT TIME ZONE 'America/New_York')::date)
-             )
-             AND (m.effective_until IS NULL OR m.effective_until > COALESCE(t.actual_move_in_on, t.planned_move_in_on, (t.created_at AT TIME ZONE 'America/New_York')::date))
-        )
       ORDER BY i.created_at`,
     [input.organizationId, input.tenancyId, `qbo:${input.environment}:%`],
   )).rows;
   if (rows.length === 0) return null;
   if (rows.length > 1) throw new AccountingError("accounting_conflict", "This tenancy is linked to more than one QuickBooks customer; resolve the mapping before showing its history");
   const row = rows[0]!;
+  if (row.legal_entity_id !== history.effectiveLegalEntityId) return null;
   const match = /^qbo:(sandbox|production):(\d{1,32})$/.exec(row.source_scope);
   if (!match) throw new AccountingError("accounting_unavailable", "The tenancy's QuickBooks mapping has an invalid scope");
   return {

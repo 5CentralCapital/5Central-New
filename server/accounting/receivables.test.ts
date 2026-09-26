@@ -362,11 +362,13 @@ test("tenancies link to one QuickBooks customer through the immutable identity m
       INSERT INTO company_property_entity_periods(id,organization_id,legal_entity_id,property_id,effective_from) VALUES('30000000-0000-4000-8000-000000000003','10000000-0000-4000-8000-000000000002','20000000-0000-4000-8000-000000000003','foreign-property','2020-01-01');
       INSERT INTO rent_ops_people(id,first_name,last_name) VALUES('person-1','QA','Resident'),('person-2','QA','Next'),('person-3','QA','Historical'),('person-4','QA','Other entity'),('person-5','QA','Other company');
       INSERT INTO rent_ops_tenancies(id,property_id,unit_id,primary_person_id,status,created_at,property_link_knowledge,unit_link_knowledge,primary_person_link_knowledge,status_knowledge)
-        VALUES('t-1','${SYNTHETIC_COMPANY.propertyId}','${SYNTHETIC_COMPANY.unitId}','person-1','past',NOW(),'manual','manual','manual','manual'),
+      VALUES('t-1','${SYNTHETIC_COMPANY.propertyId}','${SYNTHETIC_COMPANY.unitId}','person-1','past',NOW(),'manual','manual','manual','manual'),
               ('t-2','${SYNTHETIC_COMPANY.propertyId}','${SYNTHETIC_COMPANY.unitId}','person-2','current',NOW(),'manual','manual','manual','manual'),
               ('t-3','${SYNTHETIC_COMPANY.propertyId}','${SYNTHETIC_COMPANY.unitId}','person-3','past',NOW(),'manual','manual','manual','manual'),
               ('t-4','demo-property-b','demo-unit-b-1','person-4','past',NOW(),'manual','manual','manual','manual'),
               ('t-5','foreign-property','foreign-unit-1','person-5','past',NOW(),'manual','manual','manual','manual');
+      UPDATE rent_ops_tenancies SET actual_move_in_on='2021-01-01', actual_move_out_on='2021-12-31' WHERE id='t-1';
+      UPDATE rent_ops_tenancies SET actual_move_in_on='2022-01-01' WHERE id='t-2';
       UPDATE rent_ops_tenancies SET actual_move_in_on='2019-01-01', actual_move_out_on='2019-12-31' WHERE id='t-3';`);
     assert.equal((await h.executor.transaction!(tx => linkTenancyToQboCustomer(tx, input))).status, "linked");
     assert.equal((await h.executor.transaction!(tx => linkTenancyToQboCustomer(tx, input))).status, "already_linked");

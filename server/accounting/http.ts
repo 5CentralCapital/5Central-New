@@ -22,6 +22,7 @@ import { hashQuickBooksSessionBinding } from "./oauth-state";
 import { readCustomerLedger, resolveTenancyCustomer } from "./receivables-read";
 import { linkTenancyToQboCustomer } from "./receivables-links";
 import { readQboCustomerPlan } from "./qbo-customer-plan-service";
+import { resolveTenancySource } from "./tenancy-source-resolution";
 
 function businessToday(now = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
@@ -281,7 +282,7 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
     if (!executor.transaction) throw new AccountingError("accounting_configuration", "Accounting reads require a transactional company database");
     const actorId = companyWebActor(request);
     const result = await executor.transaction(async transaction => {
-      const link = await resolveTenancyCustomer(transaction, { organizationId, tenancyId: query.tenancyId, environment: query.environment });
+      const link = await resolveTenancyCustomer(transaction, { organizationId, tenancyId: query.tenancyId, environment: query.environment, asOf: query.asOf ?? businessToday() });
       if (!link) return null;
       // Authorize against the linked company before reading any of its data.
       const principal = await loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: "admin" });
@@ -289,6 +290,51 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
       return readCustomerLedger(transaction, { scope: link.scope, customerObjectId: link.customerObjectId, asOf: query.asOf, today: businessToday(), limit: query.limit, cursor: query.cursor });
     }, { readOnly: true });
     if (!result) { response.status(404).json({ code: "accounting_not_linked", message: "This tenancy is not linked to a QuickBooks customer yet; its QuickBooks history is not shown." }); return; }
+    response.json(result);
+  }));
+  app.get("/api/company/:organizationId/accounting/qbo/receivables/tenancy-source-resolution", requireAdmin, companyReadHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const query = z.object({
+      tenancyId: z.string().min(1).max(160), environment: environmentSchema.default("production"), asOf: z.string().date().optional(),
+    }).strict().parse(request.query);
+    if (!executor.transaction) throw new AccountingError("accounting_configuration", "Accounting reads require a transactional company database");
+    const actorId = companyWebActor(request);
+    const result = await executor.transaction(async transaction => {
+      const principal = await loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: "admin" });
+      const resolution = await resolveTenancySource(transaction, {
+        organizationId,
+        tenancyId: query.tenancyId,
+        environment: query.environment,
+        asOf: query.asOf ?? businessToday(),
+      });
+      if (!resolution) return null;
+      // A historical tenancy may cross entities. The caller must be allowed
+      // to see every mapped owner represented by the resolved interval before
+      // the historical QBO scope or customer link is returned.
+      let ownerIds = Array.from(new Set(resolution.ownership.periods.filter(period => period.overlapsTenancy).map(period => period.legalEntityId)));
+      // Missing or uncertain dates produce no interval candidate. Keep the
+      // read scoped to the property's mapped entities while the caller
+      // reviews the history; do not turn that uncertainty into org-wide
+      // access merely because no owner could be selected.
+      if (ownerIds.length === 0) {
+        ownerIds = (await transaction.query<{ legal_entity_id: string }>(
+          `SELECT DISTINCT legal_entity_id
+             FROM company_property_entity_periods
+            WHERE organization_id=$1 AND property_id=$2`,
+          [organizationId, resolution.tenancy.propertyId],
+        )).rows.map(row => legalEntityIdSchema.parse(row.legal_entity_id));
+      }
+      if (ownerIds.length === 0) {
+        authorizeCompanyRead(principal, { organizationId }, READ_ROLES);
+      } else {
+        for (const legalEntityId of ownerIds) authorizeCompanyRead(principal, { organizationId, legalEntityId, propertyId: resolution.tenancy.propertyId }, READ_ROLES);
+      }
+      return resolution;
+    }, { readOnly: true });
+    if (!result) {
+      response.status(404).json({ code: "accounting_not_found", message: "This tenancy is not in the requested company's property history." });
+      return;
+    }
     response.json(result);
   }));
   app.post("/api/company/:organizationId/accounting/qbo/receivables/tenancy-links", requireAdmin, companyReadHandler(async (request, response) => {

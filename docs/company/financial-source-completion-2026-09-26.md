@@ -17,4 +17,8 @@ Before production rollout:
 
 Former tenants in entities without a connected QuickBooks company may retain explicitly identified local historical records under the approved source policy. Do not create another company or route those records into a different LLC merely to archive their history. Outstanding receivables and deposit liabilities remain reviewable.
 
+Tenant source selection uses historical tenancy and ownership dates. Unknown dates, ownership gaps, and ambiguous company assignments stay reviewable; import timestamps are not tenancy dates. The read-only migration preview extracts existing persisted records and allocations with their source IDs and exact cents. It does not reimport historical rental records or apply QuickBooks entries.
+
+Payment, CreditMemo, SalesReceipt, and RefundReceipt creation remains unsupported by the R-ops write adapter. Future enablement requires provider-verified record-only fields, matching transaction/posting-policy dates, and recovery that cannot resend ambiguous creates. Source tags are evidence identifiers, not assumed queryable provider keys. All production write switches remain off.
+
 Private agreements, tenant archives, migration payloads, live diagnostics, and account classifications stay outside this public repository. This release does not itself post accounting transactions, settle payments, migrate the full workbook models, or declare the companies reconciled.

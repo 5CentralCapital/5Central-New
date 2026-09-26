@@ -12,6 +12,7 @@ import type {
   JobState,
 } from "@shared/accounting/operations";
 import type { QboCustomerLedger } from "@shared/accounting/receivables";
+import type { TenantSourceResolution } from "@shared/accounting/tenant-source-resolution";
 
 export type AccountingView = "overview" | "transactions" | "bills" | "banking" | "pm-settlements" | "close" | "connections";
 export const ACCOUNTING_VIEWS: readonly { readonly value: AccountingView; readonly label: string }[] = [
@@ -131,6 +132,8 @@ export interface AccountingApi {
   command(organizationId: string, kind: AccountingOperationCommandKind, envelope: AccountingCommandEnvelope, signal?: AbortSignal): Promise<OperationReceipt>;
   /** A tenancy's QuickBooks customer ledger from the receivables mirror; null when the tenancy is not linked to a customer. */
   tenancyLedger(organizationId: string, query: { readonly tenancyId: string; readonly environment: AccountingEnvironment; readonly cursor?: string; readonly limit?: number }, signal?: AbortSignal): Promise<QboCustomerLedger | null>;
+  /** Resolves the historical local-R-ops and QuickBooks source states for one tenancy. Read only. */
+  tenancySourceResolution(organizationId: string, query: { readonly tenancyId: string; readonly environment?: AccountingEnvironment; readonly asOf?: string }, signal?: AbortSignal): Promise<TenantSourceResolution>;
   /** Records the tenancy ↔ QuickBooks customer link in the local identity map. Nothing is written to QuickBooks. */
   linkTenancyCustomer(organizationId: string, input: { readonly scope: AccountingScope; readonly tenancyId: string; readonly customerId: string }, signal?: AbortSignal): Promise<{ readonly status: "linked" | "already_linked" }>;
 }

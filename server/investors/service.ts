@@ -350,9 +350,8 @@ export class InvestorReadService {
             AND NOT EXISTS (SELECT 1 FROM company_documents cd0 WHERE cd0.id::text=d.id::text)
          UNION ALL
          SELECT d.id::text, d.file_name, lower(d.file_name) AS file_name_sort, d.state, d.kind AS type, d.property_id, 1 AS source_priority
-           FROM company_documents d
+          FROM company_documents d
           WHERE d.organization_id=$1 AND d.legal_entity_id=$2
-            AND d.kind IN ('contract','loan','investor_agreement')
             AND d.state='verified' AND d.archived_at IS NULL
             AND (d.property_id IS NULL OR EXISTS (
               SELECT 1 FROM company_property_entity_periods pep

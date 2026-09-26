@@ -91,6 +91,38 @@ test("nested QBO groups are traversed and the explicit Total column is selected"
   assert.equal(result.coverage, "complete");
 });
 
+test("native Header.ColData account rows are read while Summary totals stay excluded", async () => {
+  const source = createQuickBooksForecastBalanceSource({
+    scope, client: {
+      getReport: async () => response({
+        rawRows: [
+          {
+            Header: { ColData: [{ id: "property-parent", value: "Property total" }, { value: "9,999.99" }] },
+            Rows: { Row: {
+              Header: { ColData: [{ id: "property-child", value: "Arcadia cost" }, { value: "123.45" }] },
+            } },
+            Summary: { ColData: [{ value: "Total Property" }, { value: "10,123.44" }] },
+          },
+          { Header: { ColData: [{ id: "cash-header", value: "Operating cash" }, { value: "500.00" }] } },
+        ],
+      }),
+    }, basis: "Accrual", currency: "USD", mappingCoverage: "complete",
+    classifications: [
+      { accountId: "cash-header", kind: "operating_cash" },
+      { accountId: "property-parent", kind: "property_cost", propertyId: "property-1" },
+      { accountId: "property-child", kind: "property_accumulated_depreciation", propertyId: "property-1" },
+      { accountId: "property-cip", kind: "property_cip", propertyId: "property-1" },
+      { accountId: "ap-absent", kind: "accounts_payable" },
+    ],
+  });
+  const result = await source.read({ organizationId: scope.organizationId, asOf });
+  assert.equal(result.operatingCash.amountCents, "50000", "leaf account IDs in Header.ColData are usable");
+  assert.equal(result.propertyBookBalances["property-1"]?.costBasisCents, "999999", "the direct header account is retained");
+  assert.equal(result.propertyBookBalances["property-1"]?.accumulatedDepreciationCents, "12345", "the child contra-account is retained separately");
+  assert.equal(result.accountsPayable.amountCents, null, "an absent AP row is unknown, never an assumed zero");
+  assert.equal(result.accountsPayable.state, "unknown");
+});
+
 test("ambiguous multi-column reports do not use the first populated monetary cell", async () => {
   const source = createQuickBooksForecastBalanceSource({
     scope, client: {

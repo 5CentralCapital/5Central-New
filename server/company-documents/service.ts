@@ -471,6 +471,25 @@ export function createCompanyDocumentPort(options: CompanyDocumentServiceOptions
           && JSON.stringify(existing.tags) === JSON.stringify(prepared.document.tags)
           && existing.kind === prepared.document.kind;
         if (sameMetadata && existing.state === "verified") {
+          // A document may have been committed before its investor/legacy
+          // bridge became eligible. Reconcile that compatibility row from the
+          // already verified staged binding without uploading the object a
+          // second time; the bridge is inside this same transaction.
+          // Storage verification can issue a newer observation timestamp on a
+          // retry. The persisted company source is the immutable binding that
+          // the compatibility row must reuse.
+          const persistedBinding: RentOpsDocumentObjectBinding = {
+            ...staged.binding,
+            documentId: existing.id,
+            backend: existing.source.backend,
+            logicalKey: existing.source.logicalKey,
+            checksumSha256: existing.source.checksumSha256,
+            sizeBytes: existing.source.sizeBytes,
+            immutableGeneration: existing.source.immutableGeneration,
+            immutableVersion: existing.source.immutableVersion,
+            verifiedAt: existing.source.verifiedAt,
+          };
+          await options.legacyBridge?.registerVerifiedDocument?.({ executor, document: existing, binding: persistedBinding, legacyDocumentId: existing.id });
           if (stageRow.state === "staged") await executor.query("UPDATE company_document_upload_stages SET state='committed', consumed_at=$1 WHERE stage_id=$2 AND state='staged'", [nowIso(now), prepared.stageId]);
           return existing;
         }

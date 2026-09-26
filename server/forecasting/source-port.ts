@@ -222,42 +222,62 @@ function reportRows(response: QuickBooksReportResponse): ReportRows {
   const result: ReportRow[] = [];
   const amountIndex = moneyColumnIndex(response);
   let amountsVerified = amountIndex !== null;
-  const walk = (value: unknown): void => {
-    const row = objectValue(value);
-    if (!row) return;
-    const cells = row.ColData;
-    if (Array.isArray(cells) && cells.length > 0) {
-      const first = objectValue(cells[0]);
-      const accountId = typeof first?.id === "string" ? first.id : typeof first?.Id === "string" ? first.Id : undefined;
-      if (accountId) {
-        // When Columns metadata is absent, only the ordinary two-cell shape
-        // is safe. For a metadata-backed report, use the selected Total column
-        // and never substitute another populated monetary cell.
-        const selectedIndex = amountIndex === undefined ? (cells.length === 2 ? 1 : null) : amountIndex;
-        let amount: string | null = null;
-        if (selectedIndex !== null && selectedIndex < cells.length) {
-          const candidateCell = objectValue(cells[selectedIndex]);
-          const candidate = candidateCell?.value ?? candidateCell?.Value;
-          if (candidate !== undefined && candidate !== "") {
-            try {
-              amount = qboReportAmountToCents(candidate);
-            } catch {
-              // A mapped row with an invalid amount must remain unknown. Keep
-              // the row out of the sum rather than turning it into zero.
-            }
-          }
+  const candidateFromCells = (value: unknown): ReportRow | null => {
+    if (!Array.isArray(value) || value.length === 0) return null;
+    const first = objectValue(value[0]);
+    const accountId = typeof first?.id === "string" ? first.id : typeof first?.Id === "string" ? first.Id : undefined;
+    if (!accountId) return null;
+    // When Columns metadata is absent, only the ordinary two-cell shape is
+    // safe. For a metadata-backed report, use the selected Total column and
+    // never substitute another populated monetary cell.
+    const selectedIndex = amountIndex === undefined ? (value.length === 2 ? 1 : null) : amountIndex;
+    let amount: string | null = null;
+    if (selectedIndex !== null && selectedIndex < value.length) {
+      const candidateCell = objectValue(value[selectedIndex]);
+      const candidate = candidateCell?.value ?? candidateCell?.Value;
+      if (candidate !== undefined && candidate !== "") {
+        try {
+          amount = qboReportAmountToCents(candidate);
+        } catch {
+          // A mapped row with an invalid amount must remain unknown. Keep
+          // the row out of the sum rather than turning it into zero.
         }
-        if (amount === null) amountsVerified = false;
-        // Retain an account row even when its amount is absent or malformed so
-        // sumMapped can reject duplicate IDs instead of counting one valid row
-        // and silently ignoring its ambiguous sibling.
-        result.push({ accountId, amountCents: amount });
       }
     }
+    return { accountId, amountCents: amount };
+  };
+  /**
+   * Walk one native report node and return every account ID below it. QBO can
+   * put a real account line in Header.ColData while also returning a nested
+   * contra-account (for example, buildings and accumulated depreciation).
+   * Both account-bearing headers and child rows are retained. Summary.ColData
+   * is deliberately never visited: it is a group subtotal and must not be
+   * added to the account balances.
+   */
+  const walk = (value: unknown): Set<string> => {
+    const row = objectValue(value);
+    if (!row) return new Set();
+    const candidates = [
+      candidateFromCells(row.Header && objectValue(row.Header)?.ColData),
+      candidateFromCells(row.ColData),
+    ].filter((candidate): candidate is ReportRow => candidate !== null);
     // Native QBO groups use row.Rows.Row. Depending on the number of children,
     // Row can itself be an array or a single object, so accept both forms.
     const nestedRows = objectValue(row.Rows)?.Row ?? row.Rows;
-    for (const child of arrayOrObject(nestedRows)) walk(child);
+    const descendantIds = new Set<string>();
+    for (const child of arrayOrObject(nestedRows)) {
+      walk(child).forEach(accountId => descendantIds.add(accountId));
+    }
+    const ownIds = new Set(candidates.map(candidate => candidate.accountId));
+    for (const candidate of candidates) {
+      if (candidate.amountCents === null) amountsVerified = false;
+      // Retain an account row even when its amount is absent or malformed so
+      // sumMapped can reject duplicate IDs instead of counting one valid row
+      // and silently ignoring its ambiguous sibling.
+      result.push(candidate);
+    }
+    ownIds.forEach(accountId => descendantIds.add(accountId));
+    return descendantIds;
   };
   for (const row of arrayOrObject(rootRows)) walk(row);
   return { rows: result, amountsVerified };
