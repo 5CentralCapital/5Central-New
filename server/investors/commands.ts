@@ -24,6 +24,7 @@ import {
   investorCommandPayloadSchemas,
   investorContractTermsSchema,
   investorContactIdSchema,
+  investorPaymentKindMatchesSingleComponent,
   investorPaymentAmountsSchema,
   investorProviderPartyReferenceSchema,
   INVESTOR_COMMAND_KINDS,
@@ -47,6 +48,8 @@ import {
   type CreateInvestorRemittanceInstructionPayload,
   type UpdateInvestorRemittanceInstructionPayload,
 } from "../../shared/investors";
+import { companyDocumentSchema, type CompanyDocument } from "../../shared/company-documents";
+import type { RentOpsDocumentObjectBinding } from "../../shared/rent-ops-contracts";
 import type { AuthenticatedPrincipal, CommandAuthorizationPolicy, TransportAttestation } from "../company/authorization";
 import {
   runCompanyCommand,
@@ -55,15 +58,21 @@ import {
 } from "../company/commands/runner";
 import { ConflictCommandError, ForbiddenCommandError, ValidationCommandError } from "../company/commands/errors";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
+import { isCompanyScopedDocumentId } from "../rent-ops/services/service";
+import { registerVerifiedRentOpsDocument } from "../company-documents/bridge";
 import {
   FailClosedInvestorSourceResolver,
   type InvestorPostedSourceVerification,
   type InvestorSourceResolver,
   type InvestorSourceVerificationInput,
 } from "./source";
-import { dbCents, dbDate, dbDecimal, dbNullableDate, dbRevision, dbString } from "./helpers";
+import { dbCents, dbDate, dbDecimal, dbNullableDate, dbNullableString, dbRevision, dbString, dbTimestamp } from "./helpers";
 
 type AnyInvestorCommandEnvelope = CommandEnvelope<Record<string, unknown>>;
+
+type InvestorDocumentReferencePurpose = "contract" | "source_evidence";
+
+const CONTRACT_COMPANY_DOCUMENT_KINDS = new Set(["contract", "loan", "investor_agreement"]);
 
 export interface InvestorCommandExecutionOptions {
   readonly principal: AuthenticatedPrincipal;
@@ -252,30 +261,129 @@ async function assertContract(context: CommandHandlerContext<unknown>, contractI
   return { instrumentId: dbString(row, "instrument_id"), revision: dbRevision(row.record_revision), status: dbString(row, "status"), currentVersionId: row.current_version_id === null || row.current_version_id === undefined ? null : dbString(row, "current_version_id") };
 }
 
+function companyDocumentBridgeInput(row: Record<string, unknown>): { document: CompanyDocument; binding: RentOpsDocumentObjectBinding } {
+  const optionalString = (key: string): string | undefined => {
+    const value = dbNullableString(row, key);
+    return value === null ? undefined : value;
+  };
+  const tags = Array.isArray(row.tags)
+    ? row.tags.filter((value): value is string => typeof value === "string")
+    : typeof row.tags === "string"
+      ? row.tags.replace(/[{}]/g, "").split(",").filter(Boolean)
+      : [];
+  const document = companyDocumentSchema.parse({
+    id: dbString(row, "id"),
+    context: {
+      organizationId: dbString(row, "organization_id"),
+      ...(optionalString("legal_entity_id") ? { legalEntityId: optionalString("legal_entity_id") } : {}),
+      ...(optionalString("property_id") ? { propertyId: optionalString("property_id") } : {}),
+      ...(optionalString("project_id") ? { projectId: optionalString("project_id") } : {}),
+      ...(optionalString("investor_contract_id") ? { investorContractId: optionalString("investor_contract_id") } : {}),
+      ...(optionalString("investor_contract_version_id") ? { investorContractVersionId: optionalString("investor_contract_version_id") } : {}),
+    },
+    kind: dbString(row, "kind"),
+    state: dbString(row, "state"),
+    title: dbString(row, "title"),
+    description: row.description === null || row.description === undefined ? null : dbString(row, "description"),
+    documentDate: row.document_date === null || row.document_date === undefined ? null : dbDate(row, "document_date"),
+    tags,
+    source: {
+      fileName: dbString(row, "file_name"),
+      declaredContentType: dbString(row, "declared_content_type"),
+      sizeBytes: Number(row.size_bytes),
+      checksumSha256: dbString(row, "checksum_sha256"),
+      backend: dbString(row, "backend"),
+      logicalKey: dbString(row, "logical_key"),
+      ...(optionalString("immutable_generation") ? { immutableGeneration: optionalString("immutable_generation") } : {}),
+      ...(optionalString("immutable_version") ? { immutableVersion: optionalString("immutable_version") } : {}),
+      verifiedAt: dbTimestamp(row, "verified_at"),
+    },
+    links: [],
+    recordRevision: dbRevision(row.record_revision),
+    uploadedAt: dbTimestamp(row, "uploaded_at"),
+    updatedAt: dbTimestamp(row, "updated_at"),
+    archivedAt: row.archived_at === null || row.archived_at === undefined ? null : dbTimestamp(row, "archived_at"),
+  });
+  const binding: RentOpsDocumentObjectBinding = {
+    documentId: document.id,
+    bindingKind: "admin",
+    backend: document.source.backend,
+    logicalKey: document.source.logicalKey,
+    checksumSha256: document.source.checksumSha256,
+    sizeBytes: document.source.sizeBytes,
+    ...(document.source.immutableGeneration ? { immutableGeneration: document.source.immutableGeneration } : {}),
+    ...(document.source.immutableVersion ? { immutableVersion: document.source.immutableVersion } : {}),
+    verifiedAt: document.source.verifiedAt,
+  };
+  return { document, binding };
+}
+
 async function assertDocumentReferences(
   executor: RentOpsQueryExecutor,
   sourceDocumentIds: readonly string[],
   active: boolean,
-  scope?: { organizationId: string; legalEntityId: string; effectiveFrom: string },
+  scope: { organizationId: string; legalEntityId: string; effectiveFrom?: string },
+  purpose: InvestorDocumentReferencePurpose = "contract",
 ): Promise<void> {
   if (sourceDocumentIds.length === 0) {
     if (active) throw new ValidationCommandError("An active investor contract needs an existing source document reference", { reason: "investor_contract_document_required" });
     return;
   }
-  const result = await executor.query<Record<string, unknown>>(`SELECT id, state, property_id FROM rent_ops_documents WHERE id=ANY($1::varchar[])`, [sourceDocumentIds]);
-  if (result.rows.length !== sourceDocumentIds.length) throw new ValidationCommandError("Investor contract references a document that does not exist", { reason: "investor_contract_document_missing" });
-  if (active && result.rows.some(row => !["signed", "executed", "filed", "current", "verified"].includes(dbString(row, "state")))) throw new ValidationCommandError("Active investor contracts require signed or verified source documents", { reason: "investor_contract_document_unverified" });
-  if (scope) {
-    const propertyIds = result.rows.map(row => row.property_id).filter((value): value is string => typeof value === "string" && value.length > 0);
-    if (propertyIds.length) {
-      const scoped = await executor.query<Record<string, unknown>>(
-        `SELECT DISTINCT property_id FROM company_property_entity_periods
-          WHERE organization_id=$1 AND legal_entity_id=$2 AND property_id=ANY($3::varchar[])
-            AND effective_from <= $4::date AND (effective_until IS NULL OR effective_until > $4::date)`,
-        [scope.organizationId, scope.legalEntityId, propertyIds, scope.effectiveFrom],
-      );
-      if (new Set(scoped.rows.map(row => dbString(row, "property_id"))).size !== new Set(propertyIds).size) throw new ValidationCommandError("Investor contract references a document outside the legal entity scope", { reason: "investor_contract_document_scope" });
+  // New company documents carry their own organization and legal-entity
+  // scope. Check them before the legacy table so a same-ID archived or
+  // cross-company row cannot fall through to historical compatibility logic.
+  const companyDocumentIds = sourceDocumentIds.filter(isCompanyScopedDocumentId);
+  const companyResult = companyDocumentIds.length
+    ? await executor.query<Record<string, unknown>>(
+      `SELECT id,organization_id,legal_entity_id,state,archived_at,property_id,project_id,
+              investor_contract_id,investor_contract_version_id,kind,title,description,
+              document_date,tags,file_name,declared_content_type,size_bytes,checksum_sha256,
+              backend,logical_key,immutable_generation,immutable_version,verified_at,
+              record_revision,uploaded_at,updated_at
+         FROM company_documents
+        WHERE id=ANY($1::varchar[])`,
+      [companyDocumentIds],
+    )
+    : { rows: [] as Record<string, unknown>[] };
+  if (companyResult.rows.length !== companyDocumentIds.length) throw new ValidationCommandError("Investor contract references a document that does not exist", { reason: "investor_contract_document_missing" });
+  const companyById = new Map(companyResult.rows.map(row => [dbString(row, "id"), row] as const));
+  for (const documentId of companyDocumentIds) {
+    const row = companyById.get(documentId);
+    if (!row) continue;
+    const organizationId = typeof row.organization_id === "string" ? row.organization_id : null;
+    const legalEntityId = typeof row.legal_entity_id === "string" ? row.legal_entity_id : null;
+    if (organizationId !== scope.organizationId || legalEntityId !== scope.legalEntityId) {
+      throw new ValidationCommandError("Investor document is outside the requested company or legal entity scope", { reason: "investor_contract_document_scope" });
     }
+    if (purpose === "contract" && !CONTRACT_COMPANY_DOCUMENT_KINDS.has(dbString(row, "kind"))) {
+      throw new ValidationCommandError("Investor contracts require a contract, loan, or investor agreement company document", { reason: "investor_contract_document_kind" });
+    }
+    if (dbString(row, "state") !== "verified" || (row.archived_at !== null && row.archived_at !== undefined)) {
+      throw new ValidationCommandError("Investor references require a current verified company document", { reason: "investor_contract_document_unverified" });
+    }
+    const bridged = companyDocumentBridgeInput(row);
+    await registerVerifiedRentOpsDocument({ executor, document: bridged.document, binding: bridged.binding, legacyDocumentId: documentId });
+  }
+
+  const legacyDocumentIds = sourceDocumentIds.filter(documentId => !isCompanyScopedDocumentId(documentId));
+  const legacyResult = legacyDocumentIds.length
+    ? await executor.query<Record<string, unknown>>(`SELECT id, state, property_id FROM rent_ops_documents WHERE id=ANY($1::varchar[])`, [legacyDocumentIds])
+    : { rows: [] as Record<string, unknown>[] };
+  if (legacyResult.rows.length !== legacyDocumentIds.length) throw new ValidationCommandError("Investor contract references a document that does not exist", { reason: "investor_contract_document_missing" });
+  if (legacyResult.rows.some(row => dbString(row, "state") === "archived")) throw new ValidationCommandError("Investor references cannot use an archived source document", { reason: "investor_contract_document_unverified" });
+  if (active && legacyResult.rows.some(row => !["signed", "executed", "filed", "current", "verified"].includes(dbString(row, "state")))) throw new ValidationCommandError("Active investor contracts require signed or verified source documents", { reason: "investor_contract_document_unverified" });
+
+  const propertyIds = [...companyResult.rows, ...legacyResult.rows]
+    .map(row => row.property_id)
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+  if (scope.effectiveFrom && propertyIds.length) {
+    const scoped = await executor.query<Record<string, unknown>>(
+      `SELECT DISTINCT property_id FROM company_property_entity_periods
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND property_id=ANY($3::varchar[])
+          AND effective_from <= $4::date AND (effective_until IS NULL OR effective_until > $4::date)`,
+      [scope.organizationId, scope.legalEntityId, propertyIds, scope.effectiveFrom],
+    );
+    if (new Set(scoped.rows.map(row => dbString(row, "property_id"))).size !== new Set(propertyIds).size) throw new ValidationCommandError("Investor contract references a document outside the legal entity scope", { reason: "investor_contract_document_scope" });
   }
 }
 
@@ -395,7 +503,7 @@ async function handleCreatePartyMapping(context: CommandHandlerContext<CreateInv
     await assertContact(context.executor, organizationId, contactId);
     if (payload.partyKind === "investor" && contactId !== account.contactId) throw new ValidationCommandError("Investor party mapping must use the account's linked company contact", { reason: "investor_party_contact_mismatch" });
   }
-  await assertDocumentReferences(context.executor, payload.sourceDocumentId ? [payload.sourceDocumentId] : [], payload.partyKind === "third_party_lender");
+  await assertDocumentReferences(context.executor, payload.sourceDocumentId ? [payload.sourceDocumentId] : [], payload.partyKind === "third_party_lender", { organizationId, legalEntityId: payload.providerParty.legalEntityId }, "source_evidence");
   const id = newRecordId();
   await context.executor.query(
     `INSERT INTO company_investor_party_mappings (id,organization_id,account_id,legal_entity_id,contact_id,party_kind,display_name,provider,provider_environment,provider_realm_id,provider_object_type,provider_object_id,source_document_id,effective_from,effective_to)
@@ -417,7 +525,7 @@ async function handleUpdatePartyMapping(context: CommandHandlerContext<UpdateInv
   const set = (column: string, value: unknown) => { updates.push(`${column}=$${values.length + 1}`); values.push(value); };
   if (payload.displayName !== undefined) set("display_name", payload.displayName);
   if (Object.prototype.hasOwnProperty.call(payload, "sourceDocumentId")) {
-    if (payload.sourceDocumentId) await assertDocumentReferences(context.executor, [payload.sourceDocumentId], dbString(row, "party_kind") === "third_party_lender");
+    if (payload.sourceDocumentId) await assertDocumentReferences(context.executor, [payload.sourceDocumentId], dbString(row, "party_kind") === "third_party_lender", { organizationId: context.envelope.scope.organizationId, legalEntityId: dbString(row, "legal_entity_id") }, "source_evidence");
     set("source_document_id", payload.sourceDocumentId ?? null);
   }
   if (Object.prototype.hasOwnProperty.call(payload, "effectiveTo")) {
@@ -453,7 +561,7 @@ async function handleCreateRemittance(context: CommandHandlerContext<CreateInves
     const contract = await assertContract(context as unknown as CommandHandlerContext<unknown>, payload.contractId);
     if (contract.instrumentId !== payload.instrumentId) throw new ValidationCommandError("Remittance contract does not belong to this instrument", { reason: "investor_remittance_contract_scope" });
   }
-  await assertDocumentReferences(context.executor, [payload.sourceDocumentId], false);
+  await assertDocumentReferences(context.executor, [payload.sourceDocumentId], false, { organizationId: context.envelope.scope.organizationId, legalEntityId: instrument.legalEntityId }, "source_evidence");
   const id = newRecordId();
   await context.executor.query(`INSERT INTO company_investor_remittance_instructions (id,organization_id,account_id,instrument_id,contract_id,legal_entity_id,party_mapping_id,beneficiary_kind,source_document_id,effective_from,effective_to,notes) VALUES ($1,$2,$3,$4,$5,$6,$7,'third_party_lender',$8,$9,$10,$11)`, [id, context.envelope.scope.organizationId, payload.accountId, payload.instrumentId, payload.contractId ?? null, instrument.legalEntityId, payload.partyMappingId, payload.sourceDocumentId, payload.effectiveFrom, payload.effectiveTo ?? null, payload.notes ?? null]);
   return savedResult([id], [{ id, revision: revisionSchema.parse(1) }]);
@@ -467,7 +575,7 @@ async function handleUpdateRemittance(context: CommandHandlerContext<UpdateInves
   const revision = dbRevision(row.record_revision); assertExpectedRevision(revision, context.envelope.expectedRevision);
   if (payload.effectiveTo !== undefined && payload.effectiveTo !== null && payload.effectiveTo < dbDate(row, "effective_from")) throw new ValidationCommandError("Remittance effectiveTo must follow effectiveFrom", { reason: "investor_remittance_dates" });
   const updates: string[] = []; const values: unknown[] = []; const set = (column: string, value: unknown) => { updates.push(`${column}=$${values.length + 1}`); values.push(value); };
-  if (payload.sourceDocumentId !== undefined) { await assertDocumentReferences(context.executor, [payload.sourceDocumentId], false); set("source_document_id", payload.sourceDocumentId); }
+  if (payload.sourceDocumentId !== undefined) { await assertDocumentReferences(context.executor, [payload.sourceDocumentId], false, { organizationId: context.envelope.scope.organizationId, legalEntityId: dbString(row, "legal_entity_id") }, "source_evidence"); set("source_document_id", payload.sourceDocumentId); }
   if (Object.prototype.hasOwnProperty.call(payload, "effectiveTo")) set("effective_to", payload.effectiveTo ?? null);
   if (Object.prototype.hasOwnProperty.call(payload, "notes")) set("notes", payload.notes ?? null);
   if (!updates.length) throw new ValidationCommandError("At least one remittance instruction field is required", { reason: "empty_investor_remittance_update" });
@@ -792,6 +900,9 @@ async function handleLinkQbo(context: CommandHandlerContext<unknown>): Promise<C
   assertExpectedRevision(payment.revision, context.envelope.expectedRevision);
   if (payment.status !== "manual_recorded" || payment.postedSource !== null) throw new ConflictCommandError("Only an unposted manual investor payment can receive a QBO link", { reason: "investor_payment_already_posted" });
   await assertPaymentNotReversed(context, payment);
+  if (!investorPaymentKindMatchesSingleComponent(payment.kind, payment.amounts)) {
+    throw new ValidationCommandError("QBO-linked investor payments require one known component matching the payment kind", { reason: "investor_qbo_component_mismatch" });
+  }
   const instrument = await assertAccountInstrument(context as unknown as CommandHandlerContext<unknown>, payment.accountId, payment.instrumentId);
   const resolver = (context as unknown as { sourceResolver?: InvestorSourceResolver }).sourceResolver ?? new FailClosedInvestorSourceResolver();
   const verification = await maybeVerifyPostedSource(context as unknown as CommandHandlerContext<unknown>, resolver, payload.paymentId, { accountId: payment.accountId, instrumentId: payment.instrumentId, obligationId: payment.obligationId ?? undefined, amountCents: payment.amountCents, currency: payment.currency, kind: payment.kind, amounts: payment.amounts, source: payload.source, paymentOn: payment.paymentOn, remittanceInstructionId: payment.remittanceInstructionId });

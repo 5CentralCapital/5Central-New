@@ -31,3 +31,14 @@ export function sumMoneyByCurrency(values: readonly MoneyValue[]): readonly Curr
   }
   return Array.from(totals.entries()).map(([currency, value]) => ({ currency, cents: value.knownCount ? value.total.toString() : null, knownCount: value.knownCount, unknownCount: value.unknownCount })).sort((left, right) => left.currency.localeCompare(right.currency));
 }
+
+/**
+ * Money values for amounts that may be only partly known. A null exact amount
+ * contributes its known minimum and is also counted as unknown, so totals read
+ * "$X + 1 unknown" instead of presenting the minimum as an exact figure.
+ */
+export function partiallyKnownMoneyValues(items: readonly { readonly exactCents: string | null | undefined; readonly knownMinimumCents: string | null | undefined; readonly currency: string | null | undefined }[]): MoneyValue[] {
+  return items.flatMap(item => item.exactCents === null || item.exactCents === undefined
+    ? [{ cents: item.knownMinimumCents, currency: item.currency }, { cents: null, currency: item.currency }]
+    : [{ cents: item.exactCents, currency: item.currency }]);
+}

@@ -1,7 +1,8 @@
 import { useState, type FormEvent, type ReactNode } from "react";
-import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QboCustomerLedger } from "@shared/accounting/receivables";
-import { accountingApi } from "../../accounting/api";
+import type { TenantSourceResolution } from "@shared/accounting/tenant-source-resolution";
+import { AccountingApiError, accountingApi } from "../../accounting/api";
 import type { AccountingApi, AccountingConnection } from "../../accounting/types";
 import {
   agingRows,
@@ -11,8 +12,6 @@ import {
   filterCustomers,
   ledgerTotals,
   openItemRows,
-  qboConnectionState,
-  qboTargetForProperty,
   verificationDisplay,
   type LedgerTone,
   type QboTarget,
@@ -75,40 +74,120 @@ function Notice({ tone, title, children }: { tone: "info" | "warning" | "error" 
   return <div className={`rm-${tone}`} role={tone === "error" ? "alert" : "status"}><div><strong>{title}</strong>{children}</div></div>;
 }
 
+function sourceEntityLabel(source: TenantSourceResolution): string {
+  return source.ownership.effectiveLegalEntityName
+    ?? source.qbo.binding?.providerCompanyName
+    ?? "the historical legal entity";
+}
+
+function sourceTarget(source: TenantSourceResolution, organization: CompanyContext["organizations"][number] | undefined): QboTarget | null {
+  const scope = source.qbo.scope;
+  if (!scope || (source.currentState !== "linked" && source.currentState !== "unlinked")) return null;
+  return {
+    organizationId: scope.organizationId,
+    organizationName: organization?.name ?? scope.organizationId,
+    legalEntityId: scope.legalEntityId,
+    entityName: sourceEntityLabel(source),
+    canLink: organization?.role === "owner" || organization?.role === "admin" || organization?.role === "finance",
+  };
+}
+
+function sourceConnections(source: TenantSourceResolution): readonly AccountingConnection[] {
+  const scope = source.qbo.scope;
+  const connection = source.qbo.connection;
+  if (!scope || !connection || (connection.state !== "active" && connection.state !== "needs_reconnect") || !connection.readCapabilityEnabled) return [];
+  return [{
+    scope,
+    name: source.qbo.binding?.providerCompanyName ?? "QuickBooks Online",
+    status: connection.state === "needs_reconnect" ? "needs_reconnect" : "ready",
+    version: 1,
+    accessTokenExpiresAt: "",
+    refreshTokenExpiresAt: null,
+    refreshTokenHardExpiresAt: null,
+    updatedAt: connection.updatedAt ?? "",
+  }];
+}
+
+function LocalHistoryNotice({ source }: { source: TenantSourceResolution }) {
+  const hasHistoricalQboLink = source.qbo.customerLink !== null;
+  return <Notice tone={hasHistoricalQboLink ? "warning" : "info"} title={hasHistoricalQboLink ? "QuickBooks connection needs attention" : "Historical records remain in R-ops"}>{" "}{hasHistoricalQboLink ? "A historical QuickBooks customer link exists, but the current QuickBooks source is not readable. Review the local R-ops Ledger and Deposits tabs; no current QuickBooks balance is shown until the connection is restored." : "This tenancy's historical financial record is kept in R-ops. Review the Ledger and Deposits tabs for local charges, payments, deposits and any remaining balance; no QuickBooks customer link is expected for this source."}{source.local.ledgerEntryCount > 0 ? ` R-ops has ${source.local.ledgerEntryCount} local ledger entr${source.local.ledgerEntryCount === 1 ? "y" : "ies"} available.` : ""}</Notice>;
+}
+
+function SourceReasons({ source }: { source: TenantSourceResolution }) {
+  return source.reasons.length > 0 ? <ul>{source.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul> : null;
+}
+
+function sourceNotFound(error: unknown): boolean {
+  return error instanceof AccountingApiError && error.status === 404 && error.code === "accounting_not_found";
+}
+
+function isResolvedHistoricalOwner(source: TenantSourceResolution): boolean {
+  return source.ownership.state === "resolved"
+    && source.ownership.coverageComplete
+    && source.ownership.effectiveLegalEntityId !== null
+    && source.ownership.periods.some(period => period.overlapsTenancy);
+}
+
+function sourceReviewReasons(sources: readonly TenantSourceResolution[]): readonly string[] {
+  const reasons = new Set(sources.flatMap(source => source.reasons));
+  if (sources.filter(isResolvedHistoricalOwner).length > 1) {
+    reasons.add("More than one accounting organization returned a fully covered historical owner for this tenancy; review ownership before selecting a QuickBooks company.");
+  }
+  if (reasons.size === 0) reasons.add("The historical accounting owner could not be resolved to one QuickBooks company; review ownership before selecting a QuickBooks company.");
+  return Array.from(reasons).slice(0, 10);
+}
+
 export function TenantQuickBooksPanel({ tenant, snapshot, readOnly = false, api = accountingApi }: { tenant: TenantView; snapshot: AdminSnapshot; readOnly?: boolean; api?: AccountingApi }) {
   const context = resolveTenantContext(tenant, snapshot);
   const tenancies = context.tenancies.filter((tenancy): tenancy is AdminTenancyView & { id: string } => Boolean(tenancy.id));
   const [tenancyId, setTenancyId] = useState(() => context.currentTenancy?.id ?? tenancies[0]?.id ?? "");
   const tenancy = tenancies.find(candidate => candidate.id === tenancyId);
   const company = useCompanyContext();
-  const target = qboTargetForProperty(company.data, tenancy?.propertyId);
-  const configuration = useQuery({
-    queryKey: [QUERY_ROOT, "configuration", target?.organizationId, target?.legalEntityId],
-    queryFn: ({ signal }) => api.getConfiguration(target!.organizationId, target!.legalEntityId, signal),
-    enabled: Boolean(target), staleTime: 60_000, retry: false,
+  const organizations = company.data?.organizations ?? [];
+  const sourceQueries = useQueries({
+    queries: organizations.map(organization => ({
+      queryKey: [QUERY_ROOT, "source-resolution", organization.id, tenancy?.id],
+      queryFn: ({ signal }: { signal: AbortSignal }) => api.tenancySourceResolution(organization.id, { tenancyId: tenancy!.id }, signal),
+      enabled: Boolean(tenancy?.id), staleTime: 30_000, retry: false,
+    })),
   });
-  const environment = configuration.data?.environment ?? null;
-  const connections = useQuery({
-    queryKey: [QUERY_ROOT, "connections", target?.organizationId, target?.legalEntityId, environment],
-    queryFn: ({ signal }) => api.listConnections(target!.organizationId, target!.legalEntityId, environment!, signal),
-    enabled: Boolean(target && environment), staleTime: 30_000, retry: false,
-  });
-  // Null while the connection list for a configured environment is still loading.
-  const state = !configuration.data || (configuration.data.configured && configuration.data.environment && !connections.data) ? null : qboConnectionState(configuration.data, connections.data ?? []);
+  const sourceData = sourceQueries.flatMap(query => query.data ? [query.data] : []);
+  const allSourceQueriesFetched = sourceQueries.length > 0 && sourceQueries.every(query => query.isFetched);
+  const resolvedSources = sourceData.filter(isResolvedHistoricalOwner);
+  const sourceSelection = !allSourceQueriesFetched
+    ? { kind: "pending" as const }
+    : resolvedSources.length === 1
+      ? { kind: "resolved" as const, source: resolvedSources[0]! }
+      : sourceData.length === 0
+        ? { kind: "unassigned" as const }
+        : { kind: "ownership_review" as const, reasons: sourceReviewReasons(sourceData) };
+  const resolution = sourceSelection.kind === "resolved" ? sourceSelection.source : undefined;
+  const sourceError = sourceQueries.find(query => query.error && !sourceNotFound(query.error))?.error ?? null;
+  const sourceQueryForRetry = sourceQueries.find(query => query.error && !sourceNotFound(query.error)) ?? sourceQueries[0];
+  const target = resolution ? sourceTarget(resolution, company.data?.organizations.find(candidate => candidate.id === resolution.qbo.scope?.organizationId)) : null;
+  const connections = resolution ? sourceConnections(resolution) : [];
+  const environment = resolution?.qbo.environment ?? null;
+  const sourceConnectionReady = Boolean(resolution && (resolution.qbo.connection?.state === "active" || resolution.qbo.connection?.state === "needs_reconnect") && resolution.qbo.connection.readCapabilityEnabled);
 
-  const intro = <p className="rm-muted">QuickBooks data, read-only. This is the tenancy's QuickBooks customer history from the verified QuickBooks mirror; it is shown separately from, and never combined with, the 5Central Ops ledger on the Ledger tab.</p>;
+  const intro = <p className="rm-muted">QuickBooks data, read-only. This tenancy's QuickBooks customer history comes from the verified mirror and stays separate from the local R-ops Ledger and Deposits tabs.</p>;
   const picker = tenancies.length > 1 && <div className="rm-ledger-filters"><label>Tenancy<select value={tenancyId} onChange={event => setTenancyId(event.target.value)}>{tenancies.map(candidate => <option key={candidate.id} value={candidate.id}>{tenancyLabel(candidate, snapshot)}</option>)}</select></label></div>;
 
   let body: ReactNode;
   if (!tenancy) body = <div className="rm-empty"><p>No tenancy is linked to this tenant, so there is no QuickBooks customer history to show.</p></div>;
   else if (company.error) body = <Notice tone="error" title="Company records could not be loaded.">{" "}<button type="button" className="rm-button" onClick={() => void company.refetch()}>Try again</button></Notice>;
   else if (!company.data) body = <div className="rm-empty" role="status"><p>Loading QuickBooks access…</p></div>;
-  else if (!target) body = <Notice tone="notice" title="No legal entity for this property">{" "}This property is not assigned to a legal entity you can access, so its QuickBooks history cannot be shown.</Notice>;
-  else if (configuration.error || connections.error) body = <Notice tone="error" title={messageOf(configuration.error ?? connections.error, "QuickBooks status could not be loaded.")}>{" "}<button type="button" className="rm-button" onClick={() => { void configuration.refetch(); void connections.refetch(); }}>Try again</button></Notice>;
-  else if (!state) body = <div className="rm-empty" role="status"><p>Checking the QuickBooks connection…</p></div>;
-  else if (state.kind === "not-configured") body = <Notice tone="notice" title="QuickBooks is not configured">{" "}QuickBooks is not set up on this server, so no QuickBooks history is available.</Notice>;
-  else if (state.kind === "not-connected") body = <Notice tone="notice" title={`QuickBooks is not connected for ${target.entityName}`}>{" "}Connect QuickBooks for this legal entity under Accounting to see this tenancy's QuickBooks history. No QuickBooks balance is known until then.</Notice>;
-  else body = <>{state.needsReconnect && <Notice tone="warning" title="QuickBooks needs to be reconnected">{" "}Refreshes are paused for {target.entityName}. The history below is the last mirrored copy and may be out of date.</Notice>}<TenancyLedger key={`${tenancy.id}:${state.environment}`} api={api} target={target} tenancyId={tenancy.id} environment={state.environment} connections={state.connections} readOnly={readOnly} /></>;
+  else if (organizations.length === 0) body = <Notice tone="notice" title="QuickBooks source is not assigned">{" "}This tenancy's local R-ops history remains available on the Ledger and Deposits tabs. No QuickBooks company is assigned in the current accounting context.</Notice>;
+  else if (sourceError) body = <Notice tone="error" title={messageOf(sourceError, "The tenancy accounting source could not be resolved.")}>{" "}<button type="button" className="rm-button" onClick={() => void sourceQueryForRetry?.refetch()}>Try again</button></Notice>;
+  else if (sourceSelection.kind === "unassigned") body = <Notice tone="notice" title="QuickBooks source is not assigned">{" "}This tenancy's local R-ops history remains available on the Ledger and Deposits tabs. No QuickBooks company is assigned for its historical period.</Notice>;
+  else if (sourceSelection.kind === "pending") body = <div className="rm-empty" role="status"><p>Resolving the historical accounting source…</p></div>;
+  else if (sourceSelection.kind === "ownership_review") body = <Notice tone="warning" title="Historical QuickBooks ownership needs review">{" "}The local R-ops history remains available, but QuickBooks history is withheld until one historical property owner is confirmed.<ul>{sourceSelection.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul></Notice>;
+  else if (sourceSelection.kind === "resolved") {
+    const source = sourceSelection.source;
+    if (source.currentState === "local_history_available") body = <LocalHistoryNotice source={source} />;
+    else if (source.currentState === "ownership_review") body = <Notice tone="warning" title="Historical QuickBooks ownership needs review">{" "}The local R-ops history remains available, but QuickBooks history is withheld until the historical property ownership is reviewed.<SourceReasons source={source} /></Notice>;
+    else if (source.currentState === "not_connected" || !sourceConnectionReady || !target) body = <Notice tone="notice" title={`QuickBooks is not connected for ${sourceEntityLabel(source)}`}>{" "}The historical owner has no readable QuickBooks connection for this tenancy. The local R-ops Ledger and Deposits remain available; no QuickBooks balance is known until a connection is confirmed.</Notice>;
+    else body = <>{source.qbo.connection?.state === "needs_reconnect" && <Notice tone="warning" title="QuickBooks needs to be reconnected">{" "}Refreshes are paused for {target.entityName}. The history below is the last mirrored copy and may be out of date.</Notice>}<TenancyLedger key={`${tenancy.id}:${environment}`} api={api} target={target} tenancyId={tenancy.id} environment={environment!} connections={connections} readOnly={readOnly} /></>;
+  }
 
   return <div className="rm-tenant-tab-content"><Panel title="QuickBooks customer ledger">{intro}{picker}{body}</Panel></div>;
 }
@@ -202,6 +281,7 @@ function LinkCustomer({ api, target, tenancyId, connections, readOnly }: { api: 
     try {
       await api.linkTenancyCustomer(target.organizationId, { scope, tenancyId, customerId: selected.providerObjectId });
       await queryClient.invalidateQueries({ queryKey: [QUERY_ROOT, "tenancy-ledger", target.organizationId, tenancyId] });
+      await queryClient.invalidateQueries({ queryKey: [QUERY_ROOT, "source-resolution", target.organizationId, tenancyId] });
     } catch (caught) {
       setError(caught); setConfirming(false);
     } finally { setSaving(false); }

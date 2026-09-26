@@ -72,8 +72,41 @@ test("documents: upload (prepare + commit) -> list -> authorized download; links
       fileName: "loan.txt", contentType: "text/plain", contentBase64: codexBytes.toString("base64"),
     });
     assert.equal(uploaded.receipt.state, "saved_in_rops");
+    const uploadedDocumentId = uploaded.receipt.affectedRecordIds[0];
+    // Simulate an eligible verified company document from before the bridge
+    // was installed: its source row remains authoritative while the legacy
+    // compatibility rows and upload stage are absent.
+    await app.db.query("DELETE FROM rent_ops_document_objects WHERE document_id=$1", [uploadedDocumentId]);
+    await app.db.query("DELETE FROM rent_ops_documents WHERE id=$1", [uploadedDocumentId]);
+    await app.db.query("DELETE FROM company_document_upload_stages WHERE document_id=$1", [uploadedDocumentId]);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const loanReplay = await app.tool("upload_company_document", {
+      command: envelope({ action: "create", input: { context: { organizationId, legalEntityId: fixture.entityId }, kind: "loan", title: "Loan note", tags: [], links: [] } }, undefined, { organizationId, legalEntityId: fixture.entityId }),
+      fileName: "loan.txt", contentType: "text/plain", contentBase64: codexBytes.toString("base64"),
+    });
+    assert.deepEqual(loanReplay.receipt.affectedRecordIds, uploaded.receipt.affectedRecordIds);
+    const loanReplayAgain = await app.tool("upload_company_document", {
+      command: envelope({ action: "create", input: { context: { organizationId, legalEntityId: fixture.entityId }, kind: "loan", title: "Loan note", tags: [], links: [] } }, undefined, { organizationId, legalEntityId: fixture.entityId }),
+      fileName: "loan.txt", contentType: "text/plain", contentBase64: codexBytes.toString("base64"),
+    });
+    assert.deepEqual(loanReplayAgain.receipt.affectedRecordIds, uploaded.receipt.affectedRecordIds);
+    const bridgeCount = await app.db.query<{ count: string }>("SELECT count(*)::text AS count FROM rent_ops_documents WHERE id=$1", [uploadedDocumentId]);
+    const bindingCount = await app.db.query<{ count: string }>("SELECT count(*)::text AS count FROM rent_ops_document_objects WHERE document_id=$1", [uploadedDocumentId]);
+    assert.equal(bridgeCount.rows[0].count, "1");
+    assert.equal(bindingCount.rows[0].count, "1");
     const httpAfterCodex = await (await fetch(`${app.base}/documents?legalEntityId=${fixture.entityId}`)).json();
     assert.equal(httpAfterCodex.items.length, 2);
+
+    // A verified LLC loan document is selectable before any investor account
+    // or contract exists; its bridge keeps the original verified object.
+    const investorDocuments = await app.tool("list_investor_documents", { scope: { organizationId, legalEntityId: fixture.entityId } });
+    const loanDocument = investorDocuments.items.find((item: { fileName: string }) => item.fileName === "loan.txt");
+    assert.ok(loanDocument, "document-first investor onboarding must not require an existing contract");
+    const bridge = await app.db.query<{ checksum_sha256: string; property_id: string | null }>(
+      "SELECT checksum_sha256, property_id FROM rent_ops_documents WHERE id=$1", [loanDocument.id],
+    );
+    assert.equal(bridge.rows[0].checksum_sha256, createHash("sha256").update(codexBytes).digest("hex"));
+    assert.equal(bridge.rows[0].property_id, null);
 
     // Another company's administrator is denied on every read, including download.
     const other = "10000000-0000-4000-8000-000000000002";

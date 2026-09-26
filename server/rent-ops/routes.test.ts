@@ -566,6 +566,68 @@ test("admin and public routes enforce nested positive allowlists, including repo
   });
 });
 
+test("legacy admin document surfaces exclude company-scoped bridge rows", async () => {
+  const bridgedId = `company-document:${"b".repeat(64)}`;
+  const ordinaryId = "document:ordinary-rental";
+  const snapshot = structuredClone(syntheticRentOpsSnapshot());
+  snapshot.documents.push(
+    {
+      id: bridgedId,
+      type: "other",
+      state: "verified",
+      fileName: "private-investor-agreement.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 12,
+      storageKey: `documents/${"c".repeat(64)}`,
+      checksumSha256: "c".repeat(64),
+      uploadedAt: "2026-08-16T12:00:00.000Z",
+      verifiedAt: "2026-08-16T12:00:00.000Z",
+      availability: "verified",
+      storageKeyKnowledge: "source",
+    },
+    {
+      id: ordinaryId,
+      propertyId: "demo-property-a",
+      type: "lease",
+      state: "requested",
+      fileName: "ordinary-lease.pdf",
+      mimeType: "application/pdf",
+      availability: "metadata",
+      uploadedAt: "2026-08-16T12:00:00.000Z",
+    },
+  );
+  const repository = new SyntheticRentOpsRepository(snapshot);
+  await withServer({
+    repository,
+    documentStorage: createInMemoryObjectStore(),
+    requireAdmin: (req, _res, next) => { req.rentOpsAdminUser = { id: "route-test-admin" } as never; next(); },
+  }, async (baseUrl) => {
+    const documents = await request(baseUrl, "/documents");
+    assert.equal(documents.status, 200);
+    const rows = documents.body as unknown as Array<Record<string, unknown>>;
+    assert.equal(rows.some((row) => row.id === bridgedId), false);
+    assert.equal(rows.some((row) => row.id === ordinaryId), true);
+
+    const snapshotResponse = await request(baseUrl, "/snapshot");
+    assert.equal(snapshotResponse.status, 200);
+    const snapshotView = snapshotResponse.body.snapshot as Record<string, unknown>;
+    assert.equal((snapshotView.documents as Array<Record<string, unknown>>).some((row) => row.id === bridgedId), false);
+
+    const workspaceDocuments = await request(baseUrl, "/workspace/collections/documents");
+    assert.equal(workspaceDocuments.status, 200);
+    assert.equal((workspaceDocuments.body.items as Array<Record<string, unknown>>).some((row) => row.id === bridgedId), false);
+
+    const download = await requestBinary(baseUrl, `/documents/${encodeURIComponent(bridgedId)}/download`);
+    assert.equal(download.status, 404);
+    assert.deepEqual(JSON.parse(download.body.toString("utf8")), { code: "not_found" });
+
+    const patch = await request(baseUrl, `/documents/${encodeURIComponent(bridgedId)}`, { method: "PATCH", body: { revision: 1, state: "archived" } });
+    assert.equal(patch.status, 404);
+    assert.deepEqual(patch.body, { code: "not_found" });
+    assert.equal((await repository.getSnapshot()).documents.find((document) => document.id === bridgedId)?.state, "verified");
+  });
+});
+
 test("applicant card target opens the same historical case ID without cross-application evidence", async () => {
   await withServer({ repository: applicantHistoryRepository(), requireAdmin: (_req, _res, next) => next() }, async (baseUrl) => {
     const nativeDetail = await request(baseUrl, "/applications/demo-application-1");

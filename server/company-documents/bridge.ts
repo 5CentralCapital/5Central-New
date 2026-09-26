@@ -12,6 +12,16 @@ export interface RegisterVerifiedRentOpsDocumentInput {
 
 function legacyDocumentType(_document: CompanyDocument): RentOpsDocument["type"] { return "other"; }
 
+function sameVerifiedObject(left: RentOpsDocumentObjectBinding, right: RentOpsDocumentObjectBinding): boolean {
+  return left.backend === right.backend
+    && left.logicalKey === right.logicalKey
+    && left.checksumSha256 === right.checksumSha256
+    && left.sizeBytes === right.sizeBytes
+    && (left.immutableGeneration ?? null) === (right.immutableGeneration ?? null)
+    && (left.immutableVersion ?? null) === (right.immutableVersion ?? null)
+    && Date.parse(left.verifiedAt) === Date.parse(right.verifiedAt);
+}
+
 /** Bridge a verified company file into the existing 5Central Ops document
  * and immutable object-binding tables inside the caller's transaction. */
 export async function registerVerifiedRentOpsDocument(input: RegisterVerifiedRentOpsDocumentInput): Promise<void> {
@@ -35,9 +45,43 @@ export async function registerVerifiedRentOpsDocument(input: RegisterVerifiedRen
   };
   const repository = new PostgresRentOpsRepository(input.executor, true);
   await repository.assertReady();
-  await repository.saveDocument(document);
   if (!repository.saveDocumentObjectBinding) throw new Error("Verified 5Central Ops document binding is unavailable.");
-  await repository.saveDocumentObjectBinding({ ...input.binding, documentId });
+  // A retry can consume a freshly staged copy of an already verified company
+  // document. Reuse the immutable compatibility row when it exists; the
+  // company-document source IDs are scoped to company_documents and do not
+  // have rows in rent_ops_source_binaries/import_runs.
+  const legacyBinding: RentOpsDocumentObjectBinding = {
+    documentId,
+    bindingKind: "admin",
+    backend: input.binding.backend,
+    logicalKey: input.binding.logicalKey,
+    checksumSha256: input.binding.checksumSha256,
+    sizeBytes: input.binding.sizeBytes,
+    ...(input.binding.immutableGeneration ? { immutableGeneration: input.binding.immutableGeneration } : {}),
+    ...(input.binding.immutableVersion ? { immutableVersion: input.binding.immutableVersion } : {}),
+    verifiedAt: input.binding.verifiedAt,
+  };
+  const existingDocument = await input.executor.query<Record<string, unknown>>(
+    "SELECT property_id, state, availability, size_bytes, checksum_sha256, storage_key FROM rent_ops_documents WHERE id=$1 LIMIT 1",
+    [documentId],
+  );
+  const existingRow = existingDocument.rows[0];
+  if (existingRow) {
+    const sameProperty = (existingRow.property_id ?? null) === (document.propertyId ?? null);
+    const sameSize = Number(existingRow.size_bytes) === document.sizeBytes;
+    const sameState = existingRow.state === "verified" && existingRow.availability === "verified";
+    if (!sameProperty || !sameSize || existingRow.checksum_sha256 !== document.checksumSha256 || existingRow.storage_key !== document.storageKey || !sameState) {
+      throw new Error("Existing 5Central Ops document conflicts with the verified company document.");
+    }
+  } else {
+    await repository.saveDocument(document);
+  }
+  const existingBinding = await repository.getDocumentObjectBinding(documentId);
+  if (existingBinding) {
+    if (!sameVerifiedObject(existingBinding, legacyBinding)) throw new Error("Existing 5Central Ops document binding conflicts with the verified company object.");
+  } else {
+    await repository.saveDocumentObjectBinding(legacyBinding);
+  }
 
   const contractLink = input.document.links.find(link => link.kind === "investor_contract");
   const versionLink = input.document.links.find(link => link.kind === "investor_contract_version");

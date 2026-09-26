@@ -33,7 +33,7 @@ import { createTenantProfileReader, validateReportFilters, deriveApplicantPipeli
 import { dashboardCash } from "./services/dashboard-cash";
 import { bankingRead, readBanking } from "./services/banking-read";
 import { toCsv } from "./services/csv";
-import { RentOpsService } from "./services/service";
+import { isCompanyScopedDocumentId, RentOpsService } from "./services/service";
 import { MagicLinkDeliveryError } from "./services/notifier";
 import type { ContentAddressedObjectStore, StorageReadAdapter } from "./storage";
 import {
@@ -546,6 +546,19 @@ function safeDownloadName(fileName: string): string {
   return "document";
 }
 
+/**
+ * Company documents have a scope-aware list/detail/download surface.  The
+ * bridge row is intentionally retained for object binding and investor
+ * references, but it must not appear in legacy R-ops admin projections.
+ */
+function legacyDocuments(documents: readonly RentOpsDocument[]): RentOpsDocument[] {
+  return documents.filter((document) => !isCompanyScopedDocumentId(document.id));
+}
+
+function legacyDocumentSnapshot<T extends { documents: RentOpsDocument[] }>(snapshot: T): T {
+  return { ...snapshot, documents: legacyDocuments(snapshot.documents) } as T;
+}
+
 function adminError(res: Response, error: unknown): void {
   if (error instanceof RentOpsRetryableConflict) { res.status(409).json({code: error.code, retryable: true}); return; }
   if (error instanceof z.ZodError) {
@@ -599,6 +612,7 @@ function createRateLimiter(limit: number, windowMs: number, maxEntries = 5_000):
 }
 
 function buildClientSnapshot(snapshot: Awaited<ReturnType<RentOpsService["snapshot"]>>, filters: RentOpsFilters): ReturnType<typeof serializeAdminDashboard> {
+  snapshot = legacyDocumentSnapshot(snapshot);
   const reports = {
     "rent-roll": deriveRentRoll(snapshot, filters),
     occupancy: deriveFixedReport(snapshot, "occupancy", filters),
@@ -690,7 +704,7 @@ function adminApplicationView(snapshot: RentOpsSnapshotValue, application: RentO
     application,
     householdMembers: snapshot.applicationHouseholdMembers.filter((member) => member.applicationId === application.id),
     requirements: snapshot.applicationRequirements.filter((requirement) => requirement.applicationId === application.id),
-    documents: snapshot.documents.filter((document) => document.applicationId === application.id),
+    documents: legacyDocuments(snapshot.documents.filter((document) => document.applicationId === application.id)),
   });
 }
 
@@ -818,7 +832,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   adminRouter.get("/preview-context", (_req, res) => { res.json({ asOfDate: nowIsoDate(configuredNow()), dataMode: options.previewSource ?? "live" }); });
   adminRouter.get("/dashboard", async (req, res) => { try { res.json(serializeAdminDashboardSummary(await service.dashboard(parseAdminFilters(req.query)))); } catch (error) { adminError(res, error); } });
   adminRouter.get("/workspace", async (req, res) => {
-    try { const snapshot = await service.workspaceSnapshot(); await sendWorkspaceJson(req, res, measureRentOps("derive", () => serializeWorkspaceBootstrap(snapshot, parseAdminFilters(req.query)))); }
+    try { const snapshot = legacyDocumentSnapshot(await service.workspaceSnapshot()); await sendWorkspaceJson(req, res, measureRentOps("derive", () => serializeWorkspaceBootstrap(snapshot, parseAdminFilters(req.query)))); }
     catch (error) { adminError(res, error); }
   });
   adminRouter.get("/workspace/dashboard", async (req, res) => {
@@ -849,7 +863,13 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
       if (!workspaceCollections.includes(req.params.name as WorkspaceCollection)) {
         res.status(404).json(errorBody("not_found")); return;
       }
-      await sendWorkspaceJson(req, res, serializeWorkspaceCollectionItems(await service.workspaceCollection(req.params.name as WorkspaceCollection), req.params.name as WorkspaceCollection));
+      const name = req.params.name as WorkspaceCollection;
+      if (name === "documents") {
+        await sendWorkspaceJson(req, res, serializeWorkspaceCollectionItems(legacyDocuments(await service.workspaceCollection("documents")), "documents"));
+        return;
+      }
+      const nonDocumentName = name as Exclude<WorkspaceCollection, "documents">;
+      await sendWorkspaceJson(req, res, serializeWorkspaceCollectionItems(await service.workspaceCollection(nonDocumentName), nonDocumentName));
     } catch (error) { adminError(res, error); }
   });
   adminRouter.get("/workspace/recurring", async (req, res) => {
@@ -908,7 +928,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
   adminRouter.post("/units", async (req, res) => { const parsed = unitSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminUnit(await service.saveUnit(parsed.data))); } catch (error) { adminError(res, error); } });
   adminRouter.patch("/units/:id", (req, res) => patchAdminRecord(req, res, "unit", patchUnitSchema, (value) => serializeAdminUnit(value as Parameters<typeof serializeAdminUnit>[0])));
   adminRouter.get("/tenants", async (req, res) => { try { const snapshot = await service.snapshot(); const personSearch = asString(req.query.search)?.toLowerCase(); res.json(snapshot.people.filter((person) => !personSearch || [person.firstName, person.lastName, person.email].filter((value): value is string => typeof value === "string").join(" ").toLowerCase().includes(personSearch)).map(serializeAdminPerson)); } catch (error) { adminError(res, error); } });
-  adminRouter.get("/tenants/:personId", async (req, res) => { try { const { profile, completeSchedules } = await service.tenantProfileContext(req.params.personId, parseAdminFilters(req.query)); if (!profile) { res.status(404).json(errorBody("not_found")); return; } await sendWorkspaceJson(req, res, serializeAdminTenantProfile(profile, completeSchedules)); } catch (error) { adminError(res, error); } });
+  adminRouter.get("/tenants/:personId", async (req, res) => { try { const { profile, completeSchedules } = await service.tenantProfileContext(req.params.personId, parseAdminFilters(req.query)); if (!profile) { res.status(404).json(errorBody("not_found")); return; } await sendWorkspaceJson(req, res, serializeAdminTenantProfile({ ...profile, documents: legacyDocuments(profile.documents) }, completeSchedules)); } catch (error) { adminError(res, error); } });
   adminRouter.post("/people", async (req, res) => { const parsed = personSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminPerson(await service.savePerson(parsed.data, {actorSubject: patchActorSubject(req), occurredAt: patchOccurredAt()}))); } catch (error) { adminError(res, error); } });
   adminRouter.patch("/people/:id", (req, res) => patchAdminRecord(req, res, "person", patchPersonSchema, (value) => serializeAdminPerson(value as Parameters<typeof serializeAdminPerson>[0])));
   adminRouter.post("/household-memberships", async (req, res) => { const parsed = householdMembershipSchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminHouseholdMembership(await service.saveHouseholdMembership(parsed.data))); } catch (error) { adminError(res, error); } });
@@ -1149,7 +1169,7 @@ export function createRentOpsRouter(options: RentOpsRouteOptions): Router {
       opened.stream.pipe(res);
     } catch (error) { adminError(res, error); }
   });
-  adminRouter.get("/documents", async (req, res) => { try { const snapshot = await service.snapshot(); const propertyId = asString(req.query.propertyId); res.json(snapshot.documents.filter((document) => !propertyId || document.propertyId === propertyId).map(serializeAdminDocument)); } catch (error) { adminError(res, error); } });
+  adminRouter.get("/documents", async (req, res) => { try { const snapshot = await service.snapshot(); const propertyId = asString(req.query.propertyId); res.json(legacyDocuments(snapshot.documents).filter((document) => !propertyId || document.propertyId === propertyId).map(serializeAdminDocument)); } catch (error) { adminError(res, error); } });
   adminRouter.patch("/documents/:id", (req, res) => patchAdminRecord(req, res, "document", patchDocumentSchema, (value) => serializeAdminDocument(value as Parameters<typeof serializeAdminDocument>[0])));
   adminRouter.post("/activity", async (req, res) => { const parsed = activitySchema.safeParse(req.body); if (!parsed.success) { res.status(400).json(errorBody("invalid_input")); return; } try { res.status(201).json(serializeAdminActivity(await service.saveActivity(parsed.data))); } catch (error) { adminError(res, error); } });
   adminRouter.get("/activity", async (req, res) => { try { const snapshot = await service.snapshot(); const personId = asString(req.query.personId); res.json(snapshot.activityEvents.filter((event) => !personId || event.personId === personId).sort((left, right) => String(right.occurredAt ?? "").localeCompare(String(left.occurredAt ?? ""))).map(serializeAdminActivity)); } catch (error) { adminError(res, error); } });

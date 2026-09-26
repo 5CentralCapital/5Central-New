@@ -56,6 +56,10 @@ const SNAPSHOT_META_COLUMNS = `n.id, n.scenario_id, n.assumption_version, n.mode
   n.source_fingerprint, n.result_sha256, n.label, n.created_by, n.created_at,
   n.result->>'completeness' AS completeness, n.result->'scenario' AS scenario_parameters, n.result->>'currency' AS result_currency,
   n.result->'summary'->>'openingCashKnown' AS opening_cash_known,
+  n.result->'replay'->'sources'->'qboOpening'->>'coverage' AS qbo_opening_coverage,
+  n.result->'replay'->'sources'->'qboOpening'->>'mappingCoverage' AS qbo_opening_mapping_coverage,
+  n.result->'replay'->'sources'->'qboOpening'->>'reconciliation' AS qbo_opening_reconciliation,
+  n.result->'replay'->'sources'->'qboOpening'->>'freshness' AS qbo_opening_freshness,
   NOT EXISTS (SELECT 1 FROM jsonb_array_elements(n.result->'checks') AS c(check_row) WHERE (c.check_row->>'passed')::boolean IS NOT TRUE) AS checks_passed`;
 
 function scenarioRow(row: Record<string, unknown>): ScenarioRow {
@@ -100,6 +104,10 @@ export function snapshotMeta(row: Record<string, unknown>): ForecastSnapshotMeta
     completeness: row.completeness === "complete" ? "complete" : "partial",
     checksPassed: row.checks_passed === true,
     openingCashKnown: row.opening_cash_known === "true" || row.opening_cash_known === true,
+    qboOpeningCoverage: dbNullableString(row.qbo_opening_coverage, "qbo_opening_coverage") as "complete" | "partial" | "unavailable" | null,
+    qboOpeningMappingCoverage: dbNullableString(row.qbo_opening_mapping_coverage, "qbo_opening_mapping_coverage") as "complete" | "partial" | null,
+    qboOpeningReconciliation: dbNullableString(row.qbo_opening_reconciliation, "qbo_opening_reconciliation") as "reconciled" | "unreconciled" | null,
+    qboOpeningFreshness: dbNullableString(row.qbo_opening_freshness, "qbo_opening_freshness") as "live_read" | "stale" | "unknown" | null,
     parametersSha256: snapshotParametersSha256(row),
     createdBy: dbString(row.created_by, "created_by"),
     createdAt: dbTimestamp(row.created_at, "created_at"),
@@ -107,7 +115,8 @@ export function snapshotMeta(row: Record<string, unknown>): ForecastSnapshotMeta
 }
 
 const META_FIELDS = ["id", "assumption_version", "model_version", "actuals_cutoff", "source_fingerprint", "result_sha256", "label", "created_by", "created_at",
-  "completeness", "checks_passed", "scenario_parameters", "result_currency", "opening_cash_known"] as const;
+  "completeness", "checks_passed", "scenario_parameters", "result_currency", "opening_cash_known", "qbo_opening_coverage", "qbo_opening_mapping_coverage",
+  "qbo_opening_reconciliation", "qbo_opening_freshness"] as const;
 const prefixedMetaColumns = (alias: string) => META_FIELDS.map(field => `${alias}.${field} AS ${alias}_${field}`).join(", ");
 function prefixedMeta(row: Record<string, unknown>, alias: string, scenarioId: string): ForecastSnapshotMeta | null {
   if (!row[`${alias}_id`]) return null;

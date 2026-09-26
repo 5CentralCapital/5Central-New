@@ -6,6 +6,7 @@ import { PostgresRentOpsRepository, type RentOpsQueryExecutor } from "../rent-op
 import { RentOpsService } from "../rent-ops/services/service";
 import { RentOpsInvariantError } from "../rent-ops/domain/invariants";
 import type { ForecastSourceData } from "./engine";
+import type { ForecastQboAmount, ForecastQboOpeningBalance, ForecastQboOpeningBalanceSource } from "./source-port";
 
 /**
  * Reads the actual opening position for a forecast from existing company
@@ -14,7 +15,17 @@ import type { ForecastSourceData } from "./engine";
  * zero) and must be supplied as an approved opening-balance override.
  */
 export interface ForecastSourceReader {
-  read(input: { organizationId: string; asOf: string; debtIds: readonly string[]; today: string }): Promise<ForecastSourceData>;
+  /**
+   * `currency` is the scenario currency. Provider amounts reported in any
+   * other currency are never copied into the scenario; they become unknown
+   * opening items that must be supplied as approved overrides.
+   */
+  read(input: { organizationId: string; asOf: string; debtIds: readonly string[]; today: string; currency: string }): Promise<ForecastSourceData>;
+}
+
+export interface ForecastSourceReaderOptions {
+  /** Optional native QBO opening-balance source. QBO A/R is deliberately not read here. */
+  readonly qboBalanceSource?: ForecastQboOpeningBalanceSource;
 }
 
 const unknownItem = (key: OpeningItemKey, source: string, note?: string): ForecastOpeningItem => ({
@@ -179,23 +190,60 @@ async function debtBalances(executor: RentOpsQueryExecutor, organizationId: stri
   return Object.fromEntries(result.rows.map(row => [row.id, { principalCents: row.outstanding, sourceIds: [`company_investor_debt:${row.id}`] }]));
 }
 
-/** Database-backed reader over the rental, PM settlement, investor and project records. */
-export function createForecastSourceReader(executor: RentOpsQueryExecutor): ForecastSourceReader {
+function qboOpeningItem(key: OpeningItemKey, amount: ForecastQboAmount | undefined, fallback: string, snapshot?: ForecastQboOpeningBalance, error?: unknown): ForecastOpeningItem {
+  if (!amount) {
+    // Keep provider/configuration error text out of forecast notes; it can
+    // contain account names, request IDs, or other sensitive details.
+    const note = error !== undefined ? "QuickBooks opening balance source failed." : undefined;
+    return unknownItem(key, fallback, note);
+  }
   return {
-    async read({ organizationId, asOf, debtIds, today }) {
+    key, label: OPENING_ITEM_LABELS[key], amountCents: amount.amountCents, asOf: amount.asOf, state: amount.state,
+    source: `QuickBooks Online native BalanceSheet (${snapshot?.basis ?? "unknown"} basis; ${snapshot?.legalEntityId ?? "unknown entity"})`,
+    sourceIds: amount.sourceIds,
+    ...(amount.note ? { note: amount.note } : {}),
+  };
+}
+
+/** Database-backed reader over the rental, PM settlement, investor and project records. */
+export function createForecastSourceReader(executor: RentOpsQueryExecutor, options: ForecastSourceReaderOptions = {}): ForecastSourceReader {
+  return {
+    async read({ organizationId, asOf, debtIds, today, currency }) {
       const properties = await mappedProperties(executor, organizationId, asOf);
-      const ledger = "QuickBooks balance-sheet reads are not connected; enter an approved opening balance";
+      let ledger = options.qboBalanceSource ? "QuickBooks opening balance source did not provide a verifiable amount" : "QuickBooks balance-sheet reads are not connected; enter an approved opening balance";
+      let qbo: ForecastQboOpeningBalance | undefined;
+      let qboError: unknown;
+      if (options.qboBalanceSource) {
+        try {
+          qbo = await options.qboBalanceSource.read({ organizationId, asOf });
+        } catch (error) {
+          // Keep the forecast runnable with explicit unknown opening items. A
+          // provider/configuration failure must never become a zero balance.
+          qboError = error;
+        }
+      }
+      if (qbo && qbo.currency !== currency) {
+        // Amounts are integer cents with no currency of their own. Copying a
+        // balance reported in another currency would silently relabel it as
+        // the scenario currency, so the whole provider read is withheld.
+        ledger = `QuickBooks reports opening balances in ${qbo.currency}, but this scenario uses ${currency}; enter an approved opening balance in ${currency}`;
+        qbo = undefined;
+      }
       const items: ForecastOpeningItem[] = [
-        unknownItem("cash_operating", ledger),
-        unknownItem("cash_restricted", ledger),
+        options.qboBalanceSource ? qboOpeningItem("cash_operating", qbo?.operatingCash, ledger, qbo, qboError) : unknownItem("cash_operating", ledger),
+        options.qboBalanceSource ? qboOpeningItem("cash_restricted", qbo?.restrictedCash, ledger, qbo, qboError) : unknownItem("cash_restricted", ledger),
         await rentalReceivables(executor, properties, asOf, today),
         await pmHeldFunds(executor, organizationId, asOf),
-        unknownItem("accounts_payable", ledger),
+        options.qboBalanceSource ? qboOpeningItem("accounts_payable", qbo?.accountsPayable, ledger, qbo, qboError) : unknownItem("accounts_payable", ledger),
         await depositsHeld(executor, properties, asOf),
         await investorObligations(executor, organizationId, asOf),
         await projectCommitments(executor, organizationId, asOf),
       ];
-      return { items, debtBalances: await debtBalances(executor, organizationId, debtIds) };
+      return {
+        items,
+        debtBalances: await debtBalances(executor, organizationId, debtIds),
+        ...(qbo ? { qboOpening: qbo, propertyBookBalances: qbo.propertyBookBalances } : {}),
+      };
     },
   };
 }

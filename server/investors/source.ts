@@ -13,6 +13,7 @@ import {
 import {
   investorFinancialSourceSchema,
   investorFinancialSourceRequestSchema,
+  investorPaymentKindMatchesSingleComponent,
   type InvestorFinancialSourceRequest,
   type InvestorFinancialSource,
   type InvestorPaymentAmounts,
@@ -251,11 +252,11 @@ function expectedInvestorPurpose(kind: InvestorPaymentKind): FinancialProviderAc
 function hasTrustedInvestorPurpose(input: InvestorSourceVerificationInput, context: { purpose: FinancialProviderAccountingPurpose; purposeEvidence: FinancialProviderPurposeEvidence; purposeMappedAt: string | null }): boolean {
   const expected = expectedInvestorPurpose(input.kind);
   if (!expected || context.purpose === "unknown" || context.purpose !== expected || context.purposeEvidence === "provider_account_unmapped" || context.purposeMappedAt === null) return false;
-  const componentCount = Object.entries(input.amounts).filter(([key, value]) => key !== "unclassifiedCents" && centsToBigInt(value) > BigInt(0)).length;
-  // A single provider purpose cannot prove a mixed principal/interest/etc.
-  // split. Keep mixed amounts manual until each component has evidence.
-  if (componentCount > 1) return false;
-  return true;
+  // A provider purpose cannot prove an unclassified or mixed principal /
+  // interest / distribution split. It must also agree with the exact local
+  // component named by the investor payment kind; otherwise an interest
+  // purpose could incorrectly attest a principal-only local payment.
+  return investorPaymentKindMatchesSingleComponent(input.kind, input.amounts);
 }
 
 function isEligiblePostedResolution(

@@ -25,6 +25,7 @@ export const COMPANY_APPLICATION_TABLES = [
   "accounting_qbo_capabilities",
   "accounting_qbo_refresh_leases",
   "accounting_qbo_source_objects",
+  "accounting_qbo_named_observations",
   "accounting_qbo_transactions",
   "accounting_qbo_source_line_balances",
   "accounting_qbo_transaction_lines",

@@ -93,11 +93,13 @@ function principalAuthorization(principal: AuthenticatedPrincipal): CompanyDocum
   };
 }
 
-/** Investor contract versions still reference rent_ops_documents; only those documents use the bridge. */
+/** Investor agreements may be uploaded before their first contract version. */
 const legacyBridge: CompanyDocumentLegacyBridge = {
   async registerVerifiedDocument(input) {
     const needsBridge = Boolean(input.document.context.investorContractVersionId)
-      || input.document.links.some(link => link.kind === "investor_contract_version");
+      || input.document.links.some(link => link.kind === "investor_contract_version")
+      || (Boolean(input.document.context.legalEntityId)
+        && ["contract", "loan", "investor_agreement"].includes(input.document.kind));
     if (needsBridge) await registerVerifiedRentOpsDocument(input);
   },
 };

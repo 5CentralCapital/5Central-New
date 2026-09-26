@@ -490,6 +490,37 @@ export const investorPaymentAmountsSchema = z.object({
 }).strict();
 export type InvestorPaymentAmounts = z.infer<typeof investorPaymentAmountsSchema>;
 
+/**
+ * QBO purpose mappings prove one investor payment component at a time. The
+ * local record may still retain a legacy multi-component loan payment; that
+ * record is valid for manual history, but it cannot be linked to one QBO
+ * purpose without component-level evidence.
+ */
+export type InvestorPaymentComponent = Exclude<keyof InvestorPaymentAmounts, "unclassifiedCents">;
+
+const INVESTOR_PAYMENT_COMPONENT_BY_KIND: Readonly<Partial<Record<InvestorPaymentKind, InvestorPaymentComponent>>> = {
+  contribution: "principalCents",
+  return_of_capital: "returnOfCapitalCents",
+  distribution: "distributionCents",
+  principal: "principalCents",
+  interest: "interestCents",
+  fee: "feeCents",
+  balloon: "balloonCents",
+};
+
+export function investorPaymentComponentForKind(kind: InvestorPaymentKind): InvestorPaymentComponent | null {
+  return INVESTOR_PAYMENT_COMPONENT_BY_KIND[kind] ?? null;
+}
+
+/** True only when the payment has one positive, known component for its kind. */
+export function investorPaymentKindMatchesSingleComponent(kind: InvestorPaymentKind, amounts: InvestorPaymentAmounts): boolean {
+  const component = investorPaymentComponentForKind(kind);
+  if (component === null || centsToBigInt(amounts[component]) <= BigInt(0)) return false;
+  return (Object.entries(amounts) as [keyof InvestorPaymentAmounts, string][]).every(([key, value]) => key === component
+    ? centsToBigInt(value) > BigInt(0)
+    : centsToBigInt(value) === BigInt(0));
+}
+
 export const investorPaymentSchema = z.object({
   id: investorPaymentIdSchema,
   accountId: investorAccountIdSchema,
@@ -776,7 +807,11 @@ export const recordInvestorPaymentPayloadSchema = z.object({
   amounts: paymentAmountInputSchema,
   source: investorFinancialSourceRequestSchema.optional(),
   correctionReason: z.string().trim().max(2_000).nullable().optional(),
-}).strict();
+}).strict().superRefine((value, context) => {
+  if (value.source?.provider === "qbo" && !investorPaymentKindMatchesSingleComponent(value.kind, value.amounts)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["amounts"], message: "QBO-linked investor payments require one known component matching the payment kind" });
+  }
+});
 export type RecordInvestorPaymentPayload = z.infer<typeof recordInvestorPaymentPayloadSchema>;
 
 export const linkInvestorPaymentSourcePayloadSchema = z.object({

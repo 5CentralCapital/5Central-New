@@ -10,6 +10,7 @@ import {
   rentalBridgePreviewSchema,
   rentalPostingPolicyListSchema,
 } from "@shared/accounting/operations";
+import { tenantSourceResolutionSchema } from "@shared/accounting/tenant-source-resolution";
 import { financialSourceCoverageSchema, financialSourceLineResolutionSchema } from "@shared/accounting/source";
 import { rentOpsAuthClient } from "../rent-ops/auth";
 import { parseCustomerLedger } from "./customer-ledger";
@@ -300,6 +301,12 @@ const api: AccountingApi = {
       if (error instanceof AccountingApiError && error.status === 404 && error.code === "accounting_not_linked") return null;
       throw error;
     }
+  },
+  async tenancySourceResolution(organizationId, query, signal) {
+    const params = new URLSearchParams({ tenancyId: query.tenancyId });
+    if (query.environment) params.set("environment", query.environment);
+    if (query.asOf) params.set("asOf", query.asOf);
+    return parsed(tenantSourceResolutionSchema, await requestJson(`${basePath(organizationId)}/receivables/tenancy-source-resolution?${params}`, { signal }));
   },
   async linkTenancyCustomer(organizationId, input, signal) {
     const value = record(await requestJson(`${basePath(organizationId)}/receivables/tenancy-links`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legalEntityId: input.scope.legalEntityId, environment: input.scope.environment, realmId: input.scope.realmId, tenancyId: input.tenancyId, customerId: input.customerId }), signal }));
