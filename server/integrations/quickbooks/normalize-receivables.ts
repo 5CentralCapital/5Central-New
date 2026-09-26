@@ -403,7 +403,9 @@ function normalizeJournalEntry(body: QuickBooksJsonObject, identity: ReceivableI
       classObjectId: referenceId(detail.ClassRef, `${label} ClassRef`),
       departmentObjectId: referenceId(detail.DepartmentRef, `${label} DepartmentRef`),
       serviceDate: null,
-      description: optionalText(line.Description, `${label} Description`, 500),
+      // Receivable effects carry a display excerpt. The full description is
+      // retained on the immutable source object and accounting source line.
+      description: optionalText(line.Description, `${label} Description`, 4000)?.slice(0, 500) ?? null,
     });
   });
   if (debits !== credits) reject("QBO JournalEntry debits and credits do not balance");

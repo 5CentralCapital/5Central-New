@@ -150,6 +150,11 @@ test("journal entries contribute only Accounts Receivable lines tagged with a cu
   assert.equal(document.customerObjectId, null);
   assert.deepEqual(document.effects.map(effect => [effect.customerObjectId, effect.kind, effect.amountCents]), [["58", "adjustment", "15000"], ["59", "adjustment", "-4000"]]);
   assert.equal(document.totalCents, "11000");
+  const longDescription = "Synthetic receivable explanation ".repeat(60).trim();
+  const longMemoBody = { ...body, Line: [{ ...body.Line[0]!, Description: longDescription }, ...body.Line.slice(1)] };
+  const longMemo = supported(normalizeQboReceivable("JournalEntry", longMemoBody, { currency: usd, accountTypes: types }));
+  assert.equal(longMemo.effects[0]?.description, longDescription.slice(0, 500));
+  assert.equal(longMemo.effects[0]?.amountCents, "15000");
   // Without the account's type a customer-tagged line cannot be classified.
   assert.match(reasons(normalizeQboReceivable("JournalEntry", body, { currency: usd, accountTypes: new Map([["79", "Income"]]) })), /not mirrored yet/);
   // Unbalanced journals are refused; journals without A/R lines are not receivables.
