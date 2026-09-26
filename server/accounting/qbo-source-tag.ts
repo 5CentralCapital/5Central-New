@@ -5,11 +5,12 @@ import { AccountingError } from "./errors";
  * Source-event tag for QuickBooks creates.
  *
  * Intuit does not document how long it remembers a `requestid`, so a create
- * whose response was lost must be found by reading QuickBooks. Invoices,
- * payments, credit memos, journal entries and bills have no natural key to
- * query by, so every create carries a stable line `5CO:<operation key>` in its
- * internal note. A later reconciler can match that line exactly instead of
- * holding the write for manual review forever.
+ * whose response was lost must be reconciled by reading QuickBooks. Invoices,
+ * payments, credit memos, sales receipts, refund receipts, journal entries
+ * and bills have no natural key, so every create carries a stable line
+ * `5CO:<operation key>` in its internal note for later correlation. The tag
+ * is metadata; this adapter does not assume that PrivateNote or Notes is a
+ * provider-queryable key.
  *
  * Customer has no PrivateNote in the QuickBooks API; its internal free-form
  * field is `Notes` (at most 2,000 characters). The other entities use
@@ -24,6 +25,8 @@ export const QBO_SOURCE_TAG_FIELDS: Readonly<Record<string, { readonly field: st
   Invoice: { field: "PrivateNote", maxLength: 4000 },
   Payment: { field: "PrivateNote", maxLength: 4000 },
   CreditMemo: { field: "PrivateNote", maxLength: 4000 },
+  SalesReceipt: { field: "PrivateNote", maxLength: 4000 },
+  RefundReceipt: { field: "PrivateNote", maxLength: 4000 },
   JournalEntry: { field: "PrivateNote", maxLength: 4000 },
   Bill: { field: "PrivateNote", maxLength: 4000 },
   Customer: { field: "Notes", maxLength: 2000 },

@@ -130,6 +130,18 @@ export interface RentOpsDocumentServiceOptions {
 
 const MAX_DOCUMENT_NAME = 240;
 const MAX_DOCUMENT_MIME = 120;
+/**
+ * Company-document files are bridged into the legacy document table only so
+ * the company/investor flows can retain their verified object binding.  The
+ * prefix is the stable identifier namespace emitted by the company document
+ * service; ordinary rental documents use the native `document:` namespaces.
+ */
+export const COMPANY_DOCUMENT_ID_PREFIX = "company-document:";
+
+export function isCompanyScopedDocumentId(documentId: unknown): documentId is string {
+  return typeof documentId === "string" && documentId.startsWith(COMPANY_DOCUMENT_ID_PREFIX);
+}
+
 // Source filenames may contain non-ASCII characters as well as the existing
 // punctuation. Paths, control characters, and hidden/path-like names remain
 // forbidden before a filename reaches object storage. Keep this ES5-compatible
@@ -1018,6 +1030,10 @@ export class RentOpsService {
 
   /** Open an authenticated admin download only after exact binding checks. */
   async openVerifiedDocument(documentId: string): Promise<{ document: RentOpsDocument; stream: import("node:stream").Readable }> {
+    // Company documents have their own scope-aware download route.  A legacy
+    // ID-only admin request must not turn a bridged row into an authorization
+    // bypass or reveal whether a private company file exists.
+    if (isCompanyScopedDocumentId(documentId)) throw new RentOpsInvariantError("Document not found");
     const document = (await this.snapshot()).documents.find((candidate) => candidate.id === documentId);
     if (!document) throw new RentOpsInvariantError("Document not found");
     if (document.state !== "verified" || document.availability !== "verified" || document.storageKeyKnowledge !== "source" || !document.storageKey || !document.checksumSha256 || !document.sizeBytes || !document.verifiedAt) throw new RentOpsInvariantError("Verified document download is unavailable");
@@ -1200,6 +1216,10 @@ export class RentOpsService {
   }
 
   async patchRecord(entityType: RentOpsPatchEntityType | "recurring_schedule", targetId: string, expectedRevision: number, patch: Record<string, unknown>, context: RentOpsAdminPatchContext): Promise<unknown> {
+    // Metadata edits for bridged company documents belong to the
+    // company-scoped document command path, which checks the organization and
+    // legal-entity grant before applying a revision-checked update.
+    if (entityType === "document" && isCompanyScopedDocumentId(targetId)) throw new RentOpsInvariantError("Document not found");
     if (entityType === "person" && patch.phoneMethods !== undefined) {
       const parsed = phoneMethodsSchema.safeParse(patch.phoneMethods);
       if (!parsed.success) throw new RentOpsInvariantError("Invalid phone methods");

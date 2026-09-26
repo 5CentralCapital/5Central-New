@@ -7,5 +7,6 @@ export * from "./port";
 export * from "./reporting-port";
 export * from "./service";
 export * from "./sources";
+export * from "./source-port";
 export * from "./store";
 export * from "./workbook-import";

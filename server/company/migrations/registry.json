@@ -496,6 +496,15 @@
       "minimumServerContract": 1,
       "minimumClientContract": 1,
       "recovery": "Retain whole-deal operational records and source identities; disable new ledger commands on rollback and apply reviewed forward repairs. Never replay QuickBooks cash or historical migrations."
+    },
+    {
+      "version": 54,
+      "fileName": "054_qbo_named_observations.sql",
+      "sha256": "d7e42072b2bbcf9b81445cbbec0f546f62f5089e1d4cd46a7f904b1312b2a7e5",
+      "predecessor": 53,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Retain append-only named-profile observations; disable new named-object sync on rollback and apply a reviewed forward repair. Never rewrite the immutable financial source revision."
     }
   ]
 }

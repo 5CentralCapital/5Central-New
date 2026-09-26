@@ -3,7 +3,9 @@ import test from "node:test";
 import { companyScopeSchema } from "../../shared/company";
 import {
   investorFinancialSourceRequestSchema,
+  investorPaymentKindMatchesSingleComponent,
   investorPaymentAmountsSchema,
+  recordInvestorPaymentPayloadSchema,
 } from "../../shared/investors";
 import { createSyntheticCompanyDatabase, SYNTHETIC_COMPANY } from "../company/testing/synthetic-database";
 import { createQboAccountingMirrorStore } from "../accounting/mirror-store";
@@ -124,6 +126,50 @@ test("provider purpose is required and must match the investor component", async
   });
   assert.equal(await receiptMismatch.verifyPostedPayment(request()), null);
   assert.ok(await base.verifyPostedPayment(request()));
+});
+
+test("QBO verification requires the payment kind's single known component", () => {
+  const amounts = (overrides: Partial<Record<string, string>>) => investorPaymentAmountsSchema.parse({
+    principalCents: "0",
+    interestCents: "0",
+    returnOfCapitalCents: "0",
+    distributionCents: "0",
+    feeCents: "0",
+    balloonCents: "0",
+    unclassifiedCents: "0",
+    ...overrides,
+  });
+  const principal = amounts({ principalCents: "500" });
+  const interest = amounts({ interestCents: "500" });
+  const interestWithUnclassified = amounts({ interestCents: "500", unclassifiedCents: "1" });
+  const mixedLoanPayment = amounts({ principalCents: "500", interestCents: "100" });
+
+  assert.equal(investorPaymentKindMatchesSingleComponent("principal", principal), true);
+  assert.equal(investorPaymentKindMatchesSingleComponent("interest", interest), true);
+  assert.equal(investorPaymentKindMatchesSingleComponent("interest", principal), false);
+  assert.equal(investorPaymentKindMatchesSingleComponent("interest", interestWithUnclassified), false);
+  assert.equal(investorPaymentKindMatchesSingleComponent("principal", mixedLoanPayment), false);
+
+  const qboSource = investorFinancialSourceRequestSchema.parse({
+    provider: "qbo",
+    reference,
+    currency: "USD",
+    amountCents: "500",
+  });
+  const payload = {
+    accountId: "30000000-0000-4000-8000-000000000001",
+    instrumentId: "40000000-0000-4000-8000-000000000001",
+    kind: "interest" as const,
+    method: "qbo" as const,
+    paymentOn: "2026-09-01",
+    currency: "USD",
+    amounts: principal,
+    source: qboSource,
+  };
+  assert.equal(recordInvestorPaymentPayloadSchema.safeParse(payload).success, false);
+  // Existing manual multi-component loan history remains representable when
+  // it has no single-provider QBO purpose claim.
+  assert.equal(recordInvestorPaymentPayloadSchema.safeParse({ ...payload, method: "manual", amounts: mixedLoanPayment, source: undefined }).success, true);
 });
 
 test("provider-shaped Purchase uses the mirrored cash account and Vendor context", async () => {

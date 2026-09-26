@@ -48,6 +48,15 @@ export const forecastSnapshotMetaSchema = z.object({
   checksPassed: z.boolean(),
   /** False when opening cash was unknown: its balances are relative movements. */
   openingCashKnown: z.boolean(),
+  /**
+   * QBO opening evidence is kept separate from the generic completeness flag.
+   * These are nullable for snapshots created before the QBO source boundary
+   * existed (and for snapshots that did not use QBO).
+   */
+  qboOpeningCoverage: z.enum(["complete", "partial", "unavailable"]).nullable().optional(),
+  qboOpeningMappingCoverage: z.enum(["complete", "partial"]).nullable().optional(),
+  qboOpeningReconciliation: z.enum(["reconciled", "unreconciled"]).nullable().optional(),
+  qboOpeningFreshness: z.enum(["live_read", "stale", "unknown"]).nullable().optional(),
   /** Hash of the scenario settings (start date, horizons, reserve floor, currency) the snapshot ran with. */
   parametersSha256: z.string().regex(/^[a-f0-9]{64}$/),
   createdBy: z.string(),
@@ -142,10 +151,10 @@ export const archiveForecastScenarioPayloadSchema = z.object({ scenarioId: forec
 export const approveForecastScenarioPayloadSchema = z.object({
   scenarioId: forecastScenarioIdSchema,
   snapshotId: forecastSnapshotIdSchema,
-  /** Required (with a reason) to approve a snapshot whose opening cash is unknown. */
+  /** Required (with a reason) to approve a snapshot with an incomplete opening position. */
   acknowledgeIncompleteOpening: z.literal(true).optional(),
   reason: reasonSchema.optional(),
-}).strict().refine(value => !value.acknowledgeIncompleteOpening || value.reason !== undefined, { message: "Give a reason for approving with unknown opening cash", path: ["reason"] });
+}).strict().refine(value => !value.acknowledgeIncompleteOpening || value.reason !== undefined, { message: "Give a reason for approving with an incomplete opening position", path: ["reason"] });
 
 export const saveForecastAssumptionsPayloadSchema = z.object({
   scenarioId: forecastScenarioIdSchema,
