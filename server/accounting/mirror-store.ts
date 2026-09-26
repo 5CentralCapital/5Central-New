@@ -337,7 +337,7 @@ function mapResolution(row: LineRow): FinancialSourceLineResolution {
     transactionType: stringValue(transactionType, "transaction type", 120),
     accountObjectId: nullableString(accountObjectId, "account object", 200),
     counterpartyObjectId: nullableString(counterpartyObjectId, "counterparty object", 200),
-    description: nullableString(row.description, "description", 500),
+    description: nullableString(row.description, "description", 4000),
     postingState: financialPostingStateSchema.parse(postingState),
     postedOn: dateValue(postedOn, "posted date"),
     settlement: {
@@ -657,7 +657,7 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       // differ under the same SyncToken; any other difference is a conflict.
       const stored = typeof row.provider_body === "string" ? JSON.parse(row.provider_body) as unknown : row.provider_body;
       if (canonicalJsonSha256(withoutReadTimeFields(objectType, stored)) !== canonicalJsonSha256(withoutReadTimeFields(objectType, input.providerBody))) {
-        throw new AccountingError("accounting_conflict", "QBO source object version changed after it was mirrored");
+        throw new AccountingError("accounting_conflict", "QBO source object version changed after it was mirrored", { reason: "qbo_source_revision_mismatch" });
       }
       return { id: row.id, bodyHash: row.body_hash };
     }

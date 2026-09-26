@@ -54,6 +54,9 @@ function providerFailure(error: unknown): never {
     if (error.code === "quickbooks_unauthorized") throw new PermanentJobError("qbo_needs_reconnect", "QuickBooks needs to be reconnected for this company");
     if (error.code === "quickbooks_unsupported_capability" || error.code === "quickbooks_validation") throw new PermanentJobError(error.code, error.message);
   }
+  if (error instanceof AccountingError && error.code === "accounting_conflict" && error.details.reason === "qbo_source_revision_mismatch") {
+    throw new PermanentJobError("qbo_source_revision_mismatch", error.message);
+  }
   if (error instanceof AccountingError && (error.code === "accounting_capability_disabled" || error.code === "accounting_validation" || error.code === "accounting_configuration")) {
     throw new PermanentJobError(error.code, error.message);
   }

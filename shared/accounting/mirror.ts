@@ -76,7 +76,7 @@ export const qboTransactionLineSchema = z.object({
   settledAmountCents: centsSchema.nullable(),
   accountObjectId: z.string().trim().min(1).max(200).nullable(),
   counterpartyObjectId: z.string().trim().min(1).max(200).nullable(),
-  description: z.string().trim().max(500).nullable(),
+  description: z.string().trim().max(4000).nullable(),
   watermark: z.string().trim().min(1).max(255),
   updatedAt: isoTimestampSchema,
 }).strict();

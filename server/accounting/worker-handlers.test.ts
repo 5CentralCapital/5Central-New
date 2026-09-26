@@ -6,6 +6,7 @@ import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import type { AccountingServices } from "./index";
 import { createAccountingJobHandlers } from "./worker-handlers";
 import { QBO_SYNC_TOPIC } from "./webhook-ingest";
+import { AccountingError } from "./errors";
 
 const scope = {
   organizationId: "10000000-0000-4000-8000-000000000001",
@@ -44,7 +45,7 @@ function job() {
   };
 }
 
-async function runProviderFailure(error: QuickBooksIntegrationError): Promise<unknown> {
+async function runProviderFailure(error: Error): Promise<unknown> {
   const services = {
     qbo: {
       status: "configured",
@@ -84,4 +85,13 @@ test("non-transient OAuth failures still require reconnect", async () => {
     () => runProviderFailure(new QuickBooksIntegrationError("quickbooks_oauth", "private", { status: 400, retryable: false })),
     (error: unknown) => error instanceof PermanentJobError && error.code === "qbo_needs_reconnect",
   );
+});
+
+test("only a proven same-revision body mismatch stops automatic retries", async () => {
+  await assert.rejects(
+    () => runProviderFailure(new AccountingError("accounting_conflict", "QBO source object version changed after it was mirrored", { reason: "qbo_source_revision_mismatch" })),
+    (error: unknown) => error instanceof PermanentJobError && error.code === "qbo_source_revision_mismatch",
+  );
+  const transient = new AccountingError("accounting_conflict", "Concurrent operation");
+  await assert.rejects(() => runProviderFailure(transient), error => error === transient);
 });

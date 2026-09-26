@@ -47,14 +47,6 @@ test("an invoice becomes signed charge and discount effects that reconcile to To
   assert.deepEqual([document.emailStatus, document.allowOnlineCard, document.allowOnlineAch, document.allowIpn, document.billEmailPresent], ["NotSet", false, false, false, false]);
 });
 
-test("projects a valid long receivable line description to the source display limit", () => {
-  const description = "D".repeat(2_000);
-  const document = supported(normalizeQboReceivable("Invoice", invoice({
-    Line: [{ Id: "1", Amount: 1275, DetailType: "SalesItemLineDetail", Description: description, SalesItemLineDetail: { ItemRef: { value: "10" } } }],
-  }), { currency: usd }));
-  assert.equal(document.effects[0]?.description, description.slice(0, 500));
-});
-
 test("string decimals are accepted exactly and sub-cent precision is refused", () => {
   const exact = supported(normalizeQboReceivable("Invoice", invoice({ TotalAmt: "1275.00", Balance: "0", Line: [{ Id: "1", Amount: "1275.00", DetailType: "SalesItemLineDetail", SalesItemLineDetail: {} }] }), { currency: usd }));
   assert.equal(exact.openBalanceCents, "0");
@@ -158,6 +150,11 @@ test("journal entries contribute only Accounts Receivable lines tagged with a cu
   assert.equal(document.customerObjectId, null);
   assert.deepEqual(document.effects.map(effect => [effect.customerObjectId, effect.kind, effect.amountCents]), [["58", "adjustment", "15000"], ["59", "adjustment", "-4000"]]);
   assert.equal(document.totalCents, "11000");
+  const longDescription = "Synthetic receivable explanation ".repeat(60).trim();
+  const longMemoBody = { ...body, Line: [{ ...body.Line[0]!, Description: longDescription }, ...body.Line.slice(1)] };
+  const longMemo = supported(normalizeQboReceivable("JournalEntry", longMemoBody, { currency: usd, accountTypes: types }));
+  assert.equal(longMemo.effects[0]?.description, longDescription.slice(0, 500));
+  assert.equal(longMemo.effects[0]?.amountCents, "15000");
   // Without the account's type a customer-tagged line cannot be classified.
   assert.match(reasons(normalizeQboReceivable("JournalEntry", body, { currency: usd, accountTypes: new Map([["79", "Income"]]) })), /not mirrored yet/);
   // Unbalanced journals are refused; journals without A/R lines are not receivables.

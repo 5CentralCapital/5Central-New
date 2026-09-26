@@ -67,6 +67,36 @@ async function harness(store: Store, start: string) {
 
 const DAY = 86_400_000;
 
+test("full replay mirrors balanced zero-total journals with long descriptions and exact line readback", async () => {
+  const description = "Synthetic supporting detail ".repeat(75).trim();
+  const journal: QuickBooksJsonObject = {
+    Id: "journal-long", SyncToken: "0", TxnDate: "2026-09-10", TotalAmt: 0,
+    CurrencyRef: { value: "USD" }, MetaData: { LastUpdatedTime: "2026-09-10T10:00:00Z" },
+    Line: [
+      { Id: "0", Amount: "123.45", Description: description, DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "7" }, Entity: { Type: "Customer", EntityRef: { value: "58" } } } },
+      { Id: "1", Amount: "123.45", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "8" } } },
+    ],
+  };
+  const store: Store = { JournalEntry: [journal], Account: [
+    { Id: "7", SyncToken: "0", AccountType: "Accounts Receivable", MetaData: { LastUpdatedTime: "2026-09-01T00:00:00Z" } },
+    { Id: "8", SyncToken: "0", AccountType: "Bank", MetaData: { LastUpdatedTime: "2026-09-01T00:00:00Z" } },
+  ] };
+  const h = await harness(store, "2026-09-20T00:00:00Z");
+  try {
+    assert.equal((await h.sync.syncChanges()).status, "complete");
+    const line = await h.mirror.resolveLine({ scope: sourceScope, objectType: "JournalEntry", objectId: "journal-long", lineId: "0" });
+    assert.equal(line?.amountCents, "12345");
+    assert.equal(line?.description, description);
+    assert.equal(line?.settlement.state, "unknown");
+    assert.equal((await h.sync.syncChanges({ forceFullReplay: true })).status, "complete");
+    const count = await h.executor.query<{ count: number }>("SELECT count(*)::int AS count FROM accounting_qbo_transaction_lines WHERE object_id='journal-long'");
+    assert.equal(count.rows[0]?.count, 2);
+    const effects = await h.executor.query<{ description: string; amount_cents: string }>("SELECT description, amount_cents::text FROM accounting_qbo_receivable_effects WHERE object_id='journal-long'");
+    assert.equal(effects.rows[0]?.description, description.slice(0, 500));
+    assert.equal(effects.rows[0]?.amount_cents, "12345");
+  } finally { await h.close(); }
+});
+
 test("sync strategy: full replay without a checkpoint, CDC within 30 days, full replay after the horizon or a CDC overflow", async () => {
   const store: Store = { Bill: [bill("10", "0", "2026-09-10T10:00:00Z")], Account: [{ Id: "7", SyncToken: "0", AccountType: "Expense", MetaData: { LastUpdatedTime: "2026-09-01T00:00:00Z" } }] };
   const h = await harness(store, "2026-09-20T00:00:00Z");
