@@ -244,3 +244,76 @@ test("deal-cost HTTP flow preserves QBO scope, allocation, revision and stale-so
     await fixture.close();
   }
 });
+
+test("deal-cost and rehab allocations share a QBO line in either order", async () => {
+  const fixture = await createSyntheticCompanyDatabase();
+  try {
+    const [dealFirstSource, rehabFirstSource] = await seedSyntheticQboPurchase(fixture.executor, {
+      objectId: "purchase-deal-cost-ordering",
+      txnDate: "2026-09-20",
+      lines: [
+        { id: "1", amount: "100.00", description: "Synthetic deal-first expense" },
+        { id: "2", amount: "100.00", description: "Synthetic rehab-first expense" },
+      ],
+    });
+    const executor = await createSyntheticRuntimeExecutor(fixture.db);
+    const services = createCompanyServices(executor, { accounting: { environment: {} } });
+    const resolvePrincipal = (connection = executor) => loadAuthenticatedPrincipal(connection, { actorId, organizationId, role: "admin" });
+    const access = { principal: await resolvePrincipal(), resolvePrincipal, transport: attestTransport("web") };
+    const scope = companyScopeSchema.parse({ organizationId, legalEntityId: entityId, propertyId });
+    const envelope = (payload: Record<string, unknown>, expectedRevision?: number) => ({
+      operationId: randomUUID(),
+      idempotencyKey: `deal-cost-ordering:${randomUUID()}`,
+      scope,
+      effectiveDate: "2026-09-22",
+      ...(expectedRevision === undefined ? {} : { expectedRevision }),
+      payload,
+    });
+    const createProject = async (name: string) => {
+      const receipt = await services.projects.execute("project.create", envelope({ propertyId, name, projectType: "rehab", status: "active", startOn: "2026-09-01", targetOn: "2026-10-15" }), access);
+      return { id: String(receipt.affectedRecordIds[0]), revision: projectRevision(receipt, String(receipt.affectedRecordIds[0])) };
+    };
+    const createDealCost = (projectId: string, source: NonNullable<typeof dealFirstSource>, amountCents: string, expectedRevision: number) => services.projects.executeDealCost!("project.deal_cost.create", envelope({
+      projectId,
+      lane: "acquisition",
+      description: "Synthetic acquisition expense",
+      vendorName: null,
+      budgetCents: null,
+      amountCents,
+      forecastCents: "0",
+      paidCents: null,
+      incurredOn: "2026-09-20",
+      paidOn: null,
+      prepaid: false,
+      sourceKind: "qbo",
+      reconciliationState: "qbo_verified",
+      sourceRecordRef: null,
+      sourceReferenceHash: null,
+      source,
+      settlementProof: null,
+    }, expectedRevision), access);
+
+    const dealFirst = await createProject("Synthetic deal-first ordering");
+    const dealFirstReceipt = await createDealCost(dealFirst.id, dealFirstSource!, "6000", dealFirst.revision);
+    const dealFirstBinding = await services.projects.executeExecution!("project.finance_binding.create", envelope({ projectId: dealFirst.id, source: dealFirstSource, allocatedCents: "4000" }, projectRevision(dealFirstReceipt, dealFirst.id)), access);
+    assert.equal((await createQboAccountingMirrorStore(fixture.executor).getBalance(dealFirstSource!)).allocatedCents, "10000");
+    assert.equal(projectRevision(dealFirstBinding, dealFirst.id) > projectRevision(dealFirstReceipt, dealFirst.id), true);
+
+    const rehabFirst = await createProject("Synthetic rehab-first ordering");
+    const rehabFirstBinding = await services.projects.executeExecution!("project.finance_binding.create", envelope({ projectId: rehabFirst.id, source: rehabFirstSource, allocatedCents: "4000" }, rehabFirst.revision), access);
+    let rehabFirstRevision = projectRevision(rehabFirstBinding, rehabFirst.id);
+    assert.equal((await createQboAccountingMirrorStore(fixture.executor).getBalance(rehabFirstSource!)).allocatedCents, "4000");
+    await assert.rejects(
+      createDealCost(rehabFirst.id, rehabFirstSource!, "7000", rehabFirstRevision),
+      /allocation exceeds its available balance|allocation exceeds the source line/i,
+      "the central allocator rejects a split that exceeds the QBO line balance",
+    );
+    assert.equal((await createQboAccountingMirrorStore(fixture.executor).getBalance(rehabFirstSource!)).allocatedCents, "4000");
+    const rehabFirstDeal = await createDealCost(rehabFirst.id, rehabFirstSource!, "6000", rehabFirstRevision);
+    rehabFirstRevision = projectRevision(rehabFirstDeal, rehabFirst.id);
+    assert.equal(rehabFirstRevision > projectRevision(rehabFirstBinding, rehabFirst.id), true);
+    assert.equal((await createQboAccountingMirrorStore(fixture.executor).getBalance(rehabFirstSource!)).allocatedCents, "10000");
+  } finally {
+    await fixture.close();
+  }
+});

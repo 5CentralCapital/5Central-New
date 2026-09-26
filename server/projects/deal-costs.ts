@@ -650,7 +650,6 @@ async function verifyQboSource(
 
 async function reserveQboIfNeeded(
   context: CommandHandlerContext<unknown>,
-  projectId: string,
   currency: string,
   source: FinancialSourceReference,
   id: string,
@@ -659,10 +658,9 @@ async function reserveQboIfNeeded(
 ): Promise<void> {
   const finance = (context as DealCostCommandContext).finance;
   if (!finance?.allocations) throw new ValidationCommandError("QBO source allocation is unavailable", { reason: "deal_cost_qbo_allocation_unavailable" });
-  const existing = await context.executor.query(`SELECT 1 FROM company_project_finance_bindings WHERE organization_id = $1 AND project_id = $2 AND provider = $3 AND environment = $4 AND realm_id = $5 AND object_type = $6 AND object_id = $7 AND line_id IS NOT DISTINCT FROM $8 AND source_version = $9 AND binding_status NOT IN ('released','unlinked') LIMIT 1`, [context.envelope.scope.organizationId, projectId, source.provider, source.environment, source.realmId, source.objectType, source.objectId, source.lineId, source.version]);
-  if (existing.rows.length > 0) {
-    throw new ValidationCommandError("This QBO source is already linked to the project's rehab finance binding; the read projection includes it there without a second cash classification", { reason: "deal_cost_qbo_already_bound" });
-  }
+  // Rehab bindings and whole-deal classifications are separate consumers of
+  // the shared source allocation. The allocator enforces the remaining line
+  // balance while allowing a valid split in either creation order.
   const absoluteAmount = centsToBigInt(amountCents) < BigInt(0) ? centsFromBigInt(-centsToBigInt(amountCents)) : centsFromBigInt(centsToBigInt(amountCents));
   await finance.allocations.reserve({ source, consumerKind, consumerId: id, amountCents: absoluteAmount, currency });
 }
@@ -700,7 +698,7 @@ async function createDealCost(context: CommandHandlerContext<ProjectDealCostComm
     if (!payload.source) throw new ValidationCommandError("QBO cost requires a source", { reason: "deal_cost_qbo_source_required" });
     const verified = await verifyQboSource(context as unknown as CommandHandlerContext<unknown>, payload.source, project, String(payload.projectId), payload.lane, amountCents, "cost");
     source = verified.source; amountCents = verified.amountCents; reconciliationState = "qbo_verified"; hash = verified.hash;
-    await reserveQboIfNeeded(context as unknown as CommandHandlerContext<unknown>, String(payload.projectId), project.currency, source, id, amountCents, "project_deal_cost");
+    await reserveQboIfNeeded(context as unknown as CommandHandlerContext<unknown>, project.currency, source, id, amountCents, "project_deal_cost");
   }
   const sourceColumns = sourceParams(source);
   await context.executor.query(
@@ -818,7 +816,7 @@ async function createDealFunding(context: CommandHandlerContext<ProjectDealCostC
     if (!source) throw new ValidationCommandError("QBO funding requires a source", { reason: "deal_funding_qbo_source_required" });
     const verified = await verifyQboSource(context as unknown as CommandHandlerContext<unknown>, source, project, String(payload.projectId), "financing", payload.amountCents, "funding");
     source = verified.source; reconciliationState = "qbo_verified"; hash = verified.hash;
-    await reserveQboIfNeeded(context as unknown as CommandHandlerContext<unknown>, String(payload.projectId), project.currency, source, id, payload.amountCents, "project_deal_funding");
+    await reserveQboIfNeeded(context as unknown as CommandHandlerContext<unknown>, project.currency, source, id, payload.amountCents, "project_deal_funding");
   }
   const sourceColumns = sourceParams(source);
   await context.executor.query(
