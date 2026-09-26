@@ -17,8 +17,16 @@ import type {
 import type { ProjectCostReport } from "@shared/projects/cost-report";
 import type { CostSourceLinePage } from "@shared/projects/source-lines";
 import type { ProjectLaborResponse } from "@shared/time/labor";
+import type { QboProjectRecordKind } from "@shared/projects";
+import type {
+  ProjectDealCost,
+  ProjectDealCostCommandKind,
+  ProjectDealCostReport,
+  ProjectDealFunding,
+} from "@shared/projects/deal-costs";
 
 export type { ProjectCostReport, CostSourceLinePage, ProjectLaborResponse };
+export type { ProjectDealCost, ProjectDealCostCommandKind, ProjectDealCostReport, ProjectDealFunding };
 
 export type ProjectWorkspaceEntity = CompanyContextEntity;
 export type ProjectSummary = SharedProjectSummary;
@@ -28,6 +36,20 @@ export type ProjectTask = SharedProjectTask;
 export type ProjectCostControl = ProjectDraftCost;
 export type ProjectExecutionDetail = SharedProjectExecutionDetail;
 export type { ProjectCommandKind, ProjectExecutionCommandKind, ProjectExecutionCommandPayload, ProjectStatus, ProjectTaskStatus, ProjectType };
+
+export interface QboIdentityFormValues {
+  readonly nativeProjectId: string;
+  readonly customerId: string;
+  readonly environment: "sandbox" | "production";
+  readonly realmId: string;
+}
+
+export function qboIdentityFormEntries(values: QboIdentityFormValues): readonly { recordKind: QboProjectRecordKind; externalId: string }[] {
+  return [
+    { recordKind: "Project", externalId: values.nativeProjectId.trim() },
+    ...(values.customerId.trim() ? [{ recordKind: "Customer" as const, externalId: values.customerId.trim() }] : []),
+  ];
+}
 
 export interface ProjectListFilters {
   readonly status?: ProjectStatus | "all";
@@ -54,12 +76,13 @@ export interface ProjectsApi {
   getProjectExecution(organizationId: string, projectId: string, scope?: { legalEntityId?: string; propertyId?: string }, signal?: AbortSignal): Promise<ProjectExecutionDetail>;
   sendCommand<TPayload = unknown>(
     organizationId: string,
-    kind: ProjectCommandKind,
+    kind: ProjectCommandKind | ProjectDealCostCommandKind,
     envelope: ProjectCommandEnvelope<TPayload>,
   ): Promise<ProjectCommandResult>;
   getCostReport?(organizationId: string, projectId: string, scope: { legalEntityId: string; propertyId: string }, signal?: AbortSignal): Promise<ProjectCostReport>;
+  getDealCostReport?(organizationId: string, projectId: string, scope: { legalEntityId: string; propertyId: string }, signal?: AbortSignal): Promise<ProjectDealCostReport>;
   getLabor?(organizationId: string, projectId: string, scope: { legalEntityId: string; propertyId: string }, signal?: AbortSignal): Promise<ProjectLaborResponse>;
-  searchCostSourceLines?(organizationId: string, query: { legalEntityId: string; purpose: "cost" | "payroll"; search?: string; cursor?: string }, signal?: AbortSignal): Promise<CostSourceLinePage>;
+  searchCostSourceLines?(organizationId: string, query: { legalEntityId: string; purpose: "cost" | "payroll"; projectId?: string; environment?: "sandbox" | "production"; realmId?: string; includeRefunds?: boolean; search?: string; cursor?: string }, signal?: AbortSignal): Promise<CostSourceLinePage>;
   sendExecutionCommand<TPayload = unknown>(
     organizationId: string,
     kind: ProjectExecutionCommandKind,
@@ -68,10 +91,10 @@ export interface ProjectsApi {
 }
 
 /** Route values. "scope" and "costs" open Budgets & costs; "execution" opens Commitments. */
-export const PROJECT_TABS = ["overview", "schedule", "budget", "commitments", "draws", "scope", "costs", "execution"] as const;
+export const PROJECT_TABS = ["overview", "schedule", "budget", "deal-costs", "commitments", "draws", "scope", "costs", "execution"] as const;
 export type ProjectTab = (typeof PROJECT_TABS)[number];
-export type ProjectSection = "overview" | "schedule" | "budget" | "commitments" | "draws";
-export const PROJECT_SECTIONS: readonly (readonly [ProjectSection, string])[] = [["overview", "Overview"], ["schedule", "Schedule"], ["budget", "Budgets & costs"], ["commitments", "Commitments"], ["draws", "Draws"]];
+export type ProjectSection = "overview" | "schedule" | "budget" | "deal-costs" | "commitments" | "draws";
+export const PROJECT_SECTIONS: readonly (readonly [ProjectSection, string])[] = [["overview", "Overview"], ["schedule", "Schedule"], ["budget", "Budgets & costs"], ["deal-costs", "Deal costs"], ["commitments", "Commitments"], ["draws", "Draws"]];
 export function projectSectionFor(tab: ProjectTab | undefined): ProjectSection {
   if (tab === "scope" || tab === "costs") return "budget";
   if (tab === "execution") return "commitments";
@@ -82,6 +105,8 @@ export interface ProjectWorkspaceProps {
   readonly organizationId: string;
   readonly organizationName?: string;
   readonly entities?: readonly ProjectWorkspaceEntity[];
+  /** Planned properties come from the project-scoped property-plan read, not company context. */
+  readonly plannedPropertyIds?: readonly string[];
   readonly api?: ProjectsApi;
   readonly initialProjectId?: string;
   readonly activeTab?: ProjectTab;

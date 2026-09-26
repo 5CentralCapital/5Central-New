@@ -183,6 +183,14 @@ test("provider sync mirrors refund and cash-back lines with signed flow and no d
     assert.equal(await mirror.hasPurchaseCredits(sourceScope, "2026-09-09"), false);
     assert.equal(await mirror.hasPurchaseCredits(sourceScope, "2026-09-10"), true);
     const isolatedScope = { ...scope, realmId: "654321" };
+    await mirror.ingestSourceObject({
+      scope: isolatedScope,
+      objectType: "Account",
+      objectId: "7",
+      version: "0",
+      providerUpdatedAt: "2026-09-10T11:00:00Z",
+      providerBody: { Id: "7", SyncToken: "0", AccountType: "Expense", AccountSubType: "OtherBusinessExpenses" },
+    });
     const isolatedSource = financialSourceReferenceSchema.parse({
       provider: "qbo", ...isolatedScope, objectType: "Purchase", objectId: "isolated", lineId: "1", version: "0",
     });

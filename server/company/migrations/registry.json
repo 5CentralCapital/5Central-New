@@ -469,6 +469,33 @@
       "minimumServerContract": 1,
       "minimumClientContract": 1,
       "recovery": "Stop receivable streams in the worker; keep mirrored documents and append-only revision effects, then apply a reviewed forward repair. QuickBooks remains the authority, so a full replay rebuilds the mirror."
+    },
+    {
+      "version": 51,
+      "fileName": "051_qbo_account_purpose.sql",
+      "sha256": "1ed23ef4f32cd7f119d780318228d6899f42b46698c36e7f2a8e979cb0c1a9b9",
+      "predecessor": 50,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Additive purpose mapping records can remain on rollback; disable mapping writes and restore the reviewed backup if schema recovery is required."
+    },
+    {
+      "version": 52,
+      "fileName": "052_project_property_plans.sql",
+      "sha256": "d5e73c247c87c308847d2a703a4fc99ccbdce6fbcddf52ebe0a95a402f549aa3",
+      "predecessor": 51,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Additive planning associations must never be converted to legal ownership on rollback; retain the table and restore the reviewed backup if needed."
+    },
+    {
+      "version": 53,
+      "fileName": "053_project_deal_ledger.sql",
+      "sha256": "975deda2dfc6f23f9ad2432e52c67806136346754e5c27e74cc585eaa8e446f8",
+      "predecessor": 52,
+      "minimumServerContract": 1,
+      "minimumClientContract": 1,
+      "recovery": "Retain whole-deal operational records and source identities; disable new ledger commands on rollback and apply reviewed forward repairs. Never replay QuickBooks cash or historical migrations."
     }
   ]
 }

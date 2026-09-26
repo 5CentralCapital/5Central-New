@@ -49,6 +49,8 @@ export interface PropertyUnitRecordsProps {
   selectedUnitId?: string;
   onSelect: (kind: "property" | "unit", id: string) => void;
   onEdit: EditAction;
+  /** Optional dedicated company property setup flow; editing existing properties still uses onEdit. */
+  onAddPropertySetup?: () => void;
   onSearchChange?: (search:string)=>void;
   /** Company context for the connected property tabs (financials, projects, work orders, documents). */
   identity: string;
@@ -307,7 +309,7 @@ export function PropertyUnitRecords(props: PropertyUnitRecordsProps) {
   return <UnitReadinessProvider filters={props.filters} readOnly={props.readOnly ?? false}><PropertyUnitRecordsContent {...props} /></UnitReadinessProvider>;
 }
 
-function PropertyUnitRecordsContent({ snapshot, readOnly, filters, selectedPropertyId, selectedUnitId, onSelect, onEdit, onSearchChange, identity, organizationId, onOpenProject, onOpenWorkOrder, onOpenReport }: PropertyUnitRecordsProps) {
+function PropertyUnitRecordsContent({ snapshot, readOnly, filters, selectedPropertyId, selectedUnitId, onSelect, onEdit, onAddPropertySetup, onSearchChange, identity, organizationId, onOpenProject, onOpenWorkOrder, onOpenReport }: PropertyUnitRecordsProps) {
   const links: PropertyLinks = { identity, organizationId, onOpenProject, onOpenWorkOrder, onOpenReport };
   const { occupancy } = useUnitReadiness();
   const [search, setSearch] = useState(filters.search ?? "");
@@ -319,7 +321,7 @@ function PropertyUnitRecordsContent({ snapshot, readOnly, filters, selectedPrope
   const changeTab=(tab:string)=>{setActiveTab(tab);const params=new URLSearchParams(window.location.search);params.set("propertyTab",tab);window.history.replaceState(window.history.state,"",`${window.location.pathname}?${params}`);};
 
   return <div className="rm-record-layout rm-property-unit-records">
-    <RecordList rows={listRows} selected={selected ? { kind: selected.kind, id: selected.kind === "unit" ? selected.unit?.id : selected.property?.id } : undefined} search={search} onSearch={next=>{setSearch(next);onSearchChange?.(next);}} onSelect={onSelect} onAddProperty={readOnly ? undefined : () => onEdit("save-property")} />
+    <RecordList rows={listRows} selected={selected ? { kind: selected.kind, id: selected.kind === "unit" ? selected.unit?.id : selected.property?.id } : undefined} search={search} onSearch={next=>{setSearch(next);onSearchChange?.(next);}} onSelect={onSelect} onAddProperty={readOnly ? undefined : onAddPropertySetup ?? (() => onEdit("save-property"))} />
     <main className="rm-property-unit-main">
       {!selected && <section className="rm-panel"><EmptyState message="Select a property or unit record to continue." /></section>}
       {selected?.kind === "property" && selected.property && <PropertyRecord readOnly={readOnly} asOfDate={filters.asOfDate} filters={filters} snapshot={snapshot} property={selected.property} activeTab={canonicalPropertyTab(activeTab)} onTab={changeTab} onSelect={onSelect} onEdit={onEdit} links={links} />}

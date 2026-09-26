@@ -6,6 +6,7 @@ import {
   projectListQuerySchema,
   projectListResponseSchema,
   projectPostedActualSchema,
+  projectQboIdentitySchema,
   projectScopeItemSchema,
   projectSummarySchema,
   projectTaskSchema,
@@ -174,6 +175,21 @@ function mapPostedActual(row: Record<string, unknown>): ReturnType<typeof projec
   });
 }
 
+function mapProjectQboIdentity(row: Record<string, unknown>): ReturnType<typeof projectQboIdentitySchema.parse> {
+  const sourceScope = dbString(row.source_scope, "qbo_source_scope");
+  const match = /^qbo:(sandbox|production):(\d{1,32})$/.exec(sourceScope);
+  if (!match) throw new ValidationCommandError("Project storage returned an invalid QuickBooks identity scope", { reason: "invalid_project_qbo_identity" });
+  return projectQboIdentitySchema.parse({
+    id: dbString(row.id, "qbo_identity_id"),
+    projectId: projectIdSchema.parse(dbString(row.project_id, "qbo_identity_project_id")),
+    recordKind: dbString(row.record_kind, "qbo_identity_record_kind"),
+    externalId: dbString(row.external_id, "qbo_identity_external_id"),
+    environment: match[1],
+    realmId: match[2],
+    linkedAt: dbTimestamp(row.created_at, "qbo_identity_created_at"),
+  });
+}
+
 function mapFinanceActual(actual: ProjectFinanceActual): ReturnType<typeof projectPostedActualSchema.parse> {
   const sourceScope = JSON.stringify({ environment: actual.source.environment, legalEntityId: actual.source.legalEntityId, realmId: actual.source.realmId });
   const externalId = [actual.source.objectType, actual.source.objectId, actual.source.lineId ?? "*", actual.source.version].join(":");
@@ -260,6 +276,16 @@ function scopeWhere(scope: CompanyScope, asOf?: string, projectId?: string): { s
           AND pep.property_id = p.property_id
           AND pep.effective_from <= $4::date
           AND (pep.effective_until IS NULL OR pep.effective_until > $4::date)
+    ) OR (
+       p.status = 'planning' AND p.unit_id IS NULL
+       AND EXISTS (
+         SELECT 1 FROM company_project_property_plans plan
+          WHERE plan.organization_id = p.organization_id
+            AND plan.legal_entity_id = p.legal_entity_id
+            AND plan.property_id = p.property_id
+            AND plan.status = 'planned'
+            AND plan.assignment_start_on <= $4::date
+       )
     ))`,
   ];
   if (projectId !== undefined) {
@@ -336,7 +362,7 @@ export class ProjectReadService {
     let summary = mapProjectSummary(summaryRow);
     const projectValues = [scope.organizationId, projectId];
 
-    const [scopeItemsResult, budgetVersionsResult, budgetLinesResult, tasksResult, dependenciesResult, draftCostsResult, postedActualsResult] = await Promise.all([
+    const [scopeItemsResult, budgetVersionsResult, budgetLinesResult, tasksResult, dependenciesResult, draftCostsResult, postedActualsResult, qboIdentitiesResult] = await Promise.all([
       this.executor.query<Record<string, unknown>>(
         `SELECT i.id, i.project_id, i.description, i.category, i.unit_label, i.quantity::text AS quantity,
                 i.rate_cents::text AS rate_cents, i.estimated_cents::text AS estimated_cents,
@@ -388,6 +414,19 @@ export class ProjectReadService {
            JOIN company_projects p ON p.organization_id = a.organization_id AND p.id = a.project_id
           WHERE a.organization_id = $1 AND a.project_id = $2
           ORDER BY a.posted_on DESC, a.id DESC`, projectValues),
+      this.executor.query<Record<string, unknown>>(
+        `SELECT i.id, i.local_id AS project_id, i.record_kind, i.source_scope, i.external_id, i.created_at
+           FROM company_external_identities i
+           JOIN company_projects p
+             ON p.organization_id = i.organization_id
+            AND p.id::text = i.local_id
+            AND p.legal_entity_id = i.legal_entity_id
+          WHERE i.organization_id = $1
+            AND i.provider = 'qbo'
+            AND i.local_kind = 'project'
+            AND i.local_id = $2
+            AND i.record_kind IN ('Project', 'Customer')
+          ORDER BY i.record_kind, i.created_at DESC, i.id DESC`, projectValues),
     ]);
 
     const scopeItems = scopeItemsResult.rows.map(mapScopeItem);
@@ -423,6 +462,7 @@ export class ProjectReadService {
     }
     const tasks = tasksResult.rows.map((row) => mapTask(row, dependencies.get(dbString(row.id, "task_id")) ?? []));
     const draftCosts = draftCostsResult.rows.map(mapDraftCost);
+    const qboProjectIdentities = qboIdentitiesResult.rows.map(mapProjectQboIdentity);
     let postedActuals = postedActualsResult.rows.map(mapPostedActual);
     if (this.finance !== null) {
       const financeResult = await this.finance.getProjectActuals({
@@ -440,7 +480,7 @@ export class ProjectReadService {
         postedActualCoverage: coverage,
       });
     }
-    return projectDetailSchema.parse({ ...summary, scopeItems, budgetVersions, tasks, draftCosts, postedActuals });
+    return projectDetailSchema.parse({ ...summary, scopeItems, budgetVersions, tasks, draftCosts, postedActuals, qboProjectIdentities });
   }
 }
 

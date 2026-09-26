@@ -24,6 +24,7 @@ import {
   type ProjectExecutionBudgetSnapshot,
 } from "../../shared/projects";
 import { createSyntheticCompanyDatabase, SYNTHETIC_COMPANY } from "../company/testing/synthetic-database";
+import { createQboAccountingMirrorStore } from "../accounting/mirror-store";
 import { calculateProjectExecutionTotals, ProjectExecutionReadService, resolveProjectFinanceActuals, type ProjectFinanceBindingSource } from "./execution";
 import { executeProjectExecutionCommand } from "./execution-commands";
 import { createProjectExecutionStore, createProjectFinanceBindingStore } from "./execution-store";
@@ -298,6 +299,15 @@ test("finance bindings use reserved allocation and downgrade stale or ineligible
   assert.equal(held.coverage, "partial");
   assert.equal(held.actuals.length, 0);
 
+
+  const refundLine = financialSourceLineResolutionSchema.parse({ ...line, direction: "credit", flow: "incoming" });
+  const refundSource = { ...source, async resolveLine() { return refundLine; } };
+  const refund = await resolveProjectFinanceActuals(refundSource, bindings, costContextForLine(refundLine), { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
+  assert.equal(refund.coverage, "complete");
+  assert.equal(refund.actuals[0]?.amountCents, "-2500");
+  const refundHeld = await resolveProjectFinanceActuals(refundSource, bindings, unknownAccountContext, { organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
+  assert.equal(refundHeld.coverage, "partial");
+  assert.equal(refundHeld.actuals.length, 0);
   const releasedAndVerified: ProjectFinanceBindingSource = {
     async listProjectBindings() {
       return [
@@ -493,6 +503,27 @@ test("a Purchase credit keeps a Purchase-bound project cost report partial", asy
   assert.equal(hasPurchaseCreditsCalls, 1);
   assert.equal(listTransactionsCalls, 0, "project coverage uses the narrow provider probe instead of scanning all lines");
 
+  // The provider probe owns the distinction between a remaining eligible
+  // refund and a credit already consumed or excluded by accounting controls.
+  // A false result must let the exact bound line establish complete coverage
+  // for fully allocated, blocked and non-cost credits alike.
+  for (const excludedReason of ["fully allocated", "blocked", "non-cost"] as const) {
+    const excluded: FinancialSourceReadPort = {
+      ...source,
+      async hasPurchaseCredits(_scope, through) {
+        assert.equal(through, "2026-09-21");
+        return false;
+      },
+    };
+    const covered = await resolveProjectFinanceActuals(excluded, bindings, costContextForLine(purchaseLine), {
+      organizationId: SYNTHETIC_COMPANY.organizationId,
+      projectId: PROJECT_ID,
+      asOf: "2026-09-21",
+    });
+    assert.equal(covered.coverage, "complete", `${excludedReason} Purchase credit should not downgrade coverage`);
+    assert.deepEqual(covered.actuals.map((actual) => actual.amountCents), ["2500"]);
+  }
+
   const withoutProbe: FinancialSourceReadPort = { ...source, hasPurchaseCredits: undefined };
   const unavailable = await resolveProjectFinanceActuals(withoutProbe, bindings, costContextForLine(purchaseLine), {
     organizationId: SYNTHETIC_COMPANY.organizationId,
@@ -501,6 +532,110 @@ test("a Purchase credit keeps a Purchase-bound project cost report partial", asy
   });
   assert.equal(unavailable.coverage, "partial", "missing provider probe must fail closed");
   assert.equal(listTransactionsCalls, 0);
+
+});
+
+test("the Purchase credit probe excludes allocated, blocked and non-cost credits", async () => {
+  const fixture = await createSyntheticCompanyDatabase();
+  const mirror = createQboAccountingMirrorStore(fixture.executor);
+  const scope = {
+    provider: "qbo" as const,
+    organizationId: SYNTHETIC_COMPANY.organizationId,
+    legalEntityId: SYNTHETIC_COMPANY.entityId,
+    environment: "sandbox" as const,
+    realmId: "12345",
+  };
+  const sourceFor = (objectId: string) => financialSourceReferenceSchema.parse({
+    provider: "qbo",
+    ...scope,
+    objectType: "Purchase",
+    objectId,
+    lineId: "1",
+    version: "0",
+  });
+  const accountFor = async (objectId: string, accountType: string) => {
+    await mirror.ingestSourceObject({
+      scope,
+      objectType: "Account",
+      objectId,
+      version: "0",
+      providerUpdatedAt: "2026-09-20T12:00:00Z",
+      providerBody: { Id: objectId, AccountType: accountType },
+    });
+  };
+  const seedCredit = async (objectId: string, accountObjectId: string) => {
+    const source = sourceFor(objectId);
+    const sourceObject = await mirror.ingestSourceObject({
+      scope,
+      objectType: "Purchase",
+      objectId,
+      version: "0",
+      providerUpdatedAt: "2026-09-20T12:00:00Z",
+      providerBody: { Id: objectId },
+    });
+    const transaction = await mirror.ingestTransaction({
+      sourceObjectId: sourceObject.id,
+      scope,
+      objectType: "Purchase",
+      objectId,
+      version: "0",
+      transactionDate: "2026-09-20",
+      postingState: "posted",
+      currency: "USD",
+      watermark: "2026-09-20T12:00:00Z",
+      updatedAt: "2026-09-20T12:00:00Z",
+    });
+    await mirror.ingestTransactionLine({
+      transactionId: transaction.id,
+      sourceObjectId: sourceObject.id,
+      source,
+      lineNumber: 1,
+      transactionType: "Purchase",
+      direction: "credit",
+      flow: "incoming",
+      lineRole: "expense",
+      amountCents: "1000",
+      currency: "USD",
+      postingState: "posted",
+      postedOn: "2026-09-20",
+      settlementState: "unknown",
+      settledOn: null,
+      settledAmountCents: null,
+      accountObjectId,
+      counterpartyObjectId: null,
+      description: `Synthetic ${objectId}`,
+      watermark: "2026-09-20T12:00:00Z",
+      updatedAt: "2026-09-20T12:00:00Z",
+    });
+    return source;
+  };
+  try {
+    await accountFor("refund-expense", "Expense");
+    await accountFor("refund-bank", "Bank");
+    const unallocated = await seedCredit("purchase-unallocated", "refund-expense");
+    const fullyAllocated = await seedCredit("purchase-allocated", "refund-expense");
+    await seedCredit("purchase-non-cost", "refund-bank");
+    await seedCredit("purchase-blocked", "refund-expense");
+    await fixture.executor.query(
+      `UPDATE accounting_qbo_source_line_balances
+          SET allocation_blocked=true
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
+          AND object_type='Purchase' AND object_id='purchase-blocked' AND line_id='1'`,
+      [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId],
+    );
+
+    // The unallocated eligible refund is the only candidate that should keep
+    // the project coverage probe open; the other three are excluded by their
+    // allocation, provider Account classification or allocation block.
+    assert.equal(await mirror.hasPurchaseCredits(scope, "2026-09-20"), true);
+    await mirror.reserve({ source: unallocated, consumerKind: "project", consumerId: "project-1", amountCents: "400", currency: "USD" });
+    assert.equal(await mirror.hasPurchaseCredits(scope, "2026-09-20"), true, "remaining unallocated cents keep coverage partial");
+    await mirror.reserve({ source: unallocated, consumerKind: "project", consumerId: "project-2", amountCents: "600", currency: "USD" });
+    await mirror.reserve({ source: fullyAllocated, consumerKind: "project", consumerId: "project-3", amountCents: "1000", currency: "USD" });
+    assert.equal(await mirror.hasPurchaseCredits(scope, "2026-09-20"), false, "fully allocated, blocked and non-cost credits are excluded");
+  } finally {
+    await fixture.close();
+  }
 });
 
 test("execution create commands persist through one idempotent company command path", async () => {
@@ -694,7 +829,7 @@ test("execution create commands persist through one idempotent company command p
   }
 });
 
-test("finance binding commands require current verified source context and release the central reservation", async () => {
+for (const isRefund of [false, true]) test(`finance binding commands reserve and release ${isRefund ? "refund" : "cost"} source amounts`, async () => {
   const fixture = await createSyntheticCompanyDatabase();
   try {
     await fixture.db.query(
@@ -753,6 +888,9 @@ test("finance binding commands require current verified source context and relea
       settlement: { state: "unknown", settledOn: null, settledAmountCents: null },
       watermark: coverage.watermark,
     });
+    if (isRefund) {
+      Object.assign(line, { direction: "credit", flow: "incoming" });
+    }
     const source: FinancialSourceReadPort = {
       async resolveLine() { return line; },
       async readCoverage() { return coverage; },
@@ -781,12 +919,174 @@ test("finance binding commands require current verified source context and relea
     const store = createProjectFinanceBindingStore(fixture.executor);
     const bindings = await store.listProjectBindings({ organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
     assert.equal(bindings[0]?.bindingStatus, "verified");
-    const projectRevision = Number(create.resultingRevisions.find((item) => String(item.recordId) === PROJECT_ID)?.revision);
+    let projectRevision = Number(create.resultingRevisions.find((item) => String(item.recordId) === PROJECT_ID)?.revision);
+    if (isRefund) {
+      const draw = await executeProjectExecutionCommand(fixture.executor, "project.draw_request.create", envelope({ projectId: PROJECT_ID, periodFrom: "2026-09-01", periodTo: "2026-09-21", retainagePercent: "0", currency: "USD" }, projectRevision), options);
+      projectRevision = Number(draw.resultingRevisions.find((item) => String(item.recordId) === PROJECT_ID)?.revision);
+      await assert.rejects(() => executeProjectExecutionCommand(fixture.executor, "project.draw_request.item.create", envelope({ drawRequestId: String(draw.affectedRecordIds[0]), sourceType: "actual", sourceId: bindingId, requestedCents: "2500", eligibleCents: "2500", retainageEligible: false, retainageCents: "0" }, projectRevision), { ...options, financeFactory: () => ({ source, allocations, costContext }) }), /refund cannot fund a draw/);
+    }
     await executeProjectExecutionCommand(fixture.executor, "project.finance_binding.release", envelope({ bindingId }, projectRevision), { ...options, financeFactory: () => ({ source, allocations, costContext }) });
     assert.equal(reserved, BigInt(0));
     const released = await store.listProjectBindings({ organizationId: SYNTHETIC_COMPANY.organizationId, projectId: PROJECT_ID });
     assert.equal(released[0]?.bindingStatus, "released");
     assert.equal(released[0]?.eligible, false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("finance binding scope follows native QBO identity and released legacy history", async () => {
+  const fixture = await createSyntheticCompanyDatabase();
+  try {
+    const { organizationId, entityId, propertyId, actorId } = SYNTHETIC_COMPANY;
+    const legacyProjectId = "50000000-0000-4000-8000-000000000011";
+    const productionSource = financialSourceReferenceSchema.parse({ ...SOURCE, environment: "production", realmId: "54321", objectId: "bill-prod-42" });
+    await fixture.db.query(
+      `INSERT INTO company_projects
+        (id, organization_id, legal_entity_id, property_id, name, project_type, status, start_on, currency)
+       VALUES ($1,$2,$3,$4,'Native identity project','rehab','planning','2026-09-21','USD'),
+              ($5,$2,$3,$4,'Legacy scope project','rehab','planning','2026-09-21','USD')`,
+      [PROJECT_ID, organizationId, entityId, propertyId, legacyProjectId],
+    );
+    await fixture.db.query(
+      `INSERT INTO accounting_qbo_realm_bindings
+        (organization_id, legal_entity_id, environment, realm_id, provider_company_id, evidence_version, company_info_hash, confirmed_by)
+       VALUES ($1,$2,'sandbox','12345','synthetic-sandbox','synthetic-1',$3,'synthetic-test')`,
+      [organizationId, entityId, "a".repeat(64)],
+    );
+    await fixture.db.query(
+      `INSERT INTO company_external_identities
+        (id, organization_id, legal_entity_id, provider, source_scope, record_kind, external_id, local_kind, local_id)
+       VALUES ($1,$2,$3,'qbo','qbo:sandbox:12345','Project','project-native-42','project',$4)`,
+      ["60000000-0000-4000-8000-000000000010", organizationId, entityId, PROJECT_ID],
+    );
+
+    const principal = await loadAuthenticatedPrincipal(fixture.executor, { actorId, organizationId, role: "admin" });
+    const scope = { organizationId, legalEntityId: entityId, propertyId };
+    const options = {
+      principal,
+      transport: attestTransport("web"),
+      resolvePrincipal: (executor: typeof fixture.executor) => loadAuthenticatedPrincipal(executor, { actorId, organizationId, role: "admin" }),
+    };
+    const lineFor = (source: ReturnType<typeof financialSourceReferenceSchema.parse>) => financialSourceLineResolutionSchema.parse({
+      source,
+      direction: "debit",
+      flow: "outgoing",
+      lineRole: "expense",
+      amountCents: "10000",
+      currency: "USD",
+      transactionType: "Bill",
+      accountObjectId: "expense-account",
+      counterpartyObjectId: "vendor-42",
+      description: "Synthetic scoped bill",
+      postingState: "posted",
+      postedOn: "2026-09-20",
+      settlement: { state: "unknown", settledOn: null, settledAmountCents: null },
+      watermark: { value: "binding-scope-watermark", observedAt: "2026-09-21T00:00:00.000Z" },
+    });
+    const source: FinancialSourceReadPort = {
+      async resolveLine(query) {
+        return lineFor(financialSourceReferenceSchema.parse({
+          ...query.scope,
+          objectType: query.objectType,
+          objectId: query.objectId,
+          lineId: query.lineId ?? null,
+          version: query.version ?? "v1",
+        }));
+      },
+      async readCoverage(scopeValue) {
+        return financialSourceCoverageSchema.parse({
+          scope: scopeValue,
+          status: "partial",
+          evidence: "live_provider_readback",
+          basis: "source_transactions",
+          watermark: { value: "binding-scope-watermark", observedAt: "2026-09-21T00:00:00.000Z" },
+          coveredFrom: "2026-01-01",
+          coveredThrough: "2026-12-31",
+          observedAt: "2026-09-21T00:00:00.000Z",
+          objectCount: 1,
+          transactionCount: 1,
+          lineCount: 1,
+          missingIntervals: [],
+          reason: null,
+        });
+      },
+      async listTransactions() {
+        return { items: [], nextCursor: null, coverage: await this.readCoverage(SCOPE) };
+      },
+    };
+    const costContext: FinancialProviderCostContextPort = {
+      async readCostContext(query) {
+        const line = lineFor(financialSourceReferenceSchema.parse({
+          ...query.scope,
+          objectType: query.objectType,
+          objectId: query.objectId,
+          lineId: query.lineId ?? null,
+          version: query.version ?? "v1",
+        }));
+        return {
+          source: line.source,
+          accountObjectId: "expense-account",
+          accountType: "Expense",
+          accountSubType: null,
+          classification: "expense",
+          eligible: true,
+          amountCents: line.amountCents,
+          currency: line.currency,
+          postedOn: line.postedOn ?? "2026-09-20",
+          postingState: "posted",
+          providerUpdatedAt: line.watermark.observedAt,
+          watermark: line.watermark,
+        };
+      },
+    };
+    const reserved = new Map<string, bigint>();
+    const allocationKey = (sourceValue: ReturnType<typeof financialSourceReferenceSchema.parse>) => `${sourceValue.environment}:${sourceValue.realmId}:${sourceValue.objectId}:${sourceValue.lineId}`;
+    const allocations: FinancialSourceAllocationPort = {
+      async getBalance(sourceValue) {
+        const used = reserved.get(allocationKey(sourceValue)) ?? BigInt(0);
+        return { source: sourceValue, lineAmountCents: "10000", allocatedCents: centsFromBigInt(used), availableCents: centsFromBigInt(BigInt(10000) - used), currency: "USD" };
+      },
+      async reserve(request) {
+        const key = allocationKey(request.source);
+        reserved.set(key, (reserved.get(key) ?? BigInt(0)) + BigInt(request.amountCents));
+        return this.getBalance(request.source);
+      },
+      async release(request) {
+        const key = allocationKey(request.source);
+        reserved.set(key, (reserved.get(key) ?? BigInt(0)) - BigInt(request.amountCents));
+        return this.getBalance(request.source);
+      },
+    };
+    const financeFactory = () => ({ source, allocations, costContext });
+    const envelope = (projectId: string, sourceValue: ReturnType<typeof financialSourceReferenceSchema.parse>, expectedRevision: number) => ({
+      operationId: newOperationId(),
+      idempotencyKey: `binding-scope-test-${newOperationId()}`,
+      scope,
+      effectiveDate: "2026-09-21",
+      expectedRevision,
+      payload: { projectId, source: sourceValue, allocatedCents: "2500" },
+    });
+
+    await assert.rejects(
+      () => executeProjectExecutionCommand(fixture.executor, "project.finance_binding.create", envelope(PROJECT_ID, productionSource, 1), { ...options, financeFactory }),
+      /does not match a verified native QuickBooks Project identity/,
+    );
+
+    const first = await executeProjectExecutionCommand(fixture.executor, "project.finance_binding.create", envelope(legacyProjectId, SOURCE, 1), { ...options, financeFactory });
+    const firstBindingId = String(first.affectedRecordIds[0]);
+    const firstRevision = Number(first.resultingRevisions.find(item => String(item.recordId) === legacyProjectId)?.revision);
+    await assert.rejects(
+      () => executeProjectExecutionCommand(fixture.executor, "project.finance_binding.create", envelope(legacyProjectId, productionSource, firstRevision), { ...options, financeFactory }),
+      /already has an unreleased QBO binding/,
+    );
+    const released = await executeProjectExecutionCommand(fixture.executor, "project.finance_binding.release", {
+      ...envelope(legacyProjectId, SOURCE, firstRevision),
+      payload: { bindingId: firstBindingId },
+    }, { ...options, financeFactory });
+    const releasedRevision = Number(released.resultingRevisions.find(item => String(item.recordId) === legacyProjectId)?.revision);
+    const second = await executeProjectExecutionCommand(fixture.executor, "project.finance_binding.create", envelope(legacyProjectId, productionSource, releasedRevision), { ...options, financeFactory });
+    assert.equal(second.affectedRecordIds.length, 2);
   } finally {
     await fixture.close();
   }

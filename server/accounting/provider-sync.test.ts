@@ -172,3 +172,122 @@ test("provider sync orders only by LastUpdatedTime and preserves overlap paginat
     await synthetic.close();
   }
 });
+
+test("provider sync mirrors JournalEntry cost lines and exposes capitalized cost context", async () => {
+  const synthetic = await createSyntheticCompanyDatabase();
+  try {
+    const mirror = createQboAccountingMirrorStore(synthetic.executor);
+    const journal = {
+      Id: "2949", SyncToken: "0", TxnDate: "2026-09-08", CurrencyRef: { value: "USD" },
+      MetaData: { LastUpdatedTime: "2026-09-23T19:30:49Z" },
+      Line: [
+        { Id: "0", Amount: "1286.44", Description: "Inventory cost", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "inventory-1" }, Entity: { Type: "Customer", EntityRef: { value: "customer-test-42", name: "Synthetic customer" } } } },
+        { Id: "1", Amount: "1286.44", Description: "Refund", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "refund-1" } } },
+      ],
+    } as QuickBooksJsonObject;
+    const nonCostJournal = {
+      Id: "2951", SyncToken: "0", TxnDate: "2026-09-08", CurrencyRef: { value: "USD" },
+      MetaData: { LastUpdatedTime: "2026-09-23T19:30:50Z" },
+      Line: [
+        { Id: "0", Amount: "10.00", Description: "Security deposit reserve", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "deposit-1" } } },
+        { Id: "1", Amount: "10.00", Description: "Offset", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "refund-1" } } },
+      ],
+    } as QuickBooksJsonObject;
+    const inventory = { Id: "inventory-1", SyncToken: "0", AccountType: "Other Current Asset", AccountSubType: "OtherCurrentAssets", MetaData: { LastUpdatedTime: "2026-09-23T19:30:49Z" } } as QuickBooksJsonObject;
+    const refund = { Id: "refund-1", SyncToken: "0", AccountType: "Other Current Asset", AccountSubType: "OtherCurrentAssets", MetaData: { LastUpdatedTime: "2026-09-23T19:30:49Z" } } as QuickBooksJsonObject;
+    const deposit = { Id: "deposit-1", SyncToken: "0", AccountType: "Other Current Asset", AccountSubType: "Other Current Asset", MetaData: { LastUpdatedTime: "2026-09-23T19:30:49Z" } } as QuickBooksJsonObject;
+    const client = {
+      read: async () => ({ entity: { Id: "1", CompanyName: "Synthetic QBO" }, raw: {}, status: 200 }),
+      query: async (query: string) => {
+        if (/FROM Preferences/.test(query)) return { entities: [{ CurrencyPrefs: { HomeCurrency: { value: "USD" }, MultiCurrencyEnabled: false } }], raw: {}, status: 200 };
+        const entity = /FROM (JournalEntry|Account|Purchase|BillPayment|Bill|Deposit)\b/.exec(query)?.[1];
+        if (entity === "JournalEntry") return { entities: [journal, nonCostJournal], raw: {}, status: 200 };
+        if (entity === "Account") return { entities: [inventory, refund, deposit], raw: {}, status: 200 };
+        return { entities: [], raw: {}, status: 200 };
+      },
+      create: async () => { throw new Error("unused"); },
+      update: async () => { throw new Error("unused"); },
+    } as unknown as QuickBooksAccountingClient;
+    const sync = createQboProviderSync({
+      executor: synthetic.executor,
+      client,
+      scope,
+      mirror,
+      capabilityStore: new PostgresQuickBooksCapabilityStore(synthetic.executor),
+      now: () => new Date("2026-09-24T00:00:00Z"),
+    });
+    await sync.bootstrapRead();
+    const result = await sync.catchUp();
+    assert.equal(result.status, "complete");
+    const stream = result.streams.find(item => item.stream === "transactions.journalentry");
+    assert.equal(stream?.result.itemsApplied, 2);
+    assert.equal(stream?.coverageStatus, "complete");
+    const unreviewedCost = await mirror.readCostContext({ scope: { provider: "qbo", ...scope }, objectType: "JournalEntry", objectId: "2949", lineId: "0" });
+    assert.equal(unreviewedCost?.classification, "other_asset");
+    assert.equal(unreviewedCost?.eligible, false);
+    for (const providerAccountId of ["inventory-1", "refund-1"] as const) {
+      await mirror.purposeMappings.mapPurpose({
+        scope: { provider: "qbo", ...scope },
+        providerAccountId,
+        purpose: "capitalized_cost",
+        effectiveFrom: "2026-01-01",
+        reviewEvidence: "Synthetic reviewed mapping for a capitalized cost account",
+        actorId: "synthetic-test",
+      });
+    }
+    const line = await mirror.resolveLine({ scope: { provider: "qbo", ...scope }, objectType: "JournalEntry", objectId: "2949", lineId: "0" });
+    assert.equal(line?.amountCents, "128644");
+    assert.equal(line?.direction, "debit");
+    assert.equal(line?.flow, "outgoing");
+    assert.equal(line?.lineRole, "expense");
+    assert.equal(line?.accountObjectId, "inventory-1");
+    assert.equal(line?.counterpartyObjectId, "customer-test-42");
+    const refundLine = await mirror.resolveLine({ scope: { provider: "qbo", ...scope }, objectType: "JournalEntry", objectId: "2949", lineId: "1" });
+    assert.equal(refundLine?.direction, "credit");
+    assert.equal(refundLine?.flow, "incoming");
+    assert.equal(refundLine?.lineRole, "expense");
+    const listed = await mirror.listTransactions({ scope: { provider: "qbo", ...scope }, from: "2026-09-08", through: "2026-09-08" });
+    assert.deepEqual(listed.items.filter(item => item.source.objectType === "JournalEntry" && item.source.objectId === "2949").map(item => [item.source.objectId, item.source.lineId, item.amountCents]), [["2949", "0", "128644"], ["2949", "1", "128644"]]);
+    const cost = await mirror.readCostContext({ scope: { provider: "qbo", ...scope }, objectType: "JournalEntry", objectId: "2949", lineId: "0" });
+    assert.equal(cost?.classification, "capitalized_cost");
+    assert.equal(cost?.eligible, true);
+    const refundCost = await mirror.readCostContext({ scope: { provider: "qbo", ...scope }, objectType: "JournalEntry", objectId: "2949", lineId: "1" });
+    assert.equal(refundCost?.classification, "capitalized_cost");
+    assert.equal(refundCost?.eligible, true);
+    const nonCost = await mirror.readCostContext({ scope: { provider: "qbo", ...scope }, objectType: "JournalEntry", objectId: "2951", lineId: "0" });
+    assert.equal(nonCost?.classification, "other_asset");
+    assert.equal(nonCost?.eligible, false);
+    assert.equal((await mirror.readCoverage({ provider: "qbo", ...scope })).status, "complete");
+  } finally {
+    await synthetic.close();
+  }
+});
+
+test("aggregate coverage stays partial until the JournalEntry stream is present", async () => {
+  const synthetic = await createSyntheticCompanyDatabase();
+  try {
+    const mirror = createQboAccountingMirrorStore(synthetic.executor);
+    const observedAt = "2026-09-24T00:00:00Z";
+    for (const stream of ["accounts", "transactions.purchase", "transactions.bill", "transactions.billpayment", "transactions.deposit"] as const) {
+      await mirror.recordCoverage({
+        scope,
+        stream,
+        status: "complete",
+        evidence: "live_provider_readback",
+        basis: "source_transactions",
+        watermark: null,
+        coveredFrom: null,
+        coveredThrough: null,
+        observedAt,
+        objectCount: 0,
+        transactionCount: 0,
+        lineCount: 0,
+      });
+    }
+    const coverage = await mirror.readCoverage({ provider: "qbo", ...scope });
+    assert.equal(coverage.status, "partial");
+    assert.match(coverage.reason ?? "", /transactions\.journalentry/);
+  } finally {
+    await synthetic.close();
+  }
+});

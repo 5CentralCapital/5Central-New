@@ -21,6 +21,7 @@ export const OPS_WORKFLOW_GUIDE = [
   { intent: 'PM statements and settlements', tools: ['list_pm_settlements', 'get_pm_settlement'] },
   { intent: 'MRA owner packets (Codex only)', tools: ['stage_mra_packet', 'map_mra_packet', 'preview_mra_packet', 'apply_mra_packet', 'get_mra_packet'] },
   { intent: 'Projects, budgets, commitments and draws', tools: ['list_projects', 'get_project', 'get_project_execution', 'get_project_cost_report'] },
+  { intent: 'Company and property setup', tools: ['get_company_context', 'legal_entity_create', 'property_setup', 'property_plan_convert', 'list_planned_property_plans'] },
   { intent: 'Investors, obligations and debt', tools: ['list_investors', 'get_investor', 'list_investor_payment_calendar', 'list_investor_debt_maturities', 'get_investor_instrument_financials'] },
   { intent: 'Forecast scenarios and cash outlook', tools: ['list_forecast_scenarios', 'preview_forecast', 'create_forecast_snapshot', 'compare_forecast_snapshots', 'explain_forecast_line'] },
   { intent: 'Work orders', tools: ['list_work_orders', 'get_work_order', 'create_work_order'] },

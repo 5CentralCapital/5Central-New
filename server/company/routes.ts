@@ -4,6 +4,7 @@ import { organizationIdSchema, legalEntityIdSchema, propertyReferenceIdSchema, c
 import { PROJECT_COMMAND_KINDS, projectCommandPayloadSchemas, projectIdSchema, projectStatusSchema } from '../../shared/projects/contracts';
 import type { ProjectCommandKind, ProjectListQuery, ProjectReadContext } from '../../shared/projects/contracts';
 import { projectExecutionCommandKinds, projectExecutionCommandPayloadSchemas, type ProjectExecutionCommandKind } from '../../shared/projects';
+import { PROJECT_DEAL_COST_COMMAND_KINDS, projectDealCostCommandPayloadSchemas, projectDealCostQuerySchema, type ProjectDealCostCommandKind, type ProjectDealCostQuery } from '../../shared/projects/deal-costs';
 import type { RentOpsQueryExecutor } from '../rent-ops/repositories/postgres';
 import { loadAuthenticatedPrincipal, attestTransport, type AuthenticatedPrincipal, type TransportAttestation } from './authorization';
 import { readCompanyContext } from './context';
@@ -17,6 +18,10 @@ import type { TimeServices } from '../time/service';
 import { registerReportingHttpRoutes, type ReportingPort } from '../reporting';
 import { registerWorkOrderRoutes } from '../work-orders/http';
 import type { WorkOrderPort } from '../work-orders/port';
+import { PROPERTY_COMMAND_KINDS, propertyCommandPayloadSchemas } from '../../shared/company/property-contracts';
+import { LEGAL_ENTITY_COMMAND_KINDS, legalEntityCommandPayloadSchemas } from '../../shared/company/legal-entity-contracts';
+import type { CompanyPropertyPort } from './property-port';
+import type { CompanyLegalEntityPort } from './legal-entity-port';
 // lane-b-accounting
 import { registerJobRoutes, type JobsPort } from '../jobs/operator';
 // lane-c-review
@@ -49,6 +54,12 @@ export interface CompanyProjectPort {
     resolvePrincipal: (executor: RentOpsQueryExecutor) => Promise<AuthenticatedPrincipal>;
     transport: TransportAttestation;
   }): Promise<unknown>;
+  getDealCosts?(principal: AuthenticatedPrincipal, query: ProjectDealCostQuery): Promise<unknown>;
+  executeDealCost?(kind: ProjectDealCostCommandKind, envelope: unknown, access: {
+    principal: AuthenticatedPrincipal;
+    resolvePrincipal: (executor: RentOpsQueryExecutor) => Promise<AuthenticatedPrincipal>;
+    transport: TransportAttestation;
+  }): Promise<unknown>;
 }
 
 const readQuery = z.object({
@@ -61,8 +72,18 @@ const readQuery = z.object({
   cursor: z.string().min(1).max(512).optional(),
 }).strict();
 
+async function assertLegalEntityScopeExists(executor: RentOpsQueryExecutor, organizationId: string, legalEntityId: string): Promise<void> {
+  const result = await executor.query(
+    `SELECT 1 FROM company_legal_entities WHERE organization_id = $1 AND id = $2 AND archived_at IS NULL`,
+    [organizationId, legalEntityId],
+  );
+  if (result.rows.length !== 1) throw new ForbiddenCommandError('Requested legal entity is outside the company scope.', { reason: 'scope_grant' });
+}
+
 export function registerCompanyRoutes(app: Express, options: {
   executor: RentOpsQueryExecutor; requireAdmin: RequestHandler; projects: CompanyProjectPort;
+  properties?: CompanyPropertyPort;
+  legalEntities?: CompanyLegalEntityPort;
   accounting?: AccountingServices;
   investors?: InvestorPort;
   time?: TimeServices;
@@ -102,6 +123,34 @@ export function registerCompanyRoutes(app: Express, options: {
   app.get('/api/company/context', requireAdmin, companyReadHandler(async (req, res) => {
     res.json(await readCompanyContext(executor, companyWebActor(req), 'admin'));
   }));
+  if (options.properties) app.get('/api/company/:organizationId/property-plans', requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const query = z.object({ legalEntityId: legalEntityIdSchema.optional() }).strict().parse(req.query);
+    const principal = await loadAuthenticatedPrincipal(executor, { actorId: companyWebActor(req), organizationId, role: 'admin' });
+    res.json(await options.properties!.listPlanned(principal, { organizationId, ...(query.legalEntityId === undefined ? {} : { legalEntityId: query.legalEntityId }) }));
+  }));
+  if (options.properties) app.post('/api/company/:organizationId/property-commands/:commandKind', requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const kind = z.enum(PROPERTY_COMMAND_KINDS).parse(req.params.commandKind);
+    const envelope = commandEnvelopeSchema(propertyCommandPayloadSchemas[kind]).parse(req.body);
+    if (envelope.scope.organizationId !== organizationId) throw new ForbiddenCommandError('Property company does not match this request.');
+    if (envelope.scope.legalEntityId !== undefined) await assertLegalEntityScopeExists(executor, organizationId, envelope.scope.legalEntityId);
+    const actorId = companyWebActor(req);
+    const resolvePrincipal = (transaction: RentOpsQueryExecutor) => loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: 'admin' });
+    const principal = await resolvePrincipal(executor);
+    res.json(await options.properties!.execute(kind, envelope, { principal, resolvePrincipal, transport: web }));
+  }));
+  if (options.legalEntities) app.post('/api/company/:organizationId/legal-entity-commands/:commandKind', requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const kind = z.enum(LEGAL_ENTITY_COMMAND_KINDS).parse(req.params.commandKind);
+    const envelope = commandEnvelopeSchema(legalEntityCommandPayloadSchemas[kind]).parse(req.body);
+    if (envelope.scope.organizationId !== organizationId) throw new ForbiddenCommandError('Legal entity company does not match this request.');
+    if (envelope.scope.legalEntityId !== undefined) await assertLegalEntityScopeExists(executor, organizationId, envelope.scope.legalEntityId);
+    const actorId = companyWebActor(req);
+    const resolvePrincipal = (transaction: RentOpsQueryExecutor) => loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: 'admin' });
+    const principal = await resolvePrincipal(executor);
+    res.json(await options.legalEntities!.execute(kind, envelope, { principal, resolvePrincipal, transport: web }));
+  }));
   app.get('/api/company/:organizationId/projects', requireAdmin, companyReadHandler(async (req, res) => {
     const organizationId = organizationIdSchema.parse(req.params.organizationId);
     const { legalEntityId, propertyId, ...query } = readQuery.parse(req.query);
@@ -122,6 +171,14 @@ export function registerCompanyRoutes(app: Express, options: {
     const principal = await loadAuthenticatedPrincipal(executor, { actorId: companyWebActor(req), organizationId, role: 'admin' });
     res.json(await projects.getExecution!(principal, { projectId, scope: { organizationId, legalEntityId: query.legalEntityId, propertyId: query.propertyId }, asOf: query.asOf }));
   }));
+  if (projects.getDealCosts) app.get('/api/company/:organizationId/projects/:projectId/deal-costs', requireAdmin, companyReadHandler(async (req, res) => {
+    const organizationId = organizationIdSchema.parse(req.params.organizationId);
+    const projectId = projectIdSchema.parse(req.params.projectId);
+    const query = readQuery.pick({ legalEntityId: true, propertyId: true, asOf: true }).parse(req.query);
+    const principal = await loadAuthenticatedPrincipal(executor, { actorId: companyWebActor(req), organizationId, role: 'admin' });
+    const dealQuery = projectDealCostQuerySchema.parse({ projectId, scope: { organizationId, legalEntityId: query.legalEntityId, propertyId: query.propertyId }, ...(query.asOf ? { asOf: query.asOf } : {}) });
+    res.json(await projects.getDealCosts!(principal, dealQuery));
+  }));
   if (projects.executeExecution) app.post('/api/company/:organizationId/project-execution-commands/:commandKind', requireAdmin, companyReadHandler(async (req, res) => {
     const organizationId = organizationIdSchema.parse(req.params.organizationId);
     const kind = z.enum(projectExecutionCommandKinds).parse(req.params.commandKind);
@@ -134,12 +191,20 @@ export function registerCompanyRoutes(app: Express, options: {
   }));
   app.post('/api/company/:organizationId/project-commands/:commandKind', requireAdmin, companyReadHandler(async (req, res) => {
     const organizationId = organizationIdSchema.parse(req.params.organizationId);
-    const kind = z.enum(PROJECT_COMMAND_KINDS).parse(req.params.commandKind);
-    const envelope = commandEnvelopeSchema(projectCommandPayloadSchemas[kind]).parse(req.body);
-    if (envelope.scope.organizationId !== organizationId) throw new ForbiddenCommandError('Project company does not match this request.');
     const actorId = companyWebActor(req);
     const resolvePrincipal = (transaction: RentOpsQueryExecutor) => loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: 'admin' });
     const principal = await resolvePrincipal(executor);
+    if (PROJECT_DEAL_COST_COMMAND_KINDS.includes(req.params.commandKind as ProjectDealCostCommandKind)) {
+      if (!projects.executeDealCost) throw new ForbiddenCommandError('Deal-cost commands are unavailable in this company runtime.');
+      const kind = z.enum(PROJECT_DEAL_COST_COMMAND_KINDS).parse(req.params.commandKind);
+      const envelope = commandEnvelopeSchema(projectDealCostCommandPayloadSchemas[kind]).parse(req.body);
+      if (envelope.scope.organizationId !== organizationId) throw new ForbiddenCommandError('Project company does not match this request.');
+      res.json(await projects.executeDealCost(kind, envelope, { principal, resolvePrincipal, transport: web }));
+      return;
+    }
+    const kind = z.enum(PROJECT_COMMAND_KINDS).parse(req.params.commandKind);
+    const envelope = commandEnvelopeSchema(projectCommandPayloadSchemas[kind]).parse(req.body);
+    if (envelope.scope.organizationId !== organizationId) throw new ForbiddenCommandError('Project company does not match this request.');
     res.json(await projects.execute(kind, envelope, { principal, resolvePrincipal, transport: web }));
   }));
 }

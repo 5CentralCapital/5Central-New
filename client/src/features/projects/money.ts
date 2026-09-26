@@ -99,20 +99,21 @@ export function formatMoneyExact(value: MoneyCents | string | undefined, currenc
 
 /**
  * An amount qualified by how much of it is known: exact when complete,
- * "At least $X" when some contributors are missing (partial QuickBooks
+ * "Known $X" when some contributors are missing (partial QuickBooks
  * coverage or unpriced labor), and "Unknown" when nothing could be read.
+ * Unknown refunds can reduce a positive subtotal, so partial is not a minimum.
  */
 export function formatQualifiedMoney(value: MoneyCents | string | null | undefined, completeness: "complete" | "partial" | "unavailable", currency = "USD"): string {
   if (value === null || value === undefined || completeness === "unavailable") return "Unknown";
-  return completeness === "complete" ? formatMoney(value, currency) : `At least ${formatMoney(value, currency)}`;
+  return completeness === "complete" ? formatMoney(value, currency) : `Known ${formatMoney(value, currency)}`;
 }
 
-/** Incurred on the cost summary: a minimum unless QuickBooks coverage is complete and all labor is priced. */
+/** Incurred on the cost summary: a known subtotal until coverage and labor are complete. */
 export function incurredLabel(summary: { currency: string; completeness: "complete" | "partial" | "unavailable"; incurred: { totalCents: MoneyCents | string | null } }): string {
   return formatQualifiedMoney(summary.incurred.totalCents, summary.completeness, summary.currency);
 }
 
-/** Paid on the cost summary: unknown when QuickBooks is unavailable, a minimum when coverage is partial. */
+/** Paid on the cost summary: unknown when unavailable, a known subtotal when partial. */
 export function paidLabel(summary: { currency: string; paid: { cents: MoneyCents | string | null; knownCents: MoneyCents | string; coverage: "complete" | "partial" | "unavailable" } }): string {
   const { paid } = summary;
   return paid.coverage === "complete" && paid.cents !== null ? formatMoney(paid.cents, summary.currency) : formatQualifiedMoney(paid.knownCents, paid.coverage === "complete" ? "partial" : paid.coverage, summary.currency);

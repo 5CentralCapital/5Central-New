@@ -2,6 +2,7 @@ import { operationIdSchema } from "@shared/company/identifiers";
 import { operationReceiptSchema } from "@shared/company/commands";
 import { projectDetailSchema, projectExecutionDetailSchema, projectListResponseSchema, type ProjectCommandKind, type ProjectExecutionCommandKind } from "@shared/projects";
 import { projectCostReportSchema } from "@shared/projects/cost-report";
+import { projectDealCostReportSchema, type ProjectDealCostCommandKind } from "@shared/projects/deal-costs";
 import { costSourceLinePageSchema } from "@shared/projects/source-lines";
 import { projectLaborResponseSchema } from "@shared/time/labor";
 import { rentOpsAuthClient } from "../rent-ops/auth";
@@ -96,6 +97,11 @@ function executionCommandPath(organizationId: string, kind: ProjectExecutionComm
   return `${basePath(organizationId).replace(/\/projects$/, "")}/project-execution-commands/${encodeURIComponent(kind)}`;
 }
 
+function projectCommandPath(organizationId: string, kind: ProjectCommandKind | ProjectDealCostCommandKind): string {
+  assertId(organizationId, "Company");
+  return `${basePath(organizationId).replace(/\/projects$/, "")}/project-commands/${encodeURIComponent(kind)}`;
+}
+
 export function createProjectCommandEnvelope<TPayload>(
   scope: ProjectCommandEnvelope["scope"],
   payload: TPayload,
@@ -164,6 +170,14 @@ function createApi(): ProjectsApi {
     return projectCostReportSchema.parse(await requestJson(`${projectPath(organizationId, projectId)}/cost-report?${params.toString()}`, { signal }));
   },
 
+  async getDealCostReport(organizationId, projectId, scope, signal) {
+    const params = new URLSearchParams({ legalEntityId: scope.legalEntityId, propertyId: scope.propertyId });
+    const payload = await requestJson(`${projectPath(organizationId, projectId)}/deal-costs?${params.toString()}`, { signal });
+    const root = isRecord(payload) && isRecord(payload.data) ? payload.data : payload;
+    const report = isRecord(root) && root.report !== undefined ? root.report : root;
+    return projectDealCostReportSchema.parse(report);
+  },
+
   async getLabor(organizationId, projectId, scope, signal) {
     const params = new URLSearchParams({ legalEntityId: scope.legalEntityId, propertyId: scope.propertyId });
     return projectLaborResponseSchema.parse(await requestJson(`${projectPath(organizationId, projectId)}/labor?${params.toString()}`, { signal }));
@@ -171,14 +185,18 @@ function createApi(): ProjectsApi {
 
   async searchCostSourceLines(organizationId, query, signal) {
     const params = new URLSearchParams({ legalEntityId: query.legalEntityId, purpose: query.purpose, limit: "50" });
+    if (query.projectId) params.set("projectId", query.projectId);
+    if (query.environment) params.set("environment", query.environment);
+    if (query.realmId) params.set("realmId", query.realmId);
+    if (query.includeRefunds) params.set("includeRefunds", "true");
     if (query.search?.trim()) params.set("search", query.search.trim());
     if (query.cursor) params.set("cursor", query.cursor);
     return costSourceLinePageSchema.parse(await requestJson(`${basePath(organizationId).replace(/\/projects$/, "")}/cost-source-lines?${params.toString()}`, { signal }));
   },
 
-  async sendCommand(organizationId, kind: ProjectCommandKind, envelope) {
+  async sendCommand(organizationId, kind: ProjectCommandKind | ProjectDealCostCommandKind, envelope) {
     assertId(organizationId, "Company");
-    const payload = await requestJson(`${basePath(organizationId).replace(/\/projects$/, "")}/project-commands/${encodeURIComponent(kind)}`, {
+    const payload = await requestJson(projectCommandPath(organizationId, kind), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(envelope),

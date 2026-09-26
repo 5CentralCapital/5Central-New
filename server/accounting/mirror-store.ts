@@ -135,6 +135,8 @@ export interface QboProviderMirror {
   readonly objectType: "Account" | "Vendor" | "Customer" | "Employee";
   readonly providerObjectId: string;
   readonly displayName: string;
+  readonly accountType: string | null;
+  readonly accountSubType: string | null;
   readonly active: boolean;
   readonly version: string;
   readonly providerUpdatedAt: string | null;
@@ -857,7 +859,10 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
          FROM accounting_qbo_source_objects
         WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
           AND object_type='Account' AND object_id=$5 AND deleted_at IS NULL
-        ORDER BY provider_updated_at DESC NULLS LAST, received_at DESC, object_version DESC LIMIT 1`,
+        ORDER BY CASE WHEN object_version ~ '^[0-9]+$' THEN 0 ELSE 1 END,
+                 CASE WHEN object_version ~ '^[0-9]+$' THEN length(object_version) ELSE 0 END DESC,
+                 CASE WHEN object_version ~ '^[0-9]+$' THEN object_version ELSE '' END DESC,
+                 provider_updated_at DESC NULLS LAST, received_at DESC LIMIT 1`,
       [...scopeParts(source).slice(0, 4), cashAccountObjectId],
     );
     const accountBody = account.rows[0]?.provider_body;
@@ -873,7 +878,10 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
            FROM accounting_qbo_source_objects
           WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
             AND object_type='Account' AND object_id=$5 AND deleted_at IS NULL
-          ORDER BY provider_updated_at DESC NULLS LAST, received_at DESC, object_version DESC LIMIT 1`,
+          ORDER BY CASE WHEN object_version ~ '^[0-9]+$' THEN 0 ELSE 1 END,
+                   CASE WHEN object_version ~ '^[0-9]+$' THEN length(object_version) ELSE 0 END DESC,
+                   CASE WHEN object_version ~ '^[0-9]+$' THEN object_version ELSE '' END DESC,
+                   provider_updated_at DESC NULLS LAST, received_at DESC LIMIT 1`,
         [...scopeParts(source).slice(0, 4), resolution.accountObjectId],
       );
       const lineBody = lineAccount.rows[0]?.provider_body;
@@ -916,22 +924,43 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
   async readCostContext(query: FinancialSourceLineQuery): Promise<FinancialProviderCostContext | null> {
     const resolution = await this.resolveLine(query);
     if (!resolution || resolution.postingState !== "posted" || !resolution.accountObjectId) return null;
+    const purposeMapping = resolution.postedOn
+      ? await this.purposeMappings.readPurposeMapping({
+          scope: {
+            provider: resolution.source.provider,
+            organizationId: resolution.source.organizationId,
+            legalEntityId: resolution.source.legalEntityId,
+            environment: resolution.source.environment,
+            realmId: resolution.source.realmId,
+          },
+          providerAccountId: resolution.accountObjectId,
+          postedOn: resolution.postedOn,
+        })
+      : null;
+    // A dated purpose mapping proves the exact Account revision used for that
+    // period. Read that revision for classification so a later provider
+    // revision cannot rewrite historical cost context in place.
+    const mappedAccountVersion = purposeMapping?.accountSourceVersion ?? null;
     const account = await this.executor.query<ProviderSourceObjectRow>(
       `SELECT provider_body, provider_updated_at, object_version
          FROM accounting_qbo_source_objects
         WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
           AND object_type='Account' AND object_id=$5 AND deleted_at IS NULL
-        ORDER BY provider_updated_at DESC NULLS LAST, received_at DESC, object_version DESC LIMIT 1`,
-      [...scopeParts(resolution.source).slice(0, 4), resolution.accountObjectId],
+          AND ($6::varchar IS NULL OR object_version=$6)
+        ORDER BY CASE WHEN object_version ~ '^[0-9]+$' THEN 0 ELSE 1 END,
+                 CASE WHEN object_version ~ '^[0-9]+$' THEN length(object_version) ELSE 0 END DESC,
+                 CASE WHEN object_version ~ '^[0-9]+$' THEN object_version ELSE '' END DESC,
+                 provider_updated_at DESC NULLS LAST, received_at DESC LIMIT 1`,
+      [...scopeParts(resolution.source).slice(0, 4), resolution.accountObjectId, mappedAccountVersion],
     );
     const body = account.rows[0]?.provider_body;
     if (!body || typeof body !== "object" || Array.isArray(body)) return null;
     const accountType = (body as Record<string, unknown>).AccountType;
     const accountSubType = (body as Record<string, unknown>).AccountSubType ?? (body as Record<string, unknown>).DetailType;
     if (typeof accountType !== "string" || accountType.length === 0 || (accountSubType !== null && accountSubType !== undefined && typeof accountSubType !== "string")) return null;
-    const classification = accountType === "Expense" ? "expense"
+    const classification = purposeMapping?.purpose === "capitalized_cost" ? "capitalized_cost"
+      : accountType === "Expense" ? "expense"
       : accountType === "Cost of Goods Sold" ? "cogs"
-        : accountType === "Fixed Asset" ? "capitalized_cost"
           : accountType === "Bank" || accountType === "Credit Card" ? "bank"
             : accountType === "Equity" ? "equity"
               : /Liability|Payable|Receivable/.test(accountType) ? "liability"
@@ -993,7 +1022,7 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       const latest = row?.latest_watermark instanceof Date ? row.latest_watermark.toISOString() : typeof row?.latest_watermark === "string" ? row.latest_watermark : null;
       return { objectCount: Number(row?.object_count ?? 0), transactionCount: Number(row?.transaction_count ?? 0), lineCount: Number(row?.line_count ?? 0), coveredFrom: toDate(row?.covered_from), coveredThrough: toDate(row?.covered_through), latestWatermark: latest };
     }
-    const match = /^transactions\.(purchase|bill|billpayment|deposit)$/.exec(stream);
+    const match = /^transactions\.(purchase|bill|billpayment|deposit|journalentry)$/.exec(stream);
     if (!match) throw new AccountingError("accounting_validation", "QBO coverage stream is unsupported");
     const entity = match[1] === "billpayment" ? "BillPayment" : match[1][0].toUpperCase() + match[1].slice(1);
     const result = await this.executor.query<{ object_count: unknown; transaction_count: unknown; line_count: unknown; covered_from: unknown; covered_through: unknown; latest_watermark: unknown }>(
@@ -1027,7 +1056,11 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
          FROM accounting_qbo_source_objects
         WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4
           AND object_type=$5 AND deleted_at IS NULL
-        ORDER BY object_id, provider_updated_at DESC NULLS LAST, received_at DESC, object_version DESC`,
+        ORDER BY object_id,
+                 CASE WHEN object_version ~ '^[0-9]+$' THEN 0 ELSE 1 END,
+                 CASE WHEN object_version ~ '^[0-9]+$' THEN length(object_version) ELSE 0 END DESC,
+                 CASE WHEN object_version ~ '^[0-9]+$' THEN object_version ELSE '' END DESC,
+                 provider_updated_at DESC NULLS LAST, received_at DESC`,
       [...scopeParts(scope), objectType],
     );
     return result.rows.map(row => {
@@ -1044,6 +1077,13 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
         objectType,
         providerObjectId,
         displayName: displayName ?? `${objectType} ${providerObjectId}`,
+        accountType: objectType === "Account" && typeof body.AccountType === "string" ? body.AccountType : null,
+        accountSubType: objectType === "Account"
+          ? (() => {
+              const value = body.AccountSubType ?? body.DetailType;
+              return typeof value === "string" ? value : null;
+            })()
+          : null,
         active: body.Active !== false,
         version,
         providerUpdatedAt,
@@ -1343,7 +1383,7 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
     const isAggregateStream = (name: string) => !name.startsWith("receivables.") && name !== "customers";
     const allRows = await this.executor.query<CoverageRow>(`SELECT stream,status,evidence,basis,watermark,covered_from,covered_through,observed_at,object_count,transaction_count,line_count,reason FROM accounting_qbo_coverage WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 ORDER BY stream`, scopeParts(scope));
     const rows = { rows: allRows.rows.filter(row => isAggregateStream(String(row.stream))) };
-    const required = ["accounts", "transactions.purchase", "transactions.bill", "transactions.billpayment", "transactions.deposit"];
+    const required = ["accounts", "transactions.purchase", "transactions.bill", "transactions.billpayment", "transactions.deposit", "transactions.journalentry"];
     if (rows.rows.length === 0) return mapCoverage(scope, null, [], "aggregate");
     const byStream = new Map(rows.rows.map(row => [String(row.stream), row]));
     const missing = required.filter(name => !byStream.has(name));
@@ -1396,19 +1436,68 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
     const values: unknown[] = [...scopeParts(scope)];
     const clauses = [
       "b.organization_id=$1", "b.legal_entity_id=$2", "b.environment=$3", "b.realm_id=$4",
-      "b.object_type='Purchase'", "b.transaction_type='Purchase'", "b.is_current=true", "b.posting_state <> 'voided'",
+      "b.object_type='Purchase'", "b.transaction_type='Purchase'", "b.is_current=true", "b.posting_state='posted'",
+      "b.allocation_blocked=false", "b.line_role IN ('expense','payable')",
       "b.direction='credit'", "b.flow='incoming'",
+      `b.amount_cents > COALESCE((
+        SELECT SUM(a.amount_cents)
+          FROM accounting_qbo_source_line_allocations a
+         WHERE a.organization_id=b.organization_id
+           AND a.legal_entity_id=b.legal_entity_id
+           AND a.environment=b.environment
+           AND a.realm_id=b.realm_id
+           AND a.object_type=b.object_type
+           AND a.object_id=b.object_id
+           AND a.line_id=b.line_id
+      ), 0)`,
     ];
     if (through !== undefined) {
       const date = isoDateSchema.parse(through);
       values.push(date);
       clauses.push("b.posted_on <= $" + String(values.length));
     }
-    const result = await this.executor.query<{ has_credit: boolean }>(
-      "SELECT EXISTS (SELECT 1 FROM accounting_qbo_source_line_balances b WHERE " + clauses.join(" AND ") + ") AS has_credit",
+    // Keep this probe narrow: only candidate Purchase credit lines are read,
+    // then each candidate is checked through the same current provider Account
+    // classification path used by project actuals. This avoids treating a
+    // transfer, blocked/deleted line, or unmapped account as a project-cost
+    // refund while still failing closed when a real eligible credit remains.
+    const result = await this.executor.query<{
+      object_id: unknown;
+      line_id: unknown;
+      latest_version: unknown;
+      amount_cents: unknown;
+      currency: unknown;
+      posted_on: unknown;
+      account_object_id: unknown;
+    }>(
+      "SELECT b.object_id,b.line_id,b.latest_version,b.amount_cents,b.currency,b.posted_on,b.account_object_id FROM accounting_qbo_source_line_balances b WHERE " + clauses.join(" AND "),
       values,
     );
-    return result.rows[0]?.has_credit === true;
+    for (const row of result.rows) {
+      const objectId = stringValue(row.object_id, "Purchase credit object ID", 200);
+      const lineId = stringValue(row.line_id, "Purchase credit line ID", 200);
+      const latestVersion = stringValue(row.latest_version, "Purchase credit source version", 120);
+      const context = await this.readCostContext({ scope, objectType: "Purchase", objectId, lineId });
+      if (!context
+        || context.source.provider !== scope.provider
+        || context.source.organizationId !== scope.organizationId
+        || context.source.legalEntityId !== scope.legalEntityId
+        || context.source.environment !== scope.environment
+        || context.source.realmId !== scope.realmId
+        || context.source.objectType !== "Purchase"
+        || context.source.objectId !== objectId
+        || context.source.lineId !== lineId
+        || context.source.version !== latestVersion
+        || context.postingState !== "posted"
+        || !context.eligible
+        || (context.classification !== "expense" && context.classification !== "cogs" && context.classification !== "capitalized_cost")
+        || context.amountCents !== centsValue(row.amount_cents, "Purchase credit amount")
+        || context.currency !== currencyCodeSchema.parse(row.currency)
+        || context.postedOn !== dateValue(row.posted_on, "Purchase credit posted date")
+        || context.accountObjectId !== nullableString(row.account_object_id, "Purchase credit account", 200)) continue;
+      return true;
+    }
+    return false;
   }
 
   async listTransactions(query: { scope: FinancialSourceScope; from?: string; through?: string; limit?: number; cursor?: string }) {

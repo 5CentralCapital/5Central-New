@@ -6,3 +6,5 @@ export * from "./allocation";
 export * from "./scope";
 export * from "./revisions";
 export * from "./commands";
+export * from "./property-contracts";
+export * from "./legal-entity-contracts";

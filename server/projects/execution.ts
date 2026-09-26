@@ -34,6 +34,7 @@ import {
   projectIdSchema,
 } from "../../shared/projects";
 import type { AuthenticatedPrincipal } from "../company/authorization";
+import { hasProjectCostDirection } from "./cost-direction";
 import type { ProjectExecutionCommandOptions } from "./execution-commands";
 import {
   financialSourceScopeKey,
@@ -133,6 +134,7 @@ const PROJECT_COST_CLASSIFICATIONS = new Set(["expense", "cogs", "capitalized_co
 function projectCostStream(objectType: string): string | undefined {
   switch (objectType) {
     case "Purchase": return "transactions.purchase";
+    case "JournalEntry": return "transactions.journalentry";
     case "Bill": return "transactions.bill";
     case "BillPayment": return "transactions.billpayment";
     case "Deposit": return "transactions.deposit";
@@ -148,7 +150,7 @@ async function isEligibleProjectCostLine(
   // transfers, principal, and bill-payment clearing lines can all look like
   // costs at the transaction level. The finance mirror must also verify the
   // current source identity and the provider Account classification.
-  if (line.flow !== "outgoing" || (line.lineRole !== "expense" && line.lineRole !== "payable")) return false;
+  if (!hasProjectCostDirection(line)) return false;
   const context = await costContext.readCostContext({
     scope: sourceScope(line.source),
     objectType: line.source.objectType,
@@ -194,13 +196,12 @@ export async function resolveProjectFinanceActuals(
   // validation signal; this narrower read prevents an unrelated open object
   // in another stream from making every project partial.
   const coverages = await Promise.all(Array.from(coverageQueries.values()).map(({ scope, stream }) => source.readCoverage(scope, stream)));
+
   let hasUnresolvedBinding = bindingRows.some((binding) => binding.bindingStatus !== "verified" || !binding.eligible);
-  // Purchase credits are normalized as incoming expense reversals and are
-  // intentionally excluded from outgoing project-cost bindings. A bound
-  // Purchase stream with any current, non-voided credit therefore has an
-  // unresolved project allocation and must remain visibly partial. The
-  // optional probe is deliberately narrow; without it, fail closed rather
-  // than scanning or claiming complete coverage.
+  // A current eligible Purchase refund with an unallocated balance can still
+  // reduce the known cost subtotal. Fully allocated and non-cost credits do
+  // not reduce coverage. Without the narrow provider probe, fail closed
+  // rather than scanning unrelated transaction streams or claiming complete.
   const purchaseScopes = Array.from(coverageQueries.values())
     .filter(({ stream }) => stream === "transactions.purchase")
     .map(({ scope }) => scope);

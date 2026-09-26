@@ -22,6 +22,7 @@ import {
   type CostSourceLinePurpose,
   type CostSourceLineQuery,
 } from "../../shared/projects/source-lines";
+import { qboEnvironmentSchema, qboRealmIdSchema } from "../../shared/projects/contracts";
 import { authorizeCompanyRead, type AuthenticatedPrincipal } from "../company/authorization";
 import { ValidationCommandError } from "../company/commands/errors";
 import { AccountingError } from "../accounting/errors";
@@ -49,6 +50,66 @@ function decodeCursor(value: string | undefined): LineCursor | null {
 
 function text(value: unknown): string { return value instanceof Date ? value.toISOString().slice(0, 10) : String(value); }
 
+type QboScope = {
+  readonly environment: "sandbox" | "production";
+  readonly realmId: string;
+};
+
+/**
+ * Resolve the one provider company a project is allowed to search. Project
+ * identity links are only created after a realm binding was verified, but the
+ * join below repeats that fence at read time so a picker cannot combine a
+ * sandbox and production mirror for one project.
+ */
+async function resolveQboScope(executor: RentOpsQueryExecutor, query: CostSourceLineQuery): Promise<QboScope | null> {
+  const explicit = query.environment !== undefined && query.realmId !== undefined;
+  if (query.projectId !== undefined) {
+    const result = await executor.query<{ environment: unknown; realm_id: unknown }>(
+      `SELECT DISTINCT b.environment, b.realm_id
+         FROM company_projects p
+         JOIN company_external_identities i
+           ON i.organization_id = p.organization_id
+          AND i.legal_entity_id = p.legal_entity_id
+          AND i.local_kind = 'project'
+          AND i.local_id = p.id::text
+          AND i.provider = 'qbo'
+          AND i.record_kind = 'Project'
+         JOIN accounting_qbo_realm_bindings b
+           ON b.organization_id = i.organization_id
+          AND b.legal_entity_id = i.legal_entity_id
+          AND i.source_scope = 'qbo:' || b.environment || ':' || b.realm_id
+        WHERE p.organization_id = $1
+          AND p.legal_entity_id = $2
+          AND p.id = $3
+          AND ($4::text IS NULL OR b.environment = $4)
+          AND ($5::varchar IS NULL OR b.realm_id = $5)`,
+      [query.organizationId, query.legalEntityId, query.projectId, query.environment ?? null, query.realmId ?? null],
+    );
+    if (result.rows.length === 0) {
+      throw new ValidationCommandError(
+        explicit ? "The requested QuickBooks scope is not linked to this project" : "Link one verified QuickBooks Project identity before searching project costs",
+        { reason: explicit ? "project_qbo_scope_mismatch" : "project_qbo_scope_required" },
+      );
+    }
+    if (result.rows.length > 1) {
+      throw new ValidationCommandError("Select a QuickBooks environment and realm for this project before searching costs", { reason: "project_qbo_scope_ambiguous" });
+    }
+    return { environment: qboEnvironmentSchema.parse(result.rows[0]!.environment), realmId: qboRealmIdSchema.parse(String(result.rows[0]!.realm_id)) };
+  }
+
+  if (!explicit) return null;
+  const result = await executor.query<{ environment: unknown; realm_id: unknown }>(
+    `SELECT environment, realm_id
+       FROM accounting_qbo_realm_bindings
+      WHERE organization_id = $1 AND legal_entity_id = $2 AND environment = $3 AND realm_id = $4`,
+    [query.organizationId, query.legalEntityId, query.environment, query.realmId],
+  );
+  if (result.rows.length !== 1) {
+    throw new ValidationCommandError("The requested QuickBooks scope is not verified for this legal entity", { reason: "qbo_scope_unverified" });
+  }
+  return { environment: qboEnvironmentSchema.parse(result.rows[0]!.environment), realmId: qboRealmIdSchema.parse(String(result.rows[0]!.realm_id)) };
+}
+
 const PURPOSE_FILTER: Readonly<Record<CostSourceLinePurpose, string>> = {
   cost: "b.flow = 'outgoing' AND b.line_role IN ('expense','payable')",
   // Deposit cash-back is an outgoing debit to an explicitly named provider
@@ -65,12 +126,19 @@ const PURPOSE_FILTER: Readonly<Record<CostSourceLinePurpose, string>> = {
 export async function searchCostSourceLines(executor: RentOpsQueryExecutor, principal: AuthenticatedPrincipal, input: CostSourceLineQuery): Promise<CostSourceLinePage> {
   const query = costSourceLineQuerySchema.parse(input);
   authorizeCompanyRead(principal, { organizationId: query.organizationId, legalEntityId: query.legalEntityId }, COST_SOURCE_LINE_READ_ROLES);
+  const qboScope = await resolveQboScope(executor, query);
   const values: unknown[] = [query.organizationId, query.legalEntityId];
   const add = (value: unknown): string => { values.push(value); return `$${values.length}`; };
   const where = [
     "b.organization_id = $1", "b.legal_entity_id = $2", "b.is_current = true", "b.allocation_blocked = false", "b.posting_state = 'posted'",
-    PURPOSE_FILTER[query.purpose],
+    query.purpose === "cost" && query.includeRefunds
+      ? "((b.direction = 'debit' AND b.flow = 'outgoing') OR (b.direction = 'credit' AND b.flow = 'incoming')) AND b.line_role IN ('expense','payable')"
+      : PURPOSE_FILTER[query.purpose],
   ];
+  if (qboScope) {
+    where.push(`b.environment = ${add(qboScope.environment)}`);
+    where.push(`b.realm_id = ${add(qboScope.realmId)}`);
+  }
   if (query.from) where.push(`b.posted_on >= ${add(query.from)}::date`);
   if (query.through) where.push(`b.posted_on <= ${add(query.through)}::date`);
   if (query.search) {
@@ -83,7 +151,7 @@ export async function searchCostSourceLines(executor: RentOpsQueryExecutor, prin
   const limit = add(query.limit + 1);
   const result = await executor.query<Record<string, unknown>>(
     `SELECT b.environment, b.realm_id, b.object_type, b.object_id, b.line_id, b.latest_version, b.transaction_type, b.amount_cents::text AS amount_cents,
-            b.currency, b.posted_on, b.settlement_state, b.counterparty_object_id, l.description,
+            b.currency, b.direction, b.posted_on, b.settlement_state, b.counterparty_object_id, l.description,
             COALESCE(a.allocated_cents, 0)::text AS allocated_cents
        FROM accounting_qbo_source_line_balances b
        JOIN accounting_qbo_transaction_lines l
@@ -110,6 +178,7 @@ export async function searchCostSourceLines(executor: RentOpsQueryExecutor, prin
         objectType: row.object_type, objectId: row.object_id, lineId: row.line_id, version: row.latest_version,
       }),
       transactionType: String(row.transaction_type),
+      ...(row.direction === "debit" || row.direction === "credit" ? { direction: row.direction } : {}),
       description: row.description === null || row.description === undefined ? null : String(row.description).slice(0, 500),
       postedOn: text(row.posted_on),
       currency: String(row.currency),

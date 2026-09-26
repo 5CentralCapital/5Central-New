@@ -48,10 +48,12 @@ test("cost summary incurred and paid carry their QuickBooks qualifiers", async (
   const { incurredLabel, paidLabel, formatQualifiedMoney } = await import("./money");
   const base = { currency: "USD", incurred: { totalCents: "150000" } };
   assert.equal(incurredLabel({ ...base, completeness: "complete" }), "$1,500.00");
-  assert.equal(incurredLabel({ ...base, completeness: "partial" }), "At least $1,500.00", "partial QuickBooks coverage makes incurred a minimum");
+  assert.equal(incurredLabel({ ...base, completeness: "partial" }), "Known $1,500.00", "partial QuickBooks coverage is a known subtotal, with either costs or refunds missing");
   assert.equal(incurredLabel({ currency: "USD", completeness: "unavailable", incurred: { totalCents: null } }), "Unknown");
   assert.equal(paidLabel({ currency: "USD", paid: { cents: "90000", knownCents: "90000", coverage: "complete" } }), "$900.00");
-  assert.equal(paidLabel({ currency: "USD", paid: { cents: null, knownCents: "90000", coverage: "partial" } }), "At least $900.00");
-  assert.equal(paidLabel({ currency: "USD", paid: { cents: null, knownCents: "0", coverage: "unavailable" } }), "Unknown", "unavailable QuickBooks is Unknown, not At least $0.00");
+  assert.equal(paidLabel({ currency: "USD", paid: { cents: null, knownCents: "90000", coverage: "partial" } }), "Known $900.00");
+  assert.equal(paidLabel({ currency: "USD", paid: { cents: null, knownCents: "0", coverage: "unavailable" } }), "Unknown", "unavailable QuickBooks is Unknown, not Known $0.00");
   assert.equal(formatQualifiedMoney("5", "unavailable"), "Unknown");
+  assert.equal(formatQualifiedMoney("-2500", "partial"), "Known -$25.00");
+  assert.equal(formatQualifiedMoney("-2500", "complete"), "-$25.00");
 });

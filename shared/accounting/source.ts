@@ -169,7 +169,7 @@ export const financialProviderPaymentSubtypeSchema = z.enum(["Cash", "Check", "C
 export type FinancialProviderPaymentSubtype = z.infer<typeof financialProviderPaymentSubtypeSchema>;
 export const financialProviderPayeeTypeSchema = z.enum(["Vendor", "Customer", "Employee"]);
 export type FinancialProviderPayeeType = z.infer<typeof financialProviderPayeeTypeSchema>;
-export const financialProviderAccountingPurposeSchema = z.enum(["capital_contribution", "distribution", "principal", "interest", "expense", "rent_receipt", "unknown"]);
+export const financialProviderAccountingPurposeSchema = z.enum(["capital_contribution", "distribution", "principal", "interest", "expense", "capitalized_cost", "rent_receipt", "unknown"]);
 export type FinancialProviderAccountingPurpose = z.infer<typeof financialProviderAccountingPurposeSchema>;
 export const financialProviderPurposeEvidenceSchema = z.enum(["provider_account_unmapped", "server_mapping", "provider_transaction"]);
 export type FinancialProviderPurposeEvidence = z.infer<typeof financialProviderPurposeEvidenceSchema>;
@@ -193,6 +193,7 @@ export const financialAccountingPurposeMappingSchema = z.object({
   reviewedBy: sourceText(200),
   reviewedAt: isoTimestampSchema,
   createdAt: isoTimestampSchema,
+  recordRevision: z.number().int().positive().safe(),
 }).strict();
 export type FinancialAccountingPurposeMapping = z.infer<typeof financialAccountingPurposeMappingSchema>;
 
@@ -282,8 +283,10 @@ export interface FinancialSourceReadPort {
   listTransactions(query: FinancialSourceTransactionQuery): Promise<FinancialSourceTransactionPage>;
   /**
    * Narrow provider-truth probe used by project cost coverage. Implementations
-   * should query current, non-voided Purchase credits without materializing
-   * the full transaction stream. Consumers fail closed when it is absent.
+   * should return true only for a current, posted, eligible Purchase credit
+   * with unallocated cents remaining; fully allocated, blocked, non-cost and
+   * unmapped credits are excluded without materializing the full transaction
+   * stream. Consumers fail closed when it is absent.
    */
   hasPurchaseCredits?(scope: FinancialSourceScope, through?: IsoDate | string): Promise<boolean>;
 }

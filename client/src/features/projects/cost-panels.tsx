@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { CircleAlert, Landmark, Link2, Search } from "lucide-react";
 import type { FinancialSourceReference } from "@shared/accounting/source";
 import type { ProjectCostLine, ProjectCostReport } from "@shared/projects/cost-report";
@@ -152,10 +152,10 @@ export function ProjectLaborPanel({ labor, currency, loading, error, onRetry }: 
   </section>;
 }
 
-function sourceKey(source: FinancialSourceReference): string { return `${source.realmId}:${source.objectType}:${source.objectId}:${source.lineId ?? ""}:${source.version}`; }
+function sourceKey(source: FinancialSourceReference): string { return `${source.environment}:${source.realmId}:${source.objectType}:${source.objectId}:${source.lineId ?? ""}:${source.version}`; }
 
 /** Pick a posted QBO line from the mirror and bind part of it to this project. */
-function FinanceBindingForm({ project, execution, disabled, search, onCreate, onCancel }: { project: ProjectDetail; execution: ProjectExecutionDetail; disabled: boolean; search: (query: { search?: string; cursor?: string }) => Promise<CostSourceLinePage>; onCreate: (payload: { source: FinancialSourceReference; allocatedCents: string; scopeItemId: string | null; commitmentId: string | null }) => void; onCancel: () => void }) {
+function FinanceBindingForm({ project, execution, disabled, search, onCreate, onCancel }: { project: ProjectDetail; execution: ProjectExecutionDetail; disabled: boolean; search: (query: { search?: string; cursor?: string; environment?: "sandbox" | "production"; realmId?: string }) => Promise<CostSourceLinePage>; onCreate: (payload: { source: FinancialSourceReference; allocatedCents: string; scopeItemId: string | null; commitmentId: string | null }) => void; onCancel: () => void }) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState<CostSourceLinePage>();
   const [loading, setLoading] = useState(false);
@@ -164,18 +164,30 @@ function FinanceBindingForm({ project, execution, disabled, search, onCreate, on
   const [scopeItemId, setScopeItemId] = useState("");
   const [commitmentId, setCommitmentId] = useState("");
   const [error, setError] = useState<string>();
+  const qboScopes = Array.from(new Map(project.qboProjectIdentities.filter(identity => identity.recordKind === "Project").map(identity => {
+    const key = `${identity.environment}:${identity.realmId}`;
+    return [key, { key, environment: identity.environment, realmId: identity.realmId }];
+  })).values());
+  const [scopeKey, setScopeKey] = useState(() => qboScopes.length === 1 ? qboScopes[0]!.key : "");
+  const selectedScope = qboScopes.find(scope => scope.key === scopeKey);
+  const requestRevision = useRef(0);
   const run = async (cursor?: string) => {
+    if (qboScopes.length === 0) { setError("Link this project to QuickBooks before searching costs."); return; }
+    if (!selectedScope) { setError("Choose live or test books before searching costs."); return; }
+    const revision = ++requestRevision.current;
     setLoading(true); setError(undefined);
     try {
-      const next = await search({ search: query, cursor });
+      const next = await search({ search: query, cursor, environment: selectedScope.environment, realmId: selectedScope.realmId });
+      if (revision !== requestRevision.current) return;
       setPage((current) => cursor && current ? { items: [...current.items, ...next.items], nextCursor: next.nextCursor } : next);
-    } catch (next) { setError(next instanceof Error ? next.message : "QBO lines could not be loaded."); } finally { setLoading(false); }
+    } catch (next) { if (revision === requestRevision.current) setError(next instanceof Error ? next.message : "QBO lines could not be loaded."); } finally { if (revision === requestRevision.current) setLoading(false); }
   };
   useEffect(() => { void run(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const submit = (event: FormEvent) => {
     event.preventDefault();
     try {
       if (!selected) throw new Error("Choose a QBO line.");
+      if (!selectedScope || selected.source.environment !== selectedScope.environment || selected.source.realmId !== selectedScope.realmId) throw new Error("Choose a line from the selected QuickBooks books.");
       const cents = parseMoneyInput(amount, "Amount").cents;
       if (BigInt(cents) <= BigInt(0)) throw new Error("Amount must be positive.");
       if (BigInt(cents) > BigInt(selected.availableCents)) throw new Error("Amount exceeds the unallocated balance of this line.");
@@ -186,15 +198,17 @@ function FinanceBindingForm({ project, execution, disabled, search, onCreate, on
   return <form className="projects-execution-form" onSubmit={submit} aria-label="Link a QBO line">
     <div className="projects-execution-form-heading"><h4>Link a QBO line</h4></div>
     {error && <div className="projects-error" role="alert"><CircleAlert size={16} /><span>{error}</span></div>}
+    {qboScopes.length > 1 && <label className="projects-execution-field"><span>QuickBooks company</span><select value={scopeKey} onChange={(event) => { requestRevision.current += 1; setLoading(false); setScopeKey(event.currentTarget.value); setPage(undefined); setSelected(undefined); setError(undefined); }}><option value="">Choose live or test books</option>{qboScopes.map(scope => <option key={scope.key} value={scope.key}>{scope.environment === "production" ? "Live books" : "Test books"}</option>)}</select></label>}
+    {qboScopes.length === 1 && <p className="projects-muted">QuickBooks: {qboScopes[0]!.environment === "production" ? "Live books" : "Test books"}</p>}
     <div className="projects-source-search"><label className="projects-search"><Search size={16} /><span className="projects-sr-only">Search QBO lines</span><input value={query} placeholder="Search description or document" onChange={(event) => setQuery(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void run(); } }} /></label><button type="button" className="projects-button projects-button-secondary" onClick={() => void run()} disabled={loading}>Search</button></div>
     {loading && !page ? <div className="projects-state" role="status"><span>Loading QBO lines…</span></div> : page && page.items.length === 0 ? <div className="projects-state projects-empty"><strong>No unallocated QBO lines</strong></div> : page && <div className="projects-table-wrap projects-source-results" role="radiogroup" aria-label="QBO lines">
       <table className="projects-table"><thead><tr><th><span className="projects-sr-only">Select</span></th><th>Line</th><th>Posted</th><th className="projects-number">Available</th></tr></thead>
         <tbody>{page.items.map((item) => <tr key={sourceKey(item.source)} className={selected && sourceKey(selected.source) === sourceKey(item.source) ? "is-selected" : undefined}>
           <td><input type="radio" name="project-source-line" aria-label={item.description ?? item.transactionType} checked={!!selected && sourceKey(selected.source) === sourceKey(item.source)} onChange={() => { setSelected(item); setAmount(formatInputValue(item.availableCents)); }} /></td>
-          <td><strong>{item.description ?? item.transactionType}</strong><small className="projects-table-subline">{item.transactionType}</small></td>
+          <td><strong>{item.description ?? item.transactionType}</strong><small className="projects-table-subline">{item.transactionType}{item.direction === "credit" ? " · Cost refund" : ""}</small></td>
           <td>{dateLabel(item.postedOn)}</td>
-          <td className="projects-number">{formatMoney(item.availableCents, item.currency)}</td>
-        </tr>)}</tbody><tfoot><tr><th scope="row">Shown: {page.items.length} QBO lines</th><td colSpan={2}>{page.nextCursor ? "Page totals by currency" : "Filtered totals by currency"}</td><td className="projects-number">{moneyTotalsByCurrency(page.items.map(item => ({ cents: item.availableCents, currency: item.currency })))}</td></tr></tfoot>
+          <td className="projects-number">{formatMoney(item.direction === "credit" ? `-${item.availableCents}` : item.availableCents, item.currency)}</td>
+        </tr>)}</tbody><tfoot><tr><th scope="row">Shown: {page.items.length} QBO lines</th><td colSpan={2}>{page.nextCursor ? "Page totals by currency" : "Filtered totals by currency"}</td><td className="projects-number">{moneyTotalsByCurrency(page.items.map(item => ({ cents: item.direction === "credit" ? `-${item.availableCents}` : item.availableCents, currency: item.currency })))}</td></tr></tfoot>
       </table>
       {page.nextCursor && <button type="button" className="projects-load-more" onClick={() => void run(page.nextCursor!)} disabled={loading}>{loading ? "Loading…" : "Load more lines"}</button>}
     </div>}
@@ -208,7 +222,7 @@ function FinanceBindingForm({ project, execution, disabled, search, onCreate, on
 }
 
 /** Verified QBO lines bound to the project, with release and the mirror line picker. */
-export function ProjectFinanceBindingsPanel({ project, execution, readOnly, saving, search, onCreate, onRelease }: { project: ProjectDetail; execution: ProjectExecutionDetail; readOnly: boolean; saving: boolean; search?: (query: { search?: string; cursor?: string }) => Promise<CostSourceLinePage>; onCreate: (payload: { source: FinancialSourceReference; allocatedCents: string; scopeItemId: string | null; commitmentId: string | null }) => void; onRelease: (bindingId: string) => void }) {
+export function ProjectFinanceBindingsPanel({ project, execution, readOnly, saving, search, onCreate, onRelease }: { project: ProjectDetail; execution: ProjectExecutionDetail; readOnly: boolean; saving: boolean; search?: (query: { search?: string; cursor?: string; environment?: "sandbox" | "production"; realmId?: string }) => Promise<CostSourceLinePage>; onCreate: (payload: { source: FinancialSourceReference; allocatedCents: string; scopeItemId: string | null; commitmentId: string | null }) => void; onRelease: (bindingId: string) => void }) {
   const [adding, setAdding] = useState(false);
   const actuals = execution.financeActuals;
   const scopeName = (id: string | null) => id ? project.scopeItems.find((item) => item.id === id)?.description ?? "Scope line" : "Unassigned";

@@ -44,6 +44,13 @@ export const projectTaskIdSchema = canonicalUuidSchema.transform((value) => valu
 export const draftCostIdSchema = canonicalUuidSchema.transform((value) => value as DraftCostId);
 export const postedActualIdSchema = canonicalUuidSchema.transform((value) => value as PostedActualId);
 
+export const qboProjectExternalIdSchema = z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9_.:-]+$/, "QuickBooks project ID contains unsupported characters");
+export const qboRealmIdSchema = z.string().regex(/^\d{1,32}$/, "QuickBooks realm ID is invalid");
+export const qboEnvironmentSchema = z.enum(["sandbox", "production"]);
+export const QBO_PROJECT_RECORD_KINDS = ["Project", "Customer"] as const;
+export const qboProjectRecordKindSchema = z.enum(QBO_PROJECT_RECORD_KINDS);
+export type QboProjectRecordKind = (typeof QBO_PROJECT_RECORD_KINDS)[number];
+
 export const PROJECT_STATUSES = ["planning", "active", "on_hold", "completed", "archived"] as const;
 export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
 export const projectStatusSchema = z.enum(PROJECT_STATUSES);
@@ -217,12 +224,24 @@ export const projectPostedActualSchema = z.object({
 }).strict();
 export type ProjectPostedActual = z.infer<typeof projectPostedActualSchema>;
 
+export const projectQboIdentitySchema = z.object({
+  id: recordReferenceIdSchema,
+  projectId: projectIdSchema,
+  recordKind: qboProjectRecordKindSchema,
+  externalId: qboProjectExternalIdSchema,
+  environment: qboEnvironmentSchema,
+  realmId: qboRealmIdSchema,
+  linkedAt: isoTimestampSchema,
+}).strict();
+export type ProjectQboIdentity = z.infer<typeof projectQboIdentitySchema>;
+
 export const projectDetailSchema = projectSummarySchema.extend({
   scopeItems: z.array(projectScopeItemSchema).max(10_000),
   budgetVersions: z.array(projectBudgetVersionSchema).max(1_000),
   tasks: z.array(projectTaskSchema).max(10_000),
   draftCosts: z.array(projectDraftCostSchema).max(10_000),
   postedActuals: z.array(projectPostedActualSchema).max(10_000),
+  qboProjectIdentities: z.array(projectQboIdentitySchema).max(20).default([]),
 }).strict();
 export type ProjectDetail = z.infer<typeof projectDetailSchema>;
 
@@ -276,6 +295,25 @@ export type UpdateProjectPayload = z.infer<typeof updateProjectPayloadSchema>;
 
 export const archiveProjectPayloadSchema = z.object({ projectId: projectIdSchema }).strict();
 export type ArchiveProjectPayload = z.infer<typeof archiveProjectPayloadSchema>;
+
+export const linkProjectQboIdentityPayloadSchema = z.object({
+  projectId: projectIdSchema,
+  identities: z.array(z.object({
+    recordKind: qboProjectRecordKindSchema,
+    externalId: qboProjectExternalIdSchema,
+  }).strict()).min(1).max(QBO_PROJECT_RECORD_KINDS.length),
+  environment: qboEnvironmentSchema,
+  realmId: qboRealmIdSchema,
+}).strict().superRefine((value, context) => {
+  const kinds = value.identities.map((identity) => identity.recordKind);
+  if (!kinds.includes("Project")) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["identities"], message: "A native QuickBooks Project ID is required" });
+  }
+  if (new Set(kinds).size !== kinds.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["identities"], message: "Each QuickBooks project identity kind may appear once" });
+  }
+});
+export type LinkProjectQboIdentityPayload = z.infer<typeof linkProjectQboIdentityPayloadSchema>;
 
 const scopeItemInputFields = {
   description: text(300),
@@ -373,6 +411,7 @@ export const PROJECT_COMMAND_KINDS = [
   "project.create",
   "project.update",
   "project.archive",
+  "project.qbo_identity.link",
   "project.scope_item.create",
   "project.scope_item.update",
   "project.scope_item.archive",
@@ -391,6 +430,7 @@ export const projectCommandPayloadSchemas = {
   "project.create": createProjectPayloadSchema,
   "project.update": updateProjectPayloadSchema,
   "project.archive": archiveProjectPayloadSchema,
+  "project.qbo_identity.link": linkProjectQboIdentityPayloadSchema,
   "project.scope_item.create": createScopeItemPayloadSchema,
   "project.scope_item.update": updateScopeItemPayloadSchema,
   "project.scope_item.archive": archiveScopeItemPayloadSchema,

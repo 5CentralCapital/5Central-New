@@ -63,9 +63,28 @@ export interface AccountingMirror {
   readonly objectType: "Account" | "Vendor" | "Customer" | "Employee";
   readonly providerObjectId: string;
   readonly displayName: string;
+  readonly accountType: string | null;
+  readonly accountSubType: string | null;
   readonly active: boolean;
   readonly version: string;
   readonly providerUpdatedAt: string | null;
+}
+
+export interface AccountingPurposeMapping {
+  readonly id: string;
+  readonly scope: { readonly organizationId: string; readonly legalEntityId: string; readonly environment: AccountingEnvironment; readonly realmId: string };
+  readonly providerAccountId: string;
+  readonly purpose: "capital_contribution" | "distribution" | "principal" | "interest" | "expense" | "capitalized_cost" | "rent_receipt";
+  readonly effectiveFrom: string;
+  readonly effectiveTo: string | null;
+  readonly accountSourceVersion: string;
+  readonly accountType: string;
+  readonly accountSubType: string | null;
+  readonly reviewEvidence: string;
+  readonly reviewedBy: string;
+  readonly reviewedAt: string;
+  readonly createdAt: string;
+  readonly recordRevision: number;
 }
 
 export interface AccountingTransaction {
@@ -89,6 +108,9 @@ export interface AccountingApi {
   getConfiguration(organizationId: string, legalEntityId: string, signal?: AbortSignal): Promise<{ readonly configured: boolean; readonly environment: AccountingEnvironment | null }>;
   listConnections(organizationId: string, legalEntityId: string, environment: AccountingEnvironment, signal?: AbortSignal): Promise<readonly AccountingConnection[]>;
   listMirrors(organizationId: string, scope: AccountingScope, kind: AccountingMirrorKind, signal?: AbortSignal): Promise<readonly AccountingMirror[]>;
+  listPurposeMappings(organizationId: string, scope: AccountingScope, providerAccountId?: string, signal?: AbortSignal): Promise<readonly AccountingPurposeMapping[]>;
+  mapCapitalizedCost(organizationId: string, input: { readonly scope: AccountingScope; readonly legalEntityId: string; readonly providerAccountId: string; readonly accountSourceVersion: string; readonly effectiveFrom: string; readonly effectiveTo?: string | null; readonly reviewEvidence: string }, signal?: AbortSignal): Promise<OperationReceipt>;
+  reattestCapitalizedCost(organizationId: string, input: { readonly scope: AccountingScope; readonly legalEntityId: string; readonly mappingId: string; readonly expectedRecordRevision: number; readonly providerAccountId: string; readonly accountSourceVersion: string; readonly effectiveFrom: string; readonly reviewEvidence: string }, signal?: AbortSignal): Promise<OperationReceipt>;
   listTransactions(organizationId: string, scope: AccountingScope, signal?: AbortSignal, cursor?: string): Promise<AccountingTransactionPage>;
   beginConnection(organizationId: string, legalEntityId: string, signal?: AbortSignal): Promise<{ readonly authorizationUrl: string; readonly expiresAt: string }>;
   getPendingBinding(organizationId: string, legalEntityId: string, pendingId: string, signal?: AbortSignal): Promise<AccountingPendingBinding | null>;

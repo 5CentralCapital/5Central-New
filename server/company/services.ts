@@ -9,6 +9,8 @@ import { createTimeServices, type TimeServices, type TimeServicesOptions } from 
 import { createCompanyReportingPort } from './reporting-runtime';
 import type { ReportingPort } from '../reporting';
 import { createWorkOrderPort, type WorkOrderPort } from '../work-orders/port';
+import { createCompanyPropertyPort, type CompanyPropertyPort } from './property-port';
+import { createCompanyLegalEntityPort, type CompanyLegalEntityPort } from './legal-entity-port';
 // lane-b-accounting
 import { createJobsPort, type JobsPort } from '../jobs/operator';
 // lane-c-review
@@ -30,6 +32,8 @@ export interface CompanyServices {
   readonly time: TimeServices;
   readonly reporting: ReportingPort;
   readonly workOrders: WorkOrderPort;
+  readonly properties: CompanyPropertyPort;
+  readonly legalEntities: CompanyLegalEntityPort;
   // lane-b-accounting
   readonly jobs: JobsPort;
   // lane-c-review
@@ -85,5 +89,7 @@ export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
   const intake = createIntakePort(executor, { documentStorage: options.documentStorage });
   const documents = createCompanyDocumentsPort(executor, { documentStorage: options.documentStorage });
   const forecasting = createForecastingPort(executor); // lane-d-forecast
-  return { executor, accounting, investors, projects, time, reporting, workOrders, jobs, reviewCases, intake, documents, forecasting, projectInsights };
+  const properties = createCompanyPropertyPort(executor);
+  const legalEntities = createCompanyLegalEntityPort(executor);
+  return { executor, accounting, investors, projects, time, reporting, workOrders, properties, legalEntities, jobs, reviewCases, intake, documents, forecasting, projectInsights };
 }

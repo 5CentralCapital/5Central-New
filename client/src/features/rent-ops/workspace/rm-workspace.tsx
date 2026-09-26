@@ -29,6 +29,7 @@ import { DashboardWorkspace } from './dashboard-workspace';
 import { DashboardCompanyPanels } from './dashboard-company';
 import { ApplicationsWorkspace } from './applications-workspace';
 import { WorkspaceEditor } from './editor';
+import { PropertySetupDialog } from './property-setup-dialog';
 import { DataGrid } from './grid';
 import { exactCentsMetric } from './list-totals';
 import { ListTotals } from './list-totals';
@@ -125,6 +126,7 @@ function AuthenticatedWorkspace(){
  const [source,setSource]=useState<'live'|'synthetic'>('live');const [contextError,setContextError]=useState<unknown>();
  const [businessDate,setBusinessDate]=useState('');const [notice,setNotice]=useState('');
  const [manageMoves,setManageMoves]=useState<{personId?:string}>();
+ const [propertySetupOpen,setPropertySetupOpen]=useState(false);
  const [editing,setEditing]=useState<{action:QuickAction;values:FormValues}>();
  const {transparency,changeTransparency}=useWorkspaceAppearance();
  const view=WORKSPACE_VIEWS[route.section];
@@ -226,7 +228,7 @@ function AuthenticatedWorkspace(){
     onWorkSchedule:(organizationId,workOrderId)=>workOrderId?openWorkOrder(organizationId,workOrderId):openCompany('work-orders',organizationId,{workOrderView:'schedule'}),
     onForecasting:organizationId=>openCompany('forecasting',organizationId,{forecastTab:'cash'}),
    }}/>}/>}</>,
-  properties:needsCollections(()=><PropertyUnitRecords readOnly={source!=='live'} snapshot={snapshot!} filters={filters} onSearchChange={search=>setFilters(current=>({...current,search}))} selectedPropertyId={route.kind==='property'?route.recordId:undefined} selectedUnitId={route.kind==='unit'?route.recordId:undefined} onSelect={(kind,id)=>go({...route,kind,recordId:id})} onEdit={openEditor}
+  properties:needsCollections(()=><PropertyUnitRecords readOnly={source!=='live'} snapshot={snapshot!} filters={filters} onSearchChange={search=>setFilters(current=>({...current,search}))} selectedPropertyId={route.kind==='property'?route.recordId:undefined} selectedUnitId={route.kind==='unit'?route.recordId:undefined} onSelect={(kind,id)=>go({...route,kind,recordId:id})} onEdit={openEditor} onAddPropertySetup={()=>setPropertySetupOpen(true)}
    identity={identity} organizationId={route.organizationId} onOpenProject={openProject} onOpenWorkOrder={openWorkOrder} onOpenReport={openReport}/>),
   'property-performance':()=><PropertyPerformance identity={identity} filters={filters} organizationId={route.organizationId} onOpenReport={openReport}/>,
   'rent-roll':reportsView,
@@ -273,6 +275,7 @@ function AuthenticatedWorkspace(){
    {body}
   </main></div>
   {manageMoves&&source==='live'&&snapshot&&<div className="rm-dialog-backdrop"><section className="rm-dialog" role="dialog" aria-modal="true" aria-label="Move-in and move-out">{data.collectionsReady?<ManagerTenancyActions snapshot={snapshot} businessDate={businessDate} personId={manageMoves.personId} propertyId={filters.propertyId} onSaved={refreshRequired} onClose={()=>setManageMoves(undefined)}/>:<><Busy label="Loading tenancy records…"/>{data.collectionError&&<ErrorNotice error={data.collectionError} retry={()=>void refresh()}/>}<button className="rm-button" onClick={()=>setManageMoves(undefined)}>Cancel</button></>}</section></div>}
+  <PropertySetupDialog organizationId={route.organizationId} open={propertySetupOpen} onClose={()=>setPropertySetupOpen(false)} onSaved={message=>{setPropertySetupOpen(false);setNotice(message);void refresh();}}/>
   {editing&&snapshot&&(data.collectionsReady?<WorkspaceEditor action={editing.action} snapshot={snapshot} initialValues={editing.values} onClose={()=>setEditing(undefined)} onSaved={finishEdit} onConflict={()=>{setEditing(undefined);setNotice('This record changed. The latest values are being loaded; review them before saving again.');void refresh();}}/>:<div className="rm-dialog-backdrop"><section className="rm-dialog" role="dialog" aria-modal="true" aria-label="Loading editor"><Busy label="Loading related records…"/>{data.collectionError&&<ErrorNotice error={data.collectionError}/>}<button className="rm-button" onClick={()=>setEditing(undefined)}>Cancel</button></section></div>)}
  </div></EntityNavigationContext.Provider>;
 }

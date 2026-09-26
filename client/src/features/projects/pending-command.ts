@@ -1,4 +1,5 @@
 import type { ProjectCommandKind, ProjectExecutionCommandKind } from "@shared/projects";
+import type { ProjectDealCostCommandKind } from "@shared/projects/deal-costs";
 import type { CompanyScope } from "@shared/company/scope";
 import { createProjectCommandEnvelope } from "./api";
 import type { ProjectCommandEnvelope } from "./types";
@@ -15,11 +16,11 @@ export class PendingProjectCommandError extends Error {
 }
 
 export interface PendingProjectCommand {
-  readonly kind: ProjectCommandKind | ProjectExecutionCommandKind;
+  readonly kind: ProjectCommandKind | ProjectExecutionCommandKind | ProjectDealCostCommandKind;
   readonly envelope: PendingEnvelope;
 }
 
-export type ProjectWriteCommandKind = ProjectCommandKind | ProjectExecutionCommandKind;
+export type ProjectWriteCommandKind = ProjectCommandKind | ProjectExecutionCommandKind | ProjectDealCostCommandKind;
 
 function commandFingerprint<TPayload>(
   kind: ProjectWriteCommandKind,

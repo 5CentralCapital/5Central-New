@@ -14,8 +14,8 @@ import { isQboReceivableType, journalEntryAccountIds, normalizeQboReceivable } f
 import { PostgresQboReceivablesStore } from "./receivables-store";
 
 const PAGE_SIZE = 500;
-const TRANSACTION_ENTITY_TYPES = ["Purchase", "Bill", "BillPayment", "Deposit"] as const;
-const REQUIRED_STREAMS = ["accounts", "transactions.purchase", "transactions.bill", "transactions.billpayment", "transactions.deposit"] as const;
+const TRANSACTION_ENTITY_TYPES = ["Purchase", "Bill", "BillPayment", "Deposit", "JournalEntry"] as const;
+const REQUIRED_STREAMS = ["accounts", "transactions.purchase", "transactions.bill", "transactions.billpayment", "transactions.deposit", "transactions.journalentry"] as const;
 /** Entities read by change data capture: the mirrored transactions plus Account identity. */
 export const QBO_CDC_ENTITIES = [...TRANSACTION_ENTITY_TYPES, "Account"] as const;
 /** Named provider records mirrored for display and mapping. */
@@ -37,6 +37,15 @@ const CDC_SAFE_LOOKBACK_MS = QUICKBOOKS_CDC_LOOKBACK_DAYS * 86_400_000 - 12 * 3_
 export function streamForEntity(entity: string): string | null {
   if ((TRANSACTION_ENTITY_TYPES as readonly string[]).includes(entity)) return `transactions.${entity.toLowerCase()}`;
   if (entity === "Account") return "accounts";
+  if (entity === "Customer" || isQboReceivableType(entity)) return receivableStreamFor(entity as QboReceivableDocumentType | "Customer");
+  return null;
+}
+
+/** JournalEntry is mirrored in both ledgers: its balanced lines feed the
+ * accounting source mirror while customer-linked A/R effects feed the
+ * receivables mirror. Keep those streams explicit at each transport boundary.
+ */
+function receivableStreamForEntity(entity: string): string | null {
   if (entity === "Customer" || isQboReceivableType(entity)) return receivableStreamFor(entity as QboReceivableDocumentType | "Customer");
   return null;
 }
@@ -614,7 +623,7 @@ export function createQboProviderSync(options: {
       const since = new Date(Math.max(Date.parse(watermark!) - CDC_OVERLAP_MS, startedAt.getTime() - CDC_SAFE_LOOKBACK_MS)).toISOString();
       let response;
       try {
-        response = await options.client.cdc([...QBO_CDC_ENTITIES, ...QBO_RECEIVABLE_CDC_ENTITIES], since);
+        response = await options.client.cdc(Array.from(new Set([...QBO_CDC_ENTITIES, ...QBO_RECEIVABLE_CDC_ENTITIES])), since);
       } catch (error) {
         return { mode: "cdc", reason: null, status: "failed", appliedCount: 0, deletedCount: 0, unsupportedCount: 0, anchored: checkpoint?.cursor !== null && checkpoint?.cursor !== undefined, watermark, error };
       }
@@ -652,7 +661,7 @@ export function createQboProviderSync(options: {
           // Receivables after Account (JournalEntry classification) and Customer.
           const receivableStore = receivables.forExecutor(executor);
           for (const entity of QBO_RECEIVABLE_CDC_ENTITIES) {
-            const stream = streamForEntity(entity)!;
+            const stream = receivableStreamForEntity(entity)!;
             for (const item of response.entities[entity] ?? []) {
               if (isDeletedCdcObject(item)) {
                 const objectId = typeof item.Id === "string" || typeof item.Id === "number" ? String(item.Id) : null;
@@ -708,6 +717,24 @@ export function createQboProviderSync(options: {
         throw error;
       }
       const currency = (QBO_NAMED_ENTITIES as readonly string[]).includes(objectType) || objectType === "Account" ? null : await loadCurrencyContext();
+      // JournalEntry is intentionally processed by both mirrors. The generic
+      // transaction mirror preserves every balanced debit/credit cost line;
+      // the receivables mirror separately retains customer-linked A/R effects.
+      if (objectType === "JournalEntry") {
+        const entityCurrency = await loadEntityCurrency();
+        const observedAt = now().toISOString();
+        const result = await options.executor.transaction(async executor => {
+          const mirror = options.mirror.forExecutor(executor);
+          const receivableStore = receivables.forExecutor(executor);
+          const transactionOutcome = await applyQboTransactionObject({ mirror, scope, entity: objectType, stream: "transactions.journalentry", item: entity, observedAt, currency });
+          const receivableOutcome = await applyQboReceivableObject({ mirror, receivables: receivableStore, scope, entity: "JournalEntry", item: entity, observedAt, currency, entityCurrency });
+          return { transactionOutcome, receivableOutcome };
+        });
+        const version = typeof entity.SyncToken === "string" || typeof entity.SyncToken === "number" ? String(entity.SyncToken) : null;
+        const skipped = result.transactionOutcome.skipped ?? result.receivableOutcome.skipped;
+        const unsupported = result.transactionOutcome.unsupported > 0 || result.receivableOutcome.unsupported > 0;
+        return { status: skipped ? "stale" : unsupported ? "unsupported" : "applied", objectType, objectId, version };
+      }
       if (isQboReceivableType(objectType)) {
         const entityCurrency = await loadEntityCurrency();
         const outcome = await options.executor.transaction(executor => applyQboReceivableObject({ mirror: options.mirror.forExecutor(executor), receivables: receivables.forExecutor(executor), scope, entity: objectType, item: entity, observedAt: now().toISOString(), currency, entityCurrency }));

@@ -40,6 +40,7 @@ import {
 } from "../company/commands/runner";
 import { ConflictCommandError, ValidationCommandError } from "../company/commands/errors";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
+import { hasProjectCostDirection } from "./cost-direction";
 import {
   assertEntityPropertyUnit,
   assertProjectScope,
@@ -137,6 +138,67 @@ function sourceKey(source: FinancialSourceReference): string {
   return [financialSourceScopeKey({ provider: source.provider, organizationId: source.organizationId, legalEntityId: source.legalEntityId, environment: source.environment, realmId: source.realmId }), source.objectType, source.objectId, source.lineId ?? "*", source.version].join("\u0000");
 }
 
+/**
+ * Keep finance bindings on one QBO company per project. A native Project
+ * identity is an explicit fence: its source scope must still have a current
+ * verified realm binding. Legacy projects without that identity retain their
+ * existing behavior, but an unreleased binding still prevents a later bind to
+ * a different environment or realm while the project row is locked above.
+ */
+async function assertProjectQboBindingScope(context: CommandHandlerContext<unknown>, projectId: string, project: { readonly legalEntityId: string }, source: FinancialSourceReference): Promise<void> {
+  const sourceScope = `qbo:${source.environment}:${source.realmId}`;
+  const identities = await context.executor.query<{ source_scope: unknown; verified_environment: unknown; verified_realm_id: unknown }>(
+    `SELECT i.source_scope, b.environment AS verified_environment, b.realm_id AS verified_realm_id
+       FROM company_external_identities i
+       LEFT JOIN accounting_qbo_realm_bindings b
+         ON b.organization_id = i.organization_id
+        AND b.legal_entity_id = i.legal_entity_id
+        AND i.source_scope = 'qbo:' || b.environment || ':' || b.realm_id
+      WHERE i.organization_id = $1
+        AND i.legal_entity_id = $2
+        AND i.provider = 'qbo'
+        AND i.local_kind = 'project'
+        AND i.local_id = $3
+        AND i.record_kind = 'Project'`,
+    [context.envelope.scope.organizationId, project.legalEntityId, projectId],
+  );
+  if (identities.rows.length > 0) {
+    const verifiedMatch = identities.rows.some(row => String(row.source_scope) === sourceScope
+      && String(row.verified_environment) === source.environment
+      && String(row.verified_realm_id) === source.realmId);
+    if (!verifiedMatch) {
+      throw new ValidationCommandError("The QBO source scope does not match a verified native QuickBooks Project identity", { reason: "project_finance_qbo_scope_mismatch" });
+    }
+  }
+
+  const existing = await context.executor.query<{ environment: unknown; realm_id: unknown }>(
+    `SELECT DISTINCT environment, realm_id
+       FROM company_project_finance_bindings
+      WHERE organization_id = $1 AND project_id = $2 AND binding_status <> 'released'`,
+    [context.envelope.scope.organizationId, projectId],
+  );
+  if (existing.rows.some(row => String(row.environment) !== source.environment || String(row.realm_id) !== source.realmId)) {
+    throw new ValidationCommandError("This project already has an unreleased QBO binding in a different environment or realm", { reason: "project_finance_qbo_scope_mismatch" });
+  }
+  // A legacy project can have an active deal classification before its first
+  // finance binding. That classification still fixes the QBO company scope,
+  // so the reverse direction must enforce the same fence.
+  const existingDeal = await context.executor.query<{ environment: unknown; realm_id: unknown }>(
+    `SELECT DISTINCT source_environment AS environment, source_realm_id AS realm_id
+       FROM company_project_deal_ledger
+      WHERE organization_id = $1 AND project_id = $2
+        AND entry_kind IN ('cost', 'funding')
+        AND source_kind = 'qbo'
+        AND archived_at IS NULL
+        AND source_environment IS NOT NULL
+        AND source_realm_id IS NOT NULL`,
+    [context.envelope.scope.organizationId, projectId],
+  );
+  if (existingDeal.rows.some(row => String(row.environment) !== source.environment || String(row.realm_id) !== source.realmId)) {
+    throw new ValidationCommandError("This project already has an active deal classification in a different QBO environment or realm", { reason: "project_finance_qbo_scope_mismatch" });
+  }
+}
+
 async function verifyBindingSource(context: CommandHandlerContext<unknown>, sourceInput: FinancialSourceReference, allocatedCents: string, effectiveDate: string, expectedCurrency: string): Promise<ReturnType<typeof financialSourceLineResolutionSchema.parse>> {
   const finance = requireFinance(context);
   const source = financialSourceReferenceSchema.parse(sourceInput);
@@ -154,7 +216,7 @@ async function verifyBindingSource(context: CommandHandlerContext<unknown>, sour
   const resolved = financialSourceLineResolutionSchema.parse(line);
   if (sourceKey(resolved.source) !== sourceKey(source)) throw new ValidationCommandError("The QBO source line revision is stale", { reason: "project_finance_revision_mismatch" });
   if (resolved.postingState !== "posted" || resolved.postedOn === null || resolved.postedOn > effectiveDate) throw new ValidationCommandError("The QBO source line is not posted for this effective date", { reason: "project_finance_line_not_posted" });
-  if (resolved.flow !== "outgoing" || (resolved.lineRole !== "expense" && resolved.lineRole !== "payable")) throw new ValidationCommandError("The QBO source line is not an eligible project cost", { reason: "project_finance_line_ineligible" });
+  if (!hasProjectCostDirection(resolved)) throw new ValidationCommandError("The QBO source line is not an eligible project cost", { reason: "project_finance_line_ineligible" });
   if (resolved.currency !== expectedCurrency) throw new ValidationCommandError("The QBO source line currency does not match the project", { reason: "project_finance_currency_mismatch" });
   const costContext = await finance.costContext.readCostContext({
     scope: { provider: source.provider, organizationId: source.organizationId, legalEntityId: source.legalEntityId, environment: source.environment, realmId: source.realmId },
@@ -312,7 +374,8 @@ async function resolveDrawSourceEligibility(
     version: row.source_version,
   });
   const allocated = rowCents(row.allocated_cents, "draw_actual_eligible");
-  await verifyBindingSource(context, source, allocated, resolveEffectiveDate(context.envelope.effectiveDate), project.currency);
+  const line = await verifyBindingSource(context, source, allocated, resolveEffectiveDate(context.envelope.effectiveDate), project.currency);
+  if (line.direction !== "debit") throw new ValidationCommandError("A project cost refund cannot fund a draw request", { reason: "project_draw_refund_ineligible" });
   return allocated;
 }
 
@@ -875,6 +938,7 @@ async function handleFinanceBindingCreate(context: CommandHandlerContext<Project
   const project = await lockProject(context as unknown as CommandHandlerContext<unknown>, payload.projectId);
   const source = financialSourceReferenceSchema.parse(payload.source);
   if (source.organizationId !== context.envelope.scope.organizationId || source.legalEntityId !== project.legalEntityId) throw new ValidationCommandError("Finance source does not match the project entity", { reason: "project_finance_scope_mismatch" });
+  await assertProjectQboBindingScope(context as unknown as CommandHandlerContext<unknown>, payload.projectId, project, source);
   if (payload.commitmentId !== undefined && payload.commitmentId !== null) await assertCommitment(context as unknown as CommandHandlerContext<unknown>, payload.commitmentId, payload.projectId);
   if (payload.scopeItemId !== undefined && payload.scopeItemId !== null) await assertScopeItemForProject(context.executor, { organizationId: context.envelope.scope.organizationId, projectId: payload.projectId, scopeItemId: payload.scopeItemId });
   const line = await verifyBindingSource(context as unknown as CommandHandlerContext<unknown>, source, payload.allocatedCents, resolveEffectiveDate(context.envelope.effectiveDate), project.currency);
