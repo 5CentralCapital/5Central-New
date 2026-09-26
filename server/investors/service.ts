@@ -321,32 +321,57 @@ export class InvestorReadService {
     const propertyIds = scope.propertyId ? [scope.propertyId] : input.propertyIds?.length ? [...input.propertyIds] : null;
     const search = input.search?.trim() || null;
     const result = await this.executor.query<Record<string, unknown>>(
-      `SELECT DISTINCT d.id, d.file_name, lower(d.file_name) AS file_name_sort, d.state, d.type, d.property_id
-         FROM rent_ops_documents d
-        WHERE d.state = 'verified'
-          AND (
-            (d.property_id IS NOT NULL AND EXISTS (
+      `WITH documents AS (
+         SELECT d.id, d.file_name, lower(d.file_name) AS file_name_sort, d.state, d.type, d.property_id, 0 AS source_priority
+           FROM rent_ops_documents d
+          WHERE d.state = 'verified'
+            AND (
+              (d.property_id IS NOT NULL AND EXISTS (
+                SELECT 1 FROM company_property_entity_periods pep
+                 WHERE pep.organization_id=$1 AND pep.legal_entity_id=$2 AND pep.property_id=d.property_id
+                   AND pep.effective_from <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/New_York')::date
+                   AND (pep.effective_until IS NULL OR pep.effective_until > (CURRENT_TIMESTAMP AT TIME ZONE 'America/New_York')::date)
+              ))
+              OR EXISTS (
+                SELECT 1
+                  FROM company_investor_contract_documents cd
+                  JOIN company_investor_contracts c
+                    ON c.organization_id=cd.organization_id AND c.id=cd.contract_id
+                  JOIN company_investor_instruments i
+                    ON i.organization_id=c.organization_id AND i.id=c.instrument_id
+                 WHERE cd.organization_id=$1 AND cd.document_id=d.id
+                   AND i.legal_entity_id=$2 AND c.archived_at IS NULL AND i.archived_at IS NULL
+              )
+            )
+            AND ($3::varchar[] IS NULL OR d.property_id=ANY($3::varchar[]))
+            AND ($4::text IS NULL OR d.file_name ILIKE '%' || $4 || '%')
+            -- A bridged legacy row must not make an archived or cross-entity
+            -- company document visible through the compatibility branch.
+            AND NOT EXISTS (SELECT 1 FROM company_documents cd0 WHERE cd0.id::text=d.id::text)
+         UNION ALL
+         SELECT d.id::text, d.file_name, lower(d.file_name) AS file_name_sort, d.state, d.kind AS type, d.property_id, 1 AS source_priority
+           FROM company_documents d
+          WHERE d.organization_id=$1 AND d.legal_entity_id=$2
+            AND d.kind IN ('contract','loan','investor_agreement')
+            AND d.state='verified' AND d.archived_at IS NULL
+            AND (d.property_id IS NULL OR EXISTS (
               SELECT 1 FROM company_property_entity_periods pep
                WHERE pep.organization_id=$1 AND pep.legal_entity_id=$2 AND pep.property_id=d.property_id
                  AND pep.effective_from <= (CURRENT_TIMESTAMP AT TIME ZONE 'America/New_York')::date
                  AND (pep.effective_until IS NULL OR pep.effective_until > (CURRENT_TIMESTAMP AT TIME ZONE 'America/New_York')::date)
             ))
-            OR EXISTS (
-              SELECT 1
-                FROM company_investor_contract_documents cd
-                JOIN company_investor_contracts c
-                  ON c.organization_id=cd.organization_id AND c.id=cd.contract_id
-                JOIN company_investor_instruments i
-                  ON i.organization_id=c.organization_id AND i.id=c.instrument_id
-               WHERE cd.organization_id=$1 AND cd.document_id=d.id
-                 AND i.legal_entity_id=$2 AND c.archived_at IS NULL AND i.archived_at IS NULL
-            )
-          )
-          AND ($3::varchar[] IS NULL OR d.property_id=ANY($3::varchar[]))
-          AND ($4::text IS NULL OR d.file_name ILIKE '%' || $4 || '%')
-        ORDER BY file_name_sort, d.id
+            AND ($3::varchar[] IS NULL OR d.property_id=ANY($3::varchar[]) OR ($5::varchar IS NULL AND d.property_id IS NULL))
+            AND ($4::text IS NULL OR d.file_name ILIKE '%' || $4 || '%')
+       ), unique_documents AS (
+         SELECT DISTINCT ON (id) id, file_name, file_name_sort, state, type, property_id
+           FROM documents
+          ORDER BY id, source_priority DESC
+       )
+       SELECT id, file_name, file_name_sort, state, type, property_id
+         FROM unique_documents
+        ORDER BY file_name_sort, id
         LIMIT 500`,
-      [scope.organizationId, scope.legalEntityId, propertyIds, search],
+      [scope.organizationId, scope.legalEntityId, propertyIds, search, scope.propertyId ?? null],
     );
     return investorDocumentListResponseSchema.parse({ items: result.rows.map(row => investorDocumentOptionSchema.parse({ id: dbString(row, "id"), fileName: dbString(row, "file_name"), state: dbString(row, "state"), type: dbString(row, "type"), propertyId: row.property_id === null || row.property_id === undefined ? null : dbString(row, "property_id") })) });
   }
@@ -357,12 +382,22 @@ export class InvestorReadService {
     if (!this.options.sourceRead) return investorFinancialSourceResponseSchema.parse({ items: [], nextCursor: null });
     const limit = input.limit ?? 100;
     const cursor = decodeFinancialSourceCursor(input.cursor, input.from, input.through);
-    const realms = await this.executor.query<Record<string, unknown>>(`SELECT DISTINCT provider_environment,provider_realm_id FROM company_investor_party_mappings WHERE organization_id=$1 AND legal_entity_id=$2 AND archived_at IS NULL`, [scope.organizationId, scope.legalEntityId]);
+    // Realm discovery is independent of investor party mappings. The party
+    // editor needs this list before its first mapping exists, so use the
+    // authorized, active QBO connections for this company and legal entity.
+    const realms = await this.executor.query<Record<string, unknown>>(
+      `SELECT DISTINCT environment,realm_id
+         FROM accounting_qbo_connections
+        WHERE organization_id=$1 AND legal_entity_id=$2
+          AND status='active' AND revoked_at IS NULL
+        ORDER BY environment,realm_id`,
+      [scope.organizationId, scope.legalEntityId],
+    );
     if (!realms.rows.length) return investorFinancialSourceResponseSchema.parse({ items: [], nextCursor: null });
     const pageLimit = Math.max(1, Math.floor(limit / realms.rows.length));
     const pages = await Promise.all(realms.rows.map(row => {
-      const environment = dbString(row, "provider_environment") as "production" | "sandbox";
-      const realmId = dbString(row, "provider_realm_id");
+      const environment = dbString(row, "environment") as "production" | "sandbox";
+      const realmId = dbString(row, "realm_id");
       const key = `${environment}:${realmId}`;
       return this.options.sourceRead!.listTransactions({ scope: { provider: "qbo", organizationId: scope.organizationId, legalEntityId: scope.legalEntityId, environment, realmId }, from: input.from, through: input.through, limit: pageLimit, cursor: cursor?.realms[key] ?? undefined }).then(page => ({ key, page }));
     }));
@@ -572,6 +607,19 @@ export class InvestorReadService {
     if (accountIds.length === 0) return new Map();
     const paymentRows = await Promise.all(accountIds.map(async accountId => [accountId, await this.loadPayments(scope, { accountId })] as const));
     const paymentsByAccount = new Map(paymentRows);
+    const instrumentResult = await this.executor.query<Record<string, unknown>>(
+      `SELECT id,account_id,kind
+         FROM company_investor_instruments
+        WHERE organization_id=$1 AND account_id=ANY($2::uuid[]) AND archived_at IS NULL
+          AND ($3::uuid IS NULL OR legal_entity_id=$3)
+          AND ($4::varchar IS NULL OR EXISTS (
+            SELECT 1 FROM company_investor_instrument_properties ip
+             WHERE ip.organization_id=company_investor_instruments.organization_id
+               AND ip.instrument_id=company_investor_instruments.id AND ip.property_id=$4
+          ))`,
+      [scope.organizationId, accountIds, scope.legalEntityId ?? null, scope.propertyId ?? null],
+    );
+    const instrumentKinds = new Map(instrumentResult.rows.map(row => [dbString(row, "id"), dbString(row, "kind")] as const));
     const result = await this.executor.query<Record<string, unknown>>(
       `WITH currencies AS (SELECT DISTINCT account_id, currency FROM company_investor_instruments i WHERE organization_id=$1 AND account_id = ANY($2::uuid[]) AND archived_at IS NULL AND ($3::uuid IS NULL OR legal_entity_id=$3) AND ($4::varchar IS NULL OR EXISTS (SELECT 1 FROM company_investor_instrument_properties ip WHERE ip.organization_id=i.organization_id AND ip.instrument_id=i.id AND ip.property_id=$4)) )
        SELECT c.account_id, c.currency,
@@ -621,9 +669,18 @@ export class InvestorReadService {
       };
       const verifiedAmount = (kind: "contribution" | "return_of_capital"): bigint => payments.reduce((total, payment) => {
         const original = payment.reversesPaymentId === null ? null : paymentById.get(String(payment.reversesPaymentId));
-        const isTarget = payment.kind === kind || (payment.kind === "correction" && original?.kind === kind);
+        const targetKind = payment.kind === "correction" ? original?.kind : payment.kind;
+        const isDebt = instrumentKinds.get(String(payment.instrumentId)) === "private_loan" || instrumentKinds.get(String(payment.instrumentId)) === "member_loan";
+        const isTarget = kind === "contribution"
+          ? targetKind === "contribution"
+          : targetKind === "return_of_capital" || (isDebt && (targetKind === "principal" || targetKind === "balloon"));
+        const componentAmount = targetKind === "return_of_capital"
+          ? centsToBigInt(payment.amounts.returnOfCapitalCents)
+          : isDebt && (targetKind === "principal" || targetKind === "balloon")
+            ? centsToBigInt(payment.amounts.principalCents) + centsToBigInt(payment.amounts.balloonCents)
+            : BigInt(0);
         return isTarget && payment.currency === currency && (evidenceStatus(payment) === "qbo_posted" || evidenceStatus(payment) === "bank_settled")
-          ? total + centsToBigInt(payment.amountCents)
+          ? total + (kind === "return_of_capital" ? componentAmount : centsToBigInt(payment.amountCents))
           : total;
       }, BigInt(0));
       const candidates = (obligationsByAccountCurrency.get(`${accountId}:${currency}`) ?? []).filter(obligation => {

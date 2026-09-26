@@ -12,6 +12,7 @@ import {
   setForecastOverridePayloadSchema,
   updateForecastScenarioPayloadSchema,
   type ForecastCommandKind,
+  type ForecastSnapshotMeta,
 } from "../../shared/forecasting/contracts";
 import { FORECAST_MODEL_VERSION } from "../../shared/forecasting/result";
 import type { AuthenticatedPrincipal, CommandAuthorizationPolicy, TransportAttestation } from "../company/authorization";
@@ -77,6 +78,23 @@ function assertActive(scenario: ScenarioRow): void {
 function assertCompatible(assumptions: ForecastAssumptions, scenario: { startDate: string; currency: string }): void {
   if (assumptions.currency !== scenario.currency) throw new ValidationCommandError("Assumptions must use the scenario currency", { reason: "forecast_currency_mismatch" });
   if (assumptions.actualsCutoff >= scenario.startDate) throw new ValidationCommandError("The actuals cutoff must be before the forecast start date", { reason: "forecast_cutoff_after_start" });
+}
+
+/**
+ * A QBO report can contain exact cents and still be unsafe as an opening
+ * position: the configured account set may be incomplete, the aggregate may
+ * cover only some entities, the read may be stale, or the report may not have
+ * been independently reconciled.  Snapshot metadata records these facts so
+ * approval does not have to reopen provider data or infer them from amounts.
+ */
+export function qboOpeningApprovalIssue(snapshot: ForecastSnapshotMeta): string | null {
+  if (snapshot.qboOpeningCoverage === undefined || snapshot.qboOpeningCoverage === null) return null;
+  const issues: string[] = [];
+  if (snapshot.qboOpeningCoverage !== "complete") issues.push(`coverage ${snapshot.qboOpeningCoverage}`);
+  if (snapshot.qboOpeningMappingCoverage !== "complete") issues.push(`account mapping ${snapshot.qboOpeningMappingCoverage ?? "unknown"}`);
+  if (snapshot.qboOpeningReconciliation !== "reconciled") issues.push(`reconciliation ${snapshot.qboOpeningReconciliation ?? "unknown"}`);
+  if (snapshot.qboOpeningFreshness !== "live_read") issues.push(`freshness ${snapshot.qboOpeningFreshness ?? "unknown"}`);
+  return issues.length ? issues.join(", ") : null;
 }
 
 async function currentAssumptions(context: Context, scenario: ScenarioRow): Promise<{ assumptions: ForecastAssumptions; sha256: string }> {
@@ -181,11 +199,24 @@ const handlersFor = (runtime: ForecastRuntime): Readonly<Record<ForecastCommandK
     if (!snapshot.openingCashKnown && !payload.acknowledgeIncompleteOpening) {
       throw new ValidationCommandError("Opening cash is unknown, so balances are relative movements. Set opening cash or acknowledge the incomplete opening position with a reason", { reason: "forecast_opening_cash_unknown" });
     }
-    const note = !snapshot.openingCashKnown && payload.reason ? `Approved with unknown opening cash: ${payload.reason}` : null;
+    const qboIssue = qboOpeningApprovalIssue(snapshot);
+    if (qboIssue && !payload.acknowledgeIncompleteOpening) {
+      throw new ValidationCommandError(`The QBO opening position is incomplete (${qboIssue}). Complete the reviewed entity/account coverage and reconciliation, or acknowledge the incomplete opening position with a reason`, { reason: "forecast_qbo_opening_incomplete" });
+    }
+    const notes: string[] = [];
+    if (!snapshot.openingCashKnown && payload.reason) notes.push(`Approved with unknown opening cash: ${payload.reason}`);
+    if (qboIssue && payload.reason) notes.push(`Approved with incomplete QBO opening (${qboIssue}): ${payload.reason}`);
+    const note = notes.length ? notes.join("; ") : null;
     const result = saved(scenario.id, await forecastStore.updateScenario(context.executor, scenario, {
       state: "approved", approved_snapshot_id: snapshot.id, approved_by: context.principal.actorId, approved_at: new Date().toISOString(), approval_note: note,
     }));
-    return note ? { ...result, validationOutcomes: [...(result.validationOutcomes ?? []), { code: "forecast.opening_cash_acknowledged", severity: "warning" as const, message: note }] } : result;
+    const acknowledgements = [
+      ...(!snapshot.openingCashKnown ? [{ code: "forecast.opening_cash_acknowledged", message: `Approved with unknown opening cash: ${payload.reason}` }] : []),
+      ...(qboIssue ? [{ code: "forecast.qbo_opening_acknowledged", message: `Approved with incomplete QBO opening (${qboIssue}): ${payload.reason}` }] : []),
+    ];
+    return acknowledgements.length
+      ? { ...result, validationOutcomes: [...(result.validationOutcomes ?? []), ...acknowledgements.map(outcome => ({ ...outcome, severity: "warning" as const }))] }
+      : result;
   },
 
   async "forecast.assumptions.save"(context) {

@@ -19,7 +19,7 @@ import { createReviewCasePort, type ReviewCasePort } from '../review-cases/port'
 import { createIntakePort, type IntakePort } from '../intake/port';
 import { createCompanyDocumentsPort, type CompanyDocumentsPort } from '../company-documents/port';
 // lane-d-forecast
-import { createForecastingPort, type ForecastingPort } from '../forecasting/port';
+import { createForecastingPort, type ForecastingPort, type ForecastingPortOptions } from '../forecasting/port';
 import { createForecastReportingReadPort } from '../forecasting/reporting-port';
 import { createProjectInsightsPort, type ProjectInsightsPort } from '../projects/insights'; // lane-f
 
@@ -49,6 +49,7 @@ export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
   time?: TimeServicesOptions;
   // lane-c-review: verified private object store for company documents, MRA packets and review evidence.
   documentStorage?: ContentAddressedObjectStore;
+  forecasting?: ForecastingPortOptions;
 } = {}): CompanyServices {
   const accounting = createAccountingServices(executor, options.accounting);
   // lane-f: payroll links and work-order cost links reserve QBO lines through the shared mirror ledger.
@@ -74,7 +75,7 @@ export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
       return { source: mirror, allocations: mirror, costContext: mirror };
     },
   });
-  const reporting = createCompanyReportingPort(executor, accounting, { forecastPort: (transaction, principal) => createForecastReportingReadPort(transaction, { principal }) });
+  const reporting = createCompanyReportingPort(executor, accounting, { forecastPort: (transaction, principal) => createForecastReportingReadPort(transaction, { ...options.forecasting, principal }) });
   const workOrders = createWorkOrderPort(executor, { financeFactory: costFinanceFactory }); // lane-f
   // lane-f: project cost report, labor allocation and QBO line picker reads.
   const projectInsights = createProjectInsightsPort(executor, {
@@ -88,7 +89,7 @@ export function createCompanyServices(executor: RentOpsQueryExecutor, options: {
   const reviewCases = createReviewCasePort(executor, { documentStorage: options.documentStorage });
   const intake = createIntakePort(executor, { documentStorage: options.documentStorage });
   const documents = createCompanyDocumentsPort(executor, { documentStorage: options.documentStorage });
-  const forecasting = createForecastingPort(executor); // lane-d-forecast
+  const forecasting = createForecastingPort(executor, options.forecasting); // lane-d-forecast
   const properties = createCompanyPropertyPort(executor);
   const legalEntities = createCompanyLegalEntityPort(executor);
   return { executor, accounting, investors, projects, time, reporting, workOrders, properties, legalEntities, jobs, reviewCases, intake, documents, forecasting, projectInsights };

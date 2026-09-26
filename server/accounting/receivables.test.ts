@@ -403,3 +403,21 @@ test("provider customer balances convert exactly", () => {
   assert.equal(providerBalanceCents("12.345"), null);
   assert.equal(providerBalanceCents(undefined), null);
 });
+
+test("customer ledger uses accepted same-version observations without accepting material profile changes", async () => {
+  const h = await harness(baseStore());
+  try {
+    await h.sync.syncChanges();
+    const mirror = createQboAccountingMirrorStore(h.executor, () => new Date("2026-09-22T00:00:00Z"));
+    const observe = (body: QuickBooksJsonObject) => mirror.ingestNamedObject({ scope, objectType: "Customer", objectId: "58", version: "0", providerBody: body, providerUpdatedAt: T("20") });
+    await observe(customer("58", "1000.00"));
+    assert.equal((await h.ledger()).verification.providerBalanceCents, "100000");
+    await observe(customer("58", "1225.00"));
+    assert.equal((await h.ledger()).verification.providerBalanceCents, "122500");
+    const conflict = await observe(customer("58", "9999.00", { Taxable: true }));
+    assert.equal(conflict.conflict, true);
+    assert.equal((await h.ledger()).verification.providerBalanceCents, "122500");
+    const original = (await h.synthetic.db.query<{ provider_body: { Balance: string } }>("SELECT provider_body FROM accounting_qbo_source_objects WHERE object_type='Customer' AND object_id='58'" )).rows[0];
+    assert.equal(original.provider_body.Balance, "1225.00");
+  } finally { await h.close(); }
+});

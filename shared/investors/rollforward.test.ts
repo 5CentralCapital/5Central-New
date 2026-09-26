@@ -111,6 +111,21 @@ test("partial payment, reversal and unknown split keep principal honest", () => 
   assert.equal(rollforward.reconciliation, "matches");
 });
 
+test("as-of rollforwards exclude later payoffs and apply reversals at their own date", () => {
+  const funding = payment({ kind: "contribution", paymentOn: "2026-01-02", amounts: { principalCents: "100000" } });
+  const payoff = payment({ kind: "principal", paymentOn: "2026-02-10", amounts: { principalCents: "100000" } });
+  const reversal = payment({ kind: "correction", status: "reversed", paymentOn: "2026-03-05", reversesPaymentId: payoff.id, amounts: { principalCents: "-100000" }, amountCents: "-100000" });
+  const build = (asOf: string) => buildInstrumentRollforward({
+    instrumentKind: "private_loan", currency: "USD", effectiveFrom: "2026-01-01", maturityOn: null, asOf,
+    documentedFundedCents: null, manualOutstandingCents: null, guaranteedReturnCents: null,
+    payments: [funding, payoff, reversal], obligations: [], fromMonth: "2026-01-01", throughMonth: `${asOf.slice(0, 7)}-01`,
+  });
+
+  assert.equal(build("2026-01-31").derivedOutstandingCents, "100000", "a later payoff cannot rewrite the January snapshot");
+  assert.equal(build("2026-02-15").derivedOutstandingCents, "0", "the payoff applies once its date is inside the snapshot");
+  assert.equal(build("2026-03-15").derivedOutstandingCents, "100000", "the reversal restores the balance only after its own date");
+});
+
 test("derived outstanding that differs from the manual value is flagged, not overwritten", () => {
   const rollforward = buildInstrumentRollforward({
     instrumentKind: "private_loan", currency: "USD", effectiveFrom: "2026-01-01", maturityOn: null, asOf: "2026-06-01",

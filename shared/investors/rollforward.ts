@@ -316,19 +316,28 @@ const POSTED: ReadonlySet<InvestorPaymentStatus> = new Set<InvestorPaymentStatus
  */
 export function buildInstrumentRollforward(input: InstrumentRollforwardInput): InstrumentRollforward {
   const currency = currencyCodeSchema.parse(input.currency);
+  const asOf = isoDateSchema.parse(input.asOf);
   const fromMonth = monthSchema.parse(input.fromMonth);
   const throughMonth = monthSchema.parse(input.throughMonth);
   if (throughMonth < fromMonth) throw new RangeError("throughMonth must be on or after fromMonth");
   if (monthDistance(fromMonth, throughMonth) > 480) throw new RangeError("Rollforward range is limited to 480 months");
+  // Keep the complete history available for resolving reversal links, while
+  // applying the requested as-of cutoff to economic flows. A later payoff or
+  // correction must never rewrite an earlier balance snapshot.
   const byId = new Map(input.payments.map((payment) => [payment.id, payment]));
+  const paymentsAtAsOf = input.payments.filter((payment) => payment.paymentOn <= asOf);
   const monthly = new Map<string, Flows>();
   const before = emptyFlows();
   let allFlows = emptyFlows();
   let contributionCount = 0;
   let unverified = 0;
-  for (const payment of input.payments) {
+  for (const payment of paymentsAtAsOf) {
     if (payment.currency !== currency) continue;
     const original = payment.reversesPaymentId ? byId.get(payment.reversesPaymentId) : undefined;
+    // A correction cannot take effect before its original payment exists in
+    // the as-of view. This also keeps malformed or backdated reversal rows
+    // from creating a balance reduction for a future payment.
+    if (original && original.paymentOn > asOf) continue;
     const kind = original ? original.kind : payment.kind;
     const amounts = payment.amounts;
     const flows = emptyFlows();
@@ -349,7 +358,7 @@ export function buildInstrumentRollforward(input: InstrumentRollforwardInput): I
   const basis: InstrumentRollforward["basis"] = contributionCount > 0 ? "payments" : input.documentedFundedCents !== null ? "documented_funding" : "unknown";
   const documentedFunding = basis === "documented_funding" ? big(input.documentedFundedCents!) : ZERO;
   const fundingMonth = monthOf(input.effectiveFrom);
-  if (basis === "documented_funding") {
+  if (basis === "documented_funding" && input.effectiveFrom <= asOf) {
     if (fundingMonth < fromMonth) before.funded += documentedFunding;
     else if (fundingMonth <= throughMonth) { const flows = monthly.get(fundingMonth) ?? emptyFlows(); flows.funded += documentedFunding; monthly.set(fundingMonth, flows); }
     allFlows.funded += documentedFunding;

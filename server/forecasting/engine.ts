@@ -50,6 +50,7 @@ import {
 } from "../../shared/forecasting/result";
 import { balanceOn, buildLoanSchedule, type LoanSchedule } from "./debt";
 import { ZERO, allocate, applyBps, big, growByBps, maxBig, minBig, prorate, text } from "./money";
+import type { ForecastQboOpeningBalance, ForecastQboPropertyBookBalance } from "./source-port";
 
 export class ForecastInputError extends Error {
   constructor(readonly code: string, message: string, readonly path?: string) {
@@ -73,6 +74,10 @@ export interface ForecastSourceData {
   readonly items: readonly ForecastOpeningItem[];
   /** Outstanding principal of company debt records, keyed by company_investor_debt id. */
   readonly debtBalances: Readonly<Record<string, { readonly principalCents: string | null; readonly sourceIds: readonly string[] }>>;
+  /** Optional native QBO opening read retained for source provenance and later property mapping. */
+  readonly qboOpening?: ForecastQboOpeningBalance;
+  /** Property-level QBO balances remain separate from assumptions until an approved mapping chooses them. */
+  readonly propertyBookBalances?: Readonly<Record<string, ForecastQboPropertyBookBalance>>;
 }
 
 export interface ForecastEngineInput {

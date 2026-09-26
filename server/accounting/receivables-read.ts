@@ -114,9 +114,24 @@ export async function readCustomerLedger(executor: RentOpsQueryExecutor, query: 
   const parts = scopeParts(scope);
 
   const customer = (await executor.query<{ provider_body: Record<string, unknown> | null; provider_updated_at: unknown }>(
-    `SELECT provider_body, provider_updated_at FROM accounting_qbo_source_objects
-      WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND object_type='Customer' AND object_id=$5 AND deleted_at IS NULL
-      ORDER BY provider_updated_at DESC NULLS LAST, received_at DESC LIMIT 1`,
+    `SELECT COALESCE(ob.provider_body,o.provider_body) AS provider_body,
+            COALESCE(ob.provider_updated_at,o.provider_updated_at) AS provider_updated_at
+       FROM accounting_qbo_source_objects o
+       LEFT JOIN LATERAL (
+         SELECT n.provider_body,n.provider_updated_at
+           FROM accounting_qbo_named_observations n
+          WHERE n.organization_id=o.organization_id AND n.legal_entity_id=o.legal_entity_id
+            AND n.environment=o.environment AND n.realm_id=o.realm_id
+            AND n.object_type=o.object_type AND n.object_id=o.object_id AND n.object_version=o.object_version
+            AND n.material_conflict=false
+          ORDER BY n.observed_at DESC,n.observation_order DESC LIMIT 1
+       ) ob ON true
+      WHERE o.organization_id=$1 AND o.legal_entity_id=$2 AND o.environment=$3 AND o.realm_id=$4
+        AND o.object_type='Customer' AND o.object_id=$5 AND o.deleted_at IS NULL
+      ORDER BY CASE WHEN o.object_version ~ '^[0-9]+$' THEN 0 ELSE 1 END,
+               CASE WHEN o.object_version ~ '^[0-9]+$' THEN length(o.object_version) ELSE 0 END DESC,
+               CASE WHEN o.object_version ~ '^[0-9]+$' THEN o.object_version ELSE '' END DESC,
+               COALESCE(ob.provider_updated_at,o.provider_updated_at) DESC NULLS LAST,o.received_at DESC LIMIT 1`,
     [...parts, customerObjectId],
   )).rows[0];
   const body = customer?.provider_body && typeof customer.provider_body === "object" ? customer.provider_body : null;
