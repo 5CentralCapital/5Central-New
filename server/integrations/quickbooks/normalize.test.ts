@@ -41,6 +41,7 @@ test("normalizes provider Purchase, Bill, and BillPayment lines with exact cent 
 test("normalizes JournalEntry debit cost and credit refund lines with exact source identities", () => {
   const result = normalizeQboTransaction("JournalEntry", {
     Id: "2949", SyncToken: "0", TxnDate: "2026-09-08", CurrencyRef: { value: "USD" },
+    TotalAmt: 0,
     MetaData: { LastUpdatedTime: updated },
     Line: [
       { Id: "0", Amount: "1286.44", Description: "Inventory cost", DetailType: "JournalEntryLineDetail", JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "inventory-1" } } },
@@ -71,6 +72,29 @@ test("rejects an unbalanced JournalEntry instead of mirroring partial cost lines
   });
   assert.ok(result.unsupportedReasons.some(reason => /do not balance/.test(reason)));
   assert.equal(result.value?.lines.length, 2);
+});
+
+test("journal zero totals preserve long provider descriptions without hiding unbalanced lines", () => {
+  const description = "Synthetic journal explanation ".repeat(70);
+  const body = {
+    Id: "journal-long", SyncToken: "0", TxnDate: "2026-09-08", TotalAmt: 0,
+    CurrencyRef: { value: "USD" }, MetaData: { LastUpdatedTime: updated },
+    Line: [
+      { Id: "0", Amount: "100.00", Description: description, JournalEntryLineDetail: { PostingType: "Debit", AccountRef: { value: "expense-1" } } },
+      { Id: "1", Amount: "100.00", JournalEntryLineDetail: { PostingType: "Credit", AccountRef: { value: "bank-1" } } },
+    ],
+  };
+  const accepted = normalizeQboTransaction("JournalEntry", body);
+  assert.deepEqual(accepted.unsupportedReasons, []);
+  assert.equal(accepted.value?.lines[0]?.description, description.trim());
+  assert.equal(accepted.value?.providerBody, body);
+  for (const changed of [
+    { ...body, Line: [body.Line[0]!, { ...body.Line[1]!, Amount: "99.99" }] },
+    { ...body, TotalAmt: "200.00" },
+    { ...body, Line: [{ ...body.Line[0]!, Description: "x".repeat(4001) }, body.Line[1]!] },
+  ]) {
+    assert.ok(normalizeQboTransaction("JournalEntry", changed).unsupportedReasons.length > 0);
+  }
 });
 
 test("rejects sub-cent or unsafe provider amounts instead of rounding", () => {

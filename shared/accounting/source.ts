@@ -152,7 +152,7 @@ export const financialSourceLineResolutionSchema = z.object({
   transactionType: sourceObjectTypeSchema,
   accountObjectId: sourceObjectIdSchema.nullable(),
   counterpartyObjectId: sourceObjectIdSchema.nullable(),
-  description: z.string().trim().max(500).nullable(),
+  description: z.string().trim().max(4000).nullable(),
   postingState: financialPostingStateSchema,
   postedOn: isoDateSchema.nullable(),
   settlement: financialSettlementSchema,
