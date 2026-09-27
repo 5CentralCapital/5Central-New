@@ -349,9 +349,9 @@ function useProjectsGate(data: DashboardData) {
 
 function ProjectTotals({ data, metrics }: WidgetContext) {
   const { projects, gate } = useProjectsGate(data);
-  const deals = useDealReports(data, projects);
-  if (gate) return gate;
   const open = openProjects(projects) ?? [];
+  const deals = useDealReports(data, projects ? open : undefined);
+  if (gate) return gate;
   if (!open.length) return <Empty title="No open projects">Projects you add appear here with budgets and spend.</Empty>;
   const currencies = new Set(open.map(project => project.currency));
   const budgetValues = open.map(project => project.approvedBudgetCents);
@@ -361,7 +361,7 @@ function ProjectTotals({ data, metrics }: WidgetContext) {
   const spent = spentKnown ? sumCents(spentValues) : null;
   const spentPartial = spentKnown && open.some(project => project.postedActualCoverage === "partial");
   const draft = currencies.size <= 1 ? sumCents(open.map(project => project.draftCostCents)) : null;
-  const profits = deals.reports.filter(entry => entry.project.status !== "completed").map(entry => entry.report?.coverage.status === "complete" && entry.report.saleForecast.profitState === "complete" ? entry.report.saleForecast.projectedProfitCents : null);
+  const profits = deals.reports.map(entry => entry.report?.coverage.status === "complete" && entry.report.saleForecast.profitState === "complete" ? entry.report.saleForecast.projectedProfitCents : null);
   const flipCurrencies = new Set(deals.flips.map(project => project.currency));
   const profit = flipCurrencies.size <= 1 && !deals.incomplete && profits.every(value => value !== null) ? sumCents(profits) : null;
   const items: Stat[] = [
@@ -424,10 +424,11 @@ function Gantt({ data, metrics }: WidgetContext) {
 
 function ProjectBoard({ data, metrics }: WidgetContext) {
   const { organization, projects, gate } = useProjectsGate(data);
-  const deals = useDealReports(data, projects);
+  const open = openProjects(projects) ?? [];
+  const deals = useDealReports(data, projects ? open : undefined);
   if (gate) return gate;
   const profit = new Map(deals.reports.map(entry => [entry.project.id, entry.report && entry.report.coverage.status === "complete" && entry.report.saleForecast.profitState === "complete" ? entry.report.saleForecast : undefined] as const));
-  const rows: Row[] = (projects ?? []).filter(project => project.status !== "completed").map(project => ({
+  const rows: Row[] = open.map(project => ({
     id: project.id, project, name: project.name, propertyName: propertyNameFor(data, organization, project.propertyId), type: PROJECT_TYPE_LABEL[project.projectType], currency: project.currency, status: PROJECT_STATUS_LABEL[project.status],
     targetOn: project.targetOn, budget: project.approvedBudgetCents, spent: project.postedActualCents, coverage: project.postedActualCoverage, draft: project.draftCostCents,
     share: spentShare(project) ?? null, profit: profit.get(project.id)?.profitState === "complete" ? profit.get(project.id)?.projectedProfitCents ?? null : null, saleOn: profit.get(project.id)?.saleOn ?? null,
