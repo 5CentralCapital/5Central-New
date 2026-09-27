@@ -121,6 +121,24 @@ export function useDealReports(data: DashboardData, projects: readonly ProjectSu
   return { flips, omitted: allFlips.length - flips.length, incomplete: allFlips.length > flips.length || results.some(result => result.isError || !result.data), reports: flips.map((project, index) => ({ project, report: results[index]?.error ? undefined : results[index]?.data, error: results[index]?.error })), loading: !projects || results.some(result => result.isLoading) };
 }
 
+/**
+ * Whole-deal reports for every open project (flips and rehabs): the rehab lane
+ * carries budget and recorded spend even where QuickBooks actuals are not
+ * linked. Same cache entries as `useDealReports`.
+ */
+export function useOpenProjectDeals(data: DashboardData, projects: readonly ProjectSummary[] | undefined, limit = 12) {
+  const { organization } = useDashboardOrganization(data);
+  const open = openProjects(projects) ?? [];
+  const chosen = open.slice(0, limit);
+  const results = useQueries({ queries: chosen.map(project => ({
+    queryKey: ["rent-ops-workspace", "dashboard-deal", data.identity, organization?.id ?? "", project.id, project.recordRevision, data.filters.asOfDate],
+    queryFn: ({ signal }: { signal: AbortSignal }) => projectsApi.getDealCostReport!(organization!.id, project.id, { legalEntityId: project.legalEntityId, propertyId: project.propertyId }, signal),
+    enabled: Boolean(organization), ...MEDIUM,
+  })) });
+  const byId = new Map(chosen.map((project, index) => [project.id, results[index]?.error ? undefined : results[index]?.data] as const));
+  return { open, byId, loading: !projects || results.some(result => result.isLoading), incomplete: open.length > chosen.length || results.some(result => result.isError) };
+}
+
 /* ---------- QuickBooks ---------- */
 
 export function useQboHealth(data: DashboardData) {
@@ -289,20 +307,30 @@ export function approvedDashboardScenario(items: readonly ForecastScenarioSummar
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
 }
 
-/** Only an approved base scenario drives the company dashboard. */
+/**
+ * Without an approved base, the newest usable draft is shown so the weekly
+ * plan is not blank, and every widget labels it as a draft (`isDraft`).
+ */
+export function draftDashboardScenario(items: readonly ForecastScenarioSummary[]) {
+  return [...items].filter(item => item.state === "draft" && item.currentAssumptionVersion > 0)
+    .sort((a, b) => (a.kind === "base" ? 0 : 1) - (b.kind === "base" ? 0 : 1) || b.updatedAt.localeCompare(a.updatedAt))[0];
+}
+
+/** An approved base scenario drives the company dashboard; a draft is shown only as a labelled fallback. */
 export function useForecast(data: DashboardData) {
   const access = useDashboardOrganization(data);
   const { organization } = access;
   const organizationId = organization?.id ?? "";
   const listQuery = useQuery({ queryKey: ["forecasting", "list", organizationId], queryFn: ({ signal }) => forecastApi.list(organizationId, signal), enabled: Boolean(organization), staleTime: 60_000, retry: false, refetchOnWindowFocus: false });
   const list = { ...listQuery, error: access.error ?? (access.noAccess ? new Error("Select an accessible company to view its forecast.") : listQuery.error) ?? (listQuery.data?.nextCursor ? new Error("The scenario list is incomplete. Open Forecasting.") : null) };
-  const scenario = approvedDashboardScenario(list.data?.items ?? []);
+  const approved = approvedDashboardScenario(list.data?.items ?? []);
+  const scenario = approved ?? draftDashboardScenario(list.data?.items ?? []);
   const run = useQuery({
     queryKey: ["rent-ops-workspace", "dashboard-forecast", organizationId, scenario?.id ?? "", scenario?.currentAssumptionVersion ?? 0],
     queryFn: ({ signal }) => forecastApi.preview(organizationId, scenario!.id, { assumptionVersion: scenario!.currentAssumptionVersion }, signal),
     enabled: Boolean(organization && scenario), ...SLOW,
   });
-  return { asOfDate: data.filters.asOfDate, organization, list, scenario, run, result: run.data?.result, loading: access.loading || list.isLoading || (Boolean(scenario) && run.isLoading), none: !!list.data && !scenario };
+  return { asOfDate: data.filters.asOfDate, organization, list, scenario, isDraft: Boolean(scenario && !approved), run, result: run.data?.result, loading: access.loading || list.isLoading || (Boolean(scenario) && run.isLoading), none: !!list.data && !scenario };
 }
 
 /* ---------- rental reports the base dashboard does not load ---------- */

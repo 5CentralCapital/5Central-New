@@ -150,8 +150,8 @@ test("every widget renders while its data is still loading", () => {
 
 test("company widgets show real figures from the company reads", () => {
   const data = sampleData();
-  assert.match(render("proj-board", "F6", data), /115th St flip[\s\S]*\$52,000/);
-  assert.match(render("proj-kpis", "W", data), /Approved budgets<\/span><strong>Unknown[\s\S]*Posted spend<\/span><strong>Unknown/);
+  assert.match(render("proj-board", "F6", data), /115th St flip[\s\S]*Sale<\/span><b[^>]*>\$425K[\s\S]*Profit<\/span><b[^>]*>\$52K/);
+  assert.match(render("proj-kpis", "W", data), /Projected sales<\/span><b[^>]*>\$425K[\s\S]*Projected flip profit<\/span><b[^>]*>\$52K[\s\S]*Rehab spent/);
   assert.match(render("cashflow-grid", "F6", data), /Tenant rent[\s\S]*Ending cash/);
   assert.match(render("milestones", "L", data), /Paint exterior[\s\S]*Cameryn Worden payment|Cameryn Worden payment[\s\S]*Paint exterior/);
   assert.match(render("debt-maturities", "L", data), /Bridge loan/);

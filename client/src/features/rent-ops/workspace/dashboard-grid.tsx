@@ -13,7 +13,7 @@ import { DASHBOARD_PRESETS } from "./dashboard-presets";
 import "./dashboard-grid.css";
 
 const DEFAULT_PRESET = "Command";
-const HEADER = 44, PAD_X = 36, PAD_Y = 26;
+const HEADER = 34, PAD_X = 40, PAD_Y = 26;
 
 // v2: the widget suite and the new Command default replace layouts saved before it.
 const storageKey = (identity: string) => `rent-ops-dashboard-layout:v2:${identity || "anonymous"}`;
@@ -223,7 +223,7 @@ function Widget({ widget, data, companyWidgetPlaced, metrics, rect, editing, dra
   return <ContextMenu.Root modal={false}>
     <ContextMenu.Trigger asChild>
       <section className={`ops-widget rmd-panel${widget.bare ? " is-bare" : ""}${widget.scrolls ? " is-scrolling" : ""}${dragging ? " is-dragging" : ""}`} data-widget={widget.id} data-size={metrics.size} aria-label={widget.name} style={pixelStyle(rect)}>
-        {!widget.bare && <header className="rmd-panel-header ops-widget-head" onPointerDown={onMove}><h2>{widget.name}</h2>{open && !editing && <button type="button" onClick={open} title={`Open ${widget.name}`} aria-label={`Open ${widget.name}`}><ArrowUpRight size={13} /></button>}</header>}
+        {!widget.bare && <header className="rmd-panel-header ops-widget-head" onPointerDown={onMove}><i className="ops-widget-dot" data-category={widget.category} aria-hidden="true" /><h2>{widget.name}</h2>{open && !editing && <button type="button" onClick={open} title={`Open ${widget.name}`} aria-label={`Open ${widget.name}`}><ArrowUpRight size={13} /></button>}</header>}
         {widget.bare && editing && <div className="ops-widget-grab" onPointerDown={onMove} aria-hidden="true">{widget.name}</div>}
         <div className="ops-widget-body">{body}</div>
         {editing && <><button type="button" className="ops-widget-remove" aria-label={`Remove ${widget.name}`} onClick={onRemove}><Minus size={14} aria-hidden="true" /></button><i className="ops-widget-resize" title="Resize" onPointerDown={onResize} /></>}

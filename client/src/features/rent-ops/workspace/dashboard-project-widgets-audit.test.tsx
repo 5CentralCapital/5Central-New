@@ -146,10 +146,11 @@ test("project budget widgets keep missing budgets and spend unknown", () => {
 
   const totalsId = [...PROJECT_WIDGETS, ...OVERVIEW_WIDGETS].find(entry => entry.name === "Project totals")?.id;
   assert.ok(totalsId, "project totals widget exists");
-  const totals = renderProjectWidget(totalsId, [project()]);
-  assert.match(totals, /Approved budgets.*Unknown/);
-  assert.match(totals, /Posted spend.*Not linked/);
-  assert.doesNotMatch(totals, /Approved budgets.*\$0/);
+  const totals = renderProjectWidget(totalsId, [project()], [project()]);
+  // Missing budgets and spend say what is missing; they never read as $0.
+  assert.match(totals, /Rehab spent.*Not recorded/);
+  assert.match(totals, /no rehab budgets set in Projects/);
+  assert.doesNotMatch(totals, /\$0 budget|Rehab spent<\/span><b[^>]*>\$0/);
 });
 
 test("budget table marks partial spend as a lower bound and leaves Left unknown", () => {
