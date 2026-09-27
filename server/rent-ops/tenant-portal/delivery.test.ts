@@ -14,6 +14,20 @@ test("tenant email is opt-in and uses distinct issuance keys without exposing se
  assert.doesNotMatch(String(requests[0].body),/synthetic-secret/);
 });
 
+test("explicitly disabled tenant email sends no portal access mail through Gmail or webhook", async () => {
+ let calls=0;
+ const fetchImpl:typeof fetch=async()=>{calls++;return new Response("",{status:202});};
+ const input={issuanceId:"disabled-issue",accountId:"account",email:"resident@example.test",token:"opaque",expiresAt:"2026-09-08T00:00:00Z",purpose:"invitation" as const};
+ const common={RENT_OPS_EMAIL_ALLOWED_RECIPIENTS:"*,invalid recipient",RENT_OPS_TENANT_EMAIL_ENABLED:"false",RENT_OPS_PUBLIC_APP_URL:"https://portal.example.test"};
+ const gmail=createTenantAccessNotifier({...common,RENT_OPS_TENANT_EMAIL_PROVIDER:"gmail"},fetchImpl);
+ const webhook=createTenantAccessNotifier({...common,RENT_OPS_MAGIC_LINK_WEBHOOK_URL:"https://delivery.example.test"},fetchImpl);
+ assert.equal(gmail,undefined);
+ assert.equal(webhook,undefined);
+ if(gmail) await gmail(input);
+ if(webhook) await webhook(input);
+ assert.equal(calls,0);
+});
+
 test("recovery preserves working credentials; failure clears only its own token; reset is one-use",async()=>{
  const store=new InMemoryTenantAccountStore(); const now="2026-09-07T00:00:00Z",expires="2026-09-08T00:00:00Z";
  await store.create({id:"a",email:"a@example.test",personId:"p",tenancyId:"t",tokenHash:"first",expiresAt:expires,now});

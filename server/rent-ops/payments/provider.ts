@@ -1,7 +1,17 @@
 import Stripe from 'stripe';
 import type { ProcessorEvent, TenantPayment } from './model';
 export interface ProviderReconciliation { state: 'paid' | 'terminal_unpaid' | 'processing' | 'unknown'; event?: ProcessorEvent }
-export interface PaymentProvider { live: boolean; createCheckout(payment: TenantPayment): Promise<{id:string;url:string;paymentIntentId?:string}>; verify(body: Buffer, signature: string): ProcessorEvent | Promise<ProcessorEvent>; reconcile?(payment: TenantPayment): Promise<ProviderReconciliation> }
+export type StripeTenantPaymentMethod = 'card' | 'us_bank_account';
+export interface PaymentProvider { live: boolean; paymentMethodTypes?: readonly StripeTenantPaymentMethod[]; createCheckout(payment: TenantPayment): Promise<{id:string;url:string;paymentIntentId?:string}>; verify(body: Buffer, signature: string): ProcessorEvent | Promise<ProcessorEvent>; reconcile?(payment: TenantPayment): Promise<ProviderReconciliation> }
+const DEFAULT_STRIPE_TENANT_PAYMENT_METHODS: readonly StripeTenantPaymentMethod[] = ['card', 'us_bank_account'];
+function configuredStripeTenantPaymentMethods(value: string | undefined): readonly StripeTenantPaymentMethod[] | undefined {
+  if (value === undefined) return DEFAULT_STRIPE_TENANT_PAYMENT_METHODS;
+  if (!value.trim()) return undefined;
+  const selected = value.split(',').map(method => method.trim());
+  const supported = new Set<StripeTenantPaymentMethod>(['card', 'us_bank_account']);
+  if (selected.some(method => !supported.has(method as StripeTenantPaymentMethod)) || new Set(selected).size !== selected.length) return undefined;
+  return DEFAULT_STRIPE_TENANT_PAYMENT_METHODS.filter(method => selected.includes(method));
+}
 const id = (value: unknown): string | undefined => typeof value === 'string' ? value : value && typeof value === 'object' && 'id' in value ? String(value.id) : undefined;
 export function normalizeStripeEvent(event: Stripe.Event): ProcessorEvent {
   const o = event.data.object as unknown as Record<string, any>;
@@ -30,6 +40,9 @@ export function normalizeStripeEvent(event: Stripe.Event): ProcessorEvent {
 export function stripeProvider(env: NodeJS.ProcessEnv, stripeClient?: Stripe): PaymentProvider | undefined {
   const key=env.STRIPE_SECRET_KEY, secret=env.STRIPE_WEBHOOK_SECRET, origin=env.TENANT_PORTAL_ORIGIN || env.RENT_OPS_PUBLIC_APP_URL;
   if(!key || !/^sk_(test|live)_/.test(key) || !secret?.startsWith('whsec_') || !origin) return;
+  const paymentMethodTypes = configuredStripeTenantPaymentMethods(env.RENT_OPS_STRIPE_PAYMENT_METHODS);
+  if (!paymentMethodTypes?.length) return;
+  const selectedPaymentMethodTypes = Object.freeze([...paymentMethodTypes]);
   let url:URL;try{url=new URL(origin);}catch{return;}
   if(url.username || url.password) return; if(url.protocol!=='https:' && !(env.NODE_ENV!=='production' && ['localhost','127.0.0.1'].includes(url.hostname))) return;
   const stripe=stripeClient ?? new Stripe(key);
@@ -58,8 +71,8 @@ export function stripeProvider(env: NodeJS.ProcessEnv, stripeClient?: Stripe): P
     if (intent.status === 'processing') return { state: 'processing', event: reconciliationEvent(payment, intent as unknown as Record<string, any>, 'processing', 'payment_intent.processing', ids) };
     return { state: 'unknown' };
   };
-  return {live:key.startsWith('sk_live_'), async createCheckout(payment) {
-    const session=await stripe.checkout.sessions.create({mode:'payment',payment_method_types:['card','us_bank_account'],client_reference_id:payment.id,metadata:{tenantPaymentId:payment.id},payment_intent_data:{metadata:{tenantPaymentId:payment.id}},line_items:[{quantity:1,price_data:{currency:'usd',unit_amount:payment.amountCents,product_data:{name:'Tenant account payment'}}}],success_url:`${url.origin}/tenant?payment=returned`,cancel_url:`${url.origin}/tenant?payment=cancelled`,expires_at:Math.floor(new Date(payment.expiresAt).getTime()/1000)}, {idempotencyKey:payment.id});
+  return {live:key.startsWith('sk_live_'), paymentMethodTypes:selectedPaymentMethodTypes, async createCheckout(payment) {
+    const session=await stripe.checkout.sessions.create({mode:'payment',payment_method_types:[...selectedPaymentMethodTypes],client_reference_id:payment.id,metadata:{tenantPaymentId:payment.id},payment_intent_data:{metadata:{tenantPaymentId:payment.id}},line_items:[{quantity:1,price_data:{currency:'usd',unit_amount:payment.amountCents,product_data:{name:'Tenant account payment'}}}],success_url:`${url.origin}/tenant?payment=returned`,cancel_url:`${url.origin}/tenant?payment=cancelled`,expires_at:Math.floor(new Date(payment.expiresAt).getTime()/1000)}, {idempotencyKey:payment.id});
     if(!session.url) throw new Error('checkout_url_missing'); return {id:session.id,url:session.url,paymentIntentId:id(session.payment_intent)};
   }, async verify(body,signature) {const event=normalizeStripeEvent(stripe.webhooks.constructEvent(body,signature,secret)); if(event.state==='adjustment' && !event.paymentId && event.paymentIntentId) {const intent=await stripe.paymentIntents.retrieve(event.paymentIntentId);event.paymentId=intent.metadata.tenantPaymentId;}return event;}, async reconcile(payment) {
     try {

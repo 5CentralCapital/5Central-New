@@ -107,7 +107,7 @@ async function harness(store: Store) {
   const sync = createQboProviderSync({ executor, client: fakeClient(store, queries, cdc), scope, mirror, capabilityStore: new PostgresQuickBooksCapabilityStore(executor), now });
   await sync.bootstrapRead();
   const ledger = (customerObjectId = "58", extra: { asOf?: string; limit?: number; cursor?: string } = {}) => readCustomerLedger(executor, { scope: sourceScope, customerObjectId, today: "2026-09-21", ...extra });
-  return { synthetic, executor, sync, queries, cdc, ledger, advance: (ms: number) => { current = new Date(current.getTime() + ms); }, close: () => synthetic.close() };
+  return { synthetic, executor, mirror, sync, queries, cdc, ledger, advance: (ms: number) => { current = new Date(current.getTime() + ms); }, close: () => synthetic.close() };
 }
 
 test("a full replay mirrors customers and receivables and the ledger ties to QuickBooks' customer balance", async () => {
@@ -139,6 +139,86 @@ test("a full replay mirrors customers and receivables and the ledger ties to Qui
     // Another customer's ledger is separate and empty, not borrowed.
     const other = await h.ledger("59");
     assert.deepEqual([other.entries.length, other.totals.endingBalanceCents, other.verification.state], [0, "0", "verified"]);
+  } finally {
+    await h.close();
+  }
+});
+
+test("same-token source conflicts stay quarantined while independent customers and invoices sync", async () => {
+  const store = baseStore();
+  store.Customer = [customer("58", "100.00"), customer("59", "50.00")];
+  store.Invoice = [invoice("130", 100, 100), invoice("131", 50, 50, { customer: "59" })];
+  store.Payment = [];
+  store.CreditMemo = [];
+  store.JournalEntry = [];
+  const h = await harness(store);
+  try {
+    const initial = await h.sync.catchUp({ fullReplay: true });
+    assert.equal(initial.status, "complete");
+
+    // QBO returns materially different invoice and customer data without
+    // changing the invoice SyncToken. That invoice must remain held while the
+    // customer profile update and a new invoice continue through the replay.
+    store.Invoice[0] = invoice("130", 110, 110);
+    store.Invoice.push(invoice("132", 20, 20, { customer: "59", updated: T("11") }));
+    store.Customer[1] = customer("59", "70.00", {
+      SyncToken: "1",
+      DisplayName: "Synthetic Tenant 59 updated",
+      MetaData: { LastUpdatedTime: T("21") },
+    });
+
+    const held = await h.sync.catchUp({ fullReplay: true });
+    const invoiceStream = held.streams.find(item => item.stream === "receivables.invoice")!;
+    const customerStream = held.streams.find(item => item.stream === "customers")!;
+    assert.equal(held.status, "partial");
+    assert.equal(invoiceStream.result.status, "complete", "the conflicted invoice is isolated from its stream transaction");
+    assert.equal(invoiceStream.unsupportedCount, 1);
+    assert.equal(invoiceStream.openExceptionCount, 1);
+    assert.equal(invoiceStream.coverageStatus, "partial");
+    assert.equal(customerStream.result.status, "complete");
+    assert.equal(customerStream.coverageStatus, "complete");
+
+    const openExceptions = await h.mirror.listOpenSyncExceptions(scope, "receivables.invoice");
+    assert.deepEqual(openExceptions.map(item => [item.objectType, item.objectId, item.version]), [["Invoice", "130", "0"]]);
+    const exceptions = await h.synthetic.db.query<{ object_type: string; object_id: string; object_version: string | null; reasons: unknown }>(
+      "SELECT object_type, object_id, object_version, reasons FROM accounting_qbo_sync_exceptions WHERE stream='receivables.invoice' AND resolved_at IS NULL",
+    );
+    assert.deepEqual(exceptions.rows.map(row => [row.object_type, row.object_id, row.object_version]), [["Invoice", "130", "0"]]);
+    const reasonText = JSON.stringify(exceptions.rows[0]?.reasons);
+    assert.match(reasonText, /source revision conflict was isolated/);
+    assert.doesNotMatch(reasonText, /110|Synthetic Tenant|Balance/);
+
+    const source = await h.synthetic.db.query<{ provider_body: Record<string, unknown> }>(
+      "SELECT provider_body FROM accounting_qbo_source_objects WHERE object_type='Invoice' AND object_id='130' AND object_version='0'",
+    );
+    assert.equal(source.rows.length, 1, "same-token conflict does not replace or duplicate immutable source data");
+    assert.equal(source.rows[0]!.provider_body.TotalAmt, 100);
+
+    const affected = await h.ledger("58");
+    assert.equal(affected.coverage.status, "partial");
+    assert.equal(affected.verification.state, "unverified");
+    assert.equal(affected.entries.find(entry => entry.objectId === "130")?.amountCents, "10000", "the original mirrored amount remains visible only with partial coverage");
+
+    const other = await h.ledger("59");
+    assert.equal(other.customer.displayName, "Synthetic Tenant 59 updated");
+    assert.ok(other.entries.some(entry => entry.objectId === "131"));
+    assert.ok(other.entries.some(entry => entry.objectId === "132"), "a new independent invoice syncs past the held object");
+
+    // Replaying the same conflicting body leaves the exception open. A newer
+    // provider revision resolves it through the established retry path.
+    const repeated = await h.sync.catchUp({ fullReplay: true });
+    assert.equal(repeated.status, "partial");
+    assert.equal(repeated.streams.find(item => item.stream === "receivables.invoice")?.openExceptionCount, 1);
+    store.Invoice[0] = invoice("130", 110, 110, { token: "1", updated: T("22") });
+    store.Customer[0] = customer("58", "110.00", {
+      SyncToken: "1",
+      MetaData: { LastUpdatedTime: T("22") },
+    });
+    const recovered = await h.sync.catchUp({ fullReplay: true });
+    assert.equal(recovered.status, "complete");
+    assert.deepEqual(await h.mirror.listOpenSyncExceptions(scope, "receivables.invoice"), []);
+    const verified = await h.ledger("58");
+    assert.equal(verified.verification.state, "verified");
   } finally {
     await h.close();
   }
@@ -269,6 +349,9 @@ test("a same-token receivable recovers after its prerequisite account becomes av
     const unsupported = await h.sync.applyObject({ objectType: "JournalEntry", objectId: "92", operation: "updated" });
     assert.equal(unsupported.status, "unsupported");
     assert.equal((await h.ledger()).entries.some(entry => entry.objectId === "92"), false);
+    const heldLedger = await h.ledger();
+    assert.equal(heldLedger.coverage.status, "partial", "the direct object hold is durable before a later catch-up");
+    assert.notEqual(heldLedger.verification.state, "verified", "a ledger with an unresolved object hold cannot be presented as verified");
 
     // Once the missing account is mirrored, the exact same SyncToken can be
     // normalized. Its append-only effects are inserted once and the current

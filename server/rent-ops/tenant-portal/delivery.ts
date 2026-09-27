@@ -12,6 +12,7 @@ export interface TenantAccessDelivery {
 export type TenantAccessNotifier = (input: TenantAccessDelivery) => Promise<void>;
 /** Acceptance means the receiver accepted responsibility, not mailbox delivery. */
 export function createTenantAccessNotifier(env: Record<string,string|undefined> = process.env, fetchImpl: typeof fetch = fetch): TenantAccessNotifier | undefined {
+  if (env.RENT_OPS_TENANT_EMAIL_ENABLED === "false") return undefined;
   const recipient = createEmailRecipientPolicy(env.RENT_OPS_EMAIL_ALLOWED_RECIPIENTS);
   if (env.RENT_OPS_TENANT_EMAIL_ENABLED !== "true") return undefined;
   if (env.RENT_OPS_TENANT_EMAIL_PROVIDER === "replit-gmail") {

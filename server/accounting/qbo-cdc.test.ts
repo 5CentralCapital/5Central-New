@@ -395,10 +395,132 @@ test("re-reading an unchanged revision after a rename or a posting keeps the fir
     assert.equal(replay.anchored, true);
     assert.equal((await h.mirror.resolveLine({ scope: sourceScope, objectType: "Bill", objectId: "40", lineId: "1" }))?.amountCents, "10000");
 
-    // A real change under the same SyncToken is still refused.
-    store.Bill = [{ ...store.Bill[0]!, TotalAmt: 999 } as QuickBooksJsonObject];
+    // A real change under the same SyncToken stays held without rolling back
+    // the independent Bill in the same full-replay stream.
+    store.Bill = [
+      { ...store.Bill[0]!, TotalAmt: 999 } as QuickBooksJsonObject,
+      bill("41", "0", "2026-09-11T10:00:00Z", 200),
+    ];
     const changed = await h.sync.syncChanges({ forceFullReplay: true });
-    assert.equal(changed.status, "failed");
+    assert.equal(changed.status, "partial");
+    assert.equal(changed.anchored, true);
+    assert.deepEqual((await h.mirror.listOpenSyncExceptions(scope, "transactions.bill")).map(item => [item.objectType, item.objectId, item.version]), [["Bill", "40", "0"]]);
+    assert.equal((await h.mirror.resolveLine({ scope: sourceScope, objectType: "Bill", objectId: "40", lineId: "1" }))?.amountCents, "10000", "the original body and amount remain unchanged");
+    assert.equal((await h.mirror.resolveLine({ scope: sourceScope, objectType: "Bill", objectId: "41", lineId: "1" }))?.amountCents, "20000", "independent source objects continue syncing");
+  } finally {
+    await h.close();
+  }
+});
+
+test("CDC isolates a same-token source conflict, advances independent objects and keeps stream coverage partial", async () => {
+  const account = { Id: "7", SyncToken: "0", Name: "Electric", AccountType: "Expense", MetaData: { LastUpdatedTime: "2026-09-01T00:00:00Z" } };
+  const store: Store = { Bill: [bill("60", "0", "2026-09-10T10:00:00Z")], Account: [account as QuickBooksJsonObject] };
+  const h = await harness(store, "2026-09-20T00:00:00Z");
+  try {
+    assert.equal((await h.sync.syncChanges()).status, "complete");
+    const original = bill("60", "0", "2026-09-10T10:00:00Z", 999);
+    const independent = bill("61", "0", "2026-09-11T10:00:00Z", 150);
+    h.cdc.queue.push(cdcResponse({ Bill: [original, independent] }, "2026-09-20T00:05:00Z"));
+
+    const result = await h.sync.syncChanges();
+    assert.equal(result.mode, "cdc");
+    assert.equal(result.status, "partial");
+    assert.equal(result.unsupportedCount, 1);
+    assert.equal(result.appliedCount, 1);
+    assert.deepEqual((await h.mirror.listOpenSyncExceptions(scope, "transactions.bill")).map(item => [item.objectType, item.objectId, item.version]), [["Bill", "60", "0"]]);
+    assert.equal((await h.mirror.readCoverage(sourceScope, "transactions.bill")).status, "partial");
+    assert.equal((await h.mirror.resolveLine({ scope: sourceScope, objectType: "Bill", objectId: "60", lineId: "1" }))?.amountCents, "10000");
+    assert.equal((await h.mirror.resolveLine({ scope: sourceScope, objectType: "Bill", objectId: "61", lineId: "1" }))?.amountCents, "15000");
+  } finally {
+    await h.close();
+  }
+});
+
+test("object webhooks persist partial coverage for a source conflict before the next independent object", async () => {
+  const account = { Id: "7", SyncToken: "0", Name: "Electric", AccountType: "Expense", MetaData: { LastUpdatedTime: "2026-09-01T00:00:00Z" } };
+  const store: Store = { Bill: [bill("70", "0", "2026-09-10T10:00:00Z"), bill("71", "0", "2026-09-10T10:00:00Z")], Account: [account as QuickBooksJsonObject] };
+  const h = await harness(store, "2026-09-20T00:00:00Z");
+  try {
+    assert.equal((await h.sync.syncChanges()).status, "complete");
+    store.Bill = [
+      bill("70", "0", "2026-09-10T10:00:00Z", 999),
+      bill("71", "0", "2026-09-10T10:00:00Z", 999),
+      bill("72", "0", "2026-09-11T10:00:00Z", 150),
+    ];
+
+    const held = await h.sync.applyObject({ objectType: "Bill", objectId: "70", operation: "updated" });
+    assert.equal(held.status, "unsupported");
+    assert.equal((await h.sync.applyObject({ objectType: "Bill", objectId: "71", operation: "updated" })).status, "unsupported");
+    const coverage = await h.synthetic.db.query<{ status: string; reason: string | null }>(
+      "SELECT status, reason FROM accounting_qbo_coverage WHERE stream='transactions.bill'",
+    );
+    assert.equal(coverage.rows[0]?.status, "partial", "the webhook writes partial coverage in the same transaction as the exception");
+    assert.match(coverage.rows[0]?.reason ?? "", /unresolved mirror exceptions/);
+    assert.deepEqual((await h.mirror.listOpenSyncExceptions(scope, "transactions.bill")).map(item => [item.objectType, item.objectId, item.version]), [["Bill", "70", "0"], ["Bill", "71", "0"]]);
+
+    const next = await h.sync.applyObject({ objectType: "Bill", objectId: "72", operation: "created" });
+    assert.equal(next.status, "applied");
+    assert.equal((await h.mirror.resolveLine({ scope: sourceScope, objectType: "Bill", objectId: "72", lineId: "1" }))?.amountCents, "15000");
+    assert.equal((await h.mirror.readCoverage(sourceScope, "transactions.bill")).status, "partial", "the later object does not clear the unresolved hold");
+
+    store.Bill[0] = bill("70", "1", "2026-09-20T00:01:00Z", 110);
+    assert.equal((await h.sync.applyObject({ objectType: "Bill", objectId: "70", operation: "updated" })).status, "applied");
+    assert.equal((await h.mirror.listOpenSyncExceptions(scope, "transactions.bill")).length, 1, "another held object still keeps the stream partial");
+    assert.equal((await h.mirror.readCoverage(sourceScope, "transactions.bill")).status, "partial");
+
+    store.Bill[1] = bill("71", "1", "2026-09-20T00:02:00Z", 120);
+    assert.equal((await h.sync.applyObject({ objectType: "Bill", objectId: "71", operation: "updated" })).status, "applied");
+    assert.deepEqual(await h.mirror.listOpenSyncExceptions(scope, "transactions.bill"), []);
+    assert.equal((await h.mirror.readCoverage(sourceScope, "transactions.bill")).status, "complete", "accepted retries restore only the still-anchored stream after every hold resolves");
+  } finally {
+    await h.close();
+  }
+});
+
+test("an unanchored object webhook retry cannot claim complete coverage", async () => {
+  const account = { Id: "7", SyncToken: "0", Name: "Electric", AccountType: "Expense", MetaData: { LastUpdatedTime: "2026-09-01T00:00:00Z" } };
+  const store: Store = { Bill: [bill("73", "0", "2026-09-10T10:00:00Z")], Account: [account as QuickBooksJsonObject] };
+  const h = await harness(store, "2026-09-20T00:00:00Z");
+  try {
+    assert.equal((await h.sync.applyObject({ objectType: "Bill", objectId: "73", operation: "created" })).status, "applied");
+    store.Bill[0] = bill("73", "0", "2026-09-10T10:00:00Z", 999);
+    assert.equal((await h.sync.applyObject({ objectType: "Bill", objectId: "73", operation: "updated" })).status, "unsupported");
+    assert.equal((await h.mirror.readCoverage(sourceScope, "transactions.bill")).status, "partial");
+
+    store.Bill[0] = bill("73", "1", "2026-09-20T00:01:00Z", 110);
+    assert.equal((await h.sync.applyObject({ objectType: "Bill", objectId: "73", operation: "updated" })).status, "applied");
+    assert.deepEqual(await h.mirror.listOpenSyncExceptions(scope, "transactions.bill"), []);
+    assert.equal((await h.mirror.readCoverage(sourceScope, "transactions.bill")).status, "partial", "a webhook retry cannot replace the missing full-replay baseline");
+  } finally {
+    await h.close();
+  }
+});
+
+test("a same-version conflict cannot restore a full-replay tombstone before source validation", async () => {
+  const account = { Id: "7", SyncToken: "0", Name: "Electric", AccountType: "Expense", MetaData: { LastUpdatedTime: "2026-09-01T00:00:00Z" } };
+  const original = bill("80", "0", "2026-09-10T10:00:00Z");
+  const store: Store = { Bill: [original], Account: [account as QuickBooksJsonObject] };
+  const h = await harness(store, "2026-09-20T00:00:00Z");
+  try {
+    assert.equal((await h.sync.syncChanges()).status, "complete");
+    store.Bill = [];
+    const missing = await h.sync.syncChanges({ forceFullReplay: true });
+    assert.equal(missing.status, "complete", "the full replay has reconciled the absent object as a deletion");
+    assert.equal((await h.mirror.readDeletionState(scope, "Bill", "80"))?.deleted, true);
+
+    store.Bill = [bill("80", "0", "2026-09-10T10:00:00Z", 999)];
+    const conflict = await h.sync.syncChanges({ forceFullReplay: true });
+    assert.equal(conflict.status, "partial");
+    const deletion = await h.mirror.readDeletionState(scope, "Bill", "80");
+    assert.deepEqual([deletion?.deleted, deletion?.detectedVia, deletion?.lastKnownVersion], [true, "full_replay", "0"]);
+    assert.equal(await h.mirror.resolveLine({ scope: sourceScope, objectType: "Bill", objectId: "80", lineId: "1" }), null);
+    const source = await h.synthetic.db.query<{ deleted_at: unknown; provider_body: Record<string, unknown> }>(
+      "SELECT deleted_at, provider_body FROM accounting_qbo_source_objects WHERE object_type='Bill' AND object_id='80' AND object_version='0'",
+    );
+    assert.equal(source.rows.length, 1);
+    assert.notEqual(source.rows[0]?.deleted_at, null, "the conflicting body leaves the original tombstone intact");
+    assert.equal((source.rows[0]?.provider_body as Record<string, unknown>).TotalAmt, 100);
+    assert.equal((await h.mirror.readCoverage(sourceScope, "transactions.bill")).status, "partial");
   } finally {
     await h.close();
   }

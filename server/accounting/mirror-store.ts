@@ -671,7 +671,12 @@ class PostgresQboAccountingMirrorStore implements QboAccountingMirrorStore {
       // differ under the same SyncToken; any other difference is a conflict.
       const stored = typeof row.provider_body === "string" ? JSON.parse(row.provider_body) as unknown : row.provider_body;
       if (canonicalJsonSha256(withoutReadTimeFields(objectType, stored)) !== canonicalJsonSha256(withoutReadTimeFields(objectType, input.providerBody))) {
-        throw new AccountingError("accounting_conflict", "QBO source object version changed after it was mirrored", { reason: "qbo_source_revision_mismatch" });
+        throw new AccountingError("accounting_conflict", "QBO source object version changed after it was mirrored", {
+          reason: "qbo_source_revision_mismatch",
+          objectType,
+          objectId,
+          version,
+        });
       }
       return { id: row.id, bodyHash: row.body_hash };
     }
