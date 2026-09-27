@@ -94,6 +94,7 @@ export function createMagicLinkWebhookNotifierFromEnv(
   env: Record<string, string | undefined> = process.env,
   fetchImpl?: typeof fetch,
 ): MagicLinkNotifier | undefined {
+  if (env.RENT_OPS_TENANT_EMAIL_ENABLED === "false") return undefined;
   createEmailRecipientPolicy(env.RENT_OPS_EMAIL_ALLOWED_RECIPIENTS);
   const provider = env.RENT_OPS_TENANT_EMAIL_PROVIDER;
   if (provider === "gmail" || provider === "replit-gmail") {

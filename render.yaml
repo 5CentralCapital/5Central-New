@@ -48,7 +48,9 @@ projects:
               - key: RENT_OPS_TENANT_EMAIL_PROVIDER
                 value: gmail
               - key: RENT_OPS_TENANT_EMAIL_ENABLED
-                value: "true"
+                value: "false"
+              - key: RENT_OPS_TENANT_CHECKOUT_ENABLED
+                value: "false"
 
           - type: worker
             name: 5central-ops-worker

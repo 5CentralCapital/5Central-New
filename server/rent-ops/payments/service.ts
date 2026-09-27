@@ -6,12 +6,26 @@ import type { RentOpsQueryExecutor } from '../repositories/postgres';
 import { PostgresTenantPaymentStore, type TenantPaymentStore } from './store';
 import { ACTIVE_TENANT_PAYMENT_STATUSES, businessDate, eligibleCharges, exactPaymentTenancy, paymentIsStale, paymentQueueReason, payableAccount, TenantPaymentError, type TenantPayment, type TenantPaymentReviewView, type ProcessorEvent } from './model';
 import { stripeProvider, type PaymentProvider } from './provider';
+
+export interface TenantPaymentServiceOptions {
+  /** An explicit false value disables new tenant-created Checkout Sessions. */
+  tenantCheckoutEnabled?: boolean;
+}
+
+export function tenantCheckoutEnabledFromEnv(env: NodeJS.ProcessEnv): boolean {
+  // An absent switch preserves the existing provider-backed behavior. Only an
+  // explicit false value disables new tenant-created Checkout Sessions.
+  return env.RENT_OPS_TENANT_CHECKOUT_ENABLED?.trim().toLowerCase() !== 'false';
+}
+
 export class TenantPaymentService {
-  constructor(readonly store:TenantPaymentStore, readonly provider?:PaymentProvider, readonly now=()=>new Date()) {}
+  constructor(readonly store:TenantPaymentStore, readonly provider?:PaymentProvider, readonly now=()=>new Date(), readonly options:TenantPaymentServiceOptions={}) {}
   async list(identity:TenantIdentity):Promise<TenantPaymentsView> {
     const snapshot=await this.store.snapshot(), payments=await this.store.list(identity.personId);
     const account=payableAccount(snapshot,identity,payments,this.now());
-    return {available:!!this.provider,...(!this.provider?{reason:'stripe_not_configured' as const}:{}),accounts:[account],payments:payments.map(({id,tenancyId,amountCents,currency,status,createdAt,postedOn})=>({id,tenancyId,amountCents,currency,status,createdAt,postedOn}))};
+    const checkoutDisabled = this.options.tenantCheckoutEnabled === false;
+    const reason = checkoutDisabled ? 'tenant_checkout_disabled' as const : !this.provider ? 'stripe_not_configured' as const : undefined;
+    return {available:!!this.provider && !checkoutDisabled,...(reason ? {reason} : {}),accounts:[account],payments:payments.map(({id,tenancyId,amountCents,currency,status,createdAt,postedOn})=>({id,tenancyId,amountCents,currency,status,createdAt,postedOn}))};
   }
   async reviewQueue(): Promise<TenantPaymentReviewView[]> {
     const now = this.now();
@@ -44,7 +58,7 @@ export class TenantPaymentService {
     // proves that a provider-side request was unpaid.
     const createdAt = Date.parse(payment.createdAt);
     const safeCreateRetry = payment.status === 'creating' && !payment.checkoutSessionId && !payment.paymentIntentId && Number.isFinite(createdAt) && now.getTime() >= createdAt && now.getTime() - createdAt < 24 * 60 * 60 * 1000;
-    if (safeCreateRetry) {
+    if (safeCreateRetry && this.options.tenantCheckoutEnabled !== false) {
       try {
         const session = await this.provider.createCheckout(payment);
         await this.store.transaction(async store => {
@@ -80,6 +94,7 @@ export class TenantPaymentService {
     return this.reviewView(current, this.now());
   }
   async checkout(identity:TenantIdentity, raw:unknown):Promise<TenantCheckoutResult> {
+    if (this.options.tenantCheckoutEnabled === false) throw new TenantPaymentError('tenant_checkout_disabled',503);
     if(!this.provider) throw new TenantPaymentError('stripe_not_configured',503);
     const input=tenantCheckoutSchema.safeParse(raw); if(!input.success) throw new TenantPaymentError('invalid_payment_request',400);
     if(input.data.tenancyId!==identity.tenancyId) throw new TenantPaymentError('tenant_account_unavailable',403);
@@ -148,4 +163,4 @@ export class TenantPaymentService {
     let remaining=target;for(const {transaction,openCents} of charges){const amount=Math.min(remaining,openCents);if(!amount)break;await store.appendAllocation({id:`tpa_${createHash('sha256').update(`${id}:${transaction.id}`).digest('hex')}`,paymentTransactionId:id,chargeTransactionId:transaction.id,amountCents:amount,allocatedOn:date,paymentLinkKnowledge:'manual',chargeLinkKnowledge:'manual',amountKnowledge:'known',allocatedOnKnowledge:'manual'});remaining-=amount;}
   }
 }
-export function createTenantPaymentService(options:{executor:RentOpsQueryExecutor;rentOpsRepository:RentOpsRepository;env:NodeJS.ProcessEnv}) {return new TenantPaymentService(new PostgresTenantPaymentStore(options.executor,options.rentOpsRepository),stripeProvider(options.env));}
+export function createTenantPaymentService(options:{executor:RentOpsQueryExecutor;rentOpsRepository:RentOpsRepository;env:NodeJS.ProcessEnv}) {return new TenantPaymentService(new PostgresTenantPaymentStore(options.executor,options.rentOpsRepository),stripeProvider(options.env),undefined,{tenantCheckoutEnabled:tenantCheckoutEnabledFromEnv(options.env)});}

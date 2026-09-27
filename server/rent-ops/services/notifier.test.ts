@@ -48,3 +48,20 @@ test("managed Gmail application email uses resume link and typed uncertain failu
  await assert.rejects(failed(input),MagicLinkDeliveryError);
  assert.equal(createMagicLinkWebhookNotifierFromEnv({...env,RENT_OPS_TENANT_EMAIL_ENABLED:"false"}),undefined);
 });
+
+test("explicitly disabled tenant email sends no applicant mail through Gmail or webhook", async () => {
+ const calls:string[]=[];
+ const fetchImpl:typeof fetch=async(url)=>{
+  calls.push(String(url));
+  return String(url).includes("oauth2.googleapis.com") ? Response.json({access_token:"synthetic-access"}) : Response.json({id:"accepted"});
+ };
+ const input={applicationId:"application:disabled",email:"applicant@example.test",token:"opaque-token",expiresAt:"2026-09-08T00:00:00Z"};
+ const common={RENT_OPS_EMAIL_ALLOWED_RECIPIENTS:"*,invalid recipient",RENT_OPS_TENANT_EMAIL_ENABLED:"false",RENT_OPS_PUBLIC_APP_URL:"https://portal.example.test"};
+ const gmail=createMagicLinkWebhookNotifierFromEnv({...common,RENT_OPS_TENANT_EMAIL_PROVIDER:"gmail"},fetchImpl);
+ const webhook=createMagicLinkWebhookNotifierFromEnv({...common,RENT_OPS_MAGIC_LINK_WEBHOOK_URL:"https://delivery.example.test"},fetchImpl);
+ assert.equal(gmail,undefined);
+ assert.equal(webhook,undefined);
+ if(gmail) await gmail(input);
+ if(webhook) await webhook(input);
+ assert.deepEqual(calls,[]);
+});

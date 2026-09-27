@@ -28,7 +28,7 @@ export interface TenantPayableAccount {
 }
 export interface TenantPaymentsView {
   available: boolean;
-  reason?: "stripe_not_configured";
+  reason?: "stripe_not_configured" | "tenant_checkout_disabled";
   payments: TenantPaymentView[];
   accounts: TenantPayableAccount[];
 }
