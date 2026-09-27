@@ -362,14 +362,15 @@ function ProjectTotals({ data, metrics }: WidgetContext) {
   const spentPartial = spentKnown && open.some(project => project.postedActualCoverage === "partial");
   const draft = currencies.size <= 1 ? sumCents(open.map(project => project.draftCostCents)) : null;
   const profits = deals.reports.map(entry => entry.report?.coverage.status === "complete" && entry.report.saleForecast.profitState === "complete" ? entry.report.saleForecast.projectedProfitCents : null);
-  const flipCurrencies = new Set(deals.flips.map(project => project.currency));
+  const flips = open.filter(project => project.projectType === "flip");
+  const flipCurrencies = new Set(flips.map(project => project.currency));
   const profit = flipCurrencies.size <= 1 && !deals.incomplete && profits.every(value => value !== null) ? sumCents(profits) : null;
   const items: Stat[] = [
     { key: "open", label: "Open projects", value: String(open.length), detail: `${open.filter(project => project.status === "active").length} active · ${open.filter(project => project.status === "planning").length} planning` },
     { key: "budget", label: "Approved budgets", value: currencies.size > 1 ? "Multiple currencies" : budget === null ? "Unknown" : wholeCents(budget), detail: currencies.size > 1 ? "Totals separated by currency" : budget === null ? `${open.filter(project => project.approvedBudgetCents === null).length} without a budget` : undefined },
     { key: "spent", label: "Posted spend", value: currencies.size > 1 ? "Multiple currencies" : !spentValues.some(value => value !== null) ? "Not linked" : spent === null ? "Unknown" : `${spentPartial ? "≥ " : ""}${wholeCents(spent)}`, detail: currencies.size > 1 ? "Totals separated by currency" : budget !== null && spent !== null && !spentPartial && centsNumber(budget) ? `${pct((centsNumber(spent) ?? 0) / (centsNumber(budget) ?? 1))} of budget` : "QuickBooks actuals" },
     { key: "draft", label: "Unposted costs", value: currencies.size > 1 ? "Multiple currencies" : wholeCents(draft), detail: "Draft costs not in QuickBooks yet" },
-    { key: "profit", label: "Projected flip profit", value: deals.loading ? "…" : !deals.flips.length ? "—" : flipCurrencies.size > 1 ? "Multiple currencies" : profit === null ? "Unknown" : wholeCents(profit), detail: deals.flips.length ? `${deals.flips.length} flip${deals.flips.length === 1 ? "" : "s"}${flipCurrencies.size > 1 ? " · totals separated by currency" : profit === null ? " · some not forecast" : ""}` : "No flips" },
+    { key: "profit", label: "Projected flip profit", value: deals.loading ? "…" : !flips.length ? "—" : flipCurrencies.size > 1 ? "Multiple currencies" : profit === null ? "Unknown" : wholeCents(profit), detail: flips.length ? `${flips.length} flip${flips.length === 1 ? "" : "s"}${flipCurrencies.size > 1 ? " · totals separated by currency" : profit === null ? " · some not forecast" : ""}` : "No flips" },
   ];
   return <StatStrip items={items} metrics={metrics} min={130} />;
 }

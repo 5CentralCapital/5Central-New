@@ -132,6 +132,13 @@ test("completed flips cannot consume the open-project report limit", () => {
   assert.doesNotMatch(board, /Loading deal reports|Some flip reports could not be read/);
 });
 
+test("open flip count includes projects beyond the report limit while their total stays unknown", () => {
+  const flips = Array.from({ length: 11 }, (_, index) => ({ ...project(), id: `active-${index}`, projectType: "flip" } as ProjectSummary));
+  const totals = renderProjectWidget("proj-kpis", flips, flips.slice(0, 10));
+  assert.match(totals, /Projected flip profit.*Unknown/);
+  assert.match(totals, /11 flips/);
+});
+
 test("project budget widgets keep missing budgets and spend unknown", () => {
   const byType = renderProjectWidget("proj-by-type", [project()]);
   assert.match(byType, /No approved budget/);
