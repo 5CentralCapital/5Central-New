@@ -107,6 +107,8 @@ export interface QboAgingBuckets {
 }
 
 export interface QboCustomerLedger {
+  /** Present on a tenancy ledger when an existing link is readable but ownership dates need confirmation. */
+  readonly ownershipWarning?: string;
   readonly scope: { readonly organizationId: string; readonly legalEntityId: string; readonly environment: "sandbox" | "production"; readonly realmId: string };
   readonly customer: { readonly objectId: string; readonly displayName: string | null; readonly active: boolean | null };
   readonly asOf: IsoDate | null;

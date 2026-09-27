@@ -270,7 +270,7 @@ function AuthenticatedWorkspace(){
    {view.heading&&<header className={`rm-page-heading rm-workspace-heading${view.filters?' has-scope':''}`}>{route.recordId&&window.history.state?.returnTo&&<button className="rm-button rm-button--icon" aria-label="Back to previous view" title="Back" onClick={()=>window.history.back()}><ChevronLeft size={17}/></button>}<h1 id="rops-page-title">{heading}</h1>
     {view.filters&&<ScopeBar filters={filters} properties={snapshot?scopeProperties(snapshot,filters):[]} onScope={changeScope} onDate={date=>setFilters(f=>pinWorkspaceDate(f,date))} onToday={()=>setFilters(f=>selectWorkspaceToday(f))}
      status={view.status?{value:view.status==='tenants'?tenantStatus:filters.status,options:statusOptions,onChange:value=>{if(view.status==='tenants')go({...route,tenantStatus:value as TenantDirectoryStatus,recordId:undefined},true);else setFilters(f=>({...f,status:value}));}}:undefined}
-     searchPlaceholder={route.section==='tenants'?'Name, property, unit, email or phone':'Search tenants, units, properties'} onSearch={search=>setFilters(f=>({...f,search}))} onRefresh={()=>void refresh()} refreshing={data.isRefreshing} updatedAt={data.bootstrap.dataUpdatedAt||undefined}/>}
+     searchPlaceholder={route.section==='tenants'?'Name, property, unit, email or phone':'Search tenants, units, properties'} onSearch={search=>setFilters(f=>({...f,search}))} onRefresh={()=>void refresh()} refreshing={data.isRefreshing} updatedAt={data.bootstrap.dataUpdatedAt||undefined} showDashboardOptions={route.section==='dashboard'}/>}
    </header>}
    {notice&&<div className="rm-notice" role="status">{notice}<button className="rm-button" aria-label="Dismiss notice" onClick={()=>setNotice('')}><X size={12}/></button></div>}
    {body}

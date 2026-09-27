@@ -1,8 +1,9 @@
 // The customizable widget grid: square cells, fixed widget sizes, drag to
 // move, drag the corner to snap between sizes, a library by category, and
-// saved layouts per user. Controls live in one small corner button and the
-// right-click menu so the dashboard itself stays quiet.
+// saved layouts per user. Dashboard options live in the ScopeBar; widget
+// actions stay in the right-click menu so the dashboard itself stays quiet.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import * as Dropdown from "@radix-ui/react-dropdown-menu";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { ArrowUpRight, Check, ChevronRight, LayoutGrid, Minus, X } from "lucide-react";
@@ -50,6 +51,7 @@ export function DashboardGrid({ data }: { data: DashboardData }) {
   const [editing, setEditing] = useState(false);
   const [category, setCategory] = useState<WidgetCategory>("rent");
   const [query, setQuery] = useState("");
+  const [optionsTarget, setOptionsTarget] = useState<HTMLElement | null>(null);
   const [gridRef, width] = useContainerWidth<HTMLDivElement>();
   const [drag, setDrag] = useState<{ id: string; rect: { left: number; top: number; width: number; height: number }; ghost: LayoutItem } | null>(null);
   const layoutRef = useRef(state.layout);
@@ -129,29 +131,33 @@ export function DashboardGrid({ data }: { data: DashboardData }) {
   };
 
   useEffect(() => { if (!editing) setQuery(""); }, [editing]);
+  useEffect(() => {
+    setOptionsTarget(document.getElementById("rops-dashboard-options"));
+    return () => setOptionsTarget(null);
+  }, []);
   const placed = new Set(state.layout.map(item => item.id));
   const companyWidgetPlaced = !showCompanyPanelsInAttention(state.layout);
   const library = WIDGETS.filter(widget => query.trim() ? `${widget.name} ${widget.description}`.toLowerCase().includes(query.trim().toLowerCase()) : widget.category === category);
   const height = gridHeight(view, rowHeight);
+  const dashboardOptions = editing
+    ? <button type="button" className="rm-button ops-dashboard-done" onClick={() => setEditing(false)}>Done</button>
+    : <Dropdown.Root modal={false}>
+      <Dropdown.Trigger className="ops-dashboard-gear" aria-label="Customize dashboard" title="Customize dashboard"><LayoutGrid size={15} aria-hidden="true" /></Dropdown.Trigger>
+      <Dropdown.Portal><Dropdown.Content className="rops-nav-menu ops-dashboard-menu" align="end" sideOffset={6} collisionPadding={12} loop>
+        <Dropdown.Item className="rops-menu-item" onSelect={() => setEditing(true)}>Customize…</Dropdown.Item>
+        <Dropdown.Separator className="rops-menu-separator" />
+        <Dropdown.Label className="rops-menu-label">Layout</Dropdown.Label>
+        <Dropdown.RadioGroup value={state.preset} onValueChange={applyPreset}>
+          {Object.keys(DASHBOARD_PRESETS).map(name => <Dropdown.RadioItem key={name} className="rops-menu-item" value={name}>{name}<Dropdown.ItemIndicator><Check size={15} aria-hidden="true" /></Dropdown.ItemIndicator></Dropdown.RadioItem>)}
+        </Dropdown.RadioGroup>
+        <Dropdown.Separator className="rops-menu-separator" />
+        <Dropdown.Item className="rops-menu-item" onSelect={() => applyPreset(state.preset === "Custom" ? DEFAULT_PRESET : state.preset)}>Reset layout</Dropdown.Item>
+      </Dropdown.Content></Dropdown.Portal>
+    </Dropdown.Root>;
 
-  return <div className={`ops-dashboard${editing ? " is-editing" : ""}${phone ? " is-phone" : ""}`}>
-    <div className="ops-dashboard-head">
-      <span className="ops-dashboard-sub">{state.layout.length} widgets · {state.preset === "Custom" ? "custom layout" : `${state.preset} layout`}</span>
-      {editing ? <button type="button" className="rm-button ops-dashboard-done" onClick={() => setEditing(false)}>Done</button>
-        : <Dropdown.Root modal={false}>
-          <Dropdown.Trigger className="ops-dashboard-gear" aria-label="Dashboard options" title="Customize dashboard"><LayoutGrid size={15} aria-hidden="true" /></Dropdown.Trigger>
-          <Dropdown.Portal><Dropdown.Content className="rops-nav-menu ops-dashboard-menu" align="end" sideOffset={6} collisionPadding={12} loop>
-            <Dropdown.Item className="rops-menu-item" onSelect={() => setEditing(true)}>Customize…</Dropdown.Item>
-            <Dropdown.Separator className="rops-menu-separator" />
-            <Dropdown.Label className="rops-menu-label">Layout</Dropdown.Label>
-            <Dropdown.RadioGroup value={state.preset} onValueChange={applyPreset}>
-              {Object.keys(DASHBOARD_PRESETS).map(name => <Dropdown.RadioItem key={name} className="rops-menu-item" value={name}>{name}<Dropdown.ItemIndicator><Check size={15} aria-hidden="true" /></Dropdown.ItemIndicator></Dropdown.RadioItem>)}
-            </Dropdown.RadioGroup>
-            <Dropdown.Separator className="rops-menu-separator" />
-            <Dropdown.Item className="rops-menu-item" onSelect={() => applyPreset(state.preset === "Custom" ? DEFAULT_PRESET : state.preset)}>Reset layout</Dropdown.Item>
-          </Dropdown.Content></Dropdown.Portal>
-        </Dropdown.Root>}
-    </div>
+  return <>
+    {optionsTarget && createPortal(dashboardOptions, optionsTarget)}
+    <div className={`ops-dashboard${editing ? " is-editing" : ""}${phone ? " is-phone" : ""}`}>
     <ContextMenu.Root modal={false}>
       <ContextMenu.Trigger asChild>
         <div ref={gridRef} className="ops-grid" style={{ height: height ? `${height}px` : undefined }} aria-label="Dashboard widgets">
@@ -200,7 +206,8 @@ export function DashboardGrid({ data }: { data: DashboardData }) {
         }) : <li className="ops-library-empty">No widgets match.</li>}
       </ul>
     </aside>}
-  </div>;
+    </div>
+  </>;
 }
 
 const pixelStyle = (rect: { left: number; top: number; width: number; height: number }): CSSProperties => ({ left: rect.left, top: rect.top, width: rect.width, height: rect.height });

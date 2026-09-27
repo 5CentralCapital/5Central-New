@@ -13,7 +13,12 @@ import {
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { AccountingError } from "./errors";
 import { coverageReasonForDisplay } from "./mirror-store";
-import { currentBusinessDate, resolveTenancyHistory } from "./tenancy-source-resolution";
+import {
+  currentBusinessDate,
+  linkedDatesMissingOwner,
+  resolveTenancyHistory,
+  tenancyMissingDatesWarning,
+} from "./tenancy-source-resolution";
 
 /*
  * The one read path for QuickBooks-backed tenant/customer financial history
@@ -356,15 +361,19 @@ export async function readCustomerLedger(executor: RentOpsQueryExecutor, query: 
  * external identity map. Returns null when the tenancy is not linked yet —
  * callers must show "not linked", never a zero balance.
  */
-export async function resolveTenancyCustomer(executor: RentOpsQueryExecutor, input: { readonly organizationId: string; readonly tenancyId: string; readonly environment: "sandbox" | "production"; readonly asOf?: string }): Promise<{ readonly scope: FinancialSourceScope; readonly customerObjectId: string } | null> {
+export async function resolveTenancyCustomer(executor: RentOpsQueryExecutor, input: { readonly organizationId: string; readonly tenancyId: string; readonly environment: "sandbox" | "production"; readonly asOf?: string }): Promise<{
+  readonly scope: FinancialSourceScope | null;
+  readonly customerObjectId: string;
+  readonly propertyId: string;
+  readonly linkedLegalEntityId: string;
+  readonly ownershipWarning: string | null;
+} | null> {
   const history = await resolveTenancyHistory(executor, {
     organizationId: input.organizationId,
     tenancyId: input.tenancyId,
     asOf: input.asOf ?? currentBusinessDate(),
   });
-  // A customer link is usable only when the full historical tenancy interval
-  // resolves to one owner. The identity map alone is not an ownership proof.
-  if (!history?.effectiveLegalEntityId) return null;
+  if (!history) throw new AccountingError("accounting_not_found", "This tenancy is not available in the requested company's mapped property history.");
   const rows = (await executor.query<{ legal_entity_id: string; source_scope: string; external_id: string }>(
     `SELECT i.legal_entity_id, i.source_scope, i.external_id
        FROM company_external_identities i
@@ -373,13 +382,35 @@ export async function resolveTenancyCustomer(executor: RentOpsQueryExecutor, inp
     [input.organizationId, input.tenancyId, `qbo:${input.environment}:%`],
   )).rows;
   if (rows.length === 0) return null;
-  if (rows.length > 1) throw new AccountingError("accounting_conflict", "This tenancy is linked to more than one QuickBooks customer; resolve the mapping before showing its history");
+  if (rows.length > 1) throw new AccountingError("accounting_conflict", "This tenancy is linked to more than one QuickBooks customer in the requested environment; resolve the mapping before showing its history");
   const row = rows[0]!;
-  if (row.legal_entity_id !== history.effectiveLegalEntityId) return null;
   const match = /^qbo:(sandbox|production):(\d{1,32})$/.exec(row.source_scope);
   if (!match) throw new AccountingError("accounting_unavailable", "The tenancy's QuickBooks mapping has an invalid scope");
+  const linkedLegalEntityId = String(row.legal_entity_id);
+  const environmentMatches = match[1] === input.environment;
+  const effectiveOwnerMatches = history.effectiveLegalEntityId === linkedLegalEntityId;
+  const fallbackOwnerMatches = linkedDatesMissingOwner(history, linkedLegalEntityId, input.asOf ?? currentBusinessDate()) === linkedLegalEntityId;
+  const scope = environmentMatches && (effectiveOwnerMatches || fallbackOwnerMatches)
+    ? financialSourceScopeSchema.parse({ provider: "qbo", organizationId: input.organizationId, legalEntityId: linkedLegalEntityId, environment: match[1], realmId: match[2] })
+    : null;
+  const missingDatesWarning = tenancyMissingDatesWarning(history);
+  let ownershipWarning: string | null = null;
+  if (!scope) {
+    if (history.effectiveLegalEntityId !== null && !effectiveOwnerMatches) {
+      ownershipWarning = "The existing QuickBooks customer link belongs to a different legal entity than the resolved historical owner. Review ownership before opening the ledger.";
+    } else if (missingDatesWarning) {
+      ownershipWarning = `${missingDatesWarning} The linked legal entity cannot be confirmed from the available ownership dates.`;
+    } else {
+      ownershipWarning = "The existing QuickBooks customer link cannot be confirmed from the tenancy's historical ownership. Review ownership before opening the ledger.";
+    }
+  } else if (fallbackOwnerMatches && missingDatesWarning) {
+    ownershipWarning = missingDatesWarning;
+  }
   return {
-    scope: financialSourceScopeSchema.parse({ provider: "qbo", organizationId: input.organizationId, legalEntityId: row.legal_entity_id, environment: match[1], realmId: match[2] }),
+    scope,
     customerObjectId: customerIdSchema.parse(row.external_id),
+    propertyId: history.tenancy.propertyId,
+    linkedLegalEntityId,
+    ownershipWarning,
   };
 }
