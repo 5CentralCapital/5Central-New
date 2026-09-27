@@ -10,7 +10,7 @@ import type { CompanyContextOrganization } from "@shared/company/context";
 import type { DashboardCompany } from "@shared/workspaces/contracts";
 import { CASH_CATEGORY_LABELS, type ForecastResultView } from "@shared/forecasting/result";
 import { financialFigure } from "../../accounting/dashboard-model";
-import { dashboardChartSeries, dashboardTrendPoints } from "./dashboard-model";
+import { dashboardTrendPoints } from "./dashboard-model";
 import {
   AxisChart, Cells, Chip, Empty, Failed, Foot, Loading, Pager, Ring, Spark,
   addDays, centsNumber, companyOpener, dayDiff, daysLabel, dollars, groupByProperty, humanLabel, kMoney, monthShort, numeric, pct, propertyLink,
@@ -95,14 +95,15 @@ export function DraftBadge({ forecast }: { forecast: { isDraft?: boolean; scenar
   return forecast.isDraft ? <span className="mk-draft" title="This scenario has not been approved in Forecasting">Draft plan · {forecast.scenario?.name ?? "not approved"}</span> : null;
 }
 
-export function ForecastGate({ forecast, children }: { forecast: ReturnType<typeof useForecast>; children: (result: ForecastResultView) => ReactNode }) {
+export function ForecastGate({ forecast, children, labelsDraft = false }: { forecast: ReturnType<typeof useForecast>; children: (result: ForecastResultView) => ReactNode; labelsDraft?: boolean }) {
   if (forecast.loading) return <Loading label="Loading cash forecast" />;
   if (forecast.list.error) return <Failed title="Forecast unavailable" error={forecast.list.error} retry={() => void forecast.list.refetch()} />;
   if (forecast.none) return <Empty title="No approved base forecast">Approve a base scenario under Forecasting to plan weekly cash.</Empty>;
   if (forecast.run.error) return <Failed title="Forecast could not run" error={forecast.run.error} retry={() => void forecast.run.refetch()} />;
   if (!forecast.result) return <Loading label="Loading cash forecast" />;
   if (!forecastWeeksFrom(forecast.result, forecast.asOfDate).length) return <Empty title="Forecast does not cover this date">Open Forecasting for a scenario covering the selected date.</Empty>;
-  return <>{children(forecast.result)}</>;
+  // A draft scenario is never presented as the approved forecast.
+  return <>{forecast.isDraft && !labelsDraft && <div className="mk-draft-row"><DraftBadge forecast={forecast} /></div>}{children(forecast.result)}</>;
 }
 
 /** Money for mockup cells: short above $10K, exact whole dollars below. */
@@ -111,7 +112,7 @@ const shortName = (name: string) => name.replace(/^5Central\s*[-–]\s*/i, "").r
 
 /* ---------- cash card ---------- */
 
-type BankTransaction = { date: string; amountCents: number | null; pending: boolean; description: string };
+type BankTransaction = { id: string; accountId: string; date: string; amountCents: number | null; pending: boolean; description: string };
 
 /** Daily balance for the banking window, walked back from today's current balance. */
 export function balanceHistory(currentCents: number, transactions: readonly BankTransaction[], fromDate: string, throughDate: string): Array<{ date: string; cents: number }> {
@@ -132,8 +133,14 @@ function CashCard({ data, metrics }: WidgetContext) {
   const cash = data.cash.data;
   const banking = data.banking.data;
   const weeks = forecastWeeksFrom(forecast.result, data.filters.asOfDate);
-  const row = (label: ReactNode, value: ReactNode, tone?: "neg" | "pos") => <div className="mk-bk-r"><span>{label}</span><b className="mk-n" data-tone={tone}>{value}</b></div>;
+  const row = (label: ReactNode, value: ReactNode, tone?: "neg" | "pos", key?: string) => <div key={key} className="mk-bk-r"><span>{label}</span><b className="mk-n" data-tone={tone}>{value}</b></div>;
+  const floor = centsNumber(forecast.result?.scenario.reserveFloorCents) ?? 0;
   const transactions: BankTransaction[] = banking?.state === "ready" ? banking.connections.flatMap(connection => connection.transactions) : [];
+  // The balance comes from one operating account; other linked accounts (and transfers
+  // between them) must not move its history. Draw it only when the account is unambiguous.
+  const operatingIds = banking?.state === "ready" && cash?.state === "ready" ? new Set(banking.connections.flatMap(connection => connection.accounts).filter(account => account.mask === cash.mask).map(account => account.id)) : new Set<string>();
+  const operating = operatingIds.size === 1 && banking?.state === "ready" ? banking.connections.flatMap(connection => connection.transactions).filter(entry => operatingIds.has(entry.accountId)) : undefined;
+  const bankCovers = (from: string, through: string) => banking?.state === "ready" && from >= banking.fromDate && through <= banking.throughDate;
   const receipts = sumKnown(data.receipts, "amountCents");
   const available = () => {
     if (data.cash.error) return <Failed title="Cash balance unavailable" retry={data.cash.refetch} />;
@@ -141,7 +148,7 @@ function CashCard({ data, metrics }: WidgetContext) {
     if (cash.state !== "ready") return <Empty title={cash.state === "unconfigured" ? "No bank connected" : "Bank balance unavailable"}>Connect the operating account under Accounting › Banking.</Empty>;
     const low = weeks.length ? weeks.reduce((min, week) => (centsNumber(week.availableClosingCents) ?? Infinity) < (centsNumber(min.availableClosingCents) ?? Infinity) ? week : min, weeks[0]!) : undefined;
     const relative = forecast.result?.summary.openingCashKnown === false;
-    const history = banking?.state === "ready" && numeric(cash.currentCents) ? balanceHistory(cash.currentCents, transactions, banking.fromDate, banking.throughDate) : [];
+    const history = banking?.state === "ready" && operating && numeric(cash.currentCents) ? balanceHistory(cash.currentCents, operating, banking.fromDate, banking.throughDate) : [];
     const spark = weeks.length > 2 && !relative ? { label: `Ending cash · next ${weeks.length} weeks${forecast.isDraft ? " (draft plan)" : ""}`, values: weeks.map(week => centsNumber(week.availableClosingCents) ?? null) }
       : history.length > 2 ? { label: `Balance · ${shortDay(history[0]!.date)} → today`, values: history.map(entry => entry.cents) } : undefined;
     return <div className="mk-bk">
@@ -151,7 +158,7 @@ function CashCard({ data, metrics }: WidgetContext) {
         {row("Ledger balance", numeric(cash.currentCents) ? dollars(cash.currentCents) : "Unknown")}
         {numeric(cash.currentCents) && numeric(cash.availableCents) && cash.currentCents !== cash.availableCents && row("Payments in processing", dollars(cash.currentCents - cash.availableCents))}
         {row(`Rent received · ${data.monthLabel}`, receipts === undefined ? "—" : dollars(receipts), "pos")}
-        {low && !relative && row(<>Low point next {weeks.length} wks <em>{shortDay(low.end)}</em></>, wholeCents(low.availableClosingCents), (centsNumber(low.availableClosingCents) ?? 0) < 2_500_000 ? "neg" : undefined)}
+        {low && !relative && row(<>Low point next {weeks.length} wks{forecast.isDraft ? " (draft)" : ""} <em>{shortDay(low.end)}</em></>, wholeCents(low.availableClosingCents), (centsNumber(low.availableClosingCents) ?? 0) < floor ? "neg" : undefined)}
       </div>
       {spark && metrics.h >= 3 && <div className="mk-bk-spark"><span>{spark.label}</span><Spark values={spark.values} width={Math.max(120, metrics.bodyWidth)} height={44} /></div>}
     </div>;
@@ -162,10 +169,11 @@ function CashCard({ data, metrics }: WidgetContext) {
       // No plan: show what actually moved through the bank this week instead.
       const start = addDays(data.filters.asOfDate, index === 0 ? -6 : -13), end = addDays(start, 6);
       if (index > 0 || banking?.state !== "ready") return <Empty title="No weekly plan">{forecast.none ? "Approve a base scenario under Forecasting to see next week." : "The cash forecast could not run."}</Empty>;
+      if (!bankCovers(start, data.filters.asOfDate)) return <Empty title="Bank activity unavailable for this date">Linked bank activity covers {shortDay(banking.fromDate)}–{shortDay(banking.throughDate)}.</Empty>;
       const inWeek = transactions.filter(entry => !entry.pending && numeric(entry.amountCents) && entry.date >= start && entry.date <= data.filters.asOfDate);
       const inflow = inWeek.filter(entry => (entry.amountCents as number) < 0).reduce((sum, entry) => sum - (entry.amountCents as number), 0);
       const outflow = inWeek.filter(entry => (entry.amountCents as number) > 0).reduce((sum, entry) => sum + (entry.amountCents as number), 0);
-      return <div className="mk-bk"><div className="mk-bk-k">Last 7 days <span>bank · {shortDay(start)}–{shortDay(end)}</span></div>
+      return <div className="mk-bk"><div className="mk-bk-k">Last 7 days <span>all linked accounts · {shortDay(start)}–{shortDay(end)}</span></div>
         <div className="mk-bk-n mk-n">{inflow - outflow < 0 ? "−" : "+"}{dollars(Math.abs(inflow - outflow))}</div>
         <div className="mk-bk-flow"><div><span>In</span><b className="mk-n">{dollars(inflow)}</b></div><div><span>Out</span><b className="mk-n">{dollars(outflow)}</b></div><div><span>Items</span><b className="mk-n">{inWeek.length}</b></div></div></div>;
     }
@@ -174,8 +182,8 @@ function CashCard({ data, metrics }: WidgetContext) {
     const net = centsNumber(current.netCents) ?? 0;
     return <div className="mk-bk"><div className="mk-bk-k">{label} <span>ends {shortDay(current.end)}</span></div>
       <div className="mk-bk-n mk-n" data-tone={net < 0 ? "neg" : undefined}>{net < 0 ? "−" : "+"}{dollars(Math.abs(net))}</div>
-      <div className="mk-bk-flow"><div><span>In</span><b className="mk-n">{wholeCents(current.inflowsCents)}</b></div><div><span>Out</span><b className="mk-n">{wholeCents(String(current.outflowsCents).replace(/^-/, ""))}</b></div><div><span>Ends at</span><b className="mk-n">{wholeCents(current.availableClosingCents)}</b></div></div>
-      <div className="mk-bk-rows">{lines.map(line => row(CASH_CATEGORY_LABELS[line.key as keyof typeof CASH_CATEGORY_LABELS] ?? humanLabel(line.key), `${line.cents < 0 ? "−" : "+"}${dollars(Math.abs(line.cents))}`, line.cents > 0 ? "pos" : undefined))}</div>
+      <div className="mk-bk-flow"><div><span>In</span><b className="mk-n">{wholeCents(current.inflowsCents)}</b></div><div><span>Out</span><b className="mk-n">{wholeCents(String(current.outflowsCents).replace(/^-/, ""))}</b></div><div><span>Ends at</span><b className="mk-n">{forecast.result?.summary.openingCashKnown === false ? "Unknown" : wholeCents(current.availableClosingCents)}</b></div></div>
+      <div className="mk-bk-rows">{lines.map(line => row(CASH_CATEGORY_LABELS[line.key as keyof typeof CASH_CATEGORY_LABELS] ?? humanLabel(line.key), `${line.cents < 0 ? "−" : "+"}${dollars(Math.abs(line.cents))}`, line.cents > 0 ? "pos" : undefined, line.key))}</div>
       <DraftBadge forecast={forecast} /></div>;
   };
   const debt = () => {
@@ -186,16 +194,16 @@ function CashCard({ data, metrics }: WidgetContext) {
     const maturing = company.data.maturities.filter(item => item.maturityOn >= data.filters.asOfDate && item.maturityOn <= addDays(data.filters.asOfDate, 30));
     return <div className="mk-bk"><div className="mk-bk-k">Debt &amp; investors <span>next 30 days</span></div>
       <div className="mk-bk-n mk-n">{!obligations.length ? "$0" : totals.total === null ? "Unknown" : `${totals.complete ? "" : "≥ "}${wholeCents(totals.total)}`}</div>
-      <div className="mk-bk-rows">{obligations.slice(0, 5).map(item => row(<>{item.accountName} <em>{shortDay(item.dueOn)}</em></>, wholeCents(remainingObligationCents(item))))}
-        {maturing.map(item => row(<>{item.instrumentName} matures <em>{shortDay(item.maturityOn)}</em></>, wholeCents(item.outstandingPrincipalCents), "neg"))}
+      <div className="mk-bk-rows">{obligations.slice(0, 5).map(item => row(<>{item.accountName} <em>{shortDay(item.dueOn)}</em></>, wholeCents(remainingObligationCents(item)), undefined, item.obligationId))}
+        {maturing.map(item => row(<>{item.instrumentName} matures <em>{shortDay(item.maturityOn)}</em></>, wholeCents(item.outstandingPrincipalCents), "neg", item.instrumentId))}
         {!obligations.length && !maturing.length && <p className="mk-cap">No investor payments or loan maturities recorded for the next 30 days.</p>}</div></div>;
   };
   const bigMoves = () => {
     if (banking?.state !== "ready") return <Empty title="Bank activity unavailable" />;
     const big = transactions.filter(entry => !entry.pending && numeric(entry.amountCents) && Math.abs(entry.amountCents as number) >= 500_000).sort((a, b) => b.date.localeCompare(a.date));
-    return <div className="mk-bk"><div className="mk-bk-k">Big money moves <span>$5K+ · since {shortDay(banking.fromDate)}</span></div>
+    return <div className="mk-bk"><div className="mk-bk-k">Big money moves <span>$5K+ · all linked accounts · since {shortDay(banking.fromDate)}</span></div>
       <div className="mk-bk-n mk-n">{big.length}</div>
-      <div className="mk-bk-rows">{big.slice(0, 5).map((entry, index) => row(<>{entry.description} <em>{shortDay(entry.date)}</em></>, `${(entry.amountCents as number) < 0 ? "+" : "−"}${kMoney(Math.abs(entry.amountCents as number))}`, (entry.amountCents as number) < 0 ? "pos" : undefined)).map((node, index) => <React.Fragment key={index}>{node}</React.Fragment>)}</div></div>;
+      <div className="mk-bk-rows">{big.slice(0, 5).map(entry => row(<>{entry.description} <em>{shortDay(entry.date)}</em></>, `${(entry.amountCents as number) < 0 ? "+" : "−"}${kMoney(Math.abs(entry.amountCents as number))}`, (entry.amountCents as number) < 0 ? "pos" : undefined, entry.id))}</div></div>;
   };
   return <Pager pages={[
     { key: "available", label: "Available cash", body: available() },
@@ -246,9 +254,11 @@ function RentalSummary({ data, metrics }: WidgetContext) {
   const collectedShare = collected !== undefined && rent ? collected / rent : undefined;
   const delinquency = dueKnown !== undefined && rent ? dueKnown / rent : undefined;
   const cells: Cell[] = [
-    { key: "collected", label: "Collected MTD", value: collectedShare === undefined ? "—" : pct(collectedShare), sub: `${money(collected)} of ${money(rent)}${rentPartial ? "+" : ""} rent roll`, tone: collectedShare !== undefined && collectedShare < 0.5 ? "neg" : undefined },
-    { key: "delinquency", label: "Delinquency", value: delinquency === undefined ? "—" : pct(delinquency), sub: data.dueSplit ? `${money(dueKnown)} owed · ${data.dueSplit.knownCount} account${data.dueSplit.knownCount === 1 ? "" : "s"}${data.dueSplit.unverifiedCount ? ` · ${data.dueSplit.unverifiedCount} unverified` : ""}` : "Loading", tone: delinquency !== undefined && delinquency > 0.1 ? "neg" : undefined },
-    { key: "rent", label: "Rent roll", value: money(rent) + (rentPartial ? "+" : ""), sub: `${occupied ?? "—"} occupied units · monthly` },
+    // With part of the rent roll unknown the known roll is a lower bound, so the
+    // collected share is only an upper bound and the delinquency share has no bound.
+    { key: "collected", label: "Collected MTD", value: collectedShare === undefined ? "—" : `${rentPartial ? "≤ " : ""}${pct(collectedShare)}`, sub: `${money(collected)} of ${rentPartial ? "≥ " : ""}${money(rent)} rent roll`, tone: collectedShare !== undefined && collectedShare < 0.5 && !rentPartial ? "neg" : undefined },
+    { key: "delinquency", label: "Delinquency", value: delinquency === undefined || rentPartial ? "—" : `${data.dueSplit?.unverifiedCount ? "≥ " : ""}${pct(delinquency)}`, sub: data.dueSplit ? `${money(dueKnown)} owed · ${data.dueSplit.knownCount} account${data.dueSplit.knownCount === 1 ? "" : "s"}${data.dueSplit.unverifiedCount ? ` · ${data.dueSplit.unverifiedCount} unverified` : ""}` : "Loading", tone: delinquency !== undefined && !rentPartial && delinquency > 0.1 ? "neg" : undefined },
+    { key: "rent", label: "Rent roll", value: `${rentPartial ? "≥ " : ""}${money(rent)}`, sub: `${occupied ?? "—"} occupied units · monthly` },
     { key: "vacancy", label: "Vacancy cost", value: !data.vacancy ? "…" : !priced.length && unpriced ? "Not set" : `${unpriced ? "≥ " : ""}${money(vacancyKnown)}`, sub: `${vacant.length} units${avgDays !== undefined ? ` · ${avgDays} days avg` : ""}${unpriced ? ` · ${unpriced} without market rent` : ""}`, tone: !priced.length && unpriced ? "muted" : undefined },
     { key: "outs", label: "Move-outs", value: String(outs.length), sub: outs.length ? outs.map(row => shortDay(String(row.date))).join(" · ") : `none in ${data.monthLabel}` },
     { key: "ins", label: "Move-ins", value: String(ins.length), sub: ins.length ? ins.map(row => `${text(row.propertyName)} ${text(row.unitNumber)}`).slice(0, 2).join(", ") : `none in ${data.monthLabel}`, tone: ins.length ? "pos" : undefined },
@@ -308,10 +318,13 @@ export function propertyLines(data: DashboardData): PropertyLine[] | undefined {
 }
 
 /** On track, watch or at risk from occupancy and past due as a share of rent. */
-export function propertyStatus(line: Row): { tone: "ok" | "watch" | "risk"; label: string } | undefined {
+export function propertyStatus(line: Row): { tone: "ok" | "watch" | "risk" | "flat"; label: string } | undefined {
   const occupancy = line.occupancyShare, due = line.dueCents, rent = line.rentCents;
   if (!numeric(occupancy)) return undefined;
-  const dueShare = numeric(due) && numeric(rent) && rent > 0 ? due / rent : 0;
+  if (occupancy < 0.7) return { tone: "risk", label: "At risk" };
+  // Unknown past due is not zero: without it the property cannot be called on track.
+  if (!numeric(due) || !numeric(rent) || rent <= 0) return { tone: "flat", label: "Review" };
+  const dueShare = due / rent;
   if (occupancy < 0.7 || dueShare > 0.3) return { tone: "risk", label: "At risk" };
   if (occupancy < 0.9 || dueShare > 0.1) return { tone: "watch", label: "Watch" };
   return { tone: "ok", label: "On track" };
@@ -327,7 +340,10 @@ function RentalTable({ data, metrics }: WidgetContext) {
   const portfolio = occupiedHistory(data);
   const trend = (history: ReturnType<typeof occupiedHistory>, total: number | null | undefined) => history.length > 1 ? <Spark width={wide ? 96 : 72} values={history.map(entry => entry.occupied)} reference={total ?? undefined} min={0} max={total ?? undefined} /> : <span className="mk-cap">—</span>;
   const collectedCell = (value: unknown, share: unknown) => <span className="mk-coll"><span className="mk-meter" aria-hidden="true"><i style={{ width: `${numeric(share) ? Math.min(100, share * 100) : 0}%` }} data-tone={numeric(share) && share < 0.5 ? "neg" : undefined} /></span><b>{numeric(value) ? dollars(value) : "—"}</b><small data-tone={numeric(share) && share < 0.5 ? "neg" : undefined}>{numeric(share) ? pct(share) : ""}</small></span>;
-  const rows = lines.slice(0, Math.max(1, Math.floor((metrics.bodyHeight - 70) / 46)));
+  const fit = Math.max(1, Math.floor((metrics.bodyHeight - 70) / 46));
+  // Keep one line for "N more" so the Portfolio footer never totals rows the table hides.
+  const rows = lines.length > fit ? lines.slice(0, Math.max(1, fit - 1)) : lines;
+  const hidden = lines.length - rows.length;
   return <div className="mk-tw"><table className="mk-rt">
     <thead><tr><th>Property</th><th>Units</th><th>Occupied</th><th className="c">Occupancy · 12 mo</th><th>Rent roll</th><th>Collected · {monthShort(data.filters.asOfDate)}</th><th>Past due</th>{wide && <th>Vacancy cost</th>}<th>Status</th></tr></thead>
     <tbody>{rows.map(line => {
@@ -343,7 +359,7 @@ function RentalTable({ data, metrics }: WidgetContext) {
         {wide && <td>{numeric(line.vacancyCents) ? dollars(line.vacancyCents) : <span className="mk-cap">market rent not set</span>}</td>}
         <td>{status ? <Chip tone={status.tone}>{status.label}</Chip> : <span className="mk-cap">—</span>}</td>
       </tr>;
-    })}</tbody>
+    })}{hidden > 0 && <tr className="mk-rt-more"><td colSpan={wide ? 9 : 8}><button type="button" className="rops-link" onClick={() => data.onReport("rent-roll")}>{hidden} more {hidden === 1 ? "property" : "properties"} in the portfolio total</button></td></tr>}</tbody>
     <tfoot><tr><td className="nm">Portfolio</td><td>{units ?? "—"}</td><td><span className="big">{occupied ?? "—"}</span><span className="mk-t3"> · {numeric(occupied) && units ? pct(occupied / units) : "—"}</span></td>
       <td className="c">{trend(portfolio, units)}</td><td>{money(rent)}</td><td>{collectedCell(collected, collected !== undefined && rent ? collected / rent : undefined)}</td>
       <td>{due === undefined ? "Unknown" : <>{dollars(due)}{rent ? <span className="mk-t3"> · {pct(due / rent)}</span> : null}</>}</td>{wide && <td>{money(sumKnown(lines, "vacancyCents"))}</td>}<td /></tr></tfoot>
@@ -356,13 +372,14 @@ function OccupancyTrend({ data, metrics }: WidgetContext) {
   const history = occupiedHistory(data);
   const total = history.map(entry => entry.units).filter(numeric).at(-1);
   const points = history.map(entry => ({ label: monthShort(entry.month), value: entry.occupied }));
-  const last = [...history].reverse().find(entry => numeric(entry.occupied));
-  const first = history.find(entry => numeric(entry.occupied));
+  const lastIndex = history.map(entry => numeric(entry.occupied)).lastIndexOf(true);
+  const firstIndex = history.findIndex(entry => numeric(entry.occupied));
+  const last = lastIndex >= 0 ? history[lastIndex] : undefined;
+  const first = firstIndex >= 0 ? history[firstIndex] : undefined;
+  const spanMonths = lastIndex - firstIndex;
   const change = last && first && numeric(last.occupied) && numeric(first.occupied) ? last.occupied - first.occupied : undefined;
-  const series = dashboardChartSeries(data.trends.data, "portfolio", "occupancy", "units")[0];
-  void series;
   return <div className="mk-trend">
-    <div className="mk-trend-h"><span className="mk-n mk-n-m">{last?.occupied ?? "—"}<span className="mk-unit">/{total ?? "—"} occupied</span></span>{change !== undefined && <span className="mk-delta" data-tone={change >= 0 ? "pos" : "neg"}>{change >= 0 ? "▲" : "▼"} {Math.abs(change)} over {history.length} mo</span>}</div>
+    <div className="mk-trend-h"><span className="mk-n mk-n-m">{last?.occupied ?? "—"}<span className="mk-unit">/{total ?? "—"} occupied</span></span>{change !== undefined && spanMonths > 0 && <span className="mk-delta" data-tone={change >= 0 ? "pos" : "neg"}>{change >= 0 ? "▲" : "▼"} {Math.abs(change)} over {spanMonths} mo</span>}</div>
     <AxisChart width={metrics.bodyWidth} height={metrics.bodyHeight - 40} points={points} yMin={0} yMax={total ? Math.ceil(total / 10) * 10 : undefined} reference={total} ticks={3} />
   </div>;
 }
@@ -399,7 +416,7 @@ function QboSummary({ data, metrics }: WidgetContext) {
     { key: "noi", label: `NOI · ${data.filters.asOfDate.slice(0, 4)} YTD`, value: show("NetOperatingIncome"), sub: `${show("Income")} income`, tone: (centsNumber(noi.cents) ?? 0) < 0 && noi.complete ? "neg" : undefined },
     { key: "net", label: "After interest", value: show("NetIncome"), sub: `${show("OtherExpenses")} other expenses`, tone: (centsNumber(net.cents) ?? 0) < 0 && net.complete ? "neg" : undefined },
     { key: "close", label: `${monthShort(close.month)} close`, value: close.loading ? "…" : <>{closeDone}<span className="mk-unit">/{closeRows.length}</span></>, sub: blocker ? blocker.label : closeRows.length ? "all checks complete" : "no connected entities" },
-    { key: "sync", label: "QuickBooks", value: <>{available.length}<span className="mk-unit">/{entities.length}</span></>, sub: `synced ${ago(lastSync ?? undefined)}${failed ? ` · ${failed} failed jobs` : ""}${exceptions ? ` · ${exceptions} exceptions` : ""}`, tone: failed || exceptions ? undefined : undefined },
+    { key: "sync", label: "QuickBooks", value: <>{available.length}<span className="mk-unit">/{entities.length}</span></>, sub: `synced ${ago(lastSync ?? undefined)}${failed ? ` · ${failed} failed jobs` : ""}${exceptions ? ` · ${exceptions} exceptions` : ""}`, tone: failed || exceptions ? "neg" : undefined },
   ];
   const entityProps = (id: string) => organization?.entities.find(entity => entity.id === id)?.properties.map(property => shortName(property.name)).join(" · ") ?? "";
   const rows = reports.rows.slice(0, Math.max(0, Math.floor((metrics.bodyHeight - 130) / 30)));
@@ -426,7 +443,7 @@ function ComingUp({ data }: WidgetContext) {
     const within = (date: string | null | undefined) => !!date && date >= asOf && date <= until;
     for (const row of data.movements ?? []) if (within(String(row.date ?? ""))) list.push({ key: `move-${row.tenantName}-${row.date}`, date: String(row.date), kind: "Move", title: `${text(row.movement)} · ${text(row.propertyName)} ${text(row.unitNumber)}`, detail: text(row.tenantName) });
     const firstOfNext = `${monthKeyOf(asOf, 1)}-01`;
-    if (within(firstOfNext) && (data.propertyRows?.length ?? 0) > 0) list.push({ key: "rent-due", date: firstOfNext, kind: "Rent", title: "Rent due", detail: `${money(sumKnown(data.propertyRows, "rent"))} scheduled across ${data.propertyRows!.length} properties` });
+    if (within(firstOfNext) && (data.propertyRows?.length ?? 0) > 0) list.push({ key: "rent-due", date: firstOfNext, kind: "Rent", title: "Rent due", detail: `${(data.propertyRows ?? []).some(row => Number(row.rentUnknown) > 0 || Number(row.unknown) > 0) ? "≥ " : ""}${money(sumKnown(data.propertyRows, "rent"))} scheduled across ${data.propertyRows!.length} properties` });
     for (const row of leases.rows ?? []) {
       if (within(String(row.contractEndOn ?? ""))) list.push({ key: `lease-${row.unitId}-${row.contractEndOn}`, date: String(row.contractEndOn), kind: "Lease", title: `Lease ends · ${text(row.propertyName)} ${text(row.unitNumber)}`, detail: text(row.tenantName), tone: "warning" });
       else if (within(String(row.noticeDeadlineOn ?? ""))) list.push({ key: `notice-${row.unitId}-${row.noticeDeadlineOn}`, date: String(row.noticeDeadlineOn), kind: "Notice", title: `Renewal notice due · ${text(row.propertyName)} ${text(row.unitNumber)}`, detail: text(row.tenantName) });
@@ -453,7 +470,7 @@ function ComingUp({ data }: WidgetContext) {
     return list.sort((a, b) => a.date.localeCompare(b.date) || a.title.localeCompare(b.title));
   }, [asOf, until, data, leases.rows, projects.data, details.details, company.data, organization, deals.byId]);
   const loading = !data.movements || leases.loading || projects.isLoading || company.isLoading || (!!projects.data && details.loading);
-  const incomplete = !!leases.error || !!projects.error || !!company.error || details.incomplete || !!company.data?.obligations.truncated;
+  const incomplete = !!leases.error || !!projects.error || !!company.error || details.incomplete || deals.incomplete || !!company.data?.obligations.truncated;
   if (!items.length) return loading ? <Loading /> : incomplete ? <Empty title="Upcoming data incomplete">Some project, company or lease records could not be read.</Empty> : <Empty title="Nothing in the next 30 days">Moves, lease ends, project dates, tasks, loan maturities and investor payments show here.</Empty>;
   return <div className="mk-up">{items.map(item => {
     const days = dayDiff(asOf, item.date);
@@ -470,7 +487,7 @@ const IN_CATEGORIES = new Set(["tenant_receipts", "subsidy_receipts", "pm_remitt
 
 function CashflowGrid({ data, metrics }: WidgetContext) {
   const forecast = useForecast(data);
-  return <ForecastGate forecast={forecast}>{result => {
+  return <ForecastGate forecast={forecast} labelsDraft>{result => {
     const weeks = forecastWeeksFrom(result, data.filters.asOfDate);
     const count = Math.max(2, Math.min(weeks.length, Math.floor((metrics.bodyWidth - 190) / 66)));
     const shown = weeks.slice(0, count);
@@ -500,7 +517,7 @@ function CashflowGrid({ data, metrics }: WidgetContext) {
           {outgoing.length > 0 && <tr className="sec"><th colSpan={shown.length + 1}>Money out</th></tr>}
           {outgoing.map(key => <tr key={key} className="grp"><th>{label(key)}</th>{shown.map(week => cell(week.categories[key], week.key))}</tr>)}
           <tr className="net"><th>Net</th>{shown.map(week => { const cents = centsNumber(week.netCents); return <td key={week.key} data-tone={(cents ?? 0) < 0 ? "neg" : undefined}>{cents === undefined ? "—" : `${cents < 0 ? "−" : "+"}${kMoney(Math.abs(cents))}`}</td>; })}</tr>
-          <tr className="end"><th>Ending cash</th>{shown.map(week => cell(week.availableClosingCents, week.key, true))}</tr>
+          <tr className="end"><th>{relative ? "Ending cash (relative)" : "Ending cash"}</th>{shown.map(week => cell(week.availableClosingCents, week.key, true))}</tr>
         </tbody></table></div>
       <Foot action="Open forecast" onAction={companyOpener(data, "forecasting", { forecastTab: "cash" })}>{`Actuals through ${shortDay(result.actualsCutoff)}`}{result.summary.weeksBelowFloor ? ` · ${result.summary.weeksBelowFloor} weeks below reserve` : ""}</Foot>
     </div>;
@@ -525,12 +542,16 @@ export function rehabBudgetCents(project: ProjectSummary, deal: Deal): string | 
 }
 
 /** Rehab spend: complete QuickBooks actuals, else verified or source-backed rehab costs on the deal. */
-export function rehabSpentCents(project: ProjectSummary, deal: Deal): { cents: string | null; source: "qbo" | "deal" | "none" } {
-  if (project.postedActualCoverage === "complete" && project.postedActualCents !== null) return { cents: project.postedActualCents, source: "qbo" };
+export function rehabSpentCents(project: ProjectSummary, deal: Deal): { cents: string | null; source: "qbo" | "deal" | "none"; partial: boolean } {
+  if (project.postedActualCoverage === "complete" && project.postedActualCents !== null) return { cents: project.postedActualCents, source: "qbo", partial: false };
   const lane = rehabLane(deal);
-  if (lane?.incurredCents) return { cents: lane.incurredCents, source: "deal" };
-  return { cents: null, source: "none" };
+  // The lane's incurred total counts verified rows only; with unreconciled rows it is a lower bound.
+  if (lane?.incurredCents) return { cents: lane.incurredCents, source: "deal", partial: lane.coverage !== "complete" };
+  return { cents: null, source: "none", partial: false };
 }
+
+/** "≥ " for lower bounds. */
+const atLeast = (partial: boolean) => partial ? "≥ " : "";
 
 function share(numerator: string | null, denominator: string | null): number | undefined {
   const top = centsNumber(numerator), bottom = centsNumber(denominator);
@@ -547,17 +568,21 @@ function ProjectTotals({ data, metrics }: WidgetContext) {
   const flips = open.filter(project => project.projectType === "flip");
   const budgets = open.map(project => rehabBudgetCents(project, deals.byId.get(project.id)));
   const budgetSet = budgets.filter((value): value is NonNullable<typeof value> => value !== null);
-  const spent = open.map(project => rehabSpentCents(project, deals.byId.get(project.id)).cents).filter((value): value is NonNullable<typeof value> => value !== null);
-  const costToDate = open.map(project => deals.byId.get(project.id)?.totals?.incurredCents ?? null).filter((value): value is NonNullable<typeof value> => value !== null);
+  const spends = open.map(project => rehabSpentCents(project, deals.byId.get(project.id)));
+  const spent = spends.map(entry => entry.cents).filter((value): value is NonNullable<typeof value> => value !== null);
+  const spentPartial = spent.length < open.length || spends.some(entry => entry.partial);
+  const costs = open.map(project => { const deal = deals.byId.get(project.id); return { cents: deal?.totals?.incurredCents ?? null, complete: deal?.coverage?.status === "complete" }; });
+  const costToDate = costs.map(entry => entry.cents).filter((value): value is NonNullable<typeof value> => value !== null);
+  const costPartial = costToDate.length < open.length || costs.some(entry => !entry.complete) || deals.incomplete;
   const sales = flipDeals.reports.map(entry => entry.report?.saleForecast?.grossProceedsCents ?? null);
   const salesSet = sales.filter((value): value is NonNullable<typeof value> => value !== null);
   const profits = flipDeals.reports.map(entry => entry.report?.coverage?.status === "complete" && entry.report.saleForecast?.profitState === "complete" ? entry.report.saleForecast!.projectedProfitCents : null);
   const profit = !flipDeals.incomplete && profits.length === flips.length && profits.every(value => value !== null) ? sumCents(profits) : null;
   const cells: Cell[] = [
-    { key: "sales", label: "Projected sales", value: flipDeals.loading ? "…" : salesSet.length ? kMoney(sumCents(salesSet)) : "Not set", sub: `${salesSet.length} of ${flips.length} flip${flips.length === 1 ? "" : "s"} priced`, tone: salesSet.length ? undefined : "muted" },
+    { key: "sales", label: "Projected sales", value: flipDeals.loading ? "…" : salesSet.length ? `${atLeast(salesSet.length < flips.length || flipDeals.incomplete)}${kMoney(sumCents(salesSet))}` : "Not set", sub: `${salesSet.length} of ${flips.length} flip${flips.length === 1 ? "" : "s"} priced`, tone: salesSet.length ? undefined : "muted" },
     { key: "profit", label: "Projected flip profit", value: flipDeals.loading ? "…" : !flips.length ? "—" : profit === null ? (profits.some(value => value !== null) ? "Unknown" : "Not set") : kMoney(profit), sub: `${flips.length} flip${flips.length === 1 ? "" : "s"}${profit === null && flips.length ? " · add sale forecasts in Projects" : ""}`, tone: profit === null ? "muted" : undefined },
-    { key: "rehab", label: "Rehab spent", value: deals.loading ? "…" : spent.length ? kMoney(sumCents(spent)) : "Not recorded", sub: !budgetSet.length ? "no rehab budgets set in Projects" : `of ${kMoney(sumCents(budgetSet))} budget${budgetSet.length < open.length ? ` · ${open.length - budgetSet.length} without budget` : ""}`, tone: spent.length ? undefined : "muted" },
-    { key: "cost", label: "Cost to date", value: deals.loading ? "…" : costToDate.length ? kMoney(sumCents(costToDate)) : "Not recorded", sub: `${open.length} open · acquisition, rehab, holding`, tone: costToDate.length ? undefined : "muted" },
+    { key: "rehab", label: "Rehab spent", value: deals.loading ? "…" : spent.length ? `${atLeast(spentPartial)}${kMoney(sumCents(spent))}` : "Not recorded", sub: !budgetSet.length ? "no rehab budgets set in Projects" : `of ${kMoney(sumCents(budgetSet))} budget${budgetSet.length < open.length ? ` · ${open.length - budgetSet.length} without budget` : ""}`, tone: spent.length ? undefined : "muted" },
+    { key: "cost", label: "Cost to date", value: deals.loading ? "…" : costToDate.length ? `${atLeast(costPartial)}${kMoney(sumCents(costToDate))}` : "Not recorded", sub: `${open.length} open · acquisition, rehab, holding`, tone: costToDate.length ? undefined : "muted" },
   ];
   return <Cells items={cells} columns={metrics.bodyWidth >= 560 ? 4 : 2} />;
 }
@@ -576,9 +601,9 @@ function RehabRings({ data, metrics }: WidgetContext) {
     const budget = rehabBudgetCents(project, deal);
     const spent = rehabSpentCents(project, deal);
     const ratio = share(spent.cents, budget);
-    const caption = project.targetOn ? daysLabel(asOf, project.targetOn) : budget === null ? "no budget" : spent.cents === null ? "no spend yet" : `${kMoney(spent.cents)} spent`;
+    const caption = project.targetOn ? daysLabel(asOf, project.targetOn) : budget === null ? "no budget" : spent.cents === null ? "no spend yet" : `${atLeast(spent.partial)}${kMoney(spent.cents)} spent`;
     return <button key={project.id} type="button" className="mk-ring" onClick={openProject(data, project, project.organizationId)} title={`${project.name}: ${spent.cents === null ? "no spend recorded" : wholeCents(spent.cents)} of ${budget === null ? "no budget" : wholeCents(budget)}`}>
-      <Ring share={ratio} size={size} tone={ratio !== undefined && ratio > 1 ? "critical" : "accent"} label={ratio === undefined ? "—" : pct(ratio)} />
+      <Ring share={ratio} size={size} tone={ratio !== undefined && ratio > 1 ? "critical" : "accent"} label={ratio === undefined ? "—" : `${spent.partial ? "≥" : ""}${pct(ratio)}`} />
       <b>{shortName(project.name.replace(/\s+(flip|rehab)$/i, ""))}</b>
       <span data-tone={project.targetOn && project.targetOn < asOf ? "neg" : undefined}>{caption}</span>
     </button>;
@@ -600,15 +625,19 @@ function Gantt({ data, metrics }: WidgetContext) {
   if (!open.length) return <Empty title="No open projects" />;
   const tasksFor = (project: ProjectSummary): ProjectDetail["tasks"] => details.details.find(detail => detail.id === project.id)?.tasks.filter(task => task.dueOn && !task.archivedAt && task.status !== "cancelled") ?? [];
   const dates = open.flatMap(project => { const m = milestones(project, deals.byId.get(project.id)); return [m.start, m.target, m.sale, ...tasksFor(project).map(task => task.dueOn)]; }).filter((value): value is NonNullable<typeof value> => !!value);
-  const from = [addDays(asOf, -21), ...dates].sort()[0]!, to = [addDays(asOf, 120), ...dates].sort().at(-1)!;
+  // One stale overdue task or a far-off sale must not squash the window: clamp to 6 months back, 18 ahead.
+  const lo = addDays(asOf, -180), hi = addDays(asOf, 540);
+  const from = [addDays(asOf, -21), ...dates.filter(date => date >= lo)].sort()[0]!, to = [addDays(asOf, 120), ...dates.filter(date => date <= hi)].sort().at(-1)!;
   const span = Math.max(1, dayDiff(from, to));
   const x = (date: string) => Math.max(0, Math.min(100, dayDiff(from, date) / span * 100));
   const months: string[] = [];
-  for (let month = monthKeyOf(from, 1); month <= to.slice(0, 7) && months.length < 24; month = monthKeyOf(`${month}-01`, 1)) months.push(month);
+  for (let month = monthKeyOf(from, 1); month <= to.slice(0, 7) && months.length < 30; month = monthKeyOf(`${month}-01`, 1)) months.push(month);
+  const labelEvery = Math.max(1, Math.ceil(months.length / Math.max(3, Math.floor(metrics.bodyWidth / 90))));
   const rowHeight = Math.max(30, Math.min(52, Math.floor((metrics.bodyHeight - 60) / Math.max(1, open.length))));
-  const rows = open.sort((a, b) => (milestones(a, deals.byId.get(a.id)).target ?? "9999").localeCompare(milestones(b, deals.byId.get(b.id)).target ?? "9999")).slice(0, Math.max(1, Math.floor((metrics.bodyHeight - 60) / rowHeight)));
+  const rows = [...open].sort((a, b) => (milestones(a, deals.byId.get(a.id)).target ?? "9999").localeCompare(milestones(b, deals.byId.get(b.id)).target ?? "9999")).slice(0, Math.max(1, Math.floor((metrics.bodyHeight - 60) / rowHeight)));
+  const hidden = open.length - rows.length;
   return <div className="mk-gt" style={{ ["--gl" as string]: `${Math.min(190, Math.max(110, metrics.bodyWidth * 0.16))}px` }}>
-    <div className="mk-gt-axis">{months.map(month => <span key={month} style={{ left: `${x(`${month}-01`)}%` }}>{monthShort(month)}{month.endsWith("-01") ? ` ’${month.slice(2, 4)}` : ""}</span>)}<b className="mk-gt-today" style={{ left: `${x(asOf)}%`, height: 22 + rows.length * rowHeight }}><span>Today</span></b></div>
+    <div className="mk-gt-axis">{months.filter((_, index) => index % labelEvery === 0).map(month => <span key={month} style={{ left: `${x(`${month}-01`)}%` }}>{monthShort(month)}{month.endsWith("-01") ? ` ’${month.slice(2, 4)}` : ""}</span>)}<b className="mk-gt-today" style={{ left: `${x(asOf)}%`, height: 22 + rows.length * rowHeight }}><span>Today</span></b></div>
     {rows.map(project => {
       const m = milestones(project, deals.byId.get(project.id));
       const deal = deals.byId.get(project.id);
@@ -630,7 +659,7 @@ function Gantt({ data, metrics }: WidgetContext) {
         </div>
       </div>;
     })}
-    <div className="mk-gt-leg"><span><i className="k reh" />Rehab (fill = spend of budget)</span><span><i className="k mkt" />Listing → sale</span><span><i className="k ms" />Sale close</span><span><i className="k tgt" />Target</span><span><i className="k task" />Task due</span></div>
+    <div className="mk-gt-leg"><span><i className="k reh" />Rehab (fill = spend of budget)</span><span><i className="k mkt" />Listing → sale</span><span><i className="k ms" />Sale close</span><span><i className="k tgt" />Target</span><span><i className="k task" />Task due</span>{hidden > 0 && <button type="button" className="rops-link" onClick={openProject(data, undefined, organization?.id)}>{hidden} more</button>}</div>
   </div>;
 }
 
@@ -664,13 +693,13 @@ function ProjectBoard({ data, metrics }: WidgetContext) {
     const next = [[m.target, "Target"], [m.sale, "Sale"]].find(([date]) => date && date >= asOf) as [string, string] | undefined;
     return <div key={project.id} className="mk-pj">
       <div className="mk-pj-a"><b>{project.name}</b><span className="mk-cap">{entityName(project.legalEntityId)} · {PROJECT_TYPE_LABEL[project.projectType]}</span><Chip tone={status.tone}>{status.label}</Chip></div>
-      <div className="mk-pj-b"><Ring share={ratio} size={44} tone={over ? "critical" : "accent"} label={ratio === undefined ? "—" : pct(ratio)} />
+      <div className="mk-pj-b"><Ring share={ratio} size={44} tone={over ? "critical" : "accent"} label={ratio === undefined ? "—" : `${spent.partial ? "≥" : ""}${pct(ratio)}`} />
         <div className="mk-pj-bar"><div className="mk-sp"><i style={{ width: `${Math.min(100, (ratio ?? 0) * 100)}%` }} /><b style={{ left: "100%" }} /></div>
-          <span className="mk-cap"><b>{spent.cents === null ? "No spend recorded" : `${kMoney(spent.cents)} spent`}</b> · {budget === null ? "no budget" : `${kMoney(budget)} budget`}{spent.source === "deal" ? " · from deal costs" : ""}</span></div></div>
+          <span className="mk-cap"><b>{spent.cents === null ? "No spend recorded" : `${atLeast(spent.partial)}${kMoney(spent.cents)} spent`}</b> · {budget === null ? "no budget" : `${kMoney(budget)} budget`}{spent.source === "deal" ? " · from deal costs" : ""}</span></div></div>
       <div className="mk-pj-c">{points.length ? <><div className="mk-strip">{[m.start, m.target, m.sale].map((date, index) => date ? <i key={index} className={date < asOf ? "done" : undefined} style={{ left: `${px(date)}%` }} title={`${["Start", "Target", "Sale"][index]} ${shortDay(date)}`} /> : null)}{a && b && asOf >= a && asOf <= b && <em style={{ left: `${px(asOf)}%` }} />}</div>
         <span className="mk-cap mk-strip-cap"><span>{a ? shortDay(a) : ""}</span><span>{next ? <>{next[1]} <b>{shortDay(next[0])}</b> · {dayDiff(asOf, next[0])}d</> : late ? <span data-tone="neg">{dayDiff(m.target!, asOf)}d past target</span> : ""}</span><span>{b && b !== a ? shortDay(b) : ""}</span></span></>
         : <span className="mk-cap">No start, target or sale dates yet</span>}</div>
-      <div className="mk-pj-d"><div><span>Sale</span><b className="mk-n">{sale?.grossProceedsCents ? kMoney(sale.grossProceedsCents) : "—"}</b></div><div><span>Profit</span><b className="mk-n" data-tone={(centsNumber(profit) ?? 0) < 0 ? "neg" : undefined}>{profit ? kMoney(profit) : "—"}</b></div><div><span>Cushion</span><b className="mk-n">{cushion === undefined ? "—" : pct(cushion)}</b></div><div><span>Budget left</span><b className="mk-n">{budget && spent.cents ? kMoney(String(BigInt(budget) - BigInt(spent.cents))) : budget ? kMoney(budget) : "—"}</b></div></div>
+      <div className="mk-pj-d"><div><span>Sale</span><b className="mk-n">{sale?.grossProceedsCents ? kMoney(sale.grossProceedsCents) : "—"}</b></div><div><span>Profit</span><b className="mk-n" data-tone={(centsNumber(profit) ?? 0) < 0 ? "neg" : undefined}>{profit ? kMoney(profit) : "—"}</b></div><div><span>Cushion</span><b className="mk-n">{cushion === undefined ? "—" : pct(cushion)}</b></div><div><span>Budget left</span><b className="mk-n">{!budget ? "—" : spent.cents === null ? "Unknown" : `${spent.partial ? "≤ " : ""}${kMoney(String(BigInt(budget) - BigInt(spent.cents)))}`}</b></div></div>
       <div className="mk-pj-e"><button type="button" className="mk-btn2" onClick={openProject(data, project, organization?.id)}>Open</button></div>
     </div>;
   })}{open.length > rows.length && <button type="button" className="rops-link mk-more" onClick={openProject(data, undefined, organization?.id)}>{open.length - rows.length} more open projects</button>}

@@ -461,11 +461,13 @@ export function AxisChart({ points, width, height, yMin, yMax, ticks = 3, refere
   const rawMin = Math.min(...known, reference ?? Infinity), rawMax = Math.max(...known, reference ?? -Infinity);
   const niceStep = (range: number) => { const exponent = Math.pow(10, Math.floor(Math.log10(range || 1))); const fraction = range / exponent; return (fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10) * exponent; };
   const step = niceStep(((yMax ?? rawMax) - (yMin ?? Math.min(0, rawMin))) / ticks);
-  const lo = yMin ?? Math.floor(Math.min(0, rawMin) / step) * step, hi = yMax ?? Math.ceil(Math.max(rawMax, lo + step) / step) * step;
-  const left = 30, right = 8, top = 8, bottom = 20;
+  const lo = yMin ?? Math.floor(Math.min(0, rawMin) / step) * step;
+  // Round the top up to a whole step so every tick (and its gridline) stays inside the chart.
+  const hi = Math.ceil(Math.max(yMax ?? rawMax, lo + step) / step) * step;
+  const tickValues: number[] = []; for (let value = lo; value <= hi + step * 1e-9; value += step) tickValues.push(value);
+  const left = Math.max(30, Math.max(...tickValues.map(value => format(value).length)) * 6.5 + 8), right = 8, top = 8, bottom = 20;
   const x = (index: number) => left + (points.length === 1 ? (w - left - right) / 2 : index * (w - left - right) / (points.length - 1));
   const y = (value: number) => top + (hi - value) / (hi - lo || 1) * (h - top - bottom);
-  const tickValues: number[] = []; for (let value = lo; value <= hi + step / 2; value += step) tickValues.push(value);
   let path = "", area = "", open = false, start = 0;
   points.forEach((point, index) => {
     if (!numeric(point.value)) { if (open) area += `L${x(index - 1)},${y(lo)}L${x(start)},${y(lo)}Z`; open = false; return; }

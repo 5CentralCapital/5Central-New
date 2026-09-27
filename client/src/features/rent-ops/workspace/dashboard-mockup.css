@@ -8,8 +8,11 @@
 .rm-workspace.rops-modern .ops-widget { border-radius: var(--ds-r-xl, 22px); }
 .rm-workspace.rops-modern .ops-widget .ops-widget-head { min-height: 34px; height: 34px; padding: 16px 20px 0; gap: 7px; justify-content: flex-start; box-sizing: border-box; }
 .rm-workspace.rops-modern .ops-widget .ops-widget-head h2 { flex: 1; font: 600 12.5px/18px var(--ds-font); color: var(--ds-muted); }
-.rm-workspace.rops-modern .ops-widget .ops-widget-head > button { width: 24px; height: 24px; opacity: 0; transition: opacity .15s; }
-.rm-workspace.rops-modern .ops-widget:hover .ops-widget-head > button, .rm-workspace.rops-modern .ops-widget .ops-widget-head > button:focus-visible { opacity: 1; }
+/* The open button fades in on hover only where hovering exists; touch keeps it visible. */
+@media (hover: hover) and (pointer: fine) {
+  .rm-workspace.rops-modern .ops-widget .ops-widget-head > button { width: 24px; height: 24px; opacity: 0; transition: opacity .15s; }
+  .rm-workspace.rops-modern .ops-widget:hover .ops-widget-head > button, .rm-workspace.rops-modern .ops-widget .ops-widget-head > button:focus-visible { opacity: 1; }
+}
 .ops-widget-dot { flex: none; width: 6px; height: 6px; border-radius: 2px; background: var(--ds-muted); }
 .ops-widget-dot[data-category="cash"] { background: #c8963a; }
 .ops-widget-dot[data-category="rent"] { background: var(--ds-ink); }
@@ -23,7 +26,7 @@
 
 /* Numbers */
 .mk-n { font-family: var(--ds-font-display); font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; font-weight: 600; letter-spacing: -.025em; color: var(--ds-ink); }
-.mk-n[data-tone="neg"], [data-tone="neg"] { color: var(--ds-critical); }
+.mk-n[data-tone="neg"], .rops-dash [data-tone="neg"] { color: var(--ds-critical); }
 .mk-n[data-tone="pos"] { color: var(--ds-positive); }
 .mk-n[data-tone="muted"] { color: var(--ds-muted); font-weight: 500; }
 .mk-n-xl { font-size: clamp(34px, 3.4vw, 46px); line-height: 1; }
@@ -36,6 +39,8 @@
 .mk-delta { display: inline-flex; align-items: center; gap: 3px; font: 600 12px var(--ds-font); font-variant-numeric: tabular-nums; padding: 2px 7px; border-radius: 6px; background: var(--ds-fill); white-space: nowrap; }
 .mk-delta[data-tone="pos"] { color: var(--ds-positive); background: var(--ds-positive-wash); }
 .mk-delta[data-tone="neg"] { color: var(--ds-critical); background: var(--ds-critical-wash); }
+.mk-draft-row { flex: none; margin: 0 0 6px; }
+.mk-rt-more td { border-top: 1px solid var(--ds-hairline); padding: 8px 0; text-align: left; font-family: var(--ds-font); }
 .mk-draft { display: inline-flex; align-items: center; font: 600 11px var(--ds-font); color: #a8781f; background: color-mix(in srgb, #c8963a 13%, transparent); padding: 2px 8px; border-radius: 6px; white-space: nowrap; }
 
 /* Chips */
@@ -221,6 +226,17 @@ table.mk-cf-table { border-collapse: collapse; font-size: 13px; width: 100%; }
 .mk-btn2 { border: 0; border-radius: 10px; padding: 6px 12px; font: 600 13px var(--ds-font); cursor: pointer; background: var(--ds-fill); color: var(--ds-ink); }
 .mk-btn2:hover { background: var(--ds-fill-hover); }
 .mk-more { align-self: flex-start; margin-top: 10px; font-size: 13px; }
+/* The board collapses by its own width, not the viewport's: a 4-column widget is narrow on any screen. */
+.ops-widget[data-widget="proj-board"] .ops-widget-body { container-type: inline-size; }
+@container (max-width: 900px) {
+  .mk-pj { grid-template-columns: 140px 1fr 1fr; grid-template-rows: auto auto; gap: 12px 18px; }
+  .mk-pj-d { grid-column: 1 / -1; }
+  .mk-pj-e { grid-column: 3; grid-row: 1; }
+}
+@container (max-width: 520px) {
+  .mk-pj { grid-template-columns: 1fr; gap: 10px; }
+  .mk-pj-e { grid-column: 1; grid-row: auto; justify-content: flex-start; }
+}
 @media (max-width: 1100px) {
   .mk-pj { grid-template-columns: 140px 1fr 1fr; grid-template-rows: auto auto; gap: 12px 18px; }
   .mk-pj-d { grid-column: 1 / -1; }
