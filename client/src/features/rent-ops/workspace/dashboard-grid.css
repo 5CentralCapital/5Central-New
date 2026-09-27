@@ -1,7 +1,7 @@
 /* Widget dashboard: grid, widget chrome, library drawer, menus. Tokens from styles/ops-tokens.css. */
 .ops-dashboard { position: relative; min-width: 0; }
-.ops-dashboard-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -4px 0 10px; }
-.ops-dashboard-sub { font: var(--ds-caption); color: var(--ds-muted); }
+.ops-dashboard-scope-tools { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; white-space: nowrap; }
+.ops-dashboard-scope-mount { display: inline-flex; flex: none; align-items: center; }
 .ops-dashboard-gear { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 50%; background: var(--ds-fill); color: var(--ds-muted); cursor: pointer; }
 .ops-dashboard-gear:hover, .ops-dashboard-gear[data-state="open"] { background: var(--ds-fill-hover); color: var(--ds-ink); }
 .ops-dashboard-gear:focus-visible { outline: none; box-shadow: var(--ds-focus); }

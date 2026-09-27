@@ -25,40 +25,59 @@ const multiOrgContext: CompanyContext = { organizations: [
   ...context.organizations,
   { id: SECOND_ORG, name: "Synthetic Books Two", role: "finance", entities: [{ id: SECOND_ENTITY, name: "Synthetic LLC Two", currency: "USD", properties: [{ id: "demo-property-a", name: "Demo A", units: [] }] }] },
 ] };
-function sourceResolution(currentState: TenantSourceResolution["currentState"], options: { readonly historicalQboLink?: boolean; readonly organizationId?: string; readonly legalEntityId?: string; readonly noOverlappingPeriod?: boolean } = {}): TenantSourceResolution {
+function sourceResolution(currentState: TenantSourceResolution["currentState"] | "linked_dates_missing", options: { readonly historicalQboLink?: boolean; readonly organizationId?: string; readonly legalEntityId?: string; readonly noOverlappingPeriod?: boolean; readonly missingStart?: boolean; readonly missingEnd?: boolean; readonly status?: string; readonly connectionUnavailable?: boolean } = {}): TenantSourceResolution {
   const historicalQboLink = options.historicalQboLink === true;
   const organizationId = options.organizationId ?? ORG;
   const legalEntityId = options.legalEntityId ?? ENTITY;
   const noOverlappingPeriod = options.noOverlappingPeriod === true;
+  const linkedDatesMissing = currentState === "linked_dates_missing";
+  const resolvedCurrentState = linkedDatesMissing ? options.connectionUnavailable ? "local_history_available" : "linked" : currentState;
   const realmId = organizationId === SECOND_ORG ? "9131" : "9130";
-  const connected = currentState === "linked" || currentState === "unlinked" || historicalQboLink;
-  const ownershipReview = currentState === "ownership_review";
-  const qboState: TenantSourceResolution["qbo"]["state"] = currentState === "linked" ? "linked" : currentState === "unlinked" ? "unlinked" : ownershipReview ? "ownership_review" : "not_connected";
+  const hasLink = linkedDatesMissing || resolvedCurrentState === "linked" || historicalQboLink;
+  const connected = hasLink || resolvedCurrentState === "unlinked";
+  const ownershipReview = resolvedCurrentState === "ownership_review";
+  const qboState: TenantSourceResolution["qbo"]["state"] = linkedDatesMissing ? options.connectionUnavailable ? "not_connected" : "linked" : resolvedCurrentState === "linked" ? "linked" : resolvedCurrentState === "unlinked" ? "unlinked" : ownershipReview ? "ownership_review" : "not_connected";
   return tenantSourceResolutionSchema.parse({
     kind: "tenant_source_resolution",
     organizationId,
     tenancyId: "demo-tenancy-a",
     asOf: "2026-09-26",
-    tenancy: { status: "current", propertyId: "demo-property-a", unitId: "demo-unit-a-1", startOn: "2026-01-01", endOn: null },
+    tenancy: { status: options.status ?? "current", propertyId: "demo-property-a", unitId: "demo-unit-a-1", startOn: options.missingStart ? null : "2026-01-01", endOn: options.missingEnd ? null : options.status === "past" ? "2026-08-31" : null },
     local: { state: "local_history_available", sourceSystem: "rent_ops", ledgerEntryCount: 2 },
     ownership: {
-      state: ownershipReview ? "review" : "resolved",
-      coverageComplete: !ownershipReview,
+      state: linkedDatesMissing ? "linked_dates_missing" : ownershipReview ? "review" : "resolved",
+      coverageComplete: !ownershipReview && !linkedDatesMissing,
       propertyName: "Demo A",
       periods: noOverlappingPeriod ? [] : [{ legalEntityId, legalEntityName: legalEntityId === SECOND_ENTITY ? "Synthetic LLC Two" : "Synthetic LLC", effectiveFrom: "2020-01-01", effectiveUntil: null, overlapsTenancy: !ownershipReview }],
-      effectiveLegalEntityId: ownershipReview ? null : legalEntityId,
-      effectiveLegalEntityName: ownershipReview ? null : legalEntityId === SECOND_ENTITY ? "Synthetic LLC Two" : "Synthetic LLC",
+      effectiveLegalEntityId: ownershipReview || linkedDatesMissing ? null : legalEntityId,
+      effectiveLegalEntityName: ownershipReview || linkedDatesMissing ? null : legalEntityId === SECOND_ENTITY ? "Synthetic LLC Two" : "Synthetic LLC",
     },
     qbo: {
       environment: "sandbox",
       state: qboState,
       scope: connected ? { provider: "qbo", organizationId, legalEntityId, environment: "sandbox", realmId } : null,
       binding: connected ? { realmId, providerCompanyName: organizationId === SECOND_ORG ? "Synthetic Books Two" : "Synthetic Books" } : null,
-      connection: connected ? { state: historicalQboLink ? "needs_reconnect" : "active", realmId, readCapabilityEnabled: !historicalQboLink, updatedAt: "2026-09-26T12:00:00.000Z" } : null,
-      customerLink: currentState === "linked" || historicalQboLink ? { customerObjectId: "58", legalEntityId } : null,
+      connection: connected && !options.connectionUnavailable ? { state: historicalQboLink ? "needs_reconnect" : "active", realmId, readCapabilityEnabled: !historicalQboLink, updatedAt: "2026-09-26T12:00:00.000Z" } : null,
+      customerLink: hasLink ? { customerObjectId: "58", legalEntityId } : null,
     },
-    currentState,
-    reasons: ownershipReview ? ["The historical property owner could not be resolved for this tenancy."] : [],
+    currentState: resolvedCurrentState,
+    reasons: ownershipReview ? ["The historical property owner could not be resolved for this tenancy."] : linkedDatesMissing ? [options.missingStart ? "Move-in date is missing." : "Move-out/end date is missing."] : [],
+  });
+}
+
+function syntheticLedger(ownershipWarning?: string) {
+  return parseCustomerLedger({
+    ...(ownershipWarning ? { ownershipWarning } : {}),
+    scope: { organizationId: ORG, legalEntityId: ENTITY, environment: "sandbox", realmId: "9130" },
+    customer: { objectId: "58", displayName: "Synthetic Resident", active: true },
+    asOf: null,
+    entries: [{ objectType: "Invoice", objectId: "101", version: "0", txnDate: "2026-08-01", dueDate: "2026-08-05", docNumber: "1001", kinds: ["charge"], amountCents: "150000", runningBalanceCents: "150000", openBalanceCents: "150000", postingState: "posted" }],
+    totals: { chargesCents: "150000", creditsCents: "0", paymentsCents: "0", adjustmentsCents: "0", endingBalanceCents: "150000" },
+    openItems: [{ objectType: "Invoice", objectId: "101", docNumber: "1001", txnDate: "2026-08-01", dueDate: "2026-08-05", openBalanceCents: "150000", daysPastDue: 49 }],
+    aging: { currentCents: "0", days1To30Cents: "0", days31To60Cents: "150000", days61To90Cents: "0", over90Cents: "0" },
+    verification: { state: "unverified", providerBalanceCents: "150000", computedBalanceCents: "150000", reason: "Balances agree, but receivable coverage is not complete" },
+    coverage: { status: "partial", reasons: ["receivables.payment: first read still running"], observedAt: new Date().toISOString() },
+    page: { total: 1, nextCursor: null },
   });
 }
 
@@ -162,4 +181,65 @@ test("multiple overlapping organization owners fail closed into ownership review
   assert.match(html, /one historical property owner is confirmed/);
   assert.doesNotMatch(html, /Link customer/);
   assert.doesNotMatch(html, /Ending balance/);
+});
+
+test("a linked tenancy with a missing move-in date shows its read-only ledger and warning", async () => {
+  const html = await render(client => {
+    client.setQueryData(["rent-ops-qbo-ledger", "tenancy-ledger", ORG, "demo-tenancy-a", "sandbox"], { pages: [syntheticLedger()], pageParams: [undefined] });
+  }, sourceResolution("linked_dates_missing", { missingStart: true }));
+  assert.match(html, /Tenancy dates need confirmation/);
+  assert.match(html, /Move-in date missing/);
+  assert.match(html, /Add the missing date to confirm ownership/);
+  assert.match(html, /<td>Invoice<\/td>/);
+  assert.match(html, /Synthetic Resident/);
+  assert.doesNotMatch(html, /Link customer/);
+});
+
+test("a past linked tenancy with a missing end date shows the ledger and end-date warning", async () => {
+  const html = await render(client => {
+    client.setQueryData(["rent-ops-qbo-ledger", "tenancy-ledger", ORG, "demo-tenancy-a", "sandbox"], { pages: [syntheticLedger()], pageParams: [undefined] });
+  }, sourceResolution("linked_dates_missing", { missingEnd: true, status: "past" }));
+  assert.match(html, /Move-out\/end date missing/);
+  assert.match(html, /<td>Invoice<\/td>/);
+  assert.doesNotMatch(html, /Link customer/);
+});
+
+test("a missing-end linked source plus another organization's mapped history withholds the ledger", async () => {
+  const linkedFallback = sourceResolution("linked_dates_missing", { missingEnd: true, status: "past" });
+  const otherOrganizationOwner = sourceResolution("unlinked", { organizationId: SECOND_ORG, legalEntityId: SECOND_ENTITY });
+  const html = await render(client => {
+    client.setQueryData(["rent-ops-qbo-ledger", "tenancy-ledger", ORG, "demo-tenancy-a", "sandbox"], { pages: [syntheticLedger()], pageParams: [undefined] });
+  }, linkedFallback, { context: multiOrgContext, resolutions: [linkedFallback, otherOrganizationOwner] });
+  assert.match(html, /Historical QuickBooks ownership needs review/);
+  assert.match(html, /mapped ownership history or existing QuickBooks link/);
+  assert.doesNotMatch(html, /Ending balance/);
+  assert.doesNotMatch(html, /Link customer/);
+});
+
+test("a ledger ownership warning survives stale resolved source data", async () => {
+  const html = await render(client => {
+    client.setQueryData(["rent-ops-qbo-ledger", "tenancy-ledger", ORG, "demo-tenancy-a", "sandbox"], { pages: [syntheticLedger("Move-in date missing. Add it to confirm ownership.")], pageParams: [undefined] });
+  }, sourceResolution("linked"));
+  assert.match(html, /Tenancy dates need confirmation/);
+  assert.match(html, /Move-in date missing\. Add it to confirm ownership\./);
+  assert.match(html, /<td>Invoice<\/td>/);
+});
+
+test("a missing-date linked source keeps its warning when QuickBooks is disconnected", async () => {
+  const html = await render(() => undefined, sourceResolution("linked_dates_missing", { missingStart: true, connectionUnavailable: true }));
+  assert.match(html, /Tenancy dates need confirmation/);
+  assert.match(html, /Move-in date missing/);
+  assert.match(html, /QuickBooks connection needs attention/);
+  assert.doesNotMatch(html, /Ending balance/);
+  assert.doesNotMatch(html, /Link customer/);
+});
+
+test("a missing-date existing link never offers a new or replacement customer link", async () => {
+  const html = await render(client => {
+    client.setQueryData(["rent-ops-qbo-ledger", "tenancy-ledger", ORG, "demo-tenancy-a", "sandbox"], { pages: [null], pageParams: [undefined] });
+    client.setQueryData(["rent-ops-qbo-ledger", "customers", ORG, ENTITY, "sandbox", "9130"], [{ kind: "customers", objectType: "Customer", providerObjectId: "58", displayName: "Synthetic Resident", active: true, version: "0", providerUpdatedAt: null }]);
+  }, sourceResolution("linked_dates_missing", { missingStart: true }));
+  assert.match(html, /The existing QuickBooks customer link could not be read/);
+  assert.doesNotMatch(html, /Not linked to a QuickBooks customer/);
+  assert.doesNotMatch(html, /Link customer/);
 });

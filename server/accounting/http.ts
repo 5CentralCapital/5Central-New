@@ -60,6 +60,43 @@ type AccountingReadRole = "owner" | "admin" | "finance" | "read_only_reviewer";
 const READ_ROLES: readonly AccountingReadRole[] = ["owner", "admin", "finance", "read_only_reviewer"];
 const MUTATION_ROLES: readonly AccountingReadRole[] = ["owner", "admin", "finance"];
 
+/** Authorize pre-existing links before a resolver can return link-specific errors or details. */
+async function authorizeExistingTenancyLinks(
+  transaction: RentOpsQueryExecutor,
+  principal: Parameters<typeof authorizeCompanyRead>[0],
+  organizationId: string,
+  tenancyId: string,
+  environment: "sandbox" | "production",
+): Promise<void> {
+  const propertyRow = (await transaction.query<{ property_id: unknown }>(
+    `SELECT t.property_id
+       FROM rent_ops_tenancies t
+      WHERE t.id=$2
+        AND EXISTS (
+          SELECT 1 FROM company_property_entity_periods mapped
+           WHERE mapped.organization_id=$1 AND mapped.property_id=t.property_id
+        )
+      LIMIT 1`,
+    [organizationId, tenancyId],
+  )).rows[0];
+  if (!propertyRow) return;
+  const propertyId = propertyReferenceIdSchema.parse(propertyRow.property_id);
+  const linkedEntities = await transaction.query<{ legal_entity_id: unknown }>(
+    `SELECT DISTINCT legal_entity_id
+       FROM company_external_identities
+      WHERE organization_id=$1 AND provider='qbo' AND record_kind='Customer'
+        AND local_kind='tenancy' AND local_id=$2 AND source_scope LIKE $3`,
+    [organizationId, tenancyId, `qbo:${environment}:%`],
+  );
+  for (const row of linkedEntities.rows) {
+    authorizeCompanyRead(principal, {
+      organizationId: organizationIdSchema.parse(organizationId),
+      legalEntityId: legalEntityIdSchema.parse(row.legal_entity_id),
+      propertyId,
+    }, READ_ROLES);
+  }
+}
+
 async function authorizedScope(executor: RentOpsQueryExecutor, request: unknown, organizationId: string, legalEntityId: string, allowedRoles: readonly AccountingReadRole[] = READ_ROLES) {
   const actorId = companyWebActor(request as Parameters<typeof companyWebActor>[0]);
   const parsedOrganizationId = organizationIdSchema.parse(organizationId);
@@ -282,15 +319,51 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
     if (!executor.transaction) throw new AccountingError("accounting_configuration", "Accounting reads require a transactional company database");
     const actorId = companyWebActor(request);
     const result = await executor.transaction(async transaction => {
+      const principal = await loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: "admin" });
+      await authorizeExistingTenancyLinks(transaction, principal, organizationId, query.tenancyId, query.environment);
       const link = await resolveTenancyCustomer(transaction, { organizationId, tenancyId: query.tenancyId, environment: query.environment, asOf: query.asOf ?? businessToday() });
       if (!link) return null;
-      // Authorize against the linked company before reading any of its data.
-      const principal = await loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: "admin" });
-      authorizeCompanyRead(principal, { organizationId, legalEntityId: link.scope.legalEntityId }, READ_ROLES);
-      return readCustomerLedger(transaction, { scope: link.scope, customerObjectId: link.customerObjectId, asOf: query.asOf, today: businessToday(), limit: query.limit, cursor: query.cursor });
+      // Authorize the immutable link itself, including the property it belongs
+      // to, before returning either a ledger or an ownership-review response.
+      const linkedEntityIds = new Set<string>([
+        link.linkedLegalEntityId,
+        ...(link.scope ? [link.scope.legalEntityId] : []),
+      ]);
+      for (const legalEntityId of Array.from(linkedEntityIds)) {
+        authorizeCompanyRead(principal, {
+          organizationId: organizationIdSchema.parse(organizationId),
+          legalEntityId: legalEntityIdSchema.parse(legalEntityId),
+          propertyId: propertyReferenceIdSchema.parse(link.propertyId),
+        }, READ_ROLES);
+      }
+      if (!link.scope) {
+        return {
+          kind: "ownership_review" as const,
+          ownershipWarning: link.ownershipWarning,
+        };
+      }
+      const ledger = await readCustomerLedger(transaction, { scope: link.scope, customerObjectId: link.customerObjectId, asOf: query.asOf, today: businessToday(), limit: query.limit, cursor: query.cursor });
+      return {
+        kind: "ledger" as const,
+        ledger,
+        ownershipWarning: link.ownershipWarning,
+      };
     }, { readOnly: true });
     if (!result) { response.status(404).json({ code: "accounting_not_linked", message: "This tenancy is not linked to a QuickBooks customer yet; its QuickBooks history is not shown." }); return; }
-    response.json(result);
+    if (result.kind === "ownership_review") {
+      const detail = result.ownershipWarning?.trim();
+      response.status(409).json({
+        code: "accounting_ownership_review",
+        message: detail
+          ? `Ownership is unresolved and needs review. ${detail}`
+          : "This tenancy has an existing QuickBooks customer link, but ownership is unresolved. Review the ownership history before viewing its ledger.",
+      });
+      return;
+    }
+    response.json({
+      ...result.ledger,
+      ...(result.ownershipWarning ? { ownershipWarning: result.ownershipWarning } : {}),
+    });
   }));
   app.get("/api/company/:organizationId/accounting/qbo/receivables/tenancy-source-resolution", requireAdmin, companyReadHandler(async (request, response) => {
     const organizationId = organizationIdSchema.parse(request.params.organizationId);
@@ -305,6 +378,7 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
     const actorId = companyWebActor(request);
     const result = await executor.transaction(async transaction => {
       const principal = await loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: "admin" });
+      await authorizeExistingTenancyLinks(transaction, principal, organizationId, query.tenancyId, environment);
       const resolution = await resolveTenancySource(transaction, {
         organizationId,
         tenancyId: query.tenancyId,
@@ -328,10 +402,17 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
           [organizationId, resolution.tenancy.propertyId],
         )).rows.map(row => legalEntityIdSchema.parse(row.legal_entity_id));
       }
-      if (ownerIds.length === 0) {
+      // A customer identity may belong to a different entity than the one
+      // selected by dated ownership. Require a grant for that linked entity
+      // and this property too, even when the response is an ownership review.
+      const linkedEntityIds = new Set<string>();
+      if (resolution.qbo.customerLink) linkedEntityIds.add(resolution.qbo.customerLink.legalEntityId);
+      if (resolution.qbo.scope) linkedEntityIds.add(resolution.qbo.scope.legalEntityId);
+      const authorizedEntityIds = Array.from(new Set<string>([...ownerIds, ...Array.from(linkedEntityIds)]));
+      if (authorizedEntityIds.length === 0) {
         authorizeCompanyRead(principal, { organizationId }, READ_ROLES);
       } else {
-        for (const legalEntityId of ownerIds) authorizeCompanyRead(principal, { organizationId, legalEntityId, propertyId: resolution.tenancy.propertyId }, READ_ROLES);
+        for (const legalEntityId of authorizedEntityIds) authorizeCompanyRead(principal, { organizationId, legalEntityId: legalEntityIdSchema.parse(legalEntityId), propertyId: resolution.tenancy.propertyId }, READ_ROLES);
       }
       return resolution;
     }, { readOnly: true });

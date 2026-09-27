@@ -340,7 +340,10 @@ test("an unread mirror is reported as unavailable, never as a zero balance", asy
 });
 
 test("tenancies link to one QuickBooks customer through the immutable identity map", async () => {
-  const h = await harness(baseStore());
+  const store = baseStore();
+  store.Customer.push(customer("60", "40.00"));
+  store.Invoice.push(invoice("133", 40, 40, { customer: "60", date: "2026-09-04" }));
+  const h = await harness(store);
   try {
     await h.sync.syncChanges();
     const input = { scope: sourceScope, tenancyId: "t-1", customerObjectId: "58" };
@@ -370,6 +373,40 @@ test("tenancies link to one QuickBooks customer through the immutable identity m
       UPDATE rent_ops_tenancies SET actual_move_in_on='2021-01-01', actual_move_out_on='2021-12-31' WHERE id='t-1';
       UPDATE rent_ops_tenancies SET actual_move_in_on='2022-01-01' WHERE id='t-2';
       UPDATE rent_ops_tenancies SET actual_move_in_on='2019-01-01', actual_move_out_on='2019-12-31' WHERE id='t-3';`);
+    await h.synthetic.db.query("INSERT INTO rent_ops_people(id,first_name,last_name) VALUES('person-6','Synthetic','No Dates')");
+    await h.synthetic.db.query(
+      `INSERT INTO rent_ops_tenancies(id,property_id,unit_id,primary_person_id,status,created_at,property_link_knowledge,unit_link_knowledge,primary_person_link_knowledge,status_knowledge)
+       VALUES('t-6',$1,$2,'person-6','past',NOW(),'manual','manual','manual','manual')`,
+      [SYNTHETIC_COMPANY.propertyId, SYNTHETIC_COMPANY.unitId],
+    );
+    await assert.rejects(h.executor.transaction!(tx => linkTenancyToQboCustomer(tx, {
+      ...input,
+      tenancyId: "t-6",
+      customerObjectId: "60",
+    })), (error: unknown) => error instanceof AccountingError && error.code === "accounting_not_found");
+    await h.synthetic.db.query(
+      "INSERT INTO company_external_identities (id, organization_id, legal_entity_id, provider, source_scope, record_kind, external_id, local_kind, local_id) VALUES ('50000000-0000-4000-8000-000000000004',$1,$2::uuid,'qbo','qbo:sandbox:123456','Customer','60','tenancy','t-6')",
+      [scope.organizationId, scope.legalEntityId],
+    );
+    const missingDateLink = await resolveTenancyCustomer(h.executor, {
+      organizationId: scope.organizationId,
+      tenancyId: "t-6",
+      environment: "sandbox",
+      asOf: "2026-09-21",
+    });
+    assert.ok(missingDateLink?.scope);
+    assert.equal(missingDateLink?.customerObjectId, "60");
+    assert.equal(missingDateLink?.propertyId, SYNTHETIC_COMPANY.propertyId);
+    assert.equal(missingDateLink?.ownershipWarning, "Move-in and move-out dates missing. Add them to confirm ownership.");
+    const linkedLedger = await readCustomerLedger(h.executor, {
+      scope: missingDateLink!.scope!,
+      customerObjectId: missingDateLink!.customerObjectId,
+      today: "2026-09-21",
+    });
+    assert.equal(linkedLedger.entries.length, 1);
+    assert.equal(linkedLedger.totals.endingBalanceCents, "4000");
+    assert.equal(linkedLedger.verification.state, "verified");
+
     assert.equal((await h.executor.transaction!(tx => linkTenancyToQboCustomer(tx, input))).status, "linked");
     assert.equal((await h.executor.transaction!(tx => linkTenancyToQboCustomer(tx, input))).status, "already_linked");
     // The next occupant of the same unit never inherits the former tenant's history.
@@ -387,9 +424,18 @@ test("tenancies link to one QuickBooks customer through the immutable identity m
       "INSERT INTO company_external_identities (id, organization_id, legal_entity_id, provider, source_scope, record_kind, external_id, local_kind, local_id) VALUES ('50000000-0000-4000-8000-000000000002',$1,$2::uuid,'qbo','qbo:sandbox:123456','Customer','59','tenancy','t-3')",
       [scope.organizationId, scope.legalEntityId],
     );
-    assert.equal(await resolveTenancyCustomer(h.executor, { organizationId: scope.organizationId, tenancyId: "t-3", environment: "sandbox" }), null);
+    const outOfOwnerLink = await resolveTenancyCustomer(h.executor, { organizationId: scope.organizationId, tenancyId: "t-3", environment: "sandbox" });
+    assert.equal(outOfOwnerLink?.scope, null);
+    assert.equal(outOfOwnerLink?.linkedLegalEntityId, scope.legalEntityId);
+    assert.ok(outOfOwnerLink?.ownershipWarning);
     const link = await resolveTenancyCustomer(h.executor, { organizationId: scope.organizationId, tenancyId: "t-1", environment: "sandbox" });
-    assert.deepEqual(link, { scope: sourceScope, customerObjectId: "58" });
+    assert.deepEqual(link, {
+      scope: sourceScope,
+      customerObjectId: "58",
+      propertyId: SYNTHETIC_COMPANY.propertyId,
+      linkedLegalEntityId: scope.legalEntityId,
+      ownershipWarning: null,
+    });
     assert.equal(await resolveTenancyCustomer(h.executor, { organizationId: scope.organizationId, tenancyId: "t-1", environment: "production" }), null);
     assert.equal(await resolveTenancyCustomer(h.executor, { organizationId: scope.organizationId, tenancyId: "t-2", environment: "sandbox" }), null);
   } finally {

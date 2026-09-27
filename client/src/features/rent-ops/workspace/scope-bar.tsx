@@ -48,7 +48,7 @@ export function dateSummary(filters: ViewFilters): string {
   return filters.asOfMode === "today" ? `${label} · Today` : label;
 }
 
-export function ScopeBar({ filters, properties, onScope, onDate, onToday, status, searchPlaceholder = "Search tenants, units, properties", onSearch, onRefresh, refreshing = false, updatedAt }: {
+export function ScopeBar({ filters, properties, onScope, onDate, onToday, status, searchPlaceholder = "Search tenants, units, properties", onSearch, onRefresh, refreshing = false, updatedAt, showDashboardOptions = false }: {
   filters: ViewFilters;
   properties: readonly PropertyOption[];
   onScope: (changes: Scope) => void;
@@ -60,11 +60,16 @@ export function ScopeBar({ filters, properties, onScope, onDate, onToday, status
   onRefresh: () => void;
   refreshing?: boolean;
   updatedAt?: number;
+  showDashboardOptions?: boolean;
 }) {
   const scopeRef = useDismissableDetails();
   const dateRef = useDismissableDetails();
   const selected = selectedWorkspaceProperties(filters);
   const updated = updatedAt ? formatTimestamp(new Date(updatedAt)) : undefined;
+  const refreshControl = <button type="button" className="rops-scope-refresh" onClick={onRefresh} disabled={refreshing} aria-label="Refresh workspace" title="Refresh">
+    <RefreshCw size={13} className={refreshing ? "spin" : ""} aria-hidden="true" />
+    <span>{refreshing ? "Refreshing…" : updated ? `Updated ${updated}` : "Refresh"}</span>
+  </button>;
   return <div className="rm-toolbar rm-workspace-toolbar rops-scope-bar" role="toolbar" aria-label="Workspace filters">
     <details className="rops-scope-picker" ref={scopeRef}>
       <summary aria-label={`Portfolio and properties: ${scopeSummary(filters, properties)}`}>{scopeSummary(filters, properties)}</summary>
@@ -93,9 +98,6 @@ export function ScopeBar({ filters, properties, onScope, onDate, onToday, status
     </details>
     {status && <select className="rops-scope-status" aria-label="Status" value={status.value} onChange={event => status.onChange(event.target.value)}>{status.options.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>}
     <label className="rm-search rops-scope-search"><Search size={14} aria-hidden="true" /><input type="search" aria-label="Search records" placeholder={searchPlaceholder} value={filters.search} onChange={event => onSearch(event.target.value)} /></label>
-    <button type="button" className="rops-scope-refresh" onClick={onRefresh} disabled={refreshing} aria-label="Refresh workspace" title="Refresh">
-      <RefreshCw size={13} className={refreshing ? "spin" : ""} aria-hidden="true" />
-      <span>{refreshing ? "Refreshing…" : updated ? `Updated ${updated}` : "Refresh"}</span>
-    </button>
+    {showDashboardOptions ? <div className="ops-dashboard-scope-tools"><span id="rops-dashboard-options" className="ops-dashboard-scope-mount" />{refreshControl}</div> : refreshControl}
   </div>;
 }

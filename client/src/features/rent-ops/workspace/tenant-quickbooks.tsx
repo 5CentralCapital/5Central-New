@@ -128,8 +128,38 @@ function isResolvedHistoricalOwner(source: TenantSourceResolution): boolean {
     && source.ownership.periods.some(period => period.overlapsTenancy);
 }
 
+function isLinkedDatesMissingSource(source: TenantSourceResolution): boolean {
+  return source.ownership.state === "linked_dates_missing"
+    && !source.ownership.coverageComplete
+    && source.ownership.effectiveLegalEntityId === null
+    && source.qbo.customerLink !== null
+    && source.qbo.scope !== null
+    && source.qbo.customerLink.legalEntityId === source.qbo.scope.legalEntityId;
+}
+
+function canUseLinkedDatesMissingSource(sources: readonly TenantSourceResolution[]): boolean {
+  const candidates = sources.filter(isLinkedDatesMissingSource);
+  if (candidates.length !== 1) return false;
+  const candidate = candidates[0]!;
+
+  // Missing dates cannot distinguish an old link from another organization's
+  // mapped ownership history. Require this linked source to be the only
+  // organization with ownership evidence or an existing QBO customer link.
+  return sources.every(source => source === candidate || (
+    source.ownership.state !== "review"
+    && source.currentState !== "ownership_review"
+    && source.ownership.periods.length === 0
+    && source.ownership.effectiveLegalEntityId === null
+    && source.qbo.customerLink === null
+    && source.currentState !== "linked"
+  ));
+}
+
 function sourceReviewReasons(sources: readonly TenantSourceResolution[]): readonly string[] {
   const reasons = new Set(sources.flatMap(source => source.reasons));
+  if (sources.some(isLinkedDatesMissingSource) && !canUseLinkedDatesMissingSource(sources)) {
+    reasons.add("Another organization's mapped ownership history or existing QuickBooks link prevents confirmation of this tenancy's historical owner.");
+  }
   if (sources.filter(isResolvedHistoricalOwner).length > 1) {
     reasons.add("More than one accounting organization returned a fully covered historical owner for this tenancy; review ownership before selecting a QuickBooks company.");
   }
@@ -154,14 +184,20 @@ export function TenantQuickBooksPanel({ tenant, snapshot, readOnly = false, api 
   const sourceData = sourceQueries.flatMap(query => query.data ? [query.data] : []);
   const allSourceQueriesFetched = sourceQueries.length > 0 && sourceQueries.every(query => query.isFetched);
   const resolvedSources = sourceData.filter(isResolvedHistoricalOwner);
+  const linkedDatesMissingSources = sourceData.filter(isLinkedDatesMissingSource);
+  const linkedDatesMissingAllowed = canUseLinkedDatesMissingSource(sourceData);
   const sourceSelection = !allSourceQueriesFetched
     ? { kind: "pending" as const }
-    : resolvedSources.length === 1
+    : linkedDatesMissingSources.length > 0
+      ? linkedDatesMissingAllowed
+        ? { kind: "linked_dates_missing" as const, source: linkedDatesMissingSources[0]! }
+        : { kind: "ownership_review" as const, reasons: sourceReviewReasons(sourceData) }
+      : resolvedSources.length === 1
       ? { kind: "resolved" as const, source: resolvedSources[0]! }
       : sourceData.length === 0
         ? { kind: "unassigned" as const }
         : { kind: "ownership_review" as const, reasons: sourceReviewReasons(sourceData) };
-  const resolution = sourceSelection.kind === "resolved" ? sourceSelection.source : undefined;
+  const resolution = sourceSelection.kind === "resolved" || sourceSelection.kind === "linked_dates_missing" ? sourceSelection.source : undefined;
   const sourceError = sourceQueries.find(query => query.error && !sourceNotFound(query.error))?.error ?? null;
   const sourceQueryForRetry = sourceQueries.find(query => query.error && !sourceNotFound(query.error)) ?? sourceQueries[0];
   const target = resolution ? sourceTarget(resolution, company.data?.organizations.find(candidate => candidate.id === resolution.qbo.scope?.organizationId)) : null;
@@ -181,18 +217,30 @@ export function TenantQuickBooksPanel({ tenant, snapshot, readOnly = false, api 
   else if (sourceSelection.kind === "unassigned") body = <Notice tone="notice" title="QuickBooks source is not assigned">{" "}This tenancy's local R-ops history remains available on the Ledger and Deposits tabs. No QuickBooks company is assigned for its historical period.</Notice>;
   else if (sourceSelection.kind === "pending") body = <div className="rm-empty" role="status"><p>Resolving the historical accounting source…</p></div>;
   else if (sourceSelection.kind === "ownership_review") body = <Notice tone="warning" title="Historical QuickBooks ownership needs review">{" "}The local R-ops history remains available, but QuickBooks history is withheld until one historical property owner is confirmed.<ul>{sourceSelection.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul></Notice>;
-  else if (sourceSelection.kind === "resolved") {
+  else if (sourceSelection.kind === "resolved" || sourceSelection.kind === "linked_dates_missing") {
     const source = sourceSelection.source;
-    if (source.currentState === "local_history_available") body = <LocalHistoryNotice source={source} />;
+    const linkedDatesMissing = sourceSelection.kind === "linked_dates_missing";
+    if (source.currentState === "local_history_available") body = <>{linkedDatesMissing && <LinkedDatesMissingNotice source={source} />}<LocalHistoryNotice source={source} /></>;
     else if (source.currentState === "ownership_review") body = <Notice tone="warning" title="Historical QuickBooks ownership needs review">{" "}The local R-ops history remains available, but QuickBooks history is withheld until the historical property ownership is reviewed.<SourceReasons source={source} /></Notice>;
-    else if (source.currentState === "not_connected" || !sourceConnectionReady || !target) body = <Notice tone="notice" title={`QuickBooks is not connected for ${sourceEntityLabel(source)}`}>{" "}The historical owner has no readable QuickBooks connection for this tenancy. The local R-ops Ledger and Deposits remain available; no QuickBooks balance is known until a connection is confirmed.</Notice>;
-    else body = <>{source.qbo.connection?.state === "needs_reconnect" && <Notice tone="warning" title="QuickBooks needs to be reconnected">{" "}Refreshes are paused for {target.entityName}. The history below is the last mirrored copy and may be out of date.</Notice>}<TenancyLedger key={`${tenancy.id}:${environment}`} api={api} target={target} tenancyId={tenancy.id} environment={environment!} connections={connections} readOnly={readOnly} /></>;
+    else if (source.currentState === "not_connected" || !sourceConnectionReady || !target) body = <>{linkedDatesMissing && <LinkedDatesMissingNotice source={source} />}<Notice tone="notice" title={`QuickBooks is not connected for ${sourceEntityLabel(source)}`}>{" "}The historical owner has no readable QuickBooks connection for this tenancy. The local R-ops Ledger and Deposits remain available; no QuickBooks balance is known until a connection is confirmed.</Notice></>;
+    else body = <>{linkedDatesMissing && <LinkedDatesMissingNotice source={source} />}{source.qbo.connection?.state === "needs_reconnect" && <Notice tone="warning" title="QuickBooks needs to be reconnected">{" "}Refreshes are paused for {target.entityName}. The history below is the last mirrored copy and may be out of date.</Notice>}<TenancyLedger key={`${tenancy.id}:${environment}`} api={api} target={target} tenancyId={tenancy.id} environment={environment!} connections={connections} readOnly={readOnly} canCreateCustomerLink={source.currentState === "unlinked" && source.qbo.customerLink === null} sourceDateWarningShown={linkedDatesMissing} /></>;
   }
 
   return <div className="rm-tenant-tab-content"><Panel title="QuickBooks customer ledger">{intro}{picker}{body}</Panel></div>;
 }
 
-function TenancyLedger({ api, target, tenancyId, environment, connections, readOnly }: { api: AccountingApi; target: QboTarget; tenancyId: string; environment: "sandbox" | "production"; connections: readonly AccountingConnection[]; readOnly: boolean }) {
+function LinkedDatesMissingNotice({ source }: { source: TenantSourceResolution }) {
+  const missingDates: string[] = [];
+  if (source.tenancy.startOn === null) missingDates.push("Move-in date missing.");
+  const openEndedStatus = source.tenancy.status === "current" || source.tenancy.status === "notice" || source.tenancy.status === "future";
+  if (source.tenancy.endOn === null && !openEndedStatus) missingDates.push("Move-out/end date missing.");
+  const detail = missingDates.length > 0
+    ? `${missingDates.join(" ")} Add the missing date${missingDates.length === 1 ? "" : "s"} to confirm ownership.`
+    : "The existing QuickBooks ledger is shown read-only while tenancy dates are checked. Add the missing dates to confirm ownership.";
+  return <Notice tone="warning" title="Tenancy dates need confirmation">{" "}This tenancy has an existing QuickBooks customer link. {detail}</Notice>;
+}
+
+function TenancyLedger({ api, target, tenancyId, environment, connections, readOnly, canCreateCustomerLink, sourceDateWarningShown }: { api: AccountingApi; target: QboTarget; tenancyId: string; environment: "sandbox" | "production"; connections: readonly AccountingConnection[]; readOnly: boolean; canCreateCustomerLink: boolean; sourceDateWarningShown: boolean }) {
   const ledger = useInfiniteQuery({
     queryKey: [QUERY_ROOT, "tenancy-ledger", target.organizationId, tenancyId, environment],
     queryFn: ({ pageParam, signal }) => api.tenancyLedger(target.organizationId, { tenancyId, environment, cursor: pageParam }, signal),
@@ -205,13 +253,15 @@ function TenancyLedger({ api, target, tenancyId, environment, connections, readO
   if (ledger.error && pages.length === 0) return <Notice tone="error" title={messageOf(ledger.error, "The QuickBooks customer ledger could not be loaded.")}>{" "}<button type="button" className="rm-button" onClick={() => void ledger.refetch()}>Try again</button></Notice>;
   const first = pages[0];
   if (first === null || first === undefined) {
-    return <LinkCustomer api={api} target={target} tenancyId={tenancyId} connections={connections} readOnly={readOnly} />;
+    return canCreateCustomerLink
+      ? <LinkCustomer api={api} target={target} tenancyId={tenancyId} connections={connections} readOnly={readOnly} />
+      : <Notice tone="warning" title="The existing QuickBooks customer link could not be read">{" "}No new or replacement customer link is available from this screen. Review the linked customer and tenancy ownership before making changes.</Notice>;
   }
   const entries = pages.flatMap(page => page?.entries ?? []);
-  return <LedgerView ledger={first} entries={entries} hasMore={ledger.hasNextPage} loadingMore={ledger.isFetchingNextPage} pageError={ledger.error} onMore={() => void ledger.fetchNextPage()} onReload={() => void ledger.refetch()} />;
+  return <LedgerView ledger={first} entries={entries} ownershipWarning={sourceDateWarningShown ? undefined : first.ownershipWarning} hasMore={ledger.hasNextPage} loadingMore={ledger.isFetchingNextPage} pageError={ledger.error} onMore={() => void ledger.fetchNextPage()} onReload={() => void ledger.refetch()} />;
 }
 
-function LedgerView({ ledger, entries, hasMore, loadingMore, pageError, onMore, onReload }: { ledger: QboCustomerLedger; entries: QboCustomerLedger["entries"]; hasMore: boolean; loadingMore: boolean; pageError: unknown; onMore: () => void; onReload: () => void }) {
+function LedgerView({ ledger, entries, ownershipWarning, hasMore, loadingMore, pageError, onMore, onReload }: { ledger: QboCustomerLedger; entries: QboCustomerLedger["entries"]; ownershipWarning?: string; hasMore: boolean; loadingMore: boolean; pageError: unknown; onMore: () => void; onReload: () => void }) {
   const coverage = coverageDisplay(ledger.coverage, new Date());
   const verification = verificationDisplay(ledger.verification);
   const rows = customerLedgerRows(entries);
@@ -220,6 +270,7 @@ function LedgerView({ ledger, entries, hasMore, loadingMore, pageError, onMore, 
   const aging = agingRows(ledger.aging);
   const open = openItemRows(ledger.openItems);
   return <>
+    {ownershipWarning && <Notice tone="warning" title="Tenancy dates need confirmation">{" "}{ownershipWarning}</Notice>}
     <dl className="rm-form-grid rm-detail-grid">
       <Field label="QuickBooks customer"><strong>{ledger.customer.displayName ?? "Name not mirrored"}</strong><small>QuickBooks #{ledger.customer.objectId}{ledger.customer.active === false ? " · inactive" : ""}</small></Field>
       <Field label="Balance from QuickBooks history" warning={!coverage.amountsKnown || verification.tone !== "good"}><strong className="rm-amount">{ending.amount}</strong>{ledger.asOf && <small>Through {formatLongDate(ledger.asOf) ?? ledger.asOf}</small>}</Field>

@@ -34,6 +34,7 @@ const entrySchema = z.object({
 });
 
 const ledgerSchema = z.object({
+  ownershipWarning: z.string().trim().min(1).max(500).optional(),
   scope: z.object({ organizationId: z.string(), legalEntityId: z.string(), environment: z.enum(["sandbox", "production"]), realmId: z.string() }),
   customer: z.object({ objectId: z.string().min(1), displayName: z.string().nullable(), active: z.boolean().nullable() }),
   asOf: isoDateSchema.nullable(),
