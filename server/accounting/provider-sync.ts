@@ -58,6 +58,53 @@ function receivableStreamForEntity(entity: string): string | null {
 
 type ApplyOutcome = { readonly objectId: string | null; readonly unsupported: number; readonly skipped?: "stale_after_deletion" | "stale_revision" };
 
+const SOURCE_REVISION_CONFLICT_REASON = "QBO source revision conflict was isolated; the immutable first-seen source data remains unchanged pending a later provider revision";
+
+function isSourceRevisionConflict(error: unknown): error is AccountingError {
+  return error instanceof AccountingError && error.code === "accounting_conflict" && error.details.reason === "qbo_source_revision_mismatch";
+}
+
+function safeProviderIdentifier(value: unknown, maxLength: number): string | null {
+  const text = typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
+  return text.length > 0 && text.length <= maxLength && !/[\u0000-\u001f\u007f]/.test(text) ? text : null;
+}
+
+/**
+ * A source revision mismatch is an object-level hold, not a reason to roll
+ * back independent provider objects in the same catch-up or CDC batch. Keep
+ * the original append-only source row and record only scoped identifiers; no
+ * provider body, financial values or profile fields enter the exception.
+ */
+async function applyWithSourceRevisionIsolation(input: {
+  readonly mirror: QboAccountingMirrorStore;
+  readonly scope: QuickBooksConnectionScope;
+  readonly stream: string;
+  readonly objectType: string;
+  readonly item: QuickBooksJsonObject;
+  readonly observedAt: string;
+  readonly apply: () => Promise<ApplyOutcome>;
+}): Promise<ApplyOutcome> {
+  try {
+    return await input.apply();
+  } catch (error) {
+    if (!isSourceRevisionConflict(error)) throw error;
+    const objectId = safeProviderIdentifier(error.details.objectId, 200) ?? safeProviderIdentifier(input.item.Id, 200);
+    const version = safeProviderIdentifier(error.details.version, 120) ?? safeProviderIdentifier(input.item.SyncToken, 120);
+    if (objectId === null) throw error;
+    await input.mirror.recordSyncException({
+      scope: input.scope,
+      stream: input.stream,
+      objectType: input.objectType,
+      objectId,
+      version,
+      kind: "unsupported",
+      reasons: [SOURCE_REVISION_CONFLICT_REASON],
+      observedAt: input.observedAt,
+    });
+    return { objectId, unsupported: 1 };
+  }
+}
+
 /**
  * A live provider observation of an object we tombstoned. An inferred
  * (full-replay) deletion is undone when the same revision reappears; an
@@ -68,13 +115,21 @@ async function admitLiveObservation(mirror: QboAccountingMirrorStore, scope: Qui
   const state = await mirror.readDeletionState(scope, objectType, objectId);
   if (!state?.deleted) return true;
   if (state.detectedVia === "full_replay") {
-    if (version !== null && state.lastKnownVersion !== null && version === state.lastKnownVersion) await mirror.restoreInferredDeletion(scope, objectType, objectId, version);
+    // A same-version observation is only a candidate resurrection. Keep its
+    // tombstone until immutable source ingestion accepts the body.
     return true;
   }
   if (version === null) return false;
   if (state.lastKnownVersion !== null && versionCompare(version, state.lastKnownVersion) <= 0) return false;
   if (state.sourceDeletedAt !== null && providerUpdatedAt !== null && providerUpdatedAt <= state.sourceDeletedAt) return false;
   return true;
+}
+
+async function restoreInferredDeletionAfterAcceptedSource(mirror: QboAccountingMirrorStore, scope: QuickBooksConnectionScope, objectType: string, objectId: string, version: string): Promise<void> {
+  const state = await mirror.readDeletionState(scope, objectType, objectId);
+  if (state?.deleted && state.detectedVia === "full_replay" && state.lastKnownVersion === version) {
+    await mirror.restoreInferredDeletion(scope, objectType, objectId, version);
+  }
 }
 
 /** Mirror one provider transaction object; shared by catch-up, CDC and webhook fetches. */
@@ -105,6 +160,7 @@ export async function applyQboTransactionObject(input: {
       // retires the previously mirrored lines so stale amounts cannot
       // be used as if they were current.
       await mirror.ingestSourceObject({ scope, objectType: identity.objectType, objectId: identity.objectId, version: identity.version, providerUpdatedAt: identity.providerUpdatedAt, providerBody: identity.providerBody, receivedAt: observedAt });
+      await restoreInferredDeletionAfterAcceptedSource(mirror, scope, identity.objectType, identity.objectId, identity.version);
       await mirror.beginTransactionRevision({ scope, objectType: identity.objectType, objectId: identity.objectId, version: identity.version, lineIds: [] });
     }
     await mirror.recordSyncException({ scope, stream, objectType: entity, objectId, version: rawVersion, kind: "unsupported", reasons: normalized.unsupportedReasons, observedAt });
@@ -120,6 +176,7 @@ export async function applyQboTransactionObject(input: {
     providerBody: value.providerBody,
     receivedAt: observedAt,
   });
+  await restoreInferredDeletionAfterAcceptedSource(mirror, scope, value.objectType, value.objectId, value.version);
   const transaction = await mirror.ingestTransaction({
     sourceObjectId: sourceObject.id,
     scope,
@@ -185,6 +242,7 @@ export async function applyQboNamedObject(mirror: QboAccountingMirrorStore, scop
     });
     return { objectId, unsupported: 1 };
   }
+  await restoreInferredDeletionAfterAcceptedSource(mirror, scope, objectType, objectId, version);
   await mirror.resolveSyncException({ scope, stream, objectType, objectId, version, observedAt });
   return { objectId, unsupported: 0 };
 }
@@ -222,7 +280,11 @@ export async function applyQboReceivableObject(input: {
   if (!(await admitLiveObservation(mirror, scope, entity, identity.objectId, identity.version, identity.providerUpdatedAt))) {
     return { objectId: identity.objectId, unsupported: 0, skipped: "stale_after_deletion" };
   }
-  const ingest = () => mirror.ingestSourceObject({ scope, objectType: entity, objectId: identity.objectId, version: identity.version, providerUpdatedAt: identity.providerUpdatedAt, providerBody: item, receivedAt: observedAt });
+  const ingest = async () => {
+    const source = await mirror.ingestSourceObject({ scope, objectType: entity, objectId: identity.objectId, version: identity.version, providerUpdatedAt: identity.providerUpdatedAt, providerBody: item, receivedAt: observedAt });
+    await restoreInferredDeletionAfterAcceptedSource(mirror, scope, entity, identity.objectId, identity.version);
+    return source;
+  };
   if (result.status === "not_receivable") {
     if ((await receivables.listDocumentIds(scope, entity, identity.objectId)).length > 0) {
       const source = await ingest();
@@ -254,6 +316,7 @@ export async function applyQboAccountObject(mirror: QboAccountingMirrorStore, sc
   }
   if (!(await admitLiveObservation(mirror, scope, "Account", normalized.objectId, normalized.version, normalized.providerUpdatedAt))) return { objectId: normalized.objectId, unsupported: 0, skipped: "stale_after_deletion" };
   await mirror.ingestSourceObject({ scope, objectType: "Account", objectId: normalized.objectId, version: normalized.version, providerUpdatedAt: normalized.providerUpdatedAt, providerBody: normalized.providerBody, receivedAt: observedAt });
+  await restoreInferredDeletionAfterAcceptedSource(mirror, scope, "Account", normalized.objectId, normalized.version);
   await mirror.resolveSyncException({ scope, stream: "accounts", objectType: "Account", objectId: normalized.objectId, version: normalized.version, observedAt });
   return { objectId: normalized.objectId, unsupported: 0 };
 }
@@ -572,7 +635,10 @@ export function createQboProviderSync(options: {
             const mirror = options.mirror.forExecutor(executor);
             const observedAt = now().toISOString();
             for (const item of items) {
-              const outcome = await apply(mirror, item, observedAt, executor);
+              const outcome = await applyWithSourceRevisionIsolation({
+                mirror, scope, stream, objectType: entity, item, observedAt,
+                apply: () => apply(mirror, item, observedAt, executor),
+              });
               unsupportedCount += outcome.unsupported;
               if (outcome.objectId) seen.add(outcome.objectId);
             }
@@ -677,9 +743,12 @@ export function createQboProviderSync(options: {
                 if (deletion.applied) tally.deleted += 1;
                 continue;
               }
-              const outcome = entity === "Account"
-                ? await applyQboAccountObject(mirror, scope, item, observedAt)
-                : await applyQboTransactionObject({ mirror, scope, entity, stream, item, observedAt, currency });
+              const outcome = await applyWithSourceRevisionIsolation({
+                mirror, scope, stream, objectType: entity, item, observedAt,
+                apply: () => entity === "Account"
+                  ? applyQboAccountObject(mirror, scope, item, observedAt)
+                  : applyQboTransactionObject({ mirror, scope, entity, stream, item, observedAt, currency }),
+              });
               if (outcome.unsupported) tally.unsupported.set(stream, (tally.unsupported.get(stream) ?? 0) + outcome.unsupported);
               else if (!outcome.skipped) tally.applied += 1;
             }
@@ -697,9 +766,12 @@ export function createQboProviderSync(options: {
                 if (deletion.applied) tally.deleted += 1;
                 continue;
               }
-              const outcome = entity === "Customer"
-                ? await applyQboNamedObject(mirror, scope, "Customer", item, observedAt)
-                : await applyQboReceivableObject({ mirror, receivables: receivableStore, scope, entity, item, observedAt, currency, entityCurrency });
+              const outcome = await applyWithSourceRevisionIsolation({
+                mirror, scope, stream, objectType: entity, item, observedAt,
+                apply: () => entity === "Customer"
+                  ? applyQboNamedObject(mirror, scope, "Customer", item, observedAt)
+                  : applyQboReceivableObject({ mirror, receivables: receivableStore, scope, entity, item, observedAt, currency, entityCurrency }),
+              });
               if (outcome.unsupported) tally.unsupported.set(stream, (tally.unsupported.get(stream) ?? 0) + outcome.unsupported);
               else if (!outcome.skipped) tally.applied += 1;
             }
@@ -753,8 +825,18 @@ export function createQboProviderSync(options: {
         const result = await options.executor.transaction(async executor => {
           const mirror = options.mirror.forExecutor(executor);
           const receivableStore = receivables.forExecutor(executor);
-          const transactionOutcome = await applyQboTransactionObject({ mirror, scope, entity: objectType, stream: "transactions.journalentry", item: entity, observedAt, currency });
-          const receivableOutcome = await applyQboReceivableObject({ mirror, receivables: receivableStore, scope, entity: "JournalEntry", item: entity, observedAt, currency, entityCurrency });
+          const transactionOutcome = await applyWithSourceRevisionIsolation({
+            mirror, scope, stream: "transactions.journalentry", objectType, item: entity, observedAt,
+            apply: () => applyQboTransactionObject({ mirror, scope, entity: objectType, stream: "transactions.journalentry", item: entity, observedAt, currency }),
+          });
+          const receivableOutcome = await applyWithSourceRevisionIsolation({
+            mirror, scope, stream: receivableStreamFor("JournalEntry"), objectType, item: entity, observedAt,
+            apply: () => applyQboReceivableObject({ mirror, receivables: receivableStore, scope, entity: "JournalEntry", item: entity, observedAt, currency, entityCurrency }),
+          });
+          if (transactionOutcome.unsupported > 0) await markStreamCoveragePartial(executor, "transactions.journalentry", transactionOutcome.unsupported, observedAt);
+          else if (!transactionOutcome.skipped) await restoreAnchoredStreamCoverageAfterAcceptedObject(executor, "transactions.journalentry", observedAt);
+          if (receivableOutcome.unsupported > 0) await markStreamCoveragePartial(executor, receivableStreamFor("JournalEntry"), receivableOutcome.unsupported, observedAt);
+          else if (!receivableOutcome.skipped) await restoreAnchoredStreamCoverageAfterAcceptedObject(executor, receivableStreamFor("JournalEntry"), observedAt);
           return { transactionOutcome, receivableOutcome };
         });
         const version = typeof entity.SyncToken === "string" || typeof entity.SyncToken === "number" ? String(entity.SyncToken) : null;
@@ -764,7 +846,17 @@ export function createQboProviderSync(options: {
       }
       if (isQboReceivableType(objectType)) {
         const entityCurrency = await loadEntityCurrency();
-        const outcome = await options.executor.transaction(executor => applyQboReceivableObject({ mirror: options.mirror.forExecutor(executor), receivables: receivables.forExecutor(executor), scope, entity: objectType, item: entity, observedAt: now().toISOString(), currency, entityCurrency }));
+        const observedAt = now().toISOString();
+        const outcome = await options.executor.transaction(async executor => {
+          const mirror = options.mirror.forExecutor(executor);
+          const result = await applyWithSourceRevisionIsolation({
+            mirror, scope, stream: receivableStreamFor(objectType), objectType, item: entity, observedAt,
+            apply: () => applyQboReceivableObject({ mirror, receivables: receivables.forExecutor(executor), scope, entity: objectType, item: entity, observedAt, currency, entityCurrency }),
+          });
+          if (result.unsupported > 0) await markStreamCoveragePartial(executor, receivableStreamFor(objectType), result.unsupported, observedAt);
+          else if (!result.skipped) await restoreAnchoredStreamCoverageAfterAcceptedObject(executor, receivableStreamFor(objectType), observedAt);
+          return result;
+        });
         const version = typeof entity.SyncToken === "string" || typeof entity.SyncToken === "number" ? String(entity.SyncToken) : null;
         return { status: outcome.skipped ? "stale" : outcome.unsupported ? "unsupported" : "applied", objectType, objectId, version };
       }
@@ -772,12 +864,21 @@ export function createQboProviderSync(options: {
       const outcome = await options.executor.transaction(async executor => {
         const mirror = options.mirror.forExecutor(executor);
         const observedAt = now().toISOString();
-        if (objectType === "Account") return applyQboAccountObject(mirror, scope, entity, observedAt);
-        if ((QBO_NAMED_ENTITIES as readonly string[]).includes(objectType)) {
-          if (version === null) throw new AccountingError("accounting_unavailable", `QBO ${objectType} is missing its SyncToken`);
-          return applyQboNamedObject(mirror, scope, objectType, entity, observedAt);
-        }
-        return applyQboTransactionObject({ mirror, scope, entity: objectType, stream: streamForEntity(objectType)!, item: entity, observedAt, currency });
+        const stream = streamForEntity(objectType) ?? objectType.toLowerCase();
+        const outcome = await applyWithSourceRevisionIsolation({
+          mirror, scope, stream, objectType, item: entity, observedAt,
+          apply: async () => {
+            if (objectType === "Account") return applyQboAccountObject(mirror, scope, entity, observedAt);
+            if ((QBO_NAMED_ENTITIES as readonly string[]).includes(objectType)) {
+              if (version === null) throw new AccountingError("accounting_unavailable", `QBO ${objectType} is missing its SyncToken`);
+              return applyQboNamedObject(mirror, scope, objectType, entity, observedAt);
+            }
+            return applyQboTransactionObject({ mirror, scope, entity: objectType, stream, item: entity, observedAt, currency });
+          },
+        });
+        if (outcome.unsupported > 0) await markStreamCoveragePartial(executor, stream, outcome.unsupported, observedAt);
+        else if (!outcome.skipped) await restoreAnchoredStreamCoverageAfterAcceptedObject(executor, stream, observedAt);
+        return outcome;
       });
       return { status: outcome.skipped ? "stale" : outcome.unsupported ? "unsupported" : "applied", objectType, objectId, version };
     },
@@ -826,6 +927,60 @@ export function createQboProviderSync(options: {
       lineCount: summary.lineCount,
       reason: storedReason.length ? storedReason.join("; ").slice(0, 500) : null,
     });
+  }
+
+  /**
+   * A previously complete, anchored stream can become partial when a webhook
+   * records an object hold. Once a later accepted webhook resolves that hold,
+   * restore the derived coverage only when the full-replay proof remains and
+   * no other partial reason or coverage gap exists.
+   */
+  async function restoreAnchoredStreamCoverageAfterAcceptedObject(executor: RentOpsQueryExecutor, stream: string, observedAt: string): Promise<void> {
+    const previous = await executor.query<{ status: string; evidence: string; basis: string; reason: string | null }>(
+      `SELECT status, evidence, basis, reason FROM accounting_qbo_coverage
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream=$5`,
+      [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId, stream],
+    );
+    const row = previous.rows[0];
+    if (!row || row.status !== "partial" || row.evidence !== "live_provider_readback" || row.basis !== "source_transactions") return;
+
+    const parts = (row.reason ?? "").split("; ").filter(Boolean);
+    if (!parts.includes(QBO_FULL_REPLAY_ANCHOR)) return;
+    const extraReasons = parts.filter(part => part !== QBO_FULL_REPLAY_ANCHOR
+      && !/^\d+ provider object or line records in this run were not mirrorable$/.test(part)
+      && !/^\d+ QBO object\(s\) have unresolved mirror exceptions$/.test(part));
+    if (extraReasons.length > 0) return;
+
+    const gaps = await executor.query<{ gap_from: string }>(
+      `SELECT gap_from FROM accounting_qbo_coverage_gaps
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream=$5 LIMIT 1`,
+      [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId, stream],
+    );
+    if (gaps.rows.length > 0) return;
+
+    const mirror = options.mirror.forExecutor(executor);
+    const openExceptionCount = (await mirror.listOpenSyncExceptions(scope, stream)).length;
+    if (openExceptionCount > 0) return;
+    await recordStreamCoverage(mirror, stream, {
+      unsupportedCount: 0, openExceptionCount: 0, observedAt, baselineVerified: true, extraReason: null,
+    });
+  }
+
+  /** A webhook object conflict must make partial coverage durable immediately. */
+  async function markStreamCoveragePartial(executor: RentOpsQueryExecutor, stream: string, unsupportedCount: number, observedAt: string): Promise<void> {
+    const mirror = options.mirror.forExecutor(executor);
+    const previous = await executor.query<{ reason: string | null }>(
+      `SELECT reason FROM accounting_qbo_coverage
+        WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3 AND realm_id=$4 AND stream=$5`,
+      [scope.organizationId, scope.legalEntityId, scope.environment, scope.realmId, stream],
+    );
+    const previousParts = (previous.rows[0]?.reason ?? "").split("; ").filter(Boolean);
+    const baselineVerified = previousParts.includes(QBO_FULL_REPLAY_ANCHOR);
+    const extraReason = previousParts.filter(part => part !== QBO_FULL_REPLAY_ANCHOR
+      && !/^\d+ provider object or line records in this run were not mirrorable$/.test(part)
+      && !/^\d+ QBO object\(s\) have unresolved mirror exceptions$/.test(part)).join("; ") || null;
+    const openExceptionCount = (await mirror.listOpenSyncExceptions(scope, stream)).length;
+    await recordStreamCoverage(mirror, stream, { unsupportedCount, openExceptionCount, observedAt, baselineVerified, extraReason });
   }
 
   /**

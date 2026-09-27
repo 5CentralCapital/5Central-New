@@ -1,23 +1,53 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { syntheticRentOpsSnapshot } from '../fixtures/synthetic';
-import { TenantPaymentService } from './service';
+import { TenantPaymentService, type TenantPaymentServiceOptions, tenantCheckoutEnabledFromEnv } from './service';
 import type { TenantPaymentStore } from './store';
 import type { TenantPayment, ProcessorEvent, PaymentAdjustment, PaymentReceipt } from './model';
 import type { TenantIdentity } from '../../../shared/tenant-portal-contracts';
 import { normalizeStripeEvent, type PaymentProvider } from './provider';
 import Stripe from 'stripe';
-function setup(providerOverride?: PaymentProvider) {
+function setup(providerOverride?: PaymentProvider, options:TenantPaymentServiceOptions={}) {
  let snapshot=structuredClone(syntheticRentOpsSnapshot()); const t=snapshot.tenancies[0];snapshot.subsidyContracts=[];
  snapshot.ledgerTransactions=[{id:'rent',propertyId:t.propertyId,unitId:t.unitId,tenancyId:t.id,personId:t.primaryPersonId,kind:'charge',category:'base_rent',status:'posted',amountCents:10000,postedOn:'2026-09-01',dueOn:'2026-09-01',description:'Rent',payer:'tenant'}];snapshot.paymentAllocations=[];
  let payments:TenantPayment[]=[],adjustments:PaymentAdjustment[]=[],receipts:PaymentReceipt[]=[];let fail=false;
  const store:TenantPaymentStore={async transaction(work){const backup=structuredClone({snapshot,payments,adjustments,receipts});try{return await work(store);}catch(e){({snapshot,payments,adjustments,receipts}=backup);throw e;}},async lockAccount(){},async snapshot(){return structuredClone(snapshot);},async list(id){return payments.filter(p=>p.personId===id);},async reviewQueue(now=new Date()){return payments.filter(p=>p.status==='review_required'||p.status==='disputed'||(['creating','pending','processing'].includes(p.status)&&Date.parse(p.expiresAt)<=now.getTime()));},async findById(id){return payments.find(p=>p.id===id);},async findByRequest(account,id){return payments.find(p=>p.accountId===account&&p.requestId===id);},async findForEvent(e){return payments.find(p=>p.id===e.paymentId||!!e.paymentIntentId&&p.paymentIntentId===e.paymentIntentId);},async insert(p){payments.push(p);},async save(){},async hasEvent(id){return receipts.some(r=>r.id===id);},async receipt(r){receipts.push(r);},async adjustments(id){return adjustments.filter(a=>a.paymentId===id);},async adjustment(a){adjustments=adjustments.filter(x=>x.providerObjectId!==a.providerObjectId);adjustments.push(a);},async appendLedger(r){snapshot.ledgerTransactions.push(r);},async appendAllocation(a){if(fail)throw new Error('allocation failure');snapshot.paymentAllocations.push(a);}};
  const identity:TenantIdentity={id:'account',personId:t.primaryPersonId,tenancyId:t.id,email:'test@example.com',status:'active'};
  const provider=providerOverride ?? {live:false,async createCheckout(){return {id:'cs_fake',url:'https://checkout.stripe.com/fake'};},verify(){throw new Error('bad signature');}};
- const service=new TenantPaymentService(store,provider,()=>new Date('2026-09-07T12:00:00Z'));
+ const service=new TenantPaymentService(store,provider,()=>new Date('2026-09-07T12:00:00Z'),options);
  return {service,identity,store,get snapshot(){return snapshot;},get payments(){return payments;},get receipts(){return receipts;},fail(){fail=true;},async checkout(){return service.checkout(identity,{tenancyId:t.id,amountCents:10000,requestId:'00000000-0000-4000-8000-000000000001'});}};
 }
 function success(paymentId:string,id='evt_success',created=100):ProcessorEvent{return {id,type:'payment_intent.succeeded',created,live:false,state:'success',paymentId,paymentIntentId:'pi_fake',amountCents:10000,currency:'usd'};}
+test('tenant checkout defaults on and honors an explicit false environment switch',()=>{assert.equal(tenantCheckoutEnabledFromEnv({}),true);assert.equal(tenantCheckoutEnabledFromEnv({RENT_OPS_TENANT_CHECKOUT_ENABLED:'false'}),false);assert.equal(tenantCheckoutEnabledFromEnv({RENT_OPS_TENANT_CHECKOUT_ENABLED:'true'}),true);});
+test('disabled tenant checkout reports its reason before reserving or calling the provider',async()=>{
+ let createCalls=0;
+ const provider:PaymentProvider={live:false,async createCheckout(){createCalls++;return{id:'cs_disabled',url:'https://checkout.stripe.com/disabled'};},verify(){throw new Error('unused');}};
+ const s=setup(provider,{tenantCheckoutEnabled:false});
+ await assert.rejects(s.service.checkout(s.identity,{tenancyId:s.identity.tenancyId,amountCents:10000,requestId:'00000000-0000-4000-8000-000000000001'}),/tenant_checkout_disabled/);
+ assert.equal(createCalls,0);
+ assert.equal(s.payments.length,0);
+ assert.deepEqual(await s.service.list(s.identity),{available:false,reason:'tenant_checkout_disabled',accounts:[{tenancyId:s.identity.tenancyId,payableCents:10000,pendingCents:0,available:true}],payments:[]});
+});
+test('disabled tenant checkout keeps history and provider webhook settlement and reversal handling available',async()=>{
+ let verifyCalls=0; let webhookEvent:ProcessorEvent|undefined;
+ const provider:PaymentProvider={live:false,async createCheckout(){return{id:'cs_existing',url:'https://checkout.stripe.com/existing'};},verify(){verifyCalls++;if(!webhookEvent)throw new Error('event missing');return webhookEvent;}};
+ const s=setup(provider); const p=await s.checkout();
+ const disabled=new TenantPaymentService(s.store,provider,()=>new Date('2026-09-07T12:00:00Z'),{tenantCheckoutEnabled:false});
+ webhookEvent=success(p.id,'webhook-success'); await disabled.webhook(Buffer.from('{}'),'signature');
+ assert.equal(verifyCalls,1); assert.equal(s.payments[0].status,'posted'); assert.equal(s.snapshot.ledgerTransactions.length,2);
+ await disabled.process({id:'webhook-refund',type:'refund.updated',created:101,live:false,state:'adjustment',paymentIntentId:'pi_fake',adjustment:{providerObjectId:'refund-disabled',kind:'refund',amountCents:2000,active:true,terminal:true}});
+ assert.equal(s.payments[0].status,'partially_refunded'); assert.equal(s.payments[0].currentLedgerCents,8000);
+ const view=await disabled.list(s.identity); assert.equal(view.available,false); assert.equal(view.reason,'tenant_checkout_disabled'); assert.equal(view.payments[0]?.status,'partially_refunded');
+});
+test('disabled tenant checkout skips recovery session creation but still reads provider truth during reconciliation',async()=>{
+ let createCalls=0; let reconcileCalls=0;
+ const provider:PaymentProvider={live:false,async createCheckout(){createCalls++;return{id:'cs_recovery',url:'https://checkout.stripe.com/recovery'};},verify(){throw new Error('unused');},async reconcile(payment){reconcileCalls++;return{state:'paid',event:success(payment.id,'reconcile-disabled')}}};
+ const s=setup(provider); await s.checkout(); const p=s.payments[0]; createCalls=0;
+ p.status='creating'; p.checkoutSessionId=undefined; p.checkoutUrl=undefined; p.paymentIntentId=undefined; p.expiresAt='2026-09-07T11:59:00.000Z'; p.createdAt='2026-09-07T11:45:00.000Z';
+ const disabled=new TenantPaymentService(s.store,provider,()=>new Date('2026-09-07T12:00:00Z'),{tenantCheckoutEnabled:false});
+ const result=await disabled.reconcile(p.id);
+ assert.equal(createCalls,0); assert.equal(reconcileCalls,1); assert.equal(result?.status,'review_required'); assert.equal(s.payments[0].status,'review_required');
+});
 test('server rejects another tenancy and overpayment; pending is separate from ledger',async()=>{const s=setup();await assert.rejects(s.service.checkout(s.identity,{tenancyId:'other',amountCents:100,requestId:'00000000-0000-4000-8000-000000000001'}));await assert.rejects(s.service.checkout(s.identity,{tenancyId:s.identity.tenancyId,amountCents:10001,requestId:'00000000-0000-4000-8000-000000000001'}));await s.checkout();assert.equal(s.snapshot.ledgerTransactions.length,1);assert.equal((await s.service.list(s.identity)).accounts[0].pendingCents,10000);});
 test('success retry credits once; refunds append reversal and residual payment',async()=>{const s=setup(),p=await s.checkout();await s.service.process(success(p.id));await s.service.process(success(p.id));await s.service.process(success(p.id,'evt_other_success'));assert.equal(s.snapshot.ledgerTransactions.length,2);assert.equal(s.snapshot.paymentAllocations.length,1);const refund:ProcessorEvent={id:'evt_refund',type:'refund.updated',created:101,live:false,state:'adjustment',paymentIntentId:'pi_fake',adjustment:{providerObjectId:'re_fake',kind:'refund',amountCents:2000,active:true,terminal:true}};await s.service.process(refund);await s.service.process({...refund,id:'evt_refund_retry'});assert.equal(s.snapshot.ledgerTransactions.length,4);assert.equal(s.payments[0].currentLedgerCents,8000);assert.equal(s.payments[0].status,'partially_refunded');});
 test('allocation failure rolls back receipt and ledger posting atomically',async()=>{const s=setup(),p=await s.checkout();s.fail();await assert.rejects(s.service.process(success(p.id)));assert.equal(s.snapshot.ledgerTransactions.length,1);assert.equal(s.receipts.length,0);assert.equal(s.payments[0].status,'pending');});

@@ -346,6 +346,47 @@ test("managed Gmail startup does not require an unused webhook receiver or manua
  assert.ok(disabled.blockingReasons.includes("production_email_delivery_disabled"));
 });
 
+test("explicitly disabled tenant email skips delivery-only production requirements", () => {
+  for (const provider of ["gmail", "replit-gmail", "webhook"]) {
+    const validation = validateRentOpsProductionConfiguration({
+      NODE_ENV: "production",
+      RENT_OPS_TENANT_EMAIL_PROVIDER: provider,
+      RENT_OPS_TENANT_EMAIL_ENABLED: "false",
+      RENT_OPS_EMAIL_ALLOWED_RECIPIENTS: "*,invalid recipient",
+      RENT_OPS_PUBLIC_APP_URL: "https://portal.example.test",
+    });
+    const deliveryReasons = validation.blockingReasons.filter(reason =>
+      reason.startsWith("production_email_recipient_") ||
+      reason === "production_email_delivery_disabled" ||
+      reason.startsWith("production_gmail_") ||
+      reason.startsWith("production_rent_ops_gmail_") ||
+      reason.startsWith("production_rent_ops_magic_link_webhook_"));
+    assert.deepEqual(deliveryReasons, [], provider);
+  }
+});
+
+test("production email-enabled mode still enforces selected provider credentials", () => {
+  const gmail = validateRentOpsProductionConfiguration({
+    NODE_ENV: "production",
+    RENT_OPS_TENANT_EMAIL_ENABLED: "true",
+    RENT_OPS_TENANT_EMAIL_PROVIDER: "gmail",
+    RENT_OPS_EMAIL_ALLOWED_RECIPIENTS: "qa@example.test",
+    RENT_OPS_PUBLIC_APP_URL: "https://portal.example.test",
+  });
+  for (const key of ["production_gmail_sender_required", "production_rent_ops_gmail_client_id_required", "production_rent_ops_gmail_client_secret_required", "production_rent_ops_gmail_refresh_token_required"]) {
+    assert.ok(gmail.blockingReasons.includes(key), key);
+  }
+
+  const webhook = validateRentOpsProductionConfiguration({
+    NODE_ENV: "production",
+    RENT_OPS_TENANT_EMAIL_ENABLED: "true",
+    RENT_OPS_EMAIL_ALLOWED_RECIPIENTS: "qa@example.test",
+    RENT_OPS_PUBLIC_APP_URL: "https://portal.example.test",
+  });
+  assert.ok(webhook.blockingReasons.includes("production_rent_ops_magic_link_webhook_secret_required"));
+  assert.ok(webhook.blockingReasons.includes("production_rent_ops_magic_link_webhook_url_invalid"));
+});
+
 test("production email requires an explicit recipient setting when enabled: a list or '*' for every tenant", () => {
   const validate = (allowed?: string) => validateRentOpsProductionConfiguration({ NODE_ENV: "production", RENT_OPS_TENANT_EMAIL_ENABLED: "true", RENT_OPS_EMAIL_ALLOWED_RECIPIENTS: allowed }).blockingReasons;
   assert.ok(validate().includes("production_email_recipient_allowlist_required"));

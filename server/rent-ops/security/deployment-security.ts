@@ -36,6 +36,7 @@ export const RENT_OPS_DEPLOYMENT_ENV_VARS = [
   "RENT_OPS_MAGIC_LINK_WEBHOOK_URL",
   "RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET",
   "RENT_OPS_PUBLIC_APP_URL",
+  "RENT_OPS_TENANT_CHECKOUT_ENABLED",
   "RENT_OPS_OBJECT_STORE_BACKEND",
   "RENT_OPS_OBJECT_STORE_ENDPOINT",
   "RENT_OPS_OBJECT_STORE_REGION",
@@ -82,8 +83,11 @@ export function validateRentOpsProductionConfiguration(
   env: RentOpsDeploymentEnvironment = process.env,
 ): RentOpsProductionConfigurationValidation {
   const blockingReasons: string[] = [];
-  if (env.RENT_OPS_TENANT_EMAIL_ENABLED === "true" && !env.RENT_OPS_EMAIL_ALLOWED_RECIPIENTS?.trim()) blockingReasons.push("production_email_recipient_allowlist_required");
-  try { createEmailRecipientPolicy(env.RENT_OPS_EMAIL_ALLOWED_RECIPIENTS); } catch { blockingReasons.push("production_email_recipient_allowlist_invalid"); }
+  const tenantEmailDisabled = env.RENT_OPS_TENANT_EMAIL_ENABLED === "false";
+  if (!tenantEmailDisabled) {
+    if (env.RENT_OPS_TENANT_EMAIL_ENABLED === "true" && !env.RENT_OPS_EMAIL_ALLOWED_RECIPIENTS?.trim()) blockingReasons.push("production_email_recipient_allowlist_required");
+    try { createEmailRecipientPolicy(env.RENT_OPS_EMAIL_ALLOWED_RECIPIENTS); } catch { blockingReasons.push("production_email_recipient_allowlist_invalid"); }
+  }
   if (configured(env, "NODE_ENV") !== RENT_OPS_DEPLOYMENT_ENVIRONMENT) blockingReasons.push("production_node_env_required");
   for (const key of ["RENT_OPS_RUNTIME_DATABASE_URL"] as const) {
     if (!postgresUrl(configured(env, key))) blockingReasons.push(`production_${key.toLowerCase()}_invalid`);
@@ -96,16 +100,16 @@ export function validateRentOpsProductionConfiguration(
   }
   if (hostDatabase && hostDatabase === runtimeDatabase) blockingReasons.push("production_host_and_rent_ops_databases_must_be_distinct");
   const emailProvider = configured(env, "RENT_OPS_TENANT_EMAIL_PROVIDER");
-  const gmailDelivery = emailProvider === "gmail" || emailProvider === "replit-gmail";
+  const gmailDelivery = !tenantEmailDisabled && (emailProvider === "gmail" || emailProvider === "replit-gmail");
   if (gmailDelivery) {
     if (configured(env, "RENT_OPS_TENANT_EMAIL_ENABLED") !== "true") blockingReasons.push("production_email_delivery_disabled");
     if (!safeDeploymentValue(configured(env, "RENT_OPS_GMAIL_FROM"), /^[^\s@]+@[^\s@]+\.[^\s@]+$/)) blockingReasons.push("production_gmail_sender_required");
     if (emailProvider === "gmail") for (const key of ["RENT_OPS_GMAIL_CLIENT_ID", "RENT_OPS_GMAIL_CLIENT_SECRET", "RENT_OPS_GMAIL_REFRESH_TOKEN"]) if (!configured(env,key)) blockingReasons.push(`production_${key.toLowerCase()}_required`);
   }
-  for (const key of ["SESSION_SECRET", "RENT_OPS_SESSION_SECRET", "RENT_OPS_ADMIN_EMAIL", ...(!gmailDelivery ? ["RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET"] : [])]) {
+  for (const key of ["SESSION_SECRET", "RENT_OPS_SESSION_SECRET", "RENT_OPS_ADMIN_EMAIL", ...(!tenantEmailDisabled && !gmailDelivery ? ["RENT_OPS_MAGIC_LINK_WEBHOOK_SECRET"] : [])]) {
     if (!configured(env, key)) blockingReasons.push(`production_${key.toLowerCase()}_required`);
   }
-  for (const key of ["RENT_OPS_PUBLIC_APP_URL", ...(!gmailDelivery ? ["RENT_OPS_MAGIC_LINK_WEBHOOK_URL"] : [])]) {
+  for (const key of ["RENT_OPS_PUBLIC_APP_URL", ...(!tenantEmailDisabled && !gmailDelivery ? ["RENT_OPS_MAGIC_LINK_WEBHOOK_URL"] : [])]) {
     if (!safeDeploymentValue(configured(env, key), /^https:\/\/[^\s]+$/)) blockingReasons.push(`production_${key.toLowerCase()}_invalid`);
   }
   const storageProfile = configured(env, "RENT_OPS_OBJECT_STORE_BACKEND");
