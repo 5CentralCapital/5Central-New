@@ -69,6 +69,8 @@ export interface TenantBalance {
   complete: boolean;
   uncertaintyCodes: string[];
   source: "delinquency" | "ledger" | "unavailable";
+  /** The account's one balance as the balances report computes it (review rolled forward), when known. */
+  balanceCents?: number | null;
 }
 
 export interface TenantSummaryModel {
@@ -262,6 +264,7 @@ function balanceFromReport(tenant: TenantView, snapshot: AdminSnapshot): TenantB
     complete,
     uncertaintyCodes,
     source: "delinquency",
+    balanceCents: typeof candidate.operationalBalanceCents === "number" ? candidate.operationalBalanceCents : null,
   };
 }
 

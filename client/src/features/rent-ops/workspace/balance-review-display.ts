@@ -2,18 +2,34 @@ import type { AdminBalanceReviewView } from "../types";
 import { formatLongDate, formatTableDate } from "../../../lib/rent-ops-formatters";
 import { formatDate, formatMoney } from "./display";
 
-/** Reviewed observations never replace the posted ledger or imply a payer split. */
+/** The last balance review as a checkpoint (amount on its date); never a second balance. */
 export function balanceReviewDisplay(review: AdminBalanceReviewView | undefined) {
   if (!review) return undefined;
   return {
-    label: review.stale ? "Historical reviewed balance" : "Reviewed operational balance",
+    label: "Last balance review",
     amount: review.reviewedBalanceCents === null ? "Unknown" : formatMoney(review.reviewedBalanceCents),
     date: `As of ${formatDate(review.asOfDate)}`,
     reviewedOn: `Reviewed ${formatLongDate(review.asOfDate) ?? formatDate(review.asOfDate)}`,
-    warning: review.stale ? "New ledger activity since review — review again." : undefined,
+    warning: undefined as string | undefined,
     qualification: review.qualifications.join(" · "),
     payerSplit: `Tenant: ${review.tenantBalanceCents === null ? "Unknown" : formatMoney(review.tenantBalanceCents)} · Agency: ${review.agencyBalanceCents === null ? "Unknown" : formatMoney(review.agencyBalanceCents)}`,
   };
+}
+
+/**
+ * The account's one balance: the reviewed amount on its date, rolled forward
+ * by posted activity dated after it. Null when it cannot be established.
+ */
+export function reviewedBalanceNowCents(review: AdminBalanceReviewView, postedCents: number | null): number | null {
+  if (review.reviewedBalanceCents === null) return null;
+  if (postedCents !== null && typeof review.postedAtReviewCents === "number") return review.reviewedBalanceCents + (postedCents - review.postedAtReviewCents);
+  return review.stale ? null : review.reviewedBalanceCents;
+}
+
+/** Amount the ledger must be trued up by on the review date so the ledger alone shows the audited balance (0 when reconciled). */
+export function ledgerTrueUpCents(review: AdminBalanceReviewView | undefined): number | null {
+  if (!review || review.reviewedBalanceCents === null || typeof review.postedAtReviewCents !== "number") return null;
+  return review.reviewedBalanceCents - review.postedAtReviewCents;
 }
 
 export function balanceReviewReportText(review: AdminBalanceReviewView | undefined): string {
@@ -33,56 +49,53 @@ export interface PostedBalanceInput {
   asOfDate?: string;
   /** Formatter for posted amounts, so the header matches the ledger table. */
   format?: (cents: number) => string;
+  /** The balances report's computed balance for this account; preferred so every screen shows the same number. */
+  balanceCents?: number | null;
 }
 
 export interface TenantHeaderBalance {
-  label: "Balance due";
+  label: "Balance";
   /** Formatted amount, or undefined when the amount is not known (never shown as $0). */
   amount?: string;
   /** Text for the "Not verified" marker when the amount is unknown. */
   unknownLabel: string;
   unknownReason: string;
-  /** Muted line under the amount: "Reviewed Sep 10, 2026" or the posted-ledger date. */
+  /** Muted line under the amount: "Reviewed Sep 10, 2026 + later activity" or the as-of date. */
   detail: string;
-  /** Stale-review warning, carried over unchanged. */
-  warning?: string;
-  /** Present when the posted ledger is known and differs from the reviewed balance. */
+  /** Present when the ledger before the review date still needs a true-up entry. */
   ledgerDifference?: { label: string; explanation: string };
 }
 
 /**
- * One balance for the tenant header. A reviewed operational balance is the
- * tenant's balance due; the posted ledger is shown only as a difference to
- * reconcile. Without a review the posted ledger balance is shown as before.
- * Values are only formatted here — nothing is recomputed.
+ * One balance for the tenant header: the reviewed balance rolled forward by
+ * later ledger activity, or the ledger balance when no review exists. A
+ * pre-review ledger gap is shown only as a reconcile action.
  */
 export function tenantHeaderBalance(review: AdminBalanceReviewView | undefined, posted: PostedBalanceInput): TenantHeaderBalance {
+  const format = (cents: number) => posted.format ? posted.format(cents) : formatMoney(cents);
+  const ledgerKnown = posted.complete && posted.amountCents !== null && Number.isFinite(posted.amountCents);
   if (review) {
-    const shown = balanceReviewDisplay(review)!;
-    const known = review.reviewedBalanceCents !== null;
-    const ledgerKnown = posted.complete && posted.amountCents !== null && Number.isFinite(posted.amountCents);
-    const differs = known && ledgerKnown && posted.amountCents !== review.reviewedBalanceCents;
+    const cents = typeof posted.balanceCents === "number" ? posted.balanceCents : reviewedBalanceNowCents(review, ledgerKnown ? posted.amountCents : null);
     const shortDate = formatTableDate(review.asOfDate) ?? formatDate(review.asOfDate);
+    const trueUp = ledgerTrueUpCents(review);
     return {
-      label: "Balance due",
-      amount: known ? shown.amount : undefined,
+      label: "Balance",
+      amount: cents === null ? undefined : format(cents),
       unknownLabel: "Not verified",
-      unknownReason: `The ${shortDate} review did not confirm an amount.`,
-      detail: shown.reviewedOn,
-      warning: shown.warning,
-      ledgerDifference: differs ? {
-        label: `Ledger shows ${posted.format ? posted.format(posted.amountCents!) : formatMoney(posted.amountCents)}`,
-        explanation: `The posted ledger differs from the ${shortDate} review. Reconcile on the Ledger tab.`,
+      unknownReason: review.reviewedBalanceCents === null ? `The ${shortDate} review did not confirm an amount.` : "Ledger activity since the last review could not be read.",
+      detail: `Reviewed ${shortDate}`,
+      ledgerDifference: trueUp ? {
+        label: `Ledger off by ${format(Math.abs(trueUp))}`,
+        explanation: `The ledger before ${shortDate} is ${format(Math.abs(trueUp))} ${trueUp > 0 ? "lower" : "higher"} than the reviewed balance. Post a ${shortDate} adjustment so the ledger matches.`,
       } : undefined,
     };
   }
-  const known = posted.complete && posted.amountCents !== null && Number.isFinite(posted.amountCents);
-  const asOf = formatLongDate(posted.asOfDate);
+  const asOf = formatTableDate(posted.asOfDate ?? "") ?? formatLongDate(posted.asOfDate);
   return {
-    label: "Balance due",
-    amount: known ? (posted.format ? posted.format(posted.amountCents!) : formatMoney(posted.amountCents)) : undefined,
+    label: "Balance",
+    amount: ledgerKnown ? format(posted.amountCents!) : undefined,
     unknownLabel: posted.unknownLabel || "Not verified",
-    unknownReason: posted.unknownReason || "The posted ledger balance is not complete.",
-    detail: asOf ? `Posted ledger · as of ${asOf}` : "Posted ledger",
+    unknownReason: posted.unknownReason || "The ledger balance is not complete.",
+    detail: asOf ? `As of ${asOf}` : "",
   };
 }

@@ -146,10 +146,22 @@ export function deriveAccountBalances(snapshot: RentOpsSnapshot, filters: RentOp
         review.reviewedBalanceCents !== latestReview.reviewedBalanceCents
           || review.tenantBalanceCents !== latestReview.tenantBalanceCents
           || review.agencyBalanceCents !== latestReview.agencyBalanceCents);
-      const balanceReview = reviewScopeAmbiguous ? undefined : latestReview;
+      // Posted balance on the review date, with the same rules as `total`, so the
+      // review rolls forward by later activity only.
+      const postedOn = (reviewDate: string): number | null => {
+        let sum = 0;
+        for (const row of value.ledger) {
+          const tx = row.transaction;
+          if (tx.status === "voided" || tx.status === "pending") continue;
+          if (!tx.postedOn || row.balanceComplete === false || !amountKnown(tx.amountCents) || tx.status !== "posted") return null;
+          if (tx.postedOn <= reviewDate) sum += ledgerBalanceSign(tx, transactionMap) * tx.amountCents;
+        }
+        return Number.isSafeInteger(sum) ? sum : null;
+      };
+      const balanceReview = reviewScopeAmbiguous || !latestReview ? undefined : { ...latestReview, postedAtReviewCents: complete ? postedOn(latestReview.asOfDate) : null };
       const operational = reviewScopeAmbiguous ? null : operationalBalanceCents(balanceReview, complete ? total : null, complete);
       if (reviewScopeAmbiguous) codes.add("balance_review_scope_ambiguous");
-      else if (balanceReview?.stale) codes.add("balance_review_stale");
+      else if (balanceReview?.stale && operational === null) codes.add("balance_review_stale");
       else if (balanceReview && operational === null) codes.add("balance_review_unresolved");
       if (filters.balanceStatus === "due" && (operational === null || operational <= 0)) continue;
       if (filters.balanceStatus === "zero" && operational !== 0) continue;

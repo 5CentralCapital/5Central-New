@@ -20,7 +20,6 @@ import type { CompanyContext } from "@shared/company/context";
 import { rentOpsAuthClient } from "../auth";
 import type { AdminSnapshot, AdminTenancyView, TenantView } from "../types";
 import { isCurrentTenancy, resolveTenantContext } from "./tenant-model";
-import { ListTotals } from "./list-totals";
 import { formatLongDate } from "../../../lib/rent-ops-formatters";
 
 /*
@@ -44,14 +43,6 @@ function useCompanyContext() {
     staleTime: 30_000,
     retry: false,
   });
-}
-
-function Panel({ title, children }: { title: string; children: ReactNode }) {
-  return <section className="rm-panel rm-tenant-panel"><div className="rm-panel-title"><h3>{title}</h3></div>{children}</section>;
-}
-
-function Field({ label, children, warning = false }: { label: string; children: ReactNode; warning?: boolean }) {
-  return <div className={`rm-field${warning ? " rm-field-warning" : ""}`}><dt>{label}</dt><dd>{children}</dd></div>;
 }
 
 function toneClass(tone: LedgerTone): string {
@@ -110,7 +101,7 @@ function sourceConnections(source: TenantSourceResolution): readonly AccountingC
 
 function LocalHistoryNotice({ source }: { source: TenantSourceResolution }) {
   const hasHistoricalQboLink = source.qbo.customerLink !== null;
-  return <Notice tone={hasHistoricalQboLink ? "warning" : "info"} title={hasHistoricalQboLink ? "QuickBooks connection needs attention" : "Historical records remain in R-ops"}>{" "}{hasHistoricalQboLink ? "A historical QuickBooks customer link exists, but the current QuickBooks source is not readable. Review the local R-ops Ledger and Deposits tabs; no current QuickBooks balance is shown until the connection is restored." : "This tenancy's historical financial record is kept in R-ops. Review the Ledger and Deposits tabs for local charges, payments, deposits and any remaining balance; no QuickBooks customer link is expected for this source."}{source.local.ledgerEntryCount > 0 ? ` R-ops has ${source.local.ledgerEntryCount} local ledger entr${source.local.ledgerEntryCount === 1 ? "y" : "ies"} available.` : ""}</Notice>;
+  return <Notice tone={hasHistoricalQboLink ? "warning" : "info"} title={hasHistoricalQboLink ? "QuickBooks connection needs attention" : "Historical records remain in R-ops"}>{" "}{hasHistoricalQboLink ? "A historical QuickBooks customer link exists, but QuickBooks can't be read right now. Use the Ledger tab meanwhile." : "This tenancy's history is on the Ledger and Deposits tabs."}</Notice>;
 }
 
 function SourceReasons({ source }: { source: TenantSourceResolution }) {
@@ -205,28 +196,27 @@ export function TenantQuickBooksPanel({ tenant, snapshot, readOnly = false, api 
   const environment = resolution?.qbo.environment ?? null;
   const sourceConnectionReady = Boolean(resolution && (resolution.qbo.connection?.state === "active" || resolution.qbo.connection?.state === "needs_reconnect") && resolution.qbo.connection.readCapabilityEnabled);
 
-  const intro = <p className="rm-muted">QuickBooks data, read-only. This tenancy's QuickBooks customer history comes from the verified mirror and stays separate from the local R-ops Ledger and Deposits tabs.</p>;
   const picker = tenancies.length > 1 && <div className="rm-ledger-filters"><label>Tenancy<select value={tenancyId} onChange={event => setTenancyId(event.target.value)}>{tenancies.map(candidate => <option key={candidate.id} value={candidate.id}>{tenancyLabel(candidate, snapshot)}</option>)}</select></label></div>;
 
   let body: ReactNode;
   if (!tenancy) body = <div className="rm-empty"><p>No tenancy is linked to this tenant, so there is no QuickBooks customer history to show.</p></div>;
   else if (company.error) body = <Notice tone="error" title="Company records could not be loaded.">{" "}<button type="button" className="rm-button" onClick={() => void company.refetch()}>Try again</button></Notice>;
   else if (!company.data) body = <div className="rm-empty" role="status"><p>Loading QuickBooks access…</p></div>;
-  else if (organizations.length === 0) body = <Notice tone="notice" title="QuickBooks source is not assigned">{" "}This tenancy's local R-ops history remains available on the Ledger and Deposits tabs. No QuickBooks company is assigned in the current accounting context.</Notice>;
+  else if (organizations.length === 0) body = <Notice tone="notice" title="QuickBooks source is not assigned">{" "}No QuickBooks company is set up yet. The Ledger tab has this tenancy's history.</Notice>;
   else if (sourceError) body = <Notice tone="error" title={messageOf(sourceError, "The tenancy accounting source could not be resolved.")}>{" "}<button type="button" className="rm-button" onClick={() => void sourceQueryForRetry?.refetch()}>Try again</button></Notice>;
-  else if (sourceSelection.kind === "unassigned") body = <Notice tone="notice" title="QuickBooks source is not assigned">{" "}This tenancy's local R-ops history remains available on the Ledger and Deposits tabs. No QuickBooks company is assigned for its historical period.</Notice>;
+  else if (sourceSelection.kind === "unassigned") body = <Notice tone="notice" title="QuickBooks source is not assigned">{" "}No QuickBooks company covers this tenancy's dates. The Ledger tab has its history.</Notice>;
   else if (sourceSelection.kind === "pending") body = <div className="rm-empty" role="status"><p>Resolving the historical accounting source…</p></div>;
-  else if (sourceSelection.kind === "ownership_review") body = <Notice tone="warning" title="Historical QuickBooks ownership needs review">{" "}The local R-ops history remains available, but QuickBooks history is withheld until one historical property owner is confirmed.<ul>{sourceSelection.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul></Notice>;
+  else if (sourceSelection.kind === "ownership_review") body = <Notice tone="warning" title="Historical QuickBooks ownership needs review">{" "}QuickBooks history is hidden until the property's owner for these dates is confirmed. The local R-ops history remains available on the Ledger tab.<ul>{sourceSelection.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul></Notice>;
   else if (sourceSelection.kind === "resolved" || sourceSelection.kind === "linked_dates_missing") {
     const source = sourceSelection.source;
     const linkedDatesMissing = sourceSelection.kind === "linked_dates_missing";
     if (source.currentState === "local_history_available") body = <>{linkedDatesMissing && <LinkedDatesMissingNotice source={source} />}<LocalHistoryNotice source={source} /></>;
-    else if (source.currentState === "ownership_review") body = <Notice tone="warning" title="Historical QuickBooks ownership needs review">{" "}The local R-ops history remains available, but QuickBooks history is withheld until the historical property ownership is reviewed.<SourceReasons source={source} /></Notice>;
-    else if (source.currentState === "not_connected" || !sourceConnectionReady || !target) body = <>{linkedDatesMissing && <LinkedDatesMissingNotice source={source} />}<Notice tone="notice" title={`QuickBooks is not connected for ${sourceEntityLabel(source)}`}>{" "}The historical owner has no readable QuickBooks connection for this tenancy. The local R-ops Ledger and Deposits remain available; no QuickBooks balance is known until a connection is confirmed.</Notice></>;
-    else body = <>{linkedDatesMissing && <LinkedDatesMissingNotice source={source} />}{source.qbo.connection?.state === "needs_reconnect" && <Notice tone="warning" title="QuickBooks needs to be reconnected">{" "}Refreshes are paused for {target.entityName}. The history below is the last mirrored copy and may be out of date.</Notice>}<TenancyLedger key={`${tenancy.id}:${environment}`} api={api} target={target} tenancyId={tenancy.id} environment={environment!} connections={connections} readOnly={readOnly} canCreateCustomerLink={source.currentState === "unlinked" && source.qbo.customerLink === null} sourceDateWarningShown={linkedDatesMissing} /></>;
+    else if (source.currentState === "ownership_review") body = <Notice tone="warning" title="Historical QuickBooks ownership needs review">{" "}QuickBooks history is hidden until the property's owner for these dates is confirmed. The local R-ops history remains available on the Ledger tab.<SourceReasons source={source} /></Notice>;
+    else if (source.currentState === "not_connected" || !sourceConnectionReady || !target) body = <>{linkedDatesMissing && <LinkedDatesMissingNotice source={source} />}<Notice tone="notice" title={`QuickBooks is not connected for ${sourceEntityLabel(source)}`}>{" "}The Ledger tab has this tenancy's history.</Notice></>;
+    else body = <>{linkedDatesMissing && <LinkedDatesMissingNotice source={source} />}{source.qbo.connection?.state === "needs_reconnect" && <Notice tone="warning" title="QuickBooks needs to be reconnected">{" "}Showing the last synced copy for {target.entityName}.</Notice>}<TenancyLedger key={`${tenancy.id}:${environment}`} api={api} target={target} tenancyId={tenancy.id} environment={environment!} connections={connections} readOnly={readOnly} canCreateCustomerLink={source.currentState === "unlinked" && source.qbo.customerLink === null} sourceDateWarningShown={linkedDatesMissing} /></>;
   }
 
-  return <div className="rm-tenant-tab-content"><Panel title="QuickBooks customer ledger">{intro}{picker}{body}</Panel></div>;
+  return <div className="rm-tenant-tab-content"><section className="rm-panel rm-tenant-panel rops-qbo">{picker}{body}</section></div>;
 }
 
 function LinkedDatesMissingNotice({ source }: { source: TenantSourceResolution }) {
@@ -254,11 +244,15 @@ function TenancyLedger({ api, target, tenancyId, environment, connections, readO
   const first = pages[0];
   if (first === null || first === undefined) {
     return canCreateCustomerLink
-      ? <LinkCustomer api={api} target={target} tenancyId={tenancyId} connections={connections} readOnly={readOnly} />
+      ? <AutoLinkThenPick api={api} target={target} tenancyId={tenancyId} environment={environment} connections={connections} readOnly={readOnly} />
       : <Notice tone="warning" title="The existing QuickBooks customer link could not be read">{" "}No new or replacement customer link is available from this screen. Review the linked customer and tenancy ownership before making changes.</Notice>;
   }
   const entries = pages.flatMap(page => page?.entries ?? []);
   return <LedgerView ledger={first} entries={entries} ownershipWarning={sourceDateWarningShown ? undefined : first.ownershipWarning} hasMore={ledger.hasNextPage} loadingMore={ledger.isFetchingNextPage} pageError={ledger.error} onMore={() => void ledger.fetchNextPage()} onReload={() => void ledger.refetch()} />;
+}
+
+function Stat({ label, children, tone }: { label: string; children: ReactNode; tone?: LedgerTone }) {
+  return <div className={`rops-qbo-stat${tone && tone !== "good" ? ` is-${tone}` : ""}`}><dt>{label}</dt><dd>{children}</dd></div>;
 }
 
 function LedgerView({ ledger, entries, ownershipWarning, hasMore, loadingMore, pageError, onMore, onReload }: { ledger: QboCustomerLedger; entries: QboCustomerLedger["entries"]; ownershipWarning?: string; hasMore: boolean; loadingMore: boolean; pageError: unknown; onMore: () => void; onReload: () => void }) {
@@ -269,40 +263,64 @@ function LedgerView({ ledger, entries, ownershipWarning, hasMore, loadingMore, p
   const ending = totals[totals.length - 1]!;
   const aging = agingRows(ledger.aging);
   const open = openItemRows(ledger.openItems);
+  const status = verification.tone !== "good" ? verification : coverage.tone !== "good" ? { tone: coverage.tone, label: coverage.tone === "error" ? "Not read yet" : ledger.coverage.status === "partial" ? "Partial history" : "Out of date" } : { tone: "good" as const, label: "Matches QuickBooks" };
+  const agingShown = aging && open.length > 0 ? aging.filter(item => item.amount !== "$0.00") : [];
   return <>
     {ownershipWarning && <Notice tone="warning" title="Tenancy dates need confirmation">{" "}{ownershipWarning}</Notice>}
-    <dl className="rm-form-grid rm-detail-grid">
-      <Field label="QuickBooks customer"><strong>{ledger.customer.displayName ?? "Name not mirrored"}</strong><small>QuickBooks #{ledger.customer.objectId}{ledger.customer.active === false ? " · inactive" : ""}</small></Field>
-      <Field label="Balance from QuickBooks history" warning={!coverage.amountsKnown || verification.tone !== "good"}><strong className="rm-amount">{ending.amount}</strong>{ledger.asOf && <small>Through {formatLongDate(ledger.asOf) ?? ledger.asOf}</small>}</Field>
-      <Field label="QuickBooks customer balance" warning={verification.tone !== "good"}><span className={toneClass(verification.tone)}>{verification.label}</span>{verification.detail && <small>{verification.detail}</small>}</Field>
-      <Field label="Coverage" warning={coverage.tone !== "good"}><span className={toneClass(coverage.tone)}>{coverage.tone === "good" ? "Complete" : !coverage.amountsKnown ? "Not read" : ledger.coverage.status === "complete" ? "Out of date" : "Partial"}</span><small>As of {coverage.asOfLabel}</small></Field>
+    <dl className="rops-qbo-summary">
+      <Stat label="QuickBooks customer"><strong>{ledger.customer.displayName ?? "Name not mirrored"}</strong><small>#{ledger.customer.objectId}{ledger.customer.active === false ? " · inactive" : ""}</small></Stat>
+      <Stat label="Balance" tone={!coverage.amountsKnown ? "warning" : verification.tone}><strong className="rm-amount">{ending.amount}</strong></Stat>
+      <Stat label="Status" tone={status.tone}><span className={toneClass(status.tone)}>{status.label}</span><small>Synced {coverage.asOfLabel}</small></Stat>
     </dl>
     {coverage.tone !== "good" && <Notice tone={coverage.tone === "error" ? "error" : "warning"} title={coverage.title}>{coverage.reasons.length > 0 && <ul>{coverage.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>}</Notice>}
     {verification.tone === "error" && <Notice tone="error" title="The mirrored history does not match QuickBooks">{" "}{verification.detail}</Notice>}
 
-    <h4>Documents</h4>
-    {rows.length === 0 ? <div className="rm-empty"><p>{coverage.amountsKnown ? "QuickBooks has no receivable documents for this customer." : "No QuickBooks documents have been read for this customer yet."}</p></div> : <div className="rm-table-wrap"><table className="rm-table rm-ledger-table">
-      <caption className="sr-only">QuickBooks customer documents with running balance</caption>
-      <thead><tr><th scope="col">Date</th><th scope="col">Type</th><th scope="col">Number</th><th scope="col" className="rm-align-right">Amount</th><th scope="col" className="rm-align-right">Applied</th><th scope="col" className="rm-align-right">Open</th><th scope="col" className="rm-align-right">Balance</th></tr></thead>
-      <tbody>{rows.map(row => <tr key={row.key}><td>{row.date}</td><td>{row.type}{row.voided && <> <span className="rm-status rm-status-muted">Voided</span></>}</td><td className="rm-reference">{row.number}</td><td className="rm-align-right rm-amount">{row.amount}</td><td className="rm-align-right rm-amount">{row.applied}</td><td className="rm-align-right rm-amount">{row.open}</td><td className="rm-align-right rm-amount">{row.balance}</td></tr>)}</tbody>
-      {!hasMore && <tfoot><tr><th scope="row" colSpan={6}>Ending balance (complete history)</th><td className="rm-align-right rm-amount"><strong>{ending.amount}</strong></td></tr></tfoot>}
-    </table></div>}
-    <ListTotals totalCount={ledger.page.total} visibleCount={entries.length} itemLabel="QuickBooks document" />
-    <div className="rm-ledger-toolbar"><span>{entries.length} of {ledger.page.total} document{ledger.page.total === 1 ? "" : "s"} shown</span>{hasMore && <button type="button" className="rm-button" disabled={loadingMore} onClick={onMore}>{loadingMore ? "Loading…" : "Load more"}</button>}</div>
-    {pageError !== null && pageError !== undefined && <Notice tone="error" title={messageOf(pageError, "More documents could not be loaded.")}>{" "}<button type="button" className="rm-button" onClick={onReload}>Reload from the first page</button></Notice>}
+    {rows.length === 0
+      ? <p className="rops-qbo-empty">{coverage.amountsKnown ? "No QuickBooks invoices or payments for this customer yet." : "QuickBooks documents have not been read for this customer yet."}</p>
+      : <section className="rops-qbo-section" aria-label="QuickBooks documents">
+        <h4>Documents</h4>
+        <div className="rm-table-wrap"><table className="rm-table rm-ledger-table">
+          <caption className="sr-only">QuickBooks customer documents with running balance</caption>
+          <thead><tr><th scope="col">Date</th><th scope="col">Type</th><th scope="col">Number</th><th scope="col" className="rm-align-right">Amount</th><th scope="col" className="rm-align-right">Applied</th><th scope="col" className="rm-align-right">Open</th><th scope="col" className="rm-align-right">Balance</th></tr></thead>
+          <tbody>{rows.map(row => <tr key={row.key}><td>{row.date}</td><td>{row.type}{row.voided && <> <span className="rm-status rm-status-muted">Voided</span></>}</td><td className="rm-reference">{row.number}</td><td className="rm-align-right rm-amount">{row.amount}</td><td className="rm-align-right rm-amount">{row.applied}</td><td className="rm-align-right rm-amount">{row.open}</td><td className="rm-align-right rm-amount">{row.balance}</td></tr>)}</tbody>
+          {!hasMore && <tfoot><tr><th scope="row" colSpan={6}>Ending balance</th><td className="rm-align-right rm-amount"><strong>{ending.amount}</strong></td></tr></tfoot>}
+        </table></div>
+        {hasMore && <div className="rm-ledger-toolbar"><span>{entries.length} of {ledger.page.total} documents</span><button type="button" className="rm-button" disabled={loadingMore} onClick={onMore}>{loadingMore ? "Loading…" : "Load more"}</button></div>}
+        {pageError !== null && pageError !== undefined && <Notice tone="error" title={messageOf(pageError, "More documents could not be loaded.")}>{" "}<button type="button" className="rm-button" onClick={onReload}>Reload from the first page</button></Notice>}
+        <dl className="rops-qbo-totals">{totals.slice(0, -1).map(item => <Stat key={item.label} label={item.label}>{<span className="rm-amount">{item.amount}</span>}</Stat>)}</dl>
+      </section>}
 
-    <div className="rm-summary-grid">
-      <section aria-label="QuickBooks totals"><h4>Totals</h4><dl className="rm-form-grid rm-detail-grid">{totals.map(item => <Field key={item.label} label={item.label} warning={!coverage.amountsKnown}><span className="rm-amount">{item.amount}</span></Field>)}</dl></section>
-      <section aria-label="QuickBooks aging"><h4>Aging</h4>{aging ? <dl className="rm-form-grid rm-detail-grid">{aging.map(item => <Field key={item.label} label={item.label}><span className="rm-amount">{item.amount}</span></Field>)}</dl> : <div className="rm-empty"><p>Aging is not available for an earlier as-of date; QuickBooks reports only today's open balances.</p></div>}</section>
-    </div>
-    <h4>Open items</h4>
-    {open.length === 0 ? <div className="rm-empty"><p>{coverage.amountsKnown ? "QuickBooks shows no open invoices, unused credits or unapplied payments." : "Open items are unknown until QuickBooks receivables are read."}</p></div> : <div className="rm-table-wrap"><table className="rm-table">
-      <caption className="sr-only">QuickBooks open items</caption>
-      <thead><tr><th scope="col">Type</th><th scope="col">Number</th><th scope="col">Date</th><th scope="col">Due</th><th scope="col" className="rm-align-right">Open</th><th scope="col">Past due</th></tr></thead>
-      <tbody>{open.map(item => <tr key={item.key}><td>{item.type}</td><td className="rm-reference">{item.number}</td><td>{item.date}</td><td>{item.due}</td><td className="rm-align-right rm-amount">{item.open}</td><td>{item.pastDue}</td></tr>)}</tbody>
-    </table></div>}
-    <ListTotals totalCount={open.length} itemLabel="open item" />
+    {open.length > 0 && <section className="rops-qbo-section" aria-label="QuickBooks open items">
+      <h4>Open items</h4>
+      {agingShown.length > 0 && <dl className="rops-qbo-totals">{agingShown.map(item => <Stat key={item.label} label={item.label}><span className="rm-amount">{item.amount}</span></Stat>)}</dl>}
+      <div className="rm-table-wrap"><table className="rm-table">
+        <caption className="sr-only">QuickBooks open items</caption>
+        <thead><tr><th scope="col">Type</th><th scope="col">Number</th><th scope="col">Date</th><th scope="col">Due</th><th scope="col" className="rm-align-right">Open</th><th scope="col">Past due</th></tr></thead>
+        <tbody>{open.map(item => <tr key={item.key}><td>{item.type}</td><td className="rm-reference">{item.number}</td><td>{item.date}</td><td>{item.due}</td><td className="rm-align-right rm-amount">{item.open}</td><td>{item.pastDue}</td></tr>)}</tbody>
+      </table></div>
+    </section>}
   </>;
+}
+
+/**
+ * Links matching tenants automatically (name and address both match one
+ * QuickBooks customer). Runs once per company per session; the manual picker
+ * shows only when this tenancy still has no unique match.
+ */
+function AutoLinkThenPick({ api, target, tenancyId, environment, connections, readOnly }: { api: AccountingApi; target: QboTarget; tenancyId: string; environment: "sandbox" | "production"; connections: readonly AccountingConnection[]; readOnly: boolean }) {
+  const queryClient = useQueryClient();
+  const enabled = target.canLink && !readOnly;
+  const auto = useQuery({
+    queryKey: [QUERY_ROOT, "auto-link", target.organizationId, target.legalEntityId, environment],
+    queryFn: async ({ signal }) => {
+      const result = await api.autoLinkTenancyCustomers(target.organizationId, { environment, legalEntityId: target.legalEntityId }, signal);
+      if (result.linkedTenancyIds.length) await queryClient.invalidateQueries({ queryKey: [QUERY_ROOT] , predicate: query => query.queryKey[1] !== "auto-link" });
+      return result;
+    },
+    enabled, staleTime: Infinity, gcTime: Infinity, retry: false,
+  });
+  if (enabled && auto.isPending) return <div className="rm-empty" role="status"><p>Looking for this tenant's QuickBooks customer…</p></div>;
+  return <LinkCustomer api={api} target={target} tenancyId={tenancyId} connections={connections} readOnly={readOnly} />;
 }
 
 function LinkCustomer({ api, target, tenancyId, connections, readOnly }: { api: AccountingApi; target: QboTarget; tenancyId: string; connections: readonly AccountingConnection[]; readOnly: boolean }) {
@@ -338,7 +356,7 @@ function LinkCustomer({ api, target, tenancyId, connections, readOnly }: { api: 
     } finally { setSaving(false); }
   }
 
-  const heading = <Notice tone="info" title="Not linked to a QuickBooks customer">{" "}This tenancy has no QuickBooks customer yet, so no QuickBooks history or balance is shown. The balance is unknown, not zero.</Notice>;
+  const heading = <Notice tone="info" title="No matching QuickBooks customer">{" "}No QuickBooks customer matched this tenant's name and address. Pick one below to link it.</Notice>;
   if (!canLink) return <>{heading}<p className="rm-muted">{readOnly ? "Linking is unavailable while viewing sample or read-only data." : "An owner, admin or finance user can link this tenancy to its QuickBooks customer."}</p></>;
   return <>{heading}
     <form className="rm-ledger-filters" onSubmit={event => void link(event)} aria-busy={saving}>

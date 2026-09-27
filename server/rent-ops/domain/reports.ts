@@ -2,7 +2,7 @@ import { createTenantStatusMatcher } from "./tenant-status";
 import { deriveAccountBalances } from "./account-balances";
 import type { DashboardPropertyPoint } from "../../../shared/rent-ops-dashboard";
 import { meteredUtilitiesForTenancy } from "./metered-utility";
-import { selectBalanceReview, operationalBalanceCents } from "./balance-review";
+import { selectBalanceReview, operationalBalanceCents, withReviewBaseline } from "./balance-review";
 import { hasVacancyConfirmationOn, hasOperationalEndOn, hasOccupancyConfirmationOn, hasConfirmedTenancyLinks, confirmedTenancyFact, isOccupiedTenancyOn, isKnownPastAccountOn } from "./tenancy-occupancy";
 import { tenantAccountLedgerRows, createTenantAccountLedgerRowsReader } from "./account-ledger";
 import { isSourceAllocationReversal } from "./invariants";
@@ -745,7 +745,7 @@ function deriveRentRollWithBalance(snapshot: RentOpsSnapshot, filters: RentOpsFi
     const { subsidyContract, subsidyException } = resolvePayerSplit(snapshot, selected, selected ? people.get(selected.primaryPersonId) : undefined, scheduleAsOf, amounts.baseRentCents);
     const unresolvedCodes = unresolvedTenancyForUnit(snapshot, unit, asOf);
     const balance = selected ? readBalance(snapshot, selected.id, asOf) : { balanceComplete: unresolvedCodes.length === 0, balanceUncertaintyCodes: unresolvedCodes.length ? ["tenancy_balance_scope_unknown"] : [], rentOnlyBalanceCents: 0, nonRentBalanceCents: 0, totalBalanceCents: 0, unappliedCashCents: 0, prepaidCents: 0, oldestUnpaidRentOn: undefined };
-    const balanceReview = selected ? selectBalanceReview(snapshot, selected.id, asOf) : undefined;
+    const balanceReview = selected ? withReviewBaseline(selectBalanceReview(snapshot, selected.id, asOf), date => readBalance(snapshot, selected.id, date)) : undefined;
     const occupancy: OccupancyState = current ? "current" : future ? "future_preleased" : unresolvedCodes.length > 0 ? "unknown" : "vacant";
     const exceptionCodes: string[] = [];
     if (currentCandidates.length > 1) exceptionCodes.push("multiple_current_tenancies");
@@ -1447,7 +1447,7 @@ function deriveDelinquencyWithBalance(snapshot: RentOpsSnapshot, filters: RentOp
     if (!matchesPropertyScope(tenancy.propertyId, filters, propertyIds)) continue;
     if (filters.unitId && tenancy.unitId !== filters.unitId) continue;
     const balance = readBalance(snapshot, tenancy.id, asOf);
-    const balanceReview = selectBalanceReview(snapshot, tenancy.id, asOf);
+    const balanceReview = withReviewBaseline(selectBalanceReview(snapshot, tenancy.id, asOf), date => readBalance(snapshot, tenancy.id, date));
     const operationalBalance = operationalBalanceCents(balanceReview, balance.totalBalanceCents, balance.balanceComplete !== false);
     if (filters.balanceStatus === "due" && (balanceReview
       ? operationalBalance === null || operationalBalance <= 0
@@ -2220,7 +2220,7 @@ export function deriveTenantProfile(snapshot: RentOpsSnapshot, personId: string,
   return {
     person,
     meteredUtilities: tenancy ? meteredUtilitiesForTenancy(snapshot, tenancy.id, asOf) : [],
-    balanceReview: tenancy ? selectBalanceReview(snapshot, tenancy.id, asOf) : undefined,
+    balanceReview: tenancy ? withReviewBaseline(selectBalanceReview(snapshot, tenancy.id, asOf), date => accountBalance(snapshot, tenancy.id, date)) : undefined,
     operationalStatus: navigation.category,
     payerResponsibilityUnverified: resolvePayerSplit(snapshot, tenancy, person, asOf, tenancy ? scheduledAmounts(snapshot, tenancy.id, asOf, createEffectiveScheduleSelector(snapshot.recurringSchedules)).baseRentCents : undefined).assistanceUnverified,
     primaryLease: tenancy ? navigation.category === "current" ? activeLeaseTerm(snapshot, tenancy.id, asOf) : navigation.category === "future" ? upcomingLeaseTerm(snapshot, tenancy.id, asOf) : undefined : undefined,

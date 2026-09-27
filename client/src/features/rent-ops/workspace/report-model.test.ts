@@ -39,7 +39,7 @@ test("curated report mappings keep drilldown IDs out of display columns", () => 
     balanceDueCents: 0,
   }];
   const view = createReportViewModel("rent-roll", rows);
-  assert.deepEqual(view.curatedColumns.map(column => column.label), ["Unit", "Tenant", "Recurring rent", "Other recurring", "Monthly total", "Balance due"]);
+  assert.deepEqual(view.curatedColumns.map(column => column.label), ["Unit", "Tenant", "Recurring rent", "Other recurring", "Monthly total", "Balance"]);
   assert.equal(view.curatedColumns.some((column) => /id$/i.test(column.key)), false);
   assert.equal(view.displayRows[0].unitNumber, "101");
   assert.equal(view.displayRows[0].__source.unitId, "unit:one");
@@ -57,14 +57,14 @@ test("report subtotals refuse an exact cents sum that exceeds safe number range"
 
 test("property subtotals sum complete amounts and withhold incomplete balance totals", () => {
   const rows: DelinquencyRow[] = [
-    { propertyId: "property:one", propertyName: "One", unitId: "unit:one", rentOnlyBalanceCents: 15000, totalBalanceCents: 15000, balanceComplete: true },
-    { propertyId: "property:one", propertyName: "One", unitId: "unit:two", rentOnlyBalanceCents: 25000, totalBalanceCents: null, balanceComplete: false },
-    { propertyId: "property:two", propertyName: "Two", unitId: "unit:three", rentOnlyBalanceCents: 0, totalBalanceCents: 0, balanceComplete: true },
+    { propertyId: "property:one", propertyName: "One", unitId: "unit:one", rentOnlyBalanceCents: 15000, totalBalanceCents: 15000, operationalBalanceCents: 15000, balanceComplete: true },
+    { propertyId: "property:one", propertyName: "One", unitId: "unit:two", rentOnlyBalanceCents: 25000, totalBalanceCents: null, operationalBalanceCents: null, balanceComplete: false },
+    { propertyId: "property:two", propertyName: "Two", unitId: "unit:three", rentOnlyBalanceCents: 0, totalBalanceCents: 0, operationalBalanceCents: 0, balanceComplete: true },
   ];
   const subtotals = buildPropertySubtotals("delinquency", rows);
   assert.deepEqual(subtotals.map((item) => [item.label, item.count]), [["One", 2], ["Two", 1]]);
   assert.equal(subtotals[0].amounts.rentOnlyBalanceCents, null);
-  assert.equal(subtotals[0].amounts.totalBalanceCents, null);
+  assert.equal(subtotals[0].amounts.operationalBalanceCents, null, "one unknown balance withholds the property total");
   assert.equal(subtotals[1].amounts.rentOnlyBalanceCents, 0);
 });
 

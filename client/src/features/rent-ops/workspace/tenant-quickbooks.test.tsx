@@ -96,7 +96,7 @@ async function render(seed: (client: QueryClient) => void, resolution: TenantSou
 test("not connected for the property's legal entity is explicit", async () => {
   const html = await render(() => undefined, sourceResolution("not_connected"));
   assert.match(html, /QuickBooks is not connected for Synthetic LLC/);
-  assert.match(html, /QuickBooks data, read-only/);
+  assert.doesNotMatch(html, /QuickBooks data, read-only/, "no intro subtext");
   assert.doesNotMatch(html, /\$0\.00/);
 });
 
@@ -104,9 +104,10 @@ test("an unlinked tenancy offers the customer link, never a zero balance", async
   const html = await render(client => {
     client.setQueryData(["rent-ops-qbo-ledger", "tenancy-ledger", ORG, "demo-tenancy-a", "sandbox"], { pages: [null], pageParams: [undefined] });
     client.setQueryData(["rent-ops-qbo-ledger", "customers", ORG, ENTITY, "sandbox", "9130"], [{ kind: "customers", objectType: "Customer", providerObjectId: "58", displayName: "Synthetic Resident", active: true, version: "0", providerUpdatedAt: null }]);
+    client.setQueryData(["rent-ops-qbo-ledger", "auto-link", ORG, ENTITY, "sandbox"], { linkedTenancyIds: [] });
   }, sourceResolution("unlinked"));
-  assert.match(html, /Not linked to a QuickBooks customer/);
-  assert.match(html, /The balance is unknown, not zero/);
+  assert.match(html, /No matching QuickBooks customer/);
+  assert.match(html, /name and address/);
   assert.match(html, /Synthetic Resident · QuickBooks #58/);
   assert.match(html, /Link customer/);
   assert.doesNotMatch(html, /\$0\.00/);
@@ -133,7 +134,7 @@ test("a linked tenancy with partial coverage shows the ledger, the gaps and the 
   assert.match(html, /Not verified/);
   assert.match(html, /<td>Invoice<\/td>/);
   assert.match(html, /\$1,500\.00/);
-  assert.match(html, /Ending balance \(complete history\)/);
+  assert.match(html, /Ending balance/);
   assert.match(html, /31–60 days/);
   assert.match(html, /49 days/);
 });
@@ -142,7 +143,7 @@ test("local historical source keeps R-ops history visible without a QBO link pro
   const html = await render(() => undefined, sourceResolution("local_history_available"));
   assert.match(html, /Historical records remain in R-ops/);
   assert.match(html, /Ledger and Deposits tabs/);
-  assert.doesNotMatch(html, /Not linked to a QuickBooks customer/);
+  assert.doesNotMatch(html, /No matching QuickBooks customer/);
   assert.doesNotMatch(html, /Link customer/);
 });
 
@@ -167,8 +168,9 @@ test("sequential organization ownership selects the sole overlapping historical 
   const html = await render(client => {
     client.setQueryData(["rent-ops-qbo-ledger", "tenancy-ledger", SECOND_ORG, "demo-tenancy-a", "sandbox"], { pages: [null], pageParams: [undefined] });
     client.setQueryData(["rent-ops-qbo-ledger", "customers", SECOND_ORG, SECOND_ENTITY, "sandbox", "9131"], [{ kind: "customers", objectType: "Customer", providerObjectId: "58", displayName: "Synthetic Resident", active: true, version: "0", providerUpdatedAt: null }]);
+    client.setQueryData(["rent-ops-qbo-ledger", "auto-link", SECOND_ORG, SECOND_ENTITY, "sandbox"], { linkedTenancyIds: [] });
   }, priorOwner, { context: multiOrgContext, resolutions: [priorOwner, currentOwner] });
-  assert.match(html, /Not linked to a QuickBooks customer/);
+  assert.match(html, /No matching QuickBooks customer/);
   assert.match(html, /Synthetic Resident · QuickBooks #58/);
   assert.doesNotMatch(html, /Historical QuickBooks ownership needs review/);
 });
@@ -178,7 +180,7 @@ test("multiple overlapping organization owners fail closed into ownership review
   const secondOwner = sourceResolution("linked", { organizationId: SECOND_ORG, legalEntityId: SECOND_ENTITY });
   const html = await render(() => undefined, firstOwner, { context: multiOrgContext, resolutions: [firstOwner, secondOwner] });
   assert.match(html, /Historical QuickBooks ownership needs review/);
-  assert.match(html, /one historical property owner is confirmed/);
+  assert.match(html, /owner for these dates is confirmed/);
   assert.doesNotMatch(html, /Link customer/);
   assert.doesNotMatch(html, /Ending balance/);
 });
@@ -240,6 +242,6 @@ test("a missing-date existing link never offers a new or replacement customer li
     client.setQueryData(["rent-ops-qbo-ledger", "customers", ORG, ENTITY, "sandbox", "9130"], [{ kind: "customers", objectType: "Customer", providerObjectId: "58", displayName: "Synthetic Resident", active: true, version: "0", providerUpdatedAt: null }]);
   }, sourceResolution("linked_dates_missing", { missingStart: true }));
   assert.match(html, /The existing QuickBooks customer link could not be read/);
-  assert.doesNotMatch(html, /Not linked to a QuickBooks customer/);
+  assert.doesNotMatch(html, /No matching QuickBooks customer/);
   assert.doesNotMatch(html, /Link customer/);
 });

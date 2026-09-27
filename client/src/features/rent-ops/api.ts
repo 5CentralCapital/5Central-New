@@ -1175,7 +1175,7 @@ function decodeLedgerRow(value: unknown): LedgerRow {
 }
 
 export function decodeBalanceReview(value: unknown): AdminBalanceReviewView {
-  const input = exactRecord(value, "balance review", ["schema", "id", "tenancyId", "personId", "propertyId", "unitId", "asOfDate", "reviewedAt", "reviewedBy", "reviewedBalanceCents", "tenantBalanceCents", "agencyBalanceCents", "qualifications", "stale"]);
+  const input = exactRecord(value, "balance review", ["schema", "id", "tenancyId", "personId", "propertyId", "unitId", "asOfDate", "reviewedAt", "reviewedBy", "reviewedBalanceCents", "tenantBalanceCents", "agencyBalanceCents", "qualifications", "stale", "postedAtReviewCents"]);
   const strings = (key: string) => requiredArrayOf(input, key, (item) => {
     if (typeof item !== "string") throw new Error(`Invalid balance review ${key}`);
     return item;
@@ -1188,6 +1188,7 @@ export function decodeBalanceReview(value: unknown): AdminBalanceReviewView {
     tenantBalanceCents: input.tenantBalanceCents === null ? null : requiredMoney(input, "tenantBalanceCents"),
     agencyBalanceCents: input.agencyBalanceCents === null ? null : requiredMoney(input, "agencyBalanceCents"),
     qualifications: strings("qualifications"), stale: requiredBoolean(input, "stale"),
+    ...(input.postedAtReviewCents === undefined ? {} : { postedAtReviewCents: input.postedAtReviewCents === null ? null : requiredMoney(input, "postedAtReviewCents") }),
   };
 }
 
