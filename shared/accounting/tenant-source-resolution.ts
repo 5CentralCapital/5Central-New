@@ -22,7 +22,7 @@ export const TENANT_SOURCE_RESOLUTION_STATES = [
 export type TenantSourceResolutionState = (typeof TENANT_SOURCE_RESOLUTION_STATES)[number];
 export const tenantSourceResolutionStateSchema = z.enum(TENANT_SOURCE_RESOLUTION_STATES);
 
-export const TENANT_OWNERSHIP_STATES = ["resolved", "review"] as const;
+export const TENANT_OWNERSHIP_STATES = ["resolved", "review", "linked_dates_missing"] as const;
 export type TenantOwnershipState = (typeof TENANT_OWNERSHIP_STATES)[number];
 export const tenantOwnershipStateSchema = z.enum(TENANT_OWNERSHIP_STATES);
 

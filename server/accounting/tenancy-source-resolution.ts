@@ -56,6 +56,7 @@ interface ConnectionRow {
 interface CustomerLinkRow {
   readonly external_id: unknown;
   readonly legal_entity_id: unknown;
+  readonly source_scope: unknown;
 }
 
 export interface TenancyHistoryPeriod {
@@ -84,6 +85,12 @@ export interface TenancyHistoryResolution {
   readonly ledgerEntryCount: number;
   readonly periods: readonly TenancyHistoryPeriod[];
   readonly ownerIds: readonly string[];
+  /** Every mapped ownership period for this property, including periods outside the known tenancy interval. */
+  readonly mappedPeriods: readonly TenancyHistoryPeriod[];
+  /** Every legal entity mapped to this property across its full history. */
+  readonly mappedOwnerIds: readonly string[];
+  /** Count of distinct legal entities mapped to this property across all organizations. */
+  readonly globalMappedOwnerCount: number;
   readonly coverageComplete: boolean;
   readonly effectiveLegalEntityId: string | null;
   readonly effectiveLegalEntityName: string | null;
@@ -180,6 +187,21 @@ function overlaps(period: { effectiveFrom: string; effectiveUntil: string | null
   return period.effectiveFrom <= endOn && (period.effectiveUntil === null || period.effectiveUntil > startOn);
 }
 
+const OPEN_TENANCY_STATUSES = new Set(["current", "notice", "future"]);
+
+export function tenancyMissingDatesWarning(history: TenancyHistoryResolution): string | null {
+  const missingStart = history.tenancy.startOn === null;
+  const missingEnd = history.tenancy.endOn === null && !OPEN_TENANCY_STATUSES.has(history.tenancy.status ?? "");
+  if (missingStart && missingEnd) return "Move-in and move-out dates missing. Add them to confirm ownership.";
+  if (missingStart) return "Move-in date missing. Add it to confirm ownership.";
+  if (missingEnd) return "Move-out or termination date missing. Add it to confirm ownership.";
+  return null;
+}
+
+function periodCoversDate(period: TenancyHistoryPeriod, day: string): boolean {
+  return period.effectiveFrom <= day && (period.effectiveUntil === null || period.effectiveUntil > day);
+}
+
 /** Resolve one tenancy's historical interval and property ownership. */
 export async function resolveTenancyHistory(
   executor: RentOpsQueryExecutor,
@@ -236,7 +258,7 @@ export async function resolveTenancyHistory(
       ORDER BY m.effective_from, m.id`,
     [organizationId, propertyId],
   );
-  const periods: TenancyHistoryPeriod[] = periodResult.rows.map(row => {
+  const mappedPeriods: TenancyHistoryPeriod[] = periodResult.rows.map(row => {
     const effectiveFrom = date(row.effective_from);
     const effectiveUntil = optionalDate(row.effective_until);
     return {
@@ -247,17 +269,31 @@ export async function resolveTenancyHistory(
       overlapsTenancy: intervalThrough !== null && overlaps({ effectiveFrom, effectiveUntil }, startOn!, intervalThrough),
     };
   });
-  const overlappingPeriods = periods.filter(period => period.overlapsTenancy);
+  const overlappingPeriods = mappedPeriods.filter(period => period.overlapsTenancy);
   const ownerIds = Array.from(new Set(overlappingPeriods.map(period => period.legalEntityId)));
+  const mappedOwnerIds = Array.from(new Set(mappedPeriods.map(period => period.legalEntityId)));
+  const datesMissing = startOn === null || (endOn === null && !OPEN_TENANCY_STATUSES.has(status ?? ""));
+  let globalMappedOwnerCount = mappedOwnerIds.length;
+  if (datesMissing) {
+    // Only the missing-date fallback needs a cross-company ambiguity guard.
+    // The aggregate reveals no other company's identity or records.
+    const globalOwnerResult = await executor.query<{ owner_count: unknown }>(
+      `SELECT COUNT(DISTINCT legal_entity_id)::int AS owner_count
+         FROM company_property_entity_periods
+        WHERE property_id=$1`,
+      [propertyId],
+    );
+    globalMappedOwnerCount = count(globalOwnerResult.rows[0]?.owner_count);
+  }
   // A tenant who moved in before the company acquired the property (an
   // inherited tenant) has no company owner for the pre-acquisition months,
   // so there is no competing QuickBooks company for that stretch. Coverage
   // is therefore measured from the later of move-in and the property's first
   // company ownership date. Gaps after acquisition, a second owner, or an
   // uncovered end of tenancy still require review.
-  const firstOwnedFrom = periods.reduce<string | null>((earliest, period) => earliest === null || period.effectiveFrom < earliest ? period.effectiveFrom : earliest, null);
+  const firstOwnedFrom = mappedPeriods.reduce<string | null>((earliest, period) => earliest === null || period.effectiveFrom < earliest ? period.effectiveFrom : earliest, null);
   const coverageStart = startOn !== null && firstOwnedFrom !== null && firstOwnedFrom > startOn ? firstOwnedFrom : startOn;
-  const completeCoverage = coverageComplete(periods, coverageStart, intervalThrough);
+  const completeCoverage = coverageComplete(mappedPeriods, coverageStart, intervalThrough);
   const ownershipResolved = ownerIds.length === 1 && completeCoverage;
   const effectiveLegalEntityId = ownershipResolved ? ownerIds[0]! : null;
   const effectiveOwner = ownershipResolved ? overlappingPeriods.find(period => period.legalEntityId === effectiveLegalEntityId) : undefined;
@@ -268,10 +304,57 @@ export async function resolveTenancyHistory(
     ledgerEntryCount: count(tenancy.ledger_entry_count),
     periods: overlappingPeriods,
     ownerIds,
+    mappedPeriods,
+    mappedOwnerIds,
+    globalMappedOwnerCount,
     coverageComplete: completeCoverage,
     effectiveLegalEntityId,
     effectiveLegalEntityName: effectiveOwner?.legalEntityName ?? null,
   };
+}
+
+/**
+ * A pre-existing link may be read with a warning only when missing dates are
+ * the sole ownership gap and the property's complete mapped history names
+ * exactly the linked legal entity. Known dates still have to intersect that
+ * entity's mapped period set; import timestamps are never used as dates.
+ */
+export function linkedDatesMissingOwner(
+  history: TenancyHistoryResolution,
+  linkedLegalEntityId: string,
+  asOf: string,
+): string | null {
+  const { startOn, endOn, status } = history.tenancy;
+  const datesMissing = startOn === null || (endOn === null && !OPEN_TENANCY_STATUSES.has(status ?? ""));
+  if (!datesMissing || history.mappedOwnerIds.length !== 1 || history.mappedOwnerIds[0] !== linkedLegalEntityId
+    || history.globalMappedOwnerCount !== 1) return null;
+
+  const ownerPeriods = history.mappedPeriods.filter(period => period.legalEntityId === linkedLegalEntityId);
+  if (ownerPeriods.length === 0) return null;
+  if (startOn === null) {
+    if (endOn !== null) {
+      // A known move-out must land inside the sole entity's ownership period.
+      if (!ownerPeriods.some(period => periodCoversDate(period, endOn))) return null;
+    } else if (OPEN_TENANCY_STATUSES.has(status ?? "")) {
+      // Current/notice/future status makes the tenancy open through as-of; an
+      // owner period that already ended cannot own that known current span.
+      if (!ownerPeriods.some(period => periodCoversDate(period, asOf))) return null;
+    } else if (!ownerPeriods.some(period => period.effectiveFrom <= asOf)) {
+      return null;
+    }
+  } else {
+    const firstOwnedFrom = ownerPeriods.reduce((earliest, period) => period.effectiveFrom < earliest ? period.effectiveFrom : earliest, ownerPeriods[0]!.effectiveFrom);
+    const startIsInherited = startOn < firstOwnedFrom;
+    const startIsCovered = ownerPeriods.some(period => periodCoversDate(period, startOn));
+    // Preserve inherited tenants whose known move-in predates the mapped
+    // acquisition. A move-in inside a later gap is a conflict.
+    if (!startIsCovered && !startIsInherited) return null;
+    if (startIsInherited && !ownerPeriods.some(period => period.effectiveFrom <= asOf)) return null;
+    if (endOn !== null && !ownerPeriods.some(period => periodCoversDate(period, endOn))) return null;
+    if (endOn === null && OPEN_TENANCY_STATUSES.has(status ?? "")
+      && !ownerPeriods.some(period => periodCoversDate(period, asOf))) return null;
+  }
+  return linkedLegalEntityId;
 }
 
 /**
@@ -294,16 +377,40 @@ export async function resolveTenancySource(
   const ownershipResolved = history.effectiveLegalEntityId !== null;
   const effectiveLegalEntityId = history.effectiveLegalEntityId;
 
+  const linkResult = await executor.query<CustomerLinkRow>(
+    `SELECT external_id, legal_entity_id, source_scope
+       FROM company_external_identities
+      WHERE organization_id=$1 AND provider='qbo' AND record_kind='Customer' AND local_kind='tenancy'
+        AND local_id=$2 AND source_scope LIKE $3
+      ORDER BY created_at, id`,
+    [organizationId, tenancyId, `qbo:${environment}:%`],
+  );
+  if (linkResult.rows.length > 1) {
+    throw new AccountingError("accounting_conflict", "This tenancy is linked to more than one QuickBooks customer in the requested environment");
+  }
+  const customerLink = linkResult.rows[0] ?? null;
+  const linkedLegalEntityId = customerLink ? String(customerLink.legal_entity_id) : null;
+  const linkedSourceScope = customerLink ? text(customerLink.source_scope) : null;
+  const linkedScopeMatch = linkedSourceScope ? /^qbo:(sandbox|production):(\d{1,32})$/.exec(linkedSourceScope) : null;
+  if (customerLink && !linkedScopeMatch) throw new AccountingError("accounting_unavailable", "The tenancy's QuickBooks mapping has an invalid scope");
+  const linkedEnvironment = linkedScopeMatch?.[1] ?? null;
+  const linkedRealmId = linkedScopeMatch?.[2] ?? null;
+  const fallbackOwnerId = customerLink && linkedLegalEntityId
+    ? linkedDatesMissingOwner(history, linkedLegalEntityId, asOf)
+    : null;
+  const missingDatesFallback = fallbackOwnerId !== null && linkedEnvironment === environment;
+
+  const sourceLegalEntityId = effectiveLegalEntityId ?? (missingDatesFallback ? fallbackOwnerId : null);
+
   let binding: BindingRow | null = null;
   let connection: ConnectionRow | null = null;
-  let customerLink: CustomerLinkRow | null = null;
-  if (effectiveLegalEntityId) {
+  if (sourceLegalEntityId) {
     const bindingResult = await executor.query<BindingRow>(
       `SELECT realm_id, provider_company_name
          FROM accounting_qbo_realm_bindings
         WHERE organization_id=$1 AND legal_entity_id=$2 AND environment=$3
         LIMIT 1`,
-      [organizationId, effectiveLegalEntityId, environment],
+      [organizationId, sourceLegalEntityId, environment],
     );
     binding = bindingResult.rows[0] ?? null;
 
@@ -320,24 +427,9 @@ export async function resolveTenancySource(
         WHERE c.organization_id=$1 AND c.legal_entity_id=$2 AND c.environment=$3
         ORDER BY (c.status='active' AND c.revoked_at IS NULL) DESC, c.updated_at DESC, c.realm_id
         LIMIT 1`,
-      [organizationId, effectiveLegalEntityId, environment],
+      [organizationId, sourceLegalEntityId, environment],
     );
     connection = connectionResult.rows[0] ?? null;
-
-    if (binding) {
-      const linkResult = await executor.query<CustomerLinkRow>(
-        `SELECT external_id, legal_entity_id
-           FROM company_external_identities
-          WHERE organization_id=$1 AND provider='qbo' AND record_kind='Customer' AND local_kind='tenancy'
-            AND local_id=$2 AND source_scope=$3
-          ORDER BY created_at, id`,
-        [organizationId, tenancyId, `qbo:${environment}:${String(binding.realm_id)}`],
-      );
-      if (linkResult.rows.length > 1) {
-        throw new AccountingError("accounting_conflict", "This tenancy is linked to more than one QuickBooks customer in the resolved company");
-      }
-      customerLink = linkResult.rows[0] ?? null;
-    }
   }
 
   const bindingRealmId = binding ? String(binding.realm_id) : null;
@@ -346,13 +438,20 @@ export async function resolveTenancySource(
     bindingRealmId && connectionRealmId === bindingRealmId
       && text(connection?.status) === "active" && connection?.revoked_at === null,
   );
-  const linkMatchesOwner = Boolean(customerLink && String(customerLink.legal_entity_id) === effectiveLegalEntityId);
-  const ownershipReview = !ownershipResolved || (customerLink !== null && !linkMatchesOwner);
+  const identityMatchesResolvedOwner = Boolean(customerLink && ownershipResolved
+    && linkedLegalEntityId === effectiveLegalEntityId && linkedEnvironment === environment);
+  const linkMatchesOwner = Boolean(identityMatchesResolvedOwner && (!bindingRealmId || linkedRealmId === bindingRealmId));
+  const linkMatchesMissingDatesOwner = missingDatesFallback;
+  const identityRealmConflict = Boolean(customerLink && (identityMatchesResolvedOwner || linkMatchesMissingDatesOwner)
+    && bindingRealmId && linkedRealmId !== bindingRealmId);
+  const ownershipReview = (!ownershipResolved && !linkMatchesMissingDatesOwner)
+    || (customerLink !== null && !identityMatchesResolvedOwner && !linkMatchesMissingDatesOwner)
+    || identityRealmConflict;
 
   let qboState: "linked" | "unlinked" | "not_connected" | "ownership_review";
   if (ownershipReview) qboState = "ownership_review";
   else if (!activeBindingConnection) qboState = "not_connected";
-  else qboState = linkMatchesOwner ? "linked" : "unlinked";
+  else qboState = linkMatchesOwner || linkMatchesMissingDatesOwner ? "linked" : "unlinked";
 
   const ledgerEntryCount = history.ledgerEntryCount;
   const localState = ledgerEntryCount > 0 ? "local_history_available" : "local_history_unavailable";
@@ -363,12 +462,23 @@ export async function resolveTenancySource(
       : localState === "local_history_available" ? "local_history_available" : "not_connected";
 
   const reasons: string[] = [];
-  if (startOn === null) reasons.push("The tenancy has no verified move-in or lease start date; review the historical interval before selecting a QuickBooks company.");
-  else if (endOn === null && status !== "current" && status !== "notice" && status !== "future") reasons.push("The tenancy has no verified move-out, termination, or lease end date; review the historical interval before selecting a QuickBooks company.");
-  else if (!completeCoverage) reasons.push("The historical legal-entity assignment does not cover the full tenancy interval; review ownership before selecting a QuickBooks company.");
-  if (ownerIds.length === 0) reasons.push("No historical legal-entity assignment overlaps this tenancy interval; review ownership before selecting a QuickBooks company.");
+  const dateWarning = tenancyMissingDatesWarning(history);
+  if (missingDatesFallback && dateWarning) reasons.push(dateWarning);
+  else {
+    if (startOn === null) reasons.push("The tenancy has no verified move-in or lease start date; review the historical interval before selecting a QuickBooks company.");
+    if (endOn === null && !OPEN_TENANCY_STATUSES.has(status ?? "")) reasons.push("The tenancy has no verified move-out, termination, or lease end date; review the historical interval before selecting a QuickBooks company.");
+    if (startOn !== null && (endOn !== null || OPEN_TENANCY_STATUSES.has(status ?? "")) && !completeCoverage) {
+      reasons.push("The historical legal-entity assignment does not cover the full tenancy interval; review ownership before selecting a QuickBooks company.");
+    }
+  }
+  if (ownerIds.length === 0 && !missingDatesFallback) reasons.push("No historical legal-entity assignment overlaps this tenancy interval; review ownership before selecting a QuickBooks company.");
   else if (ownerIds.length > 1) reasons.push("More than one legal entity owned this property during the tenancy interval; review ownership before selecting a QuickBooks company.");
-  if (customerLink && !linkMatchesOwner) reasons.push("The existing QuickBooks customer link belongs to a different legal entity than the historical owner; review the mapping.");
+  if (customerLink && !identityMatchesResolvedOwner && !linkMatchesMissingDatesOwner) {
+    reasons.push(ownershipResolved
+      ? "The existing QuickBooks customer link belongs to a different legal entity than the historical owner; review the mapping."
+      : "The existing QuickBooks customer link cannot be confirmed because historical ownership or the tenancy dates remain unresolved.");
+  }
+  if (identityRealmConflict) reasons.push("The existing QuickBooks customer identity is on a different realm than the current binding; review the QuickBooks scope.");
   if (!activeBindingConnection && qboState !== "ownership_review") reasons.push("No active QuickBooks binding connection is available for the historical owner.");
   if (localState === "local_history_available" && qboState === "not_connected") reasons.push("Local Rent Ops history is available; this does not establish a QuickBooks connection or customer link.");
   if (activeBindingConnection && qboState === "unlinked") reasons.push("QuickBooks is connected for the historical owner, but this tenancy has no customer link.");
@@ -391,7 +501,9 @@ export async function resolveTenancySource(
       ledgerEntryCount,
     },
     ownership: {
-      state: ownershipResolved && !ownershipReview ? "resolved" as const : "review" as const,
+      state: missingDatesFallback && !ownershipReview
+        ? "linked_dates_missing" as const
+        : ownershipResolved && !ownershipReview ? "resolved" as const : "review" as const,
       coverageComplete: completeCoverage,
       propertyName,
       // Keep the response tenancy-scoped: future or otherwise unrelated
@@ -403,8 +515,12 @@ export async function resolveTenancySource(
     qbo: {
       environment,
       state: qboState,
-      scope: bindingRealmId && effectiveLegalEntityId
-        ? financialSourceScopeSchema.parse({ provider: "qbo", organizationId, legalEntityId: effectiveLegalEntityId, environment, realmId: bindingRealmId })
+      scope: linkMatchesMissingDatesOwner && linkedRealmId && (!bindingRealmId || linkedRealmId === bindingRealmId)
+        ? financialSourceScopeSchema.parse({ provider: "qbo", organizationId, legalEntityId: linkedLegalEntityId, environment, realmId: linkedRealmId })
+        : identityMatchesResolvedOwner && linkedRealmId && (!bindingRealmId || linkedRealmId === bindingRealmId)
+          ? financialSourceScopeSchema.parse({ provider: "qbo", organizationId, legalEntityId: effectiveLegalEntityId, environment, realmId: linkedRealmId })
+          : bindingRealmId && effectiveLegalEntityId && customerLink === null
+          ? financialSourceScopeSchema.parse({ provider: "qbo", organizationId, legalEntityId: effectiveLegalEntityId, environment, realmId: bindingRealmId })
         : null,
       binding: bindingRealmId ? { realmId: bindingRealmId, providerCompanyName: text(binding?.provider_company_name) } : null,
       connection: connection && connectionRealmId ? {

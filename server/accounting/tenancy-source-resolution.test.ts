@@ -10,6 +10,7 @@ import { createQboTokenCipher } from "./token-crypto";
 
 const ENVIRONMENT = "production" as const;
 const REALM = "4620816365000001";
+let customerLinkSequence = 100;
 
 async function seedTenancy(
   db: Awaited<ReturnType<typeof createSyntheticCompanyDatabase>>["db"],
@@ -39,6 +40,21 @@ async function seedLedger(
      VALUES ($1,$2,$3,$4,$5,'charge','base_rent','posted',100000,'2026-01-02','Synthetic rent','tenant',
        'known','manual','manual','manual','manual','manual','unknown','manual','manual','manual','manual','unknown','unknown')`,
     [`ledger-${tenancyId}`, propertyId, unitId, tenancyId, personId],
+  );
+}
+
+async function seedCustomerLink(
+  db: Awaited<ReturnType<typeof createSyntheticCompanyDatabase>>["db"],
+  input: { tenancyId: string; customerObjectId: string; legalEntityId?: string; environment?: "sandbox" | "production"; realmId?: string; id?: string },
+): Promise<void> {
+  const environment = input.environment ?? ENVIRONMENT;
+  const realmId = input.realmId ?? REALM;
+  await db.query(
+    `INSERT INTO company_external_identities
+      (id,organization_id,legal_entity_id,provider,source_scope,record_kind,external_id,local_kind,local_id)
+     VALUES ($1,$2,$3,'qbo',$4,'Customer',$5,'tenancy',$6)`,
+    [input.id ?? `50000000-0000-4000-8000-${(customerLinkSequence++).toString(16).padStart(12, "0")}`, SYNTHETIC_COMPANY.organizationId,
+      input.legalEntityId ?? SYNTHETIC_COMPANY.entityId, `qbo:${environment}:${realmId}`, input.customerObjectId, input.tenancyId],
   );
 }
 
@@ -248,6 +264,196 @@ test("missing archive dates and a null status remain local history with an expli
   }
 });
 
+test("an existing QBO link stays readable with a missing-date warning while effective ownership remains null", async () => {
+  const fixture = await createSyntheticCompanyDatabase();
+  try {
+    await seedTenancy(fixture.db, { id: "resolver-linked-no-dates", propertyId: SYNTHETIC_COMPANY.propertyId, unitId: SYNTHETIC_COMPANY.unitId, personId: "resolver-person-linked-no-dates", status: "past" });
+    await seedLedger(fixture.db, "resolver-linked-no-dates", SYNTHETIC_COMPANY.propertyId, SYNTHETIC_COMPANY.unitId, "resolver-person-linked-no-dates");
+    await seedBindingAndConnection(fixture.db);
+    await fixture.db.query(
+      `INSERT INTO company_external_identities
+        (id,organization_id,legal_entity_id,provider,source_scope,record_kind,external_id,local_kind,local_id)
+       VALUES ('50000000-0000-4000-8000-000000000071',$1,$2::uuid,'qbo',$3,'CompanyInfo','synthetic-company','legal_entity',$2::text)`,
+      [SYNTHETIC_COMPANY.organizationId, SYNTHETIC_COMPANY.entityId, `qbo:${ENVIRONMENT}:${REALM}`],
+    );
+
+    await assert.rejects(fixture.executor.transaction!(transaction => linkTenancyToQboCustomer(transaction, {
+      scope: { provider: "qbo", organizationId: SYNTHETIC_COMPANY.organizationId, legalEntityId: SYNTHETIC_COMPANY.entityId, environment: ENVIRONMENT, realmId: REALM },
+      tenancyId: "resolver-linked-no-dates",
+      customerObjectId: "customer-no-dates",
+      asOf: "2026-09-26",
+    })), (error: unknown) => error instanceof Error && /not found/.test(error.message));
+
+    await seedCustomerLink(fixture.db, { tenancyId: "resolver-linked-no-dates", customerObjectId: "customer-no-dates" });
+    const result = await resolveTenancySource(fixture.executor, {
+      organizationId: SYNTHETIC_COMPANY.organizationId,
+      tenancyId: "resolver-linked-no-dates",
+      environment: ENVIRONMENT,
+      asOf: "2026-09-26",
+    });
+    assert.ok(result);
+    assert.equal(result.currentState, "linked");
+    assert.equal(result.qbo.state, "linked");
+    assert.equal(result.ownership.state, "linked_dates_missing");
+    assert.equal(result.ownership.coverageComplete, false);
+    assert.equal(result.ownership.effectiveLegalEntityId, null);
+    assert.equal(result.ownership.effectiveLegalEntityName, null);
+    assert.deepEqual(result.qbo.scope, {
+      provider: "qbo",
+      organizationId: SYNTHETIC_COMPANY.organizationId,
+      legalEntityId: SYNTHETIC_COMPANY.entityId,
+      environment: ENVIRONMENT,
+      realmId: REALM,
+    });
+    assert.deepEqual(result.qbo.customerLink, { customerObjectId: "customer-no-dates", legalEntityId: SYNTHETIC_COMPANY.entityId });
+    assert.ok(result.reasons.some(reason => /Move-in and move-out dates missing/.test(reason)));
+    assert.equal(result.reasons.some(reason => /No historical legal-entity assignment overlaps/.test(reason)), false);
+
+    const customer = await resolveTenancyCustomer(fixture.executor, {
+      organizationId: SYNTHETIC_COMPANY.organizationId,
+      tenancyId: "resolver-linked-no-dates",
+      environment: ENVIRONMENT,
+      asOf: "2026-09-26",
+    });
+    assert.deepEqual(customer, {
+      scope: { provider: "qbo", organizationId: SYNTHETIC_COMPANY.organizationId, legalEntityId: SYNTHETIC_COMPANY.entityId, environment: ENVIRONMENT, realmId: REALM },
+      customerObjectId: "customer-no-dates",
+      propertyId: SYNTHETIC_COMPANY.propertyId,
+      linkedLegalEntityId: SYNTHETIC_COMPANY.entityId,
+      ownershipWarning: "Move-in and move-out dates missing. Add them to confirm ownership.",
+    });
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("mapped-period boundaries reject expired and gap dates but preserve inherited pre-acquisition occupancy", async () => {
+  const fixture = await createSyntheticCompanyDatabase();
+  try {
+    await fixture.db.exec(`
+      INSERT INTO rent_ops_properties(id,name,slug) VALUES
+        ('resolver-expired-end','Expired end','resolver-expired-end'),
+        ('resolver-current-expired','Current expired','resolver-current-expired'),
+        ('resolver-start-gap','Start gap','resolver-start-gap'),
+        ('resolver-inherited-missing-end','Inherited missing end','resolver-inherited-missing-end');
+      INSERT INTO rent_ops_units(id,property_id,unit_number) VALUES
+        ('resolver-expired-end-unit','resolver-expired-end','1'),
+        ('resolver-current-expired-unit','resolver-current-expired','1'),
+        ('resolver-start-gap-unit','resolver-start-gap','1'),
+        ('resolver-inherited-missing-end-unit','resolver-inherited-missing-end','1');
+      INSERT INTO company_property_entity_periods(id,organization_id,legal_entity_id,property_id,effective_from,effective_until) VALUES
+        ('30000000-0000-4000-8000-000000000071','${SYNTHETIC_COMPANY.organizationId}','${SYNTHETIC_COMPANY.entityId}','resolver-expired-end','2020-01-01','2025-01-01'),
+        ('30000000-0000-4000-8000-000000000072','${SYNTHETIC_COMPANY.organizationId}','${SYNTHETIC_COMPANY.entityId}','resolver-current-expired','2020-01-01','2025-01-01'),
+        ('30000000-0000-4000-8000-000000000073','${SYNTHETIC_COMPANY.organizationId}','${SYNTHETIC_COMPANY.entityId}','resolver-start-gap','2020-01-01','2022-01-01'),
+        ('30000000-0000-4000-8000-000000000074','${SYNTHETIC_COMPANY.organizationId}','${SYNTHETIC_COMPANY.entityId}','resolver-start-gap','2025-01-01',NULL),
+        ('30000000-0000-4000-8000-000000000075','${SYNTHETIC_COMPANY.organizationId}','${SYNTHETIC_COMPANY.entityId}','resolver-inherited-missing-end','2020-01-01',NULL);
+    `);
+    await seedTenancy(fixture.db, { id: "resolver-end-after-expiry", propertyId: "resolver-expired-end", unitId: "resolver-expired-end-unit", personId: "resolver-person-end-after-expiry", status: "past", moveOut: "2025-02-01" });
+    await seedTenancy(fixture.db, { id: "resolver-current-after-expiry", propertyId: "resolver-current-expired", unitId: "resolver-current-expired-unit", personId: "resolver-person-current-after-expiry", status: "current" });
+    await seedTenancy(fixture.db, { id: "resolver-start-in-gap", propertyId: "resolver-start-gap", unitId: "resolver-start-gap-unit", personId: "resolver-person-start-in-gap", status: "past", moveIn: "2023-01-01" });
+    await seedTenancy(fixture.db, { id: "resolver-inherited-missing-end", propertyId: "resolver-inherited-missing-end", unitId: "resolver-inherited-missing-end-unit", personId: "resolver-person-inherited-missing-end", status: "past", moveIn: "2019-01-01" });
+    await seedCustomerLink(fixture.db, { tenancyId: "resolver-end-after-expiry", customerObjectId: "customer-expired-end" });
+    await seedCustomerLink(fixture.db, { tenancyId: "resolver-current-after-expiry", customerObjectId: "customer-current-expired" });
+    await seedCustomerLink(fixture.db, { tenancyId: "resolver-start-in-gap", customerObjectId: "customer-start-gap" });
+    await seedCustomerLink(fixture.db, { tenancyId: "resolver-inherited-missing-end", customerObjectId: "customer-inherited-missing-end" });
+
+    const resolve = (tenancyId: string) => resolveTenancyCustomer(fixture.executor, {
+      organizationId: SYNTHETIC_COMPANY.organizationId, tenancyId, environment: ENVIRONMENT, asOf: "2026-09-26",
+    });
+    assert.equal((await resolve("resolver-end-after-expiry"))?.scope, null, "known move-out after ownership expired is a conflict");
+    assert.equal((await resolve("resolver-current-after-expiry"))?.scope, null, "a current tenancy cannot extend beyond the mapped ownership period");
+    assert.equal((await resolve("resolver-start-in-gap"))?.scope, null, "a known move-in in a later ownership gap is a conflict");
+    const inherited = await resolve("resolver-inherited-missing-end");
+    assert.ok(inherited?.scope, "a pre-acquisition move-in can still be inherited");
+    assert.equal(inherited?.ownershipWarning, "Move-out or termination date missing. Add it to confirm ownership.");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("an existing link is returned for review on multi-owner, mismatched-entity, and duplicate identities", async () => {
+  const fixture = await createSyntheticCompanyDatabase();
+  try {
+    await fixture.db.exec(`
+      INSERT INTO company_legal_entities(id,organization_id,name,entity_type,currency)
+        VALUES('20000000-0000-4000-8000-000000000071','${SYNTHETIC_COMPANY.organizationId}','Second Property LLC','llc','USD');
+      INSERT INTO rent_ops_properties(id,name,slug) VALUES ('resolver-two-owner-property','Two owner property','resolver-two-owner-property');
+      INSERT INTO rent_ops_units(id,property_id,unit_number) VALUES ('resolver-two-owner-unit','resolver-two-owner-property','1');
+      INSERT INTO company_property_entity_periods(id,organization_id,legal_entity_id,property_id,effective_from,effective_until)
+        VALUES ('30000000-0000-4000-8000-000000000076','${SYNTHETIC_COMPANY.organizationId}','${SYNTHETIC_COMPANY.entityId}','resolver-two-owner-property','2020-01-01','2023-01-01'),
+               ('30000000-0000-4000-8000-000000000077','${SYNTHETIC_COMPANY.organizationId}','20000000-0000-4000-8000-000000000071','resolver-two-owner-property','2023-01-01',NULL);
+    `);
+    await seedTenancy(fixture.db, { id: "resolver-multi-owner-link", propertyId: "resolver-two-owner-property", unitId: "resolver-two-owner-unit", personId: "resolver-person-multi-owner-link", status: "past" });
+    await seedTenancy(fixture.db, { id: "resolver-mismatched-link", propertyId: SYNTHETIC_COMPANY.propertyId, unitId: SYNTHETIC_COMPANY.unitId, personId: "resolver-person-mismatched-link", status: "past", moveIn: "2021-01-01", moveOut: "2022-01-01" });
+    await seedCustomerLink(fixture.db, { tenancyId: "resolver-multi-owner-link", customerObjectId: "customer-multi-owner" });
+    await seedCustomerLink(fixture.db, { tenancyId: "resolver-mismatched-link", customerObjectId: "customer-mismatched", legalEntityId: "20000000-0000-4000-8000-000000000071" });
+
+    const multi = await resolveTenancySource(fixture.executor, {
+      organizationId: SYNTHETIC_COMPANY.organizationId, tenancyId: "resolver-multi-owner-link", environment: ENVIRONMENT, asOf: "2026-09-26",
+    });
+    assert.equal(multi?.ownership.state, "review");
+    assert.equal(multi?.ownership.effectiveLegalEntityId, null);
+    assert.equal(multi?.qbo.state, "ownership_review");
+    assert.equal(multi?.qbo.scope, null);
+    assert.deepEqual(multi?.qbo.customerLink, { customerObjectId: "customer-multi-owner", legalEntityId: SYNTHETIC_COMPANY.entityId });
+    assert.ok((await resolveTenancyCustomer(fixture.executor, {
+      organizationId: SYNTHETIC_COMPANY.organizationId, tenancyId: "resolver-multi-owner-link", environment: ENVIRONMENT,
+    }))?.ownershipWarning);
+
+    const mismatch = await resolveTenancySource(fixture.executor, {
+      organizationId: SYNTHETIC_COMPANY.organizationId, tenancyId: "resolver-mismatched-link", environment: ENVIRONMENT, asOf: "2026-09-26",
+    });
+    assert.equal(mismatch?.ownership.state, "review");
+    assert.equal(mismatch?.qbo.scope, null);
+    assert.deepEqual(mismatch?.qbo.customerLink, { customerObjectId: "customer-mismatched", legalEntityId: "20000000-0000-4000-8000-000000000071" });
+    const mismatchedRead = await resolveTenancyCustomer(fixture.executor, {
+      organizationId: SYNTHETIC_COMPANY.organizationId, tenancyId: "resolver-mismatched-link", environment: ENVIRONMENT,
+    });
+    assert.ok(mismatchedRead);
+    assert.equal(mismatchedRead.scope, null);
+    assert.equal(mismatchedRead.linkedLegalEntityId, "20000000-0000-4000-8000-000000000071");
+    assert.ok(mismatchedRead.ownershipWarning);
+
+    await seedCustomerLink(fixture.db, { tenancyId: "resolver-multi-owner-link", customerObjectId: "customer-duplicate", realmId: "4620816365000002" });
+    await assert.rejects(resolveTenancySource(fixture.executor, {
+      organizationId: SYNTHETIC_COMPANY.organizationId, tenancyId: "resolver-multi-owner-link", environment: ENVIRONMENT, asOf: "2026-09-26",
+    }), (error: unknown) => error instanceof Error && /more than one QuickBooks customer/.test(error.message));
+    await assert.rejects(resolveTenancyCustomer(fixture.executor, {
+      organizationId: SYNTHETIC_COMPANY.organizationId, tenancyId: "resolver-multi-owner-link", environment: ENVIRONMENT,
+    }), (error: unknown) => error instanceof Error && /more than one QuickBooks customer/.test(error.message));
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("a legal entity mapped in another company blocks missing-date fallback without leaking foreign ownership", async () => {
+  const fixture = await createSyntheticCompanyDatabase();
+  try {
+    await fixture.db.exec(`
+      INSERT INTO company_organizations(id,name) VALUES('10000000-0000-4000-8000-000000000071','Other Synthetic Company');
+      INSERT INTO company_legal_entities(id,organization_id,name,entity_type,currency)
+        VALUES('20000000-0000-4000-8000-000000000072','10000000-0000-4000-8000-000000000071','Foreign Owner LLC','llc','USD');
+      INSERT INTO company_property_entity_periods(id,organization_id,legal_entity_id,property_id,effective_from,effective_until)
+        VALUES('30000000-0000-4000-8000-000000000078','10000000-0000-4000-8000-000000000071','20000000-0000-4000-8000-000000000072','${SYNTHETIC_COMPANY.propertyId}','2010-01-01','2020-01-01');
+    `);
+    await seedTenancy(fixture.db, { id: "resolver-cross-company-link", propertyId: SYNTHETIC_COMPANY.propertyId, unitId: SYNTHETIC_COMPANY.unitId, personId: "resolver-person-cross-company-link", status: "past" });
+    await seedCustomerLink(fixture.db, { tenancyId: "resolver-cross-company-link", customerObjectId: "customer-cross-company" });
+    const result = await resolveTenancySource(fixture.executor, {
+      organizationId: SYNTHETIC_COMPANY.organizationId, tenancyId: "resolver-cross-company-link", environment: ENVIRONMENT, asOf: "2026-09-26",
+    });
+    assert.equal(result?.ownership.state, "review");
+    assert.equal(result?.qbo.scope, null);
+    assert.deepEqual(result?.qbo.customerLink, { customerObjectId: "customer-cross-company", legalEntityId: SYNTHETIC_COMPANY.entityId });
+    assert.equal(JSON.stringify(result).includes("20000000-0000-4000-8000-000000000072"), false);
+    const read = await resolveTenancyCustomer(fixture.executor, {
+      organizationId: SYNTHETIC_COMPANY.organizationId, tenancyId: "resolver-cross-company-link", environment: ENVIRONMENT,
+    });
+    assert.equal(read?.scope, null);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("an unknown historical status does not turn a missing termination date into ongoing occupancy", async () => {
   const fixture = await createSyntheticCompanyDatabase();
   try {
@@ -352,6 +558,9 @@ test("lease-only imported history stays unlinked until the historical customer l
     }), {
       scope: { provider: "qbo", organizationId: SYNTHETIC_COMPANY.organizationId, legalEntityId: SYNTHETIC_COMPANY.entityId, environment: ENVIRONMENT, realmId: REALM },
       customerObjectId: "lease-customer",
+      propertyId: SYNTHETIC_COMPANY.propertyId,
+      linkedLegalEntityId: SYNTHETIC_COMPANY.entityId,
+      ownershipWarning: null,
     });
     const afterLink = await resolveTenancySource(fixture.executor, {
       organizationId: SYNTHETIC_COMPANY.organizationId,
