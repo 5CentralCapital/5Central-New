@@ -2,7 +2,7 @@
 // the widget definition, and the small presentational parts (tiles, rows,
 // bars, tables, charts) that size themselves to the cell they are given.
 // Unknown amounts stay unknown: helpers return "—" or "Unknown", never $0.
-import React, { useEffect, useMemo, useState, type ReactNode } from "react";
+import React, { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import type { BankingSnapshot } from "../../../../../shared/rent-ops-banking";
 import type { DashboardCash, DashboardTrends } from "../../../../../shared/rent-ops-dashboard";
 import type { AdminSnapshot, ReportKey, TenantTab, ViewFilters } from "../types";
@@ -175,9 +175,11 @@ export function StatStrip({ items, metrics, min = 132 }: { items: Stat[]; metric
 /* ---------- exact decimal-string cents (company APIs) ---------- */
 
 const CENTS = /^-?\d+$/;
-/** String cents to a number for charts and sorting; unknown stays undefined. */
+/** Chart coordinates use safe integers only; financial display stays exact. */
 export function centsNumber(value: string | null | undefined): number | undefined {
-  return typeof value === "string" && CENTS.test(value) ? Number(value) : undefined;
+  if (typeof value !== "string" || !CENTS.test(value)) return undefined;
+  const amount = Number(value);
+  return Number.isSafeInteger(amount) ? amount : undefined;
 }
 /** Sum string cents exactly; any unknown makes the total unknown. */
 export function sumCents(values: ReadonlyArray<string | null | undefined>): string | null {
@@ -185,21 +187,34 @@ export function sumCents(values: ReadonlyArray<string | null | undefined>): stri
   for (const value of values) { if (typeof value !== "string" || !CENTS.test(value)) return null; total += BigInt(value); }
   return total.toString();
 }
-/** Whole-dollar text for string or number cents: "$12,340", "−$1,200", "—". */
-export function wholeCents(value: string | number | null | undefined): string {
-  const number = typeof value === "number" ? value : centsNumber(value ?? undefined);
-  return number === undefined || !Number.isFinite(number) ? "—" : formatWholeDollars(number);
+function exactCents(value: string | number | null | undefined): bigint | undefined {
+  if (typeof value === "string" && CENTS.test(value)) return BigInt(value);
+  if (typeof value === "number" && Number.isSafeInteger(value)) return BigInt(value);
+  return undefined;
 }
-/** Short money for tight spaces: "$1.2M", "$84K", "$950". */
+/** Whole-dollar display rounds cents without a floating-point conversion. */
+export function wholeCents(value: string | number | null | undefined): string {
+  const amount = exactCents(value);
+  if (amount === undefined) return "—";
+  const abs = amount < BigInt(0) ? -amount : amount;
+  const rounded = (abs + BigInt(50)) / BigInt(100);
+  return `${amount < BigInt(0) ? "−" : ""}$${rounded.toLocaleString("en-US")}`;
+}
+/** Compact display rounds exact cents, including amounts beyond Number's range. */
 export function shortCents(value: string | number | null | undefined): string {
-  const number = typeof value === "number" ? value : centsNumber(value ?? undefined);
-  if (number === undefined || !Number.isFinite(number)) return "—";
-  const sign = number < 0 ? "−" : "";
-  const abs = Math.abs(number) / 100;
-  if (abs >= 1_000_000) return `${sign}$${(abs / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}M`;
-  if (abs >= 10_000) return `${sign}$${Math.round(abs / 1000)}K`;
-  if (abs >= 1_000) return `${sign}$${(abs / 1000).toFixed(1)}K`;
-  return `${sign}$${Math.round(abs)}`;
+  const amount = exactCents(value);
+  if (amount === undefined) return "—";
+  const sign = amount < BigInt(0) ? "−" : "";
+  const abs = amount < BigInt(0) ? -amount : amount;
+  const compact = (unit: bigint, decimals: boolean, suffix: string) => {
+    if (!decimals) return `${sign}$${(abs + unit / BigInt(2)) / unit}${suffix}`;
+    const tenths = (abs * BigInt(10) + unit / BigInt(2)) / unit;
+    return `${sign}$${tenths / BigInt(10)}.${tenths % BigInt(10)}${suffix}`;
+  };
+  if (abs >= BigInt(100_000_000)) return compact(BigInt(100_000_000), abs < BigInt(1_000_000_000), "M");
+  if (abs >= BigInt(1_000_000)) return compact(BigInt(100_000), false, "K");
+  if (abs >= BigInt(100_000)) return compact(BigInt(100_000), true, "K");
+  return `${sign}$${(abs + BigInt(50)) / BigInt(100)}`;
 }
 export const signedCents = (cents: number) => `${cents < 0 ? "−" : "+"}${formatWholeDollars(Math.abs(cents))}`;
 
@@ -343,12 +358,29 @@ export function Stack({ parts, format = value => String(value) }: { parts: Array
 /** Pages a card between views with dots (the mockup's swipe cards). */
 export function Pager({ pages }: { pages: Array<{ key: string; label: string; body: ReactNode }> }) {
   const [index, setIndex] = useState(0);
+  const id = useId();
+  const touch = useRef<{ x: number; y: number }>();
   useEffect(() => { if (index >= pages.length) setIndex(0); }, [index, pages.length]);
-  const page = pages[Math.min(index, pages.length - 1)];
+  const active = Math.min(index, pages.length - 1);
+  const page = pages[active];
   if (!page) return null;
-  return <div className="ops-pager"><div className="ops-pager-body">{page.body}</div>
-    <div className="ops-pager-dots" role="tablist" aria-label="Card pages">{pages.map((entry, position) => <button key={entry.key} type="button" role="tab" aria-selected={position === index} aria-label={entry.label} title={entry.label} onClick={() => setIndex(position)} />)}</div></div>;
+  return <div className="ops-pager">
+    <div className="ops-pager-body" role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-tab-${active}`}
+      onTouchStart={event => { const point = event.touches[0]; if (point) touch.current = { x: point.clientX, y: point.clientY }; }}
+      onTouchEnd={event => { const point = event.changedTouches[0], start = touch.current; touch.current = undefined;
+        if (!point || !start) return;
+        const dx = point.clientX - start.x, dy = point.clientY - start.y;
+        if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) setIndex((active + (dx < 0 ? 1 : -1) + pages.length) % pages.length);
+      }}>{page.body}</div>
+    <div className="ops-pager-dots" role="tablist" aria-label="Card pages">{pages.map((entry, position) => <button key={entry.key} id={`${id}-tab-${position}`} type="button" role="tab" tabIndex={position === active ? 0 : -1} aria-selected={position === active} aria-controls={`${id}-panel`} aria-label={entry.label} title={entry.label}
+      onClick={() => setIndex(position)} onKeyDown={event => {
+        const next = event.key === "ArrowRight" ? (active + 1) % pages.length : event.key === "ArrowLeft" ? (active - 1 + pages.length) % pages.length : event.key === "Home" ? 0 : event.key === "End" ? pages.length - 1 : undefined;
+        if (next === undefined) return;
+        event.preventDefault(); setIndex(next);
+        (event.currentTarget.parentElement?.querySelectorAll("button")[next] as HTMLButtonElement | undefined)?.focus();
+      }} />)}</div></div>;
 }
+
 
 /* ---------- banking guards ---------- */
 

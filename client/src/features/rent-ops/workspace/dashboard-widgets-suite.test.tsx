@@ -62,7 +62,7 @@ function seededClient(): QueryClient {
   const projects = [project("pr1", "115th St flip", "flip", "active", "6000000", "4500000"), project("pr2", "Sun Cove rehab", "rehab", "planning", null, null)];
   client.setQueryData(["rent-ops-workspace", "dashboard-projects", IDENTITY, ORG], projects);
   client.setQueryData(["rent-ops-workspace", "dashboard-project", IDENTITY, ORG, "pr1", 3], { ...projects[0], scopeItems: [], budgetVersions: [], draftCosts: [], postedActuals: [], qboProjectIdentities: [], tasks: [{ id: "t1", projectId: "pr1", title: "Paint exterior", description: null, status: "blocked", startsOn: null, dueOn: "2026-09-28", completedOn: null, dependencyTaskIds: [], recordRevision: 1, updatedAt: "2026-09-20T00:00:00.000Z", archivedAt: null }] });
-  client.setQueryData(["rent-ops-workspace", "dashboard-deal", IDENTITY, ORG, "pr1", 3, ASOF], { projectId: "pr1", currency: "USD", asOf: ASOF, costs: [], funding: [], saleForecast: { grossProceedsCents: "42500000", saleOn: "2026-11-15", sellingCostCents: "2500000", netSaleProceedsCents: "40000000", projectedProfitCents: "5200000", profitState: "complete" }, byLane: [], totals: { budgetCents: "30000000", incurredCents: "28000000", paidCents: null, prepaidCents: null, remainingForecastCents: "1000000", finalCostCents: "29000000" }, fundingTotals: [], coverage: {} });
+  client.setQueryData(["rent-ops-workspace", "dashboard-deal", IDENTITY, ORG, "pr1", 3, ASOF], { projectId: "pr1", currency: "USD", asOf: ASOF, costs: [], funding: [], saleForecast: { grossProceedsCents: "42500000", saleOn: "2026-11-15", sellingCostCents: "2500000", netSaleProceedsCents: "40000000", projectedProfitCents: "5200000", profitState: "complete" }, byLane: [], totals: { budgetCents: "30000000", incurredCents: "28000000", paidCents: null, prepaidCents: null, remainingForecastCents: "1000000", finalCostCents: "29000000" }, fundingTotals: [], coverage: { status: "complete" } });
   client.setQueryData(["rent-ops-workspace", "dashboard-company", IDENTITY, ORG, ASOF], {
     asOf: ASOF, obligations: { items: [{ obligationId: "o1", accountId: "i1", accountName: "Cameryn Worden", instrumentName: "Note A", dueOn: "2026-10-01", currency: "USD", expectedCents: "250000", knownMinimumCents: "250000", paidCents: "0", amountComplete: true }], truncated: false },
     maturities: [{ instrumentId: "m1", accountId: "l1", accountName: "Lima One", instrumentName: "Bridge loan", maturityOn: "2026-12-01", currency: "USD", outstandingPrincipalCents: "150000000", balloonCents: null }],
@@ -70,7 +70,7 @@ function seededClient(): QueryClient {
     workDue: { items: [{ id: "w1", title: "Fix AC", propertyId: "p1", propertyName: "Sun Cove", unitId: null, unitNumber: "A1", priority: "high", status: "open", scheduledOn: "2026-09-27", reportedOn: "2026-09-20", overdue: false }], openCount: 1 },
   });
   client.setQueryData(["rent-ops-workspace", "dashboard-qbo-health", IDENTITY, ORG], { items: [health("e1", "production"), health("e2", "sandbox")], workers: { active: 1, lastSeenAt: "2026-09-26T11:00:00.000Z" }, generatedAt: "2026-09-26T12:00:00.000Z" });
-  client.setQueryData(["rent-ops-workspace", "dashboard-debt", IDENTITY, ORG], { asOf: ASOF, items: [{ instrumentId: "m1", accountId: "l1", accountName: "Lima One", instrumentName: "Bridge loan", kind: "loan", legalEntityId: "e1", currency: "USD", maturityOn: "2026-12-01", monthsToMaturity: 2, annualRate: "11.5", balloonCents: "150000000", balloonSource: "documented", derivedOutstandingCents: "150000000", manualOutstandingCents: null, reconciliation: "matched" }] });
+  client.setQueryData(["rent-ops-workspace", "dashboard-debt", IDENTITY, ORG], { asOf: ASOF, items: [{ instrumentId: "m1", accountId: "l1", accountName: "Lima One", instrumentName: "Bridge loan", kind: "loan", legalEntityId: "e1", currency: "USD", maturityOn: "2026-12-01", monthsToMaturity: 2, annualRate: "0.115", balloonCents: "150000000", balloonSource: "documented", derivedOutstandingCents: "150000000", manualOutstandingCents: null, reconciliation: "matched" }] });
   const week = (key: string, start: string, end: string, net: string) => ({ key, start, end, openingCashCents: "7000000", inflowsCents: "2000000", outflowsCents: "-1500000", netCents: net, closingCashCents: "7500000", restrictedClosingCents: "0", availableClosingCents: "7500000", modeledInflowsCents: "0", belowReserveFloor: false, categories: { tenant_receipts: "2000000", debt_service: "-1200000", project_costs: "-300000" } });
   const scenario = { id: "s1", organizationId: ORG, name: "Base plan", kind: "base", state: "approved", baseScenarioId: null, startDate: "2026-09-21", horizonWeeks: 13, horizonMonths: 12, reserveFloorCents: "2000000", currency: "USD", currentAssumptionVersion: 2, recordRevision: 1, createdBy: "m", createdAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-09-01T00:00:00.000Z" };
   client.setQueryData(["forecasting", "list", ORG], { items: [scenario], nextCursor: null });
@@ -102,6 +102,7 @@ function render(id: string, size: WidgetSize, data: DashboardData, client = seed
 }
 
 test("the suite has 75+ widgets with at least ten in every category the dashboard asks for", () => {
+  assert.equal(new Set(WIDGETS.map(widget => widget.id)).size, WIDGETS.length, "widget ids are unique");
   assert.ok(WIDGETS.length >= 75, `${WIDGETS.length} widgets`);
   for (const category of ["rent", "units", "cash", "accounting", "qb", "projects"] as const) {
     const count = WIDGETS.filter(widget => widget.category === category).length;
@@ -112,6 +113,7 @@ test("the suite has 75+ widgets with at least ten in every category the dashboar
 
 test("every widget can be resized to at least two known sizes", () => {
   for (const widget of WIDGETS) {
+    assert.ok(widget.sizes.includes(widget.defaultSize), `${widget.id} default size is supported`);
     assert.ok(widget.sizes.length >= 2, `${widget.id} has one size`);
     for (const size of widget.sizes) assert.ok(SIZES[size], `${widget.id}: ${size}`);
     assert.ok(widget.name.trim() && widget.description.trim(), `${widget.id} is labelled`);
@@ -149,7 +151,7 @@ test("every widget renders while its data is still loading", () => {
 test("company widgets show real figures from the company reads", () => {
   const data = sampleData();
   assert.match(render("proj-board", "F6", data), /115th St flip[\s\S]*\$52,000/);
-  assert.match(render("proj-kpis", "W", data), /\$60,000\+?/);
+  assert.match(render("proj-kpis", "W", data), /Approved budgets<\/span><strong>Unknown[\s\S]*Posted spend<\/span><strong>Unknown/);
   assert.match(render("cashflow-grid", "F6", data), /Tenant rent[\s\S]*Ending cash/);
   assert.match(render("milestones", "L", data), /Paint exterior[\s\S]*Cameryn Worden payment|Cameryn Worden payment[\s\S]*Paint exterior/);
   assert.match(render("debt-maturities", "L", data), /Bridge loan/);
@@ -165,8 +167,9 @@ test("unknown amounts never become zero", () => {
   assert.ok(lines.every(line => line.collectedCents === null), "no receipts read means collected is unknown");
 });
 
-test("QuickBooks entities prefer production and skip unreadable connections", () => {
+test("QuickBooks entities prefer production and keep unavailable companies visible", () => {
   const entities = qboEntities([health("e1", "sandbox"), health("e1", "production"), health("e2", "production", "needs_reconnect")])!;
-  assert.equal(entities.length, 1);
+  assert.equal(entities.length, 2);
+  assert.equal(entities.find(entity => entity.scope.legalEntityId === "e2")?.available, false);
   assert.equal(entities[0]!.scope.environment, "production");
 });

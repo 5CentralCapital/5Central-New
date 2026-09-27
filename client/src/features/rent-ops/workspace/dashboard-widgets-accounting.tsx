@@ -11,6 +11,39 @@ import { useCloseChecklists, useCompanyDashboard, useDebtMaturities, useForecast
 import { ForecastGate, useCompanyGate } from "./dashboard-widgets-overview";
 
 const outstanding = (item: { derivedOutstandingCents: string | null; manualOutstandingCents: string | null }) => item.manualOutstandingCents ?? item.derivedOutstandingCents;
+const EXACT_CENTS = /^-?\d+$/;
+const exactBigInt = (value: string | null | undefined): bigint | undefined => typeof value === "string" && EXACT_CENTS.test(value) ? BigInt(value) : undefined;
+const isPositiveCents = (value: string | null | undefined) => { const amount = exactBigInt(value); return amount !== undefined && amount > BigInt(0); };
+export function addExactCents(previous: string | null | undefined, value: string | null | undefined): string | null {
+  return previous === undefined ? value ?? null : sumCents([previous, value]);
+}
+
+/** Show the API's annual-rate decimal fraction as a human percentage exactly. */
+export function annualRatePercent(rate: string | null | undefined): string | null {
+  if (typeof rate !== "string" || !/^\d+(?:\.\d+)?$/.test(rate)) return null;
+  const [whole, fraction = ""] = rate.split(".");
+  const digits = `${whole}${fraction}`.replace(/^0+(?=\d)/, "") || "0";
+  const shift = fraction.length - 2; // multiply the decimal fraction by 100
+  let rendered: string;
+  if (shift <= 0) rendered = `${digits}${"0".repeat(-shift)}`;
+  else {
+    const padded = digits.padStart(shift + 1, "0");
+    rendered = `${padded.slice(0, -shift)}.${padded.slice(-shift)}`;
+  }
+  rendered = rendered.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+  const [integer, decimal] = rendered.split(".");
+  return `${integer.replace(/^0+(?=\d)/, "") || "0"}${decimal ? `.${decimal}` : ""}`;
+}
+
+/** Remaining payment lower bound when the roll-forward cannot determine the exact balance. */
+export function paymentLowerBoundCents(item: { remainingCents: string | null; knownMinimumCents: string; recordedCents: string }): string | null {
+  const remaining = exactBigInt(item.remainingCents);
+  if (remaining !== undefined) return (remaining > BigInt(0) ? remaining : BigInt(0)).toString();
+  const minimum = exactBigInt(item.knownMinimumCents), recorded = exactBigInt(item.recordedCents);
+  if (minimum === undefined || recorded === undefined) return null;
+  const lowerBound = minimum - recorded;
+  return (lowerBound > BigInt(0) ? lowerBound : BigInt(0)).toString();
+}
 
 function CloseChecklist({ data, metrics }: WidgetContext) {
   const { gate } = useCompanyGate(data);
@@ -25,7 +58,7 @@ function CloseChecklist({ data, metrics }: WidgetContext) {
     const open = checklist?.items.filter(item => item.state !== "complete") ?? [];
     return <li key={row.entity.scope.legalEntityId}>
       <Ring size={size} share={checklist ? checklist.completeCount / Math.max(1, checklist.items.length) : undefined} tone={open.length ? "accent" : "positive"} label={checklist ? `${checklist.completeCount}/${checklist.items.length}` : "—"} />
-      <span><strong>{row.entity.name}</strong><small>{row.error ? "Could not load" : !checklist ? "…" : open.length ? open.map(item => item.label).join(" · ") : "Closed"}</small></span>
+      <span><strong>{row.entity.name}</strong><small>{row.entity.available === false ? "Unavailable" : row.error ? "Could not load" : !checklist ? "…" : open.length ? open.map(item => item.label).join(" · ") : "Closed"}</small></span>
     </li>;
   })}</ul><Foot action="Period close" onAction={companyOpener(data, "accounting", { accountingView: "close" })}>{monthShort(close.month)} {close.month.slice(0, 4)} close</Foot></>;
 }
@@ -37,11 +70,11 @@ function Settlements({ data, metrics }: WidgetContext) {
   if (settlements.loading) return <Loading />;
   const rows: Row[] = [...settlements.items].sort((a, b) => b.periodEnd.localeCompare(a.periodEnd)).map(item => ({ ...item, id: item.id }));
   return <Table rows={rows} limit={fitRows(metrics, TABLE_ROW, 40)} empty={settlements.failed ? "Settlements could not be loaded." : "No PM settlements recorded."} onMore={companyOpener(data, "accounting", { accountingView: "pm-settlements" })} columns={[
-    { key: "propertyName", label: "Property", render: row => <span className="rops-cell-stack"><span>{String(row.propertyName ?? "Property")}</span><small>{String(row.managerName)} · {shortDay(String(row.periodStart))}–{shortDay(String(row.periodEnd))}</small></span> },
+    { key: "propertyName", label: "Property", render: row => <span className="rops-cell-stack"><span>{String(row.propertyName ?? "Property")}</span><small>{String(row.managerName)} · {shortDay(String(row.periodStart))}–{shortDay(String(row.periodEnd))} · {String(row.currency)}</small></span> },
     ...(metrics.w >= 8 ? [{ key: "grossCollectionsCents", label: "Collected", number: true, render: (row: Row) => wholeCents(row.grossCollectionsCents as string) }, { key: "pmCostsCents", label: "PM costs", number: true, render: (row: Row) => wholeCents(row.pmCostsCents as string) }] : []),
     { key: "ownerRemittanceCents", label: "Remitted", number: true, render: row => wholeCents(row.ownerRemittanceCents as string) },
     { key: "state", label: "State", render: row => <span data-tone={row.state === "exception" ? "critical" : row.state === "reconciled" ? "positive" : undefined}>{humanLabel(String(row.state))}</span> },
-  ]} />;
+  ]} footer={settlements.incomplete ? <span>Some property managers returned a partial read</span> : undefined} />;
 }
 
 function Remittances({ data, metrics }: WidgetContext) {
@@ -49,13 +82,22 @@ function Remittances({ data, metrics }: WidgetContext) {
   const settlements = usePmSettlements(data);
   if (gate) return gate;
   if (settlements.loading) return <Loading />;
-  if (!settlements.items.length) return <Empty title="No PM settlements recorded" />;
+  if (!settlements.items.length) return <Empty title={settlements.incomplete ? "Remittances unavailable" : "No PM settlements recorded"}>{settlements.incomplete ? "Some property managers could not be read completely." : undefined}</Empty>;
   const months = Array.from({ length: Math.max(3, Math.min(12, Math.floor(metrics.bodyWidth / 46))) }, (_, index) => monthKey(data.filters.asOfDate, index - Math.max(3, Math.min(12, Math.floor(metrics.bodyWidth / 46))) + 1));
-  const byMonth = new Map<string, number>();
-  for (const item of settlements.items) byMonth.set(item.periodEnd.slice(0, 7), (byMonth.get(item.periodEnd.slice(0, 7)) ?? 0) + (centsNumber(item.ownerRemittanceCents) ?? 0));
+  const byMonth = new Map<string, string | null>();
+  const currenciesByMonth = new Map<string, Set<string>>();
+  for (const item of settlements.items) {
+    const month = item.periodEnd.slice(0, 7);
+    const currencies = currenciesByMonth.get(month) ?? new Set<string>();
+    currencies.add(item.currency);
+    currenciesByMonth.set(month, currencies);
+    const previous = byMonth.get(month);
+    byMonth.set(month, currencies.size > 1 ? null : addExactCents(previous, item.ownerRemittanceCents));
+  }
   const exceptions = settlements.items.filter(item => item.state === "exception").length;
-  return <><Columns width={metrics.bodyWidth} height={metrics.bodyHeight - 40} points={months.map(month => ({ label: monthShort(month), value: byMonth.has(month) ? byMonth.get(month)! : null }))} />
-    <Foot>Owner remittances by month{exceptions ? ` · ${exceptions} exception${exceptions === 1 ? "" : "s"}` : ""}</Foot></>;
+  const mixedCurrencies = Array.from(currenciesByMonth.values()).some(currencies => currencies.size > 1);
+  return <><Columns width={metrics.bodyWidth} height={metrics.bodyHeight - 40} points={months.map(month => ({ label: monthShort(month), value: byMonth.has(month) ? centsNumber(byMonth.get(month)) ?? null : null }))} />
+    <Foot>Owner remittances by month{exceptions ? ` · ${exceptions} exception${exceptions === 1 ? "" : "s"}` : ""}{settlements.incomplete ? " · partial read" : ""}{mixedCurrencies ? " · currencies differ" : ""}</Foot></>;
 }
 
 function Bills({ data, metrics, mode }: WidgetContext & { mode: "open" | "due" }) {
@@ -66,24 +108,28 @@ function Bills({ data, metrics, mode }: WidgetContext & { mode: "open" | "due" }
   if (bills.loading || !bills.entities) return <Loading />;
   if (!bills.entities.length) return <Empty title="QuickBooks not connected" />;
   const asOf = data.filters.asOfDate;
-  const open = bills.items.filter(item => item.postingState !== "voided" && (centsNumber(item.openBalanceCents) ?? 0) > 0);
+  const uncertain = bills.incomplete || bills.items.some(item => item.postingState !== "posted" || !item.mirrored || item.openBalanceCents === null);
+  const open = bills.items.filter(item => item.postingState === "posted" && item.mirrored && isPositiveCents(item.openBalanceCents));
   const rows = (mode === "due" ? open.filter(item => item.dueDate && dayDiff(asOf, item.dueDate) <= 14) : open).sort((a, b) => (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999"));
   const total = sumCents(rows.map(item => item.openBalanceCents));
+  const currencies = new Set(rows.map(item => item.currency));
   const overdue = rows.filter(item => item.dueDate && item.dueDate < asOf).length;
-  if (!rows.length) return <Empty title={mode === "due" ? "No bills due in 14 days" : "No open bills"}>{bills.incomplete ? "Some QuickBooks bills could not be read." : undefined}</Empty>;
-  return <><Tile label={mode === "due" ? "Due in 14 days" : "Open bills"} big={isSmall(metrics)} value={wholeCents(total)} tone={overdue ? "attention" : undefined} detail={`${rows.length} bill${rows.length === 1 ? "" : "s"}${overdue ? ` · ${overdue} overdue` : ""}${bills.incomplete ? " · partial read" : ""}`} />
-    {!isSmall(metrics) && <Rows limit={fitRows(metrics, LIST_ROW, TILE, 1)} items={rows.map(item => ({ key: `${item.objectId}-${item.entityName}`, label: item.vendorName ?? "Vendor", detail: `${item.entityName}${item.dueDate ? ` · due ${shortDay(item.dueDate)}` : ""}`, value: wholeCents(item.openBalanceCents), tone: item.dueDate && item.dueDate < asOf ? "critical" as const : undefined }))} />}</>;
+  if (!rows.length) return <Empty title={uncertain ? "Bills unavailable" : mode === "due" ? "No bills due in 14 days" : "No open bills"}>{uncertain ? "Some QuickBooks bills could not be confirmed as posted and mirrored." : undefined}</Empty>;
+  return <><Tile label={mode === "due" ? "Due in 14 days" : "Open bills"} big={isSmall(metrics)} value={currencies.size > 1 ? "Multiple currencies" : uncertain ? "Unknown" : wholeCents(total)} tone={overdue ? "attention" : undefined} detail={`${rows.length} bill${rows.length === 1 ? "" : "s"}${overdue ? ` · ${overdue} overdue` : ""}${uncertain ? " · partial read" : ""}`} />
+    {!isSmall(metrics) && <Rows limit={fitRows(metrics, LIST_ROW, TILE, 1)} items={rows.map(item => ({ key: `${item.objectId}-${item.entityName}`, label: item.vendorName ?? "Vendor", detail: `${item.entityName}${item.dueDate ? ` · due ${shortDay(item.dueDate)}` : ""} · ${item.currency}`, value: wholeCents(item.openBalanceCents), tone: item.dueDate && item.dueDate < asOf ? "critical" as const : undefined }))} />}</>;
 }
 
 function BillPayments({ data, metrics }: WidgetContext) {
   const { gate } = useCompanyGate(data);
   const payments = usePayables(data, "payments");
   if (gate) return gate;
+  if (payments.health.error) return <Failed title="Bill payments unavailable" error={payments.health.error} retry={() => void payments.health.refetch()} />;
   if (payments.loading || !payments.entities) return <Loading />;
   if (!payments.entities.length) return <Empty title="QuickBooks not connected" />;
-  const rows = payments.items.filter(item => item.postingState !== "voided").sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
-  if (!rows.length) return <Empty title="No bill payments" />;
-  return <Rows limit={fitRows(metrics, LIST_ROW, 0)} items={rows.map(item => ({ key: `${item.objectId}-${item.entityName}`, label: item.vendorName ?? "Vendor", detail: `${item.entityName} · ${shortDay(item.transactionDate)}`, value: wholeCents(item.amountCents) }))} />;
+  const uncertain = payments.incomplete || payments.items.some(item => item.postingState !== "posted" || !item.mirrored || item.amountCents === null);
+  const rows = payments.items.filter(item => item.postingState === "posted" && item.mirrored).sort((a, b) => b.transactionDate.localeCompare(a.transactionDate));
+  if (!rows.length) return <Empty title={uncertain ? "Bill payments unavailable" : "No bill payments"}>{uncertain ? "Some QuickBooks payments could not be confirmed as posted and mirrored." : undefined}</Empty>;
+  return <><Rows limit={fitRows(metrics, LIST_ROW, 0)} items={rows.map(item => ({ key: `${item.objectId}-${item.entityName}`, label: item.vendorName ?? "Vendor", detail: `${item.entityName} · ${shortDay(item.transactionDate)}${item.currency ? ` · ${item.currency}` : ""}`, value: item.amountCents === null ? "Unknown" : wholeCents(item.amountCents) }))} />{uncertain && <Foot>Some payments are unavailable or not confirmed posted</Foot>}</>;
 }
 
 function InvestorPayments({ data, metrics }: WidgetContext) {
@@ -91,11 +137,15 @@ function InvestorPayments({ data, metrics }: WidgetContext) {
   const calendar = usePaymentCalendar(data);
   if (gate) return gate;
   if (calendar.loading) return <Loading />;
-  const upcoming = calendar.items.filter(item => item.dueOn >= data.filters.asOfDate || (centsNumber(item.remainingCents) ?? 1) > 0);
-  if (!upcoming.length) return <Empty title="No investor payments scheduled">{calendar.failed ? "Some entities could not be read." : "Nothing due in the next three months."}</Empty>;
-  const due = sumCents(upcoming.map(item => item.remainingCents));
-  return <><Tile label="Investor payments · 3 months" big={isSmall(metrics)} value={due === null ? `≥ ${wholeCents(sumCents(upcoming.map(item => item.remainingCents ?? item.knownMinimumCents)))}` : wholeCents(due)} detail={`${upcoming.length} payments to ${new Set(upcoming.map(item => item.accountId)).size} investors`} />
-    {!isSmall(metrics) && <Rows limit={fitRows(metrics, LIST_ROW, TILE, 1)} items={upcoming.map(item => ({ key: item.obligationId, label: item.accountName, detail: `${item.instrumentName} · ${shortDay(item.dueOn)}`, value: item.remainingCents === null ? "Unknown" : wholeCents(item.remainingCents), tone: item.dueOn < data.filters.asOfDate ? "critical" as const : undefined }))} />}</>;
+  const upcoming = calendar.items.filter(item => item.dueOn >= data.filters.asOfDate || item.remainingCents === null || isPositiveCents(paymentLowerBoundCents(item)));
+  if (!upcoming.length) return <Empty title={calendar.incomplete ? "Investor payments unavailable" : "No investor payments scheduled"}>{calendar.incomplete ? "Some entities could not be read completely." : "Nothing due in the next three months."}</Empty>;
+  const currencies = new Set(upcoming.map(item => item.currency));
+  const exact = upcoming.every(item => item.remainingCents !== null && exactBigInt(item.remainingCents) !== undefined);
+  const due = exact ? sumCents(upcoming.map(item => paymentLowerBoundCents(item))) : null;
+  const lowerBound = sumCents(upcoming.map(item => paymentLowerBoundCents(item)));
+  const value = currencies.size > 1 ? "Multiple currencies" : calendar.incomplete ? "Unknown" : exact && due !== null ? wholeCents(due) : lowerBound && lowerBound !== "0" ? `≥ ${wholeCents(lowerBound)}` : "Unknown";
+  return <><Tile label="Investor payments · 3 months" big={isSmall(metrics)} value={value} detail={`${upcoming.length} payments to ${new Set(upcoming.map(item => item.accountId)).size} investors${calendar.incomplete ? " · partial read" : ""}`} />
+    {!isSmall(metrics) && <Rows limit={fitRows(metrics, LIST_ROW, TILE, 1)} items={upcoming.map(item => ({ key: item.obligationId, label: item.accountName, detail: `${item.instrumentName} · ${shortDay(item.dueOn)} · ${item.currency}`, value: item.remainingCents === null ? "Unknown" : wholeCents(paymentLowerBoundCents(item)), tone: item.dueOn < data.filters.asOfDate ? "critical" as const : undefined }))} />}</>;
 }
 
 function InvestorMonthly({ data, metrics }: WidgetContext) {
@@ -103,10 +153,13 @@ function InvestorMonthly({ data, metrics }: WidgetContext) {
   const calendar = usePaymentCalendar(data, 6);
   if (gate) return gate;
   if (calendar.loading) return <Loading />;
-  if (!calendar.items.length) return <Empty title="No investor payments scheduled" />;
+  if (!calendar.items.length) return <Empty title={calendar.incomplete ? "Investor payments unavailable" : "No investor payments scheduled"}>{calendar.incomplete ? "Some entities could not be read completely." : undefined}</Empty>;
   const months = Array.from({ length: 6 }, (_, index) => monthKey(data.filters.asOfDate, index));
-  const byMonth = months.map(month => { const items = calendar.items.filter(item => item.periodMonth.slice(0, 7) === month); return sumCents(items.map(item => item.expectedCents)); });
-  return <><Columns width={metrics.bodyWidth} height={metrics.bodyHeight - 40} points={months.map((month, index) => ({ label: monthShort(month), value: centsNumber(byMonth[index]) ?? null, tone: "accent" }))} /><Foot>Scheduled investor payments by month</Foot></>;
+  const byMonth = months.map(month => {
+    const items = calendar.items.filter(item => item.periodMonth.slice(0, 7) === month);
+    return calendar.incomplete || new Set(items.map(item => item.currency)).size > 1 ? null : sumCents(items.map(item => item.expectedCents));
+  });
+  return <><Columns width={metrics.bodyWidth} height={metrics.bodyHeight - 40} points={months.map((month, index) => ({ label: monthShort(month), value: centsNumber(byMonth[index]) ?? null, tone: "accent" }))} /><Foot>Scheduled investor payments by month{calendar.incomplete ? " · partial read" : ""}</Foot></>;
 }
 
 function DebtMaturities({ data, metrics }: WidgetContext) {
@@ -117,7 +170,7 @@ function DebtMaturities({ data, metrics }: WidgetContext) {
   if (!debt.data) return <Loading />;
   const rows: Row[] = debt.data.items.filter(item => item.maturityOn).sort((a, b) => a.maturityOn!.localeCompare(b.maturityOn!)).map(item => ({ ...item, id: item.instrumentId, outstanding: outstanding(item) }));
   return <Table rows={rows} limit={fitRows(metrics, TABLE_ROW, 40)} empty="No dated debt instruments." onMore={companyOpener(data, "investors", { investorTab: "debt" })} columns={[
-    { key: "instrumentName", label: "Loan", render: row => <span className="rops-cell-stack"><span>{String(row.instrumentName)}</span><small>{String(row.accountName)}{row.annualRate ? ` · ${row.annualRate}%` : ""}</small></span> },
+    { key: "instrumentName", label: "Loan", render: row => <span className="rops-cell-stack"><span>{String(row.instrumentName)}</span><small>{String(row.accountName)}{row.annualRate ? ` · ${annualRatePercent(row.annualRate as string) ?? "Unknown"}%` : ""}{row.currency ? ` · ${String(row.currency)}` : ""}</small></span> },
     { key: "maturityOn", label: "Matures", render: row => { const months = row.monthsToMaturity as number | null; return <span data-tone={months !== null && months <= 3 ? "critical" : undefined}>{shortDay(String(row.maturityOn))}{months !== null ? <small> · {months <= 0 ? "due" : `${months} mo`}</small> : null}</span>; } },
     { key: "outstanding", label: "Outstanding", number: true, render: row => wholeCents(row.outstanding as string | null) },
     ...(metrics.w >= 8 ? [{ key: "balloonCents", label: "Balloon", number: true, render: (row: Row) => wholeCents(row.balloonCents as string | null) }] : []),
@@ -130,11 +183,14 @@ function DebtBalances({ data, metrics }: WidgetContext) {
   if (gate) return gate;
   if (debt.error) return <Failed title="Debt unavailable" error={debt.error} retry={() => void debt.refetch()} />;
   if (!debt.data) return <Loading />;
-  const items = debt.data.items.filter(item => centsNumber(outstanding(item)) !== undefined);
-  const total = sumCents(debt.data.items.map(outstanding));
+  const items = debt.data.items.filter(item => exactBigInt(outstanding(item)) !== undefined);
+  const currencies = new Set(items.map(item => item.currency));
+  const knownTotal = sumCents(items.map(outstanding));
+  const complete = items.length === debt.data.items.length;
   if (!debt.data.items.length) return <Empty title="No debt recorded" />;
-  return <><Tile label="Debt outstanding" big={isSmall(metrics)} value={total === null ? `≥ ${wholeCents(sumCents(items.map(outstanding)))}` : wholeCents(total)} detail={`${debt.data.items.length} instruments${debt.data.items.length > items.length ? ` · ${debt.data.items.length - items.length} balance unknown` : ""}`} />
-    {!isSmall(metrics) && <Bars limit={fitRows(metrics, LIST_ROW, TILE, 1)} items={items.sort((a, b) => (centsNumber(outstanding(b)) ?? 0) - (centsNumber(outstanding(a)) ?? 0)).map(item => ({ key: item.instrumentId, label: <>{item.instrumentName} <small>{item.accountName}</small></>, value: centsNumber(outstanding(item)) ?? 0 }))} />}</>;
+  const value = currencies.size > 1 ? "Multiple currencies" : !items.length || knownTotal === null ? "Unknown" : complete ? wholeCents(knownTotal) : knownTotal === "0" ? "Unknown" : `≥ ${wholeCents(knownTotal)}`;
+  return <><Tile label="Debt outstanding" big={isSmall(metrics)} value={value} detail={`${debt.data.items.length} instruments${!complete ? ` · ${debt.data.items.length - items.length} balance unknown` : ""}`} />
+    {!isSmall(metrics) && <Bars limit={fitRows(metrics, LIST_ROW, TILE, 1)} items={items.filter(item => centsNumber(outstanding(item)) !== undefined).sort((a, b) => (centsNumber(outstanding(b)) ?? 0) - (centsNumber(outstanding(a)) ?? 0)).map(item => ({ key: item.instrumentId, label: <>{item.instrumentName} <small>{item.accountName} · {item.currency}</small></>, value: centsNumber(outstanding(item)) ?? 0 }))} />}</>;
 }
 
 function Coverage({ data, metrics }: WidgetContext) {
@@ -161,7 +217,7 @@ function ForecastNoi({ data, metrics }: WidgetContext) {
   const forecast = useForecast(data);
   return <ForecastGate forecast={forecast}>{result => {
     const months = result.months.slice(0, Math.max(3, Math.min(result.months.length, Math.floor(metrics.bodyWidth / 38))));
-    const total = months.reduce((sum, month) => sum + (centsNumber(month.noiCents) ?? 0), 0);
+    const total = sumCents(months.map(month => month.noiCents));
     return <><Columns width={metrics.bodyWidth} height={metrics.bodyHeight - 40} points={months.map(month => ({ label: monthShort(month.month), value: centsNumber(month.noiCents) ?? null }))} />
       <Foot>Forecast NOI · {shortCents(total)} over {months.length} months</Foot></>;
   }}</ForecastGate>;

@@ -32,12 +32,12 @@ Company-side widgets load their own data, and only when the widget is on the das
 | Area | Source |
 |---|---|
 | Projects | `listProjects`, `getProject` (tasks), `getDealCostReport` (sale forecast, profit, whole-deal cost) |
-| QuickBooks | `accounting/health` picks one connection per legal entity: production before sandbox, readable connections only. From it: native `income-statement` / `balance-sheet` YTD per entity (same cache key as Accounting › Dashboard), close checklist for last month, bills and bill payments, and the account, vendor and customer mirrors and transactions. |
+| QuickBooks | `accounting/health` picks one connection per legal entity: production before sandbox, retaining unavailable companies so missing data stays visible. From readable connections: native `income-statement` / `balance-sheet` YTD per entity (cache scoped to the exact connection), close checklist for last month, bills and bill payments, and the account, vendor and customer mirrors and transactions. |
 | Accounting | PM settlements, the investor payment calendar (months as `YYYY-MM-01`), and debt maturities |
-| Forecast | The approved base scenario, or the newest usable one, previewed at its current assumption version. It supplies the weekly cash grid, runway, weekly net, in vs out, low point, cash lines, big moves, DSCR, maturity ladder and monthly NOI. |
+| Forecast | The most recently updated approved base scenario, previewed at its current assumption version. Draft and upside scenarios cannot silently substitute for it. Weekly widgets require a forecast covering the selected date. It supplies the weekly cash grid, runway, weekly net, in vs out, low point, cash lines, big moves, DSCR, maturity ladder and monthly NOI. |
 | Company | `workspaces/dashboard` supplies obligations, maturities, review cases and work due. It shares a request with the Needs attention rows. |
 
-Unknown amounts stay unknown: a missing or partial read shows "Unknown", "Unavailable", "≥" or a `*` footnote, never $0.
+Unknown amounts stay unknown: a missing or partial read shows "Unknown", "Unavailable", or an explicitly labeled lower bound. Complete confirmed zero remains $0. Totals never combine different currencies.
 
 ## Files
 
@@ -59,6 +59,10 @@ Changes to existing files:
 - `rm-workspace.tsx` passes `organizationId` and `onOpenCompany` to the dashboard, so widgets can open projects, accounting, investors, forecasting, work orders and the review queue.
 - The navigation and report-setup browser smokes now look for `rent-summary` and `rent-table`, the `occ-trend` chart, and `milestones`, instead of `attention` and `balances` and the old trend chart.
 
-## Overlap with PR #12
+## Integration and audit
 
-PR #12 (`codex/tenancy-missing-dates`) moves the dashboard options into the scope bar in `dashboard-grid.tsx`. This PR touches only the storage-key line of that file, so the two merge cleanly in either order.
+PR #12 is already on production. This branch includes that production revision and preserves its dashboard options in the scope bar.
+
+The audit corrected incomplete and paginated source reads, company and QuickBooks connection selection, forecast approval and date coverage, payment subtraction, deposit and rent uncertainty, decimal interest-rate formatting, and aggregation of monthly remittances and forecast categories. Exact monetary strings stay exact in displayed totals. Chart inputs outside the safe numeric range are unknown.
+
+The dashboard refresh now refreshes financial and forecast queries, saved layouts follow the signed-in user, and cash-card pages support keyboard and touch navigation. Focused regression tests cover the corrected behaviors alongside the all-widget rendering suite.

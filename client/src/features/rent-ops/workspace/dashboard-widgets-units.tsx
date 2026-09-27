@@ -9,6 +9,7 @@ import {
 
 const LONG = 90;
 const vacantRows = (data: DashboardData) => data.vacancy?.filter(row => row.occupancy !== "future_preleased");
+const isListed = (value: unknown): boolean => ["listed", "marketed", "active"].includes(String(value ?? "").trim().toLowerCase());
 
 function UnitMap({ data, metrics }: WidgetContext) {
   if (!data.rentRoll) return <Loading />;
@@ -42,53 +43,68 @@ function Preleased({ data, metrics }: WidgetContext) {
   if (!data.rentRoll) return <Loading />;
   const rows = data.rentRoll.filter(row => row.occupancy === "future_preleased" || (row.occupancy === "vacant" && row.futureTenantName));
   if (!rows.length) return <Empty title="Nothing preleased">Units with a signed future tenant show here.</Empty>;
-  return <Rows limit={fitRows(metrics, LIST_ROW, 0)} items={rows.map((row, index) => ({ key: `${row.unitId}-${index}`, label: <>{text(row.propertyName)} {text(row.unitNumber)}</>, detail: text(row.futureTenantName), value: money(row.baseRentCents ?? row.marketRentCents), tone: "positive" as const }))} />;
+  return <Rows limit={fitRows(metrics, LIST_ROW, 0)} items={rows.map((row, index) => ({ key: `${row.unitId}-${index}`, label: <>{text(row.propertyName)} {text(row.unitNumber)}</>, detail: text(row.futureTenantName), value: money(row.baseRentCents), tone: "positive" as const }))} />;
 }
 
 function RentByProperty({ data, metrics }: WidgetContext) {
   if (!data.propertyRows) return <Loading />;
   const rows = [...data.propertyRows].sort((a, b) => Number(b.rent) - Number(a.rent));
   const total = sumKnown(rows, "rent");
-  return <><Bars limit={fitRows(metrics, LIST_ROW, 30, 1)} items={rows.map(row => ({ key: String(row.propertyId), label: <>{text(row.propertyName)} <small>{text(row.occupied)} occ.</small></>, value: Number(row.rent) || 0, display: row.rentUnknown ? `${dollars(Number(row.rent) || 0)}+` : undefined }))} />
-    <Foot>Rent roll {total === undefined ? "—" : dollars(total)} a month</Foot></>;
+  const unknown = rows.some(row => numeric(row.rentUnknown) && row.rentUnknown > 0);
+  const totalLabel = total === undefined ? "—" : unknown ? (total ? `≥ ${dollars(total)}` : "Unknown") : dollars(total);
+  return <><Bars limit={fitRows(metrics, LIST_ROW, 30, 1)} items={rows.map(row => {
+    const rowRent = numeric(row.rent) ? row.rent : undefined;
+    return { key: String(row.propertyId), label: <>{text(row.propertyName)} <small>{text(row.occupied)} occ.</small></>, value: rowRent ?? 0, display: row.rentUnknown ? (rowRent ? `≥ ${dollars(rowRent)}` : "Unknown") : undefined };
+  })} />
+    <Foot>Rent roll {totalLabel} a month</Foot></>;
 }
 
 function RentByBedroom({ data, metrics }: WidgetContext) {
   if (!data.rentRoll) return <Loading />;
   const units = new Map(data.snapshot.snapshot.units.map(unit => [String(unit.id), unit] as const));
-  const groups = new Map<string, { rent: number; rentCount: number; market: number; marketCount: number }>();
+  const groups = new Map<string, { rent: number; rentCount: number; rentUnknown: number; market: number; marketCount: number; marketUnknown: number }>();
   for (const row of data.rentRoll) {
     const unit = units.get(String(row.unitId));
-    const key = unit?.bedrooms == null ? "Not recorded" : `${unit.bedrooms} bed`;
-    const group = groups.get(key) ?? { rent: 0, rentCount: 0, market: 0, marketCount: 0 };
-    if (row.occupancy === "current" && numeric(row.baseRentCents)) { group.rent += row.baseRentCents; group.rentCount += 1; }
+    const bedrooms = numeric(row.bedrooms) ? row.bedrooms : unit?.bedrooms;
+    const key = bedrooms == null ? "Not recorded" : `${bedrooms} bed`;
+    const group = groups.get(key) ?? { rent: 0, rentCount: 0, rentUnknown: 0, market: 0, marketCount: 0, marketUnknown: 0 };
+    if (row.occupancy === "current") {
+      if (numeric(row.baseRentCents)) { group.rent += row.baseRentCents; group.rentCount += 1; }
+      else group.rentUnknown += 1;
+    }
     if (numeric(row.marketRentCents)) { group.market += row.marketRentCents; group.marketCount += 1; }
+    else group.marketUnknown += 1;
     groups.set(key, group);
   }
   const items = Array.from(groups.entries()).sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
   if (!items.length) return <Empty title="No unit records" />;
-  return <Rows limit={fitRows(metrics, LIST_ROW, 0)} items={items.map(([key, group]) => ({ key, label: key, detail: `market ${group.marketCount ? dollars(group.market / group.marketCount) : "—"}`, value: group.rentCount ? `${dollars(group.rent / group.rentCount)} avg` : "—" }))} />;
+  return <Rows limit={fitRows(metrics, LIST_ROW, 0)} items={items.map(([key, group]) => ({ key, label: key, detail: `market ${group.marketUnknown ? "Unknown" : group.marketCount ? dollars(group.market / group.marketCount) : "—"}`, value: group.rentUnknown ? "Unknown" : group.rentCount ? `${dollars(group.rent / group.rentCount)} avg` : "—" }))} />;
 }
 
 function LongVacancies({ data, metrics }: WidgetContext) {
   const vacant = vacantRows(data);
   if (!vacant) return <Loading />;
   const rows = vacant.filter(row => numeric(row.daysVacant) && row.daysVacant >= LONG).sort((a, b) => Number(b.daysVacant) - Number(a.daysVacant));
+  const unknownMarketRent = rows.some(row => !numeric(row.marketRentCents));
   const lost = rows.reduce((sum, row) => sum + (numeric(row.marketRentCents) ? row.marketRentCents * Number(row.daysVacant) / 30 : 0), 0);
+  const lostLabel = unknownMarketRent ? (lost ? `≥ ${dollars(lost)}` : "Unknown") : dollars(lost);
   return <Table rows={rows} limit={fitRows(metrics, TABLE_ROW, 40)} empty={`No unit has been vacant ${LONG}+ days.`} onMore={() => data.onReport("occupancy")} columns={[
     { key: "unitNumber", label: "Unit", render: row => unitCell(data, row) },
     { key: "daysVacant", label: "Days", number: true, render: row => <span data-tone="critical">{text(row.daysVacant)}</span> },
     { key: "marketRentCents", label: "Asking", number: true, render: row => money(row.marketRentCents) },
-  ]} footer={<span>{rows.length} units · about {dollars(lost)} of rent lost so far</span>} />;
+  ]} footer={<span>{rows.length} units · about {lostLabel} of rent lost so far</span>} />;
 }
 
 function LossToLease({ data, metrics }: WidgetContext) {
   if (!data.rentRoll) return <Loading />;
-  const rows = data.rentRoll.filter(row => row.occupancy === "current" && numeric(row.baseRentCents) && numeric(row.marketRentCents) && row.marketRentCents > row.baseRentCents)
+  const occupied = data.rentRoll.filter(row => row.occupancy === "current");
+  const incomplete = occupied.some(row => !numeric(row.baseRentCents) || !numeric(row.marketRentCents));
+  const rows = occupied.filter(row => numeric(row.baseRentCents) && numeric(row.marketRentCents) && row.marketRentCents > row.baseRentCents)
     .map(row => ({ ...row, gapCents: (row.marketRentCents as number) - (row.baseRentCents as number) }) as Row & { gapCents: number }).sort((a, b) => b.gapCents - a.gapCents);
+  if (!rows.length && incomplete) return <Empty title="Loss to lease unavailable">Some occupied units are missing base or market rent.</Empty>;
   if (!rows.length) return <Empty title="No units below market">Occupied units rented under their market rent show here.</Empty>;
   const total = rows.reduce((sum, row) => sum + row.gapCents, 0);
-  return <><Tile label="Below market" big={isSmall(metrics)} value={`${dollars(total)}/mo`} detail={`${rows.length} occupied units · ${dollars(total * 12)} a year`} />
+  return <><Tile label="Below market" big={isSmall(metrics)} value={`${incomplete ? "≥ " : ""}${dollars(total)}/mo`} detail={`${rows.length} occupied units · ${dollars(total * 12)} a year${incomplete ? " · some rents missing" : ""}`} />
     {!isSmall(metrics) && <Bars limit={fitRows(metrics, LIST_ROW, TILE, 1)} items={rows.map((row, index) => ({ key: `${row.unitId}-${index}`, label: <>{text(row.propertyName)} {text(row.unitNumber)} <small>{money(row.baseRentCents)}</small></>, value: row.gapCents }))} />}</>;
 }
 
@@ -106,7 +122,7 @@ function Listings({ data, metrics }: WidgetContext) {
   const vacant = vacantRows(data);
   if (!vacant || !data.rentRoll) return <Loading />;
   const byUnit = new Map(data.rentRoll.map(row => [String(row.unitId), row] as const));
-  const listed = vacant.filter(row => /listed|marketed|active/i.test(String(byUnit.get(String(row.unitId))?.listing ?? "")));
+  const listed = vacant.filter(row => isListed(byUnit.get(String(row.unitId))?.listing));
   const unlisted = vacant.filter(row => !listed.includes(row));
   return <><Stack format={value => String(value)} parts={[{ key: "listed", label: "Listed", value: listed.length, tone: "positive" }, { key: "unlisted", label: "Not listed", value: unlisted.length, tone: "critical" }]} />
     {metrics.h > 2 && <Rows limit={fitRows(metrics, LIST_ROW, 70, 1)} items={unlisted.map((row, index) => ({ key: `${row.unitId}-${index}`, label: <>{text(row.propertyName)} {text(row.unitNumber)}</>, detail: humanLabel(String(byUnit.get(String(row.unitId))?.listing ?? "not listed")), value: numeric(row.daysVacant) ? `${row.daysVacant}d` : "—" }))} />}</>;

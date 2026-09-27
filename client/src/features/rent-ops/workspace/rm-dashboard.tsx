@@ -98,7 +98,7 @@ export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenU
   };
   return <section className="rm-dashboard-workspace rmd-dashboard rops-dash" aria-label="Dashboard">
     {errors.length > 0 && <div className="rmd-load-error" role="alert">Some tables could not be loaded. <button onClick={() => { requests.forEach(request => { if (request.error) void request.refetch(); }); }}>Retry</button></div>}
-    <DashboardGrid data={data} />
+    <DashboardGrid key={data.identity} data={data} />
     {applicationId && selectedApplication && <ApplicationCaseDetail key={applicationId} applicationId={applicationId} summary={selectedApplication} onClose={() => setApplicationId(undefined)} />}
     {refreshing && <div className="rmd-refreshing" role="status">Refreshing dashboard…</div>}
   </section>;

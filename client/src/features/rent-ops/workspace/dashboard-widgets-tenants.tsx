@@ -9,15 +9,25 @@ import {
 import { useExtraRentalRows } from "./dashboard-sources";
 
 const LEASE_KEYS = ["propertyId", "propertyName", "unitId", "unitNumber", "tenantName", "personId", "currentPersonId", "contractEndOn", "monthToMonth", "currentBaseRentCents", "noticeDeadlineOn", "actionStatus"];
-const DEPOSIT_KEYS = ["propertyId", "propertyName", "unitNumber", "tenantName", "personId", "securityHeldCents", "refundablePetHeldCents", "otherRefundableHeldCents", "totalHeldCents", "dispositionStatus", "unknownHeldCount"];
+const DEPOSIT_KEYS = ["propertyId", "propertyName", "unitNumber", "tenantName", "personId", "securityHeldCents", "refundablePetHeldCents", "otherRefundableHeldCents", "totalHeldCents", "dispositionStatus", "unknownHeldCount", "temporalUncertainty"];
 const HAP_KEYS = ["propertyId", "propertyName", "unitNumber", "tenantName", "personId", "agencyName", "month", "agencyObligationCents", "tenantObligationCents", "expectedTotalCents", "receivedAgencyCents", "agencyReceiptStatus", "varianceCents", "exception"];
-const SVC_KEYS = ["propertyId", "propertyName", "month", "scheduledCents", "scheduledUncertainCents", "collectedCents", "varianceCents", "complete"];
+const SVC_KEYS = ["propertyId", "propertyName", "month", "scheduledCents", "scheduledUncertainCents", "scheduledUnknownAmountCount", "collectedCents", "collectedUncertainCents", "collectedUnknownAmountCount", "varianceCents", "complete"];
 
 const isMonthToMonth = (value: unknown) => value === true || value === "yes" || value === "month_to_month";
 
+/** A property-level comparison is exact only when the server explicitly says
+ * that its scheduled and collected sides are complete. */
+const isCompleteScheduledVsCollectedRow = (row: Row): boolean => row.complete === true
+  && (row.scheduledUncertainCents === undefined || row.scheduledUncertainCents === 0)
+  && (row.scheduledUnknownAmountCount === undefined || row.scheduledUnknownAmountCount === 0)
+  && (row.collectedUncertainCents === undefined || row.collectedUncertainCents === 0)
+  && (row.collectedUnknownAmountCount === undefined || row.collectedUnknownAmountCount === 0);
+
 function TopBalances({ data, metrics }: WidgetContext) {
   if (!data.knownDue) return <Loading />;
-  if (!data.knownDue.length) return <Empty title="No balances due" />;
+  if (!data.knownDue.length) return data.unverifiedDue > 0
+    ? <Empty title="No verified balances">Unverified accounts are excluded from this ranking.</Empty>
+    : <Empty title="No balances due" />;
   const rows = [...data.knownDue].sort((a, b) => Number(b.operationalBalanceCents) - Number(a.operationalBalanceCents));
   return <><Bars tone="critical" limit={fitRows(metrics, LIST_ROW, 30, 1)} items={rows.map((row, index) => ({ key: `${row.personId}-${index}`, label: <>{text(row.tenantName)} <small>{text(row.propertyName)} {text(row.unitNumber)}</small></>, value: Number(row.operationalBalanceCents) || 0, tone: "critical" }))} />
     <Foot action="All balances" onAction={() => data.onReport("delinquency")}>{rows.length} accounts · top {Math.min(rows.length, fitRows(metrics, LIST_ROW, 30, 1))}</Foot></>;
@@ -50,11 +60,18 @@ function Deposits({ data, metrics }: WidgetContext) {
   const deposits = useExtraRentalRows(data, "security-deposit", DEPOSIT_KEYS);
   if (deposits.error) return <Failed title="Deposits unavailable" error={deposits.error} retry={deposits.retry} />;
   if (!deposits.rows) return <Loading />;
-  const known = deposits.rows.filter(row => numeric(row.totalHeldCents));
-  const unknown = deposits.rows.length - known.length + deposits.rows.reduce((sum, row) => sum + (numeric(row.unknownHeldCount) ? row.unknownHeldCount : 0), 0);
+  const isUnknown = (row: Row) => !numeric(row.totalHeldCents) || row.temporalUncertainty === true;
+  const known = deposits.rows.filter(row => !isUnknown(row));
+  // `unknownHeldCount` counts unknown source deposits inside a grouped row;
+  // adding the row count as well would report each unresolved deposit twice.
+  const unknown = deposits.rows.reduce((sum, row) => {
+    if (!isUnknown(row)) return sum;
+    return sum + (numeric(row.unknownHeldCount) && row.unknownHeldCount > 0 ? row.unknownHeldCount : 1);
+  }, 0);
   const total = known.reduce((sum, row) => sum + (row.totalHeldCents as number), 0);
   const groups = groupByProperty(known, () => ({ cents: 0, count: 0 }), (group, row) => { group.cents += row.totalHeldCents as number; group.count += 1; });
-  return <><Tile label="Deposits held" big={isSmall(metrics)} value={`${unknown ? "≥ " : ""}${dollars(total)}`} detail={`${known.length} residents${unknown ? ` · ${unknown} amounts not recorded` : ""}`} />
+  const totalLabel = unknown ? (total ? `≥ ${dollars(total)}` : "Unknown") : dollars(total);
+  return <><Tile label="Deposits held" big={isSmall(metrics)} value={totalLabel} detail={`${known.length} residents${unknown ? ` · ${unknown} records unresolved` : ""}`} />
     {!isSmall(metrics) && <Bars limit={fitRows(metrics, LIST_ROW, TILE, 1)} items={groups.sort((a, b) => b.cents - a.cents).map(group => ({ key: group.propertyId, label: <>{group.propertyName} <small>{group.count}</small></>, value: group.cents }))} />}</>;
 }
 
@@ -83,10 +100,11 @@ function CollectionRate({ data, metrics }: WidgetContext) {
   if (!svc.rows) return <Loading />;
   if (!svc.rows.length) return <Empty title="Nothing scheduled this month" />;
   const scheduled = sumKnown(svc.rows, "scheduledCents"), collected = sumKnown(svc.rows, "collectedCents");
-  const share = scheduled && collected !== undefined ? collected / scheduled : undefined;
-  return <><Tile label={`Collected of scheduled · ${data.monthLabel}`} big={isSmall(metrics)} value={share === undefined ? "Unknown" : pct(share)} meter={share} tone={share !== undefined && share < 0.8 ? "attention" : undefined} detail={`${collected === undefined ? "—" : dollars(collected)} of ${scheduled === undefined ? "—" : dollars(scheduled)}${svc.rows.some(row => row.complete === false) ? " · some properties incomplete" : ""}`} />
+  const complete = svc.rows.every(isCompleteScheduledVsCollectedRow);
+  const share = complete && scheduled && collected !== undefined ? collected / scheduled : undefined;
+  return <><Tile label={`Collected of scheduled · ${data.monthLabel}`} big={isSmall(metrics)} value={share === undefined ? "Unknown" : pct(share)} meter={share} tone={share !== undefined && share < 0.8 ? "attention" : undefined} detail={`${collected === undefined ? "—" : dollars(collected)} of ${scheduled === undefined ? "—" : dollars(scheduled)}${complete ? "" : " · some properties incomplete"}`} />
     {!isSmall(metrics) && <Bars limit={fitRows(metrics, LIST_ROW, TILE + 10, 1)} format={value => `${Math.round(value)}%`} items={svc.rows.map((row, index) => {
-      const rate = numeric(row.scheduledCents) && row.scheduledCents > 0 && numeric(row.collectedCents) ? row.collectedCents / row.scheduledCents * 100 : undefined;
+      const rate = isCompleteScheduledVsCollectedRow(row) && numeric(row.scheduledCents) && row.scheduledCents > 0 && numeric(row.collectedCents) ? row.collectedCents / row.scheduledCents * 100 : undefined;
       return { key: `${row.propertyId}-${index}`, label: text(row.propertyName), value: rate ?? 0, display: rate === undefined ? "Unknown" : `${Math.round(rate)}%`, tone: rate !== undefined && rate < 60 ? "critical" as const : undefined };
     })} />}</>;
 }
@@ -112,6 +130,8 @@ function NotPaid({ data, metrics }: WidgetContext) {
 function TenantCount({ data, metrics }: WidgetContext) {
   if (!data.rentRoll) return <Loading />;
   const current = data.rentRoll.filter(row => row.occupancy === "current");
+  // The server keeps a future replacement tenancy on a current row through
+  // futurePersonId; count it alongside standalone future-preleased rows.
   const future = data.rentRoll.filter(row => row.occupancy === "future_preleased" || row.futurePersonId);
   const rent = sumKnown(current, "baseRentCents");
   return <StatStrip metrics={metrics} min={110} items={[
@@ -125,8 +145,10 @@ function Credits({ data, metrics }: WidgetContext) {
   if (!data.rentRoll) return <Loading />;
   const rows = data.rentRoll.filter(row => numeric(row.operationalBalanceCents) && row.operationalBalanceCents < 0).sort((a, b) => Number(a.operationalBalanceCents) - Number(b.operationalBalanceCents));
   const total = rows.reduce((sum, row) => sum + Math.abs(Number(row.operationalBalanceCents)), 0);
-  return <><Tile label="Prepaid & credits" big={isSmall(metrics)} value={dollars(total)} detail={`${rows.length} tenant${rows.length === 1 ? "" : "s"} carrying a credit`} />
-    {!isSmall(metrics) && (rows.length ? <Rows limit={fitRows(metrics, LIST_ROW, TILE, 1)} items={rows.map((row, index) => ({ key: `${row.unitId}-${index}`, label: text(row.currentTenantName ?? row.tenantName), detail: `${text(row.propertyName)} ${text(row.unitNumber)}`, value: dollars(Math.abs(Number(row.operationalBalanceCents))), tone: "positive" as const }))} /> : <Empty title="No credits" />)}</>;
+  const unknown = data.rentRoll.filter(row => !numeric(row.operationalBalanceCents)).length;
+  const totalLabel = unknown ? (total ? `≥ ${dollars(total)}` : "Unknown") : dollars(total);
+  return <><Tile label="Prepaid & credits" big={isSmall(metrics)} value={totalLabel} detail={`${rows.length} tenant${rows.length === 1 ? "" : "s"} carrying a credit${unknown ? ` · ${unknown} balances not verified` : ""}`} />
+    {!isSmall(metrics) && (rows.length ? <Rows limit={fitRows(metrics, LIST_ROW, TILE, 1)} items={rows.map((row, index) => ({ key: `${row.unitId}-${index}`, label: text(row.currentTenantName ?? row.tenantName), detail: `${text(row.propertyName)} ${text(row.unitNumber)}`, value: dollars(Math.abs(Number(row.operationalBalanceCents))), tone: "positive" as const }))} /> : unknown ? <Empty title="Credit balances unavailable">Unverified balances may include credits.</Empty> : <Empty title="No credits" />)}</>;
 }
 
 function BalanceMix({ data }: WidgetContext) {
