@@ -78,7 +78,7 @@ function dashboardData(overrides: Partial<DashboardData> = {}): DashboardData {
   } as DashboardData;
 }
 
-function renderProjectWidget(id: string, projects: readonly ProjectSummary[]): string {
+function renderProjectWidget(id: string, projects: readonly ProjectSummary[], readyDeals: readonly ProjectSummary[] = []): string {
   const widget = [...PROJECT_WIDGETS, ...OVERVIEW_WIDGETS].find(entry => entry.id === id);
   assert.ok(widget, `widget ${id} exists`);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
@@ -86,6 +86,12 @@ function renderProjectWidget(id: string, projects: readonly ProjectSummary[]): s
     organizations: [{ id: ORG, name: "Audit company", role: "owner", entities: [] }],
   });
   client.setQueryData(["rent-ops-workspace", "dashboard-projects", IDENTITY, ORG], projects);
+  for (const entry of readyDeals) {
+    client.setQueryData(["rent-ops-workspace", "dashboard-deal", IDENTITY, ORG, entry.id, entry.recordRevision, AS_OF], {
+      coverage: { status: "complete" },
+      saleForecast: { profitState: "complete", projectedProfitCents: "10000", saleOn: null },
+    });
+  }
   try {
     return renderToStaticMarkup(<QueryClientProvider client={client}>{widget.render({ data: dashboardData({ organizationId: ORG }), metrics })}</QueryClientProvider>);
   } finally {
@@ -99,6 +105,38 @@ test("project actual coverage never becomes an exact share or an exact dollar la
   assert.equal(postedSpendLabel(partial), "≥ $50");
   const unavailable = project({ approvedBudgetCents: "10000", postedActualCents: null, postedActualCoverage: "unavailable" });
   assert.equal(postedSpendLabel(unavailable), "Unknown");
+});
+
+test("open-project widgets exclude completed flips from counts, currency, and report coverage", () => {
+  const active = { ...project(), projectType: "flip", name: "Active synthetic flip" } as ProjectSummary;
+  const completed = { ...active, id: "00000000-0000-4000-8000-000000000004", name: "Completed synthetic flip", status: "completed", currency: "EUR" } as ProjectSummary;
+  const totals = renderProjectWidget("proj-kpis", [completed, active], [active]);
+  assert.match(totals, /Projected flip profit.*\$100/);
+  assert.match(totals, /1 flip</);
+  assert.doesNotMatch(totals, /2 flips|Multiple currencies|some not forecast/);
+  const board = renderProjectWidget("proj-board", [completed, active], [active]);
+  assert.match(board, /Active synthetic flip/);
+  assert.match(board, /\$100/);
+  assert.doesNotMatch(board, /Completed synthetic flip|Loading deal reports|Some flip reports could not be read/);
+});
+
+test("completed flips cannot consume the open-project report limit", () => {
+  const active = { ...project(), projectType: "flip", name: "Active synthetic flip" } as ProjectSummary;
+  const completed = Array.from({ length: 11 }, (_, index) => ({ ...active, id: `completed-${index}`, status: "completed" } as ProjectSummary));
+  const totals = renderProjectWidget("proj-kpis", [...completed, active], [active]);
+  assert.match(totals, /Projected flip profit.*\$100/);
+  assert.match(totals, /1 flip</);
+  const board = renderProjectWidget("proj-board", [...completed, active], [active]);
+  assert.match(board, /Active synthetic flip/);
+  assert.match(board, /\$100/);
+  assert.doesNotMatch(board, /Loading deal reports|Some flip reports could not be read/);
+});
+
+test("open flip count includes projects beyond the report limit while their total stays unknown", () => {
+  const flips = Array.from({ length: 11 }, (_, index) => ({ ...project(), id: `active-${index}`, projectType: "flip" } as ProjectSummary));
+  const totals = renderProjectWidget("proj-kpis", flips, flips.slice(0, 10));
+  assert.match(totals, /Projected flip profit.*Unknown/);
+  assert.match(totals, /11 flips/);
 });
 
 test("project budget widgets keep missing budgets and spend unknown", () => {
