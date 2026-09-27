@@ -81,33 +81,3 @@ test('reconciliation preserves paid truth when the PaymentIntent was created ear
   assert.equal(result.event.created, 1);
   assert.equal(result.event.type, 'payment_intent.succeeded');
 });
-
-test('tenant checkout preserves the default methods and exposes explicit card-only selection', async () => {
-  const creates: Array<Record<string, unknown>> = [];
-  const client = {
-    checkout: { sessions: { async create(params: Record<string, unknown>) {
-      creates.push(params);
-      return { id: `cs_${creates.length}`, url: 'https://checkout.example.test/session', payment_intent: `pi_${creates.length}` };
-    } } },
-  } as unknown as Stripe;
-
-  const compatible = stripeProvider(env, client)!;
-  assert.deepEqual(compatible.paymentMethodTypes, ['card', 'us_bank_account']);
-  await compatible.createCheckout(payment);
-  assert.deepEqual(creates[0].payment_method_types, ['card', 'us_bank_account']);
-
-  const cardOnly = stripeProvider({ ...env, RENT_OPS_STRIPE_PAYMENT_METHODS: 'card' }, client)!;
-  assert.deepEqual(cardOnly.paymentMethodTypes, ['card']);
-  await cardOnly.createCheckout(payment);
-  assert.deepEqual(creates[1].payment_method_types, ['card']);
-
-  const reordered = stripeProvider({ ...env, RENT_OPS_STRIPE_PAYMENT_METHODS: 'us_bank_account, card' }, client)!;
-  assert.deepEqual(reordered.paymentMethodTypes, ['card', 'us_bank_account']);
-});
-
-test('invalid or empty explicit Stripe payment-method selections disable the provider', () => {
-  const client = {} as Stripe;
-  for (const selected of ['', '  ', 'card,', ',card', 'card,,us_bank_account', 'card,card', 'cash', 'card,cash']) {
-    assert.equal(stripeProvider({ ...env, RENT_OPS_STRIPE_PAYMENT_METHODS: selected }, client), undefined, JSON.stringify(selected));
-  }
-});

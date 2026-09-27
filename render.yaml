@@ -49,8 +49,6 @@ projects:
                 value: gmail
               - key: RENT_OPS_TENANT_EMAIL_ENABLED
                 value: "false"
-              - key: RENT_OPS_STRIPE_PAYMENT_METHODS
-                value: card
 
           - type: worker
             name: 5central-ops-worker
