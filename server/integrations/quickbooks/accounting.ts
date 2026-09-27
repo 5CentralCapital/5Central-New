@@ -312,6 +312,8 @@ function writeRequestId(options: QuickBooksWriteOptions | undefined): string {
 export interface QuickBooksAccountingClient {
   read<T extends QuickBooksJsonObject = QuickBooksJsonObject>(entity: QuickBooksEntityName, id: string): Promise<QuickBooksApiResponse<T>>;
   query<T extends QuickBooksJsonObject = QuickBooksJsonObject>(query: string): Promise<QuickBooksQueryResponse<T>>;
+  /** Read one Invoice with Intuit's supported hosted-payment link included. */
+  readInvoiceWithLink(id: string): Promise<QuickBooksJsonObject | null>;
   /** Every write carries a `requestid`; pass the same `requestId` when retrying the same logical write. */
   create<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(entity: QuickBooksEntityName, fields: TFields, options?: QuickBooksWriteOptions): Promise<QuickBooksApiResponse<TResult>>;
   update<TFields extends QuickBooksJsonObject = QuickBooksJsonObject, TResult extends QuickBooksJsonObject = QuickBooksJsonObject>(input: QuickBooksUpdateInput<TFields>, options?: QuickBooksWriteOptions): Promise<QuickBooksApiResponse<TResult>>;
@@ -398,6 +400,24 @@ export function createQuickBooksAccountingClient(config: QuickBooksAccountingCli
       const parsed = queryFromEnvelope<T>(response.body);
       if (!parsed) throw new QuickBooksIntegrationError("quickbooks_api", "QuickBooks query response could not be confirmed", { status: response.status });
       return { ...parsed, status: response.status, intuitTid: header(response, "intuit_tid") ?? header(response, "intuit-tid") };
+    },
+
+    async readInvoiceWithLink(id: string): Promise<QuickBooksJsonObject | null> {
+      assertIdentifier(id, "invoice ID");
+      // InvoiceLink is omitted from ordinary reads. Intuit's Accounting API
+      // documents this exact query parameter for invoice query responses.
+      const query = `select * from Invoice where Id = '${id}'`;
+      const params = new URLSearchParams({ query, include: "invoiceLink" });
+      const response = await call("GET", `query?${params.toString()}`);
+      const fault = quickBooksProviderFaultError(response);
+      if (fault) throw fault;
+      const parsed = queryFromEnvelope(response.body);
+      if (!parsed) throw new QuickBooksIntegrationError("quickbooks_api", "QuickBooks invoice link response could not be confirmed", { status: response.status });
+      if (parsed.entities.length === 0) return null;
+      if (parsed.entities.length !== 1 || String(parsed.entities[0]?.Id ?? "") !== id) {
+        throw new QuickBooksIntegrationError("quickbooks_api", "QuickBooks invoice link response did not match the requested invoice", { status: response.status });
+      }
+      return parsed.entities[0]!;
     },
 
     async cdc(entities: readonly QuickBooksEntityName[], changedSince: string): Promise<QuickBooksCdcResponse> {

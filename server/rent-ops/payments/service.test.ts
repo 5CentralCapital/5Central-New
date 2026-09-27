@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { syntheticRentOpsSnapshot } from '../fixtures/synthetic';
-import { TenantPaymentService, type TenantPaymentServiceOptions, tenantCheckoutEnabledFromEnv } from './service';
+import { TenantPaymentService, createTenantPaymentService, type TenantPaymentServiceOptions, tenantCheckoutEnabledFromEnv } from './service';
 import type { TenantPaymentStore } from './store';
 import type { TenantPayment, ProcessorEvent, PaymentAdjustment, PaymentReceipt } from './model';
 import type { TenantIdentity } from '../../../shared/tenant-portal-contracts';
@@ -19,6 +19,16 @@ function setup(providerOverride?: PaymentProvider, options:TenantPaymentServiceO
 }
 function success(paymentId:string,id='evt_success',created=100):ProcessorEvent{return {id,type:'payment_intent.succeeded',created,live:false,state:'success',paymentId,paymentIntentId:'pi_fake',amountCents:10000,currency:'usd'};}
 test('tenant checkout defaults on and honors an explicit false environment switch',()=>{assert.equal(tenantCheckoutEnabledFromEnv({}),true);assert.equal(tenantCheckoutEnabledFromEnv({RENT_OPS_TENANT_CHECKOUT_ENABLED:'false'}),false);assert.equal(tenantCheckoutEnabledFromEnv({RENT_OPS_TENANT_CHECKOUT_ENABLED:'true'}),true);});
+test('runtime cannot start a new Stripe charge when QuickBooks or legacy checkout switches are enabled',async()=>{
+ const s=setup(); let databaseCalls=0;
+ const service=createTenantPaymentService({
+  executor:{async query(){databaseCalls++;throw new Error('should not reserve a payment');}},
+  rentOpsRepository:{} as Parameters<typeof createTenantPaymentService>[0]['rentOpsRepository'],
+  env:{RENT_OPS_TENANT_CHECKOUT_ENABLED:'true',RENT_OPS_QBO_HOSTED_PAYMENTS_ENABLED:'true',STRIPE_SECRET_KEY:'sk_test_fake',STRIPE_WEBHOOK_SECRET:'whsec_fake',RENT_OPS_PUBLIC_APP_URL:'https://example.test'},
+ });
+ await assert.rejects(service.checkout(s.identity,{tenancyId:s.identity.tenancyId,amountCents:10000,requestId:'00000000-0000-4000-8000-000000000001'}),/tenant_checkout_disabled/);
+ assert.equal(databaseCalls,0);
+});
 test('disabled tenant checkout reports its reason before reserving or calling the provider',async()=>{
  let createCalls=0;
  const provider:PaymentProvider={live:false,async createCheckout(){createCalls++;return{id:'cs_disabled',url:'https://checkout.stripe.com/disabled'};},verify(){throw new Error('unused');}};

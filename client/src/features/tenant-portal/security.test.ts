@@ -37,6 +37,21 @@ test('tenant writes require their own restored CSRF and clear it after expired s
   await assert.rejects(client.request('/api/rent-ops/snapshot'));
 });
 
+test('QuickBooks invoice-link requests use the selected invoice id and tenant CSRF', async () => {
+  const calls: Array<{ path: string; init?: RequestInit }> = [];
+  const responses = [json(session), json({ invoiceId: 'invoice:opaque-id', url: 'https://connect.intuit.com/portal/app/CommerceNetwork/view/token' })];
+  const client = new TenantPortalClient((async (path: string | URL | Request, init?: RequestInit) => {
+    calls.push({ path: String(path), init }); return responses.shift()!;
+  }) as typeof fetch);
+  await client.restore();
+  await client.request('/api/tenant/payments/quickbooks/link', { invoiceId: 'invoice:opaque-id' });
+  assert.equal(calls[1].path, '/api/tenant/payments/quickbooks/link');
+  assert.equal(calls[1].init?.method, 'POST');
+  assert.deepEqual(JSON.parse(String(calls[1].init?.body)), { invoiceId: 'invoice:opaque-id' });
+  assert.equal(new Headers(calls[1].init?.headers).get('x-tenant-csrf'), session.csrfToken);
+  assert.equal(calls[1].init?.credentials, 'include');
+});
+
 test('malformed session cannot authorize writes and failed logout retains retry capability', async () => {
   const responses = [json({ ...session, csrfToken: 'short' }), json(session), json({}, 503), json({ ok: true })];
   const client = new TenantPortalClient((async () => responses.shift()!) as typeof fetch);

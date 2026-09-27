@@ -163,4 +163,8 @@ export class TenantPaymentService {
     let remaining=target;for(const {transaction,openCents} of charges){const amount=Math.min(remaining,openCents);if(!amount)break;await store.appendAllocation({id:`tpa_${createHash('sha256').update(`${id}:${transaction.id}`).digest('hex')}`,paymentTransactionId:id,chargeTransactionId:transaction.id,amountCents:amount,allocatedOn:date,paymentLinkKnowledge:'manual',chargeLinkKnowledge:'manual',amountKnowledge:'known',allocatedOnKnowledge:'manual'});remaining-=amount;}
   }
 }
-export function createTenantPaymentService(options:{executor:RentOpsQueryExecutor;rentOpsRepository:RentOpsRepository;env:NodeJS.ProcessEnv}) {return new TenantPaymentService(new PostgresTenantPaymentStore(options.executor,options.rentOpsRepository),stripeProvider(options.env),undefined,{tenantCheckoutEnabled:tenantCheckoutEnabledFromEnv(options.env)});}
+export function createTenantPaymentService(options:{executor:RentOpsQueryExecutor;rentOpsRepository:RentOpsRepository;env:NodeJS.ProcessEnv}) {
+  // Stripe remains available only for historical callbacks and reconciliation.
+  // New tenant payment links use the separately gated QuickBooks service.
+  return new TenantPaymentService(new PostgresTenantPaymentStore(options.executor,options.rentOpsRepository),stripeProvider(options.env),undefined,{tenantCheckoutEnabled:false});
+}

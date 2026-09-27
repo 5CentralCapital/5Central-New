@@ -132,6 +132,38 @@ test("production scope selects the production Accounting host", async () => {
   assert.match(requested, /^https:\/\/quickbooks\.api\.intuit\.com\/v3\/company\//);
 });
 
+test("readInvoiceWithLink uses Intuit's include=invoiceLink query and stays read-only", async () => {
+  const calls: QuickBooksTransportRequest[] = [];
+  const client = createQuickBooksAccountingClient({
+    scope: { ...scope, environment: "production" },
+    getAccessToken: async () => "access-token",
+    transport: async request => {
+      calls.push(request);
+      return response(200, { QueryResponse: { Invoice: [{ Id: "invoice-1", SyncToken: "7", Balance: "125.00", InvoiceLink: "https://connect.intuit.com/portal/app/CommerceNetwork/view/scs-v1-test" }], startPosition: 1, maxResults: 1 } });
+    },
+  });
+
+  const invoice = await client.readInvoiceWithLink("invoice-1");
+  assert.equal(invoice?.Id, "invoice-1");
+  assert.equal(invoice?.InvoiceLink, "https://connect.intuit.com/portal/app/CommerceNetwork/view/scs-v1-test");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.method, "GET");
+  const url = new URL(calls[0]!.url);
+  assert.equal(url.searchParams.get("include"), "invoiceLink");
+  assert.equal(url.searchParams.get("query"), "select * from Invoice where Id = 'invoice-1'");
+  assert.equal(calls[0]?.body, undefined);
+});
+
+test("readInvoiceWithLink returns null for no match and rejects ambiguous or mismatched query rows", async () => {
+  let body: unknown = { QueryResponse: { Invoice: [] } };
+  const client = createQuickBooksAccountingClient({ scope, getAccessToken: async () => "access-token", transport: async () => response(200, body) });
+  assert.equal(await client.readInvoiceWithLink("invoice-1"), null);
+  body = { QueryResponse: { Invoice: [{ Id: "invoice-2" }] } };
+  await assert.rejects(() => client.readInvoiceWithLink("invoice-1"), /requested invoice/);
+  body = { QueryResponse: { Invoice: [{ Id: "invoice-1" }, { Id: "invoice-1" }] } };
+  await assert.rejects(() => client.readInvoiceWithLink("invoice-1"), /requested invoice/);
+});
+
 test("preserves large JSON monetary lexemes until the caller can validate them", async () => {
   const client = createQuickBooksAccountingClient({
     scope,
