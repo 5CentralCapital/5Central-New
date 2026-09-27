@@ -1,3 +1,4 @@
+import { ZodError } from "zod";
 import { financialSourceScopeSchema } from "../../shared/accounting";
 import type { RentOpsQueryExecutor } from "../rent-ops/repositories/postgres";
 import { AccountingError } from "./errors";
@@ -36,10 +37,11 @@ export interface AutoLinkCustomer {
 export interface AutoLinkMatch { readonly tenancyId: string; readonly customer: AutoLinkCustomer }
 
 const UNIT_DESIGNATORS = new Set(["lot", "unit", "apt", "suite", "ste", "bldg", "building", "room", "space", "trailer", "lote"]);
+const STREET_WORDS = new Set(["st", "street", "ave", "avenue", "rd", "road", "blvd", "boulevard", "dr", "drive", "ln", "lane", "ct", "court", "way", "pl", "place", "ter", "terrace", "cir", "circle", "hwy", "pkwy", "e", "w", "n", "s", "ne", "nw", "se", "sw", "east", "west", "north", "south"]);
 const GENERIC_PROPERTY_WORDS = new Set(["apartments", "apartment", "apts", "apt", "the", "llc", "inc", "homes", "home", "and", "of", "at", "unit", "units"]);
 
 export function matchTokens(value: string | null | undefined): string[] {
-  return (value ?? "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+  return (value ?? "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
 }
 
 function hasAll(haystack: ReadonlySet<string>, needles: readonly string[]): boolean {
@@ -64,12 +66,14 @@ export function addressMatches(tenancy: AutoLinkTenancy, customer: AutoLinkCusto
   // A unit that is itself a street address ("617 Plateau Ave") identifies the home on its own.
   const unitIsAddress = unit.some(token => /^\d{2,}$/.test(token)) && unit.some(token => /^[a-z]{3,}$/.test(token) && !UNIT_DESIGNATORS.has(token));
   if (unitIsAddress) return true;
-  const property = matchTokens(tenancy.propertyName).filter(token => !GENERIC_PROPERTY_WORDS.has(token));
+  const property = matchTokens(tenancy.propertyName).filter(token => token.length > 1 && !GENERIC_PROPERTY_WORDS.has(token) && !STREET_WORDS.has(token));
   if (hasAll(tokens, property)) return true;
+  // Street address fallback: the house number plus one distinctive street word ("3408 … MLK").
   const street = matchTokens(tenancy.propertyAddress);
   const number = street.find(token => /^\d+$/.test(token));
-  const word = street.find(token => /^[a-z]{3,}$/.test(token) && !["the", "ave", "st", "rd", "blvd", "dr", "ln", "ct", "way", "east", "west", "north", "south"].includes(token));
-  return Boolean(number && word && tokens.has(number) && tokens.has(word));
+  const words = street.filter(token => /[a-z]/.test(token) && token.length > 1 && !STREET_WORDS.has(token));
+  // A street with no distinctive word ("669 Avenue D NW") relies on the house number.
+  return Boolean(number && tokens.has(number) && (words.length === 0 || words.some(word => tokens.has(word))));
 }
 
 /** Unique name-and-address matches, one customer per tenancy and one tenancy per customer. */
@@ -182,8 +186,9 @@ export async function autoLinkQboCustomers(executor: RentOpsQueryExecutor, input
       });
       if (result.status === "linked") linked.push({ tenancyId: match.tenancyId, customerObjectId: match.customer.objectId, legalEntityId: match.customer.legalEntityId });
     } catch (error) {
-      // Ownership history or a concurrent link rules this match out; leave it for manual review.
-      if (!(error instanceof AccountingError)) throw error;
+      // Ownership history, a concurrent link or an unusual QuickBooks id rules this
+      // match out; leave it for the manual picker.
+      if (!(error instanceof AccountingError) && !(error instanceof ZodError)) throw error;
     }
   }
   const unlinkedCount = tenancies.filter(tenancy => !linkedTenancies.has(tenancy.tenancyId) && (!input.tenancyId || tenancy.tenancyId === input.tenancyId)).length;

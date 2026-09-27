@@ -63,6 +63,7 @@ test("tenant header shows one balance: the review rolled forward by later ledger
   assert.equal(tenantHeaderBalance(zero, { complete: true, amountCents: 150000 }).amount, "$100.00", "a $100 charge after the review rolls forward");
   assert.equal(tenantHeaderBalance({ ...zero, postedAtReviewCents: 0 }, { complete: true, amountCents: 0 }).ledgerDifference, undefined);
   assert.equal(tenantHeaderBalance(zero, { complete: true, amountCents: 1, balanceCents: 777 }).amount, "$7.77", "the report's balance wins so every screen agrees");
+  assert.equal(tenantHeaderBalance(zero, { complete: true, amountCents: 1, balanceCents: null }).amount, undefined, "an unknown report balance is never replaced by a local guess");
   const unknown = tenantHeaderBalance({ ...zero, reviewedBalanceCents: null }, { complete: true, amountCents: 140000 });
   assert.equal(unknown.amount, undefined, "an unknown review is never shown as $0");
   assert.equal(unknown.unknownLabel, "Not verified");

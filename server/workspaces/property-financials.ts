@@ -124,7 +124,7 @@ export function computeRentalMeasures(snapshot: RentOpsSnapshot, propertyId: str
     measure("tenant_collections", "Tenant collections", "collections", `Receipts from tenants applied to charges, received in ${month}`, tenantReceipts, "collected-income"),
     measure("subsidy_collections", "Subsidy collections", "collections", `Receipts from housing agencies applied to charges, received in ${month}`, subsidyReceipts, "collected-income"),
     measure("other_collections", "Other or unidentified payers", "collections", `Receipts from owners or payers not recorded, received in ${month}`, otherReceipts, "collected-income"),
-    measure("arrears", "Arrears", "balances", `Operational balances due as of ${asOf}`, arrears, "delinquency"),
+    measure("arrears", "Arrears", "balances", `Balances due as of ${asOf}`, arrears, "delinquency"),
     measure("deposits_held", "Deposits held", "balances", `Refundable deposits held as of ${asOf}`, deposits, "security-deposit"),
   ];
 }

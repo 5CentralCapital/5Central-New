@@ -75,7 +75,8 @@ export function tenantHeaderBalance(review: AdminBalanceReviewView | undefined, 
   const format = (cents: number) => posted.format ? posted.format(cents) : formatMoney(cents);
   const ledgerKnown = posted.complete && posted.amountCents !== null && Number.isFinite(posted.amountCents);
   if (review) {
-    const cents = typeof posted.balanceCents === "number" ? posted.balanceCents : reviewedBalanceNowCents(review, ledgerKnown ? posted.amountCents : null);
+    // The balances report is authoritative when present (null there means unknown, e.g. conflicting reviews).
+    const cents = posted.balanceCents !== undefined ? posted.balanceCents : reviewedBalanceNowCents(review, ledgerKnown ? posted.amountCents : null);
     const shortDate = formatTableDate(review.asOfDate) ?? formatDate(review.asOfDate);
     const trueUp = ledgerTrueUpCents(review);
     return {

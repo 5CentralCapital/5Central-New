@@ -37,3 +37,10 @@ test("only unique matches in both directions are linked", () => {
   const same = tenancy("c", "Jose", "Cruz", "Lucia Apartments", "658");
   assert.deepEqual(matchTenanciesToCustomers([a, same], [customer("10", ["Jose Cruz"], ["Lucia 658"])]), [], "one customer for two tenancies → no automatic link");
 });
+
+test("a street-named property matches on its house number and street word", () => {
+  const tamara = tenancy("t4", "Tamara", "Smith", "3408 E Dr MLK BLVD", "#1", "3408 E Dr MLK Blvd");
+  assert.equal(addressMatches(tamara, customer("4", ["Tamara Smith"], ["3408 E Dr Martin Luther King Jr Blvd #1"])), false, "a different spelling of the street is not assumed");
+  assert.equal(addressMatches(tamara, customer("4", ["Tamara Smith"], ["3408 MLK Blvd Unit 1"])), true);
+  assert.equal(addressMatches(tamara, customer("4", ["Tamara Smith"], ["3408 MLK Blvd Unit 2"])), false, "the unit must match");
+});
