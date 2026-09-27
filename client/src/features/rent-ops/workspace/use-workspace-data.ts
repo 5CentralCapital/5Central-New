@@ -38,6 +38,15 @@ export async function refreshWorkspaceQueriesRequired(client: QueryClient, requi
  }
 }
 
+/** Dashboard refresh includes the company reads shared with their full pages. */
+export async function refreshDashboardQueries(client: QueryClient): Promise<void> {
+ await Promise.all([
+  client.invalidateQueries({queryKey:['forecasting','list']}, {throwOnError:true}),
+  client.invalidateQueries({queryKey:queryRoot}, {throwOnError:true}),
+  client.invalidateQueries({queryKey:['accounting','financial-dashboard']}, {throwOnError:true}),
+ ]);
+}
+
 export function useWorkspaceData({enabled,identity,filters,collections,summaryNeeded,personId}:{enabled:boolean;identity:string;filters:ViewFilters;collections:WorkspaceCollection[];summaryNeeded:boolean;personId?:string}){
  const client=useQueryClient();
  useEffect(()=>{
@@ -67,7 +76,7 @@ export function useWorkspaceData({enabled,identity,filters,collections,summaryNe
  const snapshot=useMemo(()=>enabled&&bootstrap.data?composeWorkspaceSnapshot(bootstrap.data,filters.asOfDate,summary.data?.summary,merged):undefined,[enabled,bootstrap.data,filters.asOfDate,summary.data,merged]);
  const collectionError=fetched.find(q=>q.error)?.error;
  const collectionsReady=!!bootstrap.data&&collections.every((name,i)=>bootstrap.data!.loadedCollections.includes(name)||fetched[i].isSuccess);
- const refresh=useCallback(async()=>{await client.invalidateQueries({queryKey:queryRoot}, {throwOnError:true});},[client]);
+ const refresh=useCallback(async()=>{if(summaryNeeded) await refreshDashboardQueries(client); else await client.invalidateQueries({queryKey:queryRoot}, {throwOnError:true});},[client,summaryNeeded]);
  const refreshRequired=useCallback(()=>{
   const loadedCollections=new Set(bootstrap.data?.loadedCollections??[]);
   return refreshWorkspaceQueriesRequired(client,[

@@ -1,146 +1,30 @@
 // Widget registry for the dashboard. Every widget declares the sizes it can
 // take and renders itself for the size it was given; the grid never scrolls a
-// widget that was built to fit. Data comes from one object the dashboard
-// assembles from the requests it already makes (rm-dashboard.tsx).
-import React, { useEffect, useMemo, useState, type ReactNode } from "react";
+// widget that was built to fit. The rental widgets below read the one object
+// the dashboard assembles (rm-dashboard.tsx); the company-side widgets load
+// their own data when placed (dashboard-sources.ts).
+import React, { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import type { BankingSnapshot } from "../../../../../shared/rent-ops-banking";
-import type { DashboardCash, DashboardTrends } from "../../../../../shared/rent-ops-dashboard";
 import { daysBetween, displayPersonName, formatTableDate, formatTimestamp } from "../../../lib/rent-ops-formatters";
-import type { AdminSnapshot, ReportKey, TenantTab, ViewFilters } from "../types";
 import { EntityLink, RecordLink, entityHref, shouldHandleEntityClick } from "./entity-link";
 import { formatReportValue, overdueDateAbsentLabel } from "./report-model";
 import { DashboardChart } from "./dashboard-chart";
-import type { TrendMetric } from "./dashboard-model";
-import { formatExactDollars, formatWholeDollars, type DashboardKpi, type DueSplit } from "./dashboard-kpis";
-import type { AttentionItem } from "./dashboard-attention";
+import { formatExactDollars, type DashboardKpi } from "./dashboard-kpis";
 import { Skeleton } from "./ops-ui";
-import type { WidgetSize } from "./dashboard-grid-model";
 import { UNKNOWN_AMOUNT_LABEL } from "@shared/review-cases/display-labels";
+import {
+  Bars, Empty, LIST_ROW, Rows, TABLE_ROW, TILE, Table, Tile, bankingNetCents, bankingStateNotice, dollars, fitRows, money, numeric, pct, text,
+  type Column, type DashboardData, type Row, type WidgetCategory, type WidgetDefinition,
+} from "./dashboard-kit";
+import { TENANT_WIDGETS } from "./dashboard-widgets-tenants";
+import { UNIT_WIDGETS } from "./dashboard-widgets-units";
+import { CASH_WIDGETS } from "./dashboard-widgets-cash";
+import { ACCOUNTING_WIDGETS } from "./dashboard-widgets-accounting";
+import { QUICKBOOKS_WIDGETS } from "./dashboard-widgets-quickbooks";
+import { PROJECT_WIDGETS } from "./dashboard-widgets-projects";
+import { OVERVIEW_WIDGETS } from "./dashboard-widgets-overview";
 
-export type Row = Record<string, unknown>;
-export type Column = { key: string; label: string; number?: boolean; render?: (row: Row) => ReactNode };
-export const numeric = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
-export const money = (value: unknown) => numeric(value) ? formatReportValue(value, "currency") : "—";
-export const text = (value: unknown) => value === null || value === undefined || value === "" ? "—" : String(value);
-
-/** A bank read must be complete before its aggregate can be presented as exact. */
-export function bankingNetCents(snapshot: BankingSnapshot): number | undefined {
-  if (snapshot.state !== "ready") return undefined;
-  const transactions = snapshot.connections.flatMap(connection => connection.transactions).filter(transaction => numeric(transaction.amountCents) && !transaction.pending);
-  const inflow = transactions.filter(transaction => (transaction.amountCents as number) < 0).reduce((sum, transaction) => sum - (transaction.amountCents as number), 0);
-  const outflow = transactions.filter(transaction => (transaction.amountCents as number) > 0).reduce((sum, transaction) => sum + (transaction.amountCents as number), 0);
-  return inflow - outflow;
-}
-
-export function bankingStateNotice(state: BankingSnapshot["state"], label = "Bank data") {
-  if (state === "partial") return { title: `${label} incomplete`, detail: "Some accounts or transactions could not be read. Totals are withheld until the bank read is complete." };
-  if (state === "unavailable") return { title: `${label} unavailable`, detail: "The bank did not provide a complete read. No amount is known until it succeeds." };
-  return undefined;
-}
-
-const dollars = (cents: number) => formatWholeDollars(cents);
-const pct = (share: number) => `${Math.round(share * 100)}%`;
-
-export type WidgetCategory = "rent" | "cash" | "company" | "tools";
-export const WIDGET_CATEGORIES: Record<WidgetCategory, string> = { rent: "Rentals & tenants", cash: "Cash & banking", company: "Company", tools: "Tools" };
-
-export interface WidgetMetrics { size: WidgetSize; w: number; h: number; bodyWidth: number; bodyHeight: number }
-
-export interface DashboardData {
-  snapshot: AdminSnapshot;
-  filters: ViewFilters;
-  identity: string;
-  year: number;
-  monthLabel: string;
-  kpis: DashboardKpi[];
-  attention: AttentionItem[];
-  companyPanels?: ReactNode;
-  rentRoll?: Row[];
-  dueRows?: Row[];
-  knownDue?: Row[];
-  unverifiedDue: number;
-  dueSplit?: DueSplit;
-  receipts?: Row[];
-  vacancy?: Row[];
-  vacancySorted?: Row[];
-  propertyRows?: Row[];
-  movements?: Row[];
-  applications?: Row[];
-  applicationsError?: boolean;
-  onOpenApplication: (id: string) => void;
-  trends: { data?: DashboardTrends; loading: boolean; error?: string; retry: () => void; metric: TrendMetric; setMetric: (metric: TrendMetric) => void };
-  cash: { data?: DashboardCash; error?: string; fetching: boolean; refetch: () => void };
-  banking: { data?: BankingSnapshot; error?: string; loading: boolean; refetch: () => void };
-  onReport: (report: ReportKey) => void;
-  onOpenTenant?: (personId: string, tab?: TenantTab) => void;
-  onOpenUnit?: (unitId: string) => void;
-  onOpenProperty?: (propertyId: string) => void;
-  onManageMoves?: () => void;
-}
-
-export interface WidgetContext { data: DashboardData; metrics: WidgetMetrics }
-
-export interface WidgetDefinition {
-  id: string;
-  category: WidgetCategory;
-  name: string;
-  description: string;
-  sizes: readonly WidgetSize[];
-  defaultSize: WidgetSize;
-  /** The widget draws its own header (the trend chart). */
-  bare?: boolean;
-  /** Long lists that are meant to scroll inside the card. */
-  scrolls?: boolean;
-  /** Optional "open" target shown in the header. */
-  open?: (data: DashboardData) => (() => void) | undefined;
-  render: (context: WidgetContext) => ReactNode;
-}
-
-/* ---------- shared pieces ---------- */
-
-const TABLE_ROW = 46, LIST_ROW = 38, TILE = 70;
-/** How many rows of a given height fit in the body after a reserved block. */
-export const fitRows = (metrics: WidgetMetrics, rowHeight: number, reserve = 0, minimum = 2) => Math.max(minimum, Math.floor((metrics.bodyHeight - reserve - 30) / rowHeight));
-
-export function Tile({ label, value, detail, tone, big = false, meter }: { label?: string; value: ReactNode; detail?: ReactNode; tone?: string; big?: boolean; meter?: number }) {
-  return <div className={`ops-tile${big ? " is-big" : ""}`} data-tone={tone}>
-    {label && <span className="ops-tile-label">{label}</span>}
-    <strong className="ops-tile-value">{value}</strong>
-    {meter !== undefined && <span className="rops-kpi-meter" aria-hidden="true"><i style={{ width: `${Math.round(meter * 100)}%` }} /></span>}
-    {detail && <span className="ops-tile-detail">{detail}</span>}
-  </div>;
-}
-
-export function Rows({ items, limit }: { items: Array<{ key: string; label: ReactNode; detail?: ReactNode; value: ReactNode; tone?: "positive" | "critical" | "muted" }>; limit?: number }) {
-  const shown = limit ? items.slice(0, limit) : items;
-  return <ul className="ops-rows">{shown.map(item => <li key={item.key}><span className="ops-rows-label">{item.label}{item.detail && <small>{item.detail}</small>}</span><span className="ops-rows-value" data-tone={item.tone}>{item.value}</span></li>)}</ul>;
-}
-
-export function Bars({ items, limit, format = value => dollars(value), tone }: { items: Array<{ key: string; label: ReactNode; value: number; tone?: "critical" }>; limit?: number; format?: (value: number) => string; tone?: "critical" }) {
-  const shown = limit ? items.slice(0, limit) : items;
-  const max = Math.max(1, ...shown.map(item => Math.abs(item.value)));
-  return <ul className="ops-rows ops-bars">{shown.map(item => <li key={item.key}><span className="ops-rows-label">{item.label}</span><span className="rops-unit-track" aria-hidden="true"><i data-tone={item.tone ?? tone} style={{ width: `${Math.abs(item.value) / max * 100}%` }} /></span><span className="ops-rows-value" data-tone={item.tone}>{format(item.value)}</span></li>)}</ul>;
-}
-
-export function Empty({ title, children }: { title: string; children?: ReactNode }) {
-  return <div className="ops-widget-empty"><strong>{title}</strong>{children && <span>{children}</span>}</div>;
-}
-
-export function Table({ rows, columns, empty = "No records.", footer, limit, onMore, moreLabel, fill = true }: { rows?: Row[]; columns: Column[]; empty?: string; footer?: ReactNode; limit?: number; onMore?: () => void; moreLabel?: (count: number) => string; fill?: boolean }) {
-  const [sort, setSort] = useState<{ key: string; direction: number }>();
-  const ordered = useMemo(() => !sort ? rows : [...(rows ?? [])].sort((a, b) => {
-    const left = a[sort.key], right = b[sort.key];
-    if (left == null) return right == null ? 0 : 1;
-    if (right == null) return -1;
-    return (numeric(left) && numeric(right) ? left - right : String(left).localeCompare(String(right), undefined, { numeric: true })) * sort.direction;
-  }), [rows, sort]);
-  const shown = limit && ordered ? ordered.slice(0, limit) : ordered;
-  const hidden = limit && ordered ? ordered.length - (shown?.length ?? 0) : 0;
-  return <><div className={`rmd-table-scroll${fill ? " is-fill" : ""}`}><table><thead><tr>{columns.map(column => <th key={column.key} className={column.number ? "number" : ""} aria-sort={sort?.key === column.key ? sort.direction === 1 ? "ascending" : "descending" : "none"}><button type="button" onClick={() => setSort(current => ({ key: column.key, direction: current?.key === column.key ? -current.direction : 1 }))}>{column.label}{sort?.key === column.key ? sort.direction === 1 ? " ↑" : " ↓" : ""}</button></th>)}</tr></thead><tbody>
-    {!rows ? <tr><td colSpan={columns.length} className="rmd-empty"><Skeleton width="10em" /></td></tr> : !ordered?.length ? <tr><td colSpan={columns.length} className="rmd-empty">{empty}</td></tr> : shown!.map((row, index) => <tr key={String(row.id ?? row.unitId ?? row.propertyId ?? "row") + index}>{columns.map(column => <td key={column.key} className={column.number ? "number" : ""}>{column.render ? column.render(row) : text(row[column.key])}</td>)}</tr>)}
-  </tbody></table></div>{hidden > 0 && onMore && <div className="rops-table-more"><button type="button" className="rops-link" onClick={onMore}>{moreLabel ? moreLabel(ordered!.length) : `View all ${ordered!.length}`}</button></div>}{footer && <div className="rmd-table-total">{footer}</div>}</>;
-}
+export * from "./dashboard-kit";
 
 function Notes({ identity }: { identity: string }) {
   const key = `rent-ops-dashboard-note:${identity}`;
@@ -177,20 +61,20 @@ function kpiTile(kpi: DashboardKpi | undefined, big: boolean) {
   return <Tile label={big ? undefined : kpi.label} big={big} tone={kpi.tone} meter={kpi.share} value={kpi.tone === "loading" ? <Skeleton width="4em" label={`Loading ${kpi.label.toLowerCase()}`} /> : kpi.value} detail={kpi.detail} />;
 }
 
-const kpiWidget = (id: string, key: DashboardKpi["key"], name: string, description: string): WidgetDefinition => ({
-  id, category: "rent", name, description, sizes: ["S", "M"], defaultSize: "S",
+const kpiWidget = (id: string, key: DashboardKpi["key"], name: string, description: string, category: WidgetCategory): WidgetDefinition => ({
+  id, category, name, description, sizes: ["S", "M"], defaultSize: "S",
   render: ({ data, metrics }) => kpiTile(data.kpis.find(kpi => kpi.key === key), metrics.size === "S"),
 });
 
 /* ---------- registry ---------- */
 
-export const WIDGETS: readonly WidgetDefinition[] = [
-  kpiWidget("kpi-occupancy", "occupancy", "Occupancy", "Occupied share of units in the selected properties"),
-  kpiWidget("kpi-rent", "rent", "Occupied base rent", "Monthly base rent on current tenancies"),
-  kpiWidget("kpi-collected", "receipts", "Rent collected", "Posted rent receipts this month against base rent"),
-  kpiWidget("kpi-due", "due", "Balances due", "Known balances owed by current tenants"),
+const RENTAL_WIDGETS: readonly WidgetDefinition[] = [
+  kpiWidget("kpi-occupancy", "occupancy", "Occupancy", "Occupied share of units in the selected properties", "units"),
+  kpiWidget("kpi-rent", "rent", "Occupied base rent", "Monthly base rent on current tenancies", "units"),
+  kpiWidget("kpi-collected", "receipts", "Rent collected", "Posted rent receipts this month against base rent", "rent"),
+  kpiWidget("kpi-due", "due", "Balances due", "Known balances owed by current tenants", "rent"),
   {
-    id: "attention", category: "rent", name: "Needs attention", description: "Balances, long vacancies, moves and company items, ranked", sizes: ["MT", "XT", "L", "XL"], defaultSize: "XT", scrolls: true,
+    id: "attention", category: "company", name: "Needs attention", description: "Balances, long vacancies, moves and company items, ranked", sizes: ["MT", "XT", "L", "XL"], defaultSize: "XT", scrolls: true,
     render: ({ data }) => <ul className="rops-attention" aria-label="Needs attention">
       {!data.dueRows && !data.vacancy ? <li className="rops-attention-row"><span className="rops-attention-stripe" /><span><Skeleton width="14em" /></span></li> : null}
       {data.attention.map(item => <li key={item.key} className="rops-attention-row" data-tone={item.tone}><span className="rops-attention-stripe" aria-hidden="true" /><span className="rops-attention-text"><strong>{item.title}</strong>{item.detail && <small>{item.detail}</small>}</span>
@@ -211,7 +95,7 @@ export const WIDGETS: readonly WidgetDefinition[] = [
     ]} footer={data.dueSplit ? <><span>{data.dueSplit.knownCount} {data.dueSplit.knownCount === 1 ? "account" : "accounts"}{data.dueSplit.unverifiedCount ? ` · ${data.dueSplit.unverifiedCount} not verified` : ""}</span><strong>{money(data.dueSplit.knownCents)}</strong></> : undefined} />,
   },
   {
-    id: "units-by-property", category: "rent", name: "Units by property", description: "Occupied of total per property with the longest vacancy", sizes: ["MT", "L", "XT"], defaultSize: "MT", open: data => () => data.onReport("occupancy"),
+    id: "units-by-property", category: "units", name: "Units by property", description: "Occupied of total per property with the longest vacancy", sizes: ["MT", "L", "XT"], defaultSize: "MT", open: data => () => data.onReport("occupancy"),
     render: ({ data, metrics }) => {
       const rows = data.propertyRows;
       const longest = (propertyId: unknown) => { const days = (data.vacancy ?? []).filter(row => row.propertyId === propertyId && numeric(row.daysVacant)).map(row => row.daysVacant as number); return days.length ? Math.max(...days) : undefined; };
@@ -226,7 +110,7 @@ export const WIDGETS: readonly WidgetDefinition[] = [
     },
   },
   {
-    id: "vacancy-list", category: "rent", name: "Vacancy list", description: "Vacant units with market rent and days vacant", sizes: ["L", "XL", "F6"], defaultSize: "L", open: data => () => data.onReport("occupancy"),
+    id: "vacancy-list", category: "units", name: "Vacancy list", description: "Vacant units with market rent and days vacant", sizes: ["L", "XL", "F6"], defaultSize: "L", open: data => () => data.onReport("occupancy"),
     render: ({ data, metrics }) => <Table rows={data.vacancySorted} limit={fitRows(metrics, TABLE_ROW, 40)} onMore={() => data.onReport("occupancy")} moreLabel={count => `View all ${count}`} empty="No vacant units." columns={[{ key: "unitNumber", label: "Unit", render: row => <span className="rops-cell-stack">{unitLink(data, row)}<small>{text(row.propertyName)}{row.type ? ` · ${text(row.type)}` : ""}</small></span> }, amountColumn("marketRentCents", "Rent"), { key: "daysVacant", label: "Days", number: true, render: row => numeric(row.daysVacant) ? String(row.daysVacant) : "—" }]} footer={<span>{data.vacancy?.length ?? "—"} vacant · {total(data.propertyRows, "preleased") ?? "—"} preleased</span>} />,
   },
   {
@@ -238,7 +122,7 @@ export const WIDGETS: readonly WidgetDefinition[] = [
     render: ({ data, metrics }) => <Table rows={data.applicationsError ? [] : data.applications} limit={fitRows(metrics, TABLE_ROW, 12)} onMore={() => data.onReport("applicant-pipeline")} moreLabel={count => `View all ${count}`} empty={data.applicationsError ? "Online applications could not be loaded." : "No online applications received in the last 30 days."} columns={[{ key: "displayName", label: "Applicant", render: row => <span className="rops-cell-stack"><a className="rm-entity-link" href={entityHref({ section: "applicants", recordId: String(row.id), tab: "summary", report: "applicant-pipeline" })} onClick={event => { if (shouldHandleEntityClick(event)) { event.preventDefault(); data.onOpenApplication(String(row.id)); } }}>{displayPersonName(text(row.displayName))}</a><small>{text(row.propertyName)}</small></span> }, { key: "submittedOn", label: "Date", render: row => shortDate(data, row.submittedOn) }, { key: "status", label: "Status", render: row => text(row.status).replaceAll("_", " ") }]} />,
   },
   {
-    id: "trend", category: "rent", name: "Trends", description: "Vacant, occupied or rent roll over the last 12 months", sizes: ["XT", "XL", "FT", "F"], defaultSize: "XL", bare: true,
+    id: "trend", category: "units", name: "Trends", description: "Vacant, occupied or rent roll over the last 12 months", sizes: ["XT", "XL", "FT", "F"], defaultSize: "XL", bare: true,
     render: ({ data }) => <DashboardChart metric={data.trends.metric} onMetric={data.trends.setMetric} data={data.trends.data} loading={data.trends.loading} error={data.trends.error} onRetry={data.trends.retry} />,
   },
   {
@@ -246,7 +130,7 @@ export const WIDGETS: readonly WidgetDefinition[] = [
     render: ({ data, metrics }) => <Table rows={data.receipts} limit={fitRows(metrics, TABLE_ROW, 40)} onMore={() => data.onReport("collected-income")} moreLabel={count => `View all ${count}`} empty={`No rent receipts posted in ${data.monthLabel}.`} columns={[{ key: "tenantName", label: "Tenant", render: row => <span className="rops-cell-stack">{personLink(data, row)}<small>{text(row.propertyName)}{row.unitNumber ? ` · ${text(row.unitNumber)}` : ""}</small></span> }, { key: "paymentOn", label: "Date", render: row => shortDate(data, row.paymentOn) }, amountColumn("amountCents", "Amount")]} footer={<><span>{data.receipts?.length ?? "—"} receipts · {data.monthLabel}</span><strong>{money(total(data.receipts, "amountCents"))}</strong></>} />,
   },
   {
-    id: "occupancy-by-property", category: "rent", name: "Occupancy by property", description: "Occupied share per property", sizes: ["S", "M", "MT"], defaultSize: "M",
+    id: "occupancy-by-property", category: "units", name: "Occupancy by property", description: "Occupied share per property", sizes: ["S", "M", "MT"], defaultSize: "M",
     render: ({ data, metrics }) => !data.propertyRows ? <Skeleton width="10em" /> : <Rows limit={fitRows(metrics, LIST_ROW, 0)} items={data.propertyRows.map(row => { const units = Number(row.unitCount) || 0, occupied = Number(row.occupied) || 0; const share = units ? occupied / units : 0; return { key: String(row.propertyId), label: propertyLink(data, row), detail: `${occupied} of ${units}`, value: row.unknown ? UNKNOWN_AMOUNT_LABEL : pct(share), tone: !row.unknown && share < 0.75 ? "critical" as const : undefined }; })} />,
   },
   {
@@ -278,7 +162,7 @@ export const WIDGETS: readonly WidgetDefinition[] = [
     },
   },
   {
-    id: "vacancy-cost", category: "rent", name: "Vacancy cost", description: "Market rent on vacant units per month, by property", sizes: ["S", "M", "MT"], defaultSize: "M",
+    id: "vacancy-cost", category: "units", name: "Vacancy cost", description: "Market rent on vacant units per month, by property", sizes: ["S", "M", "MT"], defaultSize: "M",
     render: ({ data, metrics }) => {
       if (!data.vacancy) return <Skeleton width="10em" />;
       const vacant = data.vacancy.filter(row => row.occupancy !== "future_preleased");
@@ -290,7 +174,7 @@ export const WIDGETS: readonly WidgetDefinition[] = [
     },
   },
   {
-    id: "days-vacant", category: "rent", name: "Days vacant", description: "Vacant units grouped by how long they have sat", sizes: ["S", "M", "MT"], defaultSize: "M",
+    id: "days-vacant", category: "units", name: "Days vacant", description: "Vacant units grouped by how long they have sat", sizes: ["S", "M", "MT"], defaultSize: "M",
     render: ({ data, metrics }) => {
       if (!data.vacancy) return <Skeleton width="10em" />;
       const vacant = data.vacancy.filter(row => row.occupancy !== "future_preleased");
@@ -302,7 +186,7 @@ export const WIDGETS: readonly WidgetDefinition[] = [
     },
   },
   {
-    id: "unit-mix", category: "rent", name: "Unit mix", description: "Bedrooms across the selected units and how many are occupied", sizes: ["S", "M"], defaultSize: "S",
+    id: "unit-mix", category: "units", name: "Unit mix", description: "Bedrooms across the selected units and how many are occupied", sizes: ["S", "M"], defaultSize: "S",
     render: ({ data, metrics }) => {
       if (!data.rentRoll) return <Skeleton width="10em" />;
       const occupancy = new Map(data.rentRoll.map(row => [String(row.unitId), row.occupancy]));
@@ -314,7 +198,7 @@ export const WIDGETS: readonly WidgetDefinition[] = [
     },
   },
   {
-    id: "rent-vs-market", category: "rent", name: "Rent vs market", description: "In-place base rent against market rent on occupied units", sizes: ["S", "M", "MT"], defaultSize: "M",
+    id: "rent-vs-market", category: "units", name: "Rent vs market", description: "In-place base rent against market rent on occupied units", sizes: ["S", "M", "MT"], defaultSize: "M",
     render: ({ data, metrics }) => {
       if (!data.rentRoll) return <Skeleton width="10em" />;
       const occupied = data.rentRoll.filter(row => row.occupancy === "current" && numeric(row.baseRentCents) && numeric(row.marketRentCents) && row.marketRentCents > 0);
@@ -375,9 +259,14 @@ export const WIDGETS: readonly WidgetDefinition[] = [
     render: ({ data }) => data.companyPanels ? <ul className="rops-attention" aria-label="Company items">{data.companyPanels}</ul> : <Empty title="No company access">Company items appear for organization members.</Empty>,
   },
   {
-    id: "notes", category: "tools", name: "Notes", description: "A scratchpad saved in this browser", sizes: ["S", "M", "MT", "L"], defaultSize: "M",
+    id: "notes", category: "company", name: "Notes", description: "A scratchpad saved in this browser", sizes: ["S", "M", "MT", "L"], defaultSize: "M",
     render: ({ data }) => <Notes identity={data.identity} />,
   },
 ];
 
-export const widgetById = (id: string) => WIDGETS.find(widget => widget.id === id);
+/** Every widget, in library order. */
+export const WIDGETS: readonly WidgetDefinition[] = [
+  ...RENTAL_WIDGETS, ...OVERVIEW_WIDGETS, ...TENANT_WIDGETS, ...UNIT_WIDGETS, ...CASH_WIDGETS, ...ACCOUNTING_WIDGETS, ...QUICKBOOKS_WIDGETS, ...PROJECT_WIDGETS,
+];
+const BY_ID = new Map(WIDGETS.map(widget => [widget.id, widget] as const));
+export const widgetById = (id: string) => BY_ID.get(id);

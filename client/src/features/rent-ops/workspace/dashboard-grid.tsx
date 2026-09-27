@@ -15,7 +15,8 @@ import "./dashboard-grid.css";
 const DEFAULT_PRESET = "Command";
 const HEADER = 44, PAD_X = 36, PAD_Y = 26;
 
-const storageKey = (identity: string) => `rent-ops-dashboard-layout:${identity || "anonymous"}`;
+// v2: the widget suite and the new Command default replace layouts saved before it.
+const storageKey = (identity: string) => `rent-ops-dashboard-layout:v2:${identity || "anonymous"}`;
 const known = (id: string) => !!widgetById(id);
 function presetLayout(name: string): LayoutItem[] {
   const entries = DASHBOARD_PRESETS[name];

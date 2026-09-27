@@ -221,6 +221,7 @@ function AuthenticatedWorkspace(){
  /** One renderer per canonical view; a missing section is a compile-time error. */
  const views:Record<WorkspaceSection,()=>ReactNode>={
   dashboard:()=><>{data.summary.error&&<ErrorNotice error={data.summary.error} retry={()=>void data.summary.refetch()}/>}{!data.summary.data?!data.summary.error&&<Busy label="Loading portfolio summary…"/>:<DashboardWorkspace onManageMoves={canRecordMoves?()=>setManageMoves({}):undefined} snapshot={snapshot!} filters={filters} previews={data.summary.data.reports} refreshing={data.summary.isFetching} onReport={openReport} onOpenTenant={openTenant} onOpenUnit={openUnit} onOpenProperty={openProperty}
+   organizationId={route.organizationId} onOpenCompany={(section,organizationId,target)=>openCompany(section as WorkspaceSection,organizationId,(target??{}) as Partial<WorkspaceRoute>)}
    companyPanels={<DashboardCompanyPanels identity={identity} organizationId={route.organizationId} asOfDate={filters.asOfDate} targets={{
     onObligations:organizationId=>openCompany('investors',organizationId,{investorTab:'payments'}),
     onMaturities:organizationId=>openCompany('investors',organizationId,{investorTab:'debt'}),

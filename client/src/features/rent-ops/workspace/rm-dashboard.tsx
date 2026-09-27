@@ -15,12 +15,13 @@ import { numeric, text, type DashboardData, type Row } from "./dashboard-widgets
 import type { TrendMetric } from "./dashboard-model";
 import { formatMonthLabel } from "../../../lib/rent-ops-formatters";
 import "./rm-dashboard.css";
+import "./dashboard-widgets.css";
 
 /**
  * The dashboard: one data layer (the requests below) feeding a grid of
  * widgets the manager arranges (dashboard-grid.tsx, dashboard-widgets.tsx).
  */
-export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenUnit, onOpenProperty, previews, refreshing = false, onManageMoves, companyPanels }: DashboardWorkspaceProps) {
+export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenUnit, onOpenProperty, previews, refreshing = false, onManageMoves, companyPanels, organizationId, onOpenCompany }: DashboardWorkspaceProps) {
   const auth = useRentOpsAuth();
   const enabled = auth.status === "authenticated" && !!auth.user?.id;
   const identity = auth.user?.id ?? "";
@@ -93,11 +94,11 @@ export function RmDashboard({ snapshot, filters, onReport, onOpenTenant, onOpenU
     trends: { data: trends.data, loading: trends.isFetching, error: trends.error?.message, retry: () => void trends.refetch(), metric, setMetric },
     cash: { data: cash.data, error: cash.error?.message, fetching: cash.isFetching, refetch: () => void cash.refetch() },
     banking: { data: banking.data, error: banking.error?.message, loading: banking.isFetching, refetch: () => void banking.refetch() },
-    onReport, onOpenTenant, onOpenUnit, onOpenProperty, onManageMoves,
+    onReport, onOpenTenant, onOpenUnit, onOpenProperty, onManageMoves, organizationId, onOpenCompany,
   };
   return <section className="rm-dashboard-workspace rmd-dashboard rops-dash" aria-label="Dashboard">
     {errors.length > 0 && <div className="rmd-load-error" role="alert">Some tables could not be loaded. <button onClick={() => { requests.forEach(request => { if (request.error) void request.refetch(); }); }}>Retry</button></div>}
-    <DashboardGrid data={data} />
+    <DashboardGrid key={data.identity} data={data} />
     {applicationId && selectedApplication && <ApplicationCaseDetail key={applicationId} applicationId={applicationId} summary={selectedApplication} onClose={() => setApplicationId(undefined)} />}
     {refreshing && <div className="rmd-refreshing" role="status">Refreshing dashboard…</div>}
   </section>;
