@@ -4,6 +4,12 @@
 .rm-tenant-record .rm-charge-table { min-width: 980px; }
 .rm-tenant-record .rm-reference { white-space: nowrap; }
 
+.rm-tenant-record .rm-table :is(th, td) { vertical-align: middle; }
+
+@media (min-width: 821px) {
+  .rm-tenant-record .rm-record-summary-main { align-self: center; }
+}
+
 .rm-charge-context { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin: 0 0 .75rem; padding: .75rem 0; border-top: 1px solid var(--ds-hairline, #e5e5e3); border-bottom: 1px solid var(--ds-hairline, #e5e5e3); color: #3a3a3c; font-size: .8125rem; }
 
 /* Tenant records get a compact desktop header and filter row.  Mobile keeps
