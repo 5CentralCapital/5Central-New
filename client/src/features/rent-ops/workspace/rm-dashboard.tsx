@@ -16,6 +16,7 @@ import type { TrendMetric } from "./dashboard-model";
 import { formatMonthLabel } from "../../../lib/rent-ops-formatters";
 import "./rm-dashboard.css";
 import "./dashboard-widgets.css";
+import "./dashboard-mockup.css";
 
 /**
  * The dashboard: one data layer (the requests below) feeding a grid of

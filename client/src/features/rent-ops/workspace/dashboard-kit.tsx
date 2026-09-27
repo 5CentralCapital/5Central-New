@@ -432,3 +432,82 @@ export function humanLabel(value: string | null | undefined): string {
   const words = value.replaceAll("_", " ").replaceAll("-", " ").trim();
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
+
+/* ---------- mockup-style pieces (Sept 24 dashboard v2) ---------- */
+
+/** Tiny line for table cells and cards; nulls break the line. An optional dashed reference line (a plan or a total). */
+export function Spark({ values, width = 100, height = 26, reference, min, max, tone }: { values: Array<number | null>; width?: number; height?: number; reference?: number; min?: number; max?: number; tone?: "critical" | "muted" }) {
+  const known = values.filter(numeric);
+  if (known.length < 2) return <svg className="mk-spark" width={width} height={height} aria-hidden="true" />;
+  const lo = min ?? Math.min(...known, reference ?? Infinity), hi = max ?? Math.max(...known, reference ?? -Infinity);
+  const span = hi - lo || 1;
+  const x = (index: number) => 1 + index * (width - 4) / Math.max(1, values.length - 1);
+  const y = (value: number) => 2 + (hi - value) / span * (height - 4);
+  let path = "", open = false;
+  values.forEach((value, index) => { if (!numeric(value)) { open = false; return; } path += `${open ? "L" : "M"}${x(index).toFixed(1)},${y(value).toFixed(1)}`; open = true; });
+  const lastIndex = values.map((value, index) => numeric(value) ? index : -1).filter(index => index >= 0).at(-1)!;
+  return <svg className="mk-spark" data-tone={tone} width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-hidden="true">
+    {reference !== undefined && <line x1={0} x2={width} y1={y(reference)} y2={y(reference)} className="mk-spark-ref" />}
+    <path d={path} className="mk-spark-line" />
+    <circle cx={x(lastIndex)} cy={y(values[lastIndex] as number)} r={2.2} className="mk-spark-dot" />
+  </svg>;
+}
+
+/** Area chart with a labelled y axis, gridlines and an optional dashed reference (total units, reserve). */
+export function AxisChart({ points, width, height, yMin, yMax, ticks = 3, reference, format = value => String(Math.round(value)), highlight }: { points: ChartPoint[]; width: number; height: number; yMin?: number; yMax?: number; ticks?: number; reference?: number; format?: (value: number) => string; highlight?: number }) {
+  const w = Math.max(120, width), h = Math.max(70, height);
+  const known = points.map(point => point.value).filter(numeric);
+  if (!known.length) return <Empty title="No history yet" />;
+  const rawMin = Math.min(...known, reference ?? Infinity), rawMax = Math.max(...known, reference ?? -Infinity);
+  const niceStep = (range: number) => { const exponent = Math.pow(10, Math.floor(Math.log10(range || 1))); const fraction = range / exponent; return (fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10) * exponent; };
+  const step = niceStep(((yMax ?? rawMax) - (yMin ?? Math.min(0, rawMin))) / ticks);
+  const lo = yMin ?? Math.floor(Math.min(0, rawMin) / step) * step, hi = yMax ?? Math.ceil(Math.max(rawMax, lo + step) / step) * step;
+  const left = 30, right = 8, top = 8, bottom = 20;
+  const x = (index: number) => left + (points.length === 1 ? (w - left - right) / 2 : index * (w - left - right) / (points.length - 1));
+  const y = (value: number) => top + (hi - value) / (hi - lo || 1) * (h - top - bottom);
+  const tickValues: number[] = []; for (let value = lo; value <= hi + step / 2; value += step) tickValues.push(value);
+  let path = "", area = "", open = false, start = 0;
+  points.forEach((point, index) => {
+    if (!numeric(point.value)) { if (open) area += `L${x(index - 1)},${y(lo)}L${x(start)},${y(lo)}Z`; open = false; return; }
+    path += `${open ? "L" : "M"}${x(index)},${y(point.value)}`;
+    if (!open) { start = index; area += `M${x(index)},${y(lo)}L${x(index)},${y(point.value)}`; } else area += `L${x(index)},${y(point.value)}`;
+    open = true;
+  });
+  if (open) area += `L${x(points.length - 1)},${y(lo)}L${x(start)},${y(lo)}Z`;
+  const labelEvery = Math.max(1, Math.ceil(points.length / Math.max(1, Math.floor((w - left) / 44))));
+  const lastIndex = points.map((point, index) => numeric(point.value) ? index : -1).filter(index => index >= 0).at(-1);
+  return <svg className="ops-chart mk-axis-chart" width={w} height={h} viewBox={`0 0 ${w} ${h}`} role="img">
+    {tickValues.map(value => <g key={value}><line x1={left} x2={w - right} y1={y(value)} y2={y(value)} className="mk-grid" /><text x={left - 6} y={y(value) + 3} className="ops-chart-label" textAnchor="end">{format(value)}</text></g>)}
+    {reference !== undefined && <line x1={left} x2={w - right} y1={y(reference)} y2={y(reference)} className="mk-ref" />}
+    {highlight !== undefined && highlight >= 0 && highlight < points.length && <rect x={x(highlight) - 3} y={top} width={6} height={h - top - bottom} className="mk-now" />}
+    <path d={area} className="ops-chart-area" />
+    <path d={path} className="ops-chart-line" />
+    {points.map((point, index) => numeric(point.value) ? <circle key={index} cx={x(index)} cy={y(point.value)} r={index === lastIndex ? 3.5 : 1.8} className="ops-chart-dot" data-tone={point.tone}><title>{`${point.label}: ${format(point.value)}`}</title></circle> : null)}
+    {points.map((point, index) => index % labelEvery === 0 || index === points.length - 1 ? <text key={`l${index}`} x={x(index)} y={h - 4} className="ops-chart-label" textAnchor={index === points.length - 1 ? "end" : "middle"}>{point.label}</text> : null)}
+  </svg>;
+}
+
+/** Small rounded status chip: positive, watch or risk, as in the mockup's table and board. */
+export function Chip({ tone, children }: { tone: "ok" | "watch" | "risk" | "flat"; children: ReactNode }) {
+  return <span className="mk-chip" data-tone={tone}><i aria-hidden="true">{tone === "ok" ? "●" : tone === "flat" ? "" : "◐"}</i>{children}</span>;
+}
+
+/** A quad or grid of mockup stat cells: small gray label, display number, one caption line. */
+export type Cell = { key: string; label: ReactNode; value: ReactNode; sub?: ReactNode; tone?: "neg" | "pos" | "muted" };
+export function Cells({ items, columns }: { items: Cell[]; columns: number }) {
+  return <div className="mk-cells" style={{ gridTemplateColumns: `repeat(${Math.max(1, columns)}, minmax(0, 1fr))` }}>{items.map(item => <div key={item.key} className="mk-cell"><span>{item.label}</span><b className="mk-n" data-tone={item.tone}>{item.value}</b>{item.sub && <small>{item.sub}</small>}</div>)}</div>;
+}
+
+/** Compact money for stat cells: "$17.7K", "$1.21M", "$950"; unknown is "—". */
+export function kMoney(value: string | number | null | undefined): string { return shortCents(value); }
+
+/** Days from the as-of date to a date: "Today", "in 4d", "6d late". */
+export function daysLabel(asOf: string, date: string): string {
+  const days = dayDiff(asOf, date);
+  return days === 0 ? "Today" : days > 0 ? `${days}d left` : `${-days}d late`;
+}
+
+export function weekday(iso: string): string {
+  const date = new Date(`${iso.slice(0, 10)}T12:00:00`);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
