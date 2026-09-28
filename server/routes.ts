@@ -2,6 +2,8 @@ import { registerRentOpsMcpRoutes } from "./rent-ops/mcp/routes";
 import { registerCompanyRoutes } from './company/routes';
 import { createCompanyServices } from './company/services';
 import { createTenantPaymentService, type TenantPaymentService } from "./rent-ops/payments/service";
+import { createTenantQuickBooksPayments } from "./rent-ops/payments/quickbooks-runtime";
+import { registerTenantQuickBooksPaymentRoutes } from "./rent-ops/payments/quickbooks-routes";
 import { registerTenantPaymentRoutes } from "./rent-ops/payments/routes";
 import type { Express } from "express";
 import { createServer, type Server } from "http";
@@ -97,6 +99,7 @@ export async function registerRoutes(app: Express, options: {
   options.onTenantPaymentService?.(tenantPaymentService);
   options.onStartupStage?.("tenant_routes");
   registerTenantPaymentRoutes(app, { service: tenantPaymentService, requireTenant: tenantPortal.requireTenant, getTenantIdentity: tenantPortal.getTenantIdentity, requireAdmin: requireRentOpsAdmin });
+  registerTenantQuickBooksPaymentRoutes(app, { service: createTenantQuickBooksPayments({ executor: rentOpsRuntimeDatabase, accounting: company.accounting, env: process.env }), requireTenant: tenantPortal.requireTenant, getTenantIdentity: tenantPortal.getTenantIdentity });
   registerRentOpsBillingRoutes(app, { service: recurringBillingService, requireAdmin: requireRentOpsAdmin });
 
   // Admin dashboard API routes

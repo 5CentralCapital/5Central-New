@@ -359,6 +359,7 @@ export function createAccountingServices(executor: RentOpsQueryExecutor, options
       const client = createQuickBooksAccountingClient({ scope, getAccessToken: () => capabilityGate.requireEnabled(scope, "accounting.read").then(() => tokenManager.getAccessToken(scope)), transport });
       return {
         read: (...args) => client.read(...args),
+        readInvoiceWithLink: (...args) => client.readInvoiceWithLink(...args),
         query: (...args) => client.query(...args),
         cdc: (...args) => client.cdc(...args),
         // A write refused by its capability gate never reached Intuit.
