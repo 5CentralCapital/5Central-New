@@ -489,6 +489,14 @@ function ledgerUnitLabel(transaction: AdminLedgerTransactionView, tenant: Tenant
   const unit = findUnit(snapshot, transaction.unitId);
   if (unit) return unitDisplayName(unit);
   if (transaction.unitId && tenant.unit?.id === transaction.unitId) return unitDisplayName(tenant.unit);
+  // Imported payments often carry no unit. When the resident has only ever
+  // lived in one unit, that unit is the only place the entry can belong.
+  if (!transaction.unitId) {
+    const unitIds = getTenantTenancies(tenant).map(tenancy => tenancy.unitId).filter((value): value is string => !!value).filter((value, index, all) => all.indexOf(value) === index);
+    const onlyUnitId = unitIds.length === 1 ? unitIds[0] : unitIds.length === 0 ? tenant.unit?.id : undefined;
+    const onlyUnit = onlyUnitId ? findUnit(snapshot, onlyUnitId) ?? (tenant.unit?.id === onlyUnitId ? tenant.unit : undefined) : undefined;
+    if (onlyUnit) return unitDisplayName(onlyUnit);
+  }
   return UNIT_MISSING_LABEL;
 }
 
