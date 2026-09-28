@@ -180,15 +180,22 @@ test("account routing uses exact property review without changing posted ledger 
   assert.equal(report(s, { personId: "alice", balanceStatus: "unverified" })[0].totalBalanceCents, 10000);
 });
 
-test("stale review fails operational routing closed while posted total remains visible", () => {
+test("a review is an audited checkpoint: later-dated activity rolls it forward, backdated entries do not move it", () => {
   const s = fixture();
   s.ledgerTransactions.push(tx("review-charge", "old", "a", "alice", 10000));
   addReview(s, "old", 0);
-  s.ledgerTransactions.push(tx("later-charge", "old", "a", "alice", 5000));
-  const row = report(s, { personId: "alice", balanceStatus: "unverified" }).find(r => r.propertyId === "a")!;
-  assert.equal(row.operationalBalanceCents, null); assert.equal(row.totalBalanceCents, 15000);
-  assert.equal(row.balanceReview?.stale, true);
-  assert.ok(row.balanceUncertaintyCodes?.includes("balance_review_stale"));
+  s.ledgerTransactions.push(tx("backdated-charge", "old", "a", "alice", 5000));
+  const backdated = report(s, { personId: "alice" }).find(r => r.propertyId === "a")!;
+  assert.equal(backdated.balanceReview?.stale, true);
+  assert.equal(backdated.totalBalanceCents, 15000);
+  assert.equal(backdated.balanceReview?.postedAtReviewCents, 15000, "the ledger on the review date, for the reconcile difference");
+  assert.equal(backdated.operationalBalanceCents, 0, "entries dated on or before the review are reconciliation work, not balance");
+  assert.equal(backdated.balanceUncertaintyCodes?.includes("balance_review_stale"), false);
+  s.ledgerTransactions.push({ ...tx("later-charge", "old", "a", "alice", 7500), postedOn: "2026-08-16", dueOn: "2026-08-16" });
+  const reportLater = (asOfDate: string) => deriveAccountBalances(s, { asOfDate, tenantStatus: "all", personId: "alice" }, deriveManagerAccountLedger, readAccountBalanceAllocations).find(r => r.propertyId === "a")!;
+  assert.equal(reportLater("2026-08-16").operationalBalanceCents, 0, "same-day activity belongs to the reviewed day");
+  s.ledgerTransactions.push({ ...tx("next-charge", "old", "a", "alice", 2500), postedOn: "2026-08-20", dueOn: "2026-08-20" });
+  assert.equal(reportLater("2026-08-31").operationalBalanceCents, 2500, "activity after the review date rolls the balance forward");
 });
 
 test("same-property transfer uses latest account review once and equally dated conflicts fail closed", () => {

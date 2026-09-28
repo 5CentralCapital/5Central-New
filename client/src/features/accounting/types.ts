@@ -136,6 +136,8 @@ export interface AccountingApi {
   tenancySourceResolution(organizationId: string, query: { readonly tenancyId: string; readonly environment?: AccountingEnvironment; readonly asOf?: string }, signal?: AbortSignal): Promise<TenantSourceResolution>;
   /** Records the tenancy ↔ QuickBooks customer link in the local identity map. Nothing is written to QuickBooks. */
   linkTenancyCustomer(organizationId: string, input: { readonly scope: AccountingScope; readonly tenancyId: string; readonly customerId: string }, signal?: AbortSignal): Promise<{ readonly status: "linked" | "already_linked" }>;
+  /** Links every tenancy whose QuickBooks customer matches on name and address; returns the tenancies linked. */
+  autoLinkTenancyCustomers(organizationId: string, input: { readonly environment: "sandbox" | "production"; readonly legalEntityId?: string; readonly tenancyId?: string }, signal?: AbortSignal): Promise<{ readonly linkedTenancyIds: readonly string[] }>;
 }
 
 export interface AccountingPeriod {

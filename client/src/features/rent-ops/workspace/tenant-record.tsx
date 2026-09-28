@@ -170,6 +170,15 @@ function SummaryTab({ tenant, snapshot, onChanged }: { tenant: TenantView; snaps
   const phoneDisplay = currentPhoneMethods(tenant.person);
   const balanceWarning = !summary.balance.complete;
   const review = balanceReviewDisplay(tenant.balanceReview);
+  const balance = tenantHeaderBalance(tenant.balanceReview, {
+    complete: summary.balance.complete,
+    amountCents: summary.balance.amountCents,
+    unknownLabel: summary.balance.complete ? undefined : reviewLabelForCodes(summary.balance.uncertaintyCodes),
+    unknownReason: summary.balance.complete ? undefined : reviewLabelsForCodes(summary.balance.uncertaintyCodes).join(" · "),
+    asOfDate: summary.asOfDate,
+    format: cents => formatMoney(cents),
+    balanceCents: summary.balance.balanceCents,
+  });
   return <div className="rm-tenant-tab-content">
     <div className="rm-summary-grid">
       <Panel title="General">
@@ -178,8 +187,7 @@ function SummaryTab({ tenant, snapshot, onChanged }: { tenant: TenantView; snaps
           <Field label="Property">{summary.propertyName}</Field>
           <Field label="Unit">{summary.unitLabel}</Field>
           <Field label="Status">{statusValue(summary.statusVerified ? summary.status : undefined, !summary.statusVerified)}</Field>
-          {review && <Field label={review.label} warning={Boolean(review.warning)}><strong className="rm-amount">{review.amount}</strong><small className="rm-muted">{review.date}</small>{review.warning && <small className="rm-warning-copy" role="status">{review.warning}</small>}{review.qualification && <small className="rm-muted rm-balance-note">{review.qualification}</small>}<small className="rm-muted rm-balance-note">{review.payerSplit}</small></Field>}
-          <Field label="Posted ledger balance" warning={balanceWarning}><span className={balanceWarning ? "rm-muted" : "rm-amount"}>{summary.balance.complete ? formatMoney(summary.balance.amountCents) : reviewLabelForCodes(summary.balance.uncertaintyCodes)}</span>{balanceWarning && summary.balance.uncertaintyCodes.length > 1 && <small className="rm-warning-copy">{reviewLabelsForCodes(summary.balance.uncertaintyCodes).join(" · ")}</small>}</Field>
+          <Field label="Balance" warning={!balance.amount}>{balance.amount ? <span className="rm-amount">{balance.amount}</span> : <span className="rm-muted">{balance.unknownLabel}</span>}{balance.detail && <small className="rm-muted">{balance.detail}</small>}{!balance.amount && balanceWarning && summary.balance.uncertaintyCodes.length > 1 && <small className="rm-warning-copy">{reviewLabelsForCodes(summary.balance.uncertaintyCodes).join(" · ")}</small>}{review?.qualification && <small className="rm-muted rm-balance-note">{review.qualification}</small>}{review && tenant.balanceReview?.agencyBalanceCents !== null && <small className="rm-muted rm-balance-note">{review.payerSplit}</small>}</Field>
           <Field label="As of date">{formatDate(summary.asOfDate)}</Field>
           {(tenant.meteredUtilities ?? []).map(utility => <Field key={`${utility.utility}:${utility.effectiveFrom}`} label="Water — metered"><span>Starts {formatDate(utility.effectiveFrom)}</span><small>Amount unknown · billed from meter readings</small></Field>)}
           {tenancy?.plannedMoveInOn && <Field label="Planned move-in">{formatDate(tenancy.plannedMoveInOn)}</Field>}
@@ -457,12 +465,12 @@ function HeaderBalance({ tenant, summary, onReconcile }: { tenant: TenantView; s
     unknownReason: summary.balance.complete ? undefined : reviewLabelsForCodes(summary.balance.uncertaintyCodes).join(" · "),
     asOfDate: summary.asOfDate,
     format: cents => formatMoney(cents),
+    balanceCents: summary.balance.balanceCents,
   });
   return <div className="rm-record-balance">
     <span className="rm-record-balance-label">{balance.label}</span>
     {balance.amount ? <strong className="rm-record-balance-amount">{balance.amount}</strong> : <NotVerified reason={balance.unknownReason}>{balance.unknownLabel}</NotVerified>}
     <small className="rm-record-balance-detail">{balance.detail}</small>
-    {balance.warning && <small className="rm-warning-copy" role="status">{balance.warning}</small>}
     {balance.ledgerDifference && <div className="rm-record-balance-diff">
       <span className="rm-status rm-status--warning" title={balance.ledgerDifference.explanation} aria-label={`${balance.ledgerDifference.label}. ${balance.ledgerDifference.explanation}`}>{balance.ledgerDifference.label}</span>
       <button type="button" className="rm-button rm-button--small" onClick={onReconcile} title={balance.ledgerDifference.explanation}>Reconcile</button>

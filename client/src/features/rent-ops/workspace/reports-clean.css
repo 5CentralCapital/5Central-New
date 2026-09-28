@@ -18,7 +18,10 @@
 .rm-clean-report .rm-report-toolbar > label { display: grid; gap: 5px; color: #66666a; font-size: 11px; font-weight: 500; }
 .rm-clean-report .rm-report-toolbar select, .rm-clean-report .rm-report-toolbar input:not([type="checkbox"]) { min-height: var(--ds-control, 32px); padding: 5px 8px; border: 1px solid transparent; border-radius: 6px; background-color: var(--ds-fill, rgb(58 50 38 / 5.5%)); color: #3A3A3C; font: inherit; font-size: 12px; }
 /* Active setup: chips for what the results reflect, and one toggle for the full form. */
-.rm-report-active-setup { display: grid; gap: 8px; padding: var(--rm-space-3, .75rem) 0 0; }
+.rm-report-active-setup { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 16px 0; }
+.rm-report-active-setup .ops-chips { flex: 1 1 360px; }
+.rm-report-active-setup .rm-report-setup-error { flex-basis: 100%; margin: 0; }
+.rm-clean-report .rm-report-active-setup .rm-report-results-toolbar { flex: 0 0 auto; margin-left: auto; padding: 0; }
 .rm-report-active-setup .ops-chips { min-width: 0; }
 .rm-clean-report .rm-report-filter-toggle { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 0 12px; border-radius: 999px; font-size: 12px; font-weight: 500; }
 .rm-clean-report .rm-report-active-setup + .rm-report-setup { margin-top: 12px; }

@@ -661,6 +661,8 @@ export interface AdminBalanceReviewView {
   agencyBalanceCents: number | null;
   qualifications: string[];
   stale: boolean;
+  /** Posted ledger balance on the review date; the balance rolls forward from it. */
+  postedAtReviewCents?: number | null;
 }
 
 export interface AdminMeteredUtilityView {

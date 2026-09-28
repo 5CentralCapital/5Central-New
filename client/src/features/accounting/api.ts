@@ -314,6 +314,11 @@ const api: AccountingApi = {
     if (status !== "linked" && status !== "already_linked") throw new AccountingApiError("The QuickBooks customer link could not be confirmed. Reload before trying again.", 0, "accounting_invalid_response");
     return { status };
   },
+  async autoLinkTenancyCustomers(organizationId, input, signal) {
+    const value = record(await requestJson(`${basePath(organizationId)}/receivables/tenancy-links/auto`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ environment: input.environment, ...(input.legalEntityId ? { legalEntityId: input.legalEntityId } : {}), ...(input.tenancyId ? { tenancyId: input.tenancyId } : {}) }), signal }));
+    const linked = Array.isArray(value.linked) ? value.linked.flatMap(item => item && typeof item === "object" && typeof (item as Record<string, unknown>).tenancyId === "string" ? [String((item as Record<string, unknown>).tenancyId)] : []) : [];
+    return { linkedTenancyIds: linked };
+  },
   async disconnect(organizationId, scope, signal) {
     const value = record(await requestJson(`${basePath(organizationId)}/disconnect`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ legalEntityId: scope.legalEntityId, realmId: scope.realmId }), signal }));
     if (value.status !== "disconnected") throw new AccountingApiError("QuickBooks did not confirm the disconnect. The connection was kept; try again.", 0, "accounting_disconnect_unconfirmed");

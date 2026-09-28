@@ -21,6 +21,7 @@ import type { QboProviderMirrorKind } from "./mirror-store";
 import { hashQuickBooksSessionBinding } from "./oauth-state";
 import { readCustomerLedger, resolveTenancyCustomer } from "./receivables-read";
 import { linkTenancyToQboCustomer } from "./receivables-links";
+import { autoLinkQboCustomers } from "./qbo-customer-auto-link";
 import { readQboCustomerPlan } from "./qbo-customer-plan-service";
 import { resolveTenancySource } from "./tenancy-source-resolution";
 
@@ -433,6 +434,20 @@ export function registerAccountingHttpRoutes(app: Express, options: AccountingHt
       return linkTenancyToQboCustomer(transaction, { scope: { provider: "qbo", organizationId, legalEntityId: body.legalEntityId, environment: body.environment, realmId: body.realmId }, tenancyId: body.tenancyId, customerObjectId: body.customerId });
     });
     response.status(result.status === "linked" ? 201 : 200).json(result);
+  }));
+  // Links tenancies whose QuickBooks customer matches on both name and address
+  // (unique in both directions). Only the local identity map changes.
+  app.post("/api/company/:organizationId/accounting/qbo/receivables/tenancy-links/auto", requireAdmin, companyReadHandler(async (request, response) => {
+    const organizationId = organizationIdSchema.parse(request.params.organizationId);
+    const body = z.object({ legalEntityId: legalEntityIdSchema.optional(), environment: environmentSchema, tenancyId: z.string().min(1).max(160).optional() }).strict().parse(request.body);
+    if (!executor.transaction) throw new AccountingError("accounting_configuration", "Accounting changes require a transactional company database");
+    const actorId = companyWebActor(request);
+    const result = await executor.transaction(async transaction => {
+      const principal = await loadAuthenticatedPrincipal(transaction, { actorId, organizationId, role: "admin" });
+      authorizeCompanyRead(principal, { organizationId, ...(body.legalEntityId ? { legalEntityId: body.legalEntityId } : {}) }, MUTATION_ROLES);
+      return autoLinkQboCustomers(transaction, { organizationId, environment: body.environment, ...(body.legalEntityId ? { legalEntityId: body.legalEntityId } : {}), ...(body.tenancyId ? { tenancyId: body.tenancyId } : {}) });
+    });
+    response.json(result);
   }));
   // Read-only QuickBooks customer plan: one proposed Customer per tenancy in
   // the owning entity's company. Nothing is written to QuickBooks.

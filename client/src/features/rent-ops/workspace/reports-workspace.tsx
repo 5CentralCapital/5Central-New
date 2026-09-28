@@ -288,6 +288,14 @@ function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTena
         <button type="button" className="rm-button rm-report-filter-toggle" aria-expanded={setupOpen} aria-controls={setupId} onClick={() => setSetupOpen(open => !open)}>{setupOpen ? <><ChevronUp size={14} aria-hidden="true" />Hide filters</> : <><Plus size={14} aria-hidden="true" />Filter</>}</button>
       </div>
       {autoRun && draftError && !setupOpen && <p className="rm-report-setup-error" role="alert">{draftError}</p>}
+      {applied && !dirty && <div className="rm-report-toolbar rm-report-results-toolbar" aria-label="Report actions">
+        {refreshing && <span className="rm-report-refreshing" role="status"><Loader2 className="rm-spin" size={14} aria-hidden="true" />Updating…</span>}
+        <div className="rm-report-toolbar-actions">
+          {optionalColumns.length > 0 && <details className="rm-report-columns"><summary><SlidersHorizontal size={14} />Columns</summary><div className="rm-report-column-options">{optionalColumns.map(column => <label key={column.key}><input type="checkbox" checked={extraColumnKeys.includes(column.key)} onChange={event => { const next = event.target.checked ? [...extraColumnKeys, column.key] : extraColumnKeys.filter(key => key !== column.key); changeColumns(next); }} />{column.label}</label>)}</div></details>}
+          <button className="rm-button" type="button" onClick={() => setExportFormat("csv")} disabled={!exportReady}><Download size={14} />Export CSV</button>
+          <button className="rm-button" type="button" onClick={() => setExportFormat("print")} disabled={!exportReady}><Printer size={14} />Print / PDF</button>
+        </div>
+      </div>}
     </div>
     {setupOpen && <ReportSetup id={setupId} report={selected} value={draft} directory={directory} allowAllScope={allowAllScope} hasAppliedRun={!!applied} autoApply={autoRun} onChange={changeDraft} onRun={runReport} />}
     {activeExportFormat && applied && !dirty && queryFilters && <ReportExportDialog report={selected} snapshot={reportSnapshot} queryFilters={queryFilters} format={activeExportFormat} onClose={() => setExportFormat(null)} localFilters={localFilters} search={search} extraColumns={extraColumnKeys} sort={sort} lockSelection />}
@@ -295,14 +303,6 @@ function ReportWorkspaceView({ snapshot, filters, selected, onSelect, onOpenTena
     {error && applied && <p className="rm-error" role="alert"><AlertCircle aria-hidden="true" />{error}</p>}
     {loading && !loadedRows && <div className="rm-empty" role="status"><Loader2 className="rm-spin" aria-hidden="true" />{emptyReportMessage(false)}</div>}
     {applied && !dirty && <div data-report-results="true" aria-busy={loading || undefined}>
-      <div className="rm-report-toolbar rm-report-results-toolbar" aria-label="Report actions">
-        {refreshing && <span className="rm-report-refreshing" role="status"><Loader2 className="rm-spin" size={14} aria-hidden="true" />Updating…</span>}
-        <div className="rm-report-toolbar-actions">
-          {optionalColumns.length > 0 && <details className="rm-report-columns"><summary><SlidersHorizontal size={14} />Columns</summary><div className="rm-report-column-options">{optionalColumns.map(column => <label key={column.key}><input type="checkbox" checked={extraColumnKeys.includes(column.key)} onChange={event => { const next = event.target.checked ? [...extraColumnKeys, column.key] : extraColumnKeys.filter(key => key !== column.key); changeColumns(next); }} />{column.label}</label>)}</div></details>}
-          <button className="rm-button" type="button" onClick={() => setExportFormat("csv")} disabled={!exportReady}><Download size={14} />Export CSV</button>
-          <button className="rm-button" type="button" onClick={() => setExportFormat("print")} disabled={!exportReady}><Printer size={14} />Print / PDF</button>
-        </div>
-      </div>
       {loadedRows && <div className={`rm-report-table-scroll${refreshing ? " is-refreshing" : ""}`}><table className="rm-table rm-grouped-report-table" aria-label={config.label}>
         <thead><tr>{activeColumns.map(column => <th key={column.key} className={column.align === "right" ? "rm-report-number" : undefined} aria-sort={sort.key === column.key ? sort.direction === "asc" ? "ascending" : "descending" : "none"}><button type="button" onClick={() => { const next = { key: column.key, direction: sort.key === column.key && sort.direction === "asc" ? "desc" as const : "asc" as const }; changeSort(next); }}>{column.label}{sort.key === column.key && (sort.direction === "asc" ? <ArrowUp size={12} /> : <ArrowDown size={12} />)}</button></th>)}</tr></thead>
         {groups.map(group => <tbody key={group.propertyId ?? group.label}>

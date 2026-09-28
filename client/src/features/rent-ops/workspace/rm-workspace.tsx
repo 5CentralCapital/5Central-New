@@ -49,6 +49,7 @@ import '../../../styles/ops-tokens.css';
 import '../../../styles/rops-system.css';
 import { TopNavigation, useWorkspaceAppearance } from './top-navigation';
 import { ScopeBar } from './scope-bar';
+import { OpenTabs, useOpenTabs } from './open-tabs';
 import { destinationRoute, workspaceDocumentTitle, workspacePageTitle, type WorkspaceDestination } from './navigation';
 import { WORKSPACE_VIEWS, investorTabForWorkspace, investorTabFromWorkspace, projectTabForWorkspace, projectTabFromWorkspace } from '../../workspaces/views';
 import { AccountingEntryWithView, CompanyDocumentsEntry, ForecastingEntry, IntakeResultsEntry, ReviewQueueEntry } from '../../workspaces/lane-mounts';
@@ -142,6 +143,13 @@ function AuthenticatedWorkspace(){
  const reportDirectory=reportDirectoryQuery.data?{properties:reportDirectoryQuery.data.snapshot.properties,units:reportDirectoryQuery.data.snapshot.units,people:reportDirectoryQuery.data.snapshot.people,tenancies:reportDirectoryQuery.data.snapshot.tenancies}:undefined;
  const snapshot=data.snapshot;
  useEffect(()=>{document.title=workspaceDocumentTitle(route);},[route]);
+ const openTabs=useOpenTabs(route,identity);
+ function tabLabel(record:WorkspaceRoute):string{
+  if(record.section==='tenants'&&record.recordId){const person=data.bootstrap.data?.tenantIndex.find(row=>row.person.id===record.recordId)?.person??snapshot?.snapshot.people.find(p=>p.id===record.recordId);const name=person?`${displayPersonName(person.firstName)} ${displayPersonName(person.lastName)}`.trim():'';return name||'Tenant';}
+  if(record.section==='properties'&&record.recordId){if(record.kind==='unit'){const unit=snapshot?.snapshot.units.find(u=>u.id===record.recordId);const property=unit?snapshot?.snapshot.properties.find(p=>p.id===unit.propertyId):undefined;return unit?`${property?.name?`${property.name} · `:''}${unit.unitNumber}`:'Unit';}return snapshot?.snapshot.properties.find(p=>p.id===record.recordId)?.name??'Property';}
+  if(record.section==='reports')return record.report==='occupancy'?'Availability':record.report==='rent-roll'?'Rent roll':REPORT_LABELS[record.report];
+  return workspacePageTitle(record);
+ }
  const reconcileRecordScope=useCallback((next:WorkspaceRoute)=>{setFilters(current=>workspaceFiltersForRecord(next,data.bootstrap.data,current));},[data.bootstrap.data]);
  const go=useCallback((next:WorkspaceRoute,replace=false)=>{
   const previous=navigationRef.current;pendingScroll.current=undefined;
@@ -267,6 +275,7 @@ function AuthenticatedWorkspace(){
   <TopNavigation route={route} onNavigate={navigate} transparency={transparency} onTransparency={changeTransparency} source={source} accountLabel={auth.user?.email??auth.user?.id} onLogout={()=>void rentOpsAuthClient.logout()}/>
   <div className="rm-body">
   <main className="rm-main" id="rops-content" tabIndex={-1} aria-labelledby={view.heading?'rops-page-title':undefined}>
+   <OpenTabs tabs={openTabs.tabs} active={route} labelFor={tabLabel} onActivate={activateRecord} onClose={openTabs.close}/>
    {view.heading&&<header className={`rm-page-heading rm-workspace-heading${view.filters?' has-scope':''}`}>{route.recordId&&window.history.state?.returnTo&&<button className="rm-button rm-button--icon" aria-label="Back to previous view" title="Back" onClick={()=>window.history.back()}><ChevronLeft size={17}/></button>}<h1 id="rops-page-title">{heading}</h1>
     {view.filters&&<ScopeBar filters={filters} properties={snapshot?scopeProperties(snapshot,filters):[]} onScope={changeScope} onDate={date=>setFilters(f=>pinWorkspaceDate(f,date))} onToday={()=>setFilters(f=>selectWorkspaceToday(f))}
      status={view.status?{value:view.status==='tenants'?tenantStatus:filters.status,options:statusOptions,onChange:value=>{if(view.status==='tenants')go({...route,tenantStatus:value as TenantDirectoryStatus,recordId:undefined},true);else setFilters(f=>({...f,status:value}));}}:undefined}

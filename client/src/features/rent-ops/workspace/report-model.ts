@@ -229,7 +229,7 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
         currency("baseRentCents", "Recurring rent"),
         currency("recurringFeesCents", "Other recurring"),
         currency("totalScheduledCents", "Monthly total"),
-        currency("operationalBalanceCents", "Balance due"),
+        currency("operationalBalanceCents", "Balance"),
         ...[
           text("propertyName", "Property", propertyName),
           status("occupancy", "Occupancy"),
@@ -238,8 +238,7 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
           text("futureTenantName", "Future tenant"),
           currency("marketRentCents", "Market rent"),
           currency("subsidyCents", "Subsidy"),
-          currency("balanceDueCents", "Posted ledger balance"),
-          text("reviewedOperationalBalance", "Reviewed operational balance", (row) => balanceReviewReportText("balanceReview" in row ? row.balanceReview : undefined)),
+          text("reviewedOperationalBalance", "Last balance review", (row) => balanceReviewReportText("balanceReview" in row ? row.balanceReview : undefined)),
         ].map(column => ({ ...column, curated: false })),
       ];
     case "occupancy":
@@ -291,12 +290,11 @@ function reportColumns(key: ReportKey): ReportColumnDefinition[] {
         withAbsent(text("unitNumber", "Unit", unitNumber), () => LINK_MISSING_LABEL),
         text("tenantName", "Tenant", tenantName),
         status("tenancyStatus", "Tenant status"),
-        currency("operationalBalanceCents", "Operational balance"),
-        currency("totalBalanceCents", "Posted ledger total"),
+        currency("operationalBalanceCents", "Balance"),
         ...[
-          currency("rentOnlyBalanceCents", "Posted rent balance"),
-          currency("nonRentBalanceCents", "Posted non-rent balance"),
-          text("reviewedOperationalBalance", "Reviewed operational balance", (row) => balanceReviewReportText("balanceReview" in row ? row.balanceReview : undefined)),
+          currency("rentOnlyBalanceCents", "Open rent charges"),
+          currency("nonRentBalanceCents", "Open other charges"),
+          text("reviewedOperationalBalance", "Last balance review", (row) => balanceReviewReportText("balanceReview" in row ? row.balanceReview : undefined)),
           currency("unappliedCashCents", "Unapplied cash"),
           withAbsent(date("oldestUnpaidRentOn", "Oldest unpaid rent"), overdueDateAbsentLabel),
           withAbsent(date("lastPaymentOn", "Last payment"), lastPaymentAbsentLabel),
@@ -459,12 +457,15 @@ function inferFormat(key: string, value: unknown): ReportColumn["format"] {
   return undefined;
 }
 
+/** Raw ledger totals that would read as a second balance next to the one "Balance" column. */
+const SUPERSEDED_BALANCE_KEYS = new Set(["balanceDueCents", "totalBalanceCents", "netAccountBalanceCents", "grossBalanceCents", "creditBalanceCents"]);
+
 function discoverSourceKeys(rows: readonly ReportRow[]): string[] {
   const keys = new Set<string>();
   for (const row of rows) {
     if (!isRecord(row)) continue;
     for (const key of Object.keys(row)) {
-      if (!isInternalIdKey(key) && key !== "balanceReview") keys.add(key);
+      if (!isInternalIdKey(key) && key !== "balanceReview" && !SUPERSEDED_BALANCE_KEYS.has(key)) keys.add(key);
     }
     const transaction = row.transaction;
     if (isRecord(transaction)) {

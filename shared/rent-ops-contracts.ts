@@ -979,6 +979,8 @@ export interface RentOpsBalanceReview {
 
 export interface RentOpsBalanceReviewView extends RentOpsBalanceReview {
   stale: boolean;
+  /** Posted ledger balance on the review's as-of date (null when unknown); the review rolls forward from it. */
+  postedAtReviewCents?: number | null;
 }
 
 export interface RentOpsActivityEvent {

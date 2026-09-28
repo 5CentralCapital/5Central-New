@@ -52,8 +52,30 @@ export function balanceReviewLedgerFingerprint(snapshot: RentOpsSnapshot, person
   return createHash("sha256").update(JSON.stringify({ledger, allocations})).digest("hex");
 }
 
-/** Manager routing only; never use this observation to bill or collect funds. */
-export function operationalBalanceCents(review: RentOpsBalanceReviewView | undefined, postedBalanceCents: number | null, postedComplete: boolean): number | null {
-  if (review) return review.stale ? null : review.reviewedBalanceCents;
+/**
+ * The one balance shown for an account. A review is an audited checkpoint:
+ * the reviewed amount is the balance on its as-of date, and posted ledger
+ * activity dated after that date rolls it forward. Ledger rows dated on or
+ * before the checkpoint never move the balance (they are reconciliation work,
+ * not a second balance). `postedAtReviewCents` is the posted ledger balance on
+ * the review date; without it only an unchanged ledger can reuse the review.
+ */
+export function operationalBalanceCents(review: RentOpsBalanceReviewView | undefined, postedBalanceCents: number | null, postedComplete: boolean, postedAtReviewCents?: number | null): number | null {
+  if (review) {
+    if (review.reviewedBalanceCents === null) return null;
+    const baseline = postedAtReviewCents ?? review.postedAtReviewCents;
+    if (postedComplete && postedBalanceCents !== null && typeof baseline === "number") {
+      return review.reviewedBalanceCents + (postedBalanceCents - baseline);
+    }
+    return review.stale ? null : review.reviewedBalanceCents;
+  }
   return postedComplete ? postedBalanceCents : null;
+}
+
+/** Attaches the posted ledger balance on the review's as-of date, so the review can be rolled forward. */
+export function withReviewBaseline(review: RentOpsBalanceReviewView | undefined, readPosted: (date: string) => { balanceComplete?: boolean; totalBalanceCents: number | null | undefined }): RentOpsBalanceReviewView | undefined {
+  if (!review) return review;
+  const posted = readPosted(review.asOfDate);
+  const known = posted.balanceComplete !== false && typeof posted.totalBalanceCents === "number" && Number.isSafeInteger(posted.totalBalanceCents);
+  return { ...review, postedAtReviewCents: known ? posted.totalBalanceCents as number : null };
 }
