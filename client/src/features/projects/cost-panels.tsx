@@ -8,7 +8,7 @@ import type { ProjectDetail, ProjectExecutionDetail } from "./types";
 import { formatLongDate, formatTableDate } from "../../lib/rent-ops-formatters";
 import { formatInputValue, formatMoney, formatQualifiedMoney, incurredLabel, paidLabel, parseMoneyInput, sumCents, sumCentsByCurrency } from "./money";
 
-function label(value: string): string { return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()); }
+function label(value: string): string { const words = value.replace(/_/g, " "); return words.charAt(0).toUpperCase() + words.slice(1); }
 /** Table dates: "Jun 1" this year, "Jun 1, 2025" otherwise. */
 function dateLabel(value: string | null | undefined): string { return formatTableDate(value) ?? "—"; }
 /** Field dates: "Sep 24, 2026". */

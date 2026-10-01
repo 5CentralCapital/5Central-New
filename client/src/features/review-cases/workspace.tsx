@@ -15,6 +15,7 @@ import {
 import { EntityLink, RecordLink } from "../rent-ops/workspace/entity-link";
 import { PendingEnvelopes } from "../work-orders/pending";
 import { parseMoneyInput } from "../projects/money";
+import { formatIsoDate } from "../workspaces/format";
 import { ReviewCaseApiError, reviewCaseEnvelope, reviewCasesApi, type ReviewCaseCommandEnvelope, type ReviewCasesApi } from "./api";
 import { CompanyGate, entityForProperty, useCompanyContext } from "./company-context";
 import {
@@ -105,10 +106,10 @@ function Field({ label, children, wide = false, help }: { label: string; childre
 type Save = (kind: ReviewCaseCommandKind, payload: Record<string, unknown>, expectedRevision?: number) => Promise<void>;
 
 const TEXT_DIALOGS: Record<"review_case.start_research" | "review_case.block" | "review_case.reopen" | "review_case.note", { title: string; label: string; field: string; required: boolean; submit: string }> = {
-  "review_case.start_research": { title: "Start Research", label: "Note (optional)", field: "note", required: false, submit: "Start Research" },
-  "review_case.block": { title: "Mark Blocked", label: "Missing fact", field: "missingFact", required: true, submit: "Mark Blocked" },
+  "review_case.start_research": { title: "Start research", label: "Note (optional)", field: "note", required: false, submit: "Start research" },
+  "review_case.block": { title: "Mark blocked", label: "Missing fact", field: "missingFact", required: true, submit: "Mark blocked" },
   "review_case.reopen": { title: "Reopen Case", label: "Reason", field: "reason", required: true, submit: "Reopen" },
-  "review_case.note": { title: "Add Note", label: "Note", field: "note", required: true, submit: "Add Note" },
+  "review_case.note": { title: "Add note", label: "Note", field: "note", required: true, submit: "Add note" },
 };
 
 function TextDialog({ detail, command, onClose, onSaved, save }: { detail: ReviewCaseDetail; command: keyof typeof TEXT_DIALOGS; onClose: () => void; onSaved: () => void; save: Save }) {
@@ -154,7 +155,7 @@ function EvidenceDialog({ detail, onClose, onSaved, save }: { detail: ReviewCase
       onSaved();
     } catch (saveError) { setError(saveError); } finally { setSaving(false); }
   };
-  return <Dialog title="Add Evidence" subtitle={detail.shortLabel} onClose={onClose} onSubmit={submit} saving={saving} submitLabel="Add Evidence">
+  return <Dialog title="Add evidence" subtitle={detail.shortLabel} onClose={onClose} onSubmit={submit} saving={saving} submitLabel="Add evidence">
     <Notice error={error} />
     <div className="rm-form-grid">
       <Field label="Type">
@@ -202,7 +203,7 @@ function ProposeDialog({ detail, onClose, onSaved, save }: { detail: ReviewCaseD
     try { await save("review_case.propose", { caseId: detail.id, correction }, detail.recordRevision); onSaved(); }
     catch (saveError) { setError(saveError); } finally { setSaving(false); }
   };
-  return <Dialog title="Propose Fix" subtitle={detail.shortLabel} onClose={onClose} onSubmit={submit} saving={saving} submitLabel="Propose Fix">
+  return <Dialog title="Propose fix" subtitle={detail.shortLabel} onClose={onClose} onSubmit={submit} saving={saving} submitLabel="Propose fix">
     <Notice error={error} />
     <fieldset className="rc-choice-group">
       <legend className="rm-field-label">Kind of fix</legend>
@@ -323,7 +324,7 @@ function Detail({ detail, onDialog, onBack }: { detail: ReviewCaseDetail; onDial
       <div className="rc-section-heading"><h3 id={`${headingId}-evidence`}>Evidence</h3><span className="rc-muted">{detail.evidence.length}</span></div>
       {detail.evidence.length ? <ul className="rc-evidence">{detail.evidence.map(item => <li key={item.id}>
         <span className="rc-evidence-kind">{evidenceKindLabel(item)}</span>
-        <div><strong>{item.origin === "detector" ? item.summary : item.reference}</strong>{item.origin !== "detector" && <p>{item.summary}</p>}<small>{[item.observedOn, item.count !== null && item.origin === "detector" ? `${item.count} record${item.count === 1 ? "" : "s"}` : null].filter(Boolean).join(" · ")}</small></div>
+        <div><strong>{item.origin === "detector" ? item.summary : item.reference}</strong>{item.origin !== "detector" && <p>{item.summary}</p>}<small>{[item.observedOn ? formatIsoDate(item.observedOn) : null, item.count !== null && item.origin === "detector" ? `${item.count} record${item.count === 1 ? "" : "s"}` : null].filter(Boolean).join(" · ")}</small></div>
       </li>)}</ul> : <p className="rc-muted rc-empty-line">No evidence yet.</p>}
     </section>
     <section className="rc-section" aria-labelledby={`${headingId}-records`}>
@@ -437,7 +438,7 @@ function ReviewQueue({ organizationId, legalEntityId, propertyId, api }: { organ
         <h1>Review queue</h1>
         <p className="rc-subtitle" aria-live="polite">{list.isLoading ? "Loading…" : total ? `${total.caseCount} case${total.caseCount === 1 ? "" : "s"} · ${total.affectedCount} affected record${total.affectedCount === 1 ? "" : "s"}${items.length ? ` · impact ${impact.label}` : ""}` : ""}</p>
       </div>
-      <button type="button" className="rm-button" onClick={() => void checkAgain()} disabled={checking}>{checking ? <LoaderCircle size={15} className="rc-spin" /> : <RefreshCw size={15} />}Check Again</button>
+      <button type="button" className="rm-button" onClick={() => void checkAgain()} disabled={checking}>{checking ? <LoaderCircle size={15} className="rc-spin" /> : <RefreshCw size={15} />}Check again</button>
     </header>
     <div className="rc-filters">
       <div className="rc-chips" role="group" aria-label="State">
@@ -462,7 +463,7 @@ function ReviewQueue({ organizationId, legalEntityId, propertyId, api }: { organ
       <section className="rm-record-list rc-list" aria-label="Review cases">
         {list.error ? <Notice error={list.error} onRetry={() => void list.refetch()} />
           : list.isLoading ? <div className="rc-state" role="status"><LoaderCircle size={16} className="rc-spin" /><p>Loading cases…</p></div>
-          : !items.length ? <div className="rc-state"><ClipboardCheck size={28} aria-hidden="true" /><h3>{view === "active" ? "Nothing to Review" : "No Cases"}</h3><p>{view === "active" ? "No open causes were detected in this scope." : "Nothing matches these filters."}</p>{view === "active" && <button type="button" className="rm-button" onClick={() => void checkAgain()} disabled={checking}>Check Again</button>}</div>
+          : !items.length ? <div className="rc-state"><ClipboardCheck size={28} aria-hidden="true" /><h3>{view === "active" ? "Nothing to review" : "No cases"}</h3><p>{view === "active" ? "No open causes were detected in this scope." : "Nothing matches these filters."}</p>{view === "active" && <button type="button" className="rm-button" onClick={() => void checkAgain()} disabled={checking}>Check again</button>}</div>
           : <div className="rc-groups">{groups.map(group => <div key={group.key} className="rc-group">
             <div className="rc-group-heading"><span className={materialityClass(group.materiality)}>{materialityLabel(group.materiality)}</span><strong>{familyLabel(group.family)}</strong><small>{group.caseCount} case{group.caseCount === 1 ? "" : "s"} · {group.affectedCount} record{group.affectedCount === 1 ? "" : "s"}</small></div>
             {group.items.map(item => <QueueRow key={item.id} item={item} active={item.id === selectedId} onSelect={() => setSelectedId(item.id)} />)}

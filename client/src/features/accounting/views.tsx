@@ -6,6 +6,8 @@ import { summarizeAmounts } from "./list-totals";
 import type { AccountingApi, AccountingCommandEnvelope, AccountingConnection, AccountingEnvironment, AccountingPeriod, AccountingScope, AccountingView } from "./types";
 import { AccountingApiError } from "./api";
 import { StatusLine } from "../rent-ops/workspace/ops-ui";
+import { RecordLink } from "../rent-ops/workspace/entity-link";
+import { useUnitLabel } from "../rent-ops/workspace/unit-labels";
 import { formatRelativeTime } from "../../lib/rent-ops-formatters";
 
 const RmBanking = lazy(() => import("../rent-ops/workspace/rm-banking").then(module => ({ default: module.RmBanking })));
@@ -318,6 +320,7 @@ export function SettlementDetail({ api, organizationId, legalEntityId, settlemen
   const [bankDate, setBankDate] = useState("");
   const [reason, setReason] = useState("");
   const formId = useId();
+  const unitLabel = useUnitLabel();
   useEffect(() => { setMode("none"); command.clearError(); }, [settlementId]); // eslint-disable-line react-hooks/exhaustive-deps
   if (detail.isLoading) return <Loading label="Loading statement…" />;
   if (detail.error || !detail.data) return <ErrorState error={detail.error} retry={() => void detail.refetch()} />;
@@ -360,7 +363,7 @@ export function SettlementDetail({ api, organizationId, legalEntityId, settlemen
       <h3 className="accounting-subhead">Statement lines</h3>
       <div className="accounting-table-wrap"><table className="accounting-table" aria-label="Statement lines">
         <thead><tr><th>Line</th><th>Kind</th><th>Description</th><th>Unit</th><th>Date</th><th className="is-number">Amount</th></tr></thead>
-        <tbody>{item.lines.map(line => <tr key={line.lineNumber}><td>{line.lineNumber}{line.sourcePage ? <span className="accounting-meta"> · p.{line.sourcePage}</span> : null}</td><td>{KIND_LABEL[line.kind] ?? line.kind}</td><td>{line.description}</td><td>{line.unitId ?? "—"}</td><td>{dateLabel(line.occurredOn)}</td><td className="is-number">{formatCents(line.amountCents, item.currency)}</td></tr>)}</tbody>
+        <tbody>{item.lines.map(line => <tr key={line.lineNumber}><td>{line.lineNumber}{line.sourcePage ? <span className="accounting-meta"> · p.{line.sourcePage}</span> : null}</td><td>{KIND_LABEL[line.kind] ?? line.kind}</td><td>{line.description}</td><td>{line.unitId ? <RecordLink kind="unit" recordId={line.unitId}>{unitLabel(line.unitId) ?? "View unit"}</RecordLink> : "—"}</td><td>{dateLabel(line.occurredOn)}</td><td className="is-number">{formatCents(line.amountCents, item.currency)}</td></tr>)}</tbody>
         <tfoot aria-label="Statement line totals by kind">{lineTotals.map(({ kind, total }) => total && <tr key={kind} className="is-total"><th scope="row" colSpan={5}>{KIND_LABEL[kind] ?? kind} total<span className="accounting-meta"> · {item.currency}</span></th><td className="is-number">{formatCents(total.totalCents, item.currency)}</td></tr>)}</tfoot>
       </table></div>
     </section>

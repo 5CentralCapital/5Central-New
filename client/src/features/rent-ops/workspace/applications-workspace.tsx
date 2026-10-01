@@ -308,7 +308,7 @@ export function ApplicationsWorkspace({ snapshot, filters, onChanged, onEdit }: 
       return personId ? <EntityLink personId={personId}>{row.name}</EntityLink> : <button type="button" className="rm-apps-name" disabled={!row.application.id} onClick={() => row.application.id && setSelectedApplicationId(row.application.id)}>{row.name}</button>;
     }, sortValue: (row) => row.name },
     { key: "submittedOn", label: "Submitted", render: (row) => knownDate(row.submittedOn, row.application.submittedOn ? row.application.submittedOnKnowledge : "unknown"), sortValue: (row) => row.submittedOn ?? "" },
-    { key: "status", label: "Status", render: (row) => <span className="rm-apps-status"><span className={statusClass(row.status, row.application.statusKnowledge)}>{displayStatus(row.application)}</span>{row.application.convertedTenancyId && <span className="rm-muted">Converted</span>}</span>, sortValue: (row) => row.status ?? "" },
+    { key: "status", label: "Status", render: (row) => <span className="rm-apps-status"><span className={statusClass(row.status, row.application.statusKnowledge)}>{displayStatus(row.application)}</span>{row.application.convertedTenancyId && row.status !== "converted" && <span className="rm-muted">Converted</span>}</span>, sortValue: (row) => row.status ?? "" },
     { key: "property", label: "Property", render: (row) => row.property, sortValue: (row) => row.property },
     { key: "unit", label: "Unit", render: (row) => row.unit || <span className="rm-muted">Unassigned</span>, sortValue: (row) => row.unit },
     { key: "contact", label: "Contact", render: (row) => <ContactCell application={row.application} />, sortValue: (row) => `${row.application.email ?? ""} ${row.application.phone ?? ""}` },
@@ -316,7 +316,7 @@ export function ApplicationsWorkspace({ snapshot, filters, onChanged, onEdit }: 
   ], [busy, onChanged, onEdit, snapshot]);
 
   return <section className="rm-panel rm-leasing-workspace rm-apps-workspace" aria-labelledby="rm-applications-title">
-    <header className="rm-apps-heading"><h2 id="rm-applications-title">Applications</h2><span className="rm-muted">{visibleApplications.length} {visibleApplications.length === 1 ? "application" : "applications"}</span></header>
+    <header className="rm-apps-heading sr-only"><h2 id="rm-applications-title">Applications</h2><span className="rm-muted">{visibleApplications.length} {visibleApplications.length === 1 ? "application" : "applications"}</span></header>
     {error && <div className="rm-error" role="alert"><AlertCircle aria-hidden="true" />{error}<button type="button" className="rm-button" onClick={() => setError(undefined)}>Dismiss</button></div>}
     <ApplicationFilterRow snapshot={snapshot} filters={filterState} propertyIds={propertyIds} group={group} counts={groupCounts} onChange={setFilterState} onGroup={setGroup} />
     <DataGrid<ApplicationGridRow> rows={rows} columns={columns} getRowKey={(row, index) => row.recordKey || applicationRecordKey(row.application, index)} onRow={(row) => { if (row.application.id) setSelectedApplicationId(row.application.id); }} pageSize={25} emptyMessage="No applications match these filters." caption="Application register" summaryLabel="application" initialSort={{ key: "submittedOn", direction: "desc" }} storageKey="rm-applications" />

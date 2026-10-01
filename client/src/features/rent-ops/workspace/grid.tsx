@@ -264,7 +264,7 @@ export function DataGrid<T extends object>({
 
       <div className="rm-table-wrap">
         <table className="rm-table">
-          {caption && <caption>{caption}</caption>}
+          {caption && <caption className="sr-only">{caption}</caption>}
           <thead>
             <tr>
               {visibleColumns.map((column) => {

@@ -149,6 +149,8 @@ export function WaterfallChart({ title, openingCents, closingCents, steps, onSel
   bars.push({ key: "closing", label: "Closing", from: 0, to: chartDollars(closingCents), kind: "total", clickable: false });
   const scale = niceScale(bars.flatMap(bar => [bar.from, bar.to]), TOP, BOTTOM);
   const slot = (w - LEFT - 24) / bars.length;
+  // About 6.5px per character at the axis font size; never shorter than the old 11-character cut.
+  const maxLabel = Math.max(11, Math.floor((slot - 8) / 6.5));
   return <figure ref={figureRef as React.RefObject<HTMLElement>} className="fc-chart" aria-labelledby={titleId}>
     <figcaption id={titleId} className="fc-chart-title">{title}</figcaption>
     <svg viewBox={`0 0 ${w} ${HEIGHT + 24}`} role="img" aria-label={`${title}. Values are listed beside the chart.`}>
@@ -161,7 +163,7 @@ export function WaterfallChart({ title, openingCents, closingCents, steps, onSel
         return <g key={bar.key} className={`fc-bar fc-bar--${bar.kind}`}>
           <rect x={left} y={top} width={slot * 0.64} height={height} rx={2}
             {...(handler ? { role: "button", tabIndex: 0, "aria-label": `${bar.label}: show contributing events`, onClick: handler, onKeyDown: activate(handler), className: "fc-bar-hit" } : {})} />
-          <text className="fc-axis-label" x={left + slot * 0.32} y={BOTTOM + 18} textAnchor="middle" aria-hidden="true">{bar.label.length > 11 ? `${bar.label.slice(0, 10)}…` : bar.label}</text>
+          <text className="fc-axis-label" x={left + slot * 0.32} y={BOTTOM + 18} textAnchor="middle" aria-hidden="true">{bar.label.length > maxLabel ? `${bar.label.slice(0, maxLabel - 1)}…` : bar.label}</text>
         </g>;
       })}
     </svg>

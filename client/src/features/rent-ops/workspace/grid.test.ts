@@ -22,8 +22,8 @@ test("money display preserves zero and marks unknown cents", () => {
 test("date and label display values are readable and deterministic", () => {
   assert.equal(formatDate("2026-01-05"), "Jan 5, 2026");
   assert.equal(formatDate(undefined), "Unverified");
-  assert.equal(formatLabel("future_preleased"), "Future Preleased");
-  assert.equal(formatLabel("monthToMonth"), "Month To Month");
+  assert.equal(formatLabel("future_preleased"), "Future preleased");
+  assert.equal(formatLabel("monthToMonth"), "Month to month");
 });
 
 test("grid sorting is numeric, stable, and leaves unknown values last", () => {

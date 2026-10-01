@@ -102,7 +102,8 @@ export function formatLabel(value: unknown): string {
     .replace(/[\s_-]+/g, " ")
     .trim();
 
-  return normalized ? normalized.split(" ").map(titleWord).join(" ") : UNVERIFIED_LABEL;
+  // Sentence case, like every other label in the app ("Month to month", "Off market").
+  return normalized ? normalized.split(" ").map((word, index) => index === 0 ? titleWord(word) : word === word.toUpperCase() && word.length > 1 ? word : word.toLowerCase()).join(" ") : UNVERIFIED_LABEL;
 }
 
 /** Short, specific review status for uncertainty codes (for example "Lease missing"). */

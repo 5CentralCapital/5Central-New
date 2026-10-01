@@ -190,7 +190,7 @@ export function ReportSetup({ entry, organization, onRun, running, initialReques
     </div>
     {general.length > 0 && <div className="reporting-error" role="alert">{general.map(error => <p key={`${error.field}:${error.message}`}>{error.message}</p>)}</div>}
     <div className="reporting-setup-actions">
-      <button className="reporting-primary" type="submit" disabled={running}>{running ? "Running…" : "Run Report"}</button>
+      <button className="reporting-primary" type="submit" disabled={running}>{running ? "Running…" : "Run report"}</button>
       <button className="reporting-quiet-button" type="button" onClick={reset} disabled={running}>Reset</button>
     </div>
   </form>;

@@ -20,3 +20,9 @@ test("a section landing becomes the record it opens", () => {
   tabs = nextOpenTabs(tabs, route("tenants", "a"));
   assert.deepEqual(keys(tabs), keys([route("dashboard"), route("tenants", "a")]));
 });
+
+test("a company landing opened before its company resolved becomes the record, not a second tab", () => {
+  let tabs = nextOpenTabs([], route("work-orders"));
+  tabs = nextOpenTabs(tabs, route("work-orders", "wo-1", { organizationId: "org-1" }));
+  assert.deepEqual(keys(tabs), keys([route("work-orders", "wo-1", { organizationId: "org-1" })]));
+});

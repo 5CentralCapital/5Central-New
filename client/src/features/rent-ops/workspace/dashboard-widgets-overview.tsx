@@ -637,7 +637,7 @@ function Gantt({ data, metrics }: WidgetContext) {
   const rows = [...open].sort((a, b) => (milestones(a, deals.byId.get(a.id)).target ?? "9999").localeCompare(milestones(b, deals.byId.get(b.id)).target ?? "9999")).slice(0, Math.max(1, Math.floor((metrics.bodyHeight - 60) / rowHeight)));
   const hidden = open.length - rows.length;
   return <div className="mk-gt" style={{ ["--gl" as string]: `${Math.min(190, Math.max(110, metrics.bodyWidth * 0.16))}px` }}>
-    <div className="mk-gt-axis">{months.filter((_, index) => index % labelEvery === 0).map(month => <span key={month} style={{ left: `${x(`${month}-01`)}%` }}>{monthShort(month)}{month.endsWith("-01") ? ` ’${month.slice(2, 4)}` : ""}</span>)}<b className="mk-gt-today" style={{ left: `${x(asOf)}%`, height: 22 + rows.length * rowHeight }}><span>Today</span></b></div>
+    <div className="mk-gt-axis">{months.filter((month, index) => index % labelEvery === 0 && Math.abs(x(`${month}-01`) - x(asOf)) * metrics.bodyWidth / 100 > 48).map(month => <span key={month} style={{ left: `${x(`${month}-01`)}%` }}>{monthShort(month)}{month.endsWith("-01") ? ` ’${month.slice(2, 4)}` : ""}</span>)}<b className="mk-gt-today" style={{ left: `${x(asOf)}%`, height: 22 + rows.length * rowHeight }}><span>Today</span></b></div>
     {rows.map(project => {
       const m = milestones(project, deals.byId.get(project.id));
       const deal = deals.byId.get(project.id);

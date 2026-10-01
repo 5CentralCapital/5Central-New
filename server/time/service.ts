@@ -98,7 +98,7 @@ function createScopedTimeReadPort(executor: RentOpsQueryExecutor, store: TimeSto
     listEmployeeMappings: (principal, scope) => inReadTransaction(principal, scope, transactionStore => transactionStore.listEmployeeMappings(scope)),
     listJobcodeMappings: (principal, scope) => inReadTransaction(principal, scope, transactionStore => transactionStore.listJobcodeMappings(scope)),
     readCoverage: (principal, scope) => inReadTransaction(principal, scope, transactionStore => transactionStore.readCoverage(scope)),
-    listConnections: (principal, scope) => inReadTransaction(principal, scope, transactionStore => transactionStore.listConnections(scope)),
+    listConnections: (principal, scope) => inReadTransaction(principal, { organizationId: scope.organizationId, legalEntityId: scope.legalEntityId }, transactionStore => transactionStore.listConnections(scope)),
     listPayrollLinks: (principal, scope) => inReadTransaction(principal, scope, transactionStore => listPayrollLinks(transactionStore.executorForRead(), scope)),
     projectLabor: (principal, input) => inReadTransaction(principal, input.scope, async transactionStore => {
       const reader = transactionStore.executorForRead();

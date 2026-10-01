@@ -35,7 +35,9 @@ function writeStored(identity: string, tabs: readonly WorkspaceRoute[]) {
 export function nextOpenTabs(tabs: readonly WorkspaceRoute[], route: WorkspaceRoute): WorkspaceRoute[] {
   const key = openTabKey(route);
   // Opening a record turns that section's list landing into the record's tab.
-  const isLanding = (tab: WorkspaceRoute) => Boolean(route.recordId) && !tab.recordId && openTabKey({ ...tab, recordId: undefined }) === openTabKey({ ...route, recordId: undefined });
+  // A landing opened before its company resolved has no organizationId; it is still the same section's landing.
+  const landingKey = (tab: WorkspaceRoute, organizationId: string | undefined) => openTabKey({ ...tab, recordId: undefined, organizationId });
+  const isLanding = (tab: WorkspaceRoute) => Boolean(route.recordId) && !tab.recordId && landingKey(tab, tab.organizationId) === landingKey(route, tab.organizationId ? route.organizationId : undefined);
   const landing = tabs.findIndex(isLanding);
   const base = landing >= 0 ? tabs.filter((tab, index) => index === landing || !isLanding(tab)) : tabs;
   const existing = base.findIndex(tab => openTabKey(tab) === key);
