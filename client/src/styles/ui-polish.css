@@ -6,7 +6,7 @@
 
 /* Data grids: the Columns picker sat in its own 46px row with a 20px gap above
    it, leaving a hole between the filters and every table. Keep it compact. */
-.rm-workspace.rops-modern .rm-data-grid > .rm-grid-toolbar { padding: 0 2px 4px; }
+.rm-workspace.rops-modern .rm-data-grid:not([aria-label="Units at this property"]) > .rm-grid-toolbar { padding: 0 2px 4px; }
 .rm-workspace.rops-modern .rm-grid-columns > summary.rm-button { min-height: 28px; padding: 0 8px; font-size: 12px; font-weight: 500; }
 
 /* Buttons rendered as links (Renew on Leases & renewals) inherited the table
@@ -77,8 +77,7 @@
 
 /* Properties › Units table: unit numbers and layouts wrapped mid-word on phones
    ("B-" / "201", "studi" / "o"). */
-.rm-workspace.rops-modern .rm-property-unit-records .rm-table td:first-child,
-.rm-workspace.rops-modern .rm-property-unit-records .rm-table td { white-space: nowrap; }
+.rm-workspace.rops-modern .rm-property-unit-records .rm-data-grid[aria-label="Units at this property"] .rm-table td { white-space: nowrap; }
 @media (max-width: 650px) {
   /* The floating Columns button covered the last headers on phones; give it its own line there. */
   .rm-workspace.rops-modern .rm-property-unit-records .rm-data-grid > .rm-toolbar { position: static; display: flex; justify-content: flex-end; padding: 0 0 4px; }

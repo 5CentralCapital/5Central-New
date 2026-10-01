@@ -154,7 +154,7 @@ Task reports read project task records; the work-orders report reads the company
 | `tasks-performance` | Tasks performance | Team/staff/property/task type; range | Assigned/completed counts, overdue counts, completion/cycle times, reopened work and explicit denominator/attribution; underlying tasks. |
 | `vendor-details` | Vendor details | Vendor/entity/property; as-of, activity range optional | Contact, service category, authorized custom fields, approved compliance state, linked work and posted spend with separate open commitments; vendor/work/bill records. |
 | `work-orders` | Work orders | Property/unit/vendor/assignee/work-order type/status; as-of or declared activity range | Issue, status, priority, requested/scheduled/completed dates, linked tasks, costs and chargebacks; work-order record and financial links. |
-| `work-sessions` | Work Sessions | Staff/task/work-order/property; range | Staff time-entry ID, start/end, duration, approval and linked task/work order; time-entry history. Duration is not payroll cost; payroll costing requires a separate authorized rate/source. |
+| `work-sessions` | Work sessions | Staff/task/work-order/property; range | Staff time-entry ID, start/end, duration, approval and linked task/work order; time-entry history. Duration is not payroll cost; payroll costing requires a separate authorized rate/source. |
 
 ### Additional existing-plan coverage
 
