@@ -48,7 +48,7 @@ export function dateSummary(filters: ViewFilters): string {
   return filters.asOfMode === "today" ? `${label} · Today` : label;
 }
 
-export function ScopeBar({ filters, properties, onScope, onDate, onToday, status, searchPlaceholder = "Search tenants, units, properties", onSearch, onRefresh, refreshing = false, updatedAt, showDashboardOptions = false }: {
+export function ScopeBar({ filters, properties, onScope, onDate, onToday, status, searchPlaceholder = "Search", onSearch, onRefresh, refreshing = false, updatedAt, showDashboardOptions = false }: {
   filters: ViewFilters;
   properties: readonly PropertyOption[];
   onScope: (changes: Scope) => void;

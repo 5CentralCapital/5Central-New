@@ -67,6 +67,15 @@ interface ActivityGridRow extends Record<string, unknown> {
   linkedPerson?:{id:string;name:string};
 }
 
+
+/** Stored codes such as "housing_assistance" read as "Housing assistance"; unknown and unverified stay as is. */
+function sentenceFact(value: unknown, knowledge?: string): string {
+  const fact = leasingFact(value, knowledge);
+  if (!leasingFactResolved(value, knowledge)) return fact;
+  const words = fact.replace(/[_-]+/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 function normalized(value: unknown): string {
   return String(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_");
 }
@@ -219,15 +228,15 @@ export function DocumentsWorkspace({ snapshot, filters, onEdit, onChanged: _onCh
   const documentColumns = useMemo<GridColumn<DocumentGridRow>[]>(() => [
     { key: "fileName", label: "Document", width: "18rem", render: (row) => <span className="rm-leasing-record-link"><FileText aria-hidden="true" />{row.fileName}</span>, sortValue: (row) => row.fileName },
     { key: "date", label: "Record date", render: (row) => knownDate(row.date, row.document.uploadedAt || row.document.verifiedAt ? undefined : "unknown"), sortValue: (row) => row.date ?? "" },
-    { key: "type", label: "Type", render: (row) => <span className={statusClass(row.type)}>{leasingFact(row.type, row.document.type ? undefined : "unknown")}</span>, sortValue: (row) => row.type ?? "" },
-    { key: "state", label: "State", render: (row) => <span className={statusClass(row.state)}>{leasingFact(row.state, row.document.state ? undefined : "unknown")}</span>, sortValue: (row) => row.state ?? "" },
+    { key: "type", label: "Type", render: (row) => <span className={statusClass(row.type)}>{sentenceFact(row.type, row.document.type ? undefined : "unknown")}</span>, sortValue: (row) => row.type ?? "" },
+    { key: "state", label: "State", render: (row) => <span className={statusClass(row.state)}>{sentenceFact(row.state, row.document.state ? undefined : "unknown")}</span>, sortValue: (row) => row.state ?? "" },
     { key: "linked", label: "Linked record", render: (row) => <span className="rm-leasing-linked">{row.linkedPerson&&row.linked.startsWith(row.linkedPerson.name)?<><EntityLink personId={row.linkedPerson.id}>{row.linkedPerson.name}</EntityLink>{row.linked.slice(row.linkedPerson.name.length)}</>:row.linked}</span>, sortValue: (row) => row.linked },
     { key: "availability", label: "File status", render: (row) => <span className="rm-leasing-availability">{row.availability}</span>, sortValue: (row) => row.availability },
     { key: "action", label: "Action", render: (row) => <DownloadCell document={row.document} onError={setError} /> },
   ], []);
   const activityColumns = useMemo<GridColumn<ActivityGridRow>[]>(() => [
     { key: "date", label: "Date", render: (row) => knownDate(row.date, row.activity.occurredAt ? row.activity.occurredAtKnowledge : "unknown"), sortValue: (row) => row.date ?? "" },
-    { key: "type", label: "Type", render: (row) => <span className={statusClass(row.type)}>{leasingFact(row.type, row.activity.type ? row.activity.typeKnowledge : "unknown")}</span>, sortValue: (row) => row.type ?? "" },
+    { key: "type", label: "Type", render: (row) => <span className={statusClass(row.type)}>{sentenceFact(row.type, row.activity.type ? row.activity.typeKnowledge : "unknown")}</span>, sortValue: (row) => row.type ?? "" },
     { key: "summary", label: "Activity", width: "22rem", render: (row) => <div><span className="rm-leasing-activity-summary"><Activity aria-hidden="true" />{row.summary}</span>{row.activity.detail && <details><summary>View details</summary><p style={{ whiteSpace: "pre-wrap" }}>{row.activity.detail}</p></details>}</div>, sortValue: (row) => row.summary },
     { key: "actor", label: "Actor", render: (row) => row.actor, sortValue: (row) => row.actor },
     { key: "linked", label: "Linked record", render: (row) => <span className="rm-leasing-linked">{row.linkedPerson&&row.linked.startsWith(row.linkedPerson.name)?<><EntityLink personId={row.linkedPerson.id}>{row.linkedPerson.name}</EntityLink>{row.linked.slice(row.linkedPerson.name.length)}</>:row.linked}</span>, sortValue: (row) => row.linked },

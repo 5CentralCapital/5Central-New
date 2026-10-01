@@ -71,7 +71,7 @@ const STATUS_LABELS: Record<ProjectStatus, string> = { planning: "Planning", act
 const TYPE_LABELS: Record<ProjectType, string> = { flip: "Flip", unit_turn: "Unit turn", rehab: "Rehab", common_area: "Common area", stabilization: "Stabilization", administrative: "Administrative" };
 const TASK_STATUS_LABELS: Record<ProjectTaskStatus, string> = { not_started: "Not started", in_progress: "In progress", blocked: "Blocked", completed: "Completed", cancelled: "Cancelled" };
 
-function labelFor(value: string | null | undefined): string { return value ? value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) : "—"; }
+function labelFor(value: string | null | undefined): string { if (!value) return "—"; const words = value.replace(/_/g, " "); return words.charAt(0).toUpperCase() + words.slice(1); }
 /** Field dates: "Sep 24, 2026". */
 function dateLabel(value: string | null | undefined): string { return formatLongDate(value) ?? "—"; }
 /** Table dates: "Jun 1" this year, "Jun 1, 2025" otherwise. */

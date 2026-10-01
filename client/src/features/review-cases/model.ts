@@ -106,15 +106,15 @@ export function groupQueue(items: readonly ReviewCaseSummary[], counts?: readonl
 }
 
 export const COMMAND_LABELS: Readonly<Record<ReviewCaseCommandKind, string>> = Object.freeze({
-  "review_case.detect": "Check Again",
-  "review_case.start_research": "Start Research",
-  "review_case.add_evidence": "Add Evidence",
-  "review_case.propose": "Propose Fix",
-  "review_case.block": "Mark Blocked",
+  "review_case.detect": "Check again",
+  "review_case.start_research": "Start research",
+  "review_case.add_evidence": "Add evidence",
+  "review_case.propose": "Propose fix",
+  "review_case.block": "Mark blocked",
   "review_case.apply": "Apply Fix",
   "review_case.verify": "Verify",
   "review_case.reopen": "Reopen",
-  "review_case.note": "Add Note",
+  "review_case.note": "Add note",
 });
 
 /** The one primary (filled) action for a case in this state, if any. */

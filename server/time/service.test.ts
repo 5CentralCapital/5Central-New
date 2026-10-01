@@ -106,6 +106,11 @@ test("transaction-bound Time reads reload active grants without opening a nested
     const principal = await loadAuthenticatedPrincipal(runtime, { actorId: SYNTHETIC_COMPANY.actorId, organizationId: SYNTHETIC_COMPANY.organizationId, role: "admin" });
     const first = await runtime.transaction!(transaction => createTransactionBoundTimeReadPort(transaction).listConnections(principal, connectionScope));
     assert.deepEqual(first, []);
+    // The HTTP route always passes an environment (often undefined); the scope check must not reject it.
+    const filtered = await runtime.transaction!(transaction => createTransactionBoundTimeReadPort(transaction).listConnections(principal, { ...connectionScope, environment: undefined }));
+    assert.deepEqual(filtered, []);
+    const production = await runtime.transaction!(transaction => createTransactionBoundTimeReadPort(transaction).listConnections(principal, { ...connectionScope, environment: "production" }));
+    assert.deepEqual(production, []);
 
     // The principal object is intentionally stale. A new active transaction
     // must observe the revocation before the read is allowed to proceed.

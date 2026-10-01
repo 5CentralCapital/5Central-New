@@ -22,7 +22,7 @@ test("K1: empty or omitted review-code lists read None; real codes stay visible;
   const omitted = cells("scheduled-vs-collected", { propertyId: "p1", propertyName: "Synthetic", month: "2026-09", scheduledCents: 1000, collectedCents: 1000, varianceCents: 0, complete: true });
   assert.equal(omitted["Review flags"], "None");
   const flagged = cells("scheduled-vs-collected", { propertyId: "p1", propertyName: "Synthetic", month: "2026-09", scheduledCents: 1000, collectedCents: 0, varianceCents: null, complete: false, uncertaintyCodes: ["schedule_person_assignment_ambiguous"] });
-  assert.equal(flagged["Review flags"], "Schedule Person Assignment Ambiguous");
+  assert.equal(flagged["Review flags"], "Schedule person assignment ambiguous");
   assert.equal(flagged.Variance, "Unknown");
   // A discovered code column (for example on HAP rows) also treats absence as none.
   const hap = createReportViewModel("hap", [{ propertyId: "p1", agencyObligationCents: 100, uncertaintyCodes: undefined } as ReportRow, { propertyId: "p1", uncertaintyCodes: ["subsidy_payment_amount_unknown"] } as ReportRow]);
@@ -51,7 +51,7 @@ test("K3: inapplicable delinquency fields say what is true instead of an uncerta
   assert.equal(overdueDateAbsentLabel({ rentOnlyBalanceCents: 5000 } as ReportRow), "Date missing");
   const dated = cells("delinquency", { propertyId: "p1", unitNumber: "1", rentOnlyBalanceCents: 5000, oldestUnpaidRentOn: "2026-08-01", noticeStatus: "notice_given" });
   assert.notEqual(dated["Oldest unpaid rent"], "Not overdue");
-  assert.equal(dated["Notice status"], "Notice Given");
+  assert.equal(dated["Notice status"], "Notice given");
 });
 
 test("K6: a known deposit amount stays visible when only its date is unverified; the three facts are separate", () => {

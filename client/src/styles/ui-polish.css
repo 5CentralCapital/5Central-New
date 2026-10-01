@@ -1,0 +1,111 @@
+/*
+ * UI polish pass (Sept 30, 2026 audit). Loaded last in the manager shell so
+ * these small fixes win over the older per-feature sheets without rewriting
+ * them. Each block names the screen it fixes.
+ */
+
+/* Data grids: the Columns picker sat in its own 46px row with a 20px gap above
+   it, leaving a hole between the filters and every table. Keep it compact. */
+.rm-workspace.rops-modern .rm-data-grid:not([aria-label="Units at this property"]) > .rm-grid-toolbar { padding: 0 2px 4px; }
+.rm-workspace.rops-modern .rm-grid-columns > summary.rm-button { min-height: 28px; padding: 0 8px; font-size: 12px; font-weight: 500; }
+
+/* Buttons rendered as links (Renew on Leases & renewals) inherited the table
+   link underline. A button never underlines. */
+.rm-workspace.rops-modern .rm-table td a.rm-button,
+.rm-workspace.rops-modern a.rm-button { text-decoration: none; }
+.rm-workspace.rops-modern .rm-table td a.rm-button { font-weight: 500; color: var(--ds-ink); }
+
+/* Tenant › Summary › Contact: "Edit phone numbers" is a quiet link, not an
+   indented grey pill with underlined text. */
+.rm-workspace.rops-modern .rm-contact-phone-edit .ro-phone-editor { padding: 0; }
+.rm-workspace.rops-modern .rm-contact-phone-edit .ro-phone-editor > button.secondary {
+  min-height: 0; margin-top: 10px; padding: 0; border: 0; background: transparent;
+  color: var(--ds-ink-2); font: 500 13px/18px var(--ds-font);
+  text-decoration: underline; text-decoration-color: var(--ds-hairline-strong); text-underline-offset: 3px;
+}
+.rm-workspace.rops-modern .rm-contact-phone-edit .ro-phone-editor > button.secondary:hover { color: var(--ds-ink); text-decoration-color: currentColor; }
+.rm-workspace.rops-modern .rm-contact-phone-edit .ro-phone-editor > form { padding-top: 12px; }
+
+/* Tenant › Summary: the portal card sat 40px below the summary cards (gap plus margin). */
+.rm-workspace.rops-modern .rm-tenant-tab-content > .tp-admin-accounts { margin-top: 0; }
+
+/* Company tables (Entities, People, Documents & compliance): the footer row
+   shaded only its label cell, leaving a white block on the right. */
+.rm-workspace.rops-modern .ws-table tfoot :is(th, td) {
+  border-top: 1px solid var(--ds-table-hairline); border-bottom: 0;
+  background: var(--ds-surface-2); color: var(--ds-muted); font: var(--ds-overline); letter-spacing: .01em;
+}
+.rm-workspace.rops-modern .ws-table tfoot td.number { color: var(--ds-ink); font-weight: 600; }
+@media (max-width: 650px) {
+  /* Narrow screens scroll the table sideways instead of crushing every column to one word per line. */
+  .rm-workspace.rops-modern .ws-table :is(th, td) { white-space: nowrap; }
+}
+
+/* Dashboard › Rentals by property: the old fixed-layout dashboard table rules
+   squeezed this table into equal 149px columns ("100%Unknown") and crushed it
+   on phones. Restore its own layout; it scrolls sideways when narrow. */
+.rm-workspace.rops-modern .rmd-dashboard table.mk-rt { table-layout: auto; min-width: 820px; font-size: 14px; }
+.rm-workspace.rops-modern .rmd-dashboard table.mk-rt :is(th, td) { max-width: none; overflow: visible; padding: 10px 12px; border-bottom: 0; text-overflow: clip; }
+.rm-workspace.rops-modern .rmd-dashboard table.mk-rt th { position: static; padding: 6px 12px 8px; background: transparent; }
+.rm-workspace.rops-modern .rmd-dashboard table.mk-rt :is(th, td):first-child { padding-left: 0; }
+.rm-workspace.rops-modern .rmd-dashboard table.mk-rt :is(th, td):last-child { padding-right: 0; }
+
+/* Header filters: the status select (Tenants, Applications) and the rent-roll
+   "Other reports" select used a larger, lighter font than the pills beside them. */
+.rm-workspace.rops-modern .rops-scope-status,
+.rm-workspace.rops-modern .rm-report-view-tabs select { color: var(--ds-ink); font: 500 13px/1 var(--ds-font); }
+
+/* Company › Documents and Company › MRA packets drew a second page title under
+   the shell's. Keep their company name and Refresh, drop the repeated title. */
+.rm-workspace.rops-modern :is(.company-documents-toolbar, .intake-toolbar) h1 {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+.rm-workspace.rops-modern :is(.company-documents-toolbar, .intake-toolbar) { padding: 0 0 12px; border-bottom: 0; background: transparent; }
+.rm-workspace.rops-modern :is(.company-documents-toolbar, .intake-toolbar) p { margin: 0; }
+.rm-workspace.rops-modern .company-documents-layout,
+.rm-workspace.rops-modern .intake-layout { overflow: hidden; border: 1px solid var(--ds-hairline); border-radius: var(--ds-r-l, 12px); }
+.rm-workspace.rops-modern .company-documents-message { margin: 0 0 12px; }
+
+/* Projects › Overview › Templates: the two forms ran edge to edge and doubled
+   the panel border. Inset them like every other panel body. */
+.rm-workspace.rops-modern .projects-panel[aria-label="Templates"] .projects-execution-split { gap: 12px; padding: 4px 20px 20px; background: transparent; }
+.rm-workspace.rops-modern .projects-panel[aria-label="Templates"] form[aria-label="Apply template"] .projects-execution-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.rm-workspace.rops-modern .projects-panel[aria-label="Templates"] form[aria-label="Save as template"] .projects-execution-form-grid { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 760px) {
+  .rm-workspace.rops-modern .projects-panel[aria-label="Templates"] .projects-execution-split { grid-template-columns: minmax(0, 1fr); padding: 4px 16px 16px; }
+}
+
+/* Properties › Units table: unit numbers and layouts wrapped mid-word on phones
+   ("B-" / "201", "studi" / "o"). */
+.rm-workspace.rops-modern .rm-property-unit-records .rm-data-grid[aria-label="Units at this property"] .rm-table td { white-space: nowrap; }
+@media (max-width: 650px) {
+  /* The floating Columns button covered the last headers on phones; give it its own line there. */
+  .rm-workspace.rops-modern .rm-property-unit-records .rm-data-grid > .rm-toolbar { position: static; display: flex; justify-content: flex-end; padding: 0 0 4px; }
+}
+
+/* Section headings on phones (Collections "Balances due", "Receipts"): the
+   count squeezed beside the title and both wrapped into a narrow column. */
+@media (max-width: 650px) {
+  .rm-workspace.rops-modern .ws-section-heading h2 { flex-wrap: wrap; row-gap: 2px; }
+  .rm-workspace.rops-modern .ws-section-heading h2 > .ws-count { flex-basis: 100%; }
+}
+
+/* Properties › Rent roll tab: the floating Columns button meant for the Units
+   table also floated over the recurring-charges header ("ActiColumns"). Only
+   the Units table keeps it in its header row. */
+.rm-workspace.rops-modern .rm-property-unit-records .rm-data-grid:not([aria-label="Units at this property"]) > .rm-toolbar {
+  position: static; display: flex; justify-content: flex-end; padding: 0 0 4px;
+}
+
+/* Investors tabs: an empty table drew its header and "Shown: 0 …" totals row
+   above the empty message. With nothing to list, show only the empty state. */
+.rm-workspace.rops-modern .investors-table:has(> tbody:empty) { display: none; }
+.rm-workspace.rops-modern .investors-button { white-space: nowrap; }
+
+/* Tenant › Lease & charges: the recurring-charge filter was a boxed, black
+   button strip unlike every other segmented control in the app. Match them. */
+.rm-workspace.rops-modern .rm-segmented { display: inline-flex; gap: 2px; padding: 3px; border: 0; border-radius: 999px; background: var(--ds-fill); }
+.rm-workspace.rops-modern .rm-segmented button { min-height: 28px; padding: 0 12px; border: 0; border-radius: 999px; background: transparent; color: var(--ds-muted); font: 500 12px/1 var(--ds-font); box-shadow: none; }
+.rm-workspace.rops-modern .rm-segmented button:hover { color: var(--ds-ink); }
+.rm-workspace.rops-modern .rm-segmented button.active { background: var(--ds-surface); color: var(--ds-ink); font-weight: 600; box-shadow: 0 0 0 1px var(--ds-hairline); }
+.rm-workspace.rops-modern .rm-segmented button span { color: inherit; opacity: .7; }

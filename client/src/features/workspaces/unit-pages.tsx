@@ -85,7 +85,7 @@ function ListingsContent({ snapshot, filters }: { snapshot: AdminSnapshot; filte
   if (!readiness.occupancyReady) return readiness.occupancyError ? null : <Loading label="Loading listings…" />;
   const all = listingRows(snapshot, filters, readiness.occupancy, unit => unitReadinessDisplay(unit, readiness.occupancy.get(unit.id ?? "")).label);
   const query = filters.search.trim().toLocaleLowerCase();
-  const rows = all.filter(row => (view === "all" || (view === "listed" ? row.listing === "listed" : row.occupancy === "vacant" || row.occupancy === "future_preleased" || row.listing === "listed"))
+  const rows = all.filter(row => (view === "all" || (view === "listed" ? row.listing === "listed" : row.occupancy === "vacant" || row.occupancy === "future_preleased" || (row.listing === "listed" && row.occupancy !== "current")))
     && (!query || `${row.propertyName} ${row.unit.unitNumber ?? ""}`.toLocaleLowerCase().includes(query)));
   const columns: GridColumn<ListingRow>[] = [
     { key: "propertyName", label: "Property", render: row => <RecordLink kind="property" recordId={row.unit.propertyId}>{row.propertyName}</RecordLink> },

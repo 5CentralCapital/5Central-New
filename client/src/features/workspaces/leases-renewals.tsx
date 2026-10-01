@@ -9,6 +9,12 @@ import { ErrorState, Loading, Segmented } from "./page";
 import { matchesSearch, rentalRows, useRentalReport } from "./rental-reports";
 import { leaseRowsFor, legacyCents, type LeaseView, type RentalRow } from "./models";
 
+/** A lease that already ended reads as how long ago, not as a negative count. */
+export function daysLeftLabel(days: number): string {
+  if (days < 0) return `Ended ${-days} ${days === -1 ? "day" : "days"} ago`;
+  return days === 0 ? "Ends today" : String(days);
+}
+
 function tableDate(value: unknown): string {
   return formatTableDate(value) ?? "—";
 }
@@ -39,7 +45,7 @@ export function LeasesRenewals({ identity, snapshot, filters }: { identity: stri
     { key: "propertyName", label: "Property", render: row => <RecordLink kind="property" recordId={row.propertyId as string}>{String(row.propertyName ?? "—")}</RecordLink> },
     { key: "unitNumber", label: "Unit", render: row => <RecordLink kind="unit" recordId={row.unitId as string}>{String(row.unitNumber ?? "—")}</RecordLink> },
     { key: "contractEndOn", label: "Lease ends", render: row => row.monthToMonth ? "Month to month" : tableDate(row.contractEndOn) },
-    { key: "daysLeft", label: "Days left", align: "right", render: row => typeof row.contractEndOn === "string" ? String(daysBetween(filters.asOfDate, row.contractEndOn)) : "—", sortValue: row => typeof row.contractEndOn === "string" ? daysBetween(filters.asOfDate, row.contractEndOn) : null },
+    { key: "daysLeft", label: "Days left", align: "right", render: row => typeof row.contractEndOn === "string" ? daysLeftLabel(daysBetween(filters.asOfDate, row.contractEndOn)) : "—", sortValue: row => typeof row.contractEndOn === "string" ? daysBetween(filters.asOfDate, row.contractEndOn) : null },
     { key: "noticeDeadlineOn", label: "Notice by", render: row => tableDate(row.noticeDeadlineOn) },
     { key: "currentBaseRentCents", label: "Base rent", align: "right", render: row => formatCentsText(legacyCents(row.currentBaseRentCents)), sortValue: row => centsSortValue(legacyCents(row.currentBaseRentCents)) },
     { key: "renew", label: "", render: row => <EntityLink personId={row.personId as string} tab="tenancy" className="rm-button rm-button--small">Renew</EntityLink> },

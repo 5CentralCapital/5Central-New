@@ -147,7 +147,12 @@ function Empty({ message }: { message: string }) {
 }
 
 function ActionButton({ action, onEdit, primary = false, danger = false }: { action: TenantEditAction; onEdit: EditAction; primary?: boolean; danger?: boolean }) {
-  return <button type="button" className={`rm-button${primary ? " rm-button-primary" : ""}${danger ? " rm-button-danger" : ""}`} onClick={() => onEdit(action.action, action.values)}>{action.label}</button>;
+  return <button type="button" className={`rm-button${primary ? " rm-button-primary" : ""}${danger ? " rm-button-danger" : ""}`} onClick={() => onEdit(action.action, action.values)} aria-label={visibleActionLabel(action.label) === action.label ? undefined : action.label}>{visibleActionLabel(action.label)}</button>;
+}
+
+/** "Edit lease 2" tells screen readers which row; on screen the row already says it, so show "Edit lease". */
+export function visibleActionLabel(label: string): string {
+  return label.replace(/^(Edit .+?) \d+$/, "$1");
 }
 
 function findAction(actions: TenantEditAction[], action: QuickAction, predicate?: (candidate: TenantEditAction) => boolean): TenantEditAction | undefined {
@@ -188,7 +193,6 @@ function SummaryTab({ tenant, snapshot, onChanged }: { tenant: TenantView; snaps
           <Field label="Unit">{summary.unitLabel}</Field>
           <Field label="Status">{statusValue(summary.statusVerified ? summary.status : undefined, !summary.statusVerified)}</Field>
           <Field label="Balance" warning={!balance.amount}>{balance.amount ? <span className="rm-amount">{balance.amount}</span> : <span className="rm-muted">{balance.unknownLabel}</span>}{balance.detail && <small className="rm-muted">{balance.detail}</small>}{!balance.amount && balanceWarning && summary.balance.uncertaintyCodes.length > 1 && <small className="rm-warning-copy">{reviewLabelsForCodes(summary.balance.uncertaintyCodes).join(" · ")}</small>}{review?.qualification && <small className="rm-muted rm-balance-note">{review.qualification}</small>}{review && tenant.balanceReview?.agencyBalanceCents !== null && <small className="rm-muted rm-balance-note">{review.payerSplit}</small>}</Field>
-          <Field label="As of date">{formatDate(summary.asOfDate)}</Field>
           {(tenant.meteredUtilities ?? []).map(utility => <Field key={`${utility.utility}:${utility.effectiveFrom}`} label="Water — metered"><span>Starts {formatDate(utility.effectiveFrom)}</span><small>Amount unknown · billed from meter readings</small></Field>)}
           {tenancy?.plannedMoveInOn && <Field label="Planned move-in">{formatDate(tenancy.plannedMoveInOn)}</Field>}
           <Field label="Actual move-in">{formatDate(tenancy?.actualMoveInOn)}</Field>

@@ -82,7 +82,7 @@ const catalog: ReportCatalog = {
     task('tasks-performance', 'Tasks performance', 'range'),
     task('vendor-details', 'Vendor details', 'custom'),
     task('work-orders', 'Work orders', 'custom'),
-    task('work-sessions', 'Work Sessions', 'range'),
+    task('work-sessions', 'Work sessions', 'range'),
     financial('balance-sheet', 'Balance sheet', 'as_of'),
     financial('cash-flow-statement', 'Cash-flow statement'),
     financial('portfolio-financials', 'Portfolio financials', 'custom', true),

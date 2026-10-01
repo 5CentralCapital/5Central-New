@@ -133,7 +133,7 @@ export function ForecastingWorkspace({ organizationId, location, onNavigate }: F
           </select>
         </label>
         <button type="button" className="rm-button rm-button-primary" onClick={() => void saveSnapshot()} disabled={savingSnapshot || selected.state === "archived" || Boolean(draftPreview) || !current}>
-          {savingSnapshot ? <><LoaderCircle size={15} className="fc-spin" aria-hidden="true" />Saving…</> : "Save Snapshot"}
+          {savingSnapshot ? <><LoaderCircle size={15} className="fc-spin" aria-hidden="true" />Saving…</> : "Save snapshot"}
         </button>
       </div>}
     </header>
@@ -141,7 +141,7 @@ export function ForecastingWorkspace({ organizationId, location, onNavigate }: F
     <Notice error={actionError} onRetry={() => setActionError(undefined)} />
     {result && !result.opening.complete && <div className="fc-banner" role="status">
       <span><strong>Opening position incomplete:</strong> {result.opening.unknown.join(", ")}.</span>
-      {tab !== "assumptions" && <button type="button" className="rm-button rm-button--small" onClick={() => setTab("assumptions")}>Set Balances</button>}
+      {tab !== "assumptions" && <button type="button" className="rm-button rm-button--small" onClick={() => setTab("assumptions")}>Set balances</button>}
     </div>}
     {failed.length > 0 && <div className="fc-alert" role="alert"><span>Accounting checks failed: {failed.map(check => check.code.replace(/_/g, " ")).join(", ")}. Approval is blocked until they pass.</span></div>}
     {result && result.warnings.length > 0 && <details className="fc-details"><summary>{result.warnings.length} model {result.warnings.length === 1 ? "note" : "notes"}</summary>

@@ -36,7 +36,7 @@ export function PropertyDocumentsPage({ identity, snapshot, filters, organizatio
             <td className="number">{row.documentCount}</td>
             <td>{row.insuranceDated ? <>{formatIsoDate(row.insuranceDated)} {row.insuranceAgeDays !== null && row.insuranceAgeDays > 365 && <Badge tone="warning">Over a year old</Badge>}</> : <Badge tone="warning">None on file</Badge>}</td>
           </tr>)}</tbody>
-          <tfoot><tr><th scope="row">Shown properties</th><td className="number">{rows.length}</td><td>Counts only</td></tr></tfoot>
+          <tfoot><tr><th scope="row">Shown properties</th><td className="number">{rows.length}</td><td /></tr></tfoot>
         </table>}
       {documents.data && documents.data.documents.length > 0 && <details className="ws-details"><summary>All company documents</summary>
         <table className="ws-table">

@@ -47,9 +47,11 @@ import './workspace-modern.css';
 import './dashboard-modern.css';
 import '../../../styles/ops-tokens.css';
 import '../../../styles/rops-system.css';
+import '../../../styles/ui-polish.css';
 import { TopNavigation, useWorkspaceAppearance } from './top-navigation';
 import { ScopeBar } from './scope-bar';
 import { OpenTabs, useOpenTabs } from './open-tabs';
+import { UnitLabelsProvider } from './unit-labels';
 import { destinationRoute, workspaceDocumentTitle, workspacePageTitle, type WorkspaceDestination } from './navigation';
 import { WORKSPACE_VIEWS, investorTabForWorkspace, investorTabFromWorkspace, projectTabForWorkspace, projectTabFromWorkspace } from '../../workspaces/views';
 import { AccountingEntryWithView, CompanyDocumentsEntry, ForecastingEntry, IntakeResultsEntry, ReviewQueueEntry } from '../../workspaces/lane-mounts';
@@ -251,7 +253,7 @@ function AuthenticatedWorkspace(){
   recurring:needsCollections(()=><RecurringRegister snapshot={snapshot!} filters={filters} onEdit={openEditor}/>),
   'make-ready':()=><MakeReadyPage identity={identity} snapshot={snapshot!} filters={filters} organizationId={route.organizationId} readOnly={source!=='live'}/>,
   listings:()=><ListingsPage snapshot={snapshot!} filters={filters} readOnly={source!=='live'}/>,
-  accounting:()=><AccountingEntryWithView identity={identity} organizationId={route.organizationId} view={route.accountingView??'overview'} onViewChange={accountingView=>go({...route,accountingView})} onNavigate={organizationId=>go({...route,organizationId})}/>,
+  accounting:()=><UnitLabelsProvider units={snapshot?.snapshot.units} properties={snapshot?.snapshot.properties}><AccountingEntryWithView identity={identity} organizationId={route.organizationId} view={route.accountingView??'overview'} onViewChange={accountingView=>go({...route,accountingView})} onNavigate={organizationId=>go({...route,organizationId})}/></UnitLabelsProvider>,
   projects:()=><ProjectEntry identity={identity} organizationId={route.organizationId} projectId={route.recordId} projectTab={projectTabForWorkspace(route.projectTab??'overview') as ProjectTab} onTabChange={tab=>go({...route,projectTab:projectTabFromWorkspace(tab)})} onNavigate={(organizationId,recordId)=>go({...route,organizationId,recordId})}/>,
   'cost-library':()=><CostLibrary identity={identity} organizationId={route.organizationId} asOfDate={filters.asOfDate} onOrganization={changeOrganization} onOpenProject={openProject}/>,
   'work-orders':()=><WorkOrderEntry identity={identity} organizationId={route.organizationId} workOrderId={route.recordId} view={(route.workOrderView??'open') as WorkOrderView} onNavigate={(organizationId,recordId,replace)=>go({...route,organizationId,recordId},replace)} onViewChange={workOrderView=>go({...route,workOrderView,recordId:undefined})} onOpenProperty={openProperty} onOpenUnit={openUnit} onOpenTenant={id=>openTenant(id)}/>,
@@ -279,7 +281,7 @@ function AuthenticatedWorkspace(){
    {view.heading&&<header className={`rm-page-heading rm-workspace-heading${view.filters?' has-scope':''}`}>{route.recordId&&window.history.state?.returnTo&&<button className="rm-button rm-button--icon" aria-label="Back to previous view" title="Back" onClick={()=>window.history.back()}><ChevronLeft size={17}/></button>}<h1 id="rops-page-title">{heading}</h1>
     {view.filters&&<ScopeBar filters={filters} properties={snapshot?scopeProperties(snapshot,filters):[]} onScope={changeScope} onDate={date=>setFilters(f=>pinWorkspaceDate(f,date))} onToday={()=>setFilters(f=>selectWorkspaceToday(f))}
      status={view.status?{value:view.status==='tenants'?tenantStatus:filters.status,options:statusOptions,onChange:value=>{if(view.status==='tenants')go({...route,tenantStatus:value as TenantDirectoryStatus,recordId:undefined},true);else setFilters(f=>({...f,status:value}));}}:undefined}
-     searchPlaceholder={route.section==='tenants'?'Name, property, unit, email or phone':'Search tenants, units, properties'} onSearch={search=>setFilters(f=>({...f,search}))} onRefresh={()=>void refresh()} refreshing={data.isRefreshing} updatedAt={data.bootstrap.dataUpdatedAt||undefined} showDashboardOptions={route.section==='dashboard'}/>}
+     searchPlaceholder={route.section==='tenants'?'Search tenants':'Search'} onSearch={search=>setFilters(f=>({...f,search}))} onRefresh={()=>void refresh()} refreshing={data.isRefreshing} updatedAt={data.bootstrap.dataUpdatedAt||undefined} showDashboardOptions={route.section==='dashboard'}/>}
    </header>}
    {notice&&<div className="rm-notice" role="status">{notice}<button className="rm-button" aria-label="Dismiss notice" onClick={()=>setNotice('')}><X size={12}/></button></div>}
    {body}
