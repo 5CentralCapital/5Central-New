@@ -6,6 +6,7 @@ import type { RentOpsRepository } from '../../../shared/rent-ops-contracts';
 import { createRentOpsMcpServer, requiredMcpToolScopes, type McpOperationalOptions } from './tools';
 import { oauthConfigFromEnv, READ_SCOPE, WRITE_SCOPE, validateIssuer, verifyOAuthToken, type McpPrincipal } from './oauth';
 import { mcpJsonBodyParser } from '../../request-body-parsers';
+import { annotateMcpRequest, inFlightRequests } from '../../memory-watchdog';
 import { mcpOptionsForClient } from '../../intake/mcp';
 
 export async function registerRentOpsMcpRoutes(app: Express, repository: RentOpsRepository, env: NodeJS.ProcessEnv = process.env, options: McpOperationalOptions = {}): Promise<void> {
@@ -39,7 +40,7 @@ export async function registerRentOpsMcpRoutes(app: Express, repository: RentOps
     next();
   };
   // The large upload parser runs only for a verified caller.
-  app.post('/mcp', authenticate, mcpJsonBodyParser, async (req,res) => {
+  app.post('/mcp', authenticate, mcpJsonBodyParser, annotateMcpRequest(inFlightRequests), async (req,res) => {
     const principal = res.locals.mcpPrincipal as McpPrincipal;
     const companyActorId = res.locals.mcpCompanyActorId as string;
     // This deployment explicitly maps its allowlisted OAuth subjects to the

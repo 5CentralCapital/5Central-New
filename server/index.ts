@@ -20,6 +20,7 @@ import { applicantPageSecurityHeaders } from "./applicant-page-security";
 import { securityHeaders } from "./security-headers";
 import { attachedImages, publicAssets } from "./static-assets";
 import { installGracefulShutdown, shutdownGraceMs } from "./graceful-shutdown";
+import { inFlightRequests, startMemoryWatchdog, trackInFlightRequests } from "./memory-watchdog";
 import {
   assertRentOpsProductionConfiguration,
   createRentOpsReadinessGate,
@@ -41,6 +42,11 @@ app.get("/readyz", (_req, res) => {
     status: state === "ready" ? "ready" : "not_ready",
   });
 });
+
+// Heap-pressure diagnostics: track every in-flight request from arrival so an
+// out-of-memory crash can be traced to the request that caused it.
+app.use(trackInFlightRequests(inFlightRequests));
+startMemoryWatchdog({ registry: inFlightRequests, log: line => console.warn(line) });
 
 // Exactly one trusted reverse-proxy hop (Render's router; Replit's before it).
 app.set("trust proxy", 1);
@@ -99,6 +105,10 @@ app.use((req, res, next) => {
       // API bodies can contain tenant, applicant, financial, or authentication
       // data. Operational logs intentionally retain request metadata only.
       log(`${req.method} ${path} ${res.statusCode} in ${duration}ms`);
+    } else if (/^\/mcp\/?$/i.test(path)) {
+      // MCP calls from Codex, Claude and the MRA agent: method and tool name only.
+      const call = typeof res.locals.mcpDescription === "string" ? ` ${res.locals.mcpDescription}` : "";
+      log(`${req.method} /mcp${call} ${res.statusCode} in ${duration}ms`);
     }
   });
 
