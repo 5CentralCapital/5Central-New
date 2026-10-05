@@ -21,6 +21,11 @@ projects:
                 value: production
               - key: NODE_VERSION
                 value: "22"
+              # Standard plan = 2 GB. Node's default heap cap here was ~1 GB and the
+              # web process crashed at it twice (Sept 30, Oct 4 2026). 1.5 GB of heap
+              # leaves ~500 MB for buffers and native memory.
+              - key: NODE_OPTIONS
+                value: "--max-old-space-size=1536"
               - key: RENT_OPS_ADMIN_OAUTH_ORIGIN
                 value: https://5central.capital
               - key: QBO_WRITES_ENABLED

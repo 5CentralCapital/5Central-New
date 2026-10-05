@@ -95,6 +95,9 @@ test("Render production and staging Blueprints use paid services and CI-gated de
   const productionWeb = serviceBlock(productionBlueprint, "5central-ops-web");
   const stagingWeb = serviceBlock(stagingBlueprint, "5central-ops-staging-web");
   assert.match(productionWeb, /fromGroup:\s*5central-ops-production-web/);
+  // The web heap cap must fit inside the Standard plan's 2 GB with room for native memory.
+  assert.match(productionWeb, /key:\s*NODE_OPTIONS\s*\n\s*value:\s*["']--max-old-space-size=1536["']/);
+  assert.doesNotMatch(serviceBlock(productionBlueprint, "5central-ops-worker"), /max-old-space-size/);
   assert.match(stagingWeb, /fromGroup:\s*5central-ops-staging-web/);
   assert.doesNotMatch(serviceBlock(productionBlueprint, "5central-ops-worker"), /fromGroup:\s*5central-ops-production-web/);
   assert.doesNotMatch(serviceBlock(stagingBlueprint, "5central-ops-staging-worker"), /fromGroup:\s*5central-ops-staging-web/);

@@ -72,6 +72,14 @@ Render's assigned `PORT`, and is checked at `/readyz`. The worker uses
 environment group. Both explicitly set `QBO_WRITES_ENABLED=off` and
 `QBO_PRODUCTION_WRITES=off`. Do not enable writes as part of hosting setup.
 
+The production web service also sets `NODE_OPTIONS=--max-old-space-size=1536`.
+On the 2 GB Standard plan Node otherwise capped the heap near 1 GB, and the
+web process crashed at that cap ("JavaScript heap out of memory", exit 134) on
+Sept 30 and Oct 4, 2026. The web process logs a `heap pressure` warning when
+heap use passes 60% of the cap, listing every in-flight request (method,
+sanitized path, age, and MCP tool name) so the next spike names its cause.
+`/mcp` calls are now in the request log as `POST /mcp tools/call <tool>`.
+
 ## Environment values
 
 ### Shared environment groups
