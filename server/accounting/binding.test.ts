@@ -34,7 +34,8 @@ test("pending CompanyInfo handoffs allow repeated attempts and consume only afte
   try {
     const store = new PostgresQuickBooksPendingBindingStore(fixture.executor, createQboTokenCipher(Buffer.alloc(32, 7)));
     const sessionBindingHash = hashQuickBooksSessionBinding("browser-session-123");
-    const input = { actorId: SYNTHETIC_COMPANY.actorId, sessionBindingHash, scope, proof, token, expiresAt: "2027-01-01T00:00:00.000Z" };
+    // A pending handoff expires; keep it an hour ahead of the real clock so the test does not lapse on a fixed date.
+    const input = { actorId: SYNTHETIC_COMPANY.actorId, sessionBindingHash, scope, proof, token, expiresAt: new Date(Date.now() + 3_600_000).toISOString() };
     const first = await store.create(input);
     const second = await store.create(input);
     assert.notEqual(first.pendingId, second.pendingId);
