@@ -55,10 +55,13 @@ export async function seedSyntheticQboPurchase(executor: RentOpsQueryExecutor, i
   for (const account of Array.from(accounts)) {
     await mirror.ingestSourceObject({ scope, objectType: "Account", objectId: account, version: "0", providerUpdatedAt: updatedAt, providerBody: { Id: account, SyncToken: "0", AccountType: "Expense", MetaData: { LastUpdatedTime: updatedAt } } });
   }
+  // Coverage goes stale 30 days (the QBO CDC lookback) after it was observed,
+  // measured against the real clock, so the seeded sync is observed "now".
+  const observedAt = new Date().toISOString();
   for (const stream of STREAMS) {
     await mirror.recordCoverage({
-      scope, stream, status: "complete", evidence: "live_provider_readback", basis: "source_transactions", watermark: financialWatermarkSchema.parse({ value: updatedAt, observedAt: updatedAt }),
-      coveredFrom: "2020-01-01", coveredThrough: input.txnDate, observedAt: updatedAt, objectCount: 1, transactionCount: 1, lineCount: input.lines.length,
+      scope, stream, status: "complete", evidence: "live_provider_readback", basis: "source_transactions", watermark: financialWatermarkSchema.parse({ value: updatedAt, observedAt }),
+      coveredFrom: "2020-01-01", coveredThrough: input.txnDate, observedAt, objectCount: 1, transactionCount: 1, lineCount: input.lines.length,
     });
   }
   return input.lines.map((line) => financialSourceReferenceSchema.parse({
