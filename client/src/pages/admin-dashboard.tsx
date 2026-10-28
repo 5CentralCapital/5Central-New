@@ -321,8 +321,18 @@ export default function AdminDashboard() {
     loadLoans();
     loadRMOccupancy();
     loadPortfolioSummary();
-    const interval = setInterval(() => { load(); loadLoans(); loadRMOccupancy(); loadPortfolioSummary(); }, 120_000);
-    return () => clearInterval(interval);
+    // Refresh only while the page is on screen, and not more than every 10 minutes:
+    // a dashboard left open in a background tab must not keep the database awake.
+    let lastRefresh = Date.now();
+    const refresh = () => {
+      if (document.visibilityState !== "visible" || Date.now() - lastRefresh < 10 * 60_000) return;
+      lastRefresh = Date.now();
+      load(); loadLoans(); loadRMOccupancy(); loadPortfolioSummary();
+    };
+    const interval = setInterval(refresh, 60_000);
+    // Coming back to a tab that sat hidden past the refresh window reloads at once.
+    document.addEventListener("visibilitychange", refresh);
+    return () => { clearInterval(interval); document.removeEventListener("visibilitychange", refresh); };
   }, [load, loadLoans, loadRMOccupancy, loadPortfolioSummary]);
 
   // Close dropdown when clicking outside

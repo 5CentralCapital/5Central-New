@@ -143,7 +143,7 @@ function SyncCard({ health, loading, error, retry }: { readonly health: Connecto
 export function OverviewPanel({ api, organizationId, legalEntityId, currency, onOpen, realmId = null, primaryAction = true }: { readonly api: AccountingApi; readonly organizationId: string; readonly legalEntityId: string; readonly currency: string; readonly onOpen: (view: AccountingView) => void; readonly realmId?: string | null; readonly primaryAction?: boolean }) {
   void currency;
   const period = useMemo(() => previousOperatingMonth(), []);
-  const health = useQuery({ queryKey: ["accounting", "health", organizationId, legalEntityId], queryFn: ({ signal }) => api.health(organizationId, legalEntityId, signal), staleTime: 15_000, refetchInterval: 60_000 });
+  const health = useQuery({ queryKey: ["accounting", "health", organizationId, legalEntityId], queryFn: ({ signal }) => api.health(organizationId, legalEntityId, signal), staleTime: 60_000, refetchInterval: 10 * 60_000 });
   const close = useQuery({ queryKey: ["accounting", "close", organizationId, legalEntityId, period], queryFn: ({ signal }) => api.closeChecklist(organizationId, legalEntityId, period, signal), staleTime: 30_000 });
   const open = useQuery({ queryKey: ["accounting", "pm-open", organizationId, legalEntityId], queryFn: ({ signal }) => api.pmSettlements(organizationId, { legalEntityId, states: ["draft", "exception"] }, signal), staleTime: 30_000 });
   const awaiting = open.data?.items.filter(item => isPositiveCents(item.ownerRemittanceCents) && !item.bankSettledOn) ?? [];

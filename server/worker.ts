@@ -5,6 +5,8 @@ import { createSystemJobHandlers, systemPeriodicJobs } from "./jobs/system-handl
 import { createReviewJobHandlers, reviewPeriodicJobs } from "./review-cases/worker";
 import { createWorkerRuntime, newWorkerId, type JobLogger } from "./jobs/worker-runtime";
 import { createRentOpsRuntimeDatabase, type RentOpsRuntimeDatabase } from "./rent-ops/runtime-database";
+import { workerCycleMs } from "./jobs/worker-cycle";
+import { createWorkerWakeWatcher, workerWakeToken } from "./jobs/worker-wake";
 
 /*
  * 5Central Ops background worker: a separate process that runs durable jobs
@@ -31,6 +33,20 @@ async function database(): Promise<RentOpsRuntimeDatabase> {
   return createRentOpsRuntimeDatabase({ environment: process.env.NODE_ENV, sharedExecutor: createRentOpsPoolExecutor(pool) });
 }
 
+/**
+ * Let the web app end an idle sleep early when someone starts work there. The
+ * web URL comes from WORKER_WAKE_URL (else RENT_OPS_PUBLIC_APP_URL); without
+ * one the worker simply waits for its next scheduled wake.
+ */
+function wakeOptions(): { idleWake?: () => Promise<boolean>; idleWakeCheckMs: number; warmWindowMs: number } {
+  const base = { idleWakeCheckMs: positiveInteger(process.env.WORKER_WAKE_CHECK_MS, 15_000, 300_000), warmWindowMs: 3 * 60_000 };
+  const url = process.env.WORKER_WAKE_URL || process.env.RENT_OPS_PUBLIC_APP_URL;
+  const token = workerWakeToken(process.env);
+  if (!url || !token) { logger.warn("worker wake signal not configured; idle sleeps run to the next scheduled wake"); return base; }
+  try { new URL(url); } catch { logger.warn("worker wake URL is invalid; idle sleeps run to the next scheduled wake"); return base; }
+  return { ...base, idleWake: createWorkerWakeWatcher({ url, token, onRejected: status => logger.warn("worker wake signal refused by the web app; check both services share RENT_OPS_RUNTIME_DATABASE_URL", { status }) }) };
+}
+
 async function main(): Promise<void> {
   // Production cutover starts held until web/database/document readback passes.
   // Changing the gate requires an operator environment update and redeploy.
@@ -53,6 +69,10 @@ async function main(): Promise<void> {
     batchSize: positiveInteger(process.env.WORKER_BATCH_SIZE, 4, 10),
     pollIntervalMs: positiveInteger(process.env.WORKER_POLL_MS, 1_000, 60_000),
     maxIdleIntervalMs: positiveInteger(process.env.WORKER_MAX_IDLE_MS, 15_000, 300_000),
+    // Cost control: wake, drain all due work, then sleep the whole cycle so the
+    // Neon database can scale to zero between bursts. WORKER_CYCLE_MS=0 restores
+    // continuous polling.
+    ...(workerCycleMs(process.env) > 0 ? { idleSleepMs: workerCycleMs(process.env), ...wakeOptions() } : {}),
     handlers: { ...createSystemJobHandlers(), ...createAccountingJobHandlers({ services }), ...createReviewJobHandlers({ executor }) },
     periodic: [...systemPeriodicJobs(), ...qboPeriodicSyncJobs({ executor, services }), ...qboWebhookFinalizationJobs(), ...reviewPeriodicJobs({ executor })],
     logger,

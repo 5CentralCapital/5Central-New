@@ -151,3 +151,60 @@ test("stop() waits for an in-flight claim and releases what it claimed instead o
     await synthetic.close();
   }
 });
+
+test("batch mode drains due work, then sleeps the whole idle cycle instead of polling", async () => {
+  const synthetic = await createSyntheticCompanyDatabase();
+  try {
+    const executor = await createSyntheticRuntimeExecutor(synthetic.db);
+    let claims = 0;
+    class CountingQueue extends PostgresJobQueue {
+      override async claim(input: Parameters<PostgresJobQueue["claim"]>[0]) { claims += 1; return super.claim(input); }
+    }
+    const queue = new CountingQueue(executor);
+    for (const key of ["b-1", "b-2", "b-3"]) await queue.enqueue({ jobKey: key, topic: "demo.batch", payload: {}, organizationId: ORG });
+    const done: string[] = [];
+    const runtime = createWorkerRuntime({
+      executor, queue, workerId: "worker-batch", batchSize: 1, pollIntervalMs: 5, maxIdleIntervalMs: 10, idleSleepMs: 60_000,
+      heartbeatIntervalMs: 1_000_000, schedulerIntervalMs: 1_000_000,
+      handlers: { "demo.batch": { handler: async ({ job }) => { done.push(job.jobKey); return {}; } } },
+    });
+    void runtime.start();
+    // Wait for the burst to finish rather than a fixed delay, so a slow CI runner cannot flake this.
+    const deadline = Date.now() + 15_000;
+    while (claims < 4 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.deepEqual(done.sort(), ["b-1", "b-2", "b-3"], "all due work drains in one burst");
+    assert.equal(claims, 4, "three claims with work, one empty claim, then a single long sleep");
+    await runtime.stop(20);
+  } finally {
+    await synthetic.close();
+  }
+});
+
+test("a wake signal ends an idle sleep early and the worker drains the new work", async () => {
+  const synthetic = await createSyntheticCompanyDatabase();
+  try {
+    const executor = await createSyntheticRuntimeExecutor(synthetic.db);
+    const queue = new PostgresJobQueue(executor);
+    const done: string[] = [];
+    let signalled = false;
+    const runtime = createWorkerRuntime({
+      executor, queue, workerId: "worker-wake", pollIntervalMs: 5, maxIdleIntervalMs: 10, idleSleepMs: 3_600_000,
+      idleWake: async () => { const value = signalled; signalled = false; return value; }, idleWakeCheckMs: 100,
+      heartbeatIntervalMs: 1_000_000, schedulerIntervalMs: 1_000_000,
+      handlers: { "demo.wake": { handler: async ({ job }) => { done.push(job.jobKey); return {}; } } },
+    });
+    void runtime.start();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await queue.enqueue({ jobKey: "w-1", topic: "demo.wake", payload: {}, organizationId: ORG });
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.deepEqual(done, [], "work started during an hour-long sleep waits without a signal");
+    signalled = true;
+    const deadline = Date.now() + 15_000;
+    while (done.length === 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(done, ["w-1"], "the signal wakes the worker within one check interval");
+    await runtime.stop(20);
+  } finally {
+    await synthetic.close();
+  }
+});

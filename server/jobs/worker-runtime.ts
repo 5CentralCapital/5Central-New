@@ -75,6 +75,25 @@ export interface WorkerRuntimeOptions {
   readonly batchSize?: number;
   readonly pollIntervalMs?: number;
   readonly maxIdleIntervalMs?: number;
+  /**
+   * Batch mode for a database that scales to zero. When set, a cycle that finds
+   * no work sleeps this long at once instead of ramping up from pollIntervalMs,
+   * so the database sees short bursts and can suspend between them. Work that
+   * arrives during the sleep waits for the next wake.
+   */
+  readonly idleSleepMs?: number;
+  /**
+   * Checked every idleWakeCheckMs during an idle sleep; returning true ends the
+   * sleep early. It must not touch the database (see worker-wake.ts).
+   */
+  readonly idleWake?: () => Promise<boolean>;
+  readonly idleWakeCheckMs?: number;
+  /**
+   * After a cycle that found work, or a wake signal, keep polling at the normal
+   * short interval for this long before the next idle sleep. The database is
+   * awake anyway right after activity, so follow-up jobs run at once.
+   */
+  readonly warmWindowMs?: number;
   readonly heartbeatIntervalMs?: number;
   readonly schedulerIntervalMs?: number;
   readonly periodic?: readonly PeriodicJobDefinition[];
@@ -117,6 +136,10 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
   const batchSize = options.batchSize ?? 4;
   const pollIntervalMs = options.pollIntervalMs ?? 1_000;
   const maxIdleIntervalMs = options.maxIdleIntervalMs ?? 15_000;
+  const idleSleepMs = options.idleSleepMs && options.idleSleepMs > 0 ? options.idleSleepMs : null;
+  const idleWakeCheckMs = Math.max(100, options.idleWakeCheckMs ?? 15_000);
+  const warmWindowMs = Math.max(0, options.warmWindowMs ?? 0);
+  let lastActivity = Number.NEGATIVE_INFINITY;
   const heartbeatIntervalMs = options.heartbeatIntervalMs ?? 15_000;
   const schedulerIntervalMs = options.schedulerIntervalMs ?? 30_000;
   const startedAt = now();
@@ -249,6 +272,21 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
     });
   }
 
+  /** Sleep for totalMs, ending early on stop() or when idleWake reports new work. */
+  async function idleSleep(totalMs: number): Promise<void> {
+    if (!options.idleWake) { await sleep(totalMs); return; }
+    const deadline = Date.now() + totalMs;
+    while (!stopping) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return;
+      await sleep(Math.min(idleWakeCheckMs, remaining));
+      if (stopping) return;
+      let woken = false;
+      try { woken = await options.idleWake(); } catch { woken = false; }
+      if (woken) { lastActivity = Date.now(); return; }
+    }
+  }
+
   async function run(): Promise<void> {
     let idleDelay = pollIntervalMs;
     try { await queue.reapExpiredLeases(); } catch (error) { logger.warn("startup reap failed", { code: redactJobError(error).code }); }
@@ -258,7 +296,9 @@ export function createWorkerRuntime(options: WorkerRuntimeOptions): WorkerRuntim
         if (tick - lastHeartbeat >= heartbeatIntervalMs) { await recordHeartbeat(); lastHeartbeat = tick; }
         if (tick - lastSchedule >= schedulerIntervalMs) { await scheduleDue(); lastSchedule = tick; }
         const cycle = await runOnce();
-        idleDelay = cycle.claimed > 0 ? 0 : Math.min(maxIdleIntervalMs, Math.max(pollIntervalMs, idleDelay * 2));
+        if (cycle.claimed > 0) { lastActivity = Date.now(); idleDelay = 0; }
+        else if (idleSleepMs !== null && Date.now() - lastActivity >= warmWindowMs) { await idleSleep(idleSleepMs); idleDelay = 0; continue; }
+        else idleDelay = Math.min(maxIdleIntervalMs, Math.max(pollIntervalMs, idleDelay * 2));
       } catch (error) {
         // Database outage or conflict: back off and keep the process alive.
         logger.error("worker cycle failed", { code: redactJobError(error).code });

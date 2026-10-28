@@ -79,3 +79,7 @@ projects:
                 value: "off"
               - key: WORKER_SHUTDOWN_GRACE_MS
                 value: "25000"
+              # The worker sleeps between bursts so Neon can scale to zero; it polls
+              # this web app (not the database) to wake early when work is started.
+              - key: WORKER_WAKE_URL
+                value: https://fivecentral-ops-staging-web.onrender.com
