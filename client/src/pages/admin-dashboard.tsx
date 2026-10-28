@@ -321,7 +321,10 @@ export default function AdminDashboard() {
     loadLoans();
     loadRMOccupancy();
     loadPortfolioSummary();
-    const interval = setInterval(() => { load(); loadLoans(); loadRMOccupancy(); loadPortfolioSummary(); }, 120_000);
+    // Refresh only while the page is on screen, and not more than every 10 minutes:
+    // a dashboard left open in a background tab must not keep the database awake.
+    const refresh = () => { if (document.visibilityState === "visible") { load(); loadLoans(); loadRMOccupancy(); loadPortfolioSummary(); } };
+    const interval = setInterval(refresh, 10 * 60_000);
     return () => clearInterval(interval);
   }, [load, loadLoans, loadRMOccupancy, loadPortfolioSummary]);
 

@@ -77,6 +77,10 @@ app.use(
       // Session tables are provisioned by the reviewed host schema in
       // production; startup must not create or migrate them implicitly.
       createTableIfMissing: !isProduction,
+      // The default prunes expired sessions every 15 minutes, which wakes the
+      // Neon database around the clock. Every six hours is plenty: expired rows
+      // are already rejected on read.
+      pruneSessionInterval: 6 * 60 * 60,
     }),
     secret: sessionSecret || "development-only-session-secret",
     resave: false,

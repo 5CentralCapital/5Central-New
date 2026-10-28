@@ -1,3 +1,4 @@
+import { workerAliveWindowMs } from "../jobs/worker-cycle";
 import {
   connectorHealthResponseSchema,
   periodCloseChecklistSchema,
@@ -16,7 +17,7 @@ import { QBO_CHANGE_STREAM } from "./provider-sync";
 const STALE_AFTER_SECONDS = 2 * 60 * 60;
 /** Health reports deletions detected in this recent window, not every tombstone ever recorded. */
 export const RECENT_DELETION_WINDOW_MS = 30 * 24 * 60 * 60_000;
-const WORKER_ALIVE_MS = 2 * 60_000;
+const WORKER_ALIVE_MS = workerAliveWindowMs();
 
 function iso(value: unknown): string | null {
   if (value === null || value === undefined) return null;

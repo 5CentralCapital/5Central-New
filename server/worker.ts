@@ -5,6 +5,7 @@ import { createSystemJobHandlers, systemPeriodicJobs } from "./jobs/system-handl
 import { createReviewJobHandlers, reviewPeriodicJobs } from "./review-cases/worker";
 import { createWorkerRuntime, newWorkerId, type JobLogger } from "./jobs/worker-runtime";
 import { createRentOpsRuntimeDatabase, type RentOpsRuntimeDatabase } from "./rent-ops/runtime-database";
+import { workerCycleMs } from "./jobs/worker-cycle";
 
 /*
  * 5Central Ops background worker: a separate process that runs durable jobs
@@ -53,6 +54,10 @@ async function main(): Promise<void> {
     batchSize: positiveInteger(process.env.WORKER_BATCH_SIZE, 4, 10),
     pollIntervalMs: positiveInteger(process.env.WORKER_POLL_MS, 1_000, 60_000),
     maxIdleIntervalMs: positiveInteger(process.env.WORKER_MAX_IDLE_MS, 15_000, 300_000),
+    // Cost control: wake, drain all due work, then sleep the whole cycle so the
+    // Neon database can scale to zero between bursts. WORKER_CYCLE_MS=0 restores
+    // continuous polling.
+    ...(workerCycleMs(process.env) > 0 ? { idleSleepMs: workerCycleMs(process.env) } : {}),
     handlers: { ...createSystemJobHandlers(), ...createAccountingJobHandlers({ services }), ...createReviewJobHandlers({ executor }) },
     periodic: [...systemPeriodicJobs(), ...qboPeriodicSyncJobs({ executor, services }), ...qboWebhookFinalizationJobs(), ...reviewPeriodicJobs({ executor })],
     logger,

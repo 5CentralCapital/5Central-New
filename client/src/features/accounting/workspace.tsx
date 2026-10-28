@@ -209,7 +209,7 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
   }, [callbackError]);
   const configuration = useQuery({ queryKey: ["accounting", "configuration", organizationId, legalEntityId], queryFn: ({ signal }) => api.getConfiguration(organizationId, legalEntityId, signal), enabled: Boolean(legalEntityId), staleTime: 30_000 });
   const environment = configuration.data?.environment ?? null;
-  const connections = useQuery({ queryKey: ["accounting", "connections", organizationId, legalEntityId, environment], queryFn: ({ signal }) => api.listConnections(organizationId, legalEntityId, environment!, signal), enabled: Boolean(legalEntityId && environment), staleTime: 20_000, refetchInterval: query => query.state.data?.some(connection => connection.status === "connected") ? 5_000 : false });
+  const connections = useQuery({ queryKey: ["accounting", "connections", organizationId, legalEntityId, environment], queryFn: ({ signal }) => api.listConnections(organizationId, legalEntityId, environment!, signal), enabled: Boolean(legalEntityId && environment), staleTime: 20_000, refetchInterval: query => query.state.data?.some(connection => connection.status === "connected") && query.state.dataUpdateCount < 40 ? 30_000 : false });
   const pending = useQuery({ queryKey: ["accounting", "pending", organizationId, legalEntityId, pendingId], queryFn: ({ signal }) => api.getPendingBinding(organizationId, legalEntityId, pendingId!, signal), enabled: Boolean(legalEntityId && pendingId), retry: false });
   useEffect(() => { if (!connections.data?.length) { setSelectedRealmId(null); return; } if (!connections.data.some(connection => connection.scope.realmId === selectedRealmId)) setSelectedRealmId(connections.data[0]!.scope.realmId); }, [connections.data, selectedRealmId]);
   const selectedConnection = connections.data?.find(connection => connection.scope.realmId === selectedRealmId) ?? connections.data?.[0] ?? null;
@@ -217,7 +217,7 @@ export function AccountingWorkspace({ organizationId, organizationName, entities
   const reportsReady = selectedConnection?.status === "ready";
   const mirrors = useQuery({ queryKey: ["accounting", "mirrors", scope, tab], queryFn: ({ signal }) => api.listMirrors(organizationId, scope!, tab as AccountingMirrorKind, signal), enabled: Boolean(scope && tab !== "transactions" && tab !== "general-ledger" && view === "transactions"), staleTime: 20_000 });
   const purposeMappings = useQuery({ queryKey: ["accounting", "purpose-mappings", scope], queryFn: ({ signal }) => api.listPurposeMappings(organizationId, scope!, undefined, signal), enabled: Boolean(scope && view === "transactions" && tab === "accounts"), staleTime: 20_000 });
-  const health = useQuery({ queryKey: ["accounting", "health", organizationId, legalEntityId], queryFn: ({ signal }) => api.health(organizationId, legalEntityId, signal), enabled: Boolean(legalEntityId && selectedConnection && selectedConnection.status !== "needs_reconnect"), staleTime: 15_000, refetchInterval: 60_000 });
+  const health = useQuery({ queryKey: ["accounting", "health", organizationId, legalEntityId], queryFn: ({ signal }) => api.health(organizationId, legalEntityId, signal), enabled: Boolean(legalEntityId && selectedConnection && selectedConnection.status !== "needs_reconnect"), staleTime: 60_000, refetchInterval: 10 * 60_000 });
   const selectedEntity = entityOptions.find(entity => entity.id === legalEntityId);
   const currency = selectedEntity?.currency ?? "USD";
   const clearPending = async () => {
