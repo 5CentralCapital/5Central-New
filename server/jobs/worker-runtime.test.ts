@@ -169,9 +169,40 @@ test("batch mode drains due work, then sleeps the whole idle cycle instead of po
       handlers: { "demo.batch": { handler: async ({ job }) => { done.push(job.jobKey); return {}; } } },
     });
     void runtime.start();
-    await new Promise(resolve => setTimeout(resolve, 300));
+    // Wait for the burst to finish rather than a fixed delay, so a slow CI runner cannot flake this.
+    const deadline = Date.now() + 15_000;
+    while (claims < 4 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise(resolve => setTimeout(resolve, 200));
     assert.deepEqual(done.sort(), ["b-1", "b-2", "b-3"], "all due work drains in one burst");
     assert.equal(claims, 4, "three claims with work, one empty claim, then a single long sleep");
+    await runtime.stop(20);
+  } finally {
+    await synthetic.close();
+  }
+});
+
+test("a wake signal ends an idle sleep early and the worker drains the new work", async () => {
+  const synthetic = await createSyntheticCompanyDatabase();
+  try {
+    const executor = await createSyntheticRuntimeExecutor(synthetic.db);
+    const queue = new PostgresJobQueue(executor);
+    const done: string[] = [];
+    let signalled = false;
+    const runtime = createWorkerRuntime({
+      executor, queue, workerId: "worker-wake", pollIntervalMs: 5, maxIdleIntervalMs: 10, idleSleepMs: 3_600_000,
+      idleWake: async () => { const value = signalled; signalled = false; return value; }, idleWakeCheckMs: 100,
+      heartbeatIntervalMs: 1_000_000, schedulerIntervalMs: 1_000_000,
+      handlers: { "demo.wake": { handler: async ({ job }) => { done.push(job.jobKey); return {}; } } },
+    });
+    void runtime.start();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    await queue.enqueue({ jobKey: "w-1", topic: "demo.wake", payload: {}, organizationId: ORG });
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.deepEqual(done, [], "work started during an hour-long sleep waits without a signal");
+    signalled = true;
+    const deadline = Date.now() + 15_000;
+    while (done.length === 0 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.deepEqual(done, ["w-1"], "the signal wakes the worker within one check interval");
     await runtime.stop(20);
   } finally {
     await synthetic.close();

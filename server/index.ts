@@ -20,6 +20,7 @@ import { applicantPageSecurityHeaders } from "./applicant-page-security";
 import { securityHeaders } from "./security-headers";
 import { attachedImages, publicAssets } from "./static-assets";
 import { installGracefulShutdown, shutdownGraceMs } from "./graceful-shutdown";
+import { createWorkerWakeSignal, trackWorkerWake, WORKER_WAKE_PATH, workerWakeHandler, workerWakeToken } from "./jobs/worker-wake";
 import { inFlightRequests, startMemoryWatchdog, trackInFlightRequests } from "./memory-watchdog";
 import {
   assertRentOpsProductionConfiguration,
@@ -42,6 +43,13 @@ app.get("/readyz", (_req, res) => {
     status: state === "ready" ? "ready" : "not_ready",
   });
 });
+
+// The background worker sleeps between bursts so the database can scale to
+// zero; it asks this in-memory counter (no database read) whether anyone has
+// started work here since it last looked.
+const workerWake = createWorkerWakeSignal();
+app.get(WORKER_WAKE_PATH, workerWakeHandler(workerWake, workerWakeToken(process.env)));
+app.use(trackWorkerWake(workerWake));
 
 // Heap-pressure diagnostics: track every in-flight request from arrival so an
 // out-of-memory crash can be traced to the request that caused it.
