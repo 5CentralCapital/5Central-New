@@ -37,7 +37,7 @@ function clientFixture(): QuickBooksAccountingClient {
 test("bootstrap probe enables read and provider catch-up mirrors exact QBO Purchase line", async () => {
   const synthetic = await createSyntheticCompanyDatabase();
   try {
-    const mirror = createQboAccountingMirrorStore(synthetic.executor);
+    const mirror = createQboAccountingMirrorStore(synthetic.executor, () => new Date("2026-09-21T15:00:00Z"));
     const sync = createQboProviderSync({
       executor: synthetic.executor,
       client: clientFixture(),
@@ -220,7 +220,7 @@ test("named profile conflicts retain every same-token observation and do not dea
 test("provider sync mirrors JournalEntry cost lines and exposes capitalized cost context", async () => {
   const synthetic = await createSyntheticCompanyDatabase();
   try {
-    const mirror = createQboAccountingMirrorStore(synthetic.executor);
+    const mirror = createQboAccountingMirrorStore(synthetic.executor, () => new Date("2026-09-24T00:00:00Z"));
     const journal = {
       Id: "2949", SyncToken: "0", TxnDate: "2026-09-08", CurrencyRef: { value: "USD" },
       MetaData: { LastUpdatedTime: "2026-09-23T19:30:49Z" },

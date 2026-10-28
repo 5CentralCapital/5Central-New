@@ -51,7 +51,7 @@ const account = (id: string, type: string) => ({ Id: id, SyncToken: "0", Account
 
 async function harness(store: Store, extra: Parameters<typeof fixtureClient>[1] = {}) {
   const synthetic = await createSyntheticCompanyDatabase();
-  const mirror = createQboAccountingMirrorStore(synthetic.executor);
+  const mirror = createQboAccountingMirrorStore(synthetic.executor, () => new Date("2026-09-21T15:00:00Z"));
   const capabilityStore = new PostgresQuickBooksCapabilityStore(synthetic.executor);
   const sync = createQboProviderSync({ executor: synthetic.executor, client: fixtureClient(store, { preferences: { CurrencyPrefs: { HomeCurrency: { value: "USD" }, MultiCurrencyEnabled: false } }, ...extra }), scope, mirror, capabilityStore, now: () => new Date("2026-09-21T15:00:00Z") });
   await sync.bootstrapRead();
@@ -316,7 +316,7 @@ test("objects without CurrencyRef use the realm's verified Preferences home curr
   }
   const synthetic = await createSyntheticCompanyDatabase();
   try {
-    const mirror = createQboAccountingMirrorStore(synthetic.executor);
+    const mirror = createQboAccountingMirrorStore(synthetic.executor, () => new Date("2026-09-21T15:00:00Z"));
     const sync = createQboProviderSync({ executor: synthetic.executor, client: fixtureClient(store), scope, mirror, capabilityStore: new PostgresQuickBooksCapabilityStore(synthetic.executor), now: () => new Date("2026-09-21T15:00:00Z") });
     await sync.bootstrapRead();
     const result = await sync.catchUp();
